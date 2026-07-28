@@ -4,8 +4,13 @@
 The server (src/server, ./build/kds_server) speaks one command per line,
 newline-terminated, and always replies with exactly one line back. This
 is a thin client for that protocol - it does no parsing/validation of its
-own, it just ships whatever you type and prints back whatever the server
-says.
+own for most commands, it just ships whatever you type and prints back
+whatever the server says (see format_reply()). SELECT is the one
+exception: its reply is rendered dataframe-style (a real pandas
+DataFrame when pandas is installed, a column-aligned text table
+otherwise) instead of the raw "header line + \\n-escaped comma rows" text
+- see render_select_reply(). The wire protocol itself is unchanged either
+way; this is purely a client-side display choice.
 
 Usage:
     ckdbs_cli.py                        interactive REPL
@@ -17,6 +22,12 @@ Usage:
     ckdbs_cli.py FIND TABLE accounts
     ckdbs_cli.py CREATE TABLE accounts
     ckdbs_cli.py --host 127.0.0.1 --port 15432 SHOW TABLES
+
+    # Full SQL grammar (src/parser) - quote as one shell argument:
+    ckdbs_cli.py "CREATE TABLE accounts (id int64, name varchar, balance int64)"
+    ckdbs_cli.py "INSERT INTO accounts VALUES (1, 'alice', 100)"
+    ckdbs_cli.py "SELECT * FROM accounts WHERE id = 1"
+    ckdbs_cli.py "UPDATE accounts SET balance = 150 WHERE id = 1"
 
 REPL-only local commands (never sent to the server):
     help / ?     list known server commands
@@ -42,7 +53,16 @@ KNOWN_COMMANDS = """\
                           -> heap page header + slot directory, pretty-printed;
                              VALUES also hex-encodes each live tuple's payload
   FIND TABLE <name>       -> oid=<n> or ERR ...
-  CREATE TABLE <name>     -> "CREATED oid=<n>" or "EXISTS oid=<n>" (idempotent)
+  CREATE TABLE <name>     -> "CREATED oid=<n>" or "EXISTS oid=<n>" (idempotent);
+                             bare form, no columns
+  CREATE TABLE <name> (<col> <type> [, ...]) [HEAP|BTREE]
+                          -> same CREATED/EXISTS reply, real columns (SQL form)
+  INSERT INTO <name> VALUES (<val> [, ...])
+                          -> "INSERTED oid=<n> slot=<n>" or ERR ...
+  SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]
+                          -> header line + one row per match
+  UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*]
+                          -> "UPDATED <n>" or ERR ...
   STOP                    -> shuts the whole server down (not just this client)
 """
 
@@ -85,8 +105,95 @@ def format_reply(reply):
     return reply.replace("\\n", "\n")
 
 
+# ---- SELECT rendering (dataframe-style) -----------------------------------
+#
+# Only SELECT gets client-side treatment; every other command's reply is
+# printed exactly as format_reply() renders it, unchanged. The wire
+# protocol itself is not touched either way.
+
+def _is_select(command):
+    words = command.strip().split()
+    return bool(words) and words[0].upper() == "SELECT"
+
+
+def _coerce(text):
+    """Turns a cell into an int when it parses as one, else leaves it as
+    text - a SELECT reply has no type tags, only comma-separated text."""
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
+def _parse_select_rows(text):
+    # Naive comma-split: a varchar value containing a comma would be
+    # mis-split. The wire format has no quoting/escaping for this - a
+    # real fix means changing the reply format, out of scope here.
+    lines = [line for line in text.split("\n") if line != ""]
+    if not lines:
+        return [], []
+    columns = lines[0].split(",")
+    rows = [[_coerce(v) for v in line.split(",")] for line in lines[1:]]
+    return columns, rows
+
+
+def to_dataframe(columns, rows):
+    """Builds a pandas DataFrame from parsed SELECT columns/rows. pandas
+    is not a hard dependency of this file (see the module docstring) -
+    imported lazily here, only when a caller wants a DataFrame. Raises
+    RuntimeError if pandas isn't installed.
+    """
+    try:
+        import pandas as pd
+    except ImportError as e:
+        raise RuntimeError("pandas is required for to_dataframe() (pip install pandas)") from e
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _text_table(columns, rows):
+    """Column-aligned text table - the fallback when pandas isn't
+    installed, so SELECT output still reads like a dataframe printout
+    rather than raw comma-joined text."""
+    str_rows = [[str(v) for v in row] for row in rows]
+    widths = [len(c) for c in columns]
+    for row in str_rows:
+        for i, v in enumerate(row):
+            widths[i] = max(widths[i], len(v))
+
+    def fmt(values):
+        return "  ".join(v.rjust(widths[i]) for i, v in enumerate(values))
+
+    lines = [fmt(columns), "  ".join("-" * w for w in widths)]
+    lines.extend(fmt(row) for row in str_rows)
+    return "\n".join(lines)
+
+
+def render_select_reply(raw_reply):
+    """Renders a SELECT reply dataframe-style: a real pandas DataFrame
+    when pandas is installed, a column-aligned text table otherwise. An
+    "ERR ..." reply passes through format_reply() unchanged - there is no
+    table to build from an error.
+    """
+    text = format_reply(raw_reply)
+    if text.startswith("ERR"):
+        return text
+
+    columns, rows = _parse_select_rows(text)
+    try:
+        return to_dataframe(columns, rows).to_string(index=False)
+    except RuntimeError:
+        return _text_table(columns, rows)
+
+
+def _print_response(command, raw_reply):
+    if _is_select(command):
+        print(render_select_reply(raw_reply))
+    else:
+        print(format_reply(raw_reply))
+
+
 def run_one_shot(conn, command):
-    print(format_reply(conn.send_command(command)))
+    _print_response(command, conn.send_command(command))
 
 
 def run_repl(conn):
@@ -108,7 +215,7 @@ def run_repl(conn):
             continue
 
         try:
-            print(format_reply(conn.send_command(stripped)))
+            _print_response(stripped, conn.send_command(stripped))
         except ConnectionError as e:
             print(f"connection lost: {e}")
             break

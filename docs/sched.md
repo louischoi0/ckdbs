@@ -1,6 +1,6 @@
 # KDS Scheduling Specification
 
-**Status:** Technical specification — input for development agents and internal reference. `[OPEN]` items must not be assumed. Consistent with `CPP-RULES.md` (thread-per-core, no exceptions, deterministic testability) and `KDS-DESIGN.md`.
+**Status:** Technical specification — input for development agents and internal reference. `[OPEN]` items must not be assumed. Consistent with `docs/rules.md` (thread-per-core, no exceptions, deterministic testability) and `docs/heap-and-tuple.md`.
 
 ---
 
@@ -36,7 +36,7 @@ Rules:
 - **Cooperative yielding is mandatory:** every task must yield within its budget (work-item count or injected-clock time). Any loop that cannot statically prove boundedness must contain an explicit yield check. Blocking syscalls inside tasks are forbidden; all waiting is expressed as suspension on I/O, timer, or message events.
 - **No preemption.** Signal- or timer-driven preemption is forbidden — it destroys deterministic simulation.
 - **No work-stealing.** A task created on a core runs and completes on that core. Moving *work* between cores happens only by sending a message that causes the peer to create its own task.
-- Task representation `[OPEN]`: callback/future chains vs C++20 stackless coroutines vs stackful fibers. The scheduler interface is a queue of runnable task handles, keeping all three viable. This decision is coupled to the language-feature whitelist in `CPP-RULES.md` §7.
+- Task representation `[OPEN]`: callback/future chains vs C++20 stackless coroutines vs stackful fibers. The scheduler interface is a queue of runnable task handles, keeping all three viable. This decision is coupled to the language-feature whitelist in `docs/rules.md` §7.
 
 ## 4. Scheduling Groups
 
@@ -56,7 +56,7 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 
 ## 6. Timers
 
-- Per-core **hierarchical timing wheel** keyed on the injected monotonic clock. No `std::chrono` reads in engine logic (`CPP-RULES.md` §4); the clock is a scheduler-provided interface.
+- Per-core **hierarchical timing wheel** keyed on the injected monotonic clock. No `std::chrono` reads in engine logic (`docs/rules.md` §4); the clock is a scheduler-provided interface.
 - Timer expiry enqueues the waiting task into its scheduling group; expiry order among same-tick timers is FIFO by registration for determinism.
 
 ## 7. Idle Policy

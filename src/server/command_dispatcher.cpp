@@ -4,7 +4,10 @@
 #include <cctype>
 #include <charconv>
 #include <sstream>
+#include <variant>
 
+#include "kds/exec/row_codec.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 
 namespace kds::server {
@@ -81,8 +84,28 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line) {
     }
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
-        if (IEquals(sub, "TABLE")) return HandleCreateTable(sub_rest);
+        if (IEquals(sub, "TABLE")) {
+            // Disambiguate the legacy bare-name form ("CREATE TABLE foo")
+            // from the SQL form ("CREATE TABLE foo (col type, ...)"): the
+            // bare form's argument is just a name, so it never contains
+            // '(' - the SQL grammar always does (ast.hpp: a column list is
+            // mandatory). Route on that rather than trying to parse both
+            // ways and see which succeeds.
+            if (sub_rest.find('(') != std::string_view::npos) {
+                return HandleCreateTableSql(Trim(line));
+            }
+            return HandleCreateTable(sub_rest);
+        }
         return {"ERR unknown CREATE target", false};
+    }
+    if (IEquals(cmd, "INSERT")) {
+        return HandleInsert(Trim(line));
+    }
+    if (IEquals(cmd, "SELECT")) {
+        return HandleSelect(Trim(line));
+    }
+    if (IEquals(cmd, "UPDATE")) {
+        return HandleUpdate(Trim(line));
     }
 
     return {"ERR unknown command", false};
@@ -209,7 +232,247 @@ DispatchOutcome CommandDispatcher::HandleFindTable(std::string_view args) {
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
-    return {"oid=" + std::to_string(oid.value()), false};
+
+    auto table_row = catalog_.GetSysTableRow(oid.value());
+    if (!table_row.ok()) {
+        return {"ERR " + table_row.status().message(), false};
+    }
+
+    const char* clustered =
+        table_row.value().clustered_type == catalog::ClusteredType::kBtree ? "BTREE" : "HEAP";
+
+    return {"oid=" + std::to_string(oid.value()) +
+                " root_page_id=" + std::to_string(table_row.value().desc_page_id) +
+                " clustered_type=" + clustered,
+            false};
+}
+
+DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::CreateTableStmt>(parsed.value())) {
+        return {"ERR expected a CREATE TABLE statement", false};
+    }
+    auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
+
+    auto existing = catalog_.FindTableOidByName(stmt.table_name);
+    if (existing.ok()) {
+        return {"EXISTS oid=" + std::to_string(existing.value()), false};
+    }
+    if (existing.status().code() != StatusCode::kNotFound) {
+        return {"ERR " + existing.status().message(), false};
+    }
+
+    // Resolve each column's parsed type_name against sys.types - the
+    // stand-in type registry (Catalog::ResolveTypeByName(), see its
+    // comment) - before touching storage, so a bad type name fails clean
+    // with nothing created.
+    catalog::Schema schema;
+    std::uint32_t pos = 0;
+    for (const auto& col : stmt.columns) {
+        auto type_row = catalog_.ResolveTypeByName(col.type_name);
+        if (!type_row.ok()) {
+            return {"ERR " + type_row.status().message(), false};
+        }
+
+        catalog::SysColumnRow row{};
+        row.pos = pos++;
+        catalog::SetName(row.name, col.name);
+        row.type_val = type_row.value().type_val;
+        row.len = type_row.value().len;
+        row.notnull = true;  // no NULL support yet - see row_codec.hpp
+        schema.columns.push_back(row);
+    }
+
+    auto oid =
+        catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema, stmt.clustered);
+    if (!oid.ok()) {
+        return {"ERR " + oid.status().message(), false};
+    }
+    return {"CREATED oid=" + std::to_string(oid.value()), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::InsertStmt>(parsed.value())) {
+        return {"ERR expected an INSERT statement", false};
+    }
+    auto& stmt = std::get<parser::InsertStmt>(parsed.value());
+
+    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) {
+        return {"ERR " + oid.status().message(), false};
+    }
+
+    auto access = catalog_.InitTableAccess(catalog::kNamespacePublic, oid.value());
+    if (!access.ok()) {
+        return {"ERR " + access.status().message(), false};
+    }
+
+    auto encoded = exec::EncodeRow(access.value().schema, stmt.values);
+    if (!encoded.ok()) {
+        return {"ERR " + encoded.status().message(), false};
+    }
+
+    // Single-page heap only: writes go straight to the table's root/desc
+    // page, no page-full overflow to a new page - heap page split policy
+    // is an open decision (CLAUDE.md) this doesn't attempt to resolve.
+    auto bytes = page_store_.Get(access.value().desc_page_id);
+    if (!bytes.ok()) {
+        return {"ERR " + bytes.status().message(), false};
+    }
+
+    heap::PageView page(bytes.value());
+    auto slot = page.InsertTuple(encoded.value(), /*xmin=*/catalog::kBootstrapXid);
+    if (!slot.ok()) {
+        return {"ERR " + slot.status().message(), false};
+    }
+
+    return {"INSERTED oid=" + std::to_string(oid.value()) + " slot=" + std::to_string(slot.value()),
+            false};
+}
+
+DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::SelectStmt>(parsed.value())) {
+        return {"ERR expected a SELECT statement", false};
+    }
+    auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+
+    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) {
+        return {"ERR " + oid.status().message(), false};
+    }
+
+    auto access = catalog_.InitTableAccess(catalog::kNamespacePublic, oid.value());
+    if (!access.ok()) {
+        return {"ERR " + access.status().message(), false};
+    }
+
+    auto bytes = page_store_.Get(access.value().desc_page_id);
+    if (!bytes.ok()) {
+        return {"ERR " + bytes.status().message(), false};
+    }
+    heap::PageView page(bytes.value());
+
+    // Same one-line-per-response contract as SHOW PAGE: a header line of
+    // column names, then one "\n"-escaped section per matching row
+    // (comma-joined values), never a raw newline byte.
+    std::ostringstream os;
+    bool first_col = true;
+    for (const auto& col : access.value().schema.columns) {
+        if (!first_col) os << ',';
+        os << catalog::NameView(col.name);
+        first_col = false;
+    }
+
+    std::uint16_t n = page.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto tuple = page.ReadTuple(i);
+        if (!tuple.ok()) continue;  // dead or out-of-range slot - skip
+
+        auto row = exec::DecodeRow(access.value().schema, tuple.value().payload);
+        if (!row.ok()) {
+            return {"ERR " + row.status().message(), false};
+        }
+
+        if (!exec::MatchesWhere(access.value().schema, row.value(), stmt.where)) continue;
+
+        os << "\\n";
+        bool first_val = true;
+        for (const auto& v : row.value()) {
+            if (!first_val) os << ',';
+            os << exec::FormatValue(v);
+            first_val = false;
+        }
+    }
+
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::UpdateStmt>(parsed.value())) {
+        return {"ERR expected an UPDATE statement", false};
+    }
+    auto& stmt = std::get<parser::UpdateStmt>(parsed.value());
+
+    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) {
+        return {"ERR " + oid.status().message(), false};
+    }
+
+    auto access = catalog_.InitTableAccess(catalog::kNamespacePublic, oid.value());
+    if (!access.ok()) {
+        return {"ERR " + access.status().message(), false};
+    }
+
+    // Validate every SET target names a real column before touching
+    // storage, so a bad column name fails clean with no partial update.
+    for (const auto& assignment : stmt.assignments) {
+        if (access.value().schema.FindColumn(assignment.col_name) == nullptr) {
+            return {"ERR unknown column '" + assignment.col_name + "'", false};
+        }
+    }
+
+    auto bytes = page_store_.Get(access.value().desc_page_id);
+    if (!bytes.ok()) {
+        return {"ERR " + bytes.status().message(), false};
+    }
+    heap::PageView page(bytes.value());
+
+    std::uint32_t updated = 0;
+    std::uint16_t n = page.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto tuple = page.ReadTuple(i);
+        if (!tuple.ok()) continue;  // dead or out-of-range slot - skip
+
+        auto row = exec::DecodeRow(access.value().schema, tuple.value().payload);
+        if (!row.ok()) {
+            return {"ERR " + row.status().message(), false};
+        }
+
+        if (!exec::MatchesWhere(access.value().schema, row.value(), stmt.where)) continue;
+
+        for (const auto& assignment : stmt.assignments) {
+            for (std::size_t c = 0; c < access.value().schema.columns.size(); ++c) {
+                if (catalog::NameView(access.value().schema.columns[c].name) ==
+                    assignment.col_name) {
+                    row.value()[c] = assignment.val;
+                    break;
+                }
+            }
+        }
+
+        auto encoded = exec::EncodeRow(access.value().schema, row.value());
+        if (!encoded.ok()) {
+            return {"ERR " + encoded.status().message(), false};
+        }
+
+        // HOT-style in-place overwrite - see PageView::OverwriteTuple's
+        // comment. No fallback to retire+reinsert if the new payload no
+        // longer fits the slot's original capacity (e.g. a grown
+        // varchar); that fails with OutOfSpace here, surfaced as ERR.
+        Status s = page.OverwriteTuple(i, encoded.value(), tuple.value().xmin, tuple.value().xmax,
+                                        tuple.value().undo_ptr);
+        if (!s.ok()) {
+            return {"ERR " + s.message(), false};
+        }
+        ++updated;
+    }
+
+    return {"UPDATED " + std::to_string(updated), false};
 }
 
 }  // namespace kds::server

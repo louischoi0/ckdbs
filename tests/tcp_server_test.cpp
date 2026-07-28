@@ -103,8 +103,9 @@ TEST_F(TcpServerTest, ServesMultipleCommandsBeforeStop) {
 
     EXPECT_EQ(SendAndReceiveLine(client, "PING"), "PONG");
     EXPECT_NE(SendAndReceiveLine(client, "SHOW META").find("version=1"), std::string::npos);
-    EXPECT_EQ(SendAndReceiveLine(client, "FIND TABLE tables"),
-              "oid=" + std::to_string(catalog::kSysTablesTable));
+    EXPECT_NE(SendAndReceiveLine(client, "FIND TABLE tables")
+                  .find("oid=" + std::to_string(catalog::kSysTablesTable)),
+              std::string::npos);
     EXPECT_EQ(SendAndReceiveLine(client, "STOP"), "OK bye");
 
     ::close(client);

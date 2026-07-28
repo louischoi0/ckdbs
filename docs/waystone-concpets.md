@@ -55,6 +55,14 @@ Consequence — **Keystone word amendment required (§10):** the `meta_handle:16
 
 Space model: Waystone size is proportional to **issued ids**, not live tuples (32 B × highest issued pk, sparsely allocated per §6). High-churn relations that burn ids accumulate dead entries; id-reuse or low-range reclamation policy is `[OPEN]`. This is one reason for the operational guidance in §8.
 
+### 4.1 Pk Generation Requirement `[CONFIRMED, 2026-07-28]`
+
+**A relation with `waystone_enabled` set must use system-generated, autoincrement pks. Callers must not supply their own `id`/pk value on insert into such a relation.**
+
+Rationale: this addressing scheme is pk-direct — `entry_index = pk` — so the directory (§6) is built around a dense, monotonically issued id sequence. A caller-supplied pk breaks that in two ways: (1) an arbitrary or sparse value forces the directory to allocate pages far ahead of actual row count (space model above, worst-cased instead of merely "high-churn"), and (2) a duplicate or out-of-order caller-supplied value can collide with or shadow an existing live entry, since entry identity is the pk itself with no separate handle to disambiguate. Plain heap tables (Waystone disabled) are unaffected and keep whatever pk-assignment policy they already have.
+
+This is enforced at the DDL/insert boundary, not inside Waystone itself — Waystone has no way to observe where a pk value came from. Enforcement mechanism (catalog-level column constraint vs. executor-level check at insert) is left to whichever component owns pk assignment; not itself an `[OPEN]` design question, just an implementation detail of an already-confirmed rule.
+
 ## 5. Entry Format — 256 Bits `[CONFIRMED]`
 
 One entry per tuple, exactly **256 bits (32 bytes)**, in ordinary 8 KB pages obtained through `storage::PageStore`.

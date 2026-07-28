@@ -56,6 +56,19 @@ static_assert(offsetof(SysObjectRow, name) == SysObjectRow::kNameOffset);
 
 // ---- sys.tables -----------------------------------------------------------
 
+// TODO(waystone, docs/waystone-concpets.md §7, T04/T12 in
+// docs/waystone-workplan.md): this row will gain `waystone_enabled` (+
+// coverage-complete state) and `waystone_dir_root: PageId`, defaulting to
+// disabled / kInvalidPageId. Rule to enforce once that flag exists
+// (docs/waystone-concpets.md §4.1, confirmed 2026-07-28): a table with
+// waystone_enabled set must use system-generated, autoincrement pks -
+// callers must not supply their own id/pk on insert into such a table.
+// Waystone addresses entries directly by pk (entry_index = pk), so a
+// caller-supplied, non-monotonic, or reused pk would break the
+// directory's dense-growth assumption and can collide with an existing
+// live entry. Enforce at the DDL/insert boundary (wherever pk assignment
+// is owned), not inside Waystone itself - Waystone has no way to observe
+// where a pk value came from.
 struct SysTableRow {
     Oid oid;
     Oid namespace_oid;

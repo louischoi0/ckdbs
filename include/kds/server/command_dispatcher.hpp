@@ -16,18 +16,18 @@
 // (TcpServer, tcp_server.hpp) - Dispatch() can be unit-tested directly,
 // with no socket or thread involved.
 //
-// Command set is intentionally small and matches what's actually built
-// today: src/parser can parse full CREATE TABLE/INSERT/SELECT/UPDATE
-// statements, but nothing here calls into it yet - there is no query
-// executor (the exec_* resumable state machines the legacy engine had),
-// and column types in that grammar can't be resolved to on-disk type_val/
-// len without the not-yet-ported type registry (see parser/ast.hpp's file
-// comment). CREATE TABLE below is therefore a minimal wire-level command,
-// not the SQL statement: it takes a bare name, no column list, and always
-// creates a zero-column ClusteredType::kHeap table. Real INSERT/SELECT and
-// SQL-grammar CREATE TABLE support arrive once the executor and type
-// registry exist; until then this only exposes what Catalog/SuperBlock
-// can already do without them.
+// Command set was originally a small, fixed vocabulary because nothing
+// called into src/parser: there was no query executor, and column types
+// in its grammar couldn't be resolved to on-disk type_val/len without a
+// type registry. That gap is now closed for a narrow scope - see
+// src/exec/row_codec.hpp's file comment for exactly what's supported
+// (no NULLs, no float/decimal columns, fixed-width ints + varchar only) -
+// by using Catalog::ResolveTypeByName() (sys.types, populated by
+// Bootstrap()) as the type registry stand-in. UPDATE is still not wired
+// in. CREATE TABLE keeps its original bare-name form (no parens - always
+// a zero-column ClusteredType::kHeap table) alongside the new SQL form,
+// disambiguated by whether a '(' follows the table name, so existing
+// callers of the bare form are unaffected.
 //
 // Protocol: one command per line, case-insensitive keyword, arguments
 // space-separated. A response is always exactly one line back (never
@@ -72,14 +72,44 @@ public:
     //                            raw text, since a payload can contain any
     //                            byte including '\n' - see HexEncode()'s
     //                            comment in the .cpp).
-    //   FIND TABLE <name>     -> "oid=<n>" or "ERR ..."
+    //   FIND TABLE <name>     -> "oid=<n> root_page_id=<n> clustered_type=<HEAP|BTREE>"
+    //                            or "ERR ..."
     //   CREATE TABLE <name>   -> "CREATED oid=<n>" if newly created,
     //                            "EXISTS oid=<n>" if a table with this
     //                            name already exists (idempotent - does
     //                            NOT error or create a duplicate). Always
     //                            a zero-column ClusteredType::kHeap table
-    //                            under the public namespace - see the file
-    //                            comment above for why.
+    //                            under the public namespace. Legacy bare
+    //                            form - no column list.
+    //   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE]
+    //                         -> same CREATED/EXISTS response as above,
+    //                            but with real columns: parsed via
+    //                            src/parser, types resolved through
+    //                            Catalog::ResolveTypeByName(). BTREE is
+    //                            parsed but rejected (not implemented -
+    //                            see catalog.cpp). See
+    //                            src/exec/row_codec.hpp for the supported
+    //                            column type set.
+    //   INSERT INTO <name> VALUES (<val> [, ...])
+    //                         -> "INSERTED oid=<table_oid> slot=<n>" or
+    //                            "ERR ...". Values are positional, one per
+    //                            schema column in `pos` order - see
+    //                            ast.hpp: no explicit column list in this
+    //                            grammar.
+    //   SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]
+    //                         -> a full heap-page scan (root page only -
+    //                            no multi-page chains yet), WHERE-filtered.
+    //                            One wire line: "col1,col2,..." then one
+    //                            "\n"-escaped (see SHOW PAGE above) section
+    //                            per matching row, comma-joined values.
+    //                            No rows matching -> just the header line.
+    //   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*]
+    //                         -> "UPDATED <n>" (n = row count touched) or
+    //                            "ERR ...". In-place HOT-style overwrite
+    //                            (PageView::OverwriteTuple) - fails with
+    //                            an ERR (no fallback) if a changed value
+    //                            no longer fits the tuple's original slot
+    //                            capacity, e.g. growing a varchar.
     DispatchOutcome Dispatch(std::string_view line);
 
 private:
@@ -88,6 +118,10 @@ private:
     DispatchOutcome HandleFindTable(std::string_view args);
     DispatchOutcome HandleShowPage(std::string_view args);
     DispatchOutcome HandleCreateTable(std::string_view args);
+    DispatchOutcome HandleCreateTableSql(std::string_view line);
+    DispatchOutcome HandleInsert(std::string_view line);
+    DispatchOutcome HandleSelect(std::string_view line);
+    DispatchOutcome HandleUpdate(std::string_view line);
 
     SuperBlock& superblock_;
     catalog::Catalog& catalog_;

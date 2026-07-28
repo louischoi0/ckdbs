@@ -1,6 +1,6 @@
 # KDS Wire Protocol — Technical Specification (KWP/1)
 
-**Status:** **Official specification**, decisions confirmed 2026-07-28. Supersedes the newline text protocol documented in `docs/client-manual.md` (retained as a loopback debug surface only, §12). Markers: `[CONFIRMED]` — decided; `[PROPOSED]` — this document's default within a confirmed decision, adopt or amend before implementing the affected part; `[OPEN]` — do not assume. Consistent with `docs/rules.md`, `docs/sched.md`, `docs/wal.md`, `docs/waystone-concept.md`.
+**Status:** **Official specification**, decisions confirmed 2026-07-28. This file's own path is `docs/protocol.md`; the companion workplan is `docs/protocol-wp.md`. Supersedes the newline text protocol documented in `docs/client-manual.md` (retained as a loopback debug surface only, §12). Markers: `[CONFIRMED]` — decided; `[PROPOSED]` — this document's default within a confirmed decision, adopt or amend before implementing the affected part; `[OPEN]` — do not assume. Consistent with `docs/rules.md`, `docs/sched.md`, `docs/waystone-concpets.md`. Cross-references `docs/wal.md`, which does not exist in the repo yet as of this writing (§9, §15-5) — treat those as forward references, not resolved links.
 
 ## 0. Decision Record `[CONFIRMED 2026-07-28]`
 

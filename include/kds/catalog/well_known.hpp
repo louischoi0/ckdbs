@@ -65,6 +65,25 @@ inline constexpr PageId kCatalogPageIndexes = 8;
 // rather than one from a real transaction.
 inline constexpr std::uint64_t kBootstrapXid = 1;
 
+// sys.columns/sys.types `type_val` tags for the scalar types Bootstrap()
+// registers. Placeholder values (no external format they must match) but
+// named rather than left as magic numbers now that row_codec.cpp switches
+// on them to decide on-disk encoding - see that file's comment for which
+// of these are actually encodable today (kTypeValFloat/kTypeValDecimal
+// are declared but not yet given an on-disk encoding, a currently open
+// decision - see CLAUDE.md's KWP `DECIMAL` wire encoding open item, which
+// extends to storage until a type registry exists).
+inline constexpr std::uint32_t kTypeValInt8 = 1;
+inline constexpr std::uint32_t kTypeValInt16 = 2;
+inline constexpr std::uint32_t kTypeValInt32 = 3;
+inline constexpr std::uint32_t kTypeValInt64 = 4;
+inline constexpr std::uint32_t kTypeValUint64 = 5;
+inline constexpr std::uint32_t kTypeValFloat = 6;
+inline constexpr std::uint32_t kTypeValDecimal = 7;
+inline constexpr std::uint32_t kTypeValBool = 8;
+inline constexpr std::uint32_t kTypeValVarchar = 9;
+inline constexpr std::uint32_t kTypeValChar = 10;
+
 enum class ClusteredType : std::uint8_t {
     kHeap = 0,
     kBtree = 1,

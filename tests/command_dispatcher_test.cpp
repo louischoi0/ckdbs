@@ -65,7 +65,11 @@ TEST_F(CommandDispatcherTest, ShowTablesIncludesBootstrapTables) {
 TEST_F(CommandDispatcherTest, FindTableReturnsOid) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("FIND TABLE tables");
-    EXPECT_EQ(out.response, "oid=" + std::to_string(catalog::kSysTablesTable));
+    EXPECT_NE(out.response.find("oid=" + std::to_string(catalog::kSysTablesTable)),
+              std::string::npos);
+    EXPECT_NE(out.response.find("root_page_id=" + std::to_string(catalog::kCatalogPageTables)),
+              std::string::npos);
+    EXPECT_NE(out.response.find("clustered_type=HEAP"), std::string::npos);
 }
 
 TEST_F(CommandDispatcherTest, FindTableUnknownNameIsError) {

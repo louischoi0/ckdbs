@@ -1,6 +1,8 @@
 #include "kds/catalog/catalog.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 
 #include "kds/storage/heap/heap_page.hpp"
 
@@ -136,11 +138,14 @@ Status Catalog::Bootstrap() {
     }
 
     // Phase 4: sys.types rows for the well-known scalar types. type_val
-    // below is a placeholder tag: the legacy engine pulled these from its
-    // types.c registry (not yet ported to this project - see storage/),
-    // so there is nothing to look them up from yet. Replace with real
-    // values once that registry exists; nothing in this codebase depends
-    // on the specific numbers today.
+    // below (well_known.hpp's kTypeVal* constants) is a placeholder tag:
+    // the legacy engine pulled these from its types.c registry (not yet
+    // ported to this project - see storage/). It is no longer numbering
+    // trivia though - src/exec/row_codec.cpp switches on these values to
+    // pick an on-disk encoding, and Catalog::ResolveTypeByName() below
+    // resolves a parsed CREATE TABLE column's type_name to one of these
+    // rows by name. Replace with real registry-sourced values later; the
+    // numbers themselves still don't need to match anything external.
     struct SysTypeBootstrap {
         Oid oid;
         std::string_view name;
@@ -148,16 +153,16 @@ Status Catalog::Bootstrap() {
         std::uint32_t len;
     };
     static constexpr std::array<SysTypeBootstrap, 10> kTypes{{
-        {kTypeInt8, "int8", 1, 1},
-        {kTypeInt16, "int16", 2, 2},
-        {kTypeInt32, "int32", 3, 4},
-        {kTypeInt64, "int64", 4, 8},
-        {kTypeUint64, "uint64", 5, 8},
-        {kTypeFloat, "float", 6, 4},
-        {kTypeDecimal, "decimal", 7, 8},
-        {kTypeBool, "bool", 8, 1},
-        {kTypeVarchar, "varchar", 9, 0},
-        {kTypeChar, "char", 10, 1},
+        {kTypeInt8, "int8", kTypeValInt8, 1},
+        {kTypeInt16, "int16", kTypeValInt16, 2},
+        {kTypeInt32, "int32", kTypeValInt32, 4},
+        {kTypeInt64, "int64", kTypeValInt64, 8},
+        {kTypeUint64, "uint64", kTypeValUint64, 8},
+        {kTypeFloat, "float", kTypeValFloat, 4},
+        {kTypeDecimal, "decimal", kTypeValDecimal, 8},
+        {kTypeBool, "bool", kTypeValBool, 1},
+        {kTypeVarchar, "varchar", kTypeValVarchar, 0},
+        {kTypeChar, "char", kTypeValChar, 1},
     }};
     for (const auto& t : kTypes) {
         if (Status s = InsertTypeRow(t.oid, t.name, t.type_val, t.len); !s.ok()) {
@@ -305,7 +310,35 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
     if (schema.columns.empty()) {
         return Status::NotFound("no columns for this rel_id");
     }
+
+    // ScanAll() returns rows in heap slot order, which happens to match
+    // insertion order (CreateTable() inserts columns in position order)
+    // but isn't guaranteed to stay that way once updates/compaction exist.
+    // Row codec callers (src/exec/row_codec.cpp) depend on schema.columns
+    // being in `pos` order to line up positionally with an INSERT's value
+    // list, so pin that ordering explicitly here rather than leaning on
+    // scan-order coincidence.
+    std::sort(schema.columns.begin(), schema.columns.end(),
+              [](const SysColumnRow& a, const SysColumnRow& b) { return a.pos < b.pos; });
+
     return schema;
+}
+
+StatusOr<SysTypeRow> Catalog::ResolveTypeByName(std::string_view name) {
+    auto rows = ScanAll<SysTypeRow>(store_, kCatalogPageTypes);
+    if (!rows.ok()) return rows.status();
+
+    for (const auto& row : rows.value()) {
+        std::string_view row_name = NameView(row.name);
+        if (row_name.size() == name.size() &&
+            std::equal(row_name.begin(), row_name.end(), name.begin(), [](char x, char y) {
+                return std::tolower(static_cast<unsigned char>(x)) ==
+                       std::tolower(static_cast<unsigned char>(y));
+            })) {
+            return row;
+        }
+    }
+    return Status::NotFound("unknown type '" + std::string(name) + "'");
 }
 
 StatusOr<TableAccess> Catalog::InitTableAccess(Oid namespace_oid, Oid oid) {

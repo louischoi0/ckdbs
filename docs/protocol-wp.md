@@ -1,6 +1,6 @@
 # KDS Wire Protocol (KWP/1) — Workplan
 
-**Status:** Official work-instruction document, companion to `docs/wire-protocol.md` (the specification). Separate from the WAL and Waystone workplans by design — task numbering is `P##` to avoid collision with Waystone's `T##`. This file holds tasks only; normative design lives in the specification. When they disagree, the specification wins — flag, don't guess.
+**Status:** Official work-instruction document, companion to `docs/protocol.md` (the specification; this file's own path is `docs/protocol-wp.md`). Separate from the WAL and Waystone workplans by design — task numbering is `P##` to avoid collision with Waystone's `T##`. This file holds tasks only; normative design lives in the specification. When they disagree, the specification wins — flag, don't guess.
 
 Every task is startable now: where a neighboring subsystem is missing (executor, WAL, multi-core messaging), the task names the seam or fixture it builds against, and real integration is a later task. Spec `[OPEN]` items are isolated behind interfaces; no task requires deciding one.
 
@@ -28,7 +28,7 @@ Done when: `Statement` carries it; fingerprinting (Waystone T11) treats SET as n
 
 **P04 — Cross-link the Waystone workplan.**
 File: `docs/waystone-workplan.md`. Amend T11 (fingerprint is computed at KWP PARSE; `S_PARSE_OK` returns `pattern_id`) and T18 (`pattern_id`/`arg_hash` arrive via the session's plan context, not a separate plumbing path).
-Done when: both tasks reference `docs/wire-protocol.md` §5.
+Done when: both tasks reference `docs/protocol.md` §5.
 
 **P05 — Protocol header `kwp.hpp`.**
 File: `include/kds/wire/kwp.hpp`. Frame header constants (offsets, `kMaxFrame` as a named constexpr with `[OPEN]` note), frame-type enums (client/server, values frozen — append-only), capability bits, durability enum mirroring `docs/wal.md` §1, error code taxonomy skeleton (`category u16 << 16 | detail u16`, categories mirroring `Status`), handshake payload structs (mirror-struct + offset `static_assert`s), codec function declarations. No logic.

@@ -1,6 +1,6 @@
 # KDS C++ Coding Rules
 
-Normative coding rules for the KDS storage engine. This file covers **rules only**; design rationale and architecture live in `KDS-DESIGN.md`, and the agent working guide is `CLAUDE.md`. Rules marked **[CONFIRMED]** are binding; the final section lists rule areas that are **not yet decided** — do not invent policy for them.
+Normative coding rules for the KDS storage engine. This file covers **rules only**; design rationale and architecture live in `docs/heap-and-tuple.md` (referred to elsewhere by its historical name `KDS-DESIGN.md`), and the agent working guide is `CLAUDE.md`. Rules marked **[CONFIRMED]** are binding; the final section lists rule areas that are **not yet decided** — do not invent policy for them.
 
 ---
 
@@ -35,7 +35,7 @@ Normative coding rules for the KDS storage engine. This file covers **rules only
 ## 5. On-Disk Format Rules `[CONFIRMED]`
 
 - Fixed-width integer types only (`uint32_t`, `uint64_t`, ...) in any persisted structure.
-- **Compiler bitfields are forbidden** in on-disk formats. Packed fields (e.g., the Keystone column `id:40 | flags:8 | meta_handle:16`) are encoded/decoded with explicit shift/mask `constexpr` helpers.
+- **Compiler bitfields are forbidden** in on-disk formats. Packed fields (e.g., the Keystone column `id:40 | flags:8 | reserved:16` — amended 2026-07-28, was `meta_handle:16`; see `docs/heap-and-tuple.md` §4) are encoded/decoded with explicit shift/mask `constexpr` helpers.
 - Every persisted struct has `static_assert`s for its total size and each field offset.
 - Page IDs are unsigned 32-bit; `0xFFFFFFFF` is the invalid sentinel; page IDs never appear in signed types.
 - Tuple ids stored outside the Keystone column (B+ tree keys, `min_key`, hint entries, metadata back-references) are zero-extended `uint64_t`; upper 24 bits are always 0.

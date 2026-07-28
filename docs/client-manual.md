@@ -1,5 +1,16 @@
 # KDS Client Manual
 
+> **Heads up:** a new binary wire protocol, **KWP/1**, is confirmed
+> (2026-07-28) as the eventual replacement for everything below — see
+> `docs/protocol.md` (spec) and `docs/protocol-wp.md` (task breakdown).
+> Once KWP/1's handshake and session layer actually exist in code, this
+> newline text protocol becomes an off-by-default loopback debug surface
+> and this manual gets rewritten around KWP/1. As of this note, only the
+> KWP frame format itself has landed in code (`include/kds/wire/kwp.hpp`,
+> `src/wire/frame_codec.cpp`) — no handshake, sessions, or client-visible
+> behavior change yet, so everything documented below is still accurate
+> and still how `kds_server` actually behaves today.
+
 How to talk to the `kds_server` process from a client: the wire protocol,
 the full command reference, and how to use the bundled CLI tool. This
 documents the *client-facing* surface only - for server internals see
@@ -58,7 +69,11 @@ printf 'PING\n' | nc 127.0.0.1 15432
 | `SHOW TABLES` | none | space-separated table names | Includes system catalog tables (`tables`, `objects`, `columns`, ...) alongside any user tables. |
 | `SHOW PAGE <page_id> [VALUES]` | page id (`uint32_t`), optional `VALUES` keyword | heap page header + slot directory dump | Development/inspection only, not part of any transactional read path. Still one wire line - see below for the escaping convention that makes it render as multiple lines. `VALUES` additionally hex-encodes each live slot's tuple payload (dead slots never show a value). `ERR ...` if the id is missing, non-numeric, unknown to the store, or the trailing option isn't `VALUES`. |
 | `FIND TABLE <name>` | table name | `oid=<n>` | `ERR ...` if the name is unknown. |
-| `CREATE TABLE <name>` | table name | `CREATED oid=<n>` or `EXISTS oid=<n>` | Idempotent: if a table with this name already exists, its oid is returned and nothing is created - never errors or creates a duplicate. Always a zero-column `ClusteredType::kHeap` table under the public namespace; this is a minimal wire-level command, not the SQL-grammar `CREATE TABLE` that `src/parser` can parse (no column list, no type resolution - see `command_dispatcher.hpp`'s file comment for why). |
+| `CREATE TABLE <name>` | table name | `CREATED oid=<n>` or `EXISTS oid=<n>` | Idempotent: if a table with this name already exists, its oid is returned and nothing is created - never errors or creates a duplicate. Always a zero-column `ClusteredType::kHeap` table under the public namespace. Legacy bare form - no column list. |
+| `CREATE TABLE <name> (<col> <type> [, ...]) [HEAP \| BTREE]` | column list, optional storage clause | `CREATED oid=<n>` or `EXISTS oid=<n>` | The real SQL-grammar form, parsed via `src/parser`. Same idempotency as the bare form. Each `<type>` is resolved case-insensitively against `sys.types` (`Catalog::ResolveTypeByName()`); see `src/exec/row_codec.hpp` for the supported set (`int8`/`int16`/`int32`/`int64`/`uint64`/`bool`/`char`/`varchar` are insertable today - `float`/`decimal` can be declared but not populated, no on-disk encoding decided yet). `BTREE` parses but is rejected (`ERR ...`) - not implemented. Disambiguated from the bare form purely by whether `(` follows the name. |
+| `INSERT INTO <name> VALUES (<val> [, ...])` | positional values, one per column in `pos` order | `INSERTED oid=<table_oid> slot=<n>` | No explicit column list in this grammar (ast.hpp) - value count must exactly match the schema. `ERR ...` on a type/width mismatch, a NULL value (not supported yet), or if the table's single heap page is full (no multi-page overflow yet). |
+| `SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]` | table name, optional AND-only WHERE | header line + one row per match | Full scan of the table's root heap page only (no multi-page chains, no index use). See below for the `\n`-escaping convention this reuses from `SHOW PAGE`. No projection - column list is always `*`. |
+| `UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*]` | SET list, optional WHERE | `UPDATED <n>` | In-place (HOT-style) overwrite of each matching row. `ERR ...` if a new value no longer fits the row's original slot reservation (e.g. growing a `varchar`) - no fallback to relocate the row yet. |
 
 Anything else, or a blank line, gets `ERR unknown command` / `ERR empty
 command` / `ERR unknown <SHOW|FIND|CREATE> target` as appropriate - the
@@ -101,13 +116,16 @@ slot[1] offset=8110 length=33 dead=1
 a literal `\n` byte, which would desync the one-line-per-response
 contract if spliced in unescaped.)
 
-`src/parser` can parse full CREATE TABLE/INSERT/SELECT/UPDATE SQL
-statements, but nothing here calls into it yet - there is no query
-executor, and column types in that grammar can't be resolved to on-disk
-storage without a type registry that hasn't been ported yet. `CREATE
-TABLE <name>` above is a different, minimal thing: a bare-name wire
-command with no column list. Expect this table to grow as the executor
-and type registry land.
+`src/parser`'s full CREATE TABLE/INSERT/SELECT/UPDATE SQL grammar is now
+wired up (`command_dispatcher.cpp`'s `HandleCreateTableSql`/`HandleInsert`/
+`HandleSelect`/`HandleUpdate`), using `sys.types` (via
+`Catalog::ResolveTypeByName()`) as a stand-in for the not-yet-ported real
+type registry, and `src/exec/row_codec.cpp` as the (still narrow-scope)
+executor: no NULLs, no `float`/`decimal` values, single-page heaps only.
+See the table above and `command_dispatcher.hpp`'s doc comment for exact
+behavior. `CREATE TABLE <name>` with no parens is a separate, older thing
+that still exists alongside it: a bare-name wire command with no column
+list.
 
 ## 4. Using `tools/ckdbs_cli.py`
 
@@ -123,7 +141,19 @@ python3 tools/ckdbs_cli.py SHOW PAGE 500 VALUES
 python3 tools/ckdbs_cli.py FIND TABLE accounts
 python3 tools/ckdbs_cli.py CREATE TABLE accounts
 python3 tools/ckdbs_cli.py --host 127.0.0.1 --port 15432 SHOW TABLES
+
+# Full SQL grammar - quote the statement as one shell argument so '(', ','
+# and quoted string literals reach the CLI intact:
+python3 tools/ckdbs_cli.py "CREATE TABLE accounts (id int64, name varchar, balance int64)"
+python3 tools/ckdbs_cli.py "INSERT INTO accounts VALUES (1, 'alice', 100)"
+python3 tools/ckdbs_cli.py "SELECT * FROM accounts WHERE id = 1"
+python3 tools/ckdbs_cli.py "UPDATE accounts SET balance = 150 WHERE id = 1"
 ```
+
+`tools/demo_queries.py` runs a fixed ~10-query CREATE TABLE/INSERT/SELECT/
+UPDATE sequence end-to-end against a running server and prints each
+query's reply - a quick way to see the whole path work without typing it
+out by hand.
 
 Exit code is 0 regardless of whether the server replied `OK`/`PONG` or
 `ERR ...` - the CLI does not interpret the reply, it only fails (exit 1)

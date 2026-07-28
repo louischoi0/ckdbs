@@ -74,6 +74,15 @@ public:
     StatusOr<std::vector<SysObjectRow>> ListTables();
 
     StatusOr<Schema> BuildSchemaFromColumns(Oid rel_id);
+
+    // Resolves a CREATE TABLE column's raw, unresolved type_name (e.g.
+    // "int64", "varchar") to its sys.types row, case-insensitively.
+    // NotFound if no such type is registered. This is today's stand-in
+    // for the not-yet-ported type registry (ast.hpp's file comment):
+    // Bootstrap() already populates sys.types with every scalar type
+    // Catalog knows about, so resolving by name against that table is a
+    // real lookup, not a guess.
+    StatusOr<SysTypeRow> ResolveTypeByName(std::string_view name);
     StatusOr<TableAccess> InitTableAccess(Oid namespace_oid, Oid oid);
 
     // Updates the desc_page_id field of table_oid's sys.tables row in

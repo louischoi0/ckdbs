@@ -12,6 +12,11 @@ endif()
 add_compile_options(-Wall -Wextra)
 
 add_library(kds
+    src/storage/crc32c.cpp
+    src/storage/page_header.cpp
+    src/storage/page_device.cpp
+    src/storage/file_page_device.cpp
+    src/storage/memory_page_device.cpp
     src/storage/keystone.cpp
     src/storage/heap/heap_page.cpp
     src/storage/in_memory_page_store.cpp
@@ -28,6 +33,8 @@ add_library(kds
     src/parser/lexer.cpp
     src/parser/ast.cpp
     src/parser/parser.cpp
+    src/wire/frame_codec.cpp
+    src/exec/row_codec.cpp
 )
 target_include_directories(kds PUBLIC include)
 

@@ -1,7 +1,7 @@
 # KDS Design Specification
 
-**Status:** Living document — input for development agents. Sections marked `[CONFIRMED]` are settled design; `[OPEN]` items must not be assumed by implementers.
-**Last updated:** 2026-07-27
+**Status:** Living document — input for development agents. Sections marked `[CONFIRMED]` are settled design; `[OPEN]` items must not be assumed by implementers. This file is the design spec CLAUDE.md and other docs refer to as "KDS-DESIGN.md" — that name is historical (pre-dates the move into `docs/`); this path is the actual, current location.
+**Last updated:** 2026-07-27 (Keystone layout and metadata-pool sections amended 2026-07-28 — see §4, §5; in-memory single-copy rule retired 2026-07-28 in favor of page-latch consistency — see §7)
 
 ---
 
@@ -27,6 +27,12 @@
 - Because `min_key` never changes, readers can prune pages by key range **without locking**.
 - Physical relayout must always honor the target page's `min_key` bound. Relocation across key ranges is done by writing tuples into **new pages with newly assigned `min_key` values**, never by mutating an existing page's `min_key`.
 
+### 3.1a Per-page epoch counter `[CONFIRMED, amended 2026-07-28]`
+
+- Every heap page header carries an **epoch counter**, bumped whenever the tuples physically on that page move (relayout, page rebuild). Unlike `min_key`, the epoch is mutable by design.
+- Purpose: Waystone (`docs/waystone-concpets.md` §3) records the page epoch at the moment it observes a tuple's location; a consumer trusts that location only while `entry.page_epoch == page's current epoch`. This is how an advisory structure avoids being a second authoritative index — no synchronous double-write on relayout, just an epoch bump.
+- Storage location `[OPEN]`: header field (on-disk format, follows §5 of `docs/rules.md`) vs. a core-local epoch table keyed by `page_id`. Epoch width and wraparound handling are also `[OPEN]`. Do not assume either.
+
 ### 3.2 Page layout (carried over from existing implementation)
 
 - Slot directory grows downward from the heap area offset; tuple data grows upward from the top; free space is the gap (`upper - lower`).
@@ -34,7 +40,7 @@
 - Per-tuple MVCC header: `xmin`, `xmax`, `undo_ptr`, `data_len`, flags.
 - Slot entries carry their own `flags` (e.g., `DEAD`) and `length`; retirement marks the slot dead rather than compacting eagerly.
 
-## 4. Keystone Column — 64-bit Tuple Header Word `[CONFIRMED]`
+## 4. Keystone Column — 64-bit Tuple Header Word `[CONFIRMED, amended 2026-07-28]`
 
 Every tuple's **first column is mandatory**: a single 64-bit word (the "Keystone column" / "Keystone word"). This is a self-imposed constraint of KDS.
 
@@ -44,7 +50,9 @@ Bit layout (one `u64`):
 |---|---|---|
 | `id` | 40 bits | Tuple primary key. Per-relation capacity ≈ 1.1 × 10^12 issued IDs. |
 | `flags` | 8 bits | Transaction/status byte (Oracle lock-byte style; may reference a per-page transaction slot). Tuple-level status such as DEAD stays in the slot directory, not here. |
-| `meta_handle` | 16 bits | **Temporary** identifier linking the tuple to its relation's metadata pool entry (Section 5). Not persistent in meaning. |
+| `reserved` | 16 bits | **Amendment 2026-07-28:** the former `meta_handle` field. Waystone (`docs/waystone-concpets.md` §4) addresses its per-tuple entries directly by `id`, not by a handle stored here, so this field has no current addressing purpose. Writers must set it to 0; readers must ignore it. Repurposing (e.g. a hot-tier accelerator handle) is `[OPEN]` — see spec §11. |
+
+Waystone-enabled relations additionally require **system-generated, autoincrement `id` values**: when a relation has `waystone_enabled` set (`docs/waystone-concpets.md` §7), callers must not supply their own `id`/pk on insert. Rationale: Waystone addressing is `entry_index = pk` (spec §4) directly off the issued id sequence; a user-supplied, non-monotonic, or reused pk would defeat the directory's dense/sparse-but-ordered growth assumption (spec §6) and could collide with an existing live entry. This rule binds only relations with Waystone on — a plain heap table (Waystone disabled) is unaffected and keeps whatever pk-assignment policy it already has.
 
 Implementation rules:
 
@@ -52,9 +60,11 @@ Implementation rules:
 - The whole word is updated with **atomic u64 operations (CAS)** under concurrency; fields must never be torn across writes.
 - External structures (B-tree keys, `min_key`, hint index entries, metadata back-references) store the id as a **zero-extended `u64`**. Invariant: upper 24 bits are 0. Do not 5-byte-pack ids.
 
-## 5. Per-Relation Metadata Pool `[CONFIRMED]`
+## 5. Per-Relation Metadata Pool — **superseded 2026-07-28**
 
-Purpose: metadata for **physical relayout and statistics only** — never on the normal read path. Normal reads go through the B+ tree (Section 6).
+> **Superseded by Waystone.** This bounded-pool design (65,536-entry cap, 16-bit `meta_handle` addressing, eviction management) is replaced in full by **Waystone**'s full-coverage, pk-direct model — see `docs/waystone-concpets.md`, decision recorded 2026-07-28. The `meta_handle` field is retired (§4). Kept below for history only; do not implement against this section.
+
+Purpose (historical): metadata for **physical relayout and statistics only** — never on the normal read path. Normal reads go through the B+ tree (Section 6).
 
 - Each relation owns a metadata pool tracking **up to 65,536 tuples** (addressed by the 16-bit `meta_handle`).
 - Pool entries are **fixed-length records** stored in standard **8 KB pages**, so a handle resolves to its entry with **O(1) arithmetic** (`page = handle >> k`, `slot = handle & mask`). Choose entries-per-page as a **power of two**; accept per-page slack rather than splitting entries across page boundaries.
@@ -69,9 +79,13 @@ Purpose: metadata for **physical relayout and statistics only** — never on the
   - End goal: KDS **automatically creates and manages hint indexes** from observed query patterns. Zero user administration.
   - Hint entries are advisory: a consumer must validate the target tuple (PK identity + MVCC visibility) and fall back to the B+ tree on mismatch. Hints may be stale; they may never cause wrong results.
 
-## 7. In-Memory Single-Copy Rule `[CONFIRMED]`
+## 7. Page-Latch Consistency Model `[CONFIRMED, supersedes former "In-Memory Single-Copy Rule", 2026-07-28]`
 
-- An identical tuple is kept **at most once** in program memory at all times, managed through a hash-table-based lookup. This is a defensive design for data integrity: all in-memory references converge on the single canonical copy.
+- **The single canonical in-memory tuple concept is retired.** There is no hash-table-based convergence enforcing that an identical tuple exists at most once in program memory.
+- Consistency is instead kept at the **page** level: a page frame is **pinned** for the duration of any access and **latched** — shared latch for reads, exclusive latch for structural mutation (slot directory changes, compaction, relayout). Tuple bytes are read/written directly within the pinned, latched frame; there is no separate tuple-identity cache to keep coherent with the page.
+- Latching is **core-local**, consistent with the thread-per-core/shared-nothing rule (`docs/rules.md` §3): a page is owned by exactly one core, and its latch serializes cooperative tasks on that core across suspension points. It is not a cross-core lock — cross-core tuple access continues to go through forwarding (`docs/protocol.md`), not shared-memory locking.
+- Query executors may still copy tuple bytes into private working buffers for processing (row buffers, projections, etc.). These are ephemeral and do not need to converge on, or compete with, any canonical copy — there isn't one.
+- The Keystone word's atomic-CAS requirement (§4) is unaffected and applies independent of latching: even under a page latch, the 64-bit word is read/written via `std::atomic<uint64_t>` so fields never tear.
 
 ## 8. Statistics-Driven Physical Relayout `[CONFIRMED — direction]`
 
@@ -82,12 +96,16 @@ Purpose: metadata for **physical relayout and statistics only** — never on the
 ## 9. Open Items `[OPEN — do not assume]`
 
 - **Implementation language:** C vs C++ (userspace). Undecided.
-- Metadata pool **eviction policy** (LRU vs frequency-based) and **invalidation mechanism** on eviction (clear-on-evict vs validate-on-use).
-- **Persistence class of metadata pages** (WAL-logged vs unlogged/no-checkpoint).
+- **Persistence class of metadata pages** (WAL-logged vs unlogged/no-checkpoint) — now framed as Waystone page persistence; see `docs/waystone-concpets.md` §11.
 - Heap **page split policy** when a page is full (how new `min_key` boundaries are chosen).
 - Hint index **admission/eviction policy** and safety classification per query template (trusted for unique lookups vs prefetch-only).
-- MVCC versioning semantics of the single-copy rule (identity per version vs per tuple) and memory reclamation scheme.
-- Relations exceeding practical id issuance (per-relation u64 opt-in or history-table policy).
+- MVCC version identity semantics (identity per version vs per tuple) — independent of the retired single-copy rule (§7).
+- Buffer-pool page-frame reclamation policy (pin refcount vs epoch-based eviction) under the page-latch model (§7).
+- Relations exceeding practical id issuance (per-relation u64 opt-in or history-table policy) — now sharpened by Waystone's id-reuse/low-range reclamation open item, spec §11.
+- Per-page epoch counter storage location and width/wraparound (`docs/waystone-concpets.md` §3, §11 — new as of the 2026-07-28 amendment).
+- Repurposing of the freed 16 Keystone `reserved` bits (§4, new as of the 2026-07-28 amendment).
+
+*(The former "metadata pool eviction policy" and "eviction-vs-validation invalidation" open items are removed: full-coverage Waystone has no admission/eviction to decide — see §5's supersession banner.)*
 
 ## 10. Invariant Summary (for implementers)
 
@@ -95,12 +113,13 @@ Purpose: metadata for **physical relayout and statistics only** — never on the
 2. A heap page's `min_key` is immutable after creation.
 3. No tuple with `id < min_key(page)` is ever placed in that page — including by relayout.
 4. Tuples within a heap page are unordered.
-5. Every tuple begins with the 64-bit Keystone column: `id:40 | flags:8 | meta_handle:16`.
+5. Every tuple begins with the 64-bit Keystone column: `id:40 | flags:8 | reserved:16` (amended 2026-07-28; the field was `meta_handle:16`, now retired — see §4).
 6. The super-column word is read/written atomically as a `u64`; on-disk encoding uses explicit shift/mask, never compiler bitfields.
 7. Ids are stored externally as zero-extended `u64` (upper 24 bits = 0).
-8. The metadata pool and hint index are advisory: losing either entirely must not affect query correctness — only performance.
-9. Normal reads are served by the B+ tree; metadata pages are never on the read path.
-10. At most one in-memory copy of an identical tuple exists at any time.
+8. Waystone and the hint index are advisory: losing either entirely must not affect query correctness — only performance.
+9. Normal reads are served by the B+ tree; Waystone pages are never on the read path.
+10. **(Revised 2026-07-28)** No single canonical in-memory tuple is enforced; consistency comes from page pin + latch discipline (§7) — shared latch for reads, exclusive latch for structural mutation.
+11. **(New 2026-07-28)** A relation with `waystone_enabled` set requires system-generated, autoincrement `id` values; callers must not supply their own pk on insert into such a relation (see §4).
 
 ---
 
