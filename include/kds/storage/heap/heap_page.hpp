@@ -152,6 +152,8 @@ public:
 
     std::uint64_t min_key() const;
     std::uint16_t slot_count() const;
+    std::uint16_t lower() const;
+    std::uint16_t upper() const;
     std::uint16_t free_space() const;
     bool HasSpaceFor(std::uint16_t payload_len) const;
 
@@ -200,6 +202,19 @@ public:
     // transaction manager can determine no snapshot still needs the
     // space). Fails with NotFound if `slot` is already out of range/dead.
     Status RetireSlot(std::uint16_t slot);
+
+    // Raw slot-directory contents for `slot_idx`, dead or alive - unlike
+    // ReadTuple()/SlotCapacity(), a dead slot is reported (dead=true)
+    // rather than treated as NotFound. For development/inspection tooling
+    // only (e.g. the server's `SHOW PAGE` command); not part of the
+    // transactional read path.
+    struct SlotInfo {
+        std::uint16_t offset;
+        std::uint16_t length;
+        std::uint8_t flags;
+        bool dead;
+    };
+    StatusOr<SlotInfo> DebugSlotInfo(std::uint16_t slot_idx) const;
 
 private:
     HeapPageHeaderFields ReadHeader() const;

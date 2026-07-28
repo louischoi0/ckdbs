@@ -51,7 +51,7 @@ int main() {
     std::cout << "bootstrap ok: superblock version=" << boot.value().superblock.version()
               << " max_page_id=" << boot.value().superblock.max_page_id() << "\n";
 
-    kds::server::CommandDispatcher dispatcher(boot.value().superblock, boot.value().catalog);
+    kds::server::CommandDispatcher dispatcher(boot.value().superblock, boot.value().catalog, store);
 
     auto listener = kds::server::TcpServer::Listen(kDefaultPort);
     if (!listener.ok()) {

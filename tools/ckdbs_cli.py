@@ -11,8 +11,12 @@ Usage:
     ckdbs_cli.py                        interactive REPL
     ckdbs_cli.py PING                    one-shot: send "PING", print reply, exit
     ckdbs_cli.py SHOW META
+    ckdbs_cli.py SHOW TABLES
+    ckdbs_cli.py SHOW PAGE 128
+    ckdbs_cli.py SHOW PAGE 128 VALUES
     ckdbs_cli.py FIND TABLE accounts
-    ckdbs_cli.py --host 127.0.0.1 --port 15432 LIST TABLES
+    ckdbs_cli.py CREATE TABLE accounts
+    ckdbs_cli.py --host 127.0.0.1 --port 15432 SHOW TABLES
 
 REPL-only local commands (never sent to the server):
     help / ?     list known server commands
@@ -33,8 +37,12 @@ DEFAULT_PORT = 15432
 KNOWN_COMMANDS = """\
   PING                    -> PONG
   SHOW META               -> superblock stats
-  LIST TABLES             -> space-separated table names
+  SHOW TABLES             -> space-separated table names
+  SHOW PAGE <page_id> [VALUES]
+                          -> heap page header + slot directory, pretty-printed;
+                             VALUES also hex-encodes each live tuple's payload
   FIND TABLE <name>       -> oid=<n> or ERR ...
+  CREATE TABLE <name>     -> "CREATED oid=<n>" or "EXISTS oid=<n>" (idempotent)
   STOP                    -> shuts the whole server down (not just this client)
 """
 
@@ -63,8 +71,22 @@ class ServerConnection:
         self._sock.close()
 
 
+def format_reply(reply):
+    """Renders a reply for display.
+
+    The wire protocol allows exactly one line back per command (see
+    docs/client-manual.md section 2) - a raw newline byte in a reply would
+    desync this client's "read up to the next \\n" framing. Commands that
+    want a readable multi-line dump (e.g. SHOW PAGE) instead join sections
+    with the literal two-character escape "\\n", which is unescaped here
+    into a real newline purely for display; nothing is sent back over the
+    wire in this form.
+    """
+    return reply.replace("\\n", "\n")
+
+
 def run_one_shot(conn, command):
-    print(conn.send_command(command))
+    print(format_reply(conn.send_command(command)))
 
 
 def run_repl(conn):
@@ -86,7 +108,7 @@ def run_repl(conn):
             continue
 
         try:
-            print(conn.send_command(stripped))
+            print(format_reply(conn.send_command(stripped)))
         except ConnectionError as e:
             print(f"connection lost: {e}")
             break

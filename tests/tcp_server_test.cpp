@@ -32,7 +32,7 @@ protected:
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         ASSERT_TRUE(boot.ok());
         boot_.emplace(std::move(boot.value()));
-        dispatcher_.emplace(boot_->superblock, boot_->catalog);
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_);
     }
 
     storage::InMemoryPageStore store_{kFirstUserPageId};

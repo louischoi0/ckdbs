@@ -90,6 +90,10 @@ std::uint64_t PageView::min_key() const { return ReadHeader().min_key; }
 
 std::uint16_t PageView::slot_count() const { return ReadHeader().nr_slots; }
 
+std::uint16_t PageView::lower() const { return ReadHeader().lower; }
+
+std::uint16_t PageView::upper() const { return ReadHeader().upper; }
+
 std::uint16_t PageView::free_space() const {
     HeapPageHeaderFields h = ReadHeader();
     return h.upper > h.lower ? static_cast<std::uint16_t>(h.upper - h.lower) : 0;
@@ -227,6 +231,21 @@ Status PageView::OverwriteTuple(std::uint16_t slot_idx, std::span<const std::byt
     }
 
     return Status::OK();
+}
+
+StatusOr<PageView::SlotInfo> PageView::DebugSlotInfo(std::uint16_t slot_idx) const {
+    HeapPageHeaderFields h = ReadHeader();
+    if (slot_idx >= h.nr_slots) {
+        return Status::NotFound("slot index out of range");
+    }
+
+    HeapSlotFields slot = ReadSlot(slot_idx);
+    SlotInfo info{};
+    info.offset = slot.offset;
+    info.length = slot.length;
+    info.flags = slot.flags;
+    info.dead = (slot.flags & kSlotFlagDead) != 0 || slot.length == 0;
+    return info;
 }
 
 Status PageView::RetireSlot(std::uint16_t slot_idx) {

@@ -55,17 +55,59 @@ printf 'PING\n' | nc 127.0.0.1 15432
 | `PING` | none | `PONG` | Liveness check. |
 | `STOP` | none | `OK bye` | Shuts the **entire server** down, not just this client's connection. Any other clients connected at the time lose their session. |
 | `SHOW META` | none | `version=<n> max_page_id=<n> create_time=<n> last_mount_time=<n> last_fsync_time=<n> total_pages=<n> free_pages=<n>` | Dumps the superblock. Times are Unix seconds. |
-| `LIST TABLES` | none | space-separated table names | Includes system catalog tables (`tables`, `objects`, `columns`, ...) alongside any user tables. |
+| `SHOW TABLES` | none | space-separated table names | Includes system catalog tables (`tables`, `objects`, `columns`, ...) alongside any user tables. |
+| `SHOW PAGE <page_id> [VALUES]` | page id (`uint32_t`), optional `VALUES` keyword | heap page header + slot directory dump | Development/inspection only, not part of any transactional read path. Still one wire line - see below for the escaping convention that makes it render as multiple lines. `VALUES` additionally hex-encodes each live slot's tuple payload (dead slots never show a value). `ERR ...` if the id is missing, non-numeric, unknown to the store, or the trailing option isn't `VALUES`. |
 | `FIND TABLE <name>` | table name | `oid=<n>` | `ERR ...` if the name is unknown. |
+| `CREATE TABLE <name>` | table name | `CREATED oid=<n>` or `EXISTS oid=<n>` | Idempotent: if a table with this name already exists, its oid is returned and nothing is created - never errors or creates a duplicate. Always a zero-column `ClusteredType::kHeap` table under the public namespace; this is a minimal wire-level command, not the SQL-grammar `CREATE TABLE` that `src/parser` can parse (no column list, no type resolution - see `command_dispatcher.hpp`'s file comment for why). |
 
 Anything else, or a blank line, gets `ERR unknown command` / `ERR empty
-command` / `ERR unknown <SHOW|LIST|FIND> target` as appropriate - the
+command` / `ERR unknown <SHOW|FIND|CREATE> target` as appropriate - the
 connection stays open and usable after an error.
 
-There is no SQL yet (`src/parser` exists but nothing wires it into
-`CommandDispatcher` yet) and no INSERT/SELECT data-manipulation commands -
-this command set only covers what the catalog/superblock can already
-report. Expect this table to grow as those subsystems land.
+`SHOW PAGE`'s reply is a one-off exception worth calling out: the wire
+contract above still holds (exactly one line, no raw newline byte), but
+its sections are joined with the literal two-character escape `\n`
+(backslash followed by `n`, not an actual newline byte) so the reply can
+render as a multi-line, human-readable dump on the client side without
+breaking that contract. `tools/ckdbs_cli.py` unescapes it back into real
+newlines before printing (see `format_reply()`); a client that doesn't
+bother will just see the literal `\n` text inline, which is still valid
+and parseable. Example (line-wrapped here for readability; the actual
+reply is one line with `\n` in place of real breaks):
+
+```
+ckdbs> SHOW PAGE 500
+page_id=500
+min_key=42
+nr_slots=2
+lower=26
+upper=8110
+free_space=8084
+next_page_id=4294967295
+slot[0] offset=8150 length=33 dead=0
+slot[1] offset=8110 length=33 dead=1
+```
+
+Add `VALUES` to also see each live slot's payload, hex-encoded:
+
+```
+ckdbs> SHOW PAGE 500 VALUES
+...
+slot[0] offset=8150 length=33 dead=0 value=68656c6c6f
+slot[1] offset=8110 length=33 dead=1
+```
+
+(Hex, not raw text: a tuple payload can contain any byte value, including
+a literal `\n` byte, which would desync the one-line-per-response
+contract if spliced in unescaped.)
+
+`src/parser` can parse full CREATE TABLE/INSERT/SELECT/UPDATE SQL
+statements, but nothing here calls into it yet - there is no query
+executor, and column types in that grammar can't be resolved to on-disk
+storage without a type registry that hasn't been ported yet. `CREATE
+TABLE <name>` above is a different, minimal thing: a bare-name wire
+command with no column list. Expect this table to grow as the executor
+and type registry land.
 
 ## 4. Using `tools/ckdbs_cli.py`
 
@@ -76,8 +118,11 @@ A zero-dependency Python 3 client (stdlib only: `socket`, `argparse`).
 ```sh
 python3 tools/ckdbs_cli.py PING
 python3 tools/ckdbs_cli.py SHOW META
+python3 tools/ckdbs_cli.py SHOW TABLES
+python3 tools/ckdbs_cli.py SHOW PAGE 500 VALUES
 python3 tools/ckdbs_cli.py FIND TABLE accounts
-python3 tools/ckdbs_cli.py --host 127.0.0.1 --port 15432 LIST TABLES
+python3 tools/ckdbs_cli.py CREATE TABLE accounts
+python3 tools/ckdbs_cli.py --host 127.0.0.1 --port 15432 SHOW TABLES
 ```
 
 Exit code is 0 regardless of whether the server replied `OK`/`PONG` or
@@ -95,8 +140,11 @@ ERR table not found: accounts
 ckdbs> help        # local-only, not sent to the server
   PING                    -> PONG
   SHOW META               -> superblock stats
-  LIST TABLES             -> space-separated table names
+  SHOW TABLES             -> space-separated table names
+  SHOW PAGE <page_id> [VALUES]
+                          -> heap page header + slot directory, pretty-printed
   FIND TABLE <name>       -> oid=<n> or ERR ...
+  CREATE TABLE <name>     -> "CREATED oid=<n>" or "EXISTS oid=<n>" (idempotent)
   STOP                    -> shuts the whole server down (not just this client)
 ckdbs> exit         # local-only: closes this connection, does NOT stop the server
 ```
