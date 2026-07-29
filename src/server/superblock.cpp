@@ -1,6 +1,7 @@
 #include "kds/server/superblock.hpp"
 
 #include <cstring>
+#include <string>
 
 #include "kds/storage/page_header.hpp"
 
@@ -13,16 +14,13 @@ SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds) noexcept {
     f.magic = kSuperBlockMagic;
     f.version = kSuperBlockVersion;
     f.reserved1 = 0;
-    f.max_page_id = kFirstUserPageId;
-    f.last_commit_page_id = 0;
     f.create_time = now_unix_seconds;
     f.last_mount_time = now_unix_seconds;
-    f.last_fsync_time = 0;
-    f.total_pages = 0;
-    f.free_pages = 0;
-    f.alloc_point = 0;
-    f.reserved3 = 0;
-    f.alloc_remaining = 0;
+    f.wal_anchor_count = 0;
+    f.reserved2 = 0;
+    // The anchor table is left zeroed by the member initializer: a fresh
+    // database has no checkpoint on any core, which is what an all-zero
+    // anchor means (superblock.hpp).
     return SuperBlock(f);
 }
 
@@ -36,20 +34,32 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
     }
 
     std::memcpy(&f.version, base + kVersionOffset, sizeof(f.version));
+    if (f.version != kSuperBlockVersion) {
+        // No migration path exists and none is wanted while the format is
+        // still moving: an image this build did not write is refused, not
+        // guessed at. Recreate the database instead.
+        return Status::Corruption("superblock version " + std::to_string(f.version) +
+                                  " is not this build's (" +
+                                  std::to_string(kSuperBlockVersion) + ")");
+    }
     std::memcpy(&f.reserved1, base + kReserved1Offset, sizeof(f.reserved1));
-    std::memcpy(&f.max_page_id, base + kMaxPageIdOffset, sizeof(f.max_page_id));
-    std::memcpy(&f.last_commit_page_id, base + kLastCommitPageIdOffset,
-                sizeof(f.last_commit_page_id));
     std::memcpy(&f.create_time, base + kCreateTimeOffset, sizeof(f.create_time));
     std::memcpy(&f.last_mount_time, base + kLastMountTimeOffset, sizeof(f.last_mount_time));
-    std::memcpy(&f.last_fsync_time, base + kLastFsyncTimeOffset, sizeof(f.last_fsync_time));
-    std::memcpy(&f.total_pages, base + kTotalPagesOffset, sizeof(f.total_pages));
-    std::memcpy(&f.free_pages, base + kFreePagesOffset, sizeof(f.free_pages));
-    std::memcpy(&f.alloc_point, base + kAllocPointOffset, sizeof(f.alloc_point));
-    std::memcpy(&f.reserved3, base + kReserved3Offset, sizeof(f.reserved3));
-    std::memcpy(&f.alloc_remaining, base + kAllocRemainingOffset, sizeof(f.alloc_remaining));
+    std::memcpy(&f.wal_anchor_count, base + kWalAnchorCountOffset, sizeof(f.wal_anchor_count));
+    std::memcpy(&f.reserved2, base + kReserved2Offset, sizeof(f.reserved2));
 
-    return SuperBlock(f);
+    SuperBlock sb(f);
+    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+        const std::byte* entry = base + kWalAnchorTableOffset + core * kWalAnchorEntrySize;
+        WalAnchorFields& a = sb.wal_anchors_[core];
+        std::memcpy(&a.checkpoint_lsn, entry + kWalAnchorCheckpointLsnOffset,
+                    sizeof(a.checkpoint_lsn));
+        std::memcpy(&a.redo_start_lsn, entry + kWalAnchorRedoStartLsnOffset,
+                    sizeof(a.redo_start_lsn));
+        std::memcpy(&a.durable_lsn, entry + kWalAnchorDurableLsnOffset, sizeof(a.durable_lsn));
+        std::memcpy(&a.segment_no, entry + kWalAnchorSegmentNoOffset, sizeof(a.segment_no));
+    }
+    return sb;
 }
 
 void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
@@ -72,53 +82,50 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
     std::memcpy(base + kMagicOffset, &fields_.magic, sizeof(fields_.magic));
     std::memcpy(base + kVersionOffset, &fields_.version, sizeof(fields_.version));
     std::memcpy(base + kReserved1Offset, &fields_.reserved1, sizeof(fields_.reserved1));
-    std::memcpy(base + kMaxPageIdOffset, &fields_.max_page_id, sizeof(fields_.max_page_id));
-    std::memcpy(base + kLastCommitPageIdOffset, &fields_.last_commit_page_id,
-                sizeof(fields_.last_commit_page_id));
     std::memcpy(base + kCreateTimeOffset, &fields_.create_time, sizeof(fields_.create_time));
     std::memcpy(base + kLastMountTimeOffset, &fields_.last_mount_time,
                 sizeof(fields_.last_mount_time));
-    std::memcpy(base + kLastFsyncTimeOffset, &fields_.last_fsync_time,
-                sizeof(fields_.last_fsync_time));
-    std::memcpy(base + kTotalPagesOffset, &fields_.total_pages, sizeof(fields_.total_pages));
-    std::memcpy(base + kFreePagesOffset, &fields_.free_pages, sizeof(fields_.free_pages));
-    std::memcpy(base + kAllocPointOffset, &fields_.alloc_point, sizeof(fields_.alloc_point));
-    std::memcpy(base + kReserved3Offset, &fields_.reserved3, sizeof(fields_.reserved3));
-    std::memcpy(base + kAllocRemainingOffset, &fields_.alloc_remaining,
-                sizeof(fields_.alloc_remaining));
+    std::memcpy(base + kWalAnchorCountOffset, &fields_.wal_anchor_count,
+                sizeof(fields_.wal_anchor_count));
+    std::memcpy(base + kReserved2Offset, &fields_.reserved2, sizeof(fields_.reserved2));
+
+    // The whole table is written, not just the slots in use: an unpublished
+    // slot's zeroes are meaningful (superblock.hpp), and writing only the
+    // used prefix would leave the rest to the memset above by accident
+    // rather than by contract.
+    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+        std::byte* entry = base + kWalAnchorTableOffset + core * kWalAnchorEntrySize;
+        const WalAnchorFields& a = wal_anchors_[core];
+        std::memcpy(entry + kWalAnchorCheckpointLsnOffset, &a.checkpoint_lsn,
+                    sizeof(a.checkpoint_lsn));
+        std::memcpy(entry + kWalAnchorRedoStartLsnOffset, &a.redo_start_lsn,
+                    sizeof(a.redo_start_lsn));
+        std::memcpy(entry + kWalAnchorDurableLsnOffset, &a.durable_lsn, sizeof(a.durable_lsn));
+        std::memcpy(entry + kWalAnchorSegmentNoOffset, &a.segment_no, sizeof(a.segment_no));
+    }
 }
 
-PageId SuperBlock::AllocatePageId() noexcept {
-    return static_cast<PageId>(fields_.max_page_id++);
+WalAnchorFields SuperBlock::wal_anchor(std::uint32_t core_id) const noexcept {
+    if (core_id >= kMaxWalCores) {
+        return WalAnchorFields{};
+    }
+    return wal_anchors_[core_id];
 }
 
-PageId SuperBlock::AllocatePageIdBatch(std::uint64_t count) noexcept {
-    auto first = static_cast<PageId>(fields_.max_page_id);
-    fields_.max_page_id += count;
-    return first;
-}
-
-void SuperBlock::SetAllocRange(PageId alloc_point, std::uint64_t remaining) noexcept {
-    fields_.alloc_point = alloc_point;
-    fields_.alloc_remaining = remaining;
-}
-
-std::pair<PageId, std::uint64_t> SuperBlock::alloc_range() const noexcept {
-    return {fields_.alloc_point, fields_.alloc_remaining};
-}
-
-void SuperBlock::SetPageCounts(std::uint64_t total_pages, std::uint64_t free_pages) noexcept {
-    fields_.total_pages = total_pages;
-    fields_.free_pages = free_pages;
+Status SuperBlock::SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& anchor) noexcept {
+    if (core_id >= kMaxWalCores) {
+        return Status::InvalidArgument("superblock: WAL anchor core_id " +
+                                       std::to_string(core_id) + " is at or above kMaxWalCores");
+    }
+    wal_anchors_[core_id] = anchor;
+    if (core_id + 1 > fields_.wal_anchor_count) {
+        fields_.wal_anchor_count = core_id + 1;
+    }
+    return Status::OK();
 }
 
 void SuperBlock::MarkMounted(std::uint64_t now_unix_seconds) noexcept {
     fields_.last_mount_time = now_unix_seconds;
-}
-
-void SuperBlock::MarkFsynced(std::uint64_t now_unix_seconds) noexcept {
-    fields_.last_fsync_time = now_unix_seconds;
-    fields_.last_commit_page_id = fields_.max_page_id;
 }
 
 }  // namespace kds::server

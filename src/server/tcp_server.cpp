@@ -5,12 +5,30 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <fcntl.h>
+
 #include <cerrno>
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace kds::server {
+namespace {
+
+Status SetNonBlocking(int fd) {
+    int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return Status::IoError(std::string("fcntl(F_GETFL) failed: ") + std::strerror(errno));
+    }
+    if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        return Status::IoError(std::string("fcntl(F_SETFL) failed: ") + std::strerror(errno));
+    }
+    return Status::OK();
+}
+
+}  // namespace
 
 StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -44,20 +62,37 @@ StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port) {
     return TcpServer(fd);
 }
 
-TcpServer::TcpServer(TcpServer&& other) noexcept : listen_fd_(other.listen_fd_) {
+TcpServer::TcpServer(TcpServer&& other) noexcept
+    : listen_fd_(other.listen_fd_),
+      scheduler_(other.scheduler_),
+      dispatcher_(other.dispatcher_),
+      clients_(std::move(other.clients_)) {
     other.listen_fd_ = -1;
+    other.scheduler_ = nullptr;
+    other.dispatcher_ = nullptr;
+    other.clients_.clear();
 }
 
 TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
     if (this != &other) {
+        Detach();
         CloseIfOpen();
         listen_fd_ = other.listen_fd_;
+        scheduler_ = other.scheduler_;
+        dispatcher_ = other.dispatcher_;
+        clients_ = std::move(other.clients_);
         other.listen_fd_ = -1;
+        other.scheduler_ = nullptr;
+        other.dispatcher_ = nullptr;
+        other.clients_.clear();
     }
     return *this;
 }
 
-TcpServer::~TcpServer() { CloseIfOpen(); }
+TcpServer::~TcpServer() {
+    Detach();
+    CloseIfOpen();
+}
 
 void TcpServer::CloseIfOpen() noexcept {
     if (listen_fd_ >= 0) {
@@ -66,50 +101,138 @@ void TcpServer::CloseIfOpen() noexcept {
     }
 }
 
-void TcpServer::Serve(CommandDispatcher& dispatcher) {
-    while (true) {
-        int client_fd = ::accept(listen_fd_, nullptr, nullptr);
-        if (client_fd < 0) {
-            if (errno == EINTR) continue;
-            break;  // listening socket is broken; nothing more we can do
-        }
-
-        std::string buffer;
-        bool client_done = false;
-        bool server_should_stop = false;
-
-        while (!client_done) {
-            char chunk[4096];
-            ssize_t n = ::read(client_fd, chunk, sizeof(chunk));
-            if (n <= 0) {
-                break;  // client closed the connection, or a read error
-            }
-            buffer.append(chunk, static_cast<std::size_t>(n));
-
-            std::size_t nl;
-            while ((nl = buffer.find('\n')) != std::string::npos) {
-                std::string_view line(buffer.data(), nl);
-                if (!line.empty() && line.back() == '\r') {
-                    line.remove_suffix(1);  // tolerate CRLF clients
-                }
-
-                DispatchOutcome outcome = dispatcher.Dispatch(line);
-                std::string reply = outcome.response + "\n";
-                ::write(client_fd, reply.data(), reply.size());
-
-                buffer.erase(0, nl + 1);
-
-                if (outcome.should_stop) {
-                    server_should_stop = true;
-                    client_done = true;
-                    break;
-                }
-            }
-        }
-
-        ::close(client_fd);
-        if (server_should_stop) break;
+Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatcher,
+                          Logger* log) {
+    if (listen_fd_ < 0) {
+        return Status::IoError("TcpServer: no listening socket to attach");
     }
+    scheduler_ = &scheduler;
+    dispatcher_ = &dispatcher;
+    log_ = log;
+
+    // Non-blocking from here on: the reactor decides when to wait, and it
+    // waits in exactly one place (the io backend). A blocking accept() here
+    // would re-create the problem this class exists to solve.
+    if (Status s = SetNonBlocking(listen_fd_); !s.ok()) return s;
+
+    return scheduler_->RegisterIoHandler(listen_fd_, sched::IoInterest::kReadable,
+                                          [this](const sched::IoEvent&) { OnListenerReadable(); });
+}
+
+void TcpServer::Detach() noexcept {
+    if (scheduler_ != nullptr) {
+        // Copied first: CloseClient mutates clients_.
+        std::vector<int> fds;
+        fds.reserve(clients_.size());
+        for (const auto& [fd, conn] : clients_) fds.push_back(fd);
+        for (int fd : fds) CloseClient(fd);
+
+        if (listen_fd_ >= 0) {
+            (void)scheduler_->UnregisterIoHandler(listen_fd_);
+        }
+        scheduler_ = nullptr;
+        dispatcher_ = nullptr;
+    }
+    clients_.clear();
+}
+
+void TcpServer::OnListenerReadable() {
+    // One accept per event, not an EAGAIN drain loop: the backend is
+    // level-triggered (epoll_io_backend.hpp), so a still-pending
+    // connection is reported again next iteration. Bounded work per
+    // handler is what keeps one busy socket from starving the timers.
+    int client_fd = ::accept(listen_fd_, nullptr, nullptr);
+    if (client_fd < 0) return;  // EAGAIN, EINTR, or a broken listener
+
+    if (!SetNonBlocking(client_fd).ok()) {
+        ::close(client_fd);
+        return;
+    }
+
+    clients_.emplace(client_fd, Connection{});
+    if (logging(LogLevel::kDebug)) {
+        log_->Debug("client", "accepted fd=" + std::to_string(client_fd) +
+                                  " open_connections=" + std::to_string(clients_.size()));
+    }
+    Status s = scheduler_->RegisterIoHandler(
+        client_fd, sched::IoInterest::kReadable,
+        [this, client_fd](const sched::IoEvent&) { OnClientReadable(client_fd); });
+    if (!s.ok()) {
+        clients_.erase(client_fd);
+        ::close(client_fd);
+    }
+}
+
+void TcpServer::OnClientReadable(int client_fd) {
+    auto it = clients_.find(client_fd);
+    if (it == clients_.end()) return;  // closed earlier this iteration
+
+    char chunk[4096];
+    ssize_t n = ::read(client_fd, chunk, sizeof(chunk));
+    if (n == 0) {
+        CloseClient(client_fd);  // orderly hangup
+        return;
+    }
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return;
+        CloseClient(client_fd);
+        return;
+    }
+
+    it->second.inbox.append(chunk, static_cast<std::size_t>(n));
+    DrainCommands(client_fd, it->second);
+}
+
+bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
+    std::size_t nl;
+    while ((nl = conn.inbox.find('\n')) != std::string::npos) {
+        std::string_view line(conn.inbox.data(), nl);
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1);  // tolerate CRLF clients
+        }
+
+        // The request as the client sent it, before anything interprets
+        // it. Trace, because it is one line per command and it echoes
+        // whatever the client typed - including anything they should not
+        // have typed.
+        if (logging(LogLevel::kTrace)) {
+            log_->Trace("client", "fd=" + std::to_string(client_fd) + " request \"" +
+                                      std::string(line) + "\"");
+        }
+
+        DispatchOutcome outcome = dispatcher_->Dispatch(line);
+        std::string reply = outcome.response + "\n";
+        ::write(client_fd, reply.data(), reply.size());
+
+        conn.inbox.erase(0, nl + 1);
+
+        if (outcome.should_stop) {
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("client", "STOP from fd=" + std::to_string(client_fd) +
+                                         "; shutting the server down");
+            }
+            // Stops the reactor, not just this connection - STOP has always
+            // meant the whole server. The connection is closed first so the
+            // client sees the reply land and the socket shut, rather than
+            // waiting on a process that is already tearing down.
+            CloseClient(client_fd);
+            scheduler_->Stop();
+            return false;
+        }
+    }
+    return true;
+}
+
+void TcpServer::CloseClient(int client_fd) {
+    if (clients_.erase(client_fd) == 0) return;
+    if (logging(LogLevel::kDebug)) {
+        log_->Debug("client", "closed fd=" + std::to_string(client_fd) +
+                                  " open_connections=" + std::to_string(clients_.size()));
+    }
+    if (scheduler_ != nullptr) {
+        (void)scheduler_->UnregisterIoHandler(client_fd);
+    }
+    ::close(client_fd);
 }
 
 }  // namespace kds::server

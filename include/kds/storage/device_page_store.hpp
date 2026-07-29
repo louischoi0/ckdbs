@@ -3,8 +3,11 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <unordered_map>
+#include <vector>
 
+#include "kds/base/log.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_store.hpp"
 
@@ -36,6 +39,14 @@
 //     that is OutOfRange, not silently unmapped.
 //
 // Concurrency: core-local, no internal synchronization (rules.md #3).
+//
+// Logging (component tag "pagestore"): allocation and write-back are the
+// two things that change what is on disk, so both are logged - allocation
+// and per-page write-back at Trace (one line per page), batch write-back
+// and sync at Debug, and every device-level failure at Error. A failed
+// checksum verify is Error and says "corruption" in as many words: it is
+// the one thing this class can detect that no caller can diagnose from a
+// Status alone, and it names damage rather than a policy refusal.
 
 namespace kds::storage {
 
@@ -66,6 +77,24 @@ public:
     Status Flush();
     Status Sync() override;
 
+    // Page ids currently dirty, in ascending order - what a checkpoint
+    // snapshots (wal.md section 11-1). No recovery LSN accompanies them:
+    // this store predates the WAL gate and stamps no page_lsn, so every
+    // page here reports recLSN 0, which the checkpointer reads as "nothing
+    // to replay" rather than "replay from the head of the log". Once
+    // mutations are logged, that becomes a real per-frame value.
+    std::vector<PageId> DirtyPageIds() const;
+
+    // Writes back exactly these pages and syncs. Ids that are not dirty,
+    // or not resident, are skipped rather than treated as an error -
+    // something else may have flushed them since the caller's snapshot.
+    Status FlushPages(std::span<const PageId> page_ids);
+
+    // Diagnostic log, null (discard) by default. Set after Open(), since
+    // the store has to exist before a server has anything to log about;
+    // `log` must outlive the store.
+    void SetLogger(Logger* log) noexcept { log_ = log; }
+
     std::size_t resident_pages() const noexcept { return frames_.size(); }
     std::uint32_t allocated_pages() const noexcept;
     bool IsAllocated(PageId page_id) const noexcept;
@@ -93,6 +122,7 @@ private:
     }
 
     PageDevice& device_;
+    Logger* log_ = nullptr;
     Page free_map_page_;
     bool free_map_dirty_;
     PageId next_new_page_id_;

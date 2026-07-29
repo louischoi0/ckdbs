@@ -2,8 +2,10 @@
 
 #include <charconv>
 #include <cstdint>
+#include <string>
 
 #include "kds/catalog/well_known.hpp"
+#include "kds/storage/keystone.hpp"
 
 namespace kds::exec {
 
@@ -19,6 +21,20 @@ using catalog::kTypeValInt64;
 using catalog::kTypeValInt8;
 using catalog::kTypeValUint64;
 using catalog::kTypeValVarchar;
+
+void StoreLe64(std::byte* out, std::uint64_t v) {
+    for (int i = 0; i < 8; ++i) {
+        out[i] = static_cast<std::byte>((v >> (8 * i)) & 0xFF);
+    }
+}
+
+std::uint64_t LoadLe64(const std::byte* in) {
+    std::uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) {
+        v |= static_cast<std::uint64_t>(in[i]) << (8 * i);
+    }
+    return v;
+}
 
 void PutLE(std::vector<std::byte>& out, std::uint64_t v, int width) {
     for (int i = 0; i < width; ++i) {
@@ -302,27 +318,59 @@ bool ConditionMatches(const catalog::Schema& schema, const std::vector<parser::A
 
 }  // namespace
 
-StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
+StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema, std::uint64_t id,
                                             const std::vector<parser::AstValue>& values) {
-    if (values.size() != schema.columns.size()) {
-        return Status::InvalidArgument("expected " + std::to_string(schema.columns.size()) +
-                                        " value(s), got " + std::to_string(values.size()));
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+
+    const std::size_t expected = schema.columns.size() - 1;
+    if (values.size() != expected) {
+        return Status::InvalidArgument("expected " + std::to_string(expected) +
+                                        " value(s) after the primary key, got " +
+                                        std::to_string(values.size()));
     }
 
+    // The Keystone word leads every tuple (heap-and-tuple.md section 4).
+    // The pk column is therefore *not* encoded into the body: storing it
+    // twice is how the two copies come to disagree.
+    auto word = Keystone::Encode(id, /*flags=*/0, /*reserved=*/0);
+    if (!word.ok()) return word.status();
+
     std::vector<std::byte> out;
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        if (Status s = EncodeOneValue(schema.columns[i], values[i], out); !s.ok()) return s;
+    out.resize(kKeystoneWordSize);
+    StoreLe64(out.data(), word.value());
+
+    for (std::size_t i = 1; i < schema.columns.size(); ++i) {
+        if (Status s = EncodeOneValue(schema.columns[i], values[i - 1], out); !s.ok()) return s;
     }
     return out;
 }
 
+StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload) {
+    if (payload.size() < kKeystoneWordSize) {
+        return Status::Corruption("tuple payload is shorter than its Keystone word");
+    }
+    return Keystone::Decode(LoadLe64(payload.data())).id;
+}
+
 StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
                                                    std::span<const std::byte> payload) {
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+
+    auto id = RowKeystoneId(payload);
+    if (!id.ok()) return id.status();
+
     std::vector<parser::AstValue> out;
     out.reserve(schema.columns.size());
-    std::size_t offset = 0;
-    for (const auto& col : schema.columns) {
-        auto next = DecodeOneValue(col, payload, offset, out);
+
+    parser::AstValue pk{};
+    pk.type = parser::ValueType::kInt;
+    pk.int_val = static_cast<std::int64_t>(id.value());
+    pk.raw_int_text = std::to_string(id.value());
+    out.push_back(std::move(pk));
+
+    std::size_t offset = kKeystoneWordSize;
+    for (std::size_t i = 1; i < schema.columns.size(); ++i) {
+        auto next = DecodeOneValue(schema.columns[i], payload, offset, out);
         if (!next.ok()) return next.status();
         offset = next.value();
     }

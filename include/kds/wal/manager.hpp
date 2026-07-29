@@ -4,6 +4,7 @@
 #include <memory>
 #include <span>
 
+#include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/wal/durability.hpp"
@@ -128,7 +129,14 @@ public:
                                                       std::uint32_t core_id = 0,
                                                       WalManagerConfig config = {});
 
+    // Optional diagnostics. Null by default so the WAL unit tests stay
+    // free of one. Record-level lines are Trace: an append happens per
+    // page mutation, so logging one at any lower threshold would put a
+    // write() syscall on the engine's hottest path.
+    void SetLogger(Logger* log) noexcept { log_ = log; }
+
     std::uint32_t core_id() const noexcept { return stream_->core_id(); }
+    std::uint64_t segment_size() const noexcept { return stream_->segment_size(); }
     const WalStats& stats() const noexcept { return stats_; }
 
     // Where the next record goes; every byte below it has been appended.
@@ -194,6 +202,7 @@ private:
     Lsn highest_group_commit_lsn_ = 0;
 
     sched::MonoTimeNs last_sync_ns_ = 0;
+    Logger* log_ = nullptr;
 };
 
 }  // namespace kds::wal

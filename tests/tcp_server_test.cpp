@@ -15,6 +15,9 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/sched/clock.hpp"
+#include "kds/sched/epoll_io_backend.hpp"
+#include "kds/sched/scheduler.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 // Real loopback-socket integration test: starts a TcpServer on a
@@ -35,6 +38,19 @@ protected:
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_);
     }
 
+    // Drives one attached TcpServer on a reactor until STOP stops it -
+    // the same shape Expeditor::Serve() uses, so the tests exercise the
+    // real path rather than a socket loop that no longer exists.
+    void RunReactor(TcpServer& listener) {
+        auto io_backend = sched::EpollIoBackend::Create();
+        ASSERT_TRUE(io_backend.ok()) << io_backend.status().message();
+        sched::Scheduler scheduler(clock_, io_backend.value());
+        ASSERT_TRUE(listener.Attach(scheduler, *dispatcher_).ok());
+        scheduler.Run();
+        listener.Detach();
+    }
+
+    sched::SystemClock clock_;
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<CommandDispatcher> dispatcher_;
@@ -79,7 +95,7 @@ TEST_F(TcpServerTest, PingRoundTripsOverRealSocket) {
     auto listener = TcpServer::Listen(kPort);
     ASSERT_TRUE(listener.ok()) << listener.status().message();
 
-    std::thread server_thread([&] { listener.value().Serve(*dispatcher_); });
+    std::thread server_thread([&] { RunReactor(listener.value()); });
 
     int client = ConnectToLoopback(kPort);
     ASSERT_GE(client, 0);
@@ -96,14 +112,16 @@ TEST_F(TcpServerTest, ServesMultipleCommandsBeforeStop) {
     auto listener = TcpServer::Listen(kPort);
     ASSERT_TRUE(listener.ok()) << listener.status().message();
 
-    std::thread server_thread([&] { listener.value().Serve(*dispatcher_); });
+    std::thread server_thread([&] { RunReactor(listener.value()); });
 
     int client = ConnectToLoopback(kPort);
     ASSERT_GE(client, 0);
 
     EXPECT_EQ(SendAndReceiveLine(client, "PING"), "PONG");
-    EXPECT_NE(SendAndReceiveLine(client, "SHOW META").find("version=1"), std::string::npos);
-    EXPECT_NE(SendAndReceiveLine(client, "FIND TABLE tables")
+    EXPECT_NE(SendAndReceiveLine(client, "SHOW META")
+                  .find("version=" + std::to_string(server::kSuperBlockVersion)),
+              std::string::npos);
+    EXPECT_NE(SendAndReceiveLine(client, "DESCRIBE tables")
                   .find("oid=" + std::to_string(catalog::kSysTablesTable)),
               std::string::npos);
     EXPECT_EQ(SendAndReceiveLine(client, "STOP"), "OK bye");
@@ -117,7 +135,7 @@ TEST_F(TcpServerTest, HandlesClientDisconnectThenAcceptsNextClient) {
     auto listener = TcpServer::Listen(kPort);
     ASSERT_TRUE(listener.ok()) << listener.status().message();
 
-    std::thread server_thread([&] { listener.value().Serve(*dispatcher_); });
+    std::thread server_thread([&] { RunReactor(listener.value()); });
 
     int first = ConnectToLoopback(kPort);
     ASSERT_GE(first, 0);

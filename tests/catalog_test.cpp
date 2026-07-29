@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/catalog/well_known.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 namespace kds::catalog {
@@ -120,10 +121,25 @@ TEST_F(CatalogTest, InitTableAccessReturnsSchemaAndDescPageId) {
     EXPECT_EQ(access.value().schema.columns.size(), 1u);
 }
 
+// Every relation needs a first column that can carry the Keystone id
+// (heap-and-tuple.md section 4), so a schema-less CreateTable is no longer
+// a legal table to build a fixture on.
+Schema MinimalPkSchema() {
+    Schema schema;
+    SysColumnRow col{};
+    col.pos = 0;
+    SetName(col.name, "id");
+    col.type_val = kTypeValInt64;
+    col.len = 8;
+    col.notnull = true;
+    schema.columns.push_back(col);
+    return schema;
+}
+
 TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
-    Schema schema;
+    Schema schema = MinimalPkSchema();
     auto oid = catalog_.CreateTable(kNamespacePublic, "movable", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 

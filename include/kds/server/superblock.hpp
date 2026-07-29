@@ -3,29 +3,31 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <utility>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
 // The SuperBlock: one fixed logical page (kPageSize) holding whole-database
-// metadata - magic/version, the page-id counter, and mount/fsync
-// bookkeeping. Ported from the legacy kernel engine's kds_superblock_t
-// (kds_meta.h), redesigned for this project's ownership model instead of
-// that one's atomics.
+// metadata - identity (magic/version/create time), the mount stamp, and the
+// per-core WAL anchors recovery starts from.
+//
+// What it deliberately does *not* hold is allocation state. The legacy
+// kernel engine's kds_superblock_t (kds_meta.h) carried a page-id counter,
+// total/free page counts, and a pre-allocation range; that half was ported
+// and then never wired to anything, because which page ids exist is
+// answered by DevicePageStore's free-map page instead - the one structure
+// that actually has to agree with the device. Two records of the same fact
+// is one record too many, so this one is gone rather than kept in sync.
 //
 // Ownership / concurrency: unlike the legacy kernel build (multiple
 // kthreads incrementing shared atomic64_t counters), this SuperBlock is
 // owned exclusively by the single DB master server process/thread
-// (src/server) - the one place page ids are minted and mount/fsync
-// timestamps are updated. Per rules.md #3 (thread-per-core, shared-nothing;
+// (src/server). Per rules.md #3 (thread-per-core, shared-nothing;
 // cross-core communication uses explicit message/queue interfaces), other
-// cores never touch a SuperBlock instance directly - they request page ids
-// etc. from the server thread via its message interface (not yet built).
-// That single-writer property is what lets every method below be a plain
-// (non-atomic) read/increment instead of the legacy code's atomic64_t
-// fields.
+// cores never touch a SuperBlock instance directly. That single-writer
+// property is what lets every method below be a plain (non-atomic)
+// read/write instead of the legacy code's atomic64_t fields.
 //
 // Persistence: this file only does in-memory state plus encode/decode to
 // a raw kPageSize buffer (same field-wise memcpy, no reinterpret_cast,
@@ -37,10 +39,10 @@
 namespace kds::server {
 
 // Page ids below this are reserved for fixed-position system structures
-// (the superblock's own page, catalog pages, etc.) - ported from the
-// legacy engine's KDS_SYS_RESERVED_PAGES. A fresh SuperBlock starts minting
-// user page ids at this value.
-inline constexpr std::uint64_t kFirstUserPageId = 128;
+// (the superblock's own page, the free map, catalog pages) - ported from
+// the legacy engine's KDS_SYS_RESERVED_PAGES. It is where DevicePageStore
+// starts handing out ids, not something the superblock itself tracks.
+inline constexpr PageId kFirstUserPageId = 128;
 
 // Fixed page id the SuperBlock itself lives at. Reserved, same convention
 // as the catalog's fixed pages (kds::catalog::kCatalogPage*, ids 4-8):
@@ -49,7 +51,11 @@ inline constexpr std::uint64_t kFirstUserPageId = 128;
 inline constexpr PageId kSuperBlockPageId = 0;
 
 inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CKDXDBS1", arbitrary but stable
-inline constexpr std::uint32_t kSuperBlockVersion = 1;
+// Bumped whenever the layout below changes. There is no migration path and
+// no compatibility window while the format is still moving: Decode() refuses
+// anything but this exact number, so a stale data file fails loudly at mount
+// instead of being misparsed. Bump it with every layout change.
+inline constexpr std::uint32_t kSuperBlockVersion = 3;
 
 // ---- On-disk field layout ----------------------------------------------
 
@@ -61,49 +67,86 @@ struct SuperBlockFields {
     std::uint64_t magic;
     std::uint32_t version;
     std::uint32_t reserved1;
-    std::uint64_t max_page_id;
-    std::uint64_t last_commit_page_id;
     std::uint64_t create_time;       // unix seconds
     std::uint64_t last_mount_time;
-    std::uint64_t last_fsync_time;
-    std::uint64_t total_pages;
-    std::uint64_t free_pages;
-    PageId alloc_point;
-    std::uint32_t reserved3;  // keeps alloc_remaining 8-byte-offset-aligned
-    std::uint64_t alloc_remaining;
+    std::uint32_t wal_anchor_count;  // anchor slots ever published into
+    std::uint32_t reserved2;         // keeps the anchor table 8-byte-aligned
 };
 
 inline constexpr std::size_t kMagicOffset = 0;
 inline constexpr std::size_t kVersionOffset = 8;
 inline constexpr std::size_t kReserved1Offset = 12;
-inline constexpr std::size_t kMaxPageIdOffset = 16;
-inline constexpr std::size_t kLastCommitPageIdOffset = 24;
-inline constexpr std::size_t kCreateTimeOffset = 32;
-inline constexpr std::size_t kLastMountTimeOffset = 40;
-inline constexpr std::size_t kLastFsyncTimeOffset = 48;
-inline constexpr std::size_t kTotalPagesOffset = 56;
-inline constexpr std::size_t kFreePagesOffset = 64;
-inline constexpr std::size_t kAllocPointOffset = 72;
-inline constexpr std::size_t kReserved3Offset = 76;
-inline constexpr std::size_t kAllocRemainingOffset = 80;
-// Bytes actually read/written; the rest of the page (up to kPageSize) is
-// reserved for future fields and always encoded as zero, same intent as
-// the legacy struct's explicit reserved2[8104] tail.
-inline constexpr std::size_t kSuperBlockUsedSize = 88;
+inline constexpr std::size_t kCreateTimeOffset = 16;
+inline constexpr std::size_t kLastMountTimeOffset = 24;
+inline constexpr std::size_t kWalAnchorCountOffset = 32;
+inline constexpr std::size_t kReserved2Offset = 36;
 
 static_assert(offsetof(SuperBlockFields, magic) == kMagicOffset);
 static_assert(offsetof(SuperBlockFields, version) == kVersionOffset);
 static_assert(offsetof(SuperBlockFields, reserved1) == kReserved1Offset);
-static_assert(offsetof(SuperBlockFields, max_page_id) == kMaxPageIdOffset);
-static_assert(offsetof(SuperBlockFields, last_commit_page_id) == kLastCommitPageIdOffset);
 static_assert(offsetof(SuperBlockFields, create_time) == kCreateTimeOffset);
 static_assert(offsetof(SuperBlockFields, last_mount_time) == kLastMountTimeOffset);
-static_assert(offsetof(SuperBlockFields, last_fsync_time) == kLastFsyncTimeOffset);
-static_assert(offsetof(SuperBlockFields, total_pages) == kTotalPagesOffset);
-static_assert(offsetof(SuperBlockFields, free_pages) == kFreePagesOffset);
-static_assert(offsetof(SuperBlockFields, alloc_point) == kAllocPointOffset);
-static_assert(offsetof(SuperBlockFields, reserved3) == kReserved3Offset);
-static_assert(offsetof(SuperBlockFields, alloc_remaining) == kAllocRemainingOffset);
+static_assert(offsetof(SuperBlockFields, wal_anchor_count) == kWalAnchorCountOffset);
+static_assert(offsetof(SuperBlockFields, reserved2) == kReserved2Offset);
+
+// ---- Per-core WAL anchors (wal.md section 14-3) --------------------------
+//
+// Where recovery starts, per core. A core's stream is only self-describing
+// forward from a known point: the log carries no index, so without an
+// anchor recovery has no choice but to replay from the first segment, which
+// is the unbounded-RTO case checkpointing exists to prevent (wal.md section
+// 1). The checkpointer publishes an entry here after - never before - its
+// CHECKPOINT_END record is durable (section 8-3).
+//
+// Indexed directly by `core_id`, so no id is stored in the entry: a fixed
+// table in the superblock page is what makes an anchor update a single
+// page write, and a page write is the only kind of update that cannot land
+// half-applied. Recovery under a *different* core count than the run that
+// wrote these is [OPEN] (wal.md section 3), so `wal_anchor_count` records
+// what the last run used and leaves the policy to whoever settles it -
+// this file must not decide it by silently reindexing.
+//
+// An all-zero entry means "this core has never completed a checkpoint":
+// redo_start_lsn 0 is not a legal record LSN (offset 0 of segment 0 is the
+// segment header, record.hpp), so zero can never be confused with a real
+// anchor and correctly reads as "replay from the start of the stream".
+
+// Slots in the table. A power of two, sized so the whole table stays well
+// inside one page: 64 * kWalAnchorEntrySize = 2048 bytes, which with the
+// fixed fields above leaves over 3/4 of the page still reserved. Raising it
+// is a format-version event, so it is deliberately generous relative to any
+// core count this engine runs on today.
+inline constexpr std::uint32_t kMaxWalCores = 64;
+
+struct WalAnchorFields {
+    std::uint64_t checkpoint_lsn;   // the CHECKPOINT_BEGIN record this came from
+    std::uint64_t redo_start_lsn;   // where recovery's analysis phase begins
+    std::uint64_t durable_lsn;      // stream's durable end when this was published
+    std::uint64_t segment_no;       // segment holding redo_start_lsn
+};
+
+inline constexpr std::size_t kWalAnchorCheckpointLsnOffset = 0;
+inline constexpr std::size_t kWalAnchorRedoStartLsnOffset = 8;
+inline constexpr std::size_t kWalAnchorDurableLsnOffset = 16;
+inline constexpr std::size_t kWalAnchorSegmentNoOffset = 24;
+// 8*4 = 32 bytes per core, every field naturally aligned.
+inline constexpr std::size_t kWalAnchorEntrySize = 32;
+
+static_assert(offsetof(WalAnchorFields, checkpoint_lsn) == kWalAnchorCheckpointLsnOffset);
+static_assert(offsetof(WalAnchorFields, redo_start_lsn) == kWalAnchorRedoStartLsnOffset);
+static_assert(offsetof(WalAnchorFields, durable_lsn) == kWalAnchorDurableLsnOffset);
+static_assert(offsetof(WalAnchorFields, segment_no) == kWalAnchorSegmentNoOffset);
+static_assert(sizeof(WalAnchorFields) == kWalAnchorEntrySize);
+
+inline constexpr std::size_t kWalAnchorTableOffset = 40;
+static_assert(kWalAnchorTableOffset % alignof(std::uint64_t) == 0);
+inline constexpr std::size_t kWalAnchorTableSize = kMaxWalCores * kWalAnchorEntrySize;
+
+// Bytes actually read/written; the rest of the page (up to kPageSize) is
+// reserved for future fields and always encoded as zero, same intent as
+// the legacy struct's explicit reserved2[8104] tail.
+inline constexpr std::size_t kSuperBlockUsedSize = kWalAnchorTableOffset + kWalAnchorTableSize;
+
 static_assert(kSuperBlockBodyOffset + kSuperBlockUsedSize <= kPageSize);
 
 // ---- SuperBlock ----------------------------------------------------------
@@ -116,8 +159,8 @@ public:
     SuperBlock() noexcept;
 
     // Formats a brand-new superblock for an empty database: sets magic/
-    // version, zeroes the counters, stamps create_time/last_mount_time to
-    // `now_unix_seconds`, and starts page-id minting at kFirstUserPageId.
+    // version, stamps create_time/last_mount_time to `now_unix_seconds`,
+    // and leaves every WAL anchor zeroed (no core has checkpointed yet).
     static SuperBlock CreateFresh(std::uint64_t now_unix_seconds) noexcept;
 
     // Reads a superblock image out of a raw page buffer (e.g. just loaded
@@ -132,50 +175,41 @@ public:
     void Encode(std::span<std::byte, kPageSize> page) const;
 
     std::uint32_t version() const noexcept { return fields_.version; }
-    std::uint64_t max_page_id() const noexcept { return fields_.max_page_id; }
-    std::uint64_t last_commit_page_id() const noexcept { return fields_.last_commit_page_id; }
     std::uint64_t create_time() const noexcept { return fields_.create_time; }
     std::uint64_t last_mount_time() const noexcept { return fields_.last_mount_time; }
-    std::uint64_t last_fsync_time() const noexcept { return fields_.last_fsync_time; }
-    std::uint64_t total_pages() const noexcept { return fields_.total_pages; }
-    std::uint64_t free_pages() const noexcept { return fields_.free_pages; }
 
-    // Mints one fresh page id, bumping max_page_id. Single-writer only -
-    // see the file-level ownership note above.
-    PageId AllocatePageId() noexcept;
+    // ---- Per-core WAL anchors (wal.md section 14-3) ---------------------
 
-    // Mints `count` consecutive fresh page ids at once and returns the
-    // first one (ids [first, first + count) are now reserved), the batch
-    // equivalent of the legacy alloc_page_id_batch().
-    PageId AllocatePageIdBatch(std::uint64_t count) noexcept;
+    // How many anchor slots the last run used - `core_id + 1` of the
+    // highest core that ever published. Recovery compares it against this
+    // run's core count; what to do when they differ is [OPEN] (wal.md
+    // section 3) and is not decided here.
+    std::uint32_t wal_anchor_count() const noexcept { return fields_.wal_anchor_count; }
 
-    // Persists the page-id pre-allocation range (see
-    // kds::page_alloc, not yet built) so it can resume across a clean
-    // restart instead of always starting a fresh range. Ported from the
-    // legacy kds_meta_set_alloc_range()/kds_meta_get_alloc_range() - same
-    // crash-safety caveat applies: only call this at clean shutdown, since
-    // trusting a persisted in-flight range after an unclean shutdown could
-    // hand out a page id twice.
-    void SetAllocRange(PageId alloc_point, std::uint64_t remaining) noexcept;
-    std::pair<PageId, std::uint64_t> alloc_range() const noexcept;
+    // The anchor for `core_id`, or an all-zero one (no checkpoint yet) for
+    // a core that never published. Out-of-range ids read as zero rather
+    // than failing: "no anchor" is the right answer for a core this
+    // database has no record of, and it makes recovery replay the whole
+    // stream, which is safe.
+    WalAnchorFields wal_anchor(std::uint32_t core_id) const noexcept;
 
-    // Updates total/free page counts as reported by the page allocator.
-    void SetPageCounts(std::uint64_t total_pages, std::uint64_t free_pages) noexcept;
+    // Records a completed checkpoint's anchor. In-memory only - it is
+    // durable once the superblock page has been encoded and the store
+    // synced, which is the caller's job and the whole of wal.md section
+    // 8-3's ordering requirement. Fails with InvalidArgument for a core_id
+    // at or above kMaxWalCores; refusing beats wrapping, which would let
+    // one core's anchor silently overwrite another's.
+    Status SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& anchor) noexcept;
 
     // Stamps last_mount_time to `now_unix_seconds` (call once per boot,
     // after Decode()/CreateFresh() succeeds).
     void MarkMounted(std::uint64_t now_unix_seconds) noexcept;
 
-    // Stamps last_fsync_time and advances last_commit_page_id to the
-    // current max_page_id. Call this right after actually persisting the
-    // encoded page to disk, not before - it records that the fsync
-    // happened, matching the legacy kds_superblock_fsync() ordering.
-    void MarkFsynced(std::uint64_t now_unix_seconds) noexcept;
-
 private:
     explicit SuperBlock(SuperBlockFields fields) noexcept : fields_(fields) {}
 
     SuperBlockFields fields_;
+    WalAnchorFields wal_anchors_[kMaxWalCores]{};
 };
 
 }  // namespace kds::server

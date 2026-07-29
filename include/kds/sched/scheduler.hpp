@@ -5,8 +5,10 @@
 #include <deque>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
+#include "kds/base/log.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
 #include "kds/sched/task.hpp"
@@ -44,9 +46,24 @@ struct SchedulerConfig {
     // Phase 2+ tuning; this is a simple placeholder that satisfies the
     // invariant without needing the SLO controller.
     std::uint64_t decay_threshold_ns = 1'000'000'000;  // 1 second
+
+    // Longest the reactor will block in PollReady() when it has nothing
+    // ready to run (sched.md section 7's idle policy). It is a *cap*, not
+    // the sleep itself: a pending timer shortens it to that timer's
+    // deadline, and a non-empty ready queue drops it to 0. The cap exists
+    // so Stop() and anything that arrives outside the io backend are still
+    // noticed promptly, rather than requiring a socket event to wake the
+    // loop.
+    int max_idle_block_ms = 10;
 };
 
 using IoHandler = std::function<void(const IoEvent&)>;
+
+// Identifies an armed timer, for cancellation. Never reused, so cancelling
+// an already-fired one-shot is a harmless no-op rather than a way to kill
+// somebody else's timer.
+using TimerId = std::uint64_t;
+inline constexpr TimerId kInvalidTimerId = 0;
 
 class Scheduler {
 public:
@@ -69,35 +86,103 @@ public:
     Status ModifyIoHandler(IoHandle handle, IoInterest interest);
     Status UnregisterIoHandler(IoHandle handle);
 
+    // ---- Timers (sched.md section 6, phase 2) ---------------------------
+    //
+    // Backed by a binary min-heap keyed on deadline, *not* the hierarchical
+    // timing wheel sched.md section 6 specifies - the wheel's win is O(1)
+    // insertion at very high timer counts, and this reactor arms a handful
+    // (checkpoint cadence, D3 flush interval). The wheel replaces this
+    // without touching these signatures.
+    //
+    // A fired timer runs its callback directly in phase 2 rather than
+    // submitting a task, so a timer callback must be as short as a phase-1
+    // io handler: the thing it should do is Submit() the work.
+
+    // Runs `fn` once, at the first RunOnce() whose clock reading is at or
+    // past `deadline`. A deadline already in the past fires on the next
+    // iteration, never retroactively.
+    TimerId SubmitAt(MonoTimeNs deadline, std::function<void()> fn);
+
+    // Runs `fn` every `period_ns`, first firing one period from now.
+    // Re-armed from the *deadline* rather than from completion time, so a
+    // slow callback does not make the interval drift outward; a callback
+    // that overruns its period simply fires again immediately rather than
+    // stacking up.
+    TimerId SubmitEvery(MonoTimeNs period_ns, std::function<void()> fn);
+
+    // Disarms a timer. Safe for an id that has already fired or was never
+    // valid; safe to call from inside the timer's own callback.
+    void CancelTimer(TimerId id);
+
+    std::size_t armed_timers() const noexcept { return timers_.size(); }
+
     // Runs one iteration of the fixed-order phase loop (sched.md section
-    // 2). Phases 2 (timer expiry) and 3 (cross-core inbox drain) are
-    // explicit no-ops in Phase 1 - the ordering is preserved so Phase 2+
-    // work slots in later without reshaping this method. Returns true if
-    // any task ran or any I/O event was drained.
+    // 2). Phase 3 (cross-core inbox drain) is still an explicit no-op - the
+    // ordering is preserved so Phase 2+ work slots in later without
+    // reshaping this method. Returns true if any task ran, any I/O event
+    // was drained, or any timer fired.
     bool RunOnce();
 
     // Runs RunOnce() until Stop() is called (from within a task, e.g. one
-    // handling a shutdown command). Phase 1 always busy-polls (sched.md
-    // section 7's blocking idle policy is Phase 2+).
+    // handling a shutdown command). Idle iterations block in the io backend
+    // for up to `max_idle_block_ms`, or until the next timer is due,
+    // whichever is sooner - so an idle reactor costs no CPU.
     void Run();
+
+    // Diagnostic log, null (discard) by default; `log` must outlive the
+    // scheduler. The reactor has no caller to return a Status to - Run()
+    // is the top of the stack - so an io-backend failure has nowhere else
+    // to go. That is the gap RunOnce() used to mark with a (void) cast.
+    void SetLogger(Logger* log) noexcept { log_ = log; }
 
     // Requests Run() to return after the current iteration. Idempotent.
     void Stop() noexcept { stopped_ = true; }
     bool stopped() const noexcept { return stopped_; }
 
 private:
+    struct Timer {
+        MonoTimeNs deadline;
+        MonoTimeNs period_ns;  // 0 = one-shot
+        TimerId id;
+        std::function<void()> fn;
+    };
+
+    // Min-heap order: std::push_heap/pop_heap build a max-heap, so "less"
+    // is the later deadline. Ties break on id, keeping firing order stable
+    // for timers armed for the same instant.
+    struct LaterDeadlineFirst {
+        bool operator()(const Timer& a, const Timer& b) const noexcept {
+            if (a.deadline != b.deadline) return a.deadline > b.deadline;
+            return a.id > b.id;
+        }
+    };
+
     bool RunReadyTasks();
     bool PickNextGroup(SchedulingGroup& out) const;
     void MaybeDecayConsumedRuntime();
+    bool ExpireTimers();
+    bool HasReadyTask() const noexcept;
+    int IdleTimeoutMs() const noexcept;
+    TimerId ArmTimer(MonoTimeNs deadline, MonoTimeNs period_ns, std::function<void()> fn);
 
     const Clock& clock_;
     IoBackend& io_backend_;
     SchedulerConfig config_;
+    Logger* log_ = nullptr;
+    // Consecutive failing PollReady() calls. A reactor whose backend is
+    // broken fails every iteration, and one line per iteration would bury
+    // the log - so only the transitions are reported (see RunOnce()).
+    std::uint64_t consecutive_io_failures_ = 0;
 
     std::array<std::deque<TaskPtr>, kNumSchedulingGroups> ready_queues_;
     std::array<std::uint64_t, kNumSchedulingGroups> consumed_ns_{};
     std::unordered_map<IoHandle, IoHandler> io_handlers_;
     std::vector<IoEvent> io_events_scratch_;
+
+    std::vector<Timer> timers_;                  // heap, LaterDeadlineFirst
+    std::unordered_set<TimerId> cancelled_timers_;
+    TimerId next_timer_id_ = kInvalidTimerId + 1;
+
     bool stopped_ = false;
 };
 

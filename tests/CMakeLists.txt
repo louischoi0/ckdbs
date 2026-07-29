@@ -9,6 +9,11 @@ add_executable(kds_tests
     keystone_test.cpp
     heap_page_test.cpp
     superblock_test.cpp
+    row_codec_test.cpp
+    scheduler_test.cpp
+    log_test.cpp
+    config_file_test.cpp
+    superblock_checkpoint_anchor_test.cpp
     in_memory_page_store_test.cpp
     free_map_test.cpp
     device_page_store_test.cpp
@@ -19,11 +24,14 @@ add_executable(kds_tests
     tcp_server_test.cpp
     lexer_test.cpp
     parser_test.cpp
+    subsystem_logging_test.cpp
     kwp_frame_test.cpp
     wal_record_test.cpp
     wal_payload_test.cpp
     wal_stream_test.cpp
     wal_manager_test.cpp
+    page_mgr_wal_gate_test.cpp
+    wal_checkpointer_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
 )

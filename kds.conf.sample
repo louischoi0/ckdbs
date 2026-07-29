@@ -1,0 +1,53 @@
+# KDS server configuration — sample
+#
+# Copy to kds.conf (or anywhere) and pass with:  kds_server --config <path>
+#
+# Format is `key = value`, one per line. `#` starts a comment. Quote a value
+# to keep surrounding whitespace or a literal '#'.
+#
+# Precedence: built-in defaults, then this file, then command-line flags.
+# A later source wins, so a flag can override a deployed file for one run.
+#
+# Every key below is optional — an omitted key keeps its default. An
+# *unknown* key is a startup error rather than a warning: a typo like
+# `chekpoint_interval_ms` would otherwise look like it worked, and the
+# operator would find out when the loss window turned out to be the default.
+
+# ---- Storage ---------------------------------------------------------------
+
+# Path to the data file. Created if absent.
+data_file = kds.db
+
+# Directory holding the per-core WAL segment files (docs/wal.md §4.1).
+# Defaults to "<data_file>.wal" when unset.
+# wal_dir = kds.db.wal
+
+# ---- Network ---------------------------------------------------------------
+
+# TCP port, loopback only. 1..65535.
+port = 15432
+
+# ---- Durability ------------------------------------------------------------
+
+# How often the system-group checkpoint task flushes dirty pages
+# (docs/wal.md §11). This is the loss-window knob: lower means less data at
+# risk on a crash and more I/O. 0 disables the cadence entirely, which puts
+# durability back on SYNC and clean shutdown alone.
+#
+# Checkpoint cadence is an [OPEN] decision in docs/wal.md §13 — this default
+# is a starting point, not a recommendation.
+checkpoint_interval_ms = 5000
+
+# ---- Logging ---------------------------------------------------------------
+
+# Diagnostic log destination. `log_dir` is prepended to `log_file` unless
+# `log_file` is already absolute. Missing directories are created.
+# Set log_file empty to disable file logging entirely.
+log_dir  =
+log_file = kdb.log
+
+# trace | debug | info | warn | error | off
+#
+# `debug` includes a line per checkpoint, which is the cheapest way to see
+# whether the cadence is actually running.
+log_level = info

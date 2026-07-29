@@ -34,9 +34,9 @@ QUERIES = [
     # 1. DDL: real column list, resolved through Catalog::ResolveTypeByName().
     ("CREATE TABLE", "CREATE TABLE accounts (id int64, name varchar, balance int64)"),
     # 2-4. Populate three rows.
-    ("INSERT alice", "INSERT INTO accounts VALUES (1, 'alice', 100)"),
-    ("INSERT bob", "INSERT INTO accounts VALUES (2, 'bob', 50)"),
-    ("INSERT carol", "INSERT INTO accounts VALUES (3, 'carol', 75)"),
+    ("INSERT alice", "INSERT INTO accounts VALUES ('alice', 100)"),
+    ("INSERT bob", "INSERT INTO accounts VALUES ('bob', 50)"),
+    ("INSERT carol", "INSERT INTO accounts VALUES ('carol', 75)"),
     # 5. Full scan.
     ("SELECT all", "SELECT * FROM accounts"),
     # 6. WHERE-filtered scan.

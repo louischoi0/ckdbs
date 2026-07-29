@@ -1,5 +1,9 @@
 #include "kds/catalog/schema.hpp"
 
+#include <string>
+
+#include "kds/catalog/well_known.hpp"
+
 namespace kds::catalog {
 
 const SysColumnRow* Schema::FindColumn(std::string_view name) const noexcept {
@@ -9,6 +13,30 @@ const SysColumnRow* Schema::FindColumn(std::string_view name) const noexcept {
         }
     }
     return nullptr;
+}
+
+bool IsIntegerTypeVal(std::uint32_t type_val) noexcept {
+    switch (type_val) {
+        case kTypeValInt8:
+        case kTypeValInt16:
+        case kTypeValInt32:
+        case kTypeValInt64:
+        case kTypeValUint64: return true;
+        default: return false;
+    }
+}
+
+Status CheckKeystoneColumn(const Schema& schema) {
+    if (schema.columns.empty()) {
+        return Status::InvalidArgument(
+            "relation has no columns; the first column is the mandatory Keystone primary key");
+    }
+    if (!IsIntegerTypeVal(schema.columns.front().type_val)) {
+        return Status::InvalidArgument("primary-key column '" +
+                                        std::string(NameView(schema.columns.front().name)) +
+                                        "' must be an integer type - it carries the Keystone id");
+    }
+    return Status::OK();
 }
 
 }  // namespace kds::catalog

@@ -57,6 +57,9 @@ Status WalManager::Sync() {
         // was; nothing here may pretend otherwise, least of all the batch
         // bookkeeping - those commits are still waiting.
         ++stats_.sync_failures;
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("wal", "sync failed: " + s.message());
+        }
         return s;
     }
     if (had_staged_bytes) {
@@ -64,6 +67,15 @@ Status WalManager::Sync() {
     }
     ++stats_.syncs;
     last_sync_ns_ = clock_.Now();
+
+    // Debug rather than Trace: a sync is a durability point, and there is
+    // one per group-commit batch rather than one per record.
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("wal", "sync durable_lsn=" + std::to_string(durable_lsn()) +
+                               " appended_lsn=" + std::to_string(appended_lsn()) +
+                               " pending_group_commits=" +
+                               std::to_string(pending_group_commits_));
+    }
 
     // Group commit: one sync past the last staged commit record resolves
     // every commit in the batch, which is the whole mechanism.
@@ -107,6 +119,16 @@ StatusOr<Lsn> WalManager::Append(const RecordSpec& spec, std::span<const std::by
     }
     ++stats_.records_appended;
     stats_.bytes_appended += EncodedRecordSize(payload.size());
+
+    // One line per WAL record. Trace only: an append accompanies every
+    // logged page mutation, so this is a per-mutation syscall when enabled.
+    if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+        log_->Trace("wal", std::string("append ") + RecordTypeName(spec.type) + " lsn=" +
+                               std::to_string(lsn.value()) + " txn=" +
+                               std::to_string(spec.txn_id) + " page=" +
+                               std::to_string(spec.page_id) + " bytes=" +
+                               std::to_string(EncodedRecordSize(payload.size())));
+    }
     return lsn.value();
 }
 

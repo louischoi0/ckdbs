@@ -89,7 +89,14 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // Every page this store writes was stamped in Flush(), so a mismatch
     // here is real damage, not an unstamped page.
     if (Status s = VerifyPageChecksum(std::span<const std::byte, kPageSize>(*bytes)); !s.ok()) {
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("pagestore", "corruption: page " + std::to_string(page_id) +
+                                         " failed checksum verification on read: " + s.message());
+        }
         return s;
+    }
+    if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+        log_->Trace("pagestore", "read page=" + std::to_string(page_id) + " from device");
     }
     return InsertFrame(page_id, std::move(bytes));
 }
@@ -110,6 +117,10 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAt(PageId page_
 
     auto bytes = std::make_unique<Page>();
     bytes->fill(std::byte{0});
+    if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+        log_->Trace("pagestore", "alloc page=" + std::to_string(page_id) + " (allocated=" +
+                                     std::to_string(allocated_pages()) + ")");
+    }
     return InsertFrame(page_id, std::move(bytes));
 }
 
@@ -156,22 +167,118 @@ Status DevicePageStore::Flush() {
         if (Status s = device_.WritePage(page_id, std::span<const std::byte, kPageSize>(
                                                       *it->second.bytes));
             !s.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "write failed for page " + std::to_string(page_id) +
+                                             ": " + s.message());
+            }
             return s;
         }
         it->second.dirty = false;
+        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+            log_->Trace("pagestore", "wrote page=" + std::to_string(page_id));
+        }
     }
 
     if (free_map_dirty_) {
         StampPageChecksum(free_map_bytes());
-        if (Status s = device_.WritePage(kFreeMapPageId, free_map_bytes()); !s.ok()) return s;
+        if (Status s = device_.WritePage(kFreeMapPageId, free_map_bytes()); !s.ok()) {
+            // The map is what makes a page reachable after a restart, so
+            // losing this write loses pages whose bytes did land.
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "free-map write failed: " + s.message());
+            }
+            return s;
+        }
         free_map_dirty_ = false;
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("pagestore", "free map written, " + std::to_string(allocated_pages()) +
+                                         " page(s) allocated");
+        }
+    }
+    if (!dirty.empty() && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("pagestore", "flushed " + std::to_string(dirty.size()) + " dirty page(s)");
     }
     return Status::OK();
 }
 
 Status DevicePageStore::Sync() {
     if (Status s = Flush(); !s.ok()) return s;
-    return device_.Sync();
+    Status s = device_.Sync();
+    if (log_ != nullptr) {
+        if (!s.ok() && log_->enabled(LogLevel::kError)) {
+            log_->Error("pagestore", "device sync failed: " + s.message());
+        } else if (s.ok() && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("pagestore", "device synced, " + std::to_string(resident_pages()) +
+                                         " page(s) resident");
+        }
+    }
+    return s;
+}
+
+std::vector<PageId> DevicePageStore::DirtyPageIds() const {
+    std::vector<PageId> dirty;
+    dirty.reserve(frames_.size());
+    for (const auto& [page_id, frame] : frames_) {
+        if (frame.dirty) dirty.push_back(page_id);
+    }
+    std::sort(dirty.begin(), dirty.end());
+    return dirty;
+}
+
+Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
+    std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
+    std::sort(ordered.begin(), ordered.end());
+
+    bool wrote_any = false;
+    for (const PageId page_id : ordered) {
+        auto it = frames_.find(page_id);
+        if (it == frames_.end() || !it->second.dirty) {
+            continue;  // evicted, or already flushed by someone else
+        }
+
+        StampPageChecksum(std::span<std::byte, kPageSize>(*it->second.bytes));
+        if (Status s = device_.WritePage(
+                page_id, std::span<const std::byte, kPageSize>(*it->second.bytes));
+            !s.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "checkpoint write failed for page " +
+                                             std::to_string(page_id) + ": " + s.message());
+            }
+            return s;
+        }
+        it->second.dirty = false;
+        wrote_any = true;
+        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+            log_->Trace("pagestore", "wrote page=" + std::to_string(page_id) + " (checkpoint)");
+        }
+    }
+
+    // The free map goes out with them, and after them: a page is only
+    // reachable once the map says its id is allocated, so publishing the
+    // map first would let a crash expose a page whose bytes never landed.
+    if (free_map_dirty_) {
+        StampPageChecksum(free_map_bytes());
+        if (Status s = device_.WritePage(kFreeMapPageId, free_map_bytes()); !s.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "checkpoint free-map write failed: " + s.message());
+            }
+            return s;
+        }
+        free_map_dirty_ = false;
+        wrote_any = true;
+    }
+
+    if (!wrote_any) return Status::OK();  // nothing written, nothing to sync
+    Status s = device_.Sync();
+    if (log_ != nullptr) {
+        if (!s.ok() && log_->enabled(LogLevel::kError)) {
+            log_->Error("pagestore", "checkpoint sync failed: " + s.message());
+        } else if (s.ok() && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("pagestore", "checkpoint wrote " + std::to_string(ordered.size()) +
+                                         " named page(s) and synced");
+        }
+    }
+    return s;
 }
 
 }  // namespace kds::storage

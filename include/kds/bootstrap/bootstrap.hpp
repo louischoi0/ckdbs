@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/server/superblock.hpp"
@@ -42,7 +43,14 @@ struct BootstrapResult {
 //
 // Fails if `store` reports an unexpected error at any step, or if
 // Catalog::Bootstrap() fails on the fresh path.
+//
+// `log` (optional, component tag "bootstrap") receives the one fact this
+// function decides and nothing else can recover afterwards: whether this
+// was a fresh database or an existing one. The returned Catalog carries
+// the same logger, so catalog writes are reported from here on. It must
+// outlive both the call and the returned result.
 StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
-                                             std::uint64_t now_unix_seconds);
+                                             std::uint64_t now_unix_seconds,
+                                             Logger* log = nullptr);
 
 }  // namespace kds::bootstrap

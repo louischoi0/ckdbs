@@ -124,7 +124,7 @@ Fuzzy checkpoints, run as a `system`-group task per core:
 
 1. Emit `CHECKPOINT_BEGIN` carrying the active-transaction table and the dirty-page table (`BufferPool::DirtyTable()` — `{page_id → recLSN}`, storage-layout §8).
 2. Flush dirty pages under §8-1, paced across the checkpoint window (storage-layout §13 checkpoint spreading) and SLO-throttled — the checkpointer never floods the foreground.
-3. Emit `CHECKPOINT_END`; persist the redo start (`min(recLSN)`) into the superblock anchor.
+3. Emit `CHECKPOINT_END`; **after it is durable**, persist the redo start (`min(recLSN)`) into the superblock anchor (§14-3). recLSN 0 — a page dirtied but described by no record — is skipped, not `min()`ed in; with no logged page in the snapshot the redo start is the `CHECKPOINT_BEGIN` LSN itself.
 4. Segments wholly below the redo start are recyclable once archived (§13).
 
 Cadence is the RTO knob: more frequent ⇒ shorter recovery + more FPI volume.
@@ -155,7 +155,7 @@ Still required:
 
 1. ~~**Design spec — tuple header (MVCC):** replace `xmin/xmax/undo_ptr` with **`trx_id` (48-bit writer) + `undo_ptr` + delete-mark flag** per §5.1~~ — **satisfied 2026-07-29**: `docs/heap-and-tuple.md` §3.2 amended and invariant 12 added; implemented in `include/kds/storage/heap/heap_page.hpp` (20-byte header, `kSlotFlagDeleted`, `PageView::DeleteMark`). The lock role stays in the Keystone lock byte.
 2. **Design spec — heap section:** `PAGE_INIT` as the sole logger of `min_key`.
-3. **Superblock spec:** per-core WAL anchors (current segment, durable LSN, redo start).
+3. ~~**Superblock spec:** per-core WAL anchors (current segment, durable LSN, redo start).~~ — **satisfied 2026-07-29**: superblock v3 carries a fixed `kMaxWalCores`-slot anchor table indexed by `core_id`, each entry `{checkpoint_lsn, redo_start_lsn, durable_lsn, segment_no}` (32 B), implemented in `include/kds/server/superblock.hpp` (`WalAnchorFields`, `SetWalAnchor`/`wal_anchor`) with `SuperBlockCheckpointAnchor` as the `wal::CheckpointAnchor` implementation. An all-zero entry means "never checkpointed" and sends recovery to the start of the stream; `wal_anchor_count` records the last run's core count so §3's changed-core-count question stays open rather than being decided by reindexing.
 4. **Transaction/MVCC spec (when written):** undo-page layout, undo retention policy, snapshot-too-old semantics; 48-bit txn-id wraparound/epoch.
 5. **`docs/wire-protocol.md` / error registry:** add `SnapshotTooOld` (retryable = context-dependent — define with §15) to the error taxonomy.
 6. **`CLAUDE.md`:** WAL opens (§15) in the open list; durability-model and MVCC-header summary lines.

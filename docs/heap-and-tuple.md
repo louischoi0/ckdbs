@@ -53,7 +53,18 @@ Bit layout (one `u64`):
 | `flags` | 8 bits | Transaction/status byte (Oracle lock-byte style; may reference a per-page transaction slot). Tuple-level status such as DEAD stays in the slot directory, not here. |
 | `reserved` | 16 bits | **Amendment 2026-07-28:** the former `meta_handle` field. Waystone (`docs/waystone-concpets.md` §4) addresses its per-tuple entries directly by `id`, not by a handle stored here, so this field has no current addressing purpose. Writers must set it to 0; readers must ignore it. Repurposing (e.g. a hot-tier accelerator handle) is `[OPEN]` — see spec §11. |
 
-Waystone-enabled relations additionally require **system-generated, autoincrement `id` values**: when a relation has `waystone_enabled` set (`docs/waystone-concpets.md` §7), callers must not supply their own `id`/pk on insert. Rationale: Waystone addressing is `entry_index = pk` (spec §4) directly off the issued id sequence; a user-supplied, non-monotonic, or reused pk would defeat the directory's dense/sparse-but-ordered growth assumption (spec §6) and could collide with an existing live entry. This rule binds only relations with Waystone on — a plain heap table (Waystone disabled) is unaffected and keeps whatever pk-assignment policy it already has.
+**Every relation** requires **system-generated, autoincrement `id` values** — callers must not supply their own `id`/pk on insert. Rationale: Waystone addressing is `entry_index = pk` (spec §4) directly off the issued id sequence; a user-supplied, non-monotonic, or reused pk would defeat the directory's dense/sparse-but-ordered growth assumption (spec §6) and could collide with an existing live entry.
+
+**Amendment 2026-07-29 — scope widened from Waystone-enabled relations to all of them.** The rule previously bound only relations with `waystone_enabled` set, leaving a plain heap table free to keep any pk-assignment policy. That split is retired: `waystone_enabled` is a flag that can be turned *on* later, and a relation that spent its early life accepting caller-supplied pks cannot then be given a dense id-addressed structure without rewriting every key. Making the sequence universal costs a plain heap table nothing and keeps every relation eligible.
+
+Consequences, as implemented:
+
+- The id sequence is **persistent, not derived**: `sys.tables.next_id` (`include/kds/catalog/rows.hpp`), issued by `Catalog::AllocateRowId()`. Deriving it as `max(id) + 1` would reissue an id after the highest tuple is deleted, and a reissued id silently aliases a retired one in any structure that addresses by id. First id issued is 1; 0 stays reserved for "unset".
+- Ids are unique and monotonic by construction, **not gapless** — an insert that fails after allocating burns one. Gaplessness is not a property anything depends on.
+- The pk is carried **only** by the Keystone word, never also as a body column: `EncodeRow()` writes `[Keystone word][columns 1..n-1]` and `INSERT` supplies values for columns 1..n-1 only. Storing the key twice is how the two copies come to disagree.
+- The pk **cannot be updated**: it is the tuple's identity, not a field of it.
+- A relation's first column must be declared with an **integer type** (`catalog::CheckKeystoneColumn`), checked at `CREATE TABLE`. Its declared width is display metadata only — the id lives in the 40-bit Keystone field regardless, so a narrow declared type does not cap the sequence.
+- Id-reuse / low-range reclamation remains `[OPEN]`; sequence exhaustion is reported (`OutOfRange`), never wrapped.
 
 Implementation rules:
 

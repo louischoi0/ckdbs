@@ -3,7 +3,9 @@
 #include <string>
 #include <string_view>
 
+#include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/page_store.hpp"
 
@@ -43,9 +45,23 @@ struct DispatchOutcome {
 
 class CommandDispatcher {
 public:
+    // `log` and `clock` are optional and independently so: a null logger
+    // disables every diagnostic below, and a null clock only drops the
+    // duration from the ones that report one. Both default to off so the
+    // socket-free unit tests stay socket- *and* clock-free.
+    //
+    // The clock is the reason this class is no longer strictly free of
+    // injectable interfaces (see the note above): reporting how long a
+    // query took needs a monotonic reading, and taking one directly would
+    // be the std::chrono call rules.md section 4 forbids.
     CommandDispatcher(SuperBlock& superblock, catalog::Catalog& catalog,
-                       storage::PageStore& page_store) noexcept
-        : superblock_(superblock), catalog_(catalog), page_store_(page_store) {}
+                       storage::PageStore& page_store, Logger* log = nullptr,
+                       const sched::Clock* clock = nullptr) noexcept
+        : superblock_(superblock),
+          catalog_(catalog),
+          page_store_(page_store),
+          log_(log),
+          clock_(clock) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -77,15 +93,25 @@ public:
     //                            raw text, since a payload can contain any
     //                            byte including '\n' - see HexEncode()'s
     //                            comment in the .cpp).
-    //   FIND TABLE <name>     -> "oid=<n> root_page_id=<n> clustered_type=<HEAP|BTREE>"
-    //                            or "ERR ..."
-    //   CREATE TABLE <name>   -> "CREATED oid=<n>" if newly created,
-    //                            "EXISTS oid=<n>" if a table with this
-    //                            name already exists (idempotent - does
-    //                            NOT error or create a duplicate). Always
-    //                            a zero-column ClusteredType::kHeap table
-    //                            under the public namespace. Legacy bare
-    //                            form - no column list.
+    //   DESCRIBE <name>       -> a summary line
+    //                            "oid=<n> root_page_id=<n>
+    //                             clustered_type=<HEAP|BTREE> next_id=<n>
+    //                             columns=<n>", then one "\n"-escaped
+    //                            (see SHOW PAGE above) section per column:
+    //                            "pos=<n> name=<s> type=<s> len=<n>
+    //                             notnull=<yes|no> pk=<yes|no>
+    //                             autoincrement=<yes|no>". Replaces the
+    //                            former FIND TABLE, which reported the
+    //                            same header and no schema. DESC is
+    //                            accepted as a synonym.
+    //   CREATE TABLE <name>   -> the bare, pre-parser form: a zero-column
+    //                            table. Now always "ERR ...", because
+    //                            every relation's first column is its
+    //                            mandatory Keystone primary key
+    //                            (heap-and-tuple.md section 4) and a
+    //                            zero-column relation cannot have one.
+    //                            Kept only so the failure names the
+    //                            reason; use the column-list form.
     //   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE]
     //                         -> same CREATED/EXISTS response as above,
     //                            but with real columns: parsed via
@@ -96,11 +122,16 @@ public:
     //                            src/exec/row_codec.hpp for the supported
     //                            column type set.
     //   INSERT INTO <name> VALUES (<val> [, ...])
-    //                         -> "INSERTED oid=<table_oid> slot=<n>" or
-    //                            "ERR ...". Values are positional, one per
-    //                            schema column in `pos` order - see
-    //                            ast.hpp: no explicit column list in this
-    //                            grammar.
+    //                         -> "INSERTED oid=<table_oid> id=<n> slot=<n>"
+    //                            or "ERR ...". Values are positional, one
+    //                            per schema column in `pos` order, *after*
+    //                            the primary key - see ast.hpp: no
+    //                            explicit column list in this grammar. The
+    //                            pk is not supplied: it is the Keystone id,
+    //                            issued by Catalog::AllocateRowId() and
+    //                            reported as `id=`. Supplying a full-width
+    //                            value list is an error naming the pk
+    //                            column (CLAUDE.md invariant 10).
     //   SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]
     //                         -> a full heap-page scan (root page only -
     //                            no multi-page chains yet), WHERE-filtered.
@@ -120,7 +151,7 @@ public:
 private:
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables();
-    DispatchOutcome HandleFindTable(std::string_view args);
+    DispatchOutcome HandleDescribe(std::string_view args);
     DispatchOutcome HandleShowPage(std::string_view args);
     DispatchOutcome HandleCreateTable(std::string_view args);
     DispatchOutcome HandleCreateTableSql(std::string_view line);
@@ -129,9 +160,25 @@ private:
     DispatchOutcome HandleUpdate(std::string_view line);
     DispatchOutcome HandleSync();
 
+    // Diagnostics. Levels are chosen so the default (info) is quiet under
+    // load: DDL and SYNC are Info because they are rare and consequential,
+    // a completed query is Debug, and the per-tuple heap events are Trace.
+    // Enabling trace on a busy server costs a write() per tuple - it is a
+    // development tool, not an operating mode.
+    // Dispatch() wraps this to time it and log the outcome once, in one
+    // place, rather than at every return of every handler.
+    DispatchOutcome DispatchInner(std::string_view line);
+
+    bool logging(LogLevel level) const noexcept {
+        return log_ != nullptr && log_->enabled(level);
+    }
+    sched::MonoTimeNs NowNs() const noexcept { return clock_ == nullptr ? 0 : clock_->Now(); }
+
     SuperBlock& superblock_;
     catalog::Catalog& catalog_;
     storage::PageStore& page_store_;
+    Logger* log_;
+    const sched::Clock* clock_;
 };
 
 }  // namespace kds::server

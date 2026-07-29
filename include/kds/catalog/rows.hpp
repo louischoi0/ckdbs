@@ -75,13 +75,24 @@ struct SysTableRow {
     Name name;
     PageId desc_page_id;
     ClusteredType clustered_type;
+    // Next Keystone id this relation will issue. The relation's pk is
+    // system-generated and autoincrement (heap-and-tuple.md section 4,
+    // CLAUDE.md invariant 10), and the sequence has to be *persistent*
+    // rather than derived: deriving it as max(id)+1 would reissue an id
+    // after the highest tuple is deleted, and Waystone addresses tuples by
+    // id directly, so a reissued id silently aliases a retired one. First
+    // id issued is 1, keeping 0 free as "unset".
+    std::uint64_t next_id;
 
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kNameOffset = 16;
     static constexpr std::size_t kDescPageIdOffset = kNameOffset + kCatalogNameMax;
     static constexpr std::size_t kClusteredTypeOffset = kDescPageIdOffset + sizeof(PageId);
-    static constexpr std::size_t kOnDiskSize = kClusteredTypeOffset + sizeof(std::uint8_t);
+    // uint64 rather than 8-byte-aligned: catalog rows are packed byte
+    // streams read through memcpy, never overlaid on the buffer.
+    static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kOnDiskSize = kNextIdOffset + sizeof(std::uint64_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
@@ -92,6 +103,9 @@ static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOid
 static_assert(offsetof(SysTableRow, name) == SysTableRow::kNameOffset);
 static_assert(offsetof(SysTableRow, desc_page_id) == SysTableRow::kDescPageIdOffset);
 static_assert(offsetof(SysTableRow, clustered_type) == SysTableRow::kClusteredTypeOffset);
+
+// The first id any relation issues. Zero stays reserved for "no id".
+inline constexpr std::uint64_t kFirstRowId = 1;
 
 // ---- sys.columns ----------------------------------------------------------
 

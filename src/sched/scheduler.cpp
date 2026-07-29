@@ -1,5 +1,8 @@
 #include "kds/sched/scheduler.hpp"
 
+#include <algorithm>
+#include <utility>
+
 namespace kds::sched {
 
 Scheduler::Scheduler(const Clock& clock, IoBackend& io_backend, SchedulerConfig config)
@@ -24,6 +27,111 @@ Status Scheduler::ModifyIoHandler(IoHandle handle, IoInterest interest) {
 Status Scheduler::UnregisterIoHandler(IoHandle handle) {
     io_handlers_.erase(handle);
     return io_backend_.Unregister(handle);
+}
+
+TimerId Scheduler::ArmTimer(MonoTimeNs deadline, MonoTimeNs period_ns,
+                            std::function<void()> fn) {
+    const TimerId id = next_timer_id_++;
+    timers_.push_back(Timer{deadline, period_ns, id, std::move(fn)});
+    std::push_heap(timers_.begin(), timers_.end(), LaterDeadlineFirst{});
+    return id;
+}
+
+TimerId Scheduler::SubmitAt(MonoTimeNs deadline, std::function<void()> fn) {
+    return ArmTimer(deadline, /*period_ns=*/0, std::move(fn));
+}
+
+TimerId Scheduler::SubmitEvery(MonoTimeNs period_ns, std::function<void()> fn) {
+    // A zero period would re-arm for the same instant forever and starve
+    // everything else in phase 2; one nanosecond is still effectively
+    // "every iteration" but always makes progress.
+    if (period_ns == 0) period_ns = 1;
+    return ArmTimer(clock_.Now() + period_ns, period_ns, std::move(fn));
+}
+
+void Scheduler::CancelTimer(TimerId id) {
+    if (id == kInvalidTimerId) return;
+    // Tombstoned rather than removed: erasing from the middle of a heap
+    // means a rebuild, and cancelling from inside a callback would
+    // invalidate the entry phase 2 is holding. The tombstone is consumed
+    // when the timer surfaces.
+    cancelled_timers_.insert(id);
+}
+
+bool Scheduler::ExpireTimers() {
+    bool fired_any = false;
+    const MonoTimeNs now = clock_.Now();
+
+    while (!timers_.empty()) {
+        const Timer& top = timers_.front();
+
+        if (cancelled_timers_.erase(top.id) > 0) {
+            std::pop_heap(timers_.begin(), timers_.end(), LaterDeadlineFirst{});
+            timers_.pop_back();
+            continue;
+        }
+        if (top.deadline > now) break;  // heap is ordered; nothing else is due
+
+        // Moved out before firing: the callback may arm or cancel timers,
+        // which can reallocate the heap out from under a reference into it.
+        std::pop_heap(timers_.begin(), timers_.end(), LaterDeadlineFirst{});
+        Timer due = std::move(timers_.back());
+        timers_.pop_back();
+
+        if (due.period_ns != 0) {
+            // Re-armed from the deadline, not from completion, so a slow
+            // callback does not push the interval outward.
+            //
+            // Missed periods **coalesce**: the next deadline skips to the
+            // first instant strictly after now, so a reactor that stalled
+            // for ten periods fires once on recovery, not ten times. For
+            // the work this carries - the checkpoint cadence - a burst of
+            // back-to-back runs after a stall is the opposite of what the
+            // cadence is for, and nothing here is a tick counter that a
+            // caller could be counting on to be conserved.
+            MonoTimeNs next = due.deadline + due.period_ns;
+            if (next <= now) {
+                const MonoTimeNs behind = now - next;
+                next += ((behind / due.period_ns) + 1) * due.period_ns;
+            }
+            const TimerId id = due.id;
+            std::function<void()> fn = due.fn;
+            timers_.push_back(Timer{next, due.period_ns, id, std::move(fn)});
+            std::push_heap(timers_.begin(), timers_.end(), LaterDeadlineFirst{});
+        }
+
+        due.fn();
+        fired_any = true;
+    }
+    return fired_any;
+}
+
+bool Scheduler::HasReadyTask() const noexcept {
+    for (const auto& queue : ready_queues_) {
+        if (!queue.empty()) return true;
+    }
+    return false;
+}
+
+int Scheduler::IdleTimeoutMs() const noexcept {
+    // Anything runnable means do not sleep at all.
+    if (HasReadyTask()) return 0;
+
+    int timeout = config_.max_idle_block_ms;
+    if (timeout < 0) timeout = 0;
+    if (timers_.empty()) return timeout;
+
+    const MonoTimeNs now = clock_.Now();
+    const MonoTimeNs deadline = timers_.front().deadline;
+    if (deadline <= now) return 0;  // already due
+
+    // Rounded up: sleeping slightly long is a late timer, sleeping short is
+    // a spin. Late is the cheaper mistake.
+    const MonoTimeNs remaining_ms = (deadline - now + 999'999) / 1'000'000;
+    if (remaining_ms < static_cast<MonoTimeNs>(timeout)) {
+        timeout = static_cast<int>(remaining_ms);
+    }
+    return timeout;
 }
 
 bool Scheduler::PickNextGroup(SchedulingGroup& out) const {
@@ -79,16 +187,30 @@ bool Scheduler::RunReadyTasks() {
 bool Scheduler::RunOnce() {
     bool did_work = false;
 
-    // Phase 1: drain I/O completions. Non-blocking poll (timeout 0) - the
-    // reactor never sleeps here in Phase 1; see Run()'s comment on idle
-    // policy.
+    // Phase 1: drain I/O completions. The wait is phase 6's idle policy
+    // pulled to the front, which is where a reactor can actually sleep: 0
+    // when anything is runnable, otherwise up to the next timer deadline
+    // (sched.md section 7).
     io_events_scratch_.clear();
-    Status io_status = io_backend_.PollReady(/*timeout_ms=*/0, io_events_scratch_);
-    // A poll failure here is not fatal to the reactor (rules.md #1: no
-    // silently-dropped status, but there is no logging subsystem yet to
-    // report it through - Phase 2+ wires this into whatever observability
-    // path lands alongside the SLO controller).
-    (void)io_status;
+    Status io_status = io_backend_.PollReady(IdleTimeoutMs(), io_events_scratch_);
+    // A poll failure here is not fatal to the reactor: the loop keeps
+    // running and the next iteration may succeed. But it is the top of the
+    // stack, so nothing else can report it - it goes to the log, and only
+    // on the transitions, because a permanently broken backend fails on
+    // every iteration and would otherwise write a line per spin.
+    if (!io_status.ok()) {
+        ++consecutive_io_failures_;
+        if (consecutive_io_failures_ == 1 && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("sched", "io backend poll failed: " + io_status.message());
+        }
+    } else if (consecutive_io_failures_ > 0) {
+        if (log_ != nullptr && log_->enabled(LogLevel::kWarn)) {
+            log_->Warn("sched", "io backend recovered after " +
+                                    std::to_string(consecutive_io_failures_) +
+                                    " failed poll(s)");
+        }
+        consecutive_io_failures_ = 0;
+    }
     for (const IoEvent& ev : io_events_scratch_) {
         auto it = io_handlers_.find(ev.handle);
         if (it != io_handlers_.end()) {
@@ -97,8 +219,10 @@ bool Scheduler::RunOnce() {
         }
     }
 
-    // Phase 2: expire timers. [Phase 2+ - no hierarchical timing wheel
-    // yet; see docs/sched.md section 6 and its Implementation Status.]
+    // Phase 2: expire timers. Min-heap, not the hierarchical timing wheel
+    // of sched.md section 6 - see SubmitAt()'s comment on why, and on what
+    // replacing it would cost.
+    if (ExpireTimers()) did_work = true;
 
     // Phase 3: drain cross-core inboxes. [Phase 2+ - single reactor only,
     // no SPSC rings yet; see docs/sched.md section 5.]
@@ -110,16 +234,25 @@ bool Scheduler::RunOnce() {
     // calls above take effect synchronously (no batching) - batched
     // submission is Phase 2+ (e.g. a real io_uring submission queue).
 
-    // Phase 6: idle policy. [Phase 1 is busy-poll only; the blocking mode
-    // from docs/sched.md section 7 is Phase 2+.]
+    // Phase 6: idle policy. Applied at phase 1's PollReady() rather than
+    // as a separate sleep here - a reactor with an event loop already has
+    // exactly one place it can block, and adding a second would be a
+    // second source of latency.
 
     return did_work;
 }
 
 void Scheduler::Run() {
     stopped_ = false;
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("sched", "reactor loop entered, " + std::to_string(timers_.size()) +
+                                 " timer(s) armed");
+    }
     while (!stopped_) {
         RunOnce();
+    }
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("sched", "reactor loop left on Stop()");
     }
 }
 

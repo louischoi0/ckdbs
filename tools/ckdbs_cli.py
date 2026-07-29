@@ -19,13 +19,12 @@ Usage:
     ckdbs_cli.py SHOW TABLES
     ckdbs_cli.py SHOW PAGE 128
     ckdbs_cli.py SHOW PAGE 128 VALUES
-    ckdbs_cli.py FIND TABLE accounts
-    ckdbs_cli.py CREATE TABLE accounts
+    ckdbs_cli.py DESCRIBE accounts
     ckdbs_cli.py --host 127.0.0.1 --port 15432 SHOW TABLES
 
     # Full SQL grammar (src/parser) - quote as one shell argument:
     ckdbs_cli.py "CREATE TABLE accounts (id int64, name varchar, balance int64)"
-    ckdbs_cli.py "INSERT INTO accounts VALUES (1, 'alice', 100)"
+    ckdbs_cli.py "INSERT INTO accounts VALUES ('alice', 100)"
     ckdbs_cli.py "SELECT * FROM accounts WHERE id = 1"
     ckdbs_cli.py "UPDATE accounts SET balance = 150 WHERE id = 1"
 
@@ -52,8 +51,8 @@ KNOWN_COMMANDS = """\
   SHOW PAGE <page_id> [VALUES]
                           -> heap page header + slot directory, pretty-printed;
                              VALUES also hex-encodes each live tuple's payload
-  FIND TABLE <name>       -> oid=<n> or ERR ...
-  CREATE TABLE <name>     -> "CREATED oid=<n>" or "EXISTS oid=<n>" (idempotent);
+  DESCRIBE <name>         -> table header + one section per column (DESC works too)
+  CREATE TABLE <name>     -> always ERR: a table needs a Keystone pk column;
                              bare form, no columns
   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP|BTREE]
                           -> same CREATED/EXISTS reply, real columns (SQL form)
@@ -232,7 +231,7 @@ def main():
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"default: {DEFAULT_HOST}")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"default: {DEFAULT_PORT}")
     parser.add_argument("command", nargs="*",
-                         help="command to send (e.g. PING, FIND TABLE accounts); "
+                         help="command to send (e.g. PING, DESCRIBE accounts); "
                               "omit for an interactive REPL")
     args = parser.parse_args()
 

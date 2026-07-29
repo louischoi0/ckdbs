@@ -29,10 +29,99 @@ Start the server:
 
 ```sh
 ./build.sh
-./build/kds_server
+./build/kds_server                        # defaults: kds.db, port 15432, ./kdb.log
+./build/kds_server --config kds.conf      # or from a settings file
 ```
 
-It prints the port it bound and a one-line hint on startup.
+It prints the data file, the log destination, and the port it bound.
+
+### Configuration
+
+Settings come from three places, later winning over earlier: **built-in
+defaults → config file (`--config <path>`) → command-line flags.** See
+`kds.conf.sample` for a commented template.
+
+| Key | Flag | Default | Meaning |
+|---|---|---|---|
+| `data_file` | positional arg | `kds.db` | Data file path; created if absent. |
+| `port` | `--port` | `15432` | TCP port, loopback only. |
+| `wal_dir` | — | `<data_file>.wal` | Per-core WAL segment directory. |
+| `checkpoint_interval_ms` | — | `5000` | How often dirty pages are flushed (`docs/wal.md` §11). `0` disables the cadence, leaving `SYNC`/shutdown as the only durability points. |
+| `log_dir` | `--log-dir` | *(empty)* | Prepended to `log_file` unless that is absolute. Created if missing. |
+| `log_file` | `--log-file` | `kdb.log` | Log file name. Empty disables file logging. |
+| `log_level` | `--log-level` | `info` | `trace`/`debug`/`info`/`warn`/`error`/`off`. |
+
+An **unknown key is a startup error**, not a warning — a typo such as
+`chekpoint_interval_ms` would otherwise look like it applied. Duplicate
+keys, malformed lines, and out-of-range values are refused the same way,
+each naming the file and line.
+
+### The log
+
+One line per event: `<unix_seconds> <LEVEL> [component] message`.
+
+```
+1785309288 INFO [expeditor] opening database 'lg.db', wal dir 'lg.db.wal'
+1785309288 INFO [expeditor] checkpoint cadence 2000ms
+1785309288 INFO [expeditor] listening on 127.0.0.1:15499
+1785309290 DEBUG [checkpoint] checkpoint complete: redo_start=4096 pages_flushed=5
+1785309295 INFO [expeditor] stopped cleanly; 8 pages persisted
+```
+
+The file is opened append-only, so a restart continues it rather than
+erasing why the last run died.
+
+**What each level costs.** The level a component reports at is a deliberate
+contract, not a preference: `info` has to stay quiet under load, or a busy
+server pays a `write()` syscall per tuple to say nothing.
+
+| Level | Components | Volume |
+|---|---|---|
+| `error` | failed checkpoint, failed WAL sync, failed client `SYNC`, page corruption detected on read, a refused WAL-gate flush, a failed page write or barrier, a failed anchor publish, io-backend failure | rare; something is wrong |
+| `warn` | failed query (with its full reason), cadence disabled, failed heap insert, buffer-pool frame exhaustion, io backend recovering | per failure |
+| `info` | startup/shutdown, fresh-vs-existing bootstrap, catalog bootstrap, DDL (`CREATE TABLE`), published checkpoint anchor, client `SYNC`, `STOP` received | per lifecycle event — the default |
+| `debug` | every query with its duration, checkpoint start/completion, connection accept/close, WAL sync, page-flush batches and their WAL waits, free-map and device syncs, superblock anchor writes, the catalog side of a DDL (root page, desc-page relink) | **per request** |
+| `trace` | every client request line, every heap insert/overwrite, every WAL record appended, **every page dirtied**, every page allocated/read/written, every row id issued | **per tuple** — a development tool, not an operating mode |
+
+**Component tags.** `expeditor` (lifecycle), `client`/`query` (connections and
+statements), `ddl`/`catalog` (schema and catalog writes), `heap` (tuple
+writes), `page` (a page being dirtied — the page-modification journal),
+`buffer` (frame table, flush batches, the WAL gate), `pagestore` (device
+reads/writes, free map, corruption), `wal` (record append and sync),
+`checkpoint` (checkpoint progress), `superblock` (anchor writes),
+`bootstrap` (fresh vs existing), `sched` (reactor and io backend).
+
+Two of these are worth knowing before turning `trace` on: `page` emits one
+line per page mutation, and `buffer`/`pagestore` emit one per page touched.
+On a write-heavy workload that is several lines per tuple.
+
+Successful replies are summarized (`-> 29B reply`), never echoed: a log that
+reproduces result sets is a log that cannot be kept. A *failed* reply is
+logged in full, because its whole content is the reason.
+
+Sample at `trace`:
+
+```
+1785309852 DEBUG [client] accepted fd=8 open_connections=1
+1785309852 TRACE [client] fd=8 request "INSERT INTO acct VALUES ('alice')"
+1785309852 TRACE [heap] insert page=128 slot=0 id=1 bytes=15
+1785309852 DEBUG [query] "INSERT INTO acct VALUES ('alice')" -> 29B reply in 81us
+1785309852 WARN [query] "SELECT * FROM nosuchtable" -> ERR no table with this name in 32us
+1785309849 TRACE [wal] append CHECKPOINT_BEGIN lsn=4096 txn=0 page=4294967295 bytes=40
+1785309849 DEBUG [wal] sync durable_lsn=4176 appended_lsn=4176 pending_group_commits=0
+1785309852 TRACE [catalog] issued row id 1 for table oid 1000
+1785309852 TRACE [page] dirty page=128 lsn=4176 rec_lsn=4176
+1785309853 DEBUG [checkpoint] started: begin_lsn=4256 dirty_pages=3 active_txns=0 redo_start=4176
+1785309853 DEBUG [buffer] wal wait: page 128 needs lsn 4176 durable
+1785309853 TRACE [pagestore] wrote page=128 (checkpoint)
+1785309853 DEBUG [superblock] wal anchor written for core 0: redo_start=4176 durable_lsn=4340
+1785309853 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=4256 redo_start=4176 durable_lsn=4340 segment=0
+```
+
+This is a *diagnostic* log, deliberately not per-request tracing — that is a
+separate, not-yet-built surface proposed in `docs/observability.md`. The
+`in <n>us` figure on a query line is the closest thing available today, and
+it is one number for the whole request, not a per-layer breakdown.
 
 Any tool that can open a TCP socket and speak newline-terminated text can
 be a client. For a quick manual check:
@@ -66,18 +155,18 @@ printf 'PING\n' | nc 127.0.0.1 15432
 | `PING` | none | `PONG` | Liveness check. |
 | `SYNC` | none | `OK synced` | Writes the page store back to the data file. Until the WAL lands, this and `STOP` are the only things that make a mutation survive the process dying - a `kill` or crash loses everything since the last one. |
 | `STOP` | none | `OK bye` | Shuts the **entire server** down, not just this client's connection. Any other clients connected at the time lose their session. |
-| `SHOW META` | none | `version=<n> max_page_id=<n> create_time=<n> last_mount_time=<n> last_fsync_time=<n> total_pages=<n> free_pages=<n>` | Dumps the superblock. Times are Unix seconds. |
+| `SHOW META` | none | `version=<n> create_time=<n> last_mount_time=<n> wal_anchor_count=<n>` | Dumps the superblock. Times are Unix seconds; `wal_anchor_count` is how many per-core WAL anchors the database carries (`docs/wal.md` §14-3). |
 | `SHOW TABLES` | none | space-separated table names | Includes system catalog tables (`tables`, `objects`, `columns`, ...) alongside any user tables. |
 | `SHOW PAGE <page_id> [VALUES]` | page id (`uint32_t`), optional `VALUES` keyword | heap page header + slot directory dump | Development/inspection only, not part of any transactional read path. Still one wire line - see below for the escaping convention that makes it render as multiple lines. `VALUES` additionally hex-encodes each live slot's tuple payload (dead slots never show a value). `ERR ...` if the id is missing, non-numeric, unknown to the store, or the trailing option isn't `VALUES`. |
-| `FIND TABLE <name>` | table name | `oid=<n>` | `ERR ...` if the name is unknown. |
-| `CREATE TABLE <name>` | table name | `CREATED oid=<n>` or `EXISTS oid=<n>` | Idempotent: if a table with this name already exists, its oid is returned and nothing is created - never errors or creates a duplicate. Always a zero-column `ClusteredType::kHeap` table under the public namespace. Legacy bare form - no column list. |
+| `DESCRIBE <name>` (or `DESC`) | table name | summary line `oid=<n> root_page_id=<n> clustered_type=<HEAP\|BTREE> next_id=<n> columns=<n>`, then one `\n`-escaped section per column: `pos=<n> name=<s> type=<s> len=<n> notnull=<yes\|no> pk=<yes\|no> autoincrement=<yes\|no>` | Replaces the former `FIND TABLE`, which reported the same summary and no schema. Column 0 is always the Keystone primary key. A relation with no registered columns (the bootstrap catalog tables) reports `columns=0` rather than erroring. `ERR ...` if the name is unknown. |
+| `CREATE TABLE <name>` | table name | `ERR ...` | The bare, pre-parser form asks for a zero-column table. Every relation's first column is its mandatory Keystone primary key (`docs/heap-and-tuple.md` §4), so a zero-column relation cannot exist and this now always errors. Use the column-list form below. |
 | `CREATE TABLE <name> (<col> <type> [, ...]) [HEAP \| BTREE]` | column list, optional storage clause | `CREATED oid=<n>` or `EXISTS oid=<n>` | The real SQL-grammar form, parsed via `src/parser`. Same idempotency as the bare form. Each `<type>` is resolved case-insensitively against `sys.types` (`Catalog::ResolveTypeByName()`); see `src/exec/row_codec.hpp` for the supported set (`int8`/`int16`/`int32`/`int64`/`uint64`/`bool`/`char`/`varchar` are insertable today - `float`/`decimal` can be declared but not populated, no on-disk encoding decided yet). `BTREE` parses but is rejected (`ERR ...`) - not implemented. Disambiguated from the bare form purely by whether `(` follows the name. |
-| `INSERT INTO <name> VALUES (<val> [, ...])` | positional values, one per column in `pos` order | `INSERTED oid=<table_oid> slot=<n>` | No explicit column list in this grammar (ast.hpp) - value count must exactly match the schema. `ERR ...` on a type/width mismatch, a NULL value (not supported yet), or if the table's single heap page is full (no multi-page overflow yet). |
+| `INSERT INTO <name> VALUES (<val> [, ...])` | positional values, one per column in `pos` order **after the primary key** | `INSERTED oid=<table_oid> id=<n> slot=<n>` | No explicit column list in this grammar (ast.hpp). **Do not supply the primary key**: column 0 is the Keystone id, issued by the engine from the relation's `next_id` sequence and reported back as `id=`. Supplying a full-width value list is an `ERR` naming the pk column. Ids are unique and ascending; they are not gapless, since a failed insert after a successful allocation burns one. `ERR ...` also on a type/width mismatch, a NULL value (not supported yet), or if the table's single heap page is full (no multi-page overflow yet). |
 | `SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]` | table name, optional AND-only WHERE | header line + one row per match | Full scan of the table's root heap page only (no multi-page chains, no index use). See below for the `\n`-escaping convention this reuses from `SHOW PAGE`. No projection - column list is always `*`. |
 | `UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*]` | SET list, optional WHERE | `UPDATED <n>` | In-place (HOT-style) overwrite of each matching row. `ERR ...` if a new value no longer fits the row's original slot reservation (e.g. growing a `varchar`) - no fallback to relocate the row yet. |
 
 Anything else, or a blank line, gets `ERR unknown command` / `ERR empty
-command` / `ERR unknown <SHOW|FIND|CREATE> target` as appropriate - the
+command` / `ERR unknown <SHOW|CREATE> target` as appropriate - the
 connection stays open and usable after an error.
 
 `SHOW PAGE`'s reply is a one-off exception worth calling out: the wire
@@ -124,9 +213,18 @@ wired up (`command_dispatcher.cpp`'s `HandleCreateTableSql`/`HandleInsert`/
 type registry, and `src/exec/row_codec.cpp` as the (still narrow-scope)
 executor: no NULLs, no `float`/`decimal` values, single-page heaps only.
 See the table above and `command_dispatcher.hpp`'s doc comment for exact
-behavior. `CREATE TABLE <name>` with no parens is a separate, older thing
-that still exists alongside it: a bare-name wire command with no column
-list.
+behavior. `CREATE TABLE <name>` with no parens is the older bare-name form
+and now always errors: every relation's first column is its mandatory
+Keystone primary key (`docs/heap-and-tuple.md` §4), so a zero-column table
+cannot exist.
+
+**Primary keys are the engine's, not the client's.** Column 0 of every
+relation is the Keystone id: system-generated, unique and autoincrement
+(`CLAUDE.md` invariant 10). `INSERT` therefore supplies values for columns
+1..n-1 only, and the assigned key comes back in the reply as `id=<n>`;
+`UPDATE` cannot change it. Two rows with the same key are not expressible,
+which is the point - a tuple's id is its identity, and Waystone addresses
+tuples by it directly.
 
 ## 4. Using `tools/ckdbs_cli.py`
 
@@ -139,14 +237,13 @@ python3 tools/ckdbs_cli.py PING
 python3 tools/ckdbs_cli.py SHOW META
 python3 tools/ckdbs_cli.py SHOW TABLES
 python3 tools/ckdbs_cli.py SHOW PAGE 500 VALUES
-python3 tools/ckdbs_cli.py FIND TABLE accounts
-python3 tools/ckdbs_cli.py CREATE TABLE accounts
+python3 tools/ckdbs_cli.py DESCRIBE accounts
 python3 tools/ckdbs_cli.py --host 127.0.0.1 --port 15432 SHOW TABLES
 
 # Full SQL grammar - quote the statement as one shell argument so '(', ','
 # and quoted string literals reach the CLI intact:
 python3 tools/ckdbs_cli.py "CREATE TABLE accounts (id int64, name varchar, balance int64)"
-python3 tools/ckdbs_cli.py "INSERT INTO accounts VALUES (1, 'alice', 100)"
+python3 tools/ckdbs_cli.py "INSERT INTO accounts VALUES ('alice', 100)"
 python3 tools/ckdbs_cli.py "SELECT * FROM accounts WHERE id = 1"
 python3 tools/ckdbs_cli.py "UPDATE accounts SET balance = 150 WHERE id = 1"
 ```
@@ -166,16 +263,18 @@ if it cannot connect at all.
 python3 tools/ckdbs_cli.py
 ckdbs> PING
 PONG
-ckdbs> FIND TABLE accounts
-ERR table not found: accounts
+ckdbs> DESCRIBE accounts
+oid=4000 root_page_id=128 clustered_type=HEAP next_id=1 columns=2
+pos=0 name=id type=int64 len=8 notnull=yes pk=yes autoincrement=yes
+pos=1 name=name type=varchar len=0 notnull=yes pk=no autoincrement=no
 ckdbs> help        # local-only, not sent to the server
   PING                    -> PONG
   SHOW META               -> superblock stats
   SHOW TABLES             -> space-separated table names
   SHOW PAGE <page_id> [VALUES]
                           -> heap page header + slot directory, pretty-printed
-  FIND TABLE <name>       -> oid=<n> or ERR ...
-  CREATE TABLE <name>     -> "CREATED oid=<n>" or "EXISTS oid=<n>" (idempotent)
+  DESCRIBE <name>         -> table header + one section per column
+  CREATE TABLE <name> (<col> <type> [, ...]) [HEAP|BTREE]
   STOP                    -> shuts the whole server down (not just this client)
 ckdbs> exit         # local-only: closes this connection, does NOT stop the server
 ```

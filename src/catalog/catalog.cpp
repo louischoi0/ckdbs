@@ -5,6 +5,7 @@
 #include <cctype>
 
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/keystone.hpp"
 
 namespace kds::catalog {
 
@@ -116,7 +117,19 @@ Status Catalog::Bootstrap() {
     // pruned by key range, so there is no meaningful min_key to choose.
     for (const auto& t : kSysTables) {
         auto created = store_.CreateAt(t.page_id);
-        if (!created.ok()) return created.status();
+        if (!created.ok()) {
+            // Bootstrap runs once, on a store that should have none of
+            // these ids; a conflict here means it is being run against an
+            // existing database, which is the destructive mistake
+            // bootstrap.hpp's fresh/existing branch exists to prevent.
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("catalog", "bootstrap could not create catalog page " +
+                                           std::to_string(t.page_id) + " for sys." +
+                                           std::string(t.name) + ": " +
+                                           created.status().message());
+            }
+            return created.status();
+        }
         auto page = heap::PageView::CreateEmpty(created.value(), 0);
         if (!page.ok()) return page.status();
     }
@@ -170,6 +183,11 @@ Status Catalog::Bootstrap() {
         }
     }
 
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size()) +
+                                  " system tables and " + std::to_string(kTypes.size()) +
+                                  " types on the fixed catalog pages");
+    }
     return Status::OK();
 }
 
@@ -194,6 +212,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     SetName(row.name, name);
     row.desc_page_id = desc_page_id;
     row.clustered_type = clustered_type;
+    row.next_id = kFirstRowId;
     return InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
 }
 
@@ -238,6 +257,10 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         // (kernel/kds/btree.c) - rejected rather than half-implemented.
         return Status::InvalidArgument("btree clustered tables are not implemented yet");
     }
+    // Refused at definition time rather than at the first INSERT: a table
+    // whose first column cannot hold the Keystone id is one no row can
+    // ever be written to (heap-and-tuple.md section 4).
+    if (Status s = CheckKeystoneColumn(schema); !s.ok()) return s;
 
     auto created = store_.CreateNew();
     if (!created.ok()) return created.status();
@@ -262,6 +285,16 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         if (!s.ok()) return s;
     }
 
+    // Debug, not Info: the dispatcher already reports the client-visible
+    // DDL at Info ("[ddl] created table ..."), and two Info lines for one
+    // statement is how a log stops being readable. What this one adds is
+    // the physical detail the client never sees - the root page.
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("catalog", "created table '" + std::string(name) + "' oid=" +
+                                  std::to_string(new_oid) + " root_page=" +
+                                  std::to_string(root_id) + " columns=" +
+                                  std::to_string(schema.columns.size()));
+    }
     return new_oid;
 }
 
@@ -357,6 +390,66 @@ StatusOr<TableAccess> Catalog::InitTableAccess(Oid namespace_oid, Oid oid) {
     return access;
 }
 
+StatusOr<SysTypeRow> Catalog::ResolveTypeByVal(std::uint32_t type_val) {
+    auto rows = ScanAll<SysTypeRow>(store_, kCatalogPageTypes);
+    if (!rows.ok()) return rows.status();
+
+    for (const auto& row : rows.value()) {
+        if (row.type_val == type_val) return row;
+    }
+    return Status::NotFound("no sys.types row for this type_val");
+}
+
+StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
+    auto bytes = store_.Get(kCatalogPageTables);
+    if (!bytes.ok()) return bytes.status();
+
+    heap::PageView page(bytes.value());
+    std::uint16_t n = page.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto tuple = page.ReadTuple(i);
+        if (!tuple.ok()) {
+            if (tuple.status().code() == StatusCode::kNotFound) continue;
+            return tuple.status();
+        }
+
+        auto row = SysTableRow::Decode(tuple.value().payload);
+        if (!row.ok()) return row.status();
+        if (row.value().oid != table_oid) continue;
+
+        const std::uint64_t id = row.value().next_id;
+        if (id > kMaxKeystoneId) {
+            // The sequence is exhausted, not wrapped: reissuing from the
+            // bottom would alias ids that Waystone addresses directly.
+            // Id-reuse / low-range reclamation is an open decision
+            // (CLAUDE.md), so this refuses rather than picking one.
+            return Status::OutOfRange("relation has exhausted the Keystone id space");
+        }
+
+        // Bumped and persisted before the caller inserts anything. A crash
+        // between here and the insert burns an id, which is harmless - the
+        // sequence only has to be unique and monotonic, never gapless. The
+        // reverse order would reissue an id after a crash, which is not.
+        row.value().next_id = id + 1;
+        auto encoded = row.value().Encode();
+        if (Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id,
+                                            tuple.value().undo_ptr);
+            !s.ok()) {
+            return s;
+        }
+        // One line per issued id: the sequence is the tuple identity
+        // (invariant 10), so "which id did this row get" is a question
+        // that gets asked about every insert that later looks wrong.
+        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+            log_->Trace("catalog", "issued row id " + std::to_string(id) + " for table oid " +
+                                       std::to_string(table_oid));
+        }
+        return id;
+    }
+
+    return Status::NotFound("no sys.tables row for this oid");
+}
+
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
     auto bytes = store_.Get(kCatalogPageTables);
     if (!bytes.ok()) return bytes.status();
@@ -374,9 +467,18 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
         if (!row.ok()) return row.status();
         if (row.value().oid != table_oid) continue;
 
+        const PageId old_desc_page_id = row.value().desc_page_id;
         row.value().desc_page_id = new_desc_page_id;
         auto encoded = row.value().Encode();
-        return page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
+        Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
+        if (s.ok() && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            // A relation's entry page moving is a structural change to the
+            // relation, rare enough to deserve Debug rather than Trace.
+            log_->Debug("catalog", "table oid " + std::to_string(table_oid) +
+                                       " desc page " + std::to_string(old_desc_page_id) + " -> " +
+                                       std::to_string(new_desc_page_id));
+        }
+        return s;
     }
 
     return Status::NotFound("no sys.tables row for this oid");

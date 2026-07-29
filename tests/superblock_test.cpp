@@ -1,6 +1,7 @@
 #include "kds/server/superblock.hpp"
 
 #include <array>
+#include <cstring>
 #include <span>
 
 #include <gtest/gtest.h>
@@ -19,22 +20,15 @@ TEST(SuperBlockTest, CreateFreshSetsExpectedDefaults) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
 
     EXPECT_EQ(sb.version(), kSuperBlockVersion);
-    EXPECT_EQ(sb.max_page_id(), kFirstUserPageId);
-    EXPECT_EQ(sb.last_commit_page_id(), 0u);
     EXPECT_EQ(sb.create_time(), 1000u);
     EXPECT_EQ(sb.last_mount_time(), 1000u);
-    EXPECT_EQ(sb.last_fsync_time(), 0u);
-    EXPECT_EQ(sb.total_pages(), 0u);
-    EXPECT_EQ(sb.free_pages(), 0u);
+    EXPECT_EQ(sb.wal_anchor_count(), 0u);
 }
 
 TEST(SuperBlockTest, EncodeDecodeRoundTrip) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
-    sb.AllocatePageId();
-    sb.AllocatePageId();
-    sb.SetPageCounts(500, 100);
-    sb.SetAllocRange(200, 56);
-    sb.MarkFsynced(2000);
+    sb.MarkMounted(2000);
+    ASSERT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{4096, 8192, 12288, 0}).ok());
 
     PageBuf buf{};
     sb.Encode(AsSpan(buf));
@@ -43,13 +37,10 @@ TEST(SuperBlockTest, EncodeDecodeRoundTrip) {
     ASSERT_TRUE(decoded.ok());
 
     EXPECT_EQ(decoded.value().version(), sb.version());
-    EXPECT_EQ(decoded.value().max_page_id(), sb.max_page_id());
-    EXPECT_EQ(decoded.value().last_commit_page_id(), sb.last_commit_page_id());
     EXPECT_EQ(decoded.value().create_time(), sb.create_time());
-    EXPECT_EQ(decoded.value().last_fsync_time(), sb.last_fsync_time());
-    EXPECT_EQ(decoded.value().total_pages(), 500u);
-    EXPECT_EQ(decoded.value().free_pages(), 100u);
-    EXPECT_EQ(decoded.value().alloc_range(), (std::pair<PageId, std::uint64_t>{200, 56}));
+    EXPECT_EQ(decoded.value().last_mount_time(), 2000u);
+    EXPECT_EQ(decoded.value().wal_anchor_count(), 1u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).redo_start_lsn, 8192u);
 }
 
 TEST(SuperBlockTest, DecodeRejectsBadMagic) {
@@ -59,47 +50,114 @@ TEST(SuperBlockTest, DecodeRejectsBadMagic) {
     EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
-TEST(SuperBlockTest, AllocatePageIdIsMonotonicAndUnique) {
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    PageId first = sb.AllocatePageId();
-    PageId second = sb.AllocatePageId();
-    PageId third = sb.AllocatePageId();
-
-    EXPECT_EQ(first, kFirstUserPageId);
-    EXPECT_EQ(second, first + 1);
-    EXPECT_EQ(third, first + 2);
-    EXPECT_EQ(sb.max_page_id(), first + 3);
-}
-
-TEST(SuperBlockTest, AllocatePageIdBatchReservesAContiguousRange) {
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    PageId batch_start = sb.AllocatePageIdBatch(10);
-    EXPECT_EQ(batch_start, kFirstUserPageId);
-    EXPECT_EQ(sb.max_page_id(), kFirstUserPageId + 10);
-
-    // The next single allocation must not reuse anything in the batch.
-    PageId next = sb.AllocatePageId();
-    EXPECT_EQ(next, kFirstUserPageId + 10);
-}
-
-TEST(SuperBlockTest, MarkFsyncedAdvancesLastCommitToMaxPageId) {
-    SuperBlock sb = SuperBlock::CreateFresh(1000);
-    sb.AllocatePageId();
-    sb.AllocatePageId();
-
-    sb.MarkFsynced(1500);
-    EXPECT_EQ(sb.last_fsync_time(), 1500u);
-    EXPECT_EQ(sb.last_commit_page_id(), sb.max_page_id());
-}
-
 TEST(SuperBlockTest, EncodeZeroesReservedTail) {
     SuperBlock sb = SuperBlock::CreateFresh(1000);
     PageBuf buf;
     buf.fill(std::byte{0xAB});  // poison the buffer first
     sb.Encode(AsSpan(buf));
 
-    for (std::size_t i = kSuperBlockUsedSize; i < kPageSize; ++i) {
+    // Offsets in the layout constants are body-relative, so the tail starts
+    // past the body, not past byte kSuperBlockUsedSize of the page.
+    for (std::size_t i = kSuperBlockBodyOffset + kSuperBlockUsedSize; i < kPageSize; ++i) {
         ASSERT_EQ(buf[i], std::byte{0}) << "byte " << i << " should be zeroed";
+    }
+}
+
+// ---- Per-core WAL anchors (wal.md section 14-3) --------------------------
+
+TEST(SuperBlockWalAnchorTest, FreshDatabaseHasNoAnchors) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+
+    EXPECT_EQ(sb.wal_anchor_count(), 0u);
+    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+        // Zero is not a legal record LSN, so this reads unambiguously as
+        // "no checkpoint yet" and sends recovery to the start of the stream.
+        EXPECT_EQ(sb.wal_anchor(core).redo_start_lsn, 0u);
+        EXPECT_EQ(sb.wal_anchor(core).checkpoint_lsn, 0u);
+        EXPECT_EQ(sb.wal_anchor(core).durable_lsn, 0u);
+        EXPECT_EQ(sb.wal_anchor(core).segment_no, 0u);
+    }
+}
+
+TEST(SuperBlockWalAnchorTest, AnchorsSurviveEncodeDecode) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    ASSERT_TRUE(sb.SetWalAnchor(0, WalAnchorFields{4096, 8192, 12288, 0}).ok());
+    ASSERT_TRUE(sb.SetWalAnchor(7, WalAnchorFields{1 << 20, 1 << 21, 1 << 22, 3}).ok());
+
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok());
+
+    EXPECT_EQ(decoded.value().wal_anchor_count(), 8u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).checkpoint_lsn, 4096u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).redo_start_lsn, 8192u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).durable_lsn, 12288u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).segment_no, 0u);
+    EXPECT_EQ(decoded.value().wal_anchor(7).redo_start_lsn, 1u << 21);
+    EXPECT_EQ(decoded.value().wal_anchor(7).segment_no, 3u);
+
+    // A slot between two published ones is still "never checkpointed".
+    EXPECT_EQ(decoded.value().wal_anchor(3).redo_start_lsn, 0u);
+}
+
+TEST(SuperBlockWalAnchorTest, AnchorsAreIndexedIndependentlyPerCore) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+        ASSERT_TRUE(sb.SetWalAnchor(core, WalAnchorFields{core + 1, core + 2, core + 3, core}).ok());
+    }
+
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok());
+
+    EXPECT_EQ(decoded.value().wal_anchor_count(), kMaxWalCores);
+    for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
+        EXPECT_EQ(decoded.value().wal_anchor(core).redo_start_lsn, core + 2)
+            << "core " << core << " read another core's entry";
+    }
+}
+
+TEST(SuperBlockWalAnchorTest, CountTracksTheHighestCoreEverPublished) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    ASSERT_TRUE(sb.SetWalAnchor(5, WalAnchorFields{1, 2, 3, 0}).ok());
+    EXPECT_EQ(sb.wal_anchor_count(), 6u);
+
+    // A lower core publishing later does not shrink it: the count says how
+    // wide the table is, not which entry was written last.
+    ASSERT_TRUE(sb.SetWalAnchor(1, WalAnchorFields{4, 5, 6, 0}).ok());
+    EXPECT_EQ(sb.wal_anchor_count(), 6u);
+}
+
+TEST(SuperBlockWalAnchorTest, CoreIdBeyondTheTableIsRefusedNotWrapped) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+
+    Status s = sb.SetWalAnchor(kMaxWalCores, WalAnchorFields{1, 2, 3, 0});
+    EXPECT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+    // And nothing was written: wrapping would have landed on core 0.
+    EXPECT_EQ(sb.wal_anchor(0).redo_start_lsn, 0u);
+    EXPECT_EQ(sb.wal_anchor_count(), 0u);
+}
+
+TEST(SuperBlockWalAnchorTest, ReadingPastTheTableIsNoAnchorNotACrash) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    EXPECT_EQ(sb.wal_anchor(kMaxWalCores).redo_start_lsn, 0u);
+    EXPECT_EQ(sb.wal_anchor(1'000'000).redo_start_lsn, 0u);
+}
+
+TEST(SuperBlockTest, DecodeRefusesAnyVersionButThisBuilds) {
+    for (const std::uint32_t version : {kSuperBlockVersion - 1, kSuperBlockVersion + 1}) {
+        SuperBlock sb = SuperBlock::CreateFresh(1000);
+        PageBuf buf{};
+        sb.Encode(AsSpan(buf));
+        std::memcpy(buf.data() + kSuperBlockBodyOffset + kVersionOffset, &version,
+                    sizeof(version));
+
+        auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+        EXPECT_FALSE(decoded.ok()) << "version " << version << " should not mount";
+        EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
     }
 }
 

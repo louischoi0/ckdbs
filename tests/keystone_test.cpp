@@ -12,7 +12,7 @@ TEST(KeystoneTest, EncodeDecodeRoundTrip) {
     Keystone k = Keystone::Decode(word.value());
     EXPECT_EQ(k.id, 42u);
     EXPECT_EQ(k.flags, 7u);
-    EXPECT_EQ(k.meta_handle, 1234u);
+    EXPECT_EQ(k.reserved, 1234u);
 }
 
 TEST(KeystoneTest, MaxValuesRoundTrip) {
@@ -22,7 +22,7 @@ TEST(KeystoneTest, MaxValuesRoundTrip) {
     Keystone k = Keystone::Decode(word.value());
     EXPECT_EQ(k.id, kMaxKeystoneId);
     EXPECT_EQ(k.flags, 0xFFu);
-    EXPECT_EQ(k.meta_handle, 0xFFFFu);
+    EXPECT_EQ(k.reserved, 0xFFFFu);
 }
 
 TEST(KeystoneTest, ZeroValuesRoundTrip) {
@@ -33,7 +33,7 @@ TEST(KeystoneTest, ZeroValuesRoundTrip) {
     Keystone k = Keystone::Decode(0);
     EXPECT_EQ(k.id, 0u);
     EXPECT_EQ(k.flags, 0u);
-    EXPECT_EQ(k.meta_handle, 0u);
+    EXPECT_EQ(k.reserved, 0u);
 }
 
 TEST(KeystoneTest, RejectsIdBeyond40Bits) {
@@ -43,20 +43,20 @@ TEST(KeystoneTest, RejectsIdBeyond40Bits) {
 }
 
 TEST(KeystoneTest, FieldsDoNotBleedIntoEachOther) {
-    // id=0 but flags/meta_handle saturated: decoding must not leak bits
-    // from the flags/meta_handle region back into id.
+    // id=0 but flags/reserved saturated: decoding must not leak bits
+    // from the flags/reserved region back into id.
     auto word = Keystone::Encode(0, 0xFF, 0xFFFF);
     ASSERT_TRUE(word.ok());
 
     Keystone k = Keystone::Decode(word.value());
     EXPECT_EQ(k.id, 0u);
 
-    // id saturated but flags/meta_handle zero: no leakage the other way.
+    // id saturated but flags/reserved zero: no leakage the other way.
     auto word2 = Keystone::Encode(kMaxKeystoneId, 0, 0);
     ASSERT_TRUE(word2.ok());
     Keystone k2 = Keystone::Decode(word2.value());
     EXPECT_EQ(k2.flags, 0u);
-    EXPECT_EQ(k2.meta_handle, 0u);
+    EXPECT_EQ(k2.reserved, 0u);
 }
 
 }  // namespace

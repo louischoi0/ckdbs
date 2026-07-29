@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
@@ -45,20 +46,40 @@
 
 namespace kds::exec {
 
-// Encodes one row's values into a tuple payload, in `schema.columns`
-// order. Fails with InvalidArgument if values.size() != schema.columns
-// size, any value is NULL, any int value doesn't fit its column's width,
-// a string value doesn't fit a fixed-width `char` column, a varchar
-// value exceeds the uint16 length-prefix's range, or the row touches a
-// float/decimal column (see file comment).
-StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
+// Rejects a schema that cannot carry a Keystone word: no columns at all,
+// or a first column whose declared type is not an integer one. Exposed so
+// CREATE TABLE can refuse such a table at definition time rather than at
+// the first INSERT.
+Status CheckKeystoneColumn(const catalog::Schema& schema);
+
+// Encodes one row's values into a tuple payload.
+//
+// The payload is `[Keystone word][columns 1..n-1]`: the first schema
+// column IS the primary key and is carried by the Keystone word's id
+// field, so `values` supplies only the columns after it. `id` is the
+// system-generated key (catalog::Catalog::AllocateRowId) - the pk is
+// never encoded into the body as well, since two copies of one value is
+// how the two come to disagree.
+//
+// Fails with InvalidArgument if the schema has no usable Keystone column,
+// values.size() != schema.columns.size() - 1, `id` exceeds the Keystone
+// word's 40-bit range, any value is NULL, any int value doesn't fit its
+// column's width, a string value doesn't fit a fixed-width `char` column,
+// a varchar value exceeds the uint16 length-prefix's range, or the row
+// touches a float/decimal column (see file comment).
+StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema, std::uint64_t id,
                                             const std::vector<parser::AstValue>& values);
 
+// Reads just the primary key out of a tuple payload, without decoding the
+// body. This is what a duplicate-key scan compares, and it is why the pk
+// lives in a fixed-offset word: finding it costs no schema walk.
+StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload);
+
 // Decodes a tuple payload back into one value per `schema.columns` entry,
-// in the same order EncodeRow() wrote them. Fails with Corruption if
-// `payload` is shorter than the schema requires (e.g. a truncated
-// varchar length prefix) - a heap tuple whose data_len was produced by
-// EncodeRow() for this same schema should never trigger this.
+// pk first, in the same order EncodeRow() wrote them. Fails with
+// Corruption if `payload` is shorter than the schema requires (e.g. a
+// truncated varchar length prefix) - a heap tuple whose data_len was
+// produced by EncodeRow() for this same schema should never trigger this.
 StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
                                                    std::span<const std::byte> payload);
 

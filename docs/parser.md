@@ -1,6 +1,6 @@
 # KDS Parser — Blueprint & Development Instructions
 
-**Status:** **Official blueprint**, directions confirmed 2026-07-29. This document is written as *instructions*: each item states what to build and when it counts as done. Markers: `[CONFIRMED]` — build as stated; `[PROPOSED]` — default within a confirmed direction, amend before implementing if needed; `[OPEN]` — do not assume. Consistent with `docs/rules.md`, `docs/wire-protocol.md` (KWP §5), `docs/waystone-concept.md` (fingerprint layer), `docs/physical-optimizer-blueprint.md` (bundle input), and the design spec (invariant 6).
+**Status:** **Official blueprint**, directions confirmed 2026-07-29. This document is written as *instructions*: each item states what to build and when it counts as done. Markers: `[CONFIRMED]` — build as stated; `[PROPOSED]` — default within a confirmed direction, amend before implementing if needed; `[OPEN]` — do not assume. Consistent with `docs/rules.md`, `docs/protocol.md` (KWP §5), `docs/waystone-concpets.md` (fingerprint layer), `docs/physical-optimizer-blueprint.md` (bundle input — **document does not exist yet**), and the design spec (invariant 6). Task breakdown: `docs/parser-workplan.md` (4 phases, PR01–PR24).
 
 The parser runs at KWP `C_PARSE` only — never per execution (extended model, D4). It is therefore off the per-execution hot path, but it is the **front door of every engine differentiator**: fingerprints for Waystone, statement classes for plan-free dispatch, and the DDL surface for engine features all originate here.
 
@@ -84,6 +84,6 @@ Also open: exact v1 class list ratification (I2 `[PROPOSED]` list), per-statemen
 ## 6. Required Amendments
 
 1. `include/kds/parser/ast.hpp`: flat-AST migration (I3) and class tag (I2) — coordinate with existing consumers (fingerprint T11, KWP session P08).
-2. `docs/wire-protocol.md` / client manual: document the I12 join-order contract and I9/I11 `Unsupported` surfaces.
-3. `docs/waystone-concept.md` (pattern layer) and `docs/physical-optimizer-blueprint.md` (bundle planner): note `kJoinSelect` as the pattern-group candidate tag.
+2. `docs/protocol.md` / client manual: document the I12 join-order contract and I9/I11 `Unsupported` surfaces.
+3. `docs/waystone-concpets.md` (pattern layer) and `docs/physical-optimizer-blueprint.md` (bundle planner): note `kJoinSelect` as the pattern-group candidate tag. *(The physical-optimizer document does not exist; that half is blocked, see the workplan's "Blocked references".)*
 4. `CLAUDE.md`: parser summary lines (parameterized-at-parse, statement classes, written-order joins) + I14 in the open list.

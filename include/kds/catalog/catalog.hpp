@@ -3,6 +3,7 @@
 #include <string_view>
 #include <vector>
 
+#include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
@@ -30,12 +31,24 @@
 //   - Object oid generation (GenerateUserOid()) is in-memory only and
 //     resets on restart - same KNOWN GAP the legacy engine had (see
 //     kUserOidStart's comment in well_known.hpp).
+//
+// Logging (component tag "catalog"): catalog pages are the pages whose
+// contents explain every other page, so the writes are logged at Info
+// (bootstrap, CREATE TABLE - rare, structural, and the thing an operator
+// reconstructs a database's history from) and the per-row mutations at
+// Trace (id issue, desc-page relink). Reads are not logged at all: they
+// are the common case and say nothing about what changed.
 
 namespace kds::catalog {
 
 class Catalog {
 public:
     explicit Catalog(storage::PageStore& store) noexcept : store_(store) {}
+
+    // Diagnostic log, null (discard) by default. `log` must outlive the
+    // catalog. Set rather than constructed with, because bootstrap builds
+    // a Catalog before the server has decided anything about logging.
+    void SetLogger(Logger* log) noexcept { log_ = log; }
 
     // Registers the fixed namespace/type sys-objects in the in-memory
     // registry (no disk I/O - these are well-known constants, not stored
@@ -83,7 +96,24 @@ public:
     // Catalog knows about, so resolving by name against that table is a
     // real lookup, not a guess.
     StatusOr<SysTypeRow> ResolveTypeByName(std::string_view name);
+
+    // The reverse lookup, for rendering a stored column's type back as a
+    // name (DESCRIBE). NotFound if no sys.types row carries this type_val.
+    StatusOr<SysTypeRow> ResolveTypeByVal(std::uint32_t type_val);
+
     StatusOr<TableAccess> InitTableAccess(Oid namespace_oid, Oid oid);
+
+    // Issues the next Keystone id for `table_oid` and persists the bumped
+    // sequence, so the primary key is system-generated rather than
+    // caller-supplied (CLAUDE.md invariant 10). Ids are unique and
+    // monotonic by construction; they are not gapless, since a failed
+    // insert after a successful allocation burns one.
+    //
+    // Fails with NotFound if no sys.tables row names `table_oid`, and with
+    // OutOfRange once the relation has issued its 40-bit id space -
+    // reclamation policy is an open decision, so exhaustion is reported
+    // rather than wrapped.
+    StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
     // Updates the desc_page_id field of table_oid's sys.tables row in
     // place - for a future btree root split/collapse to repoint at a new
@@ -109,6 +139,7 @@ private:
                           std::uint32_t len);
 
     storage::PageStore& store_;
+    Logger* log_ = nullptr;
     Oid next_user_oid_ = kUserOidStart;
     SysObjectRegistry sys_objects_;
 };

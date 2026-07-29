@@ -36,11 +36,13 @@ TEST_F(BufferPoolTest, AllocNewMarksFrameDirtyByDefault) {
     pool.Unpin(*frame.value());
 }
 
-TEST_F(BufferPoolTest, MarkCleanClearsDirtyFlag) {
+TEST_F(BufferPoolTest, FlushIsTheOnlyWayAFrameGoesClean) {
     BufferPool pool(backing_, 4);
     auto frame = pool.AllocNew(1);
     ASSERT_TRUE(frame.ok());
-    pool.MarkClean(*frame.value());
+    // MarkClean() is private (page.md section 8): a page is clean because
+    // it was written, never because someone said so.
+    ASSERT_TRUE(pool.Flush(*frame.value()).ok());
     EXPECT_FALSE(frame.value()->is_dirty());
     pool.Unpin(*frame.value());
 }

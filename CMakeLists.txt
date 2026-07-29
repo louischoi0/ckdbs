@@ -12,6 +12,7 @@ endif()
 add_compile_options(-Wall -Wextra)
 
 add_library(kds
+    src/base/log.cpp
     src/storage/crc32c.cpp
     src/storage/page_header.cpp
     src/storage/page_device.cpp
@@ -24,6 +25,7 @@ add_library(kds
     src/storage/device_page_store.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
+    src/server/superblock_checkpoint_anchor.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
     src/catalog/schema.cpp
@@ -32,6 +34,7 @@ add_library(kds
     src/bootstrap/bootstrap.cpp
     src/server/command_dispatcher.cpp
     src/server/expeditor.cpp
+    src/server/config_file.cpp
     src/server/tcp_server.cpp
     src/parser/lexer.cpp
     src/parser/ast.cpp
@@ -41,15 +44,34 @@ add_library(kds
     src/wal/payload.cpp
     src/wal/stream.cpp
     src/wal/manager.cpp
+    src/wal/checkpointer.cpp
     src/wal/log_device.cpp
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp
     src/exec/row_codec.cpp
+    src/sched/clock.cpp
+    src/sched/scheduler.cpp
+    src/sched/epoll_io_backend.cpp
 )
 target_include_directories(kds PUBLIC include)
 
 add_executable(kds_server src/server/main.cpp)
 target_link_libraries(kds_server PRIVATE kds)
+
+# The benchmark measures libkds, not its own translation unit, so
+# optimizing only this target would buy nothing - the numbers are only
+# meaningful when the whole tree is configured Release:
+#
+#     cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+#     cmake --build build-release -j && ./build-release/kds_bench
+#
+# The binary says so at startup when it detects otherwise, rather than
+# printing Debug numbers someone might quote.
+option(KDS_BUILD_BENCH "Build ckdbs microbenchmarks" ON)
+if(KDS_BUILD_BENCH)
+    add_executable(kds_bench bench/bench_main.cpp)
+    target_link_libraries(kds_bench PRIVATE kds)
+endif()
 
 option(KDS_BUILD_TESTS "Build ckdbs unit tests" ON)
 if(KDS_BUILD_TESTS)

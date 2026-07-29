@@ -13,7 +13,7 @@ TEST(BootstrapTest, FreshDatabaseCreatesSuperBlockAndCatalog) {
     auto result = BootstrapDatabase(store, 1000);
     ASSERT_TRUE(result.ok()) << result.status().message();
 
-    EXPECT_EQ(result.value().superblock.max_page_id(), server::kFirstUserPageId);
+    EXPECT_EQ(result.value().superblock.version(), server::kSuperBlockVersion);
     EXPECT_EQ(result.value().superblock.create_time(), 1000u);
 
     auto tables_oid = result.value().catalog.FindTableOidByName("tables");
@@ -31,7 +31,17 @@ TEST(BootstrapTest, SecondBootstrapLoadsExistingSuperBlockWithoutReRunningCatalo
     // bootstrap call did NOT wipe the catalog (Catalog::Bootstrap() would
     // fail outright trying to re-CreateAt the fixed pages anyway, but this
     // also proves data survives across the boundary).
+    // A relation's first column is its mandatory Keystone primary key
+    // (heap-and-tuple.md section 4), so the table needs one to exist.
     catalog::Schema schema;
+    catalog::SysColumnRow col{};
+    col.pos = 0;
+    catalog::SetName(col.name, "id");
+    col.type_val = catalog::kTypeValInt64;
+    col.len = 8;
+    col.notnull = true;
+    schema.columns.push_back(col);
+
     auto table_oid =
         first.value().catalog.CreateTable(catalog::kNamespacePublic, "widgets", schema,
                                            catalog::ClusteredType::kHeap);
