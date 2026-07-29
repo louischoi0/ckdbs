@@ -39,6 +39,7 @@ add_library(kds
     src/wire/frame_codec.cpp
     src/wal/record.cpp
     src/wal/payload.cpp
+    src/wal/stream.cpp
     src/wal/log_device.cpp
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp

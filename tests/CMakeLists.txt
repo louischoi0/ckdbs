@@ -22,6 +22,7 @@ add_executable(kds_tests
     kwp_frame_test.cpp
     wal_record_test.cpp
     wal_payload_test.cpp
+    wal_stream_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
 )
