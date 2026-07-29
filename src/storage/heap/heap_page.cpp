@@ -18,14 +18,14 @@ namespace {
 inline constexpr std::uint64_t kMaxTupleId = (std::uint64_t{1} << 40) - 1;
 
 std::size_t SlotOffset(std::uint16_t idx) {
-    return kHeaderSize + static_cast<std::size_t>(idx) * kSlotOnDiskSize;
+    return kHeapHeaderOffset + kHeaderSize + static_cast<std::size_t>(idx) * kSlotOnDiskSize;
 }
 
 }  // namespace
 
 HeapPageHeaderFields PageView::ReadHeader() const {
     HeapPageHeaderFields h{};
-    const std::byte* base = page_.data();
+    const std::byte* base = page_.data() + kHeapHeaderOffset;
     std::memcpy(&h.flags, base + kHeaderFlagsOffset, sizeof(h.flags));
     std::memcpy(&h.nr_slots, base + kHeaderNrSlotsOffset, sizeof(h.nr_slots));
     std::memcpy(&h.lower, base + kHeaderLowerOffset, sizeof(h.lower));
@@ -35,7 +35,7 @@ HeapPageHeaderFields PageView::ReadHeader() const {
 }
 
 void PageView::WriteHeader(const HeapPageHeaderFields& h) {
-    std::byte* base = page_.data();
+    std::byte* base = page_.data() + kHeapHeaderOffset;
     std::memcpy(base + kHeaderFlagsOffset, &h.flags, sizeof(h.flags));
     std::memcpy(base + kHeaderNrSlotsOffset, &h.nr_slots, sizeof(h.nr_slots));
     std::memcpy(base + kHeaderLowerOffset, &h.lower, sizeof(h.lower));
@@ -65,12 +65,17 @@ StatusOr<PageView> PageView::CreateEmpty(std::span<std::byte, kPageSize> page,
         return Status::InvalidArgument("min_key exceeds 40-bit tuple id range");
     }
 
+    // Zeroes the page and writes the common header (page_type kHeap,
+    // page_lsn 0, checksum 0 - the checksum is stamped at flush time,
+    // page.md section 8). Everything this file writes lives above it.
+    storage::FormatPage(page, PageType::kHeap);
+
     PageView view(page);
 
     HeapPageHeaderFields h{};
     h.flags = kHeaderFlagInitialized;
     h.nr_slots = 0;
-    h.lower = static_cast<std::uint16_t>(kHeaderSize);
+    h.lower = static_cast<std::uint16_t>(kHeapHeaderOffset + kHeaderSize);
     // Stops short of kPageSize by sizeof(PageId): that tail is permanently
     // reserved for the next_page_id link, never counted as free space.
     h.upper = static_cast<std::uint16_t>(kNextPageIdOffset);
@@ -121,10 +126,12 @@ void PageView::set_next_page_id(PageId next) {
 }
 
 StatusOr<std::uint16_t> PageView::InsertTuple(std::span<const std::byte> payload,
-                                               std::uint64_t xmin, std::uint64_t xmax,
-                                               std::uint64_t undo_ptr) {
+                                               std::uint64_t trx_id, std::uint64_t undo_ptr) {
     if (payload.size() > kPageSize) {
         return Status::InvalidArgument("payload larger than a page");
+    }
+    if (trx_id > kMaxTrxId) {
+        return Status::InvalidArgument("trx_id exceeds 48 bits");
     }
 
     auto payload_len = static_cast<std::uint16_t>(payload.size());
@@ -140,8 +147,7 @@ StatusOr<std::uint16_t> PageView::InsertTuple(std::span<const std::byte> payload
     std::uint16_t new_slot_idx = h.nr_slots;
 
     std::byte* tuple_base = page_.data() + new_upper;
-    std::memcpy(tuple_base + kTupleXminOffset, &xmin, sizeof(xmin));
-    std::memcpy(tuple_base + kTupleXmaxOffset, &xmax, sizeof(xmax));
+    std::memcpy(tuple_base + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
     std::memcpy(tuple_base + kTupleUndoPtrOffset, &undo_ptr, sizeof(undo_ptr));
     std::memcpy(tuple_base + kTupleDataLenOffset, &payload_len, sizeof(payload_len));
     std::uint8_t tuple_flags = 0;
@@ -179,9 +185,9 @@ StatusOr<PageView::Tuple> PageView::ReadTuple(std::uint16_t slot_idx) const {
 
     const std::byte* tuple_base = page_.data() + slot.offset;
     Tuple t{};
-    std::memcpy(&t.xmin, tuple_base + kTupleXminOffset, sizeof(t.xmin));
-    std::memcpy(&t.xmax, tuple_base + kTupleXmaxOffset, sizeof(t.xmax));
+    std::memcpy(&t.trx_id, tuple_base + kTupleTrxIdOffset, sizeof(t.trx_id));
     std::memcpy(&t.undo_ptr, tuple_base + kTupleUndoPtrOffset, sizeof(t.undo_ptr));
+    t.deleted = (slot.flags & kSlotFlagDeleted) != 0;
 
     std::uint16_t data_len;
     std::memcpy(&data_len, tuple_base + kTupleDataLenOffset, sizeof(data_len));
@@ -205,7 +211,11 @@ StatusOr<std::uint16_t> PageView::SlotCapacity(std::uint16_t slot_idx) const {
 }
 
 Status PageView::OverwriteTuple(std::uint16_t slot_idx, std::span<const std::byte> payload,
-                                std::uint64_t xmin, std::uint64_t xmax, std::uint64_t undo_ptr) {
+                                std::uint64_t trx_id, std::uint64_t undo_ptr) {
+    if (trx_id > kMaxTrxId) {
+        return Status::InvalidArgument("trx_id exceeds 48 bits");
+    }
+
     HeapPageHeaderFields h = ReadHeader();
     if (slot_idx >= h.nr_slots) {
         return Status::NotFound("slot index out of range");
@@ -222,14 +232,37 @@ Status PageView::OverwriteTuple(std::uint16_t slot_idx, std::span<const std::byt
     }
 
     std::byte* tuple_base = page_.data() + slot.offset;
-    std::memcpy(tuple_base + kTupleXminOffset, &xmin, sizeof(xmin));
-    std::memcpy(tuple_base + kTupleXmaxOffset, &xmax, sizeof(xmax));
+    std::memcpy(tuple_base + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
     std::memcpy(tuple_base + kTupleUndoPtrOffset, &undo_ptr, sizeof(undo_ptr));
     std::memcpy(tuple_base + kTupleDataLenOffset, &payload_len, sizeof(payload_len));
     if (payload_len > 0) {
         std::memcpy(tuple_base + kTupleHeaderOnDiskSize, payload.data(), payload_len);
     }
 
+    return Status::OK();
+}
+
+Status PageView::DeleteMark(std::uint16_t slot_idx, std::uint64_t trx_id) {
+    if (trx_id > kMaxTrxId) {
+        return Status::InvalidArgument("trx_id exceeds 48 bits");
+    }
+
+    HeapPageHeaderFields h = ReadHeader();
+    if (slot_idx >= h.nr_slots) {
+        return Status::NotFound("slot index out of range");
+    }
+
+    HeapSlotFields slot = ReadSlot(slot_idx);
+    if ((slot.flags & kSlotFlagDead) != 0 || slot.length == 0) {
+        return Status::NotFound("slot is dead");
+    }
+
+    // The deleter goes in the same writer field an insert or overwrite
+    // would stamp - that field, plus the mark, is all DELETE is here.
+    std::memcpy(page_.data() + slot.offset + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
+
+    slot.flags |= kSlotFlagDeleted;
+    WriteSlot(slot_idx, slot);
     return Status::OK();
 }
 

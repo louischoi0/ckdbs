@@ -153,7 +153,7 @@ Satisfied by `docs/storage-layout.md` (S1/S9): ~~page headers gain `page_lsn` + 
 
 Still required:
 
-1. **Design spec — tuple header (MVCC):** replace `xmin/xmax/undo_ptr` with **`trx_id` (48-bit writer) + `undo_ptr` + delete-mark flag** per §5.1; note the lock role stays in the Keystone lock byte. Stamp 2026-07-28.
+1. ~~**Design spec — tuple header (MVCC):** replace `xmin/xmax/undo_ptr` with **`trx_id` (48-bit writer) + `undo_ptr` + delete-mark flag** per §5.1~~ — **satisfied 2026-07-29**: `docs/heap-and-tuple.md` §3.2 amended and invariant 12 added; implemented in `include/kds/storage/heap/heap_page.hpp` (20-byte header, `kSlotFlagDeleted`, `PageView::DeleteMark`). The lock role stays in the Keystone lock byte.
 2. **Design spec — heap section:** `PAGE_INIT` as the sole logger of `min_key`.
 3. **Superblock spec:** per-core WAL anchors (current segment, durable LSN, redo start).
 4. **Transaction/MVCC spec (when written):** undo-page layout, undo retention policy, snapshot-too-old semantics; 48-bit txn-id wraparound/epoch.

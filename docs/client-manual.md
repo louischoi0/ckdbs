@@ -64,6 +64,7 @@ printf 'PING\n' | nc 127.0.0.1 15432
 | Command | Arguments | Success reply | Notes |
 |---|---|---|---|
 | `PING` | none | `PONG` | Liveness check. |
+| `SYNC` | none | `OK synced` | Writes the page store back to the data file. Until the WAL lands, this and `STOP` are the only things that make a mutation survive the process dying - a `kill` or crash loses everything since the last one. |
 | `STOP` | none | `OK bye` | Shuts the **entire server** down, not just this client's connection. Any other clients connected at the time lose their session. |
 | `SHOW META` | none | `version=<n> max_page_id=<n> create_time=<n> last_mount_time=<n> last_fsync_time=<n> total_pages=<n> free_pages=<n>` | Dumps the superblock. Times are Unix seconds. |
 | `SHOW TABLES` | none | space-separated table names | Includes system catalog tables (`tables`, `objects`, `columns`, ...) alongside any user tables. |

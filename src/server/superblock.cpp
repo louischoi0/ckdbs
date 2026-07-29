@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "kds/storage/page_header.hpp"
+
 namespace kds::server {
 
 SuperBlock::SuperBlock() noexcept : fields_{} {}
@@ -26,7 +28,7 @@ SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds) noexcept {
 
 StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> page) {
     SuperBlockFields f{};
-    const std::byte* base = page.data();
+    const std::byte* base = page.data() + kSuperBlockBodyOffset;
 
     std::memcpy(&f.magic, base + kMagicOffset, sizeof(f.magic));
     if (f.magic != kSuperBlockMagic) {
@@ -51,12 +53,21 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
 }
 
 void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
-    std::byte* base = page.data();
+    // Format only a page that is not already a superblock: FormatPage
+    // resets page_lsn, and re-encoding an existing superblock (every mount
+    // stamps last_mount_time) must not erase the LSN redo compares against
+    // (wal.md section 9).
+    if (storage::RawPageType(page) != static_cast<std::uint8_t>(PageType::kSuperBlock)) {
+        storage::FormatPage(page, PageType::kSuperBlock);
+    }
 
-    // Zero the whole page first so bytes beyond kSuperBlockUsedSize (the
+    std::byte* base = page.data() + kSuperBlockBodyOffset;
+
+    // Zero the body first so bytes beyond kSuperBlockUsedSize (the
     // reserved-for-future-fields tail) are always well-defined, rather
-    // than leaking whatever the caller's buffer previously held.
-    std::memset(base, 0, kPageSize);
+    // than leaking whatever the caller's buffer previously held. The
+    // common header below kSuperBlockBodyOffset is left alone.
+    std::memset(base, 0, kPageSize - kSuperBlockBodyOffset);
 
     std::memcpy(base + kMagicOffset, &fields_.magic, sizeof(fields_.magic));
     std::memcpy(base + kVersionOffset, &fields_.version, sizeof(fields_.version));

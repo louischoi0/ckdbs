@@ -55,6 +55,11 @@ public:
     // Recognized commands (case-insensitive):
     //   PING                  -> "PONG"
     //   STOP                  -> "OK bye" and should_stop = true
+    //   SYNC                  -> "OK synced" or "ERR ...". Writes the page
+    //                            store back to stable storage. Until the
+    //                            WAL lands, this and STOP are the only
+    //                            things that make a mutation survive the
+    //                            process dying.
     //   SHOW META             -> superblock stats, one line
     //   SHOW TABLES           -> space-separated table names
     //   SHOW PAGE <page_id> [VALUES]
@@ -122,6 +127,7 @@ private:
     DispatchOutcome HandleInsert(std::string_view line);
     DispatchOutcome HandleSelect(std::string_view line);
     DispatchOutcome HandleUpdate(std::string_view line);
+    DispatchOutcome HandleSync();
 
     SuperBlock& superblock_;
     catalog::Catalog& catalog_;

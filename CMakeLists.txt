@@ -19,7 +19,9 @@ add_library(kds
     src/storage/memory_page_device.cpp
     src/storage/keystone.cpp
     src/storage/heap/heap_page.cpp
+    src/storage/free_map.cpp
     src/storage/in_memory_page_store.cpp
+    src/storage/device_page_store.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
     src/catalog/oid.cpp
@@ -29,11 +31,17 @@ add_library(kds
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp
     src/server/command_dispatcher.cpp
+    src/server/expeditor.cpp
     src/server/tcp_server.cpp
     src/parser/lexer.cpp
     src/parser/ast.cpp
     src/parser/parser.cpp
     src/wire/frame_codec.cpp
+    src/wal/record.cpp
+    src/wal/payload.cpp
+    src/wal/log_device.cpp
+    src/wal/memory_log_device.cpp
+    src/wal/file_log_device.cpp
     src/exec/row_codec.cpp
 )
 target_include_directories(kds PUBLIC include)

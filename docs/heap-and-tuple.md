@@ -1,7 +1,7 @@
 # KDS Design Specification
 
 **Status:** Living document — input for development agents. Sections marked `[CONFIRMED]` are settled design; `[OPEN]` items must not be assumed by implementers. This file is the design spec CLAUDE.md and other docs refer to as "KDS-DESIGN.md" — that name is historical (pre-dates the move into `docs/`); this path is the actual, current location.
-**Last updated:** 2026-07-27 (Keystone layout and metadata-pool sections amended 2026-07-28 — see §4, §5; in-memory single-copy rule retired 2026-07-28 in favor of page-latch consistency — see §7)
+**Last updated:** 2026-07-27 (Keystone layout and metadata-pool sections amended 2026-07-28 — see §4, §5; in-memory single-copy rule retired 2026-07-28 in favor of page-latch consistency — see §7; tuple MVCC header amended 2026-07-29 to `trx_id` + `undo_ptr`, `xmax` removed — see §3.2)
 
 ---
 
@@ -37,8 +37,9 @@
 
 - Slot directory grows downward from the heap area offset; tuple data grows upward from the top; free space is the gap (`upper - lower`).
 - The page tail permanently reserves `sizeof(page_id)` bytes for a `next_page_id` chain link, excluded from free-space accounting.
-- Per-tuple MVCC header: `xmin`, `xmax`, `undo_ptr`, `data_len`, flags.
-- Slot entries carry their own `flags` (e.g., `DEAD`) and `length`; retirement marks the slot dead rather than compacting eagerly.
+- Per-tuple MVCC header `[CONFIRMED, amended 2026-07-29]`: **`trx_id` (48-bit writer, zero-extended to 8 bytes) + `undo_ptr` + `data_len` + flags — 20 bytes, no `xmax`** (`docs/wal.md` §5.1, §14-1). A version's death is the next version's birth: walking the undo chain already names the overwriting transaction, so recording that boundary a second time in the older version is redundant. `trx_id` is whichever transaction last stamped the version — insert, overwrite, or delete-mark. The lock-slot role `xmax` plays in Postgres belongs to the Keystone lock byte here (§4).
+- **DELETE is a delete-mark** `[CONFIRMED 2026-07-29]`: slot flag `DELETED` plus the deleter's `trx_id` in the writer field, tuple bytes left in place for snapshots that predate it. Physical reclamation is slot retirement (`DEAD`), a separate operation for a purge pass — hence two distinct WAL records, `HEAP_DELETE_MARK` and `SLOT_RETIRE`.
+- Slot entries carry their own `flags` (`DEAD`, `DELETED`) and `length`; retirement marks the slot dead rather than compacting eagerly.
 
 ## 4. Keystone Column — 64-bit Tuple Header Word `[CONFIRMED, amended 2026-07-28]`
 
@@ -120,6 +121,7 @@ Purpose (historical): metadata for **physical relayout and statistics only** —
 9. Normal reads are served by the B+ tree; Waystone pages are never on the read path.
 10. **(Revised 2026-07-28)** No single canonical in-memory tuple is enforced; consistency comes from page pin + latch discipline (§7) — shared latch for reads, exclusive latch for structural mutation.
 11. **(New 2026-07-28)** A relation with `waystone_enabled` set requires system-generated, autoincrement `id` values; callers must not supply their own pk on insert into such a relation (see §4).
+12. **(New 2026-07-29)** The tuple MVCC header is exactly `trx_id:48 (zero-extended to 64) | undo_ptr | data_len | flags` = 20 bytes. There is no `xmax`; a version's validity interval is reconstructed from the undo chain, and DELETE is the slot's `DELETED` mark plus the deleter's `trx_id`.
 
 ---
 

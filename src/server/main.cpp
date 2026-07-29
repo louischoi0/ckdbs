@@ -2,31 +2,19 @@
 #include <cstdlib>
 #include <iostream>
 
-#include "kds/bootstrap/bootstrap.hpp"
-#include "kds/server/command_dispatcher.hpp"
-#include "kds/server/tcp_server.hpp"
-#include "kds/storage/in_memory_page_store.hpp"
+#include "kds/server/expeditor.hpp"
 
-// Entrypoint of the DB master server process (src/server). This is the
-// platform layer, not engine logic: it is allowed to read the wall clock
-// and do real socket/stdout I/O directly (rules.md #4 requires *engine*
-// logic to go through injectable interfaces for time/IO/randomness so it
-// can run under the deterministic simulator - main.cpp and tcp_server.cpp
-// are the boundary places that provide the real versions of those to
-// everything else).
+// Entrypoint of the DB master server process. Platform layer only: argv,
+// the wall clock, and stdout. Everything else belongs to the Expeditor,
+// which owns the subsystems (expeditor.hpp).
 //
-// Current state: bootstraps a database (against an InMemoryPageStore -
-// there is still no real disk backend, an open decision in CLAUDE.md, so
-// nothing persists across a restart yet) and then serves client commands
-// over a plain-text TCP protocol (CommandDispatcher's small command set -
-// see its file comment for why there's no SQL yet). Still missing before
-// this is a real server: a disk-backed PageStore, and the thread-per-core
-// worker pool (rules.md #3) that would let it serve more than one client
-// at a time.
+// Durability: writes reach the data file on SYNC and at clean shutdown
+// (STOP). A crash or kill loses everything since the last of those - the
+// WAL (docs/wal.md) is what closes that gap.
 
 namespace {
 
-constexpr std::uint16_t kDefaultPort = 15432;
+constexpr const char* kDefaultDataFile = "kds.db";
 
 std::uint64_t NowUnixSeconds() {
     return static_cast<std::uint64_t>(
@@ -37,33 +25,27 @@ std::uint64_t NowUnixSeconds() {
 
 }  // namespace
 
-int main() {
-    std::cout << "ckdbs server starting (InMemoryPageStore - nothing persists across a restart "
-                 "yet)\n";
+int main(int argc, char** argv) {
+    kds::server::Expeditor::Config config;
+    config.data_file = argc > 1 ? argv[1] : kDefaultDataFile;
 
-    kds::storage::InMemoryPageStore store(kds::server::kFirstUserPageId);
-
-    auto boot = kds::bootstrap::BootstrapDatabase(store, NowUnixSeconds());
-    if (!boot.ok()) {
-        std::cerr << "bootstrap failed: " << boot.status().message() << "\n";
+    auto expeditor = kds::server::Expeditor::Open(config, NowUnixSeconds());
+    if (!expeditor.ok()) {
+        std::cerr << "startup failed: " << expeditor.status().message() << "\n";
         return EXIT_FAILURE;
     }
-    std::cout << "bootstrap ok: superblock version=" << boot.value().superblock.version()
-              << " max_page_id=" << boot.value().superblock.max_page_id() << "\n";
+    auto& db = *expeditor.value();
 
-    kds::server::CommandDispatcher dispatcher(boot.value().superblock, boot.value().catalog, store);
+    std::cout << "ckdbs on " << db.config().data_file << ": "
+              << db.store().allocated_pages() << " pages, superblock version "
+              << db.superblock().version() << "\n"
+              << "listening on 127.0.0.1:" << db.config().port << "\n";
 
-    auto listener = kds::server::TcpServer::Listen(kDefaultPort);
-    if (!listener.ok()) {
-        std::cerr << "failed to listen on port " << kDefaultPort << ": "
-                  << listener.status().message() << "\n";
+    if (kds::Status s = db.Serve(); !s.ok()) {
+        std::cerr << "server stopped: " << s.message() << "\n";
         return EXIT_FAILURE;
     }
-    std::cout << "listening on 127.0.0.1:" << kDefaultPort
-              << " (try: printf 'PING\\n' | nc 127.0.0.1 " << kDefaultPort << ")\n";
 
-    listener.value().Serve(dispatcher);
-
-    std::cout << "ckdbs server stopped (STOP command received)\n";
+    std::cout << "stopped; " << db.store().allocated_pages() << " pages persisted\n";
     return EXIT_SUCCESS;
 }

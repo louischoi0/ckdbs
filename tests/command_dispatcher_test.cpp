@@ -9,7 +9,9 @@
 
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 
 namespace kds::server {
 namespace {
@@ -102,9 +104,9 @@ TEST_F(CommandDispatcherTest, ShowPageReportsHeaderAndSlots) {
     std::string payload = "hello";
     std::vector<std::byte> bytes(payload.size());
     std::memcpy(bytes.data(), payload.data(), payload.size());
-    auto slot0 = view.value().InsertTuple(bytes, /*xmin=*/1);
+    auto slot0 = view.value().InsertTuple(bytes, /*trx_id=*/1);
     ASSERT_TRUE(slot0.ok());
-    auto slot1 = view.value().InsertTuple(bytes, /*xmin=*/2);
+    auto slot1 = view.value().InsertTuple(bytes, /*trx_id=*/2);
     ASSERT_TRUE(slot1.ok());
     ASSERT_TRUE(view.value().RetireSlot(slot1.value()).ok());
 
@@ -148,9 +150,9 @@ TEST_F(CommandDispatcherTest, ShowPageValuesIncludesLiveTuplePayloadHexEncoded) 
     std::string payload = "hello";  // hex: 68656c6c6f
     std::vector<std::byte> bytes(payload.size());
     std::memcpy(bytes.data(), payload.data(), payload.size());
-    auto slot0 = view.value().InsertTuple(bytes, /*xmin=*/1);
+    auto slot0 = view.value().InsertTuple(bytes, /*trx_id=*/1);
     ASSERT_TRUE(slot0.ok());
-    auto slot1 = view.value().InsertTuple(bytes, /*xmin=*/2);
+    auto slot1 = view.value().InsertTuple(bytes, /*trx_id=*/2);
     ASSERT_TRUE(slot1.ok());
     ASSERT_TRUE(view.value().RetireSlot(slot1.value()).ok());
 
@@ -178,7 +180,7 @@ TEST_F(CommandDispatcherTest, ShowPageWithoutValuesOmitsPayload) {
     std::string payload = "hello";
     std::vector<std::byte> bytes(payload.size());
     std::memcpy(bytes.data(), payload.data(), payload.size());
-    ASSERT_TRUE(view.value().InsertTuple(bytes, /*xmin=*/1).ok());
+    ASSERT_TRUE(view.value().InsertTuple(bytes, /*trx_id=*/1).ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("SHOW PAGE " + std::to_string(kPageId));
@@ -226,6 +228,34 @@ TEST_F(CommandDispatcherTest, CreateTableMissingNameIsError) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     auto out = d.Dispatch("CREATE TABLE");
     EXPECT_EQ(out.response.substr(0, 4), "ERR ");
+}
+
+// SYNC is what makes a mutation outlive the process: without it, a kill
+// (here: MemoryPageDevice::Crash) drops everything written since startup.
+TEST(CommandDispatcherSyncTest, SyncPersistsThroughAnUncleanShutdown) {
+    auto device = storage::MemoryPageDevice::Create(8);
+    ASSERT_TRUE(device.ok());
+
+    {
+        auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
+        ASSERT_TRUE(store.ok());
+        auto boot = bootstrap::BootstrapDatabase(*store.value(), 1000);
+        ASSERT_TRUE(boot.ok());
+
+        CommandDispatcher d(boot.value().superblock, boot.value().catalog, *store.value());
+        ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64)").response.substr(0, 7), "CREATED");
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (7)").response.substr(0, 8), "INSERTED");
+        EXPECT_EQ(d.Dispatch("SYNC").response, "OK synced");
+    }
+    device.value()->Crash();
+
+    auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
+    ASSERT_TRUE(store.ok());
+    auto boot = bootstrap::BootstrapDatabase(*store.value(), 2000);
+    ASSERT_TRUE(boot.ok());
+
+    CommandDispatcher d(boot.value().superblock, boot.value().catalog, *store.value());
+    EXPECT_NE(d.Dispatch("SELECT * FROM t").response.find("7"), std::string::npos);
 }
 
 }  // namespace

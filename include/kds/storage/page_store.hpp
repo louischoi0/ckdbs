@@ -40,6 +40,22 @@ public:
     // Fetches an already-created page's bytes for reading or in-place
     // mutation. Fails with NotFound if page_id was never created.
     virtual StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) = 0;
+
+    // Makes everything written through this store durable: after an OK
+    // return, the state survives the process dying by any means.
+    //
+    // Not pure virtual, and the default is OK because it is *true* for a
+    // store with no stable storage under it - an InMemoryPageStore has
+    // nothing that could outlive the process, so there is nothing it could
+    // fail to persist. That keeps callers from having to ask which kind of
+    // store they hold.
+    //
+    // This is a whole-store durability point, which is all there is until
+    // the WAL lands (docs/wal.md): with one, durability becomes
+    // per-transaction (group commit, and KWP/1's per-transaction
+    // durability class, docs/protocol.md) and calling this per statement
+    // stops being the right shape.
+    virtual Status Sync() { return Status::OK(); }
 };
 
 }  // namespace kds::storage

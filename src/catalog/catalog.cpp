@@ -37,13 +37,13 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId page_id) {
 
 template <typename RowT>
 Status InsertRow(storage::PageStore& store, PageId page_id, const RowT& row,
-                  std::uint64_t xmin) {
+                  std::uint64_t trx_id) {
     auto bytes = store.Get(page_id);
     if (!bytes.ok()) return bytes.status();
 
     heap::PageView page(bytes.value());
     auto encoded = row.Encode();
-    auto slot = page.InsertTuple(encoded, xmin);
+    auto slot = page.InsertTuple(encoded, trx_id);
     if (!slot.ok()) return slot.status();
     return Status::OK();
 }
@@ -376,8 +376,7 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
 
         row.value().desc_page_id = new_desc_page_id;
         auto encoded = row.value().Encode();
-        return page.OverwriteTuple(i, encoded, tuple.value().xmin, tuple.value().xmax,
-                                    tuple.value().undo_ptr);
+        return page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
     }
 
     return Status::NotFound("no sys.tables row for this oid");

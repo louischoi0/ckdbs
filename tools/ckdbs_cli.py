@@ -63,6 +63,7 @@ KNOWN_COMMANDS = """\
                           -> header line + one row per match
   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*]
                           -> "UPDATED <n>" or ERR ...
+  SYNC                    -> persists everything written so far
   STOP                    -> shuts the whole server down (not just this client)
 """
 

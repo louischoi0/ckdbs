@@ -7,6 +7,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/storage/page_header.hpp"
 
 // The SuperBlock: one fixed logical page (kPageSize) holding whole-database
 // metadata - magic/version, the page-id counter, and mount/fsync
@@ -28,9 +29,10 @@
 //
 // Persistence: this file only does in-memory state plus encode/decode to
 // a raw kPageSize buffer (same field-wise memcpy, no reinterpret_cast,
-// no bitfields discipline as heap_page.hpp). Actually reading/writing that
-// buffer to a block device is a separate, not-yet-built concern (I/O
-// backend abstraction is an open decision - see CLAUDE.md).
+// no bitfields discipline as heap_page.hpp); DevicePageStore writes that
+// buffer out. The superblock is a headered page class (page.md section 1),
+// so its fields start at kSuperBlockBodyOffset and bytes 0..32 belong to
+// the common header - page_type, checksum, and the page_lsn redo needs.
 
 namespace kds::server {
 
@@ -50,6 +52,10 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 inline constexpr std::uint32_t kSuperBlockVersion = 1;
 
 // ---- On-disk field layout ----------------------------------------------
+
+// Superblock fields begin after the common page header; every offset
+// below is relative to this.
+inline constexpr std::size_t kSuperBlockBodyOffset = storage::kPageBodyOffset;
 
 struct SuperBlockFields {
     std::uint64_t magic;
@@ -98,7 +104,7 @@ static_assert(offsetof(SuperBlockFields, free_pages) == kFreePagesOffset);
 static_assert(offsetof(SuperBlockFields, alloc_point) == kAllocPointOffset);
 static_assert(offsetof(SuperBlockFields, reserved3) == kReserved3Offset);
 static_assert(offsetof(SuperBlockFields, alloc_remaining) == kAllocRemainingOffset);
-static_assert(kSuperBlockUsedSize <= kPageSize);
+static_assert(kSuperBlockBodyOffset + kSuperBlockUsedSize <= kPageSize);
 
 // ---- SuperBlock ----------------------------------------------------------
 

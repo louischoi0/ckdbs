@@ -39,8 +39,18 @@ TEST(HeapPageTest, CreateEmptyInitializesHeader) {
     EXPECT_EQ(view.value().slot_count(), 0u);
     EXPECT_EQ(view.value().next_page_id(), kInvalidPageId);
 
-    std::size_t expected_free = kNextPageIdOffset - kHeaderSize;
+    // The common page header sits below the heap header now, so free space
+    // is 32 bytes smaller than it used to be.
+    std::size_t expected_free = kNextPageIdOffset - (kHeapHeaderOffset + kHeaderSize);
     EXPECT_EQ(view.value().free_space(), expected_free);
+    EXPECT_EQ(view.value().lower(), kHeapHeaderOffset + kHeaderSize);
+
+    // A heap page is a headered page class: page_header.hpp owns bytes
+    // 0..32, and that is where redo will find page_lsn (wal.md section 9).
+    auto page = std::span<const std::byte, kPageSize>(buf);
+    EXPECT_EQ(storage::RawPageType(page), static_cast<std::uint8_t>(PageType::kHeap));
+    EXPECT_EQ(storage::GetPageLsn(page), storage::kNoPageLsn);
+    EXPECT_TRUE(storage::ValidatePageHeader(page, PageType::kHeap).ok());
 }
 
 TEST(HeapPageTest, CreateEmptyRejectsMinKeyBeyond40Bits) {
@@ -57,14 +67,13 @@ TEST(HeapPageTest, InsertThenReadRoundTrip) {
     PageView page = created.value();
 
     auto payload = BytesOf("hello heap page");
-    auto slot = page.InsertTuple(payload, /*xmin=*/7, /*xmax=*/0, /*undo_ptr=*/0);
+    auto slot = page.InsertTuple(payload, /*trx_id=*/7, /*undo_ptr=*/0);
     ASSERT_TRUE(slot.ok());
     EXPECT_EQ(slot.value(), 0u);
 
     auto tuple = page.ReadTuple(slot.value());
     ASSERT_TRUE(tuple.ok());
-    EXPECT_EQ(tuple.value().xmin, 7u);
-    EXPECT_EQ(tuple.value().xmax, 0u);
+    EXPECT_EQ(tuple.value().trx_id, 7u);
     EXPECT_EQ(tuple.value().undo_ptr, 0u);
     EXPECT_EQ(StringOf(tuple.value().payload), "hello heap page");
 }
@@ -97,20 +106,19 @@ TEST(HeapPageTest, OverwriteTupleInPlaceKeepsSlotIndex) {
     ASSERT_TRUE(created.ok());
     PageView page = created.value();
 
-    auto slot = page.InsertTuple(BytesOf("original"), 1, 0, 0);
+    auto slot = page.InsertTuple(BytesOf("original"), 1, 0);
     ASSERT_TRUE(slot.ok());
 
     auto cap = page.SlotCapacity(slot.value());
     ASSERT_TRUE(cap.ok());
     EXPECT_EQ(cap.value(), 8u);  // strlen("original")
 
-    Status overwritten = page.OverwriteTuple(slot.value(), BytesOf("replaced"), 2, 3, 4);
+    Status overwritten = page.OverwriteTuple(slot.value(), BytesOf("replaced"), 2, 4);
     EXPECT_TRUE(overwritten.ok());
 
     auto tuple = page.ReadTuple(slot.value());
     ASSERT_TRUE(tuple.ok());
-    EXPECT_EQ(tuple.value().xmin, 2u);
-    EXPECT_EQ(tuple.value().xmax, 3u);
+    EXPECT_EQ(tuple.value().trx_id, 2u);
     EXPECT_EQ(tuple.value().undo_ptr, 4u);
     EXPECT_EQ(StringOf(tuple.value().payload), "replaced");
     EXPECT_EQ(page.slot_count(), 1u);  // no new slot was created
@@ -125,7 +133,7 @@ TEST(HeapPageTest, OverwriteTupleFailsWhenPayloadExceedsReservation) {
     auto slot = page.InsertTuple(BytesOf("short"), 1);
     ASSERT_TRUE(slot.ok());
 
-    Status overwritten = page.OverwriteTuple(slot.value(), BytesOf("this is much too long"), 1, 0, 0);
+    Status overwritten = page.OverwriteTuple(slot.value(), BytesOf("this is much too long"), 1, 0);
     EXPECT_FALSE(overwritten.ok());
     EXPECT_EQ(overwritten.code(), StatusCode::kOutOfSpace);
 
@@ -139,7 +147,7 @@ TEST(HeapPageTest, OverwriteTupleOutOfRangeIsNotFound) {
     ASSERT_TRUE(created.ok());
     PageView page = created.value();
 
-    Status overwritten = page.OverwriteTuple(0, BytesOf("x"), 1, 0, 0);
+    Status overwritten = page.OverwriteTuple(0, BytesOf("x"), 1, 0);
     EXPECT_FALSE(overwritten.ok());
     EXPECT_EQ(overwritten.code(), StatusCode::kNotFound);
 }
@@ -265,6 +273,96 @@ TEST(HeapPageTest, MinKeyUnaffectedByInserts) {
     ASSERT_TRUE(page.InsertTuple(BytesOf("b"), 2).ok());
 
     EXPECT_EQ(page.min_key(), 555u);
+}
+
+// DELETE in the no-xmax model (wal.md 5.1): the mark plus the deleter's
+// id in the writer field, bytes left in place for older snapshots.
+TEST(HeapPageTest, DeleteMarkKeepsTheTupleReadableAndStampsTheDeleter) {
+    PageBuf buf{};
+    auto created = PageView::CreateEmpty(AsSpan(buf), 0);
+    ASSERT_TRUE(created.ok());
+    PageView page = created.value();
+
+    auto slot = page.InsertTuple(BytesOf("alive"), /*trx_id=*/11);
+    ASSERT_TRUE(slot.ok());
+    ASSERT_FALSE(page.ReadTuple(slot.value()).value().deleted);
+
+    ASSERT_TRUE(page.DeleteMark(slot.value(), /*trx_id=*/12).ok());
+
+    auto tuple = page.ReadTuple(slot.value());
+    ASSERT_TRUE(tuple.ok()) << tuple.status().message();
+    EXPECT_TRUE(tuple.value().deleted);
+    EXPECT_EQ(tuple.value().trx_id, 12u);
+    EXPECT_EQ(StringOf(tuple.value().payload), "alive");
+
+    // Re-marking re-stamps the deleter rather than failing.
+    ASSERT_TRUE(page.DeleteMark(slot.value(), /*trx_id=*/13).ok());
+    EXPECT_EQ(page.ReadTuple(slot.value()).value().trx_id, 13u);
+}
+
+// The two are different operations, which is why they are different WAL
+// records: retirement removes the row from the page for good.
+TEST(HeapPageTest, RetireIsPhysicalAndDeleteMarkIsNot) {
+    PageBuf buf{};
+    auto created = PageView::CreateEmpty(AsSpan(buf), 0);
+    ASSERT_TRUE(created.ok());
+    PageView page = created.value();
+
+    auto marked = page.InsertTuple(BytesOf("marked"), 1);
+    auto retired = page.InsertTuple(BytesOf("retired"), 1);
+    ASSERT_TRUE(marked.ok() && retired.ok());
+
+    ASSERT_TRUE(page.DeleteMark(marked.value(), 2).ok());
+    ASSERT_TRUE(page.RetireSlot(retired.value()).ok());
+
+    EXPECT_TRUE(page.ReadTuple(marked.value()).ok());
+    EXPECT_EQ(page.ReadTuple(retired.value()).status().code(), StatusCode::kNotFound);
+    EXPECT_FALSE(page.DebugSlotInfo(marked.value()).value().dead);
+    EXPECT_TRUE(page.DebugSlotInfo(retired.value()).value().dead);
+
+    // A retired slot has nothing left to delete-mark.
+    EXPECT_EQ(page.DeleteMark(retired.value(), 3).code(), StatusCode::kNotFound);
+}
+
+TEST(HeapPageTest, TrxIdBeyond48BitsIsRejected) {
+    PageBuf buf{};
+    auto created = PageView::CreateEmpty(AsSpan(buf), 0);
+    ASSERT_TRUE(created.ok());
+    PageView page = created.value();
+
+    EXPECT_EQ(page.InsertTuple(BytesOf("x"), kMaxTrxId + 1).status().code(),
+              StatusCode::kInvalidArgument);
+
+    auto slot = page.InsertTuple(BytesOf("x"), kMaxTrxId);
+    ASSERT_TRUE(slot.ok());
+    EXPECT_EQ(page.ReadTuple(slot.value()).value().trx_id, kMaxTrxId);
+    EXPECT_EQ(page.OverwriteTuple(slot.value(), BytesOf("y"), kMaxTrxId + 1, 0).code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(page.DeleteMark(slot.value(), kMaxTrxId + 1).code(), StatusCode::kInvalidArgument);
+}
+
+// The layout itself (wal.md 4.2 / 5.1): 20 bytes, no xmax, trx_id first.
+TEST(HeapPageTest, TupleHeaderIsTwentyBytesWithTrxIdFirst) {
+    EXPECT_EQ(kTupleHeaderOnDiskSize, 20u);
+
+    PageBuf buf{};
+    auto created = PageView::CreateEmpty(AsSpan(buf), 0);
+    ASSERT_TRUE(created.ok());
+    PageView page = created.value();
+
+    auto slot = page.InsertTuple(BytesOf("payload"), /*trx_id=*/0x0102030405, /*undo_ptr=*/0x77);
+    ASSERT_TRUE(slot.ok());
+
+    const auto info = page.DebugSlotInfo(slot.value());
+    ASSERT_TRUE(info.ok());
+    EXPECT_EQ(info.value().length, kTupleHeaderOnDiskSize + 7);
+
+    std::uint64_t on_page = 0;
+    std::memcpy(&on_page, buf.data() + info.value().offset + kTupleTrxIdOffset, sizeof(on_page));
+    EXPECT_EQ(on_page, 0x0102030405u);
+    std::memcpy(&on_page, buf.data() + info.value().offset + kTupleUndoPtrOffset, sizeof(on_page));
+    EXPECT_EQ(on_page, 0x77u);
+    EXPECT_EQ(StringOf(page.ReadTuple(slot.value()).value().payload), "payload");
 }
 
 }  // namespace

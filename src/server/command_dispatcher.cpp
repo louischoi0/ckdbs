@@ -107,8 +107,18 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line) {
     if (IEquals(cmd, "UPDATE")) {
         return HandleUpdate(Trim(line));
     }
+    if (IEquals(cmd, "SYNC")) {
+        return HandleSync();
+    }
 
     return {"ERR unknown command", false};
+}
+
+DispatchOutcome CommandDispatcher::HandleSync() {
+    if (Status s = page_store_.Sync(); !s.ok()) {
+        return {"ERR " + s.message(), false};
+    }
+    return {"OK synced", false};
 }
 
 DispatchOutcome CommandDispatcher::HandleShowMeta() {
@@ -328,7 +338,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
     }
 
     heap::PageView page(bytes.value());
-    auto slot = page.InsertTuple(encoded.value(), /*xmin=*/catalog::kBootstrapXid);
+    auto slot = page.InsertTuple(encoded.value(), /*trx_id=*/catalog::kBootstrapXid);
     if (!slot.ok()) {
         return {"ERR " + slot.status().message(), false};
     }
@@ -464,7 +474,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         // comment. No fallback to retire+reinsert if the new payload no
         // longer fits the slot's original capacity (e.g. a grown
         // varchar); that fails with OutOfSpace here, surfaced as ERR.
-        Status s = page.OverwriteTuple(i, encoded.value(), tuple.value().xmin, tuple.value().xmax,
+        Status s = page.OverwriteTuple(i, encoded.value(), tuple.value().trx_id,
                                         tuple.value().undo_ptr);
         if (!s.ok()) {
             return {"ERR " + s.message(), false};
