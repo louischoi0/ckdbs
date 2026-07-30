@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
 
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
@@ -74,6 +75,13 @@ enum class DurabilityClass {
 };
 
 const char* DurabilityClassName(DurabilityClass durability) noexcept;
+
+// The inverse, over exactly the names DurabilityClassName() produces
+// ("strict"/"group"/"relaxed", case-insensitively) plus the "d1"/"d2"/"d3"
+// spellings wal.md section 1 uses. Anything else is InvalidArgument naming
+// the accepted set - a config file that means D1 and silently gets D3 is
+// the failure this refuses to have.
+StatusOr<DurabilityClass> ParseDurabilityClass(std::string_view name);
 
 struct WalManagerConfig {
     std::size_t ring_capacity = kDefaultRingCapacity;
@@ -184,6 +192,14 @@ public:
     // but the checkpointer needs to bound how much sits in the ring
     // without forcing a sync.
     Status Flush();
+
+    // Makes every byte appended so far durable, whatever class put it
+    // there and whatever the D3 interval says. DrainOnce() is the paced
+    // version and deliberately declines to sync a relaxed commit before
+    // its window is up; this is for the two moments where that pacing is
+    // wrong - a clean shutdown and an explicit client SYNC, both of which
+    // promise that everything acknowledged has landed.
+    Status SyncAll() { return Sync(); }
 
 private:
     WalManager(std::unique_ptr<WalStream> stream, const sched::Clock& clock,

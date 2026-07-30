@@ -1,5 +1,6 @@
 #include "kds/wal/manager.hpp"
 
+#include <cctype>
 #include <string>
 #include <utility>
 
@@ -15,6 +16,20 @@ const char* DurabilityClassName(DurabilityClass durability) noexcept {
             return "relaxed";
     }
     return "unknown";
+}
+
+StatusOr<DurabilityClass> ParseDurabilityClass(std::string_view name) {
+    std::string lowered;
+    lowered.reserve(name.size());
+    for (const char c : name) {
+        lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    if (lowered == "strict" || lowered == "d1") return DurabilityClass::kStrict;
+    if (lowered == "group" || lowered == "d2") return DurabilityClass::kGroup;
+    if (lowered == "relaxed" || lowered == "d3") return DurabilityClass::kRelaxed;
+    return Status::InvalidArgument("unknown durability class '" + std::string(name) +
+                                   "'; expected strict|d1, group|d2 or relaxed|d3");
 }
 
 WalManager::WalManager(std::unique_ptr<WalStream> stream, const sched::Clock& clock,

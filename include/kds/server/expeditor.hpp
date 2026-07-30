@@ -49,10 +49,22 @@
 //
 // The checkpoint is what closes that: it flushes the store's dirty pages
 // on a cadence (wal.md section 11-2) through PageStoreCheckpointTarget.
-// Note what it is *not* yet - the WAL gate is not on this store's flush
-// path, and nothing logs page mutations, so the checkpoint's redo start is
-// not yet a recovery guarantee (see page_store_checkpoint_target.hpp). It
-// bounds the loss window; it does not survive a crash mid-write.
+//
+// ---- What the WAL covers, and what it does not (2026-07-30) -------------
+//
+// Open() installs the store's WAL gate and hands the dispatcher a
+// WalManager, so INSERT is logged and ordered: its records are durable to
+// the configured class before the reply, and no dirty page reaches the
+// device ahead of them. A second `system`-group timer drains the log,
+// which is what bounds a relaxed commit's loss window.
+//
+// Two gaps remain, and neither is small. **Recovery does not exist**
+// (wal.md section 12): nothing reads the stream back, so a logged insert
+// is recoverable in principle and not in practice - what protects a
+// restart today is still the flush. And **INSERT is the only logged
+// statement**; CREATE TABLE, UPDATE and the catalog rows under both still
+// mutate pages outside the log, so for them the checkpoint remains what
+// it was - a bound on the loss window, not a crash guarantee.
 
 namespace kds::server {
 
@@ -72,6 +84,27 @@ public:
         // constant anything may depend on. 0 disables the timer entirely,
         // which puts durability back on SYNC and STOP alone.
         sched::MonoTimeNs checkpoint_interval_ns = 5'000'000'000;  // 5 s
+
+        // Durability class applied to every logged statement (wal.md
+        // section 1). Per-transaction in the design and per-server here,
+        // because the newline protocol has nowhere to carry it - KWP/1
+        // makes it a protocol field (protocol.md), and this key retires
+        // into that default when it does.
+        //
+        // kGroup is the default because it is the one that is both durable
+        // and able to amortize: with one connection it costs the same sync
+        // per commit as kStrict, and it starts paying the moment there is
+        // more than one committer. kRelaxed trades a bounded loss window
+        // for not waiting at all.
+        wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
+
+        // How often the `system`-group WAL drain runs. It is what makes a
+        // kRelaxed commit durable within its interval and what resolves a
+        // kGroup batch nobody is waiting on; a drain with nothing pending
+        // does no I/O (manager.hpp), so this is cheap to run often. 0
+        // disables it, which leaves kRelaxed commits unsynced until the
+        // next checkpoint or shutdown.
+        sched::MonoTimeNs wal_drain_interval_ns = 1'000'000;  // 1 ms
 
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to
         // wherever the process runs"; the two are joined into one path, so
@@ -115,7 +148,18 @@ public:
     // Writes everything back to stable storage. Still what SYNC and the
     // shutdown path call; no longer the *only* thing that persists, now
     // that the checkpoint timer runs (see the file comment).
-    Status Sync() { return store_->Sync(); }
+    //
+    // The log goes first, and unconditionally: the store's WAL gate only
+    // syncs the log as far as the pages it is about to write require, so a
+    // relaxed commit whose pages are already clean would otherwise still
+    // be in the ring when the process exits. A drain here is what makes
+    // "stopped cleanly" mean every acknowledged commit survived.
+    Status Sync() {
+        if (wal_ != nullptr) {
+            if (Status s = wal_->SyncAll(); !s.ok()) return s;
+        }
+        return store_->Sync();
+    }
 
     // Runs one checkpoint to completion: snapshot the dirty table, flush
     // it, log CHECKPOINT_END, publish the superblock anchor. This is what

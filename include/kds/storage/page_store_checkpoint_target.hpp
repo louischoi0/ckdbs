@@ -11,23 +11,20 @@
 // the store the server actually runs on today - the buffer pool is not on
 // the server's path yet, and the checkpointer must not care which it is.
 //
-// ---- What this target can and cannot promise ----------------------------
+// ---- What this target promises ------------------------------------------
 //
-// DevicePageStore predates the WAL gate: it stamps no `page_lsn` and holds
-// no `WalDurability` seam, so a flush through it is *not* ordered against
-// the log. That is sound only while nothing logs page mutations - which is
-// where the engine is (wal.md section 12 recovery does not exist, and no
-// mutation path appends records). Every page therefore reports recLSN 0,
-// which the checkpointer reads as "nothing to replay" rather than "replay
-// from the head of the log" (see Checkpointer::Start).
+// The gate and the dirty table are both the store's now (2026-07-30, when
+// INSERT started logging): DevicePageStore::SetWalGate() orders every one
+// of its write paths against the log, and DirtyPagesWithRecLsn() carries a
+// real per-frame recLSN, so this adapter is a straight projection of both
+// and holds no policy of its own.
 //
-// So what a checkpoint over this target buys today is the *flush*, not
-// bounded recovery: dirty pages reach the platter on a cadence instead of
-// only at SYNC and clean shutdown. When mutations start logging, this
-// target has to grow the gate - or the server has to move onto BufferPool,
-// which already has it - before the checkpoint's redo start means anything.
-// Recording that here rather than in a commit message: the gap is not
-// visible from the checkpointer's side.
+// A page reports recLSN 0 when nothing *logged* dirtied it - catalog rows
+// and bootstrap, which still write outside the log. The checkpointer reads
+// that as "nothing to replay for this page" and leaves it out of the redo
+// start, which is accurate for those paths and would be a lie for a logged
+// one. That is why every logged mutation must call StampPageLsn(); the
+// obligation is on the mutation path, and it is not checkable from here.
 
 namespace kds::storage {
 
@@ -37,8 +34,8 @@ public:
 
     std::vector<wal::CheckpointDirtyPage> DirtyTable() const override {
         std::vector<wal::CheckpointDirtyPage> table;
-        for (const PageId page_id : store_.DirtyPageIds()) {
-            table.push_back(wal::CheckpointDirtyPage{page_id, /*rec_lsn=*/0});
+        for (const auto& [page_id, rec_lsn] : store_.DirtyPagesWithRecLsn()) {
+            table.push_back(wal::CheckpointDirtyPage{page_id, rec_lsn});
         }
         return table;
     }

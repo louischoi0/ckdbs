@@ -2,8 +2,12 @@
 
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include "kds/catalog/well_known.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 
 namespace kds::catalog {
 namespace {
@@ -17,6 +21,21 @@ protected:
     // tables never collide with the fixed catalog pages (4-8).
     static constexpr PageId server_first_new_page_id_ = 128;
 };
+
+// Every relation needs a first column that can carry the Keystone id
+// (heap-and-tuple.md section 4), so a schema-less CreateTable is no longer
+// a legal table to build a fixture on.
+Schema MinimalPkSchema() {
+    Schema schema;
+    SysColumnRow col{};
+    col.pos = 0;
+    SetName(col.name, "id");
+    col.type_val = kTypeValInt64;
+    col.len = 8;
+    col.notnull = true;
+    schema.columns.push_back(col);
+    return schema;
+}
 
 TEST_F(CatalogTest, BootstrapSucceeds) {
     Status s = catalog_.Bootstrap();
@@ -114,26 +133,73 @@ TEST_F(CatalogTest, InitTableAccessReturnsSchemaAndDescPageId) {
     auto oid = catalog_.CreateTable(kNamespacePublic, "widgets", schema, ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
 
-    auto access = catalog_.InitTableAccess(kNamespacePublic, oid.value());
+    auto access = catalog_.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();
-    EXPECT_EQ(access.value().oid, oid.value());
-    EXPECT_EQ(access.value().clustered_type, ClusteredType::kHeap);
-    EXPECT_EQ(access.value().schema.columns.size(), 1u);
+    EXPECT_EQ(access.value()->oid, oid.value());
+    EXPECT_EQ(access.value()->clustered_type, ClusteredType::kHeap);
+    EXPECT_EQ(access.value()->schema.columns.size(), 1u);
+    EXPECT_EQ(access.value()->namespace_oid, kNamespacePublic);
+
+    // Second open is the same cached entry, not a rebuilt copy.
+    auto again = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(again.ok());
+    EXPECT_EQ(again.value(), access.value());
 }
 
-// Every relation needs a first column that can carry the Keystone id
-// (heap-and-tuple.md section 4), so a schema-less CreateTable is no longer
-// a legal table to build a fixture on.
-Schema MinimalPkSchema() {
-    Schema schema;
-    SysColumnRow col{};
-    col.pos = 0;
-    SetName(col.name, "id");
-    col.type_val = kTypeValInt64;
-    col.len = 8;
-    col.notnull = true;
-    schema.columns.push_back(col);
-    return schema;
+// The pointer InitTableAccess hands out has to survive the statement that
+// took it, which for INSERT means surviving its own id allocation: the
+// sequence lives in sys.tables next to the row this entry came from, but
+// TableAccess does not carry it.
+TEST_F(CatalogTest, ATableAccessPointerSurvivesRowIdAllocation) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    Schema schema = MinimalPkSchema();
+    auto oid = catalog_.CreateTable(kNamespacePublic, "held", schema, ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok());
+
+    auto access = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    const TableAccess* held = access.value();
+    const PageId desc_page = held->desc_page_id;
+
+    for (int i = 0; i < 20; ++i) {
+        ASSERT_TRUE(catalog_.AllocateRowId(oid.value()).ok());
+    }
+
+    EXPECT_EQ(held->desc_page_id, desc_page);
+    EXPECT_EQ(held->schema.columns.size(), 1u);
+    EXPECT_EQ(catalog_.InitTableAccess(oid.value()).value(), held);
+}
+
+// DDL drops the entry, so the next open rebuilds it from the pages and sees
+// the new fact. The pointer is not reused across that boundary.
+TEST_F(CatalogTest, DdlInvalidatesACachedTableAccess) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    Schema schema = MinimalPkSchema();
+    auto oid = catalog_.CreateTable(kNamespacePublic, "relinked", schema, ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok());
+
+    auto first = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(first.ok());
+    const PageId old_desc = first.value()->desc_page_id;
+
+    ASSERT_TRUE(catalog_.UpdateRelationDescPage(oid.value(), old_desc + 1000).ok());
+
+    auto second = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(second.ok());
+    EXPECT_EQ(second.value()->desc_page_id, old_desc + 1000);
+}
+
+// A cached schema must not leak into a relation that has none: the
+// bootstrap catalog tables have no sys.columns rows, and DESCRIBE reports
+// columns=0 for them rather than erroring.
+TEST_F(CatalogTest, BuildSchemaFromColumnsStillReportsNotFoundForACatalogTable) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    for (int i = 0; i < 3; ++i) {
+        auto schema = catalog_.BuildSchemaFromColumns(kSysTablesTable);
+        EXPECT_FALSE(schema.ok());
+        EXPECT_EQ(schema.status().code(), StatusCode::kNotFound);
+    }
 }
 
 TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
@@ -184,12 +250,144 @@ TEST_F(CatalogTest, IndexRowsRoundTripAndFilterByTable) {
     EXPECT_EQ(missing.status().code(), StatusCode::kNotFound);
 }
 
+// The version counter parser.md I5 / PR20 stamp bound statements with. Its
+// contract is monotonic-on-DDL, not "+1 per statement": one CreateTable
+// bumps it once per catalog row it writes.
+TEST_F(CatalogTest, DdlBumpsTheCatalogVersion) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    const std::uint64_t after_bootstrap = catalog_.catalog_version();
+    EXPECT_GT(after_bootstrap, 0u);
+
+    Schema schema = MinimalPkSchema();
+    auto oid = catalog_.CreateTable(kNamespacePublic, "versioned", schema, ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    const std::uint64_t after_create = catalog_.catalog_version();
+    EXPECT_GT(after_create, after_bootstrap);
+
+    ASSERT_TRUE(catalog_.UpdateRelationDescPage(oid.value(), 9999).ok());
+    EXPECT_GT(catalog_.catalog_version(), after_create);
+}
+
+// The rule that keeps a statement's cached TableAccess alive across its own
+// insert: the id sequence is not a cached fact, so issuing one stales
+// nothing. If this ever starts bumping, every bound statement re-parses on
+// every insert.
+TEST_F(CatalogTest, AllocateRowIdAndReadsDoNotBumpTheCatalogVersion) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    Schema schema = MinimalPkSchema();
+    auto oid = catalog_.CreateTable(kNamespacePublic, "seq", schema, ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok());
+
+    const std::uint64_t before = catalog_.catalog_version();
+
+    for (int i = 0; i < 10; ++i) {
+        auto id = catalog_.AllocateRowId(oid.value());
+        ASSERT_TRUE(id.ok()) << id.status().message();
+    }
+    ASSERT_TRUE(catalog_.FindTableOidByName("seq").ok());
+    ASSERT_TRUE(catalog_.GetSysTableRow(oid.value()).ok());
+    ASSERT_TRUE(catalog_.InitTableAccess(oid.value()).ok());
+    ASSERT_TRUE(catalog_.ResolveTypeByVal(kTypeValInt64).ok());
+    ASSERT_TRUE(catalog_.ListTables().ok());
+
+    EXPECT_EQ(catalog_.catalog_version(), before);
+}
+
+// sys.types is written only by Bootstrap(), so one snapshot serves the
+// process and an unknown type name is refused without going back to the
+// page - which is what takes the scan off DESCRIBE's per-column loop and
+// off CREATE TABLE's error path.
+TEST_F(CatalogTest, TypeResolutionIsServedFromOneSnapshot) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+
+    auto first = catalog_.ResolveTypeByName("int64");
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    const std::uint64_t after_first = catalog_.cache_stats().fills;
+
+    for (int i = 0; i < 20; ++i) {
+        ASSERT_TRUE(catalog_.ResolveTypeByName("INT64").ok());  // case-insensitive, still
+        ASSERT_TRUE(catalog_.ResolveTypeByVal(kTypeValVarchar).ok());
+        auto unknown = catalog_.ResolveTypeByName("no_such_type");
+        EXPECT_FALSE(unknown.ok());
+        EXPECT_EQ(unknown.status().code(), StatusCode::kNotFound);
+    }
+
+    // No refills: the snapshot was loaded once and answered everything,
+    // including the misses.
+    EXPECT_EQ(catalog_.cache_stats().fills, after_first);
+}
+
+// DDL must not drop the type snapshot - it cannot stale it - but it must
+// drop the table list, or a freshly created table would be invisible to
+// SHOW TABLES.
+TEST_F(CatalogTest, DdlRefreshesTheTableListAndKeepsTypes) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    ASSERT_TRUE(catalog_.ResolveTypeByName("int64").ok());
+
+    auto before = catalog_.ListTables();
+    ASSERT_TRUE(before.ok());
+    const std::size_t count_before = before.value().size();
+
+    Schema schema = MinimalPkSchema();
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "listed", schema, ClusteredType::kHeap).ok());
+
+    auto after = catalog_.ListTables();
+    ASSERT_TRUE(after.ok());
+    EXPECT_EQ(after.value().size(), count_before + 1);
+    bool found = false;
+    for (const SysObjectRow& row : after.value()) {
+        if (NameView(row.name) == "listed") found = true;
+    }
+    EXPECT_TRUE(found);
+}
+
 TEST_F(CatalogTest, FindTableOidByNameFailsForUnknownName) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
     auto oid = catalog_.FindTableOidByName("does_not_exist");
     EXPECT_FALSE(oid.ok());
     EXPECT_EQ(oid.status().code(), StatusCode::kNotFound);
+}
+
+// The cache's second payoff, and the one that is deterministic rather than
+// timing-dependent: PageStore::Get() hands out a mutable span and therefore
+// marks the page dirty (device_page_store.cpp), so before the cache every
+// catalog *read* bought its page a rewrite at the next checkpoint. Cached
+// reads touch no page, so they dirty none.
+TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/128);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+
+    Catalog catalog(*store.value());
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+    Schema schema = MinimalPkSchema();
+    auto oid = catalog.CreateTable(kNamespacePublic, "hot", schema, ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // Warm the three cached facts, then flush so every frame starts clean.
+    ASSERT_TRUE(catalog.FindTableOidByName("hot").ok());
+    ASSERT_TRUE(catalog.InitTableAccess(oid.value()).ok());
+    ASSERT_TRUE(catalog.ResolveTypeByVal(kTypeValInt64).ok());
+    ASSERT_TRUE(catalog.ListTables().ok());
+    ASSERT_TRUE(store.value()->Flush().ok());
+    ASSERT_TRUE(store.value()->DirtyPageIds().empty());
+
+    // The catalog work a SELECT or an UPDATE does, fifty times over.
+    for (int i = 0; i < 50; ++i) {
+        ASSERT_TRUE(catalog.FindTableOidByName("hot").ok());
+        ASSERT_TRUE(catalog.InitTableAccess(oid.value()).ok());
+        ASSERT_TRUE(catalog.ResolveTypeByVal(kTypeValInt64).ok());
+        ASSERT_TRUE(catalog.ListTables().ok());
+    }
+
+    EXPECT_TRUE(store.value()->DirtyPageIds().empty());
+
+    // An INSERT still dirties exactly one catalog page - sys.tables, where
+    // next_id lives. That one is not cached and must not be.
+    ASSERT_TRUE(catalog.AllocateRowId(oid.value()).ok());
+    EXPECT_EQ(store.value()->DirtyPageIds(), std::vector<PageId>{kCatalogPageTables});
 }
 
 }  // namespace

@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 
+#include "kds/stats/waystone_dir.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 
@@ -193,6 +194,15 @@ Status Catalog::Bootstrap() {
 
 Oid Catalog::GenerateUserOid() noexcept { return next_user_oid_++; }
 
+void Catalog::BumpVersion(std::string_view what) {
+    ++catalog_version_;
+    cache_.Invalidate();
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("catalog", "cache invalidated by " + std::string(what) + ": version " +
+                                   std::to_string(catalog_version_));
+    }
+}
+
 Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
                                  std::string_view name) {
     SysObjectRow row{};
@@ -201,7 +211,11 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     row.type_oid = type_oid;
     row.rel_id = 0;
     SetName(row.name, name);
-    return InsertRow(store_, kCatalogPageObjects, row, kBootstrapXid);
+    Status s = InsertRow(store_, kCatalogPageObjects, row, kBootstrapXid);
+    // A new sys.objects row changes what FindTableOidByName and ListTables
+    // would answer, so it stales cached name lookups.
+    if (s.ok()) BumpVersion("sys.objects insert");
+    return s;
 }
 
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
@@ -213,7 +227,15 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.desc_page_id = desc_page_id;
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
-    return InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
+    // Waystone is opt-in and off at creation (spec section 7). Turning it
+    // on is a separate DDL step (SetWaystoneDirectory), which keeps
+    // CREATE TABLE's cost identical to what it was.
+    row.waystone_state = WaystoneState::kDisabled;
+    row.waystone_dir_root = kInvalidPageId;
+    row.waystone_dir_depth = 0;
+    Status s = InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
+    if (s.ok()) BumpVersion("sys.tables insert");
+    return s;
 }
 
 Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
@@ -226,7 +248,10 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.type_val = type_val;
     row.len = len;
     row.notnull = notnull;
-    return InsertRow(store_, kCatalogPageColumns, row, kBootstrapXid);
+    Status s = InsertRow(store_, kCatalogPageColumns, row, kBootstrapXid);
+    // A new column row changes the schema half of a cached TableAccess.
+    if (s.ok()) BumpVersion("sys.columns insert");
+    return s;
 }
 
 Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type_val,
@@ -236,9 +261,17 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
     SetName(row.name, name);
     row.type_val = type_val;
     row.len = len;
-    return InsertRow(store_, kCatalogPageTypes, row, kBootstrapXid);
+    Status s = InsertRow(store_, kCatalogPageTypes, row, kBootstrapXid);
+    // The cache treats sys.types as immutable and keeps its snapshot across
+    // Invalidate(). This is the only writer, so it is the only place that
+    // assumption can be broken - drop the snapshot here rather than rely on
+    // "Bootstrap() runs first" staying true.
+    if (s.ok()) cache_.InvalidateTypes();
+    return s;
 }
 
+// No version bump: nothing cached is derived from sys.indexes (see
+// catalog_cache.hpp - index rows have no production reader yet).
 Status Catalog::InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_pos,
                                 std::uint32_t col_type, std::uint8_t flags) {
     SysIndexRow row{};
@@ -309,18 +342,32 @@ StatusOr<SysTableRow> Catalog::GetSysTableRow(Oid table_oid) {
 }
 
 StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name) {
+    if (const Oid* cached = cache_.FindOidByName(name); cached != nullptr) {
+        return *cached;
+    }
+
     auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects);
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
         if (row.type_oid == kTypeTable && NameView(row.name) == name) {
+            cache_.PutOidByName(name, row.oid);
             return row.oid;
         }
     }
+    // An absent name is not remembered. Two callers depend on that:
+    // HandleCreateTable / HandleCreateTableSql look a name up *expecting*
+    // NotFound before creating it, and a second Catalog over the same store
+    // can create a table this instance never saw. A remembered absence
+    // makes both answers wrong, where a repeated scan is only slow.
     return Status::NotFound("no table with this name");
 }
 
 StatusOr<std::vector<SysObjectRow>> Catalog::ListTables() {
+    if (const std::vector<SysObjectRow>* cached = cache_.FindTableList(); cached != nullptr) {
+        return *cached;
+    }
+
     auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects);
     if (!rows.ok()) return rows.status();
 
@@ -328,10 +375,21 @@ StatusOr<std::vector<SysObjectRow>> Catalog::ListTables() {
     for (auto& row : rows.value()) {
         if (row.type_oid == kTypeTable) tables.push_back(row);
     }
-    return tables;
+    return *cache_.PutTableList(std::move(tables));
 }
 
 StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
+    // Serves the cached copy when the relation has been opened before. The
+    // return stays by value: this is the only caller-facing schema API that
+    // hands out an owned Schema, DESCRIBE is not a hot path, and a copy
+    // costs one vector allocation against the page scan below.
+    if (const TableAccess* cached = cache_.FindTableAccess(rel_id); cached != nullptr) {
+        return cached->schema;
+    }
+    return ScanSchemaFromColumns(rel_id);
+}
+
+StatusOr<Schema> Catalog::ScanSchemaFromColumns(Oid rel_id) {
     auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns);
     if (!rows.ok()) return rows.status();
 
@@ -357,11 +415,25 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
     return schema;
 }
 
-StatusOr<SysTypeRow> Catalog::ResolveTypeByName(std::string_view name) {
+StatusOr<const std::vector<SysTypeRow>*> Catalog::EnsureTypes() {
+    if (const std::vector<SysTypeRow>* cached = cache_.FindTypes(); cached != nullptr) {
+        return cached;
+    }
     auto rows = ScanAll<SysTypeRow>(store_, kCatalogPageTypes);
     if (!rows.ok()) return rows.status();
+    return cache_.PutTypes(std::move(rows.value()));
+}
 
-    for (const auto& row : rows.value()) {
+StatusOr<SysTypeRow> Catalog::ResolveTypeByName(std::string_view name) {
+    // One snapshot per process, and unlike every other cached fact its
+    // *misses* are authoritative: only InsertTypeRow() writes sys.types and
+    // it drops the snapshot, so "not in the snapshot" means "not in the
+    // table" and needs no rescan. That takes the page read off the CREATE
+    // TABLE error path too.
+    auto types = EnsureTypes();
+    if (!types.ok()) return types.status();
+
+    for (const auto& row : *types.value()) {
         std::string_view row_name = NameView(row.name);
         if (row_name.size() == name.size() &&
             std::equal(row_name.begin(), row_name.end(), name.begin(), [](char x, char y) {
@@ -374,27 +446,41 @@ StatusOr<SysTypeRow> Catalog::ResolveTypeByName(std::string_view name) {
     return Status::NotFound("unknown type '" + std::string(name) + "'");
 }
 
-StatusOr<TableAccess> Catalog::InitTableAccess(Oid namespace_oid, Oid oid) {
+StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
+    if (const TableAccess* cached = cache_.FindTableAccess(oid); cached != nullptr) {
+        return cached;
+    }
+
     auto table_row = GetSysTableRow(oid);
     if (!table_row.ok()) return table_row.status();
 
-    auto schema = BuildSchemaFromColumns(oid);
+    // Scan, not BuildSchemaFromColumns(): that one would probe the same
+    // cache entry this call is in the middle of filling.
+    auto schema = ScanSchemaFromColumns(oid);
     if (!schema.ok()) return schema.status();
 
     TableAccess access{};
-    access.namespace_oid = namespace_oid;
+    // The relation's namespace comes from its sys.tables row rather than
+    // from the caller. It used to be a parameter echoed straight into the
+    // result, which is untenable once the entry is shared: whichever caller
+    // filled it first would decide the field for everyone else. CreateTable
+    // already persists the right value.
+    access.namespace_oid = table_row.value().namespace_oid;
     access.oid = oid;
     access.schema = std::move(schema.value());
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
-    return access;
+    access.waystone_state = table_row.value().waystone_state;
+    access.waystone_dir_root = table_row.value().waystone_dir_root;
+    access.waystone_dir_depth = table_row.value().waystone_dir_depth;
+    return cache_.PutTableAccess(std::move(access));
 }
 
 StatusOr<SysTypeRow> Catalog::ResolveTypeByVal(std::uint32_t type_val) {
-    auto rows = ScanAll<SysTypeRow>(store_, kCatalogPageTypes);
-    if (!rows.ok()) return rows.status();
+    auto types = EnsureTypes();
+    if (!types.ok()) return types.status();
 
-    for (const auto& row : rows.value()) {
+    for (const auto& row : *types.value()) {
         if (row.type_val == type_val) return row;
     }
     return Status::NotFound("no sys.types row for this type_val");
@@ -471,12 +557,78 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
         row.value().desc_page_id = new_desc_page_id;
         auto encoded = row.value().Encode();
         Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
+        // desc_page_id is a field of every cached TableAccess, so a relink
+        // stales it. Bumped only on success: a failed overwrite moved
+        // nothing.
+        if (s.ok()) BumpVersion("desc-page relink");
         if (s.ok() && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
             // A relation's entry page moving is a structural change to the
             // relation, rare enough to deserve Debug rather than Trace.
             log_->Debug("catalog", "table oid " + std::to_string(table_oid) +
                                        " desc page " + std::to_string(old_desc_page_id) + " -> " +
                                        std::to_string(new_desc_page_id));
+        }
+        return s;
+    }
+
+    return Status::NotFound("no sys.tables row for this oid");
+}
+
+Status Catalog::SetWaystoneDirectory(Oid table_oid, WaystoneState state, PageId dir_root,
+                                     std::uint8_t dir_depth) {
+    // Checked before the page is touched: a half-written triple is the one
+    // outcome that would leave the relation unwalkable.
+    if (state == WaystoneState::kDisabled) {
+        if (dir_root != kInvalidPageId || dir_depth != 0) {
+            return Status::InvalidArgument(
+                "catalog: a disabled Waystone must carry no directory root and depth 0");
+        }
+    } else {
+        if (dir_root == kInvalidPageId) {
+            return Status::InvalidArgument(
+                "catalog: an enabled Waystone needs a directory root page");
+        }
+        if (dir_depth < 1 || dir_depth > stats::kMaxDirDepth) {
+            return Status::InvalidArgument(
+                "catalog: Waystone directory depth " + std::to_string(dir_depth) +
+                " is outside 1.." + std::to_string(stats::kMaxDirDepth));
+        }
+    }
+
+    auto bytes = store_.Get(kCatalogPageTables);
+    if (!bytes.ok()) return bytes.status();
+
+    heap::PageView page(bytes.value());
+    std::uint16_t n = page.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto tuple = page.ReadTuple(i);
+        if (!tuple.ok()) {
+            if (tuple.status().code() == StatusCode::kNotFound) continue;
+            return tuple.status();
+        }
+
+        auto row = SysTableRow::Decode(tuple.value().payload);
+        if (!row.ok()) return row.status();
+        if (row.value().oid != table_oid) continue;
+
+        row.value().waystone_state = state;
+        row.value().waystone_dir_root = dir_root;
+        row.value().waystone_dir_depth = dir_depth;
+        auto encoded = row.value().Encode();
+        Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
+        // All three are TableAccess fields, so a cached entry is stale the
+        // moment they change. Bumped only on success: a failed overwrite
+        // changed nothing and invalidating would just cost a re-scan.
+        if (s.ok()) BumpVersion("waystone directory change");
+        if (s.ok() && log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+            // Info, alongside the other DDL: enabling Waystone changes the
+            // relation's storage form and its per-insert cost, which is
+            // the kind of thing an operator wants in a default log.
+            log_->Info("catalog", "table oid " + std::to_string(table_oid) +
+                                      " waystone state=" +
+                                      std::to_string(static_cast<int>(state)) + " root=" +
+                                      std::to_string(dir_root) + " depth=" +
+                                      std::to_string(dir_depth));
         }
         return s;
     }

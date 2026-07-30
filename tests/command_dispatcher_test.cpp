@@ -518,8 +518,10 @@ TEST_F(DispatcherLogTest, HeapOverwriteIsLoggedAtTrace) {
     sink_.lines.clear();
 
     ASSERT_EQ(d.Dispatch("UPDATE acct SET name = 'wendy'").response.substr(0, 7), "UPDATED");
-    EXPECT_TRUE(Logged("[heap] overwrite page="));
-    EXPECT_TRUE(Logged("rows=1"));
+    // An UPDATE spans the whole page chain now, so the line counts pages
+    // touched rather than naming the one page a table used to be.
+    EXPECT_TRUE(Logged("[heap] overwrite rows=1"));
+    EXPECT_TRUE(Logged("1 page(s)"));
 }
 
 TEST_F(DispatcherLogTest, ANullLoggerLeavesEveryCommandWorking) {

@@ -5,11 +5,13 @@
 #include <memory>
 #include <span>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "kds/base/log.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/wal/durability.hpp"
 
 // The disk-backed PageStore: the same three-operation contract catalog,
 // bootstrap and the dispatcher already speak, served out of a PageDevice.
@@ -22,21 +24,66 @@
 // decide whether to run Catalog::Bootstrap()), and which page bytes are
 // current (resident frames, written back by Flush()).
 //
-// Every page it writes is stamped with a CRC32C over the common page
-// header (page.md sections 8 and 10) and verified when it is read back on
-// a miss - never on a hit. Corruption is therefore detected at load; the
+// Every *headered* page it writes is stamped with a CRC32C over the common
+// page header (page.md sections 8 and 10) and verified when it is read back
+// on a miss - never on a hit. Corruption is therefore detected at load; the
 // FULL_PAGE_IMAGE that heals it is the WAL's job (wal.md section 10).
+//
+// ---- Headerless pages (2026-07-30) --------------------------------------
+//
+// Waystone entry and directory pages carry no common header: 256 x 32 B and
+// 2048 x 4 B tile 8 KiB exactly, and a header would cost a slot and break
+// the shift/mask addressing that is the point of those layouts
+// (docs/waystone-concpets.md sections 5 and 6). Stamping a checksum into
+// one at offset 4 would overwrite data - the upper half of entry 0's pk -
+// and verifying one on read would reject it.
+//
+// CreateNewHeaderless() marks a page as such, and the mark is **durable**,
+// in a second bitmap page of the same shape as the free map
+// (kHeaderlessMapPageId). It cannot be an in-memory side table: this store
+// never evicts, so a page comes off the device exactly once, on first touch
+// after open - which is exactly when a verify would reject it. It cannot be
+// recomputed from the catalog either, because the store is opened before
+// bootstrap has a catalog to ask.
+//
+// The cost is that these pages carry no damage detection at all. That is
+// the right trade for an advisory structure and not a concession: a wrong
+// Waystone entry must be *survivable*, which the probe's Keystone-id check
+// guarantees (spec section 3.1), and survivable is strictly stronger than
+// detectable. It does mean silent bit-rot in a Waystone page shows up as a
+// probe miss and a fallback scan, never as a wrong answer.
 //
 // Not here, deliberately:
 //   - No eviction. Everything touched stays resident, as InMemoryPageStore
 //     already did. Clock eviction needs PageRef (page.md section 3) and
 //     the frame-reclamation policy is an open decision in CLAUDE.md.
-//   - No WAL gate (page.md section 8): there is no WAL to wait on, so this
-//     is restart-durable, not crash-durable.
 //   - Every page handed out is marked dirty, because PageStore v1 hands
 //     out a raw mutable span with no MarkDirty(). PageRef fixes that.
 //   - One free-map page, so coverage is kFreeMapBitsPerPage ids; beyond
 //     that is OutOfRange, not silently unmapped.
+//
+// ---- The WAL gate (page.md section 8, wal.md section 8-1) ---------------
+//
+// A dirty page may reach the device only once the log records describing
+// its modifications are durable. That rule is enforced here rather than
+// asked of callers: SetWalGate() installs a WalDurability, and every write
+// path below (Flush, Sync, FlushPages) first calls EnsureDurable() on the
+// highest page_lsn among the pages it is about to write. With no gate
+// installed the store behaves exactly as it did before one existed, which
+// is what the WAL-free unit tests and the simulator rely on - and which is
+// sound only for a caller that logs nothing.
+//
+// The gate is one call per flush batch, not per page: EnsureDurable() is a
+// no-op once the watermark has passed, so gating on the batch maximum
+// costs at most one sync for the whole batch instead of one per page.
+//
+// StampPageLsn() is the other half. A mutation path appends its record,
+// then calls it with the record's LSN; that both records the page_lsn the
+// gate reads and captures the frame's **recLSN** - the LSN of the first
+// record to dirty the frame since it was last clean, which is what a
+// checkpoint's dirty table must carry for recovery's redo start to be
+// correct (wal.md section 11-1). A frame keeps that value until it is
+// written back, then drops it.
 //
 // Concurrency: core-local, no internal synchronization (rules.md #3).
 //
@@ -54,6 +101,12 @@ namespace kds::storage {
 // alongside the superblock (0) and the catalog's fixed pages (4-8).
 inline constexpr PageId kFreeMapPageId = 1;
 
+// The headerless bitmap (PageType::kHeaderlessMap), immediately after it
+// in the same reserved sub-128 range. One bit per page id: set means the
+// page carries no common header, so it is neither checksum-stamped on the
+// way out nor verified on the way in.
+inline constexpr PageId kHeaderlessMapPageId = 2;
+
 class DevicePageStore final : public PageStore {
 public:
     // `device` must outlive the store. A device with no pages, or one whose
@@ -70,6 +123,16 @@ public:
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
     StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
 
+    // CreateNew() for a page that will carry no common header - see the
+    // note above. The whole 8 KiB is the caller's, and this store will
+    // neither stamp nor verify a checksum on it, now or after a reopen.
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderless();
+
+    // Whether `page_id` was created headerless. False for an id that does
+    // not exist, which is the safe answer: an unknown page is treated as
+    // headered and therefore verified.
+    bool IsHeaderless(PageId page_id) const noexcept;
+
     // Writes dirty frames back in page-id order, which is file order
     // (page.md section 13), then the free map. Data pages go first so a
     // crash between them can only orphan a page, never publish one whose
@@ -77,13 +140,31 @@ public:
     Status Flush();
     Status Sync() override;
 
-    // Page ids currently dirty, in ascending order - what a checkpoint
-    // snapshots (wal.md section 11-1). No recovery LSN accompanies them:
-    // this store predates the WAL gate and stamps no page_lsn, so every
-    // page here reports recLSN 0, which the checkpointer reads as "nothing
-    // to replay" rather than "replay from the head of the log". Once
-    // mutations are logged, that becomes a real per-frame value.
+    // Installs the WAL-before-data gate described above. Null (the
+    // default) disables it. `gate` must outlive the store.
+    void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
+
+    // Records that the record at `lsn` modified `page_id`: stamps the
+    // page header's page_lsn and, if this is the first record to dirty the
+    // frame since it was last written back, adopts `lsn` as its recLSN.
+    //
+    // Call it *after* appending the record and *before* returning to the
+    // client. Fails with NotFound if the page is not resident, and with
+    // InvalidArgument for lsn 0 (kNoPageLsn means "never logged", so it
+    // cannot also mean "logged at 0"; a real record LSN is never 0 because
+    // offset 0 is the segment header - record.hpp).
+    Status StampPageLsn(PageId page_id, std::uint64_t lsn) override;
+
+    // Page ids currently dirty, in ascending order.
     std::vector<PageId> DirtyPageIds() const;
+
+    // The same set with each frame's recLSN attached - what a checkpoint
+    // snapshots (wal.md section 11-1). A frame dirtied by something that
+    // logged nothing reports 0, which the checkpointer reads as "nothing
+    // to replay for this page"; that is accurate for the unlogged paths
+    // (catalog writes, bootstrap) and wrong for a logged one, which is why
+    // every logged mutation must call StampPageLsn().
+    std::vector<std::pair<PageId, wal::Lsn>> DirtyPagesWithRecLsn() const;
 
     // Writes back exactly these pages and syncs. Ids that are not dirty,
     // or not resident, are skipped rather than treated as an error -
@@ -105,10 +186,27 @@ private:
     struct Frame {
         std::unique_ptr<Page> bytes;
         bool dirty = false;
+        // First log record to dirty this frame since it was last written
+        // back; 0 when nothing logged touched it. See StampPageLsn().
+        wal::Lsn rec_lsn = 0;
     };
 
     DevicePageStore(PageDevice& device, PageId first_new_page_id, const Page& free_map,
-                    bool free_map_dirty) noexcept;
+                    const Page& headerless_map, bool maps_dirty) noexcept;
+
+    // Stamps a checksum unless the page is headerless. The one place that
+    // decision is made, so no write path can forget it.
+    void StampIfHeadered(PageId page_id, std::span<std::byte, kPageSize> page) const;
+
+    // Writes back whichever of the two bitmap pages are dirty, after the
+    // data pages they describe. Same ordering rule the free map always
+    // followed: a page is only reachable once the map says so.
+    Status FlushMaps();
+
+    // Waits for the log records of `page_ids` to be durable before any of
+    // them is written. A no-op with no gate installed or no logged page in
+    // the batch.
+    Status AwaitWalGate(std::span<const PageId> page_ids);
 
     StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id);
     std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes);
@@ -120,11 +218,22 @@ private:
     std::span<const std::byte, kPageSize> free_map_bytes() const noexcept {
         return std::span<const std::byte, kPageSize>(free_map_page_);
     }
+    std::span<std::byte, kPageSize> headerless_map_bytes() noexcept {
+        return std::span<std::byte, kPageSize>(headerless_map_page_);
+    }
+    std::span<const std::byte, kPageSize> headerless_map_bytes() const noexcept {
+        return std::span<const std::byte, kPageSize>(headerless_map_page_);
+    }
 
     PageDevice& device_;
     Logger* log_ = nullptr;
+    wal::WalDurability* wal_gate_ = nullptr;
     Page free_map_page_;
-    bool free_map_dirty_;
+    Page headerless_map_page_;
+    // One flag for both maps: they are written together, in the same
+    // order, at the same points, and a separate flag per map would only
+    // create a state where one is on disk and the other is not.
+    bool maps_dirty_;
     PageId next_new_page_id_;
     std::unordered_map<PageId, Frame> frames_;
 };

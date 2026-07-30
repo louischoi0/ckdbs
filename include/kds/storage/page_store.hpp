@@ -5,6 +5,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/storage/page_header.hpp"
 
 // Abstract "give me the bytes for page_id" seam. This exists so that
 // higher layers (catalog/) can be written and tested today against
@@ -40,6 +41,24 @@ public:
     // Fetches an already-created page's bytes for reading or in-place
     // mutation. Fails with NotFound if page_id was never created.
     virtual StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) = 0;
+
+    // Records that the WAL record at `lsn` modified `page_id`: stamps the
+    // page header's page_lsn, which is what a store's write-back path
+    // compares against the log's durable watermark (wal.md section 8-1).
+    // A logged mutation calls this after appending its record and before
+    // acknowledging the client.
+    //
+    // The default does exactly the stamp and nothing else, which is the
+    // whole of the obligation for a store with no stable storage under it:
+    // there is no write-back to order against the log. A store that does
+    // write back overrides this to also track the frame's recLSN and to
+    // hold the gate (DevicePageStore).
+    virtual Status StampPageLsn(PageId page_id, std::uint64_t lsn) {
+        auto page = Get(page_id);
+        if (!page.ok()) return page.status();
+        SetPageLsn(page.value(), lsn);
+        return Status::OK();
+    }
 
     // Makes everything written through this store durable: after an OK
     // return, the state survives the process dying by any means.

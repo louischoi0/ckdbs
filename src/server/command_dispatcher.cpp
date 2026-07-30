@@ -6,9 +6,13 @@
 #include <sstream>
 #include <variant>
 
+#include <vector>
+
 #include "kds/exec/row_codec.hpp"
 #include "kds/parser/parser.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/wal/payload.hpp"
 
 namespace kds::server {
 
@@ -54,27 +58,6 @@ std::string HexEncode(std::span<const std::byte> bytes) {
         out.push_back(kHexDigits[v & 0x0F]);
     }
     return out;
-}
-
-// Scans the page for a live tuple already carrying `id`. Only the fixed
-// Keystone word at the front of each payload is read - no schema walk, no
-// row decode - which is the practical payoff of putting the pk there.
-// Delete-marked tuples still count: their key is not free until the slot
-// is physically retired.
-Status CheckDuplicateKey(const heap::PageView& page, std::uint64_t id) {
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) continue;  // retired or out-of-range slot
-
-        auto existing = exec::RowKeystoneId(tuple.value().payload);
-        if (!existing.ok()) return existing.status();
-        if (existing.value() == id) {
-            return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
-                                          " already present at slot " + std::to_string(i));
-        }
-    }
-    return Status::OK();
 }
 
 }  // namespace
@@ -164,6 +147,18 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
 }
 
 DispatchOutcome CommandDispatcher::HandleSync() {
+    // The log first, and unconditionally. The store's gate syncs it only
+    // as far as the pages it is about to write need, so a relaxed commit
+    // whose pages are already clean would survive a SYNC unsynced - and
+    // SYNC's whole promise is that it does not.
+    if (wal_ != nullptr) {
+        if (Status s = wal_->SyncAll(); !s.ok()) {
+            if (logging(LogLevel::kError)) {
+                log_->Error("wal", "client SYNC failed to sync the log: " + s.message());
+            }
+            return {"ERR " + s.message(), false};
+        }
+    }
     if (Status s = page_store_.Sync(); !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("storage", "client SYNC failed: " + s.message());
@@ -402,6 +397,76 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
     return {"CREATED oid=" + std::to_string(oid.value()), false};
 }
 
+Status CommandDispatcher::LogInsert(const heap::ChainInsertResult& placed, std::uint64_t id,
+                                    std::span<const std::byte> tuple, std::uint64_t trx_id) {
+    if (wal_ == nullptr) return Status::OK();
+
+    const std::uint64_t txn_id = next_txn_id_++;
+    if (auto begun = wal_->Append(wal::RecordSpec{wal::RecordType::kTxnBegin, txn_id});
+        !begun.ok()) {
+        return begun.status();
+    }
+
+    // Chain growth first, in the order redo has to apply it: the old
+    // tail's image (which already carries the new link - ChainInsert sets
+    // it before returning), then the page it points at, then the tuple.
+    if (placed.grew_chain) {
+        auto old_tail = page_store_.Get(placed.linked_from);
+        if (!old_tail.ok()) return old_tail.status();
+
+        std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+        if (auto n = wal::EncodeFullPageImage(
+                image, std::span<const std::byte, kPageSize>(old_tail.value()));
+            !n.ok()) {
+            return n.status();
+        }
+        auto fpi = wal_->Append(
+            wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, placed.linked_from}, image);
+        if (!fpi.ok()) return fpi.status();
+        if (Status s = page_store_.StampPageLsn(placed.linked_from, fpi.value()); !s.ok()) {
+            return s;
+        }
+
+        std::array<std::byte, wal::kPageInitPayloadSize> init{};
+        const wal::PageInitPayload init_fields{/*min_key=*/id,
+                                               static_cast<std::uint8_t>(PageType::kHeap),
+                                               {0, 0, 0}};
+        if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
+        if (auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kPageInit, txn_id, placed.page_id}, init);
+            !rec.ok()) {
+            return rec.status();
+        }
+    }
+
+    // undo_ptr 0: an insert supersedes no version, so its undo chain ends
+    // at itself (wal.md section 5.1).
+    std::vector<std::byte> payload(wal::kHeapWriteFixedSize + tuple.size());
+    const wal::HeapWritePayload fields{trx_id, /*undo_ptr=*/0, placed.slot,
+                                       static_cast<std::uint16_t>(tuple.size())};
+    if (auto n = wal::EncodeHeapWrite(payload, fields, tuple); !n.ok()) return n.status();
+
+    auto rec = wal_->Append(
+        wal::RecordSpec{wal::RecordType::kHeapInsert, txn_id, placed.page_id}, payload);
+    if (!rec.ok()) return rec.status();
+    if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
+
+    auto commit = wal_->Commit(txn_id, durability_);
+    if (!commit.ok()) return commit.status();
+
+    // kStrict already synced inside Commit(). kGroup did not: it staged
+    // the commit for the next drain, and the acknowledgement owed to the
+    // client is "durable", so the wait happens here. With one connection
+    // the batch is always this one commit and the drain is one sync - the
+    // batching only pays off once concurrent committers exist to fill it
+    // (manager.hpp). kRelaxed waits for nothing by definition.
+    if (durability_ == wal::DurabilityClass::kGroup && !wal_->IsDurable(commit.value())) {
+        if (Status s = wal_->DrainOnce(); !s.ok()) return s;
+        if (Status s = wal_->EnsureDurable(commit.value()); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
 DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
@@ -417,19 +482,22 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
         return {"ERR " + oid.status().message(), false};
     }
 
-    auto access = catalog_.InitTableAccess(catalog::kNamespacePublic, oid.value());
+    auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
         return {"ERR " + access.status().message(), false};
     }
+    // Borrowed from the catalog's cache, not owned: valid for this
+    // statement, including across AllocateRowId() (catalog.hpp).
+    const catalog::TableAccess& ta = *access.value();
 
     // The primary key is the engine's to issue, never the caller's
     // (CLAUDE.md invariant 10), so VALUES supplies the columns *after* it.
     // Catching the old arity here gives a usable message instead of the
     // codec's "expected N value(s)".
-    const std::size_t ncols = access.value().schema.columns.size();
+    const std::size_t ncols = ta.schema.columns.size();
     if (ncols > 0 && stmt.values.size() == ncols) {
         return {"ERR do not supply a value for primary-key column '" +
-                    std::string(catalog::NameView(access.value().schema.columns.front().name)) +
+                    std::string(catalog::NameView(ta.schema.columns.front().name)) +
                     "' - it is autoincrement and engine-assigned",
                 false};
     }
@@ -439,37 +507,48 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
         return {"ERR " + id.status().message(), false};
     }
 
-    auto encoded = exec::EncodeRow(access.value().schema, id.value(), stmt.values);
+    auto encoded = exec::EncodeRow(ta.schema, id.value(), stmt.values);
     if (!encoded.ok()) {
         return {"ERR " + encoded.status().message(), false};
     }
 
-    // Single-page heap only: writes go straight to the table's root/desc
-    // page, no page-full overflow to a new page - heap page split policy
-    // is an open decision (CLAUDE.md) this doesn't attempt to resolve.
-    auto bytes = page_store_.Get(access.value().desc_page_id);
-    if (!bytes.ok()) {
-        return {"ERR " + bytes.status().message(), false};
+    // The relation is a chain of heap pages rooted at its desc page
+    // (heap_chain.hpp): the tuple goes into the tail, and a full tail
+    // grows the chain by one page rather than failing. Duplicate-key and
+    // min_key enforcement live in there too - they are heap invariants,
+    // not dispatcher policy.
+    auto placed = heap::ChainInsert(page_store_, ta.desc_page_id, id.value(),
+                                    encoded.value(), /*trx_id=*/catalog::kBootstrapXid);
+    if (!placed.ok()) {
+        if (logging(LogLevel::kWarn)) {
+            log_->Warn("heap", "insert into the chain at page " +
+                                   std::to_string(ta.desc_page_id) +
+                                   " failed: " + placed.status().message());
+        }
+        return {"ERR " + placed.status().message(), false};
     }
 
-    heap::PageView page(bytes.value());
-
-    // Belt to the sequence's braces. An issued id is unique by
-    // construction, so this can only fire if the sequence and the heap
-    // have drifted - a corrupted or rolled-back sys.tables row. That is
-    // exactly when silently writing a second tuple under one key would do
-    // the most damage, since Waystone addresses tuples by id directly.
-    if (Status s = CheckDuplicateKey(page, id.value()); !s.ok()) {
+    // Logged after the page is mutated and before the client is answered -
+    // see the ordering note in this class's header for why that is safe
+    // here and what would break it.
+    if (Status s = LogInsert(placed.value(), id.value(), encoded.value(),
+                             /*trx_id=*/catalog::kBootstrapXid);
+        !s.ok()) {
+        if (logging(LogLevel::kError)) {
+            log_->Error("wal", "logging the insert of id " + std::to_string(id.value()) +
+                                   " failed: " + s.message());
+        }
         return {"ERR " + s.message(), false};
     }
 
-    auto slot = page.InsertTuple(encoded.value(), /*trx_id=*/catalog::kBootstrapXid);
-    if (!slot.ok()) {
-        if (logging(LogLevel::kWarn)) {
-            log_->Warn("heap", "insert into page " + std::to_string(access.value().desc_page_id) +
-                                   " failed: " + slot.status().message());
-        }
-        return {"ERR " + slot.status().message(), false};
+    // A chain growing is rare and structural - the closest thing this
+    // engine has to a file extending - so it is Debug, above the per-tuple
+    // Trace line below.
+    if (placed.value().grew_chain && logging(LogLevel::kDebug)) {
+        log_->Debug("heap", "chain of table oid " + std::to_string(oid.value()) +
+                                " grew: new tail page " +
+                                std::to_string(placed.value().page_id) + " min_key=" +
+                                std::to_string(id.value()));
     }
 
     // Trace: one line per inserted tuple. Logged from here rather than from
@@ -477,14 +556,18 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
     // owning a logger - and which the catalog also writes through, where a
     // "heap insert" line would describe a catalog row, not a user tuple.
     if (logging(LogLevel::kTrace)) {
-        log_->Trace("heap", "insert page=" + std::to_string(access.value().desc_page_id) +
-                                " slot=" + std::to_string(slot.value()) +
+        log_->Trace("heap", "insert page=" + std::to_string(placed.value().page_id) +
+                                " slot=" + std::to_string(placed.value().slot) +
                                 " id=" + std::to_string(id.value()) +
                                 " bytes=" + std::to_string(encoded.value().size()));
     }
 
+    // The page id is part of the reply because it is no longer implied by
+    // the table: a client that wants to `SHOW PAGE` the row it just wrote
+    // would otherwise have to walk the chain to guess where it went.
     return {"INSERTED oid=" + std::to_string(oid.value()) + " id=" + std::to_string(id.value()) +
-                " slot=" + std::to_string(slot.value()),
+                " page=" + std::to_string(placed.value().page_id) +
+                " slot=" + std::to_string(placed.value().slot),
             false};
 }
 
@@ -503,47 +586,54 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
         return {"ERR " + oid.status().message(), false};
     }
 
-    auto access = catalog_.InitTableAccess(catalog::kNamespacePublic, oid.value());
+    auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
         return {"ERR " + access.status().message(), false};
     }
-
-    auto bytes = page_store_.Get(access.value().desc_page_id);
-    if (!bytes.ok()) {
-        return {"ERR " + bytes.status().message(), false};
-    }
-    heap::PageView page(bytes.value());
+    // Borrowed from the catalog's cache, not owned: valid for this
+    // statement, including across AllocateRowId() (catalog.hpp).
+    const catalog::TableAccess& ta = *access.value();
 
     // Same one-line-per-response contract as SHOW PAGE: a header line of
     // column names, then one "\n"-escaped section per matching row
     // (comma-joined values), never a raw newline byte.
     std::ostringstream os;
     bool first_col = true;
-    for (const auto& col : access.value().schema.columns) {
+    for (const auto& col : ta.schema.columns) {
         if (!first_col) os << ',';
         os << catalog::NameView(col.name);
         first_col = false;
     }
 
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) continue;  // dead or out-of-range slot - skip
+    // Full scan of the whole chain, in chain order - which is id order
+    // page by page (heap_chain.hpp), so rows come back roughly sorted by
+    // pk without anything sorting them. Still a scan: no index, no
+    // min_key-based pruning of pages the WHERE cannot match. Both are
+    // read-path work that belongs with the B+ tree.
+    Status scan = heap::ChainVisit(
+        page_store_, ta.desc_page_id,
+        [&](PageId, heap::PageView& page, std::uint16_t slot) -> Status {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
 
-        auto row = exec::DecodeRow(access.value().schema, tuple.value().payload);
-        if (!row.ok()) {
-            return {"ERR " + row.status().message(), false};
-        }
+            auto row = exec::DecodeRow(ta.schema, tuple.value().payload);
+            if (!row.ok()) return row.status();
 
-        if (!exec::MatchesWhere(access.value().schema, row.value(), stmt.where)) continue;
+            if (!exec::MatchesWhere(ta.schema, row.value(), stmt.where)) {
+                return Status::OK();
+            }
 
-        os << "\\n";
-        bool first_val = true;
-        for (const auto& v : row.value()) {
-            if (!first_val) os << ',';
-            os << exec::FormatValue(v);
-            first_val = false;
-        }
+            os << "\\n";
+            bool first_val = true;
+            for (const auto& v : row.value()) {
+                if (!first_val) os << ',';
+                os << exec::FormatValue(v);
+                first_val = false;
+            }
+            return Status::OK();
+        });
+    if (!scan.ok()) {
+        return {"ERR " + scan.message(), false};
     }
 
     return {os.str(), false};
@@ -564,19 +654,22 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         return {"ERR " + oid.status().message(), false};
     }
 
-    auto access = catalog_.InitTableAccess(catalog::kNamespacePublic, oid.value());
+    auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
         return {"ERR " + access.status().message(), false};
     }
+    // Borrowed from the catalog's cache, not owned: valid for this
+    // statement, including across AllocateRowId() (catalog.hpp).
+    const catalog::TableAccess& ta = *access.value();
 
     // Validate every SET target names a real column before touching
     // storage, so a bad column name fails clean with no partial update.
     const std::string pk_name =
-        access.value().schema.columns.empty()
+        ta.schema.columns.empty()
             ? std::string()
-            : std::string(catalog::NameView(access.value().schema.columns.front().name));
+            : std::string(catalog::NameView(ta.schema.columns.front().name));
     for (const auto& assignment : stmt.assignments) {
-        if (access.value().schema.FindColumn(assignment.col_name) == nullptr) {
+        if (ta.schema.FindColumn(assignment.col_name) == nullptr) {
             return {"ERR unknown column '" + assignment.col_name + "'", false};
         }
         // The pk is the tuple's identity, not a field of it: Waystone and
@@ -587,64 +680,74 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         }
     }
 
-    auto bytes = page_store_.Get(access.value().desc_page_id);
-    if (!bytes.ok()) {
-        return {"ERR " + bytes.status().message(), false};
-    }
-    heap::PageView page(bytes.value());
-
     std::uint32_t updated = 0;
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) continue;  // dead or out-of-range slot - skip
+    std::uint32_t pages_touched = 0;
+    PageId last_page = kInvalidPageId;
 
-        auto row = exec::DecodeRow(access.value().schema, tuple.value().payload);
-        if (!row.ok()) {
-            return {"ERR " + row.status().message(), false};
-        }
+    Status scan = heap::ChainVisit(
+        page_store_, ta.desc_page_id,
+        [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
 
-        if (!exec::MatchesWhere(access.value().schema, row.value(), stmt.where)) continue;
+            auto row = exec::DecodeRow(ta.schema, tuple.value().payload);
+            if (!row.ok()) return row.status();
 
-        for (const auto& assignment : stmt.assignments) {
-            for (std::size_t c = 0; c < access.value().schema.columns.size(); ++c) {
-                if (catalog::NameView(access.value().schema.columns[c].name) ==
-                    assignment.col_name) {
-                    row.value()[c] = assignment.val;
-                    break;
+            if (!exec::MatchesWhere(ta.schema, row.value(), stmt.where)) {
+                return Status::OK();
+            }
+
+            for (const auto& assignment : stmt.assignments) {
+                for (std::size_t c = 0; c < ta.schema.columns.size(); ++c) {
+                    if (catalog::NameView(ta.schema.columns[c].name) ==
+                        assignment.col_name) {
+                        row.value()[c] = assignment.val;
+                        break;
+                    }
                 }
             }
-        }
 
-        // The pk is unchanged by construction (rejected above), so it is
-        // carried straight from the tuple's own Keystone word rather than
-        // round-tripped through the decoded row.
-        auto id = exec::RowKeystoneId(tuple.value().payload);
-        if (!id.ok()) {
-            return {"ERR " + id.status().message(), false};
-        }
-        const std::vector<parser::AstValue> body(row.value().begin() + 1, row.value().end());
+            // The pk is unchanged by construction (rejected above), so it
+            // is carried straight from the tuple's own Keystone word
+            // rather than round-tripped through the decoded row.
+            auto id = exec::RowKeystoneId(tuple.value().payload);
+            if (!id.ok()) return id.status();
+            const std::vector<parser::AstValue> body(row.value().begin() + 1, row.value().end());
 
-        auto encoded = exec::EncodeRow(access.value().schema, id.value(), body);
-        if (!encoded.ok()) {
-            return {"ERR " + encoded.status().message(), false};
-        }
+            auto encoded = exec::EncodeRow(ta.schema, id.value(), body);
+            if (!encoded.ok()) return encoded.status();
 
-        // HOT-style in-place overwrite - see PageView::OverwriteTuple's
-        // comment. No fallback to retire+reinsert if the new payload no
-        // longer fits the slot's original capacity (e.g. a grown
-        // varchar); that fails with OutOfSpace here, surfaced as ERR.
-        Status s = page.OverwriteTuple(i, encoded.value(), tuple.value().trx_id,
-                                        tuple.value().undo_ptr);
-        if (!s.ok()) {
-            return {"ERR " + s.message(), false};
-        }
-        ++updated;
+            // HOT-style in-place overwrite - see PageView::OverwriteTuple's
+            // comment. No fallback to retire+reinsert if the new payload no
+            // longer fits the slot's original capacity (e.g. a grown
+            // varchar); that fails with OutOfSpace here, surfaced as ERR.
+            //
+            // Note this keeps the row on its own page even across a chain:
+            // an update never moves a tuple, so no page's min_key can be
+            // invalidated by one.
+            if (Status s = page.OverwriteTuple(slot, encoded.value(), tuple.value().trx_id,
+                                                tuple.value().undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            ++updated;
+            if (page_id != last_page) {
+                last_page = page_id;
+                ++pages_touched;
+            }
+            return Status::OK();
+        });
+    if (!scan.ok()) {
+        // Partial by design: rows updated before the failure stay updated.
+        // There is no transaction to roll back into yet - the same
+        // exposure the single-page version had, now spread over a chain.
+        return {"ERR " + scan.message(), false};
     }
 
     if (updated > 0 && logging(LogLevel::kTrace)) {
-        log_->Trace("heap", "overwrite page=" + std::to_string(access.value().desc_page_id) +
-                                " rows=" + std::to_string(updated));
+        log_->Trace("heap", "overwrite rows=" + std::to_string(updated) + " across " +
+                                std::to_string(pages_touched) + " page(s) of table oid " +
+                                std::to_string(oid.value()));
     }
     return {"UPDATED " + std::to_string(updated), false};
 }

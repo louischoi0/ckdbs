@@ -31,13 +31,21 @@ inline constexpr std::uint32_t kFreeMapBitsPerPage =
     static_cast<std::uint32_t>(kPageBodySize) * 8;
 static_assert(kFreeMapBitsPerPage == 65280);
 
-// Common header for kFreeMap, every bit clear. The checksum is stamped by
-// the owner at write-out time (page.md section 8), not here.
-void FormatFreeMapPage(std::span<std::byte, kPageSize> page);
+// Common header, every bit clear. The checksum is stamped by the owner at
+// write-out time (page.md section 8), not here.
+//
+// `type` exists because a second bitmap of the same shape now lives beside
+// the allocation map: PageType::kHeaderlessMap, one bit per page id saying
+// whether that page carries a common header at all. Identical addressing,
+// identical helpers, different meaning - so the format is shared and only
+// the header's type byte distinguishes them on disk.
+void FormatFreeMapPage(std::span<std::byte, kPageSize> page,
+                       PageType type = PageType::kFreeMap);
 
-// Checksum verifies and the header is a kFreeMap this build can parse.
-// Either failure is Corruption.
-Status ValidateFreeMapPage(std::span<const std::byte, kPageSize> page);
+// Checksum verifies and the header is a bitmap page of `type` this build
+// can parse. Either failure is Corruption.
+Status ValidateFreeMapPage(std::span<const std::byte, kPageSize> page,
+                           PageType type = PageType::kFreeMap);
 
 // An index at or above kFreeMapBitsPerPage reads as allocated and ignores
 // writes: callers range-check and report OutOfRange with their own

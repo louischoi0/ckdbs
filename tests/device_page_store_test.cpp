@@ -49,13 +49,19 @@ bool Matches(std::span<const std::byte, kPageSize> page, std::uint8_t seed) {
     return true;
 }
 
-TEST(DevicePageStoreTest, FreshDeviceHasOnlyTheFreeMapAllocated) {
+TEST(DevicePageStoreTest, FreshDeviceHasOnlyTheTwoMapsAllocated) {
     auto device = MakeDevice();
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
 
-    EXPECT_EQ(store->allocated_pages(), 1u);
+    // The allocation bitmap and the headerless bitmap, both reserved at
+    // fixed ids and both self-allocated at open.
+    EXPECT_EQ(store->allocated_pages(), 2u);
     EXPECT_TRUE(store->IsAllocated(kFreeMapPageId));
+    EXPECT_TRUE(store->IsAllocated(kHeaderlessMapPageId));
+    // The maps themselves are headered, so they are checksummed like
+    // anything else - only what they *point at* can be headerless.
+    EXPECT_FALSE(store->IsHeaderless(kHeaderlessMapPageId));
     EXPECT_FALSE(store->IsAllocated(0));
     EXPECT_EQ(store->Get(0).status().code(), StatusCode::kNotFound);
     EXPECT_EQ(store->Get(500).status().code(), StatusCode::kNotFound);
@@ -131,7 +137,7 @@ TEST(DevicePageStoreTest, SyncedStateSurvivesReopen) {
 
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
-    EXPECT_EQ(store->allocated_pages(), 3u);
+    EXPECT_EQ(store->allocated_pages(), 4u);  // two data pages + the two maps
     EXPECT_EQ(store->resident_pages(), 0u);  // nothing loaded until asked for
 
     auto zero = store->Get(0);
@@ -167,7 +173,7 @@ TEST(DevicePageStoreTest, UnsyncedWorkIsLostOnCrash) {
 
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
-    EXPECT_EQ(store->allocated_pages(), 1u);
+    EXPECT_EQ(store->allocated_pages(), 2u);  // the two maps, nothing else
     EXPECT_EQ(store->Get(0).status().code(), StatusCode::kNotFound);
 }
 
@@ -190,10 +196,14 @@ TEST(DevicePageStoreTest, FlushWritesIdSortedWithTheFreeMapLast) {
     for (const auto& entry : device->trace()) {
         if (entry.kind == MemoryPageDevice::OpKind::kWrite) written.push_back(entry.first_page_id);
     }
-    ASSERT_EQ(written.size(), 5u);
+    // Four data pages, then both maps. The free map is strictly last: it
+    // is what makes an id exist, so a crash before it can only orphan a
+    // page, never publish one whose bytes never landed.
+    ASSERT_EQ(written.size(), 6u);
     EXPECT_EQ(written.back(), kFreeMapPageId);
+    EXPECT_EQ(written[written.size() - 2], kHeaderlessMapPageId);
 
-    std::vector<PageId> data(written.begin(), written.end() - 1);
+    std::vector<PageId> data(written.begin(), written.end() - 2);
     EXPECT_EQ(data, (std::vector<PageId>{0, 7, 64, 200}));
 
     // A second flush with nothing dirtied is a no-op.
@@ -313,6 +323,174 @@ TEST(DevicePageStoreTest, ChecksumsAreStampedOnWriteAndVerifiedOnLoad) {
     auto store = OpenStore(*device);
     ASSERT_NE(store, nullptr);
     EXPECT_EQ(store->Get(0).status().code(), StatusCode::kCorruption);
+}
+
+
+// ---- Headerless pages ---------------------------------------------------
+//
+// Waystone entry and directory pages tile 8 KiB exactly and carry no
+// common header (docs/waystone-concpets.md sections 5 and 6), so byte 4 -
+// where every other page keeps its checksum - is data. These tests are
+// about the two moments that would destroy it: the stamp on write-out and
+// the verify on read-back.
+
+// Every byte distinct from its neighbours *including the header region*,
+// which is what a headerless page actually looks like.
+void FillWhole(std::span<std::byte, kPageSize> page, std::uint8_t seed) {
+    for (std::size_t i = 0; i < kPageSize; ++i) {
+        page[i] = static_cast<std::byte>((i * 31u + seed) & 0xFF);
+    }
+}
+
+bool MatchesWhole(std::span<const std::byte, kPageSize> page, std::uint8_t seed) {
+    for (std::size_t i = 0; i < kPageSize; ++i) {
+        if (page[i] != static_cast<std::byte>((i * 31u + seed) & 0xFF)) return false;
+    }
+    return true;
+}
+
+TEST(DevicePageStoreHeaderlessTest, AHeaderlessPageIsMarkedAndAHeaderedOneIsNot) {
+    auto device = MakeDevice();
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    auto plain = store->CreateNew();
+    ASSERT_TRUE(plain.ok());
+    auto raw = store->CreateNewHeaderless();
+    ASSERT_TRUE(raw.ok());
+
+    EXPECT_FALSE(store->IsHeaderless(plain.value().first));
+    EXPECT_TRUE(store->IsHeaderless(raw.value().first));
+    // An id nothing allocated is treated as headered - the safe default,
+    // since it means "verify" rather than "trust".
+    EXPECT_FALSE(store->IsHeaderless(50000));
+}
+
+TEST(DevicePageStoreHeaderlessTest, FlushDoesNotStampAChecksumOverItsBytes) {
+    auto device = MakeDevice();
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    auto raw = store->CreateNewHeaderless();
+    ASSERT_TRUE(raw.ok());
+    const PageId id = raw.value().first;
+    FillWhole(raw.value().second, 3);
+
+    ASSERT_TRUE(store->Flush().ok());
+
+    // Still byte-identical in the frame: the stamp would have overwritten
+    // bytes 4..8, which on a Waystone entry page is half of entry 0's pk.
+    auto after = store->Get(id);
+    ASSERT_TRUE(after.ok());
+    EXPECT_TRUE(MatchesWhole(after.value(), 3));
+}
+
+TEST(DevicePageStoreHeaderlessTest, ItSurvivesAReopenWithoutBeingCalledCorrupt) {
+    // The reason the headerless map has to be durable at all. This store
+    // never evicts, so a page comes off the device exactly once - here -
+    // and an in-memory-only set would have been lost by now.
+    auto device = MakeDevice();
+    PageId id = kInvalidPageId;
+    {
+        auto store = OpenStore(*device);
+        ASSERT_NE(store, nullptr);
+        auto raw = store->CreateNewHeaderless();
+        ASSERT_TRUE(raw.ok());
+        id = raw.value().first;
+        FillWhole(raw.value().second, 9);
+        ASSERT_TRUE(store->Sync().ok());
+    }
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    EXPECT_TRUE(store->IsHeaderless(id)) << "the mark must be durable, not a side table";
+
+    auto page = store->Get(id);
+    ASSERT_TRUE(page.ok()) << "a headerless page must not be checksum-verified: "
+                           << page.status().message();
+    EXPECT_TRUE(MatchesWhole(page.value(), 9));
+}
+
+TEST(DevicePageStoreHeaderlessTest, HeaderedPagesAreStillStampedAndVerified) {
+    // The change must not have turned verification off for everything.
+    auto device = MakeDevice();
+    PageId id = kInvalidPageId;
+    {
+        auto store = OpenStore(*device);
+        ASSERT_NE(store, nullptr);
+        auto plain = store->CreateNew();
+        ASSERT_TRUE(plain.ok());
+        id = plain.value().first;
+        Fill(plain.value().second, 4);
+        ASSERT_TRUE(store->Sync().ok());
+    }
+
+    // Corrupt one body byte behind the store's back.
+    Page bytes{};
+    std::span<std::byte, kPageSize> view(bytes);
+    ASSERT_TRUE(device->ReadPage(id, view).ok());
+    bytes[kPageBodyOffset + 10] ^= std::byte{0xFF};
+    ASSERT_TRUE(device->WritePage(id, std::span<const std::byte, kPageSize>(bytes)).ok());
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    EXPECT_EQ(store->Get(id).status().code(), StatusCode::kCorruption);
+}
+
+TEST(DevicePageStoreHeaderlessTest, DamageToAHeaderlessPageIsSilentByDesign) {
+    // Stated as a test because it is a deliberate trade, not an oversight:
+    // these pages carry no checksum, so bit-rot in one is undetectable
+    // here. It is survivable instead - the probe's Keystone-id check
+    // (spec section 3.1) turns a wrong entry into a miss and a fallback
+    // scan, which is a stronger guarantee than detection.
+    auto device = MakeDevice();
+    PageId id = kInvalidPageId;
+    {
+        auto store = OpenStore(*device);
+        ASSERT_NE(store, nullptr);
+        auto raw = store->CreateNewHeaderless();
+        ASSERT_TRUE(raw.ok());
+        id = raw.value().first;
+        FillWhole(raw.value().second, 2);
+        ASSERT_TRUE(store->Sync().ok());
+    }
+
+    Page bytes{};
+    std::span<std::byte, kPageSize> view(bytes);
+    ASSERT_TRUE(device->ReadPage(id, view).ok());
+    bytes[100] ^= std::byte{0xFF};
+    ASSERT_TRUE(device->WritePage(id, std::span<const std::byte, kPageSize>(bytes)).ok());
+
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+    auto page = store->Get(id);
+    EXPECT_TRUE(page.ok()) << "no checksum means no detection, by construction";
+    EXPECT_FALSE(MatchesWhole(page.value(), 2));
+}
+
+TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesTheId) {
+    // Ordering that matters on a crash: the free map is what makes an id
+    // exist, so it goes last. The reverse would publish an allocated
+    // Waystone page whose headerless bit had not landed, and the next read
+    // of it would verify a checksum nobody wrote.
+    auto device = MakeDevice();
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    auto raw = store->CreateNewHeaderless();
+    ASSERT_TRUE(raw.ok());
+    FillWhole(raw.value().second, 1);
+
+    device->ClearTrace();
+    ASSERT_TRUE(store->Flush().ok());
+
+    std::vector<PageId> written;
+    for (const auto& entry : device->trace()) {
+        if (entry.kind == MemoryPageDevice::OpKind::kWrite) written.push_back(entry.first_page_id);
+    }
+    ASSERT_GE(written.size(), 2u);
+    EXPECT_EQ(written.back(), kFreeMapPageId);
+    EXPECT_EQ(written[written.size() - 2], kHeaderlessMapPageId);
 }
 
 }  // namespace

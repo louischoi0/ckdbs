@@ -47,6 +47,8 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `port` | `--port` | `15432` | TCP port, loopback only. |
 | `wal_dir` | — | `<data_file>.wal` | Per-core WAL segment directory. |
 | `checkpoint_interval_ms` | — | `5000` | How often dirty pages are flushed (`docs/wal.md` §11). `0` disables the cadence, leaving `SYNC`/shutdown as the only durability points. |
+| `durability` | — | `group` | Durability class for every **logged** statement — today `INSERT` only (`docs/wal.md` §1). `strict`/`d1` fsyncs before replying; `group`/`d2` is the same durability point with the fsync amortized over concurrent committers, which costs the same as `strict` while the server serves one connection at a time; `relaxed`/`d3` replies immediately and syncs on the drain below. Names are case-insensitive. |
+| `wal_drain_interval_us` | — | `1000` | How often the WAL drain runs. Bounds a `relaxed` commit's loss window; a tick with nothing staged does no I/O. `0` disables it. |
 | `log_dir` | `--log-dir` | *(empty)* | Prepended to `log_file` unless that is absolute. Created if missing. |
 | `log_file` | `--log-file` | `kdb.log` | Log file name. Empty disables file logging. |
 | `log_level` | `--log-level` | `info` | `trace`/`debug`/`info`/`warn`/`error`/`off`. |
@@ -80,7 +82,7 @@ server pays a `write()` syscall per tuple to say nothing.
 | `error` | failed checkpoint, failed WAL sync, failed client `SYNC`, page corruption detected on read, a refused WAL-gate flush, a failed page write or barrier, a failed anchor publish, io-backend failure | rare; something is wrong |
 | `warn` | failed query (with its full reason), cadence disabled, failed heap insert, buffer-pool frame exhaustion, io backend recovering | per failure |
 | `info` | startup/shutdown, fresh-vs-existing bootstrap, catalog bootstrap, DDL (`CREATE TABLE`), published checkpoint anchor, client `SYNC`, `STOP` received | per lifecycle event — the default |
-| `debug` | every query with its duration, checkpoint start/completion, connection accept/close, WAL sync, page-flush batches and their WAL waits, free-map and device syncs, superblock anchor writes, the catalog side of a DDL (root page, desc-page relink) | **per request** |
+| `debug` | every query with its duration, checkpoint start/completion, connection accept/close, WAL sync, page-flush batches and their WAL waits, free-map and device syncs, superblock anchor writes, the catalog side of a DDL (root page, desc-page relink), catalog cache invalidation | **per request** |
 | `trace` | every client request line, every heap insert/overwrite, every WAL record appended, **every page dirtied**, every page allocated/read/written, every row id issued | **per tuple** — a development tool, not an operating mode |
 
 **Component tags.** `expeditor` (lifecycle), `client`/`query` (connections and
@@ -153,7 +155,7 @@ printf 'PING\n' | nc 127.0.0.1 15432
 | Command | Arguments | Success reply | Notes |
 |---|---|---|---|
 | `PING` | none | `PONG` | Liveness check. |
-| `SYNC` | none | `OK synced` | Writes the page store back to the data file. Until the WAL lands, this and `STOP` are the only things that make a mutation survive the process dying - a `kill` or crash loses everything since the last one. |
+| `SYNC` | none | `OK synced` | Syncs the WAL, then writes the page store back to the data file. For an `INSERT` this is belt-and-braces (it is already logged and, unless `durability = relaxed`, already durable); for **every other mutation** - `CREATE TABLE`, `UPDATE`, catalog rows - this and `STOP` are still the only things that make it survive the process dying. |
 | `STOP` | none | `OK bye` | Shuts the **entire server** down, not just this client's connection. Any other clients connected at the time lose their session. |
 | `SHOW META` | none | `version=<n> create_time=<n> last_mount_time=<n> wal_anchor_count=<n>` | Dumps the superblock. Times are Unix seconds; `wal_anchor_count` is how many per-core WAL anchors the database carries (`docs/wal.md` §14-3). |
 | `SHOW TABLES` | none | space-separated table names | Includes system catalog tables (`tables`, `objects`, `columns`, ...) alongside any user tables. |
@@ -161,8 +163,8 @@ printf 'PING\n' | nc 127.0.0.1 15432
 | `DESCRIBE <name>` (or `DESC`) | table name | summary line `oid=<n> root_page_id=<n> clustered_type=<HEAP\|BTREE> next_id=<n> columns=<n>`, then one `\n`-escaped section per column: `pos=<n> name=<s> type=<s> len=<n> notnull=<yes\|no> pk=<yes\|no> autoincrement=<yes\|no>` | Replaces the former `FIND TABLE`, which reported the same summary and no schema. Column 0 is always the Keystone primary key. A relation with no registered columns (the bootstrap catalog tables) reports `columns=0` rather than erroring. `ERR ...` if the name is unknown. |
 | `CREATE TABLE <name>` | table name | `ERR ...` | The bare, pre-parser form asks for a zero-column table. Every relation's first column is its mandatory Keystone primary key (`docs/heap-and-tuple.md` §4), so a zero-column relation cannot exist and this now always errors. Use the column-list form below. |
 | `CREATE TABLE <name> (<col> <type> [, ...]) [HEAP \| BTREE]` | column list, optional storage clause | `CREATED oid=<n>` or `EXISTS oid=<n>` | The real SQL-grammar form, parsed via `src/parser`. Same idempotency as the bare form. Each `<type>` is resolved case-insensitively against `sys.types` (`Catalog::ResolveTypeByName()`); see `src/exec/row_codec.hpp` for the supported set (`int8`/`int16`/`int32`/`int64`/`uint64`/`bool`/`char`/`varchar` are insertable today - `float`/`decimal` can be declared but not populated, no on-disk encoding decided yet). `BTREE` parses but is rejected (`ERR ...`) - not implemented. Disambiguated from the bare form purely by whether `(` follows the name. |
-| `INSERT INTO <name> VALUES (<val> [, ...])` | positional values, one per column in `pos` order **after the primary key** | `INSERTED oid=<table_oid> id=<n> slot=<n>` | No explicit column list in this grammar (ast.hpp). **Do not supply the primary key**: column 0 is the Keystone id, issued by the engine from the relation's `next_id` sequence and reported back as `id=`. Supplying a full-width value list is an `ERR` naming the pk column. Ids are unique and ascending; they are not gapless, since a failed insert after a successful allocation burns one. `ERR ...` also on a type/width mismatch, a NULL value (not supported yet), or if the table's single heap page is full (no multi-page overflow yet). |
-| `SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]` | table name, optional AND-only WHERE | header line + one row per match | Full scan of the table's root heap page only (no multi-page chains, no index use). See below for the `\n`-escaping convention this reuses from `SHOW PAGE`. No projection - column list is always `*`. |
+| `INSERT INTO <name> VALUES (<val> [, ...])` | positional values, one per column in `pos` order **after the primary key** | `INSERTED oid=<table_oid> id=<n> page=<n> slot=<n>` | No explicit column list in this grammar (ast.hpp). **Do not supply the primary key**: column 0 is the Keystone id, issued by the engine from the relation's `next_id` sequence and reported back as `id=`. Supplying a full-width value list is an `ERR` naming the pk column. Ids are unique and ascending; they are not gapless, since a failed insert after a successful allocation burns one. `ERR ...` also on a type/width mismatch or a NULL value (not supported yet). A full page is no longer an error: the relation is a **chain of heap pages** linked through `next_page_id`, and a full tail page grows the chain by one page rather than refusing the row (`page=` in the reply says where it landed, which is no longer implied by the table). Space freed by deleted rows on earlier pages is not reused - the chain only grows at the tail until page compaction exists. **This is the one logged statement** (2026-07-30): it appends `TXN_BEGIN`/`HEAP_INSERT`/`TXN_COMMIT` (plus a `FULL_PAGE_IMAGE` and `PAGE_INIT` when the chain grows) and does not reply until they are durable to the configured `durability` class. `ERR ...` if the log cannot be written - in which case the row *is* in the page and will be lost on a crash, since there is no transaction manager to roll it back. |
+| `SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]` | table name, optional AND-only WHERE | header line + one row per match | Full scan of the table's whole page chain, in chain order - which is primary-key order page by page, so rows come back roughly pk-sorted without anything sorting them. Still a scan: no index, and no `min_key` pruning of pages the `WHERE` cannot match. See below for the `\n`-escaping convention this reuses from `SHOW PAGE`. No projection - column list is always `*`. |
 | `UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*]` | SET list, optional WHERE | `UPDATED <n>` | In-place (HOT-style) overwrite of each matching row. `ERR ...` if a new value no longer fits the row's original slot reservation (e.g. growing a `varchar`) - no fallback to relocate the row yet. |
 
 Anything else, or a blank line, gets `ERR unknown command` / `ERR empty
@@ -252,6 +254,50 @@ python3 tools/ckdbs_cli.py "UPDATE accounts SET balance = 150 WHERE id = 1"
 UPDATE sequence end-to-end against a running server and prints each
 query's reply - a quick way to see the whole path work without typing it
 out by hand.
+
+`tools/benchmark.py` measures client-visible throughput against a running
+server: it creates its own 5-column table (Keystone pk + four body
+columns) and reports queries/sec plus a latency distribution for four
+phases - `INSERT`, point `SELECT ... WHERE id = <n>`, full-table `SELECT`,
+and `UPDATE`. Two caveats belong with any number it prints: there is no
+index yet, so a point SELECT is a **full scan of the page chain** and its
+qps falls as roughly 1/rows; and the server serves one connection at a
+time (section 5), so the tool is deliberately single-connection - client
+threads would measure the `accept()` queue. Run the server from a Release
+build on a scratch data file, or the numbers describe a `-O0` build:
+
+```sh
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release -j
+./build-release/kds_server /tmp/bench.db --port 15599 --log-dir /tmp --log-file b.log --log-level debug &
+python3 tools/benchmark.py --port 15599 --rows 5000 --read-ops 2000 --update-ops 2000 \
+    --server-log /tmp/b.log
+```
+
+Since INSERT is logged, the insert phase now measures the `durability`
+setting as much as the engine, and the two must be quoted together. On an
+EBS gp3 root volume (2,000 rows, 5 columns, one connection, Release):
+
+| `durability` | inserts/sec | p50 |
+|---|---|---|
+| `strict` | 802 | 1.04 ms |
+| `group` | 798 | 1.04 ms |
+| `relaxed` | 6,332 | 116 µs |
+
+`group` matching `strict` is the expected result, not a bug: a batch needs
+concurrent committers and the server takes one connection at a time. And
+**do not benchmark on `tmpfs`** — `fsync` there is free, all three classes
+come out identical, and the measurement says nothing.
+
+`--server-log` reads the server's own `in <n>us` per-statement figure back
+out of its debug log (matched to this run by its unique table name) and
+prints a server-side p50/p95 per statement kind next to the client-side
+numbers. That is the figure to judge engine changes on: the client-side
+round-trip floor on loopback is ~70-90 µs here, so a change worth 5 µs of
+engine time is invisible in qps and obvious in the server-side column.
+
+This is the whole-request counterpart to `bench/bench_main.cpp`, which
+times WAL/page internals in-process with no server, parser or socket; the
+two sets of numbers are not comparable.
 
 Exit code is 0 regardless of whether the server replied `OK`/`PONG` or
 `ERR ...` - the CLI does not interpret the reply, it only fails (exit 1)

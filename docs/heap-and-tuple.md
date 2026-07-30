@@ -33,6 +33,17 @@
 - Purpose: Waystone (`docs/waystone-concpets.md` §3) records the page epoch at the moment it observes a tuple's location; a consumer trusts that location only while `entry.page_epoch == page's current epoch`. This is how an advisory structure avoids being a second authoritative index — no synchronous double-write on relayout, just an epoch bump.
 - Storage location `[OPEN]`: header field (on-disk format, follows §5 of `docs/rules.md`) vs. a core-local epoch table keyed by `page_id`. Epoch width and wraparound handling are also `[OPEN]`. Do not assume either.
 
+### 3.1b Chain growth by tail append `[CONFIRMED 2026-07-29]`
+
+A relation is a **chain of heap pages** linked through the `next_page_id` tail reservation (§3.2), rooted at `sys.tables.desc_page_id`. Implemented in `include/kds/storage/heap/heap_chain.hpp`; before it, a relation was one page and an INSERT failed with `OutOfSpace` once 8 KB of tuples had landed.
+
+- **Growth is tail append, never a split.** Every insert goes to the last page in the chain. When that page has no room, a new page is allocated, the tuple is written into it, and only then is the new page linked on — the link is what makes the page reachable, so publishing it before the tuple would expose an empty tail.
+- **A new page's `min_key` is the id of the tuple that caused the growth** — the smallest id it can ever hold, since ids only increase (§4). No existing page's `min_key` is touched, so §3.1's immutability holds by construction.
+- **Ordering property.** Because ids increase and every insert appends, each page's ids lie entirely below the next page's `min_key`. The chain is therefore key-ordered page by page, while tuples *within* a page stay unordered — the "semi-sorted" of §3.1 now holds across pages as well as within one. Two consequences are relied on in code: a duplicate of an incoming id can only be in the tail page (so the check is O(1) pages, not O(chain)), and an id below the tail's `min_key` cannot be placed anywhere legally and is refused as a backwards id sequence.
+- **This does not decide the split policy.** Dividing a full page's contents and choosing a new boundary — the `[OPEN]` item in `CLAUDE.md` — is untouched: nothing here ever moves a tuple off a page or assigns a `min_key` to a page that already holds tuples. A split policy lands beside this, and pages produced by tail append stay valid under it.
+- **No free-space reuse.** A page that fills and then has rows deleted is never revisited; the chain only grows at the tail. Reclaiming that space needs page compaction, which needs a transaction manager to know no snapshot still needs the bytes. A delete-heavy relation therefore grows monotonically.
+- Walks are bounded by `kMaxChainPages` (2^20 pages = 8 GiB per relation); exceeding it is reported as `Corruption` rather than looping, since a cycle in the links would otherwise hang a request.
+
 ### 3.2 Page layout (carried over from existing implementation)
 
 - Slot directory grows downward from the heap area offset; tuple data grows upward from the top; free space is the gap (`upper - lower`).
@@ -129,7 +140,7 @@ Purpose (historical): metadata for **physical relayout and statistics only** —
 6. The super-column word is read/written atomically as a `u64`; on-disk encoding uses explicit shift/mask, never compiler bitfields.
 7. Ids are stored externally as zero-extended `u64` (upper 24 bits = 0).
 8. Waystone and the hint index are advisory: losing either entirely must not affect query correctness — only performance.
-9. Normal reads are served by the B+ tree; Waystone pages are never on the read path.
+9. **(Amended 2026-07-30 — `docs/waystone-concpets.md` §3.1)** The B+ tree is the authoritative read path (the heap chain scan stands in until it exists). Waystone is never authoritative, but a pk point lookup **may** probe it: this previously read "Waystone pages are never on the read path", and the probe now owes a validate-and-fall-back contract instead — treat a missing/dead entry or an epoch mismatch as a miss, check the Keystone id of the tuple actually found at the reported location, apply MVCC visibility as the authoritative path would, and fall through on any mismatch. Invariant 8 above is what did not change.
 10. **(Revised 2026-07-28)** No single canonical in-memory tuple is enforced; consistency comes from page pin + latch discipline (§7) — shared latch for reads, exclusive latch for structural mutation.
 11. **(New 2026-07-28)** A relation with `waystone_enabled` set requires system-generated, autoincrement `id` values; callers must not supply their own pk on insert into such a relation (see §4).
 12. **(New 2026-07-29)** The tuple MVCC header is exactly `trx_id:48 (zero-extended to 64) | undo_ptr | data_len | flags` = 20 bytes. There is no `xmax`; a version's validity interval is reconstructed from the undo chain, and DELETE is the slot's `DELETED` mark plus the deleter's `trx_id`.

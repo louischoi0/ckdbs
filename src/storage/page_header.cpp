@@ -33,6 +33,7 @@ std::uint8_t MaxSupportedFormatVersion(PageType type) noexcept {
         case PageType::kCatalog:
         case PageType::kSuperBlock:
         case PageType::kFreeMap:
+        case PageType::kHeaderlessMap:
             return 1;
         case PageType::kInvalid:
             break;

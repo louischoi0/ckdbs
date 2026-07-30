@@ -20,6 +20,7 @@ add_library(kds
     src/storage/memory_page_device.cpp
     src/storage/keystone.cpp
     src/storage/heap/heap_page.cpp
+    src/storage/heap/heap_chain.cpp
     src/storage/free_map.cpp
     src/storage/in_memory_page_store.cpp
     src/storage/device_page_store.cpp
@@ -30,6 +31,11 @@ add_library(kds
     src/catalog/rows.cpp
     src/catalog/schema.cpp
     src/catalog/sys_object_registry.cpp
+    src/stats/waystone_entry.cpp
+    src/stats/waystone_dir.cpp
+    src/stats/waystone_hooks.cpp
+    src/stats/waystone_probe.cpp
+    src/catalog/catalog_cache.cpp
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp
     src/server/command_dispatcher.cpp

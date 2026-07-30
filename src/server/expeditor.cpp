@@ -16,8 +16,8 @@ std::string Expeditor::Config::LogPath() const {
 }
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
-    return {"data_file", "port",     "wal_dir",  "checkpoint_interval_ms",
-            "log_dir",   "log_file", "log_level"};
+    return {"data_file", "port",      "wal_dir",   "checkpoint_interval_ms", "durability",
+            "wal_drain_interval_us", "log_dir",   "log_file",               "log_level"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -54,6 +54,22 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // reasons about, and held in ns internally because that is the
         // scheduler's. 0 keeps its documented meaning: no cadence.
         checkpoint_interval_ns = v.value() * 1'000'000ULL;
+    }
+    if (file.Has("durability")) {
+        auto v = file.GetString("durability");
+        if (!v.ok()) return v.status();
+        auto parsed = wal::ParseDurabilityClass(v.value());
+        if (!parsed.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + parsed.status().message());
+        }
+        durability = parsed.value();
+    }
+    if (file.Has("wal_drain_interval_us")) {
+        auto v = file.GetUint("wal_drain_interval_us");
+        if (!v.ok()) return v.status();
+        // Microseconds in the file: a drain interval an operator cares
+        // about is well under a millisecond, so ms would round it away.
+        wal_drain_interval_ns = v.value() * 1'000ULL;
     }
     if (file.Has("log_dir")) {
         auto v = file.GetString("log_dir");
@@ -121,14 +137,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // on a copy elsewhere staying a copy.
     expeditor->database_->catalog.SetLogger(&*expeditor->logger_);
 
-    expeditor->dispatcher_.emplace(expeditor->database_->superblock,
-                                   expeditor->database_->catalog, *expeditor->store_,
-                                   &*expeditor->logger_, &expeditor->clock_);
-
-    // The WAL stack. Opened even though nothing logs page mutations yet:
-    // the checkpointer's records are real records, so the stream and its
-    // segment files exist from the first boot rather than appearing the
-    // day the first mutation is logged.
+    // The WAL stack, before the dispatcher: INSERT logs through it, so the
+    // dispatcher cannot be built until it exists.
     auto log_device = wal::FileLogDevice::Open(expeditor->config_.wal_dir, /*core_id=*/0);
     if (!log_device.ok()) return log_device.status();
     expeditor->log_device_ = std::move(log_device.value());
@@ -138,6 +148,19 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!wal.ok()) return wal.status();
     expeditor->wal_ = std::move(wal.value());
     expeditor->wal_->SetLogger(&*expeditor->logger_);
+
+    // WAL-before-data, enforced by the store rather than asked of its
+    // callers (device_page_store.hpp): from here on no dirty page reaches
+    // the device ahead of the records describing it.
+    expeditor->store_->SetWalGate(expeditor->wal_.get());
+
+    expeditor->dispatcher_.emplace(expeditor->database_->superblock,
+                                   expeditor->database_->catalog, *expeditor->store_,
+                                   &*expeditor->logger_, &expeditor->clock_,
+                                   &*expeditor->wal_, expeditor->config_.durability);
+    expeditor->logger_->Info("expeditor",
+                             std::string("INSERT durability ") +
+                                 wal::DurabilityClassName(expeditor->config_.durability));
 
     expeditor->checkpoint_target_.emplace(*expeditor->store_);
     expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
@@ -222,6 +245,23 @@ Status Expeditor::Serve() {
     } else {
         logger_->Warn("expeditor",
                       "checkpoint cadence disabled; durability is SYNC and shutdown only");
+    }
+
+    // The other `system`-group task of wal.md section 6-2/6-3. It is what
+    // bounds a kRelaxed commit's loss window and what resolves a kGroup
+    // batch no committer is waiting on; a tick with nothing staged does no
+    // I/O, so the interval is chosen for the loss window, not for cost.
+    if (config_.wal_drain_interval_ns > 0) {
+        scheduler.SubmitEvery(config_.wal_drain_interval_ns, [this] {
+            if (Status s = wal_->DrainOnce(); !s.ok()) {
+                // Same shape as the checkpoint timer: no caller to return
+                // to, so the log is the only place this becomes visible.
+                logger_->Error("wal", "drain failed: " + s.message());
+            }
+        });
+    } else {
+        logger_->Warn("wal", "drain cadence disabled; relaxed commits stay unsynced "
+                             "until checkpoint or shutdown");
     }
 
     logger_->Info("expeditor", "listening on 127.0.0.1:" + std::to_string(config_.port));

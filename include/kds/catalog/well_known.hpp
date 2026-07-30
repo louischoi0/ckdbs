@@ -89,4 +89,36 @@ enum class ClusteredType : std::uint8_t {
     kBtree = 1,
 };
 
+// Whether a relation carries a Waystone structure, and if so whether its
+// coverage guarantee is claimable yet (docs/waystone-concpets.md section
+// 7). Persisted in sys.tables, so values are frozen and append-only.
+//
+// The middle state is the whole reason this is not a bool. Enabling a
+// relation that already holds rows needs a backfill pass, and until it
+// finishes the entries exist for only part of the relation - so a probe
+// miss does not mean "no such row" and the coverage guarantee is not yet
+// true. Only kCovered licenses a consumer to treat a miss as information.
+enum class WaystoneState : std::uint8_t {
+    // No directory, no entry pages, no per-insert work. The relation is a
+    // plain semi-sorted heap and nothing about Waystone costs it anything.
+    kDisabled = 0,
+
+    // Directory exists and the insert path maintains entries, but a
+    // backfill over pre-existing rows has not completed. Probes are
+    // answerable and advisory as ever; coverage is not claimed.
+    kBackfilling = 1,
+
+    // Coverage complete: every live tuple of the relation has an entry.
+    // The state a relation enabled at CREATE TABLE starts in, since an
+    // empty relation is trivially covered.
+    kCovered = 2,
+};
+
+// True once the relation maintains entries on the insert path, whether or
+// not backfill has finished. Spelled out so call sites never write the
+// two-way comparison themselves and forget kBackfilling.
+constexpr bool WaystoneActive(WaystoneState state) noexcept {
+    return state != WaystoneState::kDisabled;
+}
+
 }  // namespace kds::catalog

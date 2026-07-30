@@ -8,6 +8,7 @@ add_executable(kds_tests
     memory_page_device_test.cpp
     keystone_test.cpp
     heap_page_test.cpp
+    heap_chain_test.cpp
     superblock_test.cpp
     row_codec_test.cpp
     scheduler_test.cpp
@@ -17,7 +18,14 @@ add_executable(kds_tests
     in_memory_page_store_test.cpp
     free_map_test.cpp
     device_page_store_test.cpp
+    waystone_entry_test.cpp
+    waystone_dir_test.cpp
+    waystone_catalog_test.cpp
+    waystone_hooks_test.cpp
+    waystone_probe_test.cpp
+    catalog_cache_test.cpp
     catalog_test.cpp
+    insert_wal_test.cpp
     bootstrap_test.cpp
     page_mgr_test.cpp
     command_dispatcher_test.cpp

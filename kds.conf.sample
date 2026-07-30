@@ -38,6 +38,33 @@ port = 15432
 # is a starting point, not a recommendation.
 checkpoint_interval_ms = 5000
 
+# Durability class applied to every logged statement (docs/wal.md §1).
+# Today that means INSERT and nothing else — CREATE TABLE, UPDATE and the
+# catalog rows under both still write pages outside the log, so no setting
+# here makes them crash-safe.
+#
+#   strict  (d1)  the INSERT reply is sent only after its commit record is
+#                 fsync'd. One fsync per insert.
+#   group   (d2)  same durability point, one fsync amortized over a batch
+#                 of concurrent committers. Identical in cost to `strict`
+#                 until the server serves more than one connection at a
+#                 time, since a batch of one is a batch.
+#   relaxed (d3)  the reply is sent immediately; commits become durable on
+#                 the drain below. Trades a bounded loss window for not
+#                 waiting on the device — measured here as ~8x the insert
+#                 throughput of strict on an EBS gp3 volume.
+#
+# Per-transaction in the design; per-server here only because the newline
+# protocol has nowhere to carry it. KWP/1 makes it a protocol field.
+durability = group
+
+# How often the system-group WAL drain runs, in microseconds. It bounds a
+# `relaxed` commit's loss window and resolves a `group` batch nobody is
+# waiting on. A tick with nothing staged does no I/O, so this is cheap to
+# run often. 0 disables it, which leaves relaxed commits unsynced until the
+# next checkpoint or shutdown.
+wal_drain_interval_us = 1000
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

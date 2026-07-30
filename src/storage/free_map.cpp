@@ -19,14 +19,14 @@ std::uint8_t ByteAt(std::span<const std::byte, kPageSize> page, std::uint32_t in
 
 }  // namespace
 
-void FormatFreeMapPage(std::span<std::byte, kPageSize> page) {
+void FormatFreeMapPage(std::span<std::byte, kPageSize> page, PageType type) {
     // FormatPage zeroes the page, which is already an empty bitmap.
-    FormatPage(page, PageType::kFreeMap);
+    FormatPage(page, type);
 }
 
-Status ValidateFreeMapPage(std::span<const std::byte, kPageSize> page) {
+Status ValidateFreeMapPage(std::span<const std::byte, kPageSize> page, PageType type) {
     if (Status s = VerifyPageChecksum(page); !s.ok()) return s;
-    return ValidatePageHeader(page, PageType::kFreeMap);
+    return ValidatePageHeader(page, type);
 }
 
 bool FreeMapIsAllocated(std::span<const std::byte, kPageSize> page, std::uint32_t index) noexcept {

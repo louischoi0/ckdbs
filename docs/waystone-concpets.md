@@ -1,6 +1,6 @@
 # Waystone — Concept & Technical Specification
 
-**Status:** **Official specification.** Confirmed 2026-07-28. Supersedes the earlier Waystone draft in full; the earlier bounded-pool (65,536-entry) model is **superseded** (§10). Sections marked `[CONFIRMED]` are settled; `[OPEN]` items must not be assumed. Milestones and task breakdowns live in the companion work-instruction document `waystone-workplan.md`, not here.
+**Status:** **Official specification.** Confirmed 2026-07-28; §3 rule 4 amended 2026-07-30 (§3.1 — read-path probes are now permitted under a validate-and-fall-back contract; the advisory/never-authoritative guarantee is unchanged). Supersedes the earlier Waystone draft in full; the earlier bounded-pool (65,536-entry) model is **superseded** (§10). Sections marked `[CONFIRMED]` are settled; `[OPEN]` items must not be assumed. Milestones and task breakdowns live in the companion work-instruction document `waystone-workplan.md`, not here.
 
 **Naming:** *Waystone* — extends the engine's stone metaphor: the **Keystone** word is each tuple's structural identity; a *waystone* guides travelers without being the road, which is exactly this structure's advisory role.
 
@@ -36,10 +36,30 @@ The "100% consistency" question is split into two facts with different guarantee
 
 Normative advisory rules (restating hard invariants 7 & 8; enforced by tests):
 
-1. A consumer acting on a Waystone location must validate the target (Keystone id match + MVCC visibility) or rely on epoch trust, and must fall back to the B+ tree on any mismatch.
+1. A consumer acting on a Waystone location must validate the target (Keystone id match + MVCC visibility) or rely on epoch trust, and must fall back to the authoritative path on any mismatch.
 2. Dropping any event or the entire structure may cost performance but must never change query results.
 3. The ingest path never blocks, throttles, or fails a query. Ring overflow policy is drop.
-4. Waystone pages never appear on the normal read path.
+4. Waystone is never **authoritative**. A reader may probe it for a pk location provided rule 1 holds — see §3.1.
+
+### 3.1 Read-path probes `[AMENDED 2026-07-30]`
+
+Rule 4 previously read *"Waystone pages never appear on the normal read path."* That is **superseded**: a pk point lookup may probe Waystone and read the tuple at the location it reports, provided it validates and falls back.
+
+What changed and what did not. The old rule bundled two claims:
+
+- *Waystone is never authoritative — deleting it wholesale never changes a result.* **Unchanged, and still the invariant that matters.** Every consequence the old rule was protecting (no synchronous double-writes, no WAL obligation, no crash-recovery obligation, no second source of truth) follows from this one, not from physical absence on the read path.
+- *Waystone pages are never physically touched during a read.* **Dropped.** It was a means to the above, not the end, and it forbade the structure's most valuable use.
+
+The probe contract, normative:
+
+1. Probe by pk through the directory (§6). A miss — no entry, `kEntryLive` clear, `page_id == kInvalidPageId`, or `entry.page_epoch != page's current epoch` — is **not** an answer. Fall through to the authoritative path.
+2. On a hit, read the named `(page_id, slot)` and **check the Keystone id of the tuple actually there against the pk asked for.** A mismatch is not corruption; it is a stale entry, and it falls through like a miss. MVCC visibility is applied exactly as it would be on the authoritative path — the probe chooses *where to look*, never *what is visible*.
+3. The fallback target is the B+ tree once it exists; until then it is the heap chain scan (`ChainVisit`). Either way the probe is a shortcut to a result the engine can already produce without it.
+4. A relation with Waystone disabled, or whose entry pages have been deleted underneath it, answers every query identically — only slower.
+
+Rationale for amending a hard invariant rather than working around it: there is no B+ tree, so `WHERE id = <n>` is a full page-chain scan whose cost grows linearly with the relation. Waystone already holds an O(1) pk→location map that the coverage guarantee (§3) keeps populated on the insert path. Refusing to read it means either building a second structure with the same content or leaving the engine's worst read path unimproved, and neither buys any correctness the validate-and-fall-back contract above does not already provide.
+
+Testing consequence: spec §12-3 ("zero Waystone-page touches") is replaced — see §12.
 
 ## 4. Addressing — pk-Direct O(1) `[CONFIRMED]`
 
@@ -153,7 +173,7 @@ All deterministic (injected clock, simulated scheduling; rules.md §4):
 
 1. **Codec & directory:** entry round-trips; offset/size asserts; directory walk correctness incl. lazy allocation and depth growth; page tiling exact.
 2. **Advisory contract:** query results byte-identical with observer off, ring saturated (all drops), and after wholesale Waystone deletion of an enabled relation.
-3. **Read-path isolation:** instrumented `PageStore` proves zero Waystone-page touches during normal query execution.
+3. **Read-path equivalence** *(replaces the former "read-path isolation", amended 2026-07-30 with §3.1).* The old test asserted zero Waystone-page touches during query execution and is now exactly backwards. Its replacement is the stronger property it was standing in for: for one fixed query set, results are **byte-identical** across four configurations — probe enabled, probe disabled, relation Waystone-disabled, and entry pages deleted underneath a live enabled relation. Add a deliberately-corrupted-entry case: an entry pointing at a valid page and slot holding a *different* pk must produce the same result as a miss, proving the Keystone-id check in §3.1 rule 2 is load-bearing rather than decorative.
 4. **Coverage guarantee:** after any committed insert on an enabled relation, the entry exists with `kEntryLive`; after delete, cleared. Backfill converges and is restartable mid-way.
 5. **Epoch validation:** relayout bumps epoch ⇒ probes report untrusted; re-observation restores trust; counts survive throughout.
 6. **Flag semantics:** disabled relations incur zero Waystone work (instrumented); enable→backfill→coverage-complete transition; disable drops structures with no result change.

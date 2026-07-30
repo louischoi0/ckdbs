@@ -9,6 +9,41 @@ Execution rules:
 
 ---
 
+## Amendment 2026-07-30 — seek-first ordering
+
+Invariant 8 was amended (spec §3.1): a pk point lookup may probe Waystone under a validate-and-fall-back contract. That changes what is on the critical path, because the goal became **row-seek latency** rather than relayout statistics. The numbered tasks below are unchanged in content; the order they are executed in is not.
+
+Critical path, in order — `W00` (this amendment, done) → `T08` → `T09` → `T10` → `T04`/`T12` → `T13` → `T16` → **`W07`** → measure.
+
+`W07` is new and has no `T` number because the old plan had nowhere to put it: wire the probe into `HandleSelect` for `WHERE id = <n>`, validating per §3.1 and falling back to `ChainVisit`. Its tests are spec §12-3 in its amended form.
+
+Deferred, and explicitly not needed for the seek win: `T11` (fingerprint), `T14` (aggregator/heat), `T15` (observer ring), `T17` (backfill), `T20` (pattern groups). Heat exists to drive relayout, and there is no physical optimizer to drive. `T13`'s insert hook is what keeps coverage complete, so no backfill is needed for relations that were enabled at creation — `T17` is only for enabling a relation that already holds rows.
+
+### Blocker found in W03 — headerless pages vs. the store's checksum `[RESOLVED 2026-07-30, option 1]`
+
+Resolved by teaching the store which pages are headerless. `DevicePageStore::CreateNewHeaderless()` allocates one and records the fact in a **durable** second bitmap page — `PageType::kHeaderlessMap` at `kHeaderlessMapPageId` (2), same one-bit-per-page-id format as the free map. `StampIfHeadered()` is the single point where the stamp decision is made, and the read-miss path skips verification for a marked page.
+
+Durability is not a nicety: the store never evicts, so a page comes off the device exactly once — on first touch after open — and that is precisely when a verify would reject it. It cannot be recomputed from the catalog either, since the store is opened before bootstrap has a catalog to ask. Write order is headerless map, then free map: the free map is what makes an id exist, so a crash between them leaves a headerless bit set for an unallocated id (harmless — `IsHeaderless()` also requires allocation), where the reverse would publish a Waystone page whose bit had not landed.
+
+Accepted cost, stated as a test (`DamageToAHeaderlessPageIsSilentByDesign`): these pages carry no damage detection. Right for an advisory structure — a wrong entry must be *survivable*, which the probe's Keystone-id check guarantees, and survivable is stronger than detectable. Bit-rot becomes a probe miss and a fallback scan, never a wrong answer.
+
+### Original blocker text, kept for the reasoning
+
+Waystone entry and directory pages are **headerless by class** (spec §5/§6): 256 × 32 B and 2048 × 4 B tile 8 KiB exactly, and a header would cost a slot and break the shift/mask addressing the whole design rests on. `page_header.hpp` says as much.
+
+`DevicePageStore` does not know that. `Flush()` and `FlushPages()` call `StampPageChecksum()` on **every** dirty frame, which writes a `uint32_t` at byte offset 4 — on a headerless entry page that is the upper half of entry 0's `pk`. The read path is symmetric: `ResidentBytes()` calls `VerifyPageChecksum()` on every miss, so a reloaded Waystone page would come back `Corruption`. Both halves of the round trip are broken, silently on write and loudly on read.
+
+This does not affect `T09`/`T10` — their tests run on `InMemoryPageStore`, which neither stamps nor verifies — but it blocks `T13` and `W07`, the first tasks that put a Waystone page in the server's real store. **Decide before starting W05.** Sketch of the options, in preference order, none picked:
+
+1. **Teach the store which pages are headerless.** A per-store set, populated when the page is created; excluded from stamping and verification. Cheapest, localized, and it keeps the tiling. The cost is that these pages then carry *no* damage detection, which is arguably right for an advisory structure — a wrong entry must be survivable (the probe's Keystone-id check), which is stronger than being detectable — but it interacts with the persistence-class `[OPEN]` below and should be decided with it.
+2. **A separate store or file for Waystone pages.** Clean separation, no changes to `DevicePageStore`, but a second allocator, a second free map, and a second thing to open at boot.
+3. **Give Waystone pages a header.** Rejected on its face: 8160/32 = 255 entries is not a power of two, so `pk & 0xFF` addressing dies and every lookup gains a division. It would invalidate the derivations in spec §5/§6.
+
+Two `[OPEN]`s stay open and both are isolated behind seams, per the standing instruction:
+
+- **Heap-page epoch storage** — `EpochProvider` seam. The default implementation reports a constant epoch for every page, which is *correct* today because nothing moves a tuple, and wrong the day relayout lands. `BumpFor(page)` exists unimplemented (`T19`).
+- **Waystone page persistence class** — the hooks write through `PageStore`; whether the write is also WAL-logged is one call site in `HandleInsert`. Unlogged means a crash loses entries, probes miss, and reads fall back to the scan: slower, never wrong. Do not pick without the decision landing in spec §11.
+
 ## Gate: spec & repo consistency
 
 **T01 — Amend Keystone layout in the design spec.**
@@ -23,9 +58,15 @@ Done when: banner + link present; grep for `65,536|65536|meta_handle` finds only
 File: `docs/heap-and-tuple.md` §3. Define the per-page epoch counter (bumped whenever tuples on the page move); storage location marked `[OPEN]` (header field vs core-local table), with the note that a header field would be on-disk format under `docs/rules.md` §5.
 Done when: epoch defined once, `[OPEN]` marker present.
 
-**T04 — Extend the catalog spec for Waystone.**
+**T04 — Extend the catalog spec for Waystone.** — **done 2026-07-30, together with T12.**
 Files: catalog documentation + `include/kds/catalog/well_known.hpp` comments. Relation entry gains `waystone_enabled` (with distinct *coverage-complete* state) and `waystone_dir_root: PageId`. Defaults: disabled, `kInvalidPageId`.
 Done when: fields documented with defaults and DDL ownership noted.
+
+Landed as **three** fields, not two: `WaystoneState` (`kDisabled`/`kBackfilling`/`kCovered`), `waystone_dir_root`, and `waystone_dir_depth`. The depth is the addition the spec did not name, and it has to be persisted rather than derived from `next_id` — a derived depth would change the instant the sequence crossed a coverage boundary, which is *before* `GrowDirectory()` relinks the root, and every lookup in that window would walk the wrong number of levels onto the wrong leaf. `Catalog::SetWaystoneDirectory()` writes all three as one unit and refuses an inconsistent triple, so every reader downstream may trust it without re-checking.
+
+**Format break.** `SysTableRow::kOnDiskSize` grew by 6 bytes and `Decode()` requires an exact match, so **data files written before this change no longer open** — `ERR catalog row size mismatch` on any `sys.tables` read. Fresh project, no compatibility promise: discard old data files. Worth knowing that a *partially* migrated page is broken outright rather than partially — `AllocateRowId()` scans every row on the catalog page and fails on the first old one, so even a newly created table inside an old database cannot take an insert.
+
+**Hazard handed to T13.** `SetWaystoneDirectory()` bumps the catalog version, which clears the `TableAccess` cache and dangles any `const TableAccess*` a statement is holding. `HandleInsert` holds one across its whole body, so directory growth — which happens mid-insert — must re-acquire it afterwards. Documented on the method; it is the one way to use this API wrong.
 
 **T05 — Refresh `CLAUDE.md`.**
 Remove obsolete opens (metadata pool eviction; eviction-vs-validation invalidation). Add the spec §11 opens. Fix the architecture summary lines (Keystone layout; metadata pool → Waystone full coverage; hint index unchanged).
@@ -59,12 +100,12 @@ Files: `src/parser/fingerprint.cpp` + header, `tests/fingerprint_test.cpp`. Norm
 Tests: identical shapes with different constants → same `pattern_id`; different shapes → different; stability across runs (no address-based hashing).
 Needs: nothing (parser exists). May run in parallel with T09–T10.
 
-**T12 — Catalog flag & storage-form wiring.**
+**T12 — Catalog flag & storage-form wiring.** — **done 2026-07-30**, see T04 above; `TableAccess` carries the triple, `tests/waystone_catalog_test.cpp` covers defaults, round trip, validation and cache invalidation.
 Files: catalog module + `tests/catalog_test.cpp` additions. Add `waystone_enabled` (+coverage state) and `waystone_dir_root` to the relation record (on-disk rules: memcpy codec, static_asserts); relation-open path returns the storage form; DDL set/clear.
 Tests: defaults on create; round-trip through catalog pages; open path reports the right form.
 Needs: T04, T10.
 
-**T13 — Coverage hooks (unit-level).**
+**T13 — Coverage hooks (unit-level).** — **done 2026-07-30** as `waystone_hooks.{hpp,cpp}` + 15 tests. Two decisions worth carrying forward: the hooks take the directory root and depth as a `WaystoneRef` value and never touch the catalog (a hook that could grow the directory would bump the catalog version and dangle the `TableAccess*` its own caller is holding), and a pk past the current depth reports **`OutOfRange`**, distinct from `InvalidArgument`, because "grow and retry" is a normal event and a bad pk is a bug. Dispatcher wiring is *not* included — it is still behind the headerless-page/checksum decision above.
 Files: `src/stats/waystone_hooks.cpp`, `tests/waystone_hooks_test.cpp`. `OnInsert(pk, page_id, slot, epoch)` initializes the entry (`kEntryLive`) through the directory; `OnDelete(pk)` clears. Single arithmetic entry write each — anything heavier is a spec violation. Executor integration is deliberately out of scope here (T18).
 Tests: spec §12-4 hook half against HeapPage/InMemoryPageStore fixtures, incl. first-touch lazy page allocation.
 Needs: T09–T10.
@@ -79,7 +120,7 @@ Files: `src/stats/access_ring.cpp`, `tests/access_ring_test.cpp`. Core-local SPS
 Tests: spec §12-7 (saturation drops, never blocks, counts visible); steady-state no-allocation assertion.
 Needs: T08. Parallel with T13–T14.
 
-**T16 — Probe & epoch validation.**
+**T16 — Probe & epoch validation.** — **done 2026-07-30** as `waystone_probe.{hpp,cpp}` + 18 tests. `Probe()` folds all four ways to be unusable (no entry, no page, cleared `kEntryLive`, epoch mismatch) into one `trusted` flag, deliberately, so a caller cannot handle three and forget the fourth. `ProbeAndVerify()` owns the §3.1 rule-2 Keystone-id check and **fails closed** — a null id-reader is `InvalidArgument`, never a silently unverified trust. `Observe()` restores trust after a fallback lookup without touching heat and without resurrecting a delete-mark. `EpochProvider` keeps the epoch-storage `[OPEN]` open.
 Files: extend aggregator + `tests/waystone_probe_test.cpp`. pk probe through the directory returning `{page_id, slot, use_count, page_epoch, trusted}`; epoch source behind an `EpochProvider` seam (stub now; real bump sites arrive with the physical optimizer, T19). Document the B+-tree-fallback obligation at the call site.
 Tests: spec §12-5 — bump ⇒ untrusted, re-observe ⇒ trusted, counts survive.
 Needs: T14.
@@ -91,7 +132,7 @@ Needs: T12–T14.
 
 **T18 — Executor integration.** *(startable as a stub today; completes with roadmap M1)*
 Wire the observer into the executor's tuple-touch sites and the coverage hooks into the insert/delete paths; plumb `pattern_id`/`arg_hash` from the plan context (T11). Until M1 lands, keep the integration behind a fixture executor that replays scripted access traces — the trace format is this task's first deliverable and is what T14–T16 consume.
-Tests: spec §12-2 (results identical with observer off / ring saturated / structure deleted) and §12-3 (zero Waystone-page touches on the normal read path, instrumented PageStore) — both become regression-mandatory for every later change.
+Tests: spec §12-2 (results identical with observer off / ring saturated / structure deleted) and §12-3 in its **amended** form (read-path *equivalence* across probe-on / probe-off / disabled / pages-deleted / stale-entry-pointing-at-a-different-pk — not the retired "zero page touches" assertion) — both become regression-mandatory for every later change.
 Needs: T13–T15.
 
 **T19 — Relayout epoch bump sites.** *(interface now, call sites later)*

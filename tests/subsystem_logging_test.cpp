@@ -223,7 +223,7 @@ TEST(SubsystemLoggingTest, PageStoreLogsAllocationAndWriteBack) {
 
     EXPECT_TRUE(log.Has("pagestore", {"alloc", "page=4"}));
     EXPECT_TRUE(log.Has("pagestore", {"wrote", "page=4"}));
-    EXPECT_TRUE(log.Has("pagestore", {"free map written"}));
+    EXPECT_TRUE(log.Has("pagestore", {"maps written"}));
     EXPECT_TRUE(log.Has("pagestore", {"device synced"}));
 }
 

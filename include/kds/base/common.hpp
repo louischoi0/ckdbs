@@ -45,10 +45,20 @@ enum class PageType : std::uint8_t {
     kCatalog = 5,
     kSuperBlock = 6,
     kFreeMap = 7,
+    // Bitmap of which page ids are *headerless* - Waystone entry and
+    // directory pages, whose exact power-of-two tilings leave no room for
+    // a common header (docs/waystone-concpets.md sections 5 and 6). Same
+    // one-bit-per-page-id format as kFreeMap; see free_map.hpp.
+    //
+    // It has to be durable rather than a side table: DevicePageStore never
+    // evicts, so a page is read back from the device exactly once - on
+    // first touch after open - and that is precisely when a checksum
+    // verify would reject a page that never carried one.
+    kHeaderlessMap = 8,
 };
 
 // Highest value currently assigned above; anything greater read off disk
 // was written by a newer build. Bump when appending to the enum.
-inline constexpr std::uint8_t kMaxAssignedPageType = 7;
+inline constexpr std::uint8_t kMaxAssignedPageType = 8;
 
 }  // namespace kds

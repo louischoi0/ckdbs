@@ -106,7 +106,7 @@ Section intentionally reserved to keep §8–§14 numbering stable across revisi
 
 The whole correctness contract between WAL, `BufferPool`, and the checkpointer:
 
-1. **WAL-before-data:** a dirty page may be written to the data file only when its stream is durable up to that page's `page_lsn`. **Enforced inside `BufferPool::Flush` via the `WalDurability` seam** (storage-layout §8); `MarkClean` is reachable only as flush completion.
+1. **WAL-before-data:** a dirty page may be written to the data file only when its stream is durable up to that page's `page_lsn`. **Enforced inside `BufferPool::Flush` via the `WalDurability` seam** (storage-layout §8); `MarkClean` is reachable only as flush completion. As of 2026-07-30 `DevicePageStore` — the store the server actually runs on — holds the same seam (`SetWalGate()`) and applies it in `Flush`, `Sync` and `FlushPages`, gating on the highest `page_lsn` in the batch. That was a precondition for logging INSERT, not a follow-up to it: an ungated store flushing a logged page is exactly the violation this rule names.
 2. **Commit-before-ack:** a `D1/D2` commit is acknowledged (`S_TXN_OK`) only after its commit record is durable.
 3. **Checkpoint honesty:** `CHECKPOINT_END` is written only after every page in the checkpoint's dirty-page table has been flushed under rule 1, or remains listed with its recovery LSN.
 
@@ -128,6 +128,18 @@ Fuzzy checkpoints, run as a `system`-group task per core:
 4. Segments wholly below the redo start are recyclable once archived (§13).
 
 Cadence is the RTO knob: more frequent ⇒ shorter recovery + more FPI volume.
+
+## 11a. What actually logs today `[STATUS 2026-07-30]`
+
+**`INSERT` and nothing else.** `CommandDispatcher::HandleInsert` runs one implicit transaction per statement and appends `TXN_BEGIN` → (`FULL_PAGE_IMAGE` + `PAGE_INIT`, only when the heap chain grows) → `HEAP_INSERT` → `TXN_COMMIT`, stamps `page_lsn` on every page it touched, and applies the class from the `durability` config key before replying. `CREATE TABLE`, `UPDATE`, and every catalog row underneath them still mutate pages outside the log.
+
+Three properties of that first path are worth stating, because they are the shape the remaining paths should copy or deliberately not copy:
+
+- **The `FULL_PAGE_IMAGE` on chain growth is a placeholder for a missing record type.** Growth mutates two pages: the new page, and the *old* tail whose `next_page_id` now reaches it. §5.2 has no record for a link edit, so the old tail is logged whole. It costs one page of log per page of heap — about +50% log volume on small rows, paid once per 8 KB of tuples, never per tuple. A `HEAP_CHAIN_LINK` record type would remove it and is the obvious first entry the next time the record enum is extended (record.hpp's enum is frozen and append-only, so it is a format-version event and not something the insert path decides on its own).
+- **Records are appended after the page is mutated, not while it is latched.** §8-1 asks for the latter. What makes the former sound *here* is narrow: the server is a single cooperative thread, no flush can interleave between the mutation and the `page_lsn` stamp, and the store's gate covers every instant after it. Any path that suspends mid-statement must generate its record under the latch instead.
+- **A failed append leaves the tuple in the page.** The client gets an `ERR`, but there is no transaction manager to unwind the heap insert, so the row exists and is unlogged — a lost write on a crash, not a wrong answer now. The abort path that closes this belongs to the transaction layer.
+
+Implicit-transaction ids are a process-local counter starting at 1 each boot. That is wrong the moment recovery reads two boots of one stream and sees colliding ids; durable txn-id allocation is part of §14's item 4.
 
 ## 12. Recovery `[PROPOSED]`
 
@@ -154,7 +166,7 @@ Satisfied by `docs/storage-layout.md` (S1/S9): ~~page headers gain `page_lsn` + 
 Still required:
 
 1. ~~**Design spec — tuple header (MVCC):** replace `xmin/xmax/undo_ptr` with **`trx_id` (48-bit writer) + `undo_ptr` + delete-mark flag** per §5.1~~ — **satisfied 2026-07-29**: `docs/heap-and-tuple.md` §3.2 amended and invariant 12 added; implemented in `include/kds/storage/heap/heap_page.hpp` (20-byte header, `kSlotFlagDeleted`, `PageView::DeleteMark`). The lock role stays in the Keystone lock byte.
-2. **Design spec — heap section:** `PAGE_INIT` as the sole logger of `min_key`.
+2. ~~**Design spec — heap section:** `PAGE_INIT` as the sole logger of `min_key`.~~ — **satisfied 2026-07-30**: chain growth is the only thing that creates a heap page, and it emits `PAGE_INIT` carrying the new page's `min_key` (§11a). No other record encodes it.
 3. ~~**Superblock spec:** per-core WAL anchors (current segment, durable LSN, redo start).~~ — **satisfied 2026-07-29**: superblock v3 carries a fixed `kMaxWalCores`-slot anchor table indexed by `core_id`, each entry `{checkpoint_lsn, redo_start_lsn, durable_lsn, segment_no}` (32 B), implemented in `include/kds/server/superblock.hpp` (`WalAnchorFields`, `SetWalAnchor`/`wal_anchor`) with `SuperBlockCheckpointAnchor` as the `wal::CheckpointAnchor` implementation. An all-zero entry means "never checkpointed" and sends recovery to the start of the stream; `wal_anchor_count` records the last run's core count so §3's changed-core-count question stays open rather than being decided by reindexing.
 4. **Transaction/MVCC spec (when written):** undo-page layout, undo retention policy, snapshot-too-old semantics; 48-bit txn-id wraparound/epoch.
 5. **`docs/wire-protocol.md` / error registry:** add `SnapshotTooOld` (retryable = context-dependent — define with §15) to the error taxonomy.

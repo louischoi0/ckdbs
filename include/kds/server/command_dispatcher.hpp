@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -7,7 +9,9 @@
 #include "kds/catalog/catalog.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/wal/manager.hpp"
 
 // Command dispatch: turns one client-supplied line of text into an action
 // against the running database and a text response. Deliberately pure
@@ -35,6 +39,47 @@
 // space-separated. A response is always exactly one line back (never
 // containing embedded newlines) - the platform-layer listener appends the
 // line terminator itself.
+//
+// ---- WAL (2026-07-30): INSERT is logged, nothing else is ----------------
+//
+// Given a WalManager, INSERT appends the records that describe it and does
+// not answer the client until they are durable to the configured class
+// (wal.md sections 1 and 5.2). Every other mutating path - CREATE TABLE,
+// UPDATE, and the catalog rows underneath both - still writes pages
+// outside the log, so a crash still loses them. INSERT went first because
+// it is the path with a benchmark pointed at it; the others follow the
+// same shape.
+//
+// One INSERT is one implicit transaction, and it emits:
+//
+//     TXN_BEGIN
+//     [FULL_PAGE_IMAGE  of the old tail]  only when the chain grew
+//     [PAGE_INIT        of the new tail]  only when the chain grew
+//     HEAP_INSERT       the tuple, its slot, its writer
+//     TXN_COMMIT        + the durability class's wait
+//
+// The FULL_PAGE_IMAGE is there because chain growth mutates two pages: the
+// new page's `next_page_id` link lives in the *old* tail's header, and a
+// new page redo cannot reach is a new page redo cannot use. No record type
+// describes a link edit on its own (record.hpp's enum is frozen and
+// append-only, so inventing one is a format-version event), and an FPI is
+// the existing record that makes a page whole. It costs one page of log
+// per page of heap - roughly +50% log volume on small rows - and it is
+// paid once per 8 KB of tuples, never per tuple. A HEAP_CHAIN_LINK record
+// type would remove it; that is a format decision, not this file's.
+//
+// ---- Ordering: the records are appended after the page is mutated -------
+//
+// ChainInsert() writes the tuple into the page frame, and only then are
+// the records appended and page_lsn stamped. That is safe here, and the
+// reason is narrow enough to be worth stating: the server is a single
+// cooperative thread (sched.md), the checkpoint and drain tasks are other
+// tasks on it, and nothing suspends between the mutation and the stamp -
+// so no flush can observe the page in between. What protects the interval
+// is the store's WAL gate (device_page_store.hpp): once page_lsn is
+// stamped, no write-back can outrun the log. A path that ever suspends
+// mid-statement must generate the record while holding the page latch
+// instead, which is what wal.md section 8-1 actually asks for.
 
 namespace kds::server {
 
@@ -54,14 +99,20 @@ public:
     // injectable interfaces (see the note above): reporting how long a
     // query took needs a monotonic reading, and taking one directly would
     // be the std::chrono call rules.md section 4 forbids.
+    // `wal` is optional too, and null means INSERT mutates pages without
+    // logging them - the pre-2026-07-30 behaviour, which the socket-free
+    // unit tests and the catalog-level tests still run on.
     CommandDispatcher(SuperBlock& superblock, catalog::Catalog& catalog,
                        storage::PageStore& page_store, Logger* log = nullptr,
-                       const sched::Clock* clock = nullptr) noexcept
+                       const sched::Clock* clock = nullptr, wal::WalManager* wal = nullptr,
+                       wal::DurabilityClass durability = wal::DurabilityClass::kGroup) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
           log_(log),
-          clock_(clock) {}
+          clock_(clock),
+          wal_(wal),
+          durability_(durability) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -160,6 +211,21 @@ private:
     DispatchOutcome HandleUpdate(std::string_view line);
     DispatchOutcome HandleSync();
 
+    // Appends the record set above for one placed tuple, stamps page_lsn
+    // on every page it touched, and applies the durability class. A no-op
+    // returning OK when no WalManager was supplied.
+    //
+    // A failure here is reported to the client and the tuple stays in the
+    // page frame: the mutation happened, and the record describing it did
+    // not. That is a lost write on a crash, not a wrong answer now, and
+    // the alternative - unwinding a heap insert with no transaction
+    // manager to unwind it - would be the worse lie. The WAL gate still
+    // holds, because an unstamped page carries page_lsn 0 and a page whose
+    // records failed to append is indistinguishable from one nothing
+    // logged; closing that needs the abort path a transaction layer owns.
+    Status LogInsert(const heap::ChainInsertResult& placed, std::uint64_t id,
+                     std::span<const std::byte> tuple, std::uint64_t trx_id);
+
     // Diagnostics. Levels are chosen so the default (info) is quiet under
     // load: DDL and SYNC are Info because they are rare and consequential,
     // a completed query is Debug, and the per-tuple heap events are Trace.
@@ -179,6 +245,17 @@ private:
     storage::PageStore& page_store_;
     Logger* log_;
     const sched::Clock* clock_;
+    wal::WalManager* wal_;
+    wal::DurabilityClass durability_;
+
+    // Implicit-transaction ids for the statements this dispatcher logs.
+    // Process-local and restarting from 1 every boot, which is wrong the
+    // moment recovery reads two boots' worth of one stream back - ids from
+    // different runs would collide. Allocating them durably is the
+    // transaction manager's job (wal.md section 12 has no owner yet), so
+    // this is deliberately the cheapest thing that produces a distinct id
+    // per statement within a run, and it is a known gap, not an oversight.
+    std::uint64_t next_txn_id_ = 1;
 };
 
 }  // namespace kds::server
