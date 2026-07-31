@@ -1,180 +1,174 @@
 # Waystone — Concept & Technical Specification
 
-**Status:** **Official specification.** Confirmed 2026-07-28; §3 rule 4 amended 2026-07-30 (§3.1 — read-path probes are now permitted under a validate-and-fall-back contract; the advisory/never-authoritative guarantee is unchanged). Supersedes the earlier Waystone draft in full; the earlier bounded-pool (65,536-entry) model is **superseded** (§10). Sections marked `[CONFIRMED]` are settled; `[OPEN]` items must not be assumed. Milestones and task breakdowns live in the companion work-instruction document `waystone-workplan.md`, not here.
+How KDS remembers where a repeated query found its rows. Task breakdown: `waystone-workplan.md`. `[OPEN]` marks a decision that has not been made; `[PROPOSED]` marks a default to confirm or amend before the affected part is built.
 
-**Naming:** *Waystone* — extends the engine's stone metaphor: the **Keystone** word is each tuple's structural identity; a *waystone* guides travelers without being the road, which is exactly this structure's advisory role.
+**Naming:** the **Keystone** word is each tuple's structural identity; a *waystone* guides travelers without being the road. The advisory role is what the name is for.
+
+**Status: not implemented.** The fingerprint and the `sys.patterns` catalog relation exist (`waystone-workplan.md` P01-P04); nothing records or replays a trail yet.
 
 ---
 
 ## 1. Concept
 
-Waystone is KDS's generalization of heap tuple reference patterns into a maintained per-relation structure, and the substrate for both of the engine's differentiating mechanisms:
+A **waystone is the recorded trail of one pattern instance.**
 
-- **Physical relayout:** per-tuple heat (decayed use counts, recency) tells the physical optimizer which tuples are hot and which pages to rebuild — within what the immutable `min_key` invariant permits.
-- **The new index form:** unlike a value-ordered index, Waystone maps *observed access* to tuple locations directly. It is the seed of the auto-generated hint index (`(query_pattern_id, args)` → cross-table locations).
+A *pattern* is the shape of a query or procedure, identified when it is parsed and reduced to function form — `patternX(a, b)`. A *pattern instance* is that shape with its arguments bound: the pair `(pattern_id, arg_hash)`. Executing an instance touches some set of tuples, possibly across several relations. The waystone for that instance records their **Keystones**, with where each one was last seen.
 
-Waystone lives **outside the query executor** as a separate module. The executor only emits access events through a one-method observer seam; all interpretation, storage, and policy belong to Waystone. This separation makes the advisory contract (§3) structurally enforceable.
+Three properties follow, and they define the structure:
 
-## 2. Scope Model — Full Coverage `[CONFIRMED]`
+- **A relation holds no Keystone map.** Nothing addresses a tuple by arithmetic on its pk, so there is no per-relation directory, no coverage guarantee, and no per-relation enable flag. A relation stores tuples; that is all it does.
+- **A waystone spans relations.** One page holds the Keystones of a customer row, the account rows under it, and the instrument rows those reference — because that is what one execution of `patternX(a, b)` touched. Every entry therefore carries its own `rel_oid` (§6).
+- **Pk values may be arbitrary.** Nothing here requires a dense, monotonically issued id sequence, so a heap page or a btree leaf may hold any pk the rest of the engine permits. See §8: this *permits* a relaxation, it does not perform one.
 
-**Decision (2026-07-28): Waystone tracks every tuple of an enabled relation** (Option 1). The bounded-pool alternative (tracking a hot subset with admission/eviction) is rejected.
+Waystone lives outside the executor. The executor emits a trail through a one-method seam and asks for one through another; all storage and policy belong to Waystone, which is what keeps the advisory contract structurally enforceable.
 
-Recorded rationale:
+## 2. What a waystone is not — the trust model
 
-- Per-tuple overhead is 32 bytes (§5). Against typical OLTP row sizes this is a single-digit-percent tax; acceptable.
-- Full coverage **eliminates the admission/eviction problem entirely** — the policy machinery, its bottleneck risk, and the performance cliff for untracked tuples all disappear.
-- O(1) arithmetic access by id becomes possible for *every* tuple, which is what the hint index and relayout statistics need to be dependable.
+**A waystone is a trail, not an answer.** It records where a previous execution *found* rows. It never asserts that the set it holds is complete.
 
-Coverage is **per relation**, controlled by a catalog flag (§7). "Every tuple" means every tuple of relations with Waystone enabled.
+This is not a preference. Invariant 9 says Waystone is never authoritative, and a stored set trusted as the complete answer to `patternX(a, b)` *is* authoritative — it would be the sole reason the engine believes no other row qualifies. The failure mode is severe in a particular way: a stale entry that points at the wrong place is caught by the Keystone-id check, but a stored set missing a row inserted since it was recorded is wrong in a way **no per-tuple validation can detect**, because there is no tuple to validate. Absence has no witness.
 
-## 3. Consistency Model `[CONFIRMED]`
+So the normative rule, which every consumer is bound by:
 
-The "100% consistency" question is split into two facts with different guarantees:
+> **A waystone may replace a lookup. It may never replace a search.**
 
-- **Coverage (existence) — guaranteed 100%.** Every tuple of an enabled relation has a Waystone entry. The entry slot is determined arithmetically by the tuple's pk (§4), so it is initialized as part of the **insert path** with an O(1) write. Note: design-spec invariant 8 forbids meta pages on the normal *read* path only; participation in the write path is permitted and is hereby confirmed for entry initialization.
-- **Location (page_id/slot) — advisory, never authoritative.** Guaranteeing exact location at all times would make Waystone a second authoritative index: synchronous double-writes on every UPDATE and relayout, WAL logging, and crash-recovery obligations — contradicting hard invariant 7 and erasing the design's advantage. Instead, location freshness is tracked by **epoch validation**: each heap page carries an epoch counter, bumped whenever tuples on it move (relayout, page rebuild); each Waystone entry records the epoch at observation. `entry.page_epoch == heap page epoch` ⇒ the location is trustworthy; mismatch ⇒ consumer falls back to the B+ tree. Misses therefore exist only in the short window after a page's tuples move, before re-observation.
+A pattern *step* whose authoritative work is a keyed lookup — a pk equality, or a nested-loop join probing the next relation by pk (`docs/parser.md` I12: the query is the plan) — may be served from the trail, because completeness for that step follows from pk uniqueness, not from the trail. A step that must *search* — a non-pk predicate, a range, a scan — runs authoritatively no matter what the trail says; the trail may only prefetch for it.
 
-Normative advisory rules (restating hard invariants 7 & 8; enforced by tests):
+Replay contract, normative, per entry:
 
-1. A consumer acting on a Waystone location must validate the target (Keystone id match + MVCC visibility) or rely on epoch trust, and must fall back to the authoritative path on any mismatch.
-2. Dropping any event or the entire structure may cost performance but must never change query results.
-3. The ingest path never blocks, throttles, or fails a query. Ring overflow policy is drop.
-4. Waystone is never **authoritative**. A reader may probe it for a pk location provided rule 1 holds — see §3.1.
+1. Read the tuple at the recorded `(page_id, slot)` and check that the Keystone id there equals the entry's `pk` **and** that the page belongs to the entry's `rel_oid`. A mismatch is a stale entry, not corruption: fall through.
+2. Check the recorded `page_epoch` against the page's current epoch. A mismatch is a miss.
+3. Apply MVCC visibility exactly as the authoritative path would. The trail chooses *where to look*, never *what is visible*.
+4. On any miss, fall through to the authoritative path **for that step alone** — a btree descent on a btree relation, a chain scan on a heap one. A missing waystone, a dropped one, or the whole structure deleted changes no result; it costs the descents the trail would have saved.
 
-### 3.1 Read-path probes `[AMENDED 2026-07-30]`
+Trusting a set as complete would require amending invariant 9 and a completeness mechanism to go with it — a per-relation change stamp bumped at commit, so "nothing has changed under this set" is provable. That is `[OPEN]` (§9) and deliberately out of scope.
 
-Rule 4 previously read *"Waystone pages never appear on the normal read path."* That is **superseded**: a pk point lookup may probe Waystone and read the tuple at the location it reports, provided it validates and falls back.
+## 3. Pattern identity
 
-What changed and what did not. The old rule bundled two claims:
+`pattern_id` is a fingerprint of the statement's *shape*, computed **at parse time** and never per execution (`docs/parser.md` I1). Literals are parameterized as they are lexed: the shape stream hashes to `pattern_id`, and the ordered literal values hash to `arg_hash`. `WHERE id = 42` and `WHERE id = ?` therefore converge on one `pattern_id`, which is the property that makes the whole structure work — a client that inlines literals and one that binds parameters share a waystone.
 
-- *Waystone is never authoritative — deleting it wholesale never changes a result.* **Unchanged, and still the invariant that matters.** Every consequence the old rule was protecting (no synchronous double-writes, no WAL obligation, no crash-recovery obligation, no second source of truth) follows from this one, not from physical absence on the read path.
-- *Waystone pages are never physically touched during a read.* **Dropped.** It was a means to the above, not the end, and it forbade the structure's most valuable use.
+Two obligations follow:
 
-The probe contract, normative:
+- **Stability.** `pattern_id` is persisted in `sys.patterns` and is the key to stored waystones, so it must not depend on pointer values, hash-map iteration order, or anything else that varies between runs of the same binary.
+- **Versioning.** The parser is being replaced wholesale (`docs/parser.md`), and the replacement will not produce identical fingerprints. Every pattern row carries a `fingerprint_version`; a row whose version does not match the running build is ignored, and its waystones with it. This is the cheap alternative to a migration that would have to re-parse stored SQL the engine no longer keeps.
 
-1. Probe by pk through the directory (§6). A miss — no entry, `kEntryLive` clear, `page_id == kInvalidPageId`, or `entry.page_epoch != page's current epoch` — is **not** an answer. Fall through to the authoritative path.
-2. On a hit, read the named `(page_id, slot)` and **check the Keystone id of the tuple actually there against the pk asked for.** A mismatch is not corruption; it is a stale entry, and it falls through like a miss. MVCC visibility is applied exactly as it would be on the authoritative path — the probe chooses *where to look*, never *what is visible*.
-3. The fallback target is the B+ tree once it exists; until then it is the heap chain scan (`ChainVisit`). Either way the probe is a shortcut to a result the engine can already produce without it.
-4. A relation with Waystone disabled, or whose entry pages have been deleted underneath it, answers every query identically — only slower.
+## 4. Catalog — `sys.patterns`
 
-Rationale for amending a hard invariant rather than working around it: there is no B+ tree, so `WHERE id = <n>` is a full page-chain scan whose cost grows linearly with the relation. Waystone already holds an O(1) pk→location map that the coverage guarantee (§3) keeps populated on the insert path. Refusing to read it means either building a second structure with the same content or leaving the engine's worst read path unimproved, and neither buys any correctness the validate-and-fall-back contract above does not already provide.
+Patterns are catalog objects, in a relation named `patterns` in the `sys` namespace, bootstrapped on its own fixed page alongside `sys.tables` and friends.
 
-Testing consequence: spec §12-3 ("zero Waystone-page touches") is replaced — see §12.
+| Field | Type | Meaning |
+|---|---|---|
+| `oid` | `Oid` | the pattern object's oid |
+| `pattern_id` | `uint64` | the parse-time fingerprint; the lookup key |
+| `fingerprint_version` | `uint32` | §3; a mismatch retires the row's waystones |
+| `stmt_class` | `uint8` | the parser's execution-class tag (`docs/parser.md` I2) |
+| `waystone_root` | `PageId` | root of this pattern's `arg_hash` directory, `kInvalidPageId` when none |
+| `dir_depth` | `uint8` | levels the directory walk traverses; persisted, never derived |
+| `use_count` | `uint32` | executions observed; best-effort, drives retention |
+| `last_seen` | `uint64` | truncated logical timestamp; best-effort |
 
-## 4. Addressing — pk-Direct O(1) `[CONFIRMED]`
+`waystone_root` and `dir_depth` are written as one unit by `Catalog::SetPatternWaystoneRoot()` and validated as a pair: a root without its depth is unwalkable, and a depth disagreeing with the root sends every walk to the wrong leaf. `dir_depth == 0` is the authority on "no directory" — a row read out of a zeroed page decodes its root as page 0, which looks like a valid `PageId`, so the question is keyed on the field whose zero value already means none.
 
-Under full coverage, **the pk itself is the entry address**; no separate handle exists.
+Why a catalog relation rather than an in-memory table: patterns are the durable, inspectable statement of *what this database is asked to do*, they are few (an application's distinct query shapes — dozens to hundreds, not millions), and making them catalog objects gives `SHOW PATTERNS` and every future policy surface one place to live. The unbounded axis is not patterns but *instances per pattern*, and that is bounded by eviction inside the directory (§9), not by the catalog.
+
+**Registering a pattern bumps no catalog version**, so it is safe on the statement path. Nothing cached can go stale from a pattern appearing: absences are never cached, so no entry claims the pattern is missing, and no other cached fact mentions it. This is what lets a first execution register its own pattern mid-statement without dangling the `const TableAccess*` that statement is holding. Pointing a pattern at a new directory updates the cached `PatternAccess` in place rather than invalidating, for the same reason — the fact belongs to one pattern and is read by nothing else.
+
+## 5. Addressing — two levels
 
 ```
-entry_index = pk                        // zero-extended 40-bit Keystone id
-logical_page = pk >> 8                  // 256 entries per page
-slot         = pk & 0xFF
+pattern_id  --> sys.patterns row          (catalog lookup, cached)
+arg_hash    --> waystone for that instance (directory walk under waystone_root)
 ```
 
-Consequence — **Keystone word amendment required (§10):** the `meta_handle:16` field loses its addressing purpose. The 16 bits are redefined as **reserved** in the Keystone layout (`id:40 | flags:8 | reserved:16`); repurposing (e.g. a hot-tier accelerator handle, extended transaction-slot reference) is `[OPEN]`. Until repurposed, writers must set the field to 0 and readers must ignore it.
+The second level is an inode-style page directory: interior pages of 2048 `PageId` children, walked by digits of the `arg_hash`, lazily allocated, deepened by relinking the root. Depth is bounded at `kMaxPatternDirDepth` = 6, derived rather than chosen — ceil(64 / 11) levels address a 64-bit key at a fanout of 2^11.
 
-Space model: Waystone size is proportional to **issued ids**, not live tuples (32 B × highest issued pk, sparsely allocated per §6). High-churn relations that burn ids accumulate dead entries; id-reuse or low-range reclamation policy is `[OPEN]`. This is one reason for the operational guidance in §8.
+It is a hash directory, not a radix index over a dense key, so **collisions are possible**. An `arg_hash` collision must be resolved by the waystone's own header, which stores the `arg_hash` it was recorded for; a mismatch is a miss, never a wrong trail. Handling repeated collisions (chain vs. displace vs. drop) is `[OPEN]`.
 
-### 4.1 Pk Generation Requirement `[CONFIRMED, 2026-07-28]`
+## 6. Page format `[PROPOSED]`
 
-**A relation with `waystone_enabled` set must use system-generated, autoincrement pks. Callers must not supply their own `id`/pk value on insert into such a relation.**
+Waystone pages are **headered** — `PageType::kWaystone`, carrying the common page header like every other page class. Nothing here is addressed by shift and mask (a trail is read sequentially), so the payload need not tile the page exactly, and the pages keep checksums and a `page_lsn`.
 
-Rationale: this addressing scheme is pk-direct — `entry_index = pk` — so the directory (§6) is built around a dense, monotonically issued id sequence. A caller-supplied pk breaks that in two ways: (1) an arbitrary or sparse value forces the directory to allocate pages far ahead of actual row count (space model above, worst-cased instead of merely "high-churn"), and (2) a duplicate or out-of-order caller-supplied value can collide with or shadow an existing live entry, since entry identity is the pk itself with no separate handle to disambiguate. Plain heap tables (Waystone disabled) are unaffected and keep whatever pk-assignment policy they already have.
+Page body: a waystone header, then entries in **execution order**.
 
-This is enforced at the DDL/insert boundary, not inside Waystone itself — Waystone has no way to observe where a pk value came from. Enforcement mechanism (catalog-level column constraint vs. executor-level check at insert) is left to whichever component owns pk assignment; not itself an `[OPEN]` design question, just an implementation detail of an already-confirmed rule.
+Waystone header:
 
-## 5. Entry Format — 256 Bits `[CONFIRMED]`
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | `pattern_id` — self-identifying, checked on read |
+| 8 | 8 | `arg_hash` — resolves directory collisions (§5) |
+| 16 | 2 | `entry_count` |
+| 18 | 2 | `flags` |
+| 20 | 4 | `next_page_id` — a trail longer than one page continues here |
+| 24 | 8 | `recorded_ts` |
+| 32 | 4 | `use_count` |
+| 36 | 4 | `reserved` |
 
-One entry per tuple, exactly **256 bits (32 bytes)**, in ordinary 8 KB pages obtained through `storage::PageStore`.
+Entry — 32 bytes, one per Keystone in the trail:
 
 | Offset | Size | Field | Notes |
 |---|---|---|---|
-| 0 | 8 | `pk` | zero-extended Keystone id (upper 24 bits 0); self-identifying for integrity checks. `rel_oid` is implicit — the structure is per-relation. |
-| 8 | 4 | `page_id` | last observed heap location; advisory; `kInvalidPageId` if never observed |
-| 12 | 2 | `slot` | last observed slot |
-| 14 | 2 | `flags` | `kEntryLive` (set at insert, cleared on delete), rest reserved |
-| 16 | 4 | `use_count` | decayed access counter |
-| 20 | 4 | `last_ts` | truncated logical timestamp of last access |
-| 24 | 4 | `page_epoch` | heap-page epoch at observation (§3); location trusted iff it matches the page's current epoch |
-| 28 | 4 | `reserved` | future: pattern link / argument affinity |
+| 0 | 8 | `pk` | zero-extended Keystone id, upper 24 bits 0 (invariant 7) |
+| 8 | 8 | `rel_oid` | **the field a per-relation structure did not need.** One page spans relations, so the entry must say which. A full 64-bit `catalog::Oid`: oids are `uint64` at the source, and a narrowed copy that happens to fit today aliases two relations onto one value the day it does not |
+| 16 | 4 | `page_id` | last observed location; advisory |
+| 20 | 4 | `page_epoch` | location trust (§2 rule 2) |
+| 24 | 2 | `slot` | last observed slot |
+| 26 | 2 | `flags` | `kWaystoneEntryValid`, rest reserved |
+| 28 | 2 | `step_id` | which step of the pattern produced it — the join position. 16 bits counts relations in a join chain, not rows |
+| 30 | 2 | `reserved` | 0 |
 
-Derivations (named `constexpr`s in code): `kEntrySize = 32` (power of two ⇒ shift/mask addressing); `kEntriesPerPage = 8192 / 32 = 256`, tiling the page exactly.
+`step_id` is what makes a cross-table trail replayable rather than merely descriptive: the executor needs to know that entry 0 is the driving relation and entries 1–17 are the probe results, or the trail is an unordered bag of tuples from three tables.
 
-Format rules (rules.md §2, §5): field-wise `memcpy` codec only; no `reinterpret_cast` overlays; no compiler bitfields; fixed-width integers; little-endian on disk; sizes/offsets pinned by `static_assert`.
+Entries per page is derived, not chosen: `(8192 − 32 common header − 40 waystone header) / 32 = 253`, with 24 bytes of tail slack. Not a power of two, and it does not need to be — the exact tiling a pk-addressed structure required is precisely what cost it the page header.
 
-Semantics: **heat and location are separate facts.** An epoch bump invalidates location trust; `use_count` survives — the tuple is still hot, we merely no longer know where it is until re-observed.
+Format rules as ever (`docs/rules.md` §§2, 5): field-wise `memcpy` through named offsets, `static_assert` on every size and offset, fixed-width little-endian, no bitfields, no `reinterpret_cast` onto page bytes.
 
-## 6. Logical Continuity — Per-Relation Page Directory `[CONFIRMED]`
+## 7. What this buys
 
-Waystone pages cannot be physically contiguous — random inserts make that impossible. Continuity is **logical**, via a per-relation page directory (the inode-block-map pattern):
+Per pattern step served from a trail, against the authoritative path it replaces:
 
-- The relation's catalog entry gains a **Waystone directory root `PageId`** (plus the enable flag, §7).
-- A directory page (8 KB) holds `8192 / 4 = 2048` child `PageId`s. Coverage per level: 1 level → 2048 × 256 = 524,288 tuples; 2 levels → 2048² × 256 ≈ 1.07 × 10⁹; **3 levels** → 2048³ × 256 = 2⁴¹, covering the full 40-bit id space with headroom. Depth is fixed at what the relation's id high-water requires; growing depth relinks the root.
-- Lookup: `pk` → digits base-2048 → directory walk → leaf Waystone page → `slot = pk & 0xFF`. Constant hops (≤ 4 page touches); upper directory levels are few and stay core-resident, so the practical cost is the two-touch path.
-- **Lazy allocation:** unpopulated ranges hold `kInvalidPageId` at every level; pages are allocated on first entry initialization. Sparse id spaces cost only what they touch.
-- Directory and entry pages are ordinary pages from `PageStore`; ownership is core-local per the relation's owning core (rules.md §3).
+- **`kJoinSelect`, the case this design exists for.** Written-order nested-loop over 3 relations is 3 keyed descents, ~3 page touches each. A validated trail replay is 3 direct page reads. The saving grows with the join's length, and join length is exactly what a financial procedure has.
+- **`kPointSelect` on a btree relation.** One descent becomes one read. Modest, and honestly not the reason to build this.
+- **`kPointSelect` on a heap relation.** A full chain scan becomes one read. Large — and this is where §1's third consequence pays off: a heap relation with arbitrary pks gets pk-keyed acceleration for *observed* patterns without carrying an index at all.
+- **Any step that searches.** Nothing. By §2 it still searches. Prefetching its pages is the only permitted use, and prefetch is advisory twice over.
 
-## 7. Per-Relation Enablement — Catalog Flag `[CONFIRMED]`
+The bar to clear, measured on this engine: a validated point lookup ran 8,417 qps / 11 µs server-side against 311 qps / 2,582 µs for a chain scan at 5,000 rows, and stayed flat in row count. A pattern trail should match that on the single-relation case and beat a btree descent chain on the join case, or it has not earned its complexity.
 
-Waystone is switchable **per relation**. The catalog stores a `waystone_enabled` flag on the relation's entry, and **the engine consults this flag to decide the relation's storage form**:
+## 8. Invariants — what this touches
 
-- **Enabled at creation:** the directory root is provisioned; the insert path initializes entries (coverage guarantee active); the executor's observer wiring includes the relation; probes are served.
-- **Disabled:** no directory, no entry pages, no per-insert work, no events aggregated for the relation. The relation stores data exactly as a plain semi-sorted heap.
-- **Disabling a live relation** is always safe (advisory contract): drop the directory and entry pages wholesale, clear the flag. No query result changes.
-- **Enabling a live relation** requires a coverage **backfill**: a `maintenance`-group task scans the relation (B+ tree order), initializes entries, and only then sets the flag's *coverage-complete* state. Until backfill completes, probes answer NotFound and the coverage guarantee is not yet claimed. Backfill is restartable and, like everything here, droppable.
-- Flag changes are catalog DDL; their durability follows catalog persistence rules.
+- **Invariant 7** (advisory; deleting it never changes results) — unchanged, and still the one that matters.
+- **Invariant 8** (never authoritative) — unchanged, and now load-bearing in a new way: it is what forces §2's trail model.
+- **Invariant 6** (ids outside the tuple header are zero-extended `uint64`) — unchanged; entry `pk` obeys it.
+- **Invariant 3** (`min_key`) and **invariant 10** (system-generated autoincrement ids) — **not changed by this document.** §1 notes that pattern-keying removes the *only* structural reason the engine needed dense monotonic pks, so arbitrary pk values become possible. Whether to actually permit a caller-supplied pk (invariant 10) or to retire `min_key` pruning (invariant 3) are separate decisions with their own blast radius — `min_key` exists for lock-free range pruning and `next_id` for tuple identity, neither of which was ever about Waystone. Listed `[OPEN]` in §9; do not assume either.
 
-## 8. Operational Guidance — Recommendation to Operators `[CONFIRMED, non-normative]`
+## 9. Open decisions — do not assume
 
-*This section addresses database operators and customers, not engine developers. It is a recommendation, not an engine-enforced restriction.*
+- **Retention and eviction per pattern.** Instances per pattern are unbounded; the catalog bounds patterns, nothing yet bounds instances. Admission/eviction returns here, confined to one directory.
+- **Recording policy.** Every execution, sampled, or only after a pattern has been seen *n* times? Recording on first sight pays the write for one-shot queries; waiting misses short-lived hot instances.
+- **Persistence class** of waystone pages (WAL-logged vs unlogged). Unlogged loss costs replays, never results.
+- **Completeness / set caching**, and with it whether invariant 8 is ever amended. Needs a per-relation change stamp bumped at *commit*, not at write — a row inserted-then-committed by another transaction would otherwise slip past a stamp taken between the two.
+- **`arg_hash` collision handling** beyond the header check (§5): chain, displace, or drop.
+- **Pattern registration on the statement path** vs. lazily off it (§4 hazard).
+- **Invariant 3 / invariant 10 relaxation** (§8).
+- Inherited and still open: heap-page epoch storage and width; decay function and cadence; ring sampling policy under pressure; hint-index per-template trust classification.
 
-**Enable Waystone on master (reference) tables; leave it off elsewhere by default.** Master data — customers, accounts, instruments, counterparties — is where Waystone pays: read-heavy PK point lookups, comparatively low churn, bounded and long-lived id populations, and recurring query shapes that the hint index can learn. High-churn transactional tables (order flow, tick/history, audit logs) are a poor fit: they burn ids (space grows with issued ids, §4), their access is append/scan-shaped rather than repeated point access, and their statistics decay before they can be exploited.
+## 10. Why not a pk-direct index
 
-Rule of thumb: if a table is something you would cache, enable Waystone on it. If it is something you archive, do not.
+The obvious alternative — a per-relation structure mapping every pk to its location, addressed by arithmetic — was built and then removed. The argument against it is what shapes this design, so it is worth stating.
 
-## 9. Runtime Model (summary)
+A pk-direct waystone is a radix tree over the same key the clustered B+ tree already indexes. At a fanout of 2048 both reach a leaf in the same handful of page touches, so the O(1)-versus-O(log n) distinction does not survive contact with real fanout. What the tree has and the radix structure does not: it is authoritative, it answers ranges, and it costs space proportional to *live rows* rather than to *issued ids*. Addressing entries by pk also forces a dense, monotonically issued id sequence on the whole engine — a constraint paid across every layer to buy a duplicate of an index that already exists.
 
-Unchanged from the confirmed event/aggregator design, restated post-decision:
+This design duplicates nothing. **No index maps a pattern instance to a cross-relation tuple set**, and that gap is what Waystone fills.
 
-- **Two-layer events:** query-template fingerprint (`pattern_id`, computed once at parse/plan time) + 48-byte fixed POD `TupleAccessEvent` per tuple touch (now carrying no meaningful `meta_handle`; field retired per §10).
-- **Observer seam:** `AccessObserver::OnTupleAccess(...) noexcept` is the executor's only knowledge of Waystone — wait-free enqueue into a core-local SPSC ring, or drop. `NullAccessObserver` remains a valid production configuration and is the implicit configuration for waystone-disabled relations.
-- **Aggregator (write side):** core-local, `maintenance` scheduling group, never self-throttling (SLO controller is the only throttle). `Ingest` updates count/recency/location/epoch; `DecayTick` applies decay against the injected clock; epoch bumps from relayout invalidate location trust in place of the old page-sweep invalidation. Admission machinery is **deleted** — there is nothing to admit.
-- **Probe (read side):** O(1) by pk through the directory; returns location + `page_epoch` + heat; consumers apply §3 rule 1. For hint consumers and the physical optimizer only.
-- **Insert/delete hooks:** insert initializes the entry (`kEntryLive`, coverage); delete clears `kEntryLive`. Both are O(1) arithmetic writes. *(2026-07-31, `docs/txn.md`: clearing `kEntryLive` makes probes for that pk untrusted, so a reader whose read view predates the delete falls through to the authoritative scan and correctly still sees the row. That is the advisory contract working as designed — one pk becomes slower, no result changes. Rolling a delete back re-sets the flag through a dedicated `OnDeleteUndo` hook; `Ingest`/`Observe` must not, because they are deliberately no-ops on a non-live entry so they cannot resurrect a delete-mark.)*
-- **Derived patterns:** range access `(rel_oid, pk_lo, pk_hi)` and pattern-correlated groups (per-execution `SingleKeyRef` sequences keyed by `(pattern_id, arg_hash)`) are aggregations over the same primitive and event stream.
+One artifact remains from that removal: `DevicePageStore::CreateNewHeaderless()` and the durable `kHeaderlessMap` bitmap page have no caller, because §6 makes waystone pages headered. Removing them is optional cleanup.
 
-## 10. Superseded Designs & Required Amendments `[CONFIRMED, normative]`
+## 11. Testing requirements
 
-This decision amends previously confirmed design. The following changes are **mandatory documentation work**; the concept is not fully confirmed until they land (task breakdown in `waystone-workplan.md`):
+All deterministic (injected clock, simulated scheduling; `docs/rules.md` §4):
 
-1. **Design spec, Keystone column section:** layout becomes `id:40 | flags:8 | reserved:16`. The `meta_handle` field and its "temporary metadata pool identifier" semantics are removed; the 16 bits are reserved (write 0 / ignore), repurposing `[OPEN]`. Record the amendment date.
-2. **Design spec, metadata pool section:** the per-relation 65,536-entry bounded pool, its 16-bit handle addressing, its eviction management, and the 2 MiB cap are **superseded** by Waystone full coverage (this document). Keep the section with a superseded-by note rather than deleting history.
-3. **Design spec, heap page section:** add the per-page **epoch counter** (storage location `[OPEN]` — header field vs core-local table; if a header field, it is on-disk format and follows rules.md §5).
-4. **Catalog spec / `well_known`:** relation entries gain `waystone_enabled` (+ coverage-complete state) and the directory root `PageId`.
-5. **CLAUDE.md:** remove the now-obsolete open decisions (metadata pool eviction policy, eviction-vs-validation invalidation); add the new `[OPEN]` items from §11; update the architecture summary (Keystone layout, metadata pool → Waystone).
-6. **`docs/page-management.md`:** no structural change, but note Waystone directory/entry pages as a `PageStore` client and a future SpaceManager consumer.
-7. **Header `waystone.hpp`:** rewrite to match — delete `AdmissionPolicy` and 16-bit-handle addressing; add directory constants/walk, epoch field, insert/delete hooks, catalog-flag wiring.
-8. **Earlier Waystone draft document:** replaced by this specification + `waystone-workplan.md`.
-
-## 11. Open Decisions — do not assume
-
-- Repurposing of the freed 16 Keystone bits (reserved until decided).
-- Heap-page epoch storage (page header on-disk field vs core-local epoch table) and epoch width/wraparound handling.
-- Id-reuse / low-range reclamation policy for high-churn enabled relations.
-- Waystone page persistence class (WAL-logged vs unlogged; on unlogged loss, rebuild = backfill).
-- Decay function and cadence (halving vs EWMA; tick period).
-- Ring sampling policy under pressure (drop-newest vs drop-oldest vs probabilistic).
-- Directory depth growth protocol details (root relink ordering vs concurrent probes on the owning core).
-- Hint-index admission and per-template trust classification (unchanged from before).
-
-## 12. Testing Requirements
-
-All deterministic (injected clock, simulated scheduling; rules.md §4):
-
-1. **Codec & directory:** entry round-trips; offset/size asserts; directory walk correctness incl. lazy allocation and depth growth; page tiling exact.
-2. **Advisory contract:** query results byte-identical with observer off, ring saturated (all drops), and after wholesale Waystone deletion of an enabled relation.
-3. **Read-path equivalence** *(replaces the former "read-path isolation", amended 2026-07-30 with §3.1).* The old test asserted zero Waystone-page touches during query execution and is now exactly backwards. Its replacement is the stronger property it was standing in for: for one fixed query set, results are **byte-identical** across four configurations — probe enabled, probe disabled, relation Waystone-disabled, and entry pages deleted underneath a live enabled relation. Add a deliberately-corrupted-entry case: an entry pointing at a valid page and slot holding a *different* pk must produce the same result as a miss, proving the Keystone-id check in §3.1 rule 2 is load-bearing rather than decorative.
-4. **Coverage guarantee:** after any committed insert on an enabled relation, the entry exists with `kEntryLive`; after delete, cleared. Backfill converges and is restartable mid-way.
-5. **Epoch validation:** relayout bumps epoch ⇒ probes report untrusted; re-observation restores trust; counts survive throughout.
-6. **Flag semantics:** disabled relations incur zero Waystone work (instrumented); enable→backfill→coverage-complete transition; disable drops structures with no result change.
-7. **Overflow:** ring saturation drops without blocking; drops visible in `stats()`.
+1. **Fingerprint:** inline-literal and bound-parameter forms of one statement yield one `pattern_id`; different shapes differ; stable across runs and processes; `fingerprint_version` mismatch retires stored waystones.
+2. **Codec & directory:** header and entry round-trips; offset/size asserts; walk correctness including lazy allocation and depth growth; `arg_hash` collision resolves to a miss via the header check, never to a foreign trail.
+3. **The advisory contract — the test that must never be allowed to fail.** For a fixed query set, results are **byte-identical** across five configurations: recording on, recording off, replay off, all waystones deleted mid-run, and a deliberately corrupted trail whose entries name valid pages and slots holding *different* tuples. The last case proves the §2 rule-1 identity check is load-bearing.
+4. **Lookup-not-search:** a pattern with a non-pk predicate must produce identical results and must be shown (instrumented) to still perform its search. A trail that shortcuts a search is a correctness bug, not an optimization, and this is the test that catches it.
+5. **Cross-relation replay:** a `kJoinSelect` trail spanning three relations replays in `step_id` order and produces the same rows in the same order as the authoritative path.
+6. **MVCC:** a trail recorded under one read view, replayed under another, returns exactly what the authoritative path returns — including a row deleted since recording (invisible) and a row inserted since (present via the authoritative search step, absent from the trail).
+7. **Epoch validation:** a page whose epoch is bumped renders its entries untrusted; re-recording restores them.

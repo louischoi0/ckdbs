@@ -155,4 +155,45 @@ StatusOr<SysIndexRow> SysIndexRow::Decode(std::span<const std::byte> bytes) {
     return row;
 }
 
+// ---- sys.patterns ----------------------------------------------------
+
+std::array<std::byte, SysPatternRow::kOnDiskSize> SysPatternRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kOidOffset, &oid, sizeof(oid));
+    std::memcpy(base + kPatternIdOffset, &pattern_id, sizeof(pattern_id));
+    std::memcpy(base + kLastSeenOffset, &last_seen, sizeof(last_seen));
+    std::memcpy(base + kFingerprintVersionOffset, &fingerprint_version,
+                sizeof(fingerprint_version));
+    std::memcpy(base + kWaystoneRootOffset, &waystone_root, sizeof(waystone_root));
+    std::memcpy(base + kUseCountOffset, &use_count, sizeof(use_count));
+    std::memcpy(base + kStmtClassOffset, &stmt_class, sizeof(stmt_class));
+    std::memcpy(base + kDirDepthOffset, &dir_depth, sizeof(dir_depth));
+    return buf;
+}
+
+StatusOr<SysPatternRow> SysPatternRow::Decode(std::span<const std::byte> bytes) {
+    if (Status s = CheckSize(bytes, kOnDiskSize); !s.ok()) return s;
+
+    SysPatternRow row{};
+    const std::byte* base = bytes.data();
+    std::memcpy(&row.oid, base + kOidOffset, sizeof(row.oid));
+    std::memcpy(&row.pattern_id, base + kPatternIdOffset, sizeof(row.pattern_id));
+    std::memcpy(&row.last_seen, base + kLastSeenOffset, sizeof(row.last_seen));
+    std::memcpy(&row.fingerprint_version, base + kFingerprintVersionOffset,
+                sizeof(row.fingerprint_version));
+    std::memcpy(&row.waystone_root, base + kWaystoneRootOffset, sizeof(row.waystone_root));
+    std::memcpy(&row.use_count, base + kUseCountOffset, sizeof(row.use_count));
+    std::memcpy(&row.stmt_class, base + kStmtClassOffset, sizeof(row.stmt_class));
+    std::memcpy(&row.dir_depth, base + kDirDepthOffset, sizeof(row.dir_depth));
+    // Deliberately no validation of the decoded values - not of
+    // fingerprint_version, not of the root/depth pair. This is a pure
+    // decode, like every Decode() above it: the size check is the only
+    // corruption signal it owns, and whether a version is current or a
+    // root/depth pair is coherent are questions for the layer that acts on
+    // them (P04), which is also the only layer that can do anything about
+    // the answer.
+    return row;
+}
+
 }  // namespace kds::catalog

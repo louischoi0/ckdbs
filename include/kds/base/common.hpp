@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// Shared primitive types/constants (KDS-DESIGN.md invariants 1, 6, 7).
+// Shared primitive types/constants (docs/heap-and-tuple.md invariants 1, 6, 7).
 
 namespace kds {
 
@@ -49,7 +49,7 @@ enum class PageType : std::uint8_t {
     // power-of-two tiling leaves no room for a common header. Same
     // one-bit-per-page-id format as kFreeMap; see free_map.hpp. No page
     // class claims one today - the Waystone entry and directory pages it
-    // was built for were removed 2026-07-31 - but the bitmap is on-disk
+    // was built for have been removed - but the bitmap is on-disk
     // format and stays.
     //
     // It has to be durable rather than a side table: DevicePageStore never
@@ -57,10 +57,17 @@ enum class PageType : std::uint8_t {
     // first touch after open - and that is precisely when a checksum
     // verify would reject a page that never carried one.
     kHeaderlessMap = 8,
+
+    // A waystone: the recorded trail of one pattern instance
+    // (docs/waystone-concpets.md). Headered like every type above it -
+    // nothing in a trail is addressed by shift and mask, so the payload
+    // does not have to tile the page and the page keeps its checksum and
+    // page_lsn.
+    kWaystone = 9,
 };
 
 // Highest value currently assigned above; anything greater read off disk
 // was written by a newer build. Bump when appending to the enum.
-inline constexpr std::uint8_t kMaxAssignedPageType = 8;
+inline constexpr std::uint8_t kMaxAssignedPageType = 9;
 
 }  // namespace kds

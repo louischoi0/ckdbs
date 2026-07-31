@@ -27,25 +27,24 @@
 // (TcpServer, tcp_server.hpp) - Dispatch() can be unit-tested directly,
 // with no socket or thread involved.
 //
-// Command set was originally a small, fixed vocabulary because nothing
-// called into src/parser: there was no query executor, and column types
-// in its grammar couldn't be resolved to on-disk type_val/len without a
-// type registry. That gap is now closed for a narrow scope - see
-// src/exec/row_codec.hpp's file comment for exactly what's supported
-// (no NULLs, no float/decimal columns, fixed-width ints + varchar only) -
-// by using Catalog::ResolveTypeByName() (sys.types, populated by
-// Bootstrap()) as the type registry stand-in. UPDATE is still not wired
-// in. CREATE TABLE keeps its original bare-name form (no parens - always
-// a zero-column ClusteredType::kHeap table) alongside the new SQL form,
-// disambiguated by whether a '(' follows the table name, so existing
-// callers of the bare form are unaffected.
+// The SQL statements (CREATE TABLE, INSERT, SELECT, UPDATE) are parsed by
+// src/parser and executed here. Column types are resolved through
+// Catalog::ResolveTypeByName() against sys.types, which stands in for the
+// type registry that does not exist yet; src/exec/row_codec.hpp names
+// exactly what that covers - no NULLs, no float or decimal columns,
+// fixed-width ints and varchar only.
+//
+// CREATE TABLE also keeps a bare-name form with no parens, which asks for
+// a zero-column table and therefore always errors now that every relation
+// needs a Keystone pk column. The two forms are disambiguated by whether a
+// '(' follows the table name.
 //
 // Protocol: one command per line, case-insensitive keyword, arguments
 // space-separated. A response is always exactly one line back (never
 // containing embedded newlines) - the platform-layer listener appends the
 // line terminator itself.
 //
-// ---- WAL (2026-07-30): INSERT is logged, nothing else is ----------------
+// ---- WAL: INSERT is logged, nothing else is -----------------------------
 //
 // Given a WalManager, INSERT appends the records that describe it and does
 // not answer the client until they are durable to the configured class
@@ -73,7 +72,7 @@
 // paid once per 8 KB of tuples, never per tuple. A HEAP_CHAIN_LINK record
 // type would remove it; that is a format decision, not this file's.
 //
-// ---- Clustered type (2026-07-31): one dispatcher, two storages ----------
+// ---- Clustered type: one dispatcher, two storages ----------------------
 //
 // A relation is either a chain of heap pages (`ClusteredType::kHeap`,
 // heap_chain.hpp) or a clustered B+ tree (`kBtree`, btree.hpp), and every
@@ -141,7 +140,7 @@ public:
     // query took needs a monotonic reading, and taking one directly would
     // be the std::chrono call rules.md section 4 forbids.
     // `wal` is optional too, and null means INSERT mutates pages without
-    // logging them - the pre-2026-07-30 behaviour, which the socket-free
+    // logging them - the unlogged path, which the socket-free
     // unit tests and the catalog-level tests still run on.
     CommandDispatcher(SuperBlock& superblock, catalog::Catalog& catalog,
                        storage::PageStore& page_store, Logger* log = nullptr,
@@ -170,6 +169,13 @@ public:
     //                            process dying.
     //   SHOW META             -> superblock stats, one line
     //   SHOW TABLES           -> space-separated table names
+    //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
+    //                            section per sys.patterns row. An
+    //                            inspection surface: it lists rows from
+    //                            older fingerprint revisions too, marked
+    //                            `stale=v<n>`, because those are the dead
+    //                            weight a version bump leaves behind and
+    //                            seeing them is the point.
     //   SHOW PAGE <page_id> [VALUES]
     //                         -> page dump: header + slot directory for a
     //                            heap page or a B+ tree leaf, or level +
@@ -252,6 +258,7 @@ private:
     DispatchOutcome HandleListTables();
     DispatchOutcome HandleDescribe(std::string_view args);
     DispatchOutcome HandleShowPage(std::string_view args);
+    DispatchOutcome HandleShowPatterns();
     DispatchOutcome HandleCreateTable(std::string_view args);
     DispatchOutcome HandleCreateTableSql(std::string_view line);
     DispatchOutcome HandleInsert(std::string_view line);

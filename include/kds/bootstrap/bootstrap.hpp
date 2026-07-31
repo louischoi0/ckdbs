@@ -9,15 +9,14 @@
 #include "kds/storage/page_store.hpp"
 
 // Whole-database bring-up: given a PageStore, load an existing database or
-// create a fresh one, mirroring the legacy kernel engine's boot order
-// (kds_init_meta_system() -> kds_catalog_bootstrap() "only if fresh",
-// documented in kernel/kds/main.c/kds_bootstrap()) - the same care that
-// comment takes matters here too: kds_catalog_bootstrap()'s Catalog::
-// Bootstrap() unconditionally (re)creates the fixed catalog pages, so
-// running it against an existing database would clobber real data. This
-// file's fresh/existing branch (based on whether a valid SuperBlock image
-// is already at kds::server::kSuperBlockPageId) exists specifically to
-// make that mistake impossible to make by accident.
+// create a fresh one - and bootstrap the catalog **only if fresh**.
+//
+// That condition is the whole point of this file. Catalog::Bootstrap()
+// unconditionally (re)creates the fixed catalog pages, so running it
+// against an existing database would clobber real data. The fresh/existing
+// branch here - decided by whether a valid SuperBlock image already sits
+// at kds::server::kSuperBlockPageId - exists to make that mistake
+// impossible to make by accident.
 
 namespace kds::bootstrap {
 

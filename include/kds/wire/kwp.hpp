@@ -10,7 +10,7 @@
 
 #include "kds/base/status.hpp"
 
-// KWP/1 - KDS Wire Protocol, confirmed 2026-07-28 (docs/protocol.md).
+// KWP/1 - the KDS wire protocol (docs/protocol.md).
 // This header holds the frame format, frame catalog, capability bits,
 // durability levels, and the wire error-code taxonomy, plus the
 // FrameHeader codec and FrameDecoder declarations whose bodies live in
@@ -123,7 +123,7 @@ enum class Capability : std::uint64_t {
 // ---- Durability (docs/protocol.md §9) --------------------------------------
 // Per-transaction protocol field. Numbering is meant to mirror
 // docs/wal.md §1's D1/D2/D3 durability classes, but that document does
-// not exist in the repo yet (as of 2026-07-28) - treat this enum as the
+// not exist yet - treat this enum as the
 // authoritative numbering until docs/wal.md lands and either confirms or
 // amends it.
 enum class DurabilityLevel : std::uint8_t {
@@ -144,7 +144,7 @@ enum class DurabilityLevel : std::uint8_t {
 // registry (docs/protocol-wp.md P12, src/wire/error_registry.cpp),
 // including its append-only golden-list guard.
 //
-// kTxnConflict gained its engine-level equivalent on 2026-07-31:
+// kTxnConflict has an engine-level equivalent:
 // StatusCode::kTxnConflict maps here with **retryable = 1**, which
 // docs/protocol.md §11 makes part of the compatibility surface. It is the
 // only retryable category (kds::IsRetryable is the engine-side spelling of

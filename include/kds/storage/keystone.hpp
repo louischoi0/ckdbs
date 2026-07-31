@@ -8,7 +8,7 @@
 
 // Every tuple's mandatory first column (heap-and-tuple.md section 4): one
 // 64-bit word, the "Keystone column" / "Keystone word",
-// `id:40 | flags:8 | reserved:16` (amended 2026-07-28; the field was
+// `id:40 | flags:8 | reserved:16` (the reserved field was
 // `meta_handle:16` back when a bounded metadata pool handed out handles;
 // that pool is gone and the handle is retired: write 0, ignore on read,
 // repurposing is [OPEN]). This file only does encode/decode

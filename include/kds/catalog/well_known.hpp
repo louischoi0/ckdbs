@@ -3,10 +3,9 @@
 #include "kds/base/common.hpp"
 #include "kds/catalog/oid.hpp"
 
-// Well-known oids / fixed page ids, ported from the legacy kernel engine's
-// kds_catalog.h constants of the same names (values kept identical where
-// there is no reason to renumber, so anyone cross-referencing the legacy
-// design doc isn't tripped up).
+// Well-known oids and fixed page ids. These values are persisted, so they
+// are frozen: a number here may never change meaning, and a retired one is
+// never reused.
 
 namespace kds::catalog {
 
@@ -41,23 +40,32 @@ inline constexpr Oid kSysColumnsTable = 111;
 inline constexpr Oid kSysTablesTable = 112;
 inline constexpr Oid kSysIndexesTable = 113;
 
-// Starting point for user-created object oids. KNOWN GAP (same as the
-// legacy engine): this counter is in-memory only and resets on every
-// process restart - persisting it would mean adding a field to
-// kds::server::SuperBlock, deliberately not done here since that's a
-// layout change to a struct other code already depends on.
+// sys.patterns (docs/waystone-concpets.md section 4): one row per observed
+// query shape, keyed by the parse-time fingerprint. A pattern is a catalog
+// object because it is the durable, inspectable statement of what this
+// database is asked to do - and because the waystone directory for a
+// pattern has to be rooted somewhere that survives a restart.
+inline constexpr Oid kSysPatternsTable = 114;
+
+// Starting point for user-created object oids. **KNOWN GAP:** this counter
+// is in-memory only and resets on every process restart, so two objects
+// created in different runs can share an oid. Persisting it means adding a
+// field to kds::server::SuperBlock, a layout change other code depends on.
+// This is why sys.patterns rows take their oid from a persistent sequence
+// instead (Catalog::RegisterPattern).
 inline constexpr Oid kUserOidStart = 4000;
 
 // Fixed page ids for the bootstrap catalog heap pages. Reserved: a
 // PageStore's CreateAt is called with these exact values during
 // Catalog::Bootstrap(), never handed out by a general-purpose allocator.
-// All sit below kds::server::kFirstUserPageId (128), same convention the
-// legacy engine used (KDS_SYS_RESERVED_PAGES).
+// All sit below kds::server::kFirstUserPageId (128), which is where the
+// reserved range ends.
 inline constexpr PageId kCatalogPageTypes = 4;
 inline constexpr PageId kCatalogPageColumns = 5;
 inline constexpr PageId kCatalogPageObjects = 6;
 inline constexpr PageId kCatalogPageTables = 7;
 inline constexpr PageId kCatalogPageIndexes = 8;
+inline constexpr PageId kCatalogPagePatterns = 9;
 
 // Transaction id stamped on every bootstrap-time tuple - mirrors
 // PostgreSQL's FrozenTransactionId: bootstrap rows are inserted before a

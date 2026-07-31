@@ -33,6 +33,7 @@ add_library(kds
     src/catalog/rows.cpp
     src/catalog/schema.cpp
     src/catalog/sys_object_registry.cpp
+    src/stats/waystone_page.cpp
     src/catalog/catalog_cache.cpp
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp
@@ -41,6 +42,7 @@ add_library(kds
     src/server/config_file.cpp
     src/server/tcp_server.cpp
     src/parser/lexer.cpp
+    src/parser/fingerprint.cpp
     src/parser/ast.cpp
     src/parser/parser.cpp
     src/wire/frame_codec.cpp

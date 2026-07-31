@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kds/exec/row_codec.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -111,6 +112,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         if (IEquals(sub, "META")) return HandleShowMeta();
         if (IEquals(sub, "TABLES")) return HandleListTables();
         if (IEquals(sub, "PAGE")) return HandleShowPage(sub_rest);
+        if (IEquals(sub, "PATTERNS")) return HandleShowPatterns();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -119,7 +121,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "TABLE")) {
-            // Disambiguate the legacy bare-name form ("CREATE TABLE foo")
+            // Disambiguate the bare-name form ("CREATE TABLE foo")
             // from the SQL form ("CREATE TABLE foo (col type, ...)"): the
             // bare form's argument is just a name, so it never contains
             // '(' - the SQL grammar always does (ast.hpp: a column list is
@@ -177,6 +179,46 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     os << "version=" << superblock_.version() << " create_time=" << superblock_.create_time()
        << " last_mount_time=" << superblock_.last_mount_time()
        << " wal_anchor_count=" << superblock_.wal_anchor_count();
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowPatterns() {
+    auto rows = catalog_.ListPatterns();
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    // Same one-line-per-response contract as DESCRIBE and SHOW PAGE: a
+    // count line, then one "\n"-escaped section per pattern, never a raw
+    // newline byte.
+    std::ostringstream os;
+    os << "patterns=" << rows.value().size();
+
+    for (const catalog::SysPatternRow& row : rows.value()) {
+        // pattern_id in hex, because it is a hash: the decimal form of a
+        // 64-bit fingerprint is 20 unreadable digits, and the thing an
+        // operator does with this value is compare it to another one.
+        os << "\\n" << "pattern_id=0x" << std::hex << row.pattern_id << std::dec
+           << " oid=" << row.oid
+           << " class=" << static_cast<int>(row.stmt_class)
+           << " uses=" << row.use_count
+           << " last_seen=" << row.last_seen
+           << " waystone=";
+        // dir_depth is the authority on whether a directory exists
+        // (rows.hpp); reporting the root alone would print page 0 for a
+        // pattern that has none.
+        if (catalog::HasWaystoneDirectory(row)) {
+            os << "root=" << row.waystone_root << ",depth=" << static_cast<int>(row.dir_depth);
+        } else {
+            os << "none";
+        }
+        // A row this build cannot resolve is still listed, and saying so is
+        // the point of listing it: it is dead weight from a fingerprint
+        // version bump, and nothing will ever look it up again.
+        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) {
+            os << " stale=v" << row.fingerprint_version;
+        }
+    }
     return {os.str(), false};
 }
 
@@ -915,7 +957,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
             return {"ERR unknown column '" + assignment.col_name + "'", false};
         }
         // The pk is the tuple's identity, not a field of it: the btree and
-        // any future hint index address a tuple by this id, so changing it
+        // Waystone address a tuple by this id, so changing it
         // in place would silently retarget every reference to the row.
         if (assignment.col_name == pk_name) {
             return {"ERR primary-key column '" + pk_name + "' cannot be updated", false};

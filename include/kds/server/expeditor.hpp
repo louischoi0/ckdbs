@@ -50,7 +50,7 @@
 // The checkpoint is what closes that: it flushes the store's dirty pages
 // on a cadence (wal.md section 11-2) through PageStoreCheckpointTarget.
 //
-// ---- What the WAL covers, and what it does not (2026-07-30) -------------
+// ---- What the WAL covers, and what it does not --------------------------
 //
 // Open() installs the store's WAL gate and hands the dispatcher a
 // WalManager, so INSERT is logged and ordered: its records are durable to

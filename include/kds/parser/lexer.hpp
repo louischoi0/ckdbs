@@ -4,11 +4,10 @@
 
 #include "kds/parser/token.hpp"
 
-// Hand-rolled lexer for the KDS SQL subset, ported from the legacy kernel
-// engine's kds_lexer_t (parser.c). One-token lookahead (Peek()/Next()),
-// same as the legacy version, since the parser needs it to decide things
-// like "is there a WHERE clause" or "is there another column" without
-// consuming the token that answers the question.
+// Hand-rolled lexer for the KDS SQL subset, with one-token lookahead
+// (Peek()/Next()) - the parser needs it to decide things like "is there a
+// WHERE clause" or "is there another column" without consuming the token
+// that answers the question.
 
 namespace kds::parser {
 

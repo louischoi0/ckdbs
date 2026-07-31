@@ -13,7 +13,7 @@
 //
 // ---- What this target promises ------------------------------------------
 //
-// The gate and the dirty table are both the store's now (2026-07-30, when
+// The gate and the dirty table are both the store's (since
 // INSERT started logging): DevicePageStore::SetWalGate() orders every one
 // of its write paths against the log, and DirtyPagesWithRecLsn() carries a
 // real per-frame recLSN, so this adapter is a straight projection of both

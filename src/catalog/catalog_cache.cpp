@@ -84,12 +84,38 @@ const std::vector<SysObjectRow>* CatalogCache::PutTableList(std::vector<SysObjec
     return &*table_list_;
 }
 
+const PatternAccess* CatalogCache::FindPattern(std::uint64_t pattern_id) noexcept {
+    auto it = patterns_.find(pattern_id);
+    if (it == patterns_.end()) {
+        ++stats_.misses;
+        return nullptr;
+    }
+    ++stats_.hits;
+    return &it->second;
+}
+
+const PatternAccess* CatalogCache::PutPattern(PatternAccess access) {
+    const std::uint64_t key = access.pattern_id;
+    auto [it, inserted] = patterns_.try_emplace(key, std::move(access));
+    if (inserted) ++stats_.fills;
+    return &it->second;
+}
+
+void CatalogCache::UpdatePatternWaystone(std::uint64_t pattern_id, PageId root,
+                                         std::uint8_t depth) noexcept {
+    auto it = patterns_.find(pattern_id);
+    if (it == patterns_.end()) return;
+    it->second.waystone_root = root;
+    it->second.dir_depth = depth;
+}
+
 void CatalogCache::Invalidate() noexcept {
     // types_ is deliberately kept: sys.types is written only by Bootstrap()
     // (see catalog_cache.hpp's table of what is cacheable).
     table_access_.clear();
     name_to_oid_.clear();
     table_list_.reset();
+    patterns_.clear();
     ++stats_.invalidations;
 }
 

@@ -1,24 +1,10 @@
-# KDS Transactions & MVCC — Technical Specification
+# KDS Transactions & MVCC
 
-**Status:** Official specification. Confirmed 2026-07-31. Marker legend follows
-`docs/wal.md`: `[CONFIRMED]` — settled; `[PROPOSED]` — this document's default,
-adopt or amend before implementing the affected part; `[OPEN]` — must not be
-assumed.
-
-This document is the "Transaction/MVCC spec" that `docs/wal.md` §14 item 4 names
-as an unwritten prerequisite. It closes two of that item's four clauses (undo-page
-layout; and, by ratifying isolation levels, the visibility model) and closes the
-`[OPEN]` item **MVCC version identity semantics** from `CLAUDE.md` and
-`docs/heap-and-tuple.md` §9. It deliberately does **not** close undo retention,
-`SnapshotTooOld`, or `trx_id` wraparound — see §9.
-
-Consistent with `docs/wal.md` (§§1, 2, 5.1, 8, 12), `docs/heap-and-tuple.md`
-(§§3.2, 4, 7, invariants 9-12), `docs/rules.md` (§§1-4), `docs/sched.md` §4,
-`docs/protocol.md` §§9, 11, and `docs/waystone-concpets.md` §3.1.
+How KDS isolates concurrent statements and what a reader sees. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/wal.md`, `docs/heap-and-tuple.md` (§3.2, the tuple MVCC header).
 
 ---
 
-## 1. Isolation levels `[CONFIRMED 2026-07-31]`
+## 1. Isolation levels
 
 KDS supports exactly two isolation levels. **No level was named anywhere in the
 documentation before this section**, so this is a new decision rather than a
@@ -42,7 +28,7 @@ LEVEL ...`) — the same three-level precedence chain `durability` already uses.
 locking or SSI read-tracking, neither of which fits a design with no lock manager
 and no reader registration (§4).
 
-## 2. MVCC version identity `[CONFIRMED 2026-07-31]`
+## 2. MVCC version identity
 
 **Identity is per logical tuple, not per version.** This resolves the `[OPEN]`
 item "MVCC version identity semantics (identity per version vs per logical
@@ -64,13 +50,13 @@ Undo records are not independently addressable rows, nothing outside the undo
 chain may hold a reference to one, and `undo_ptr` is meaningful only when reached
 from the tuple it belongs to.
 
-## 3. Undo storage `[CONFIRMED 2026-07-31]`
+## 3. Undo storage
 
 Closes `docs/wal.md` §15's "Undo-page layout details (`UNDO_WRITE` targets)".
 
 ### 3.1 Undo pages are headered
 
-Not a free choice. `wal.md` §9 `[CONFIRMED]` already lists **undo** among the
+Not a free choice. `wal.md` §9 already lists **undo** among the
 pages carrying the common 32-byte page header, and `docs/page.md` §1 names
 Waystone entry and directory pages as the *only* headerless class. Undo pages are
 allocated with `PageStore::CreateNew()` and formatted with
@@ -203,7 +189,7 @@ not a format-version event.
 `kMaxUndoChainLength = 2^16`. Exceeding the bound is `Corruption`, not a hang —
 the same guard `kMaxChainPages` provides for the heap chain.
 
-## 4. Snapshots and visibility `[CONFIRMED 2026-07-31]`
+## 4. Snapshots and visibility
 
 ### 4.1 `ReadView`
 
@@ -242,7 +228,7 @@ change when purge lands.
 `trx_id == 1` (`catalog::kBootstrapXid`) is visible to **every** read view,
 unconditionally and permanently. This is not a migration shim that ages out:
 
-- Every row written before 2026-07-31 carries it (`HandleInsert` passed
+- Every row written before the transaction manager existed carries it (`HandleInsert` passed
   `kBootstrapXid` for all of them).
 - Every catalog row carries it **forever**, because catalog writes use
   `kBootstrapXid` and catalog in-place updates carry the old header forward (§7).
@@ -274,7 +260,7 @@ Every chain terminates definitively: at an always-visible `trx_id == 1` version,
 at `undo_ptr == 0`, or at a `kInsert` record.
 
 The predicate is the **first consumer of `Tuple::deleted`**, which the engine has
-set since 2026-07-29 and never read.
+set and never read.
 
 ### 4.4 Where it is applied
 
@@ -289,7 +275,7 @@ true, because nothing applied visibility anywhere.
 callback: that keeps `storage/` free of a dependency on `txn/`, and keeps
 `ChainVisit` usable by the catalog, which must not filter.
 
-## 5. Write conflicts — first-updater-wins `[CONFIRMED 2026-07-31]`
+## 5. Write conflicts — first-updater-wins
 
 No lock manager, no waiting, no deadlock detection, and the Keystone lock byte
 stays unused. A conflict is detected from the tuple header alone. For writer `T`
@@ -308,7 +294,7 @@ snapshot and its write; KDS aborts retryably rather than re-reading. That is
 stricter than PostgreSQL's `READ COMMITTED` and is a deliberate simplification —
 there is no re-read loop and no lock to wait on.
 
-The engine reports `StatusCode::kTxnConflict`, which maps to the `[CONFIRMED]`
+The engine reports `StatusCode::kTxnConflict`, which maps to the
 wire contract `wire::ErrorCategory::kTxnConflict` with **`retryable = 1`**
 (`protocol.md` §11: "financial client libraries build retry loops on this bit, so
 it is part of the compatibility surface"). On the newline protocol the spelling
@@ -322,7 +308,7 @@ ERR TXN_CONFLICT retryable=1 row id=42 was written by transaction 118
 A conflict inside an explicit transaction puts the session in `failed-txn`; in
 autocommit it aborts immediately.
 
-## 6. Rollback `[CONFIRMED 2026-07-31]`
+## 6. Rollback
 
 `Abort` walks the transaction's trail **in reverse** and emits each compensation
 as an ordinary logged page mutation — the shape `wal.md` §12-3 asks for, so that
@@ -342,7 +328,7 @@ anyway. Undo pages are not freed; purge is a non-goal (§9).
 states that no transaction owns a `SLOT_RETIRE`, so its envelope carries
 `kNoTxnId`. That is true of a purge pass and false of a rollback compensation,
 which *is* owned by the aborting transaction — stamping `kNoTxnId` would hide the
-rollback from recovery's analysis phase. As of 2026-07-31: **a `SLOT_RETIRE`
+rollback from recovery's analysis phase. Today: **a `SLOT_RETIRE`
 emitted by rollback carries the aborting transaction's id; one emitted by a purge
 pass carries `kNoTxnId`.**
 
@@ -356,7 +342,7 @@ supports additively. It is nonetheless a strict improvement on the previous
 behaviour, whose own comment read "Partial by design: rows updated before the
 failure stay updated."
 
-## 7. Catalog and DDL `[CONFIRMED 2026-07-31]`
+## 7. Catalog and DDL
 
 Nothing in `src/catalog/` participates in transactions:
 
@@ -369,7 +355,7 @@ Nothing in `src/catalog/` participates in transactions:
   an explicit transaction is not rolled back by `ROLLBACK`.** A known limitation,
   consistent with the catalog's existing instance-scoped coherency caveat.
 
-## 8. Shipping MVCC before recovery — a known correctness gap `[2026-07-31]`
+## 8. MVCC ships before recovery — a known correctness gap
 
 An explicit transaction spans reactor iterations, so a `system`-group checkpoint
 can flush pages holding uncommitted tuples. WAL-before-data still holds:

@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/base/log.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -29,6 +30,81 @@ protected:
     storage::InMemoryPageStore store_{kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
 };
+
+// ---- SHOW PATTERNS (docs/waystone-concpets.md section 4) ------------------
+
+TEST_F(CommandDispatcherTest, ShowPatternsOnAFreshDatabaseReportsNone) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto out = d.Dispatch("SHOW PATTERNS");
+    EXPECT_EQ(out.response, "patterns=0");
+}
+
+TEST_F(CommandDispatcherTest, ShowPatternsListsARegisteredPattern) {
+    ASSERT_TRUE(boot_->catalog.RegisterPattern(0xABCD, catalog::kStmtClassUnclassified).ok());
+
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto out = d.Dispatch("SHOW PATTERNS");
+
+    EXPECT_NE(out.response.find("patterns=1"), std::string::npos) << out.response;
+    // Hex, because comparing two 64-bit fingerprints in decimal is not a
+    // thing anyone can do by eye.
+    EXPECT_NE(out.response.find("pattern_id=0xabcd"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("uses=0"), std::string::npos) << out.response;
+    // No trail has been recorded, so there is no directory - and the
+    // report must say so rather than printing a root of page 0.
+    EXPECT_NE(out.response.find("waystone=none"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("stale="), std::string::npos) << out.response;
+}
+
+TEST_F(CommandDispatcherTest, ShowPatternsReportsAWaystoneDirectory) {
+    ASSERT_TRUE(boot_->catalog.RegisterPattern(7, catalog::kStmtClassUnclassified).ok());
+    ASSERT_TRUE(boot_->catalog.SetPatternWaystoneRoot(7, 4096, 2).ok());
+
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto out = d.Dispatch("SHOW PATTERNS");
+    EXPECT_NE(out.response.find("waystone=root=4096,depth=2"), std::string::npos) << out.response;
+}
+
+TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion) {
+    // Written straight onto the page, the way a stale row really appears:
+    // an older build recorded it and then the version moved. No API can
+    // produce one, since RegisterPattern() stamps the current version.
+    auto bytes = store_.Get(catalog::kCatalogPagePatterns);
+    ASSERT_TRUE(bytes.ok());
+    heap::PageView page(bytes.value());
+    catalog::SysPatternRow row{};
+    row.oid = 999;
+    row.pattern_id = 0x5151;
+    row.fingerprint_version = parser::kFingerprintVersion + 1;
+    row.waystone_root = kInvalidPageId;
+    auto encoded = row.Encode();
+    ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
+
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto out = d.Dispatch("SHOW PATTERNS");
+
+    // Listed, not hidden: this is an inspection surface, and a row nothing
+    // will ever look up again is exactly what an operator needs to see.
+    EXPECT_NE(out.response.find("pattern_id=0x5151"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("stale=v"), std::string::npos) << out.response;
+
+    // But it is still invisible to a lookup, which is where the version
+    // rule lives.
+    EXPECT_FALSE(boot_->catalog.FindPattern(0x5151).ok());
+}
+
+TEST_F(CommandDispatcherTest, ShowPatternsResponseIsOneLine) {
+    ASSERT_TRUE(boot_->catalog.RegisterPattern(1, catalog::kStmtClassUnclassified).ok());
+    ASSERT_TRUE(boot_->catalog.RegisterPattern(2, catalog::kStmtClassUnclassified).ok());
+
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto out = d.Dispatch("SHOW PATTERNS");
+
+    // The wire contract: one command, one line back. Sections are the
+    // two-character "\n" escape, never a raw newline byte.
+    EXPECT_EQ(out.response.find('\n'), std::string::npos);
+    EXPECT_NE(out.response.find("\\n"), std::string::npos) << out.response;
+}
 
 TEST_F(CommandDispatcherTest, Ping) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);

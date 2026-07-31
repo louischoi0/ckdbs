@@ -90,10 +90,9 @@ StatusOr<PageView> PageView::CreateEmptyAs(std::span<std::byte, kPageSize> page,
     h.min_key = min_key;
     view.WriteHeader(h);
 
-    // kInvalidPageId (not 0) marks "no next page": unlike the legacy
-    // kernel code, this design reserves 0xFFFFFFFF rather than 0 as the
-    // invalid page id sentinel (common.hpp), so that's the "no next page"
-    // value here too.
+    // kInvalidPageId, not 0, marks "no next page": 0xFFFFFFFF is the
+    // engine-wide invalid page id (common.hpp), and 0 is a real page - the
+    // superblock.
     view.set_next_page_id(kInvalidPageId);
 
     return view;

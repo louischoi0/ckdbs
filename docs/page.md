@@ -1,8 +1,8 @@
-# KDS Page Layout, Buffering & Paging I/O — Technical Specification
+# KDS Page Management
 
-**Status:** **Official specification**, decisions confirmed 2026-07-28 (rev. 2 — adds paging I/O optimization, growth, and the mmap evaluation). Extends and partially supersedes `docs/page-management.md`: that document's `PageStore` contract (§3) and allocation policy (§6) are amended here; its BufferPool description (§5) is replaced by this document's buffer sections. Markers: `[CONFIRMED]` — decided; `[PROPOSED]` — default within a confirmed decision, adopt or amend before implementing the affected part; `[OPEN]` — do not assume. Consistent with `docs/rules.md`, `docs/wal.md`, `docs/waystone-concept.md`, `docs/sched.md`.
+Page allocation, the buffer pool, the file layout, and the I/O path. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Consistent with `docs/rules.md`, `docs/wal.md`, `docs/waystone-concpets.md`, `docs/sched.md`.
 
-## 0. Decision Record `[CONFIRMED 2026-07-28]`
+## 0. Decision Record
 
 | # | Decision | Choice |
 |---|---|---|
@@ -14,15 +14,15 @@
 | S11 | Paging mechanism | **Explicit buffer pool with asynchronous I/O (Postgres-style frames). mmap is rejected for data and WAL** (§15) |
 | S3/S4/S6/S8/S10 | Eviction, dirty/checkpoint, SpaceManager detail, frame memory, config/observability | Defaults specified below as `[PROPOSED]` |
 
-## 1. Page Classes `[CONFIRMED]`
+## 1. Page Classes
 
 Two page classes exist, and the distinction is load-bearing:
 
 - **Headered pages** — heap, B+ tree, undo, catalog, superblock, free-map: carry the common header (§2), are checksummed, carry `page_lsn`, and participate in WAL and recovery.
-- **Headerless pages** — **Waystone entry and directory pages only.** Both tilings are exact powers of two (256 × 32 B entries; 2048 × 4 B directory children = 8192 exactly), so any header would steal a slot and force division-based addressing, violating the confirmed shift/mask derivations in `docs/waystone-concept.md` §5–6. The exemption is safe *because of* Waystone's advisory contract: these pages are unlogged by default, wholly rebuildable via backfill, and self-verifying at the entry level (each entry stores its `pk`; a mismatch or garbage read is treated as absent — always correct). The rejected alternative — halving fanout to 2⁷ to make header room — would double Waystone's space cost for integrity it does not need.
+- **Headerless pages** — **Waystone entry and directory pages only.** Both tilings are exact powers of two (256 × 32 B entries; 2048 × 4 B directory children = 8192 exactly), so any header would steal a slot and force division-based addressing, violating the confirmed shift/mask derivations in `docs/waystone-concpets.md` §5–6. The exemption is safe *because of* Waystone's advisory contract: these pages are unlogged by default, wholly rebuildable via backfill, and self-verifying at the entry level (each entry stores its `pk`; a mismatch or garbage read is treated as absent — always correct). The rejected alternative — halving fanout to 2⁷ to make header room — would double Waystone's space cost for integrity it does not need.
 - Consequences: WAL `FULL_PAGE_IMAGE` and checksum verification apply to headered pages only; recovery never replays onto headerless pages; the buffer pool records the class per frame (§7) so instrumentation can enforce both this rule and Waystone invariant 8.
 
-## 2. Common Page Header `[CONFIRMED layout]`
+## 2. Common Page Header
 
 Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins at offset 32.
 
@@ -40,7 +40,7 @@ Codec rules as everywhere (rules.md §2/§5): field-wise memcpy helpers, mirror 
 
 **Amendment consequence:** `heap_page`'s current layout shifts by 32 bytes (existing ad-hoc fields fold into the common header where equivalent). No shipped format exists, so this is a code change, not a migration.
 
-## 3. `PageRef` — the Pinned-Page Handle `[CONFIRMED]`
+## 3. `PageRef` — the Pinned-Page Handle
 
 Raw spans are unsafe the moment eviction exists; the interface fixes it structurally now, while callers are few:
 
@@ -50,7 +50,7 @@ Raw spans are unsafe the moment eviction exists; the interface fixes it structur
 - `MarkDirty()` records the frame's `recLSN` (first-dirty LSN) if unset — the hook feeding the checkpoint dirty-page table (§8).
 - Migration: `InMemoryPageStore`, `BufferPool`, catalog, bootstrap, and tests move to `PageRef` in one change; `Frame` becomes an implementation detail no caller names.
 
-## 4. Single-File Store `[CONFIRMED]`
+## 4. Single-File Store
 
 - One data file per KDS instance. Mapping is pure arithmetic: `file_offset = page_id × 8192`. No file/segment indirection, no mapping table.
 - Capacity: `page_id` is u32 with `2³¹` target pages ⇒ 16 TiB file ceiling (design constant, asserted).
@@ -63,11 +63,11 @@ Raw spans are unsafe the moment eviction exists; the interface fixes it structur
 Owns "which page_ids exist / are free" inside the disk-backed store, behind the unchanged `PageStore` seam:
 
 - **Free map:** bitmap pages (`page_type = freemap`). One headered free-map page covers `(8192 − 32) × 8 = 65,280` pages (~510 MiB of data file); free-map pages sit at computable interval positions in the id space — locating the bitmap for a page_id is arithmetic, not lookup.
-- **Extent = 64 pages** `[OPEN: size]` — the unit of file growth and (future) per-core prealloc batching. Per-core prealloc remains deferred exactly as decided (page-management §6.3); reconfirmed.
+- **Extent = 64 pages** `[OPEN: size]` — the unit of file growth and, later, per-core prealloc batching. Per-core prealloc is deferred.
 - **Durability:** allocation changes emit the reserved `ALLOC`/`FREE` WAL records (wal.md §5); the free map is a headered, logged page class replayed like any other. Crash between extent growth and first use is benign (§14). Reserved-page reclamation rule `[OPEN]`, shared with wal.md.
 - High-water mark and free-map root live in the superblock.
 
-## 6. Per-Core Buffer Pools `[CONFIRMED]`
+## 6. Per-Core Buffer Pools
 
 - One `BufferPool` instance per core, caching only pages that core owns. Pin counts and frame state stay plain non-atomic fields — the current single-core implementation *is* the per-core implementation; multi-core adds instances, not synchronization.
 - Cross-core page access does not exist: work moves to the owning core over the message interface (rules.md §3), consistent with wire-protocol D3.
@@ -95,7 +95,7 @@ The pool enforces the WAL contract in code, not by caller discipline:
 - One preallocated, **4 KiB-aligned slab** of `nr_frames × 8 KiB` per pool, carved at startup — O_DIRECT-compatible regardless of the open I/O-backend decision; zero steady-state allocation.
 - At the disk transition, frames become owning copies (real read-into / write-from); with `PageRef` no caller observes the difference.
 
-## 10. Checksums `[CONFIRMED adopted; parameters PROPOSED]`
+## 10. Checksums
 
 - CRC32C (hardware-accelerated where available — SSE4.2 `crc32` on x86-64; the software fallback is a correctness twin used by the deterministic sim); field per §2; scope: all headered pages; computed at flush (§8), verified on every load from disk — never on buffer hits.
 - Verification failure ⇒ `Status(DataCorruption)`; during recovery, a checksum-failed page with an available `FULL_PAGE_IMAGE` is restored from it (wal.md §10) — checksum *detects*, FPI *heals*.
@@ -137,7 +137,7 @@ The file is growable to the 16 TiB ceiling with amortized, crash-safe extension:
 - Crash-safe ordering: `ALLOC` WAL record first, then file extension, then first use. File extension is idempotent on replay; an extension without surviving `ALLOC` linkage is re-absorbed by the recovery sweep (§5 open item). File-metadata durability (size/blocks) is folded into the same flush discipline as data (backend-specific verb, defined with the I/O backend decision).
 - Shrinking/truncation is a **non-goal** for v1 (`FREE`d space is reused, not returned to the filesystem); recorded so nothing accidentally depends on it.
 
-## 15. mmap Evaluation — Rejected for Data & WAL `[CONFIRMED]`
+## 15. mmap Evaluation — Rejected for Data & WAL
 
 mmap was evaluated as the paging mechanism (map the single file, let the kernel page it). It is attractive on the surface — the arithmetic single-file layout is exactly mmap-shaped, and the kernel page cache comes free. It is rejected, for reasons that are well documented across DBMS engineering literature and are *worse* than usual under KDS's architecture:
 
@@ -147,13 +147,13 @@ mmap was evaluated as the paging mechanism (map the single file, let the kernel 
 4. **It breaks deterministic testing outright.** Kernel paging cannot be injected, scheduled, or fault-injected through the `IoBackend` seam; rules.md §4 (whole-engine simulation with torn-write injection) would be unenforceable. In KDS this is not a nice-to-have — it is how every guarantee in wal.md §16 is proven.
 5. **Performance at scale is worse, not better:** TLB shootdown storms on eviction, kernel reclaim contention, 4 KiB kernel granularity vs 8 KiB engine pages, and no interposition point for checksums (§10) or the flush gate (§8).
 
-**Verdict:** explicit per-core buffer pool with asynchronous, seam-injected I/O `[CONFIRMED]` (decision S11). mmap may appear in offline tooling (e.g. read-only backup inspection utilities) but never inside the engine's data or WAL paths.
+**Verdict:** explicit per-core buffer pool with asynchronous, seam-injected I/O (decision S11). mmap may appear in offline tooling (e.g. read-only backup inspection utilities) but never inside the engine's data or WAL paths.
 
 ## 16. Required Amendments (gate for implementation)
 
 1. **Design spec — heap page section:** heap layout begins at offset 32 atop the common header; fold duplicated fields; note the headered/headerless split. Stamp dates.
-2. **`docs/waystone-concept.md`:** record the headerless-class exemption (§1) against its §5/§6; add the entry-self-verification integrity note; note Waystone-driven prefetch (§12-3) as a consumer.
-3. **`docs/page-management.md`:** banner §3 (superseded by `PageRef` v2), §5 (by §§6–9, 12–13 here), §6 (by §5, §14 here).
+2. **`docs/waystone-concpets.md`:** record the headerless-class exemption (§1) against its §5/§6; add the entry-self-verification integrity note; note Waystone-driven prefetch (§12-3) as a consumer.
+
 4. **`docs/wal.md`:** cross-refs — `page_lsn`/checksum land via the common header (§14-1 satisfied); free-map is a logged page type; ALLOC-before-extend ordering (§14 here) referenced from its recovery section.
 5. **`docs/sched.md`:** note the background writer and prefetch drain as `system`-group residents.
 6. **`CLAUDE.md`:** architecture summary (common header, PageRef, single growable file, per-core pools + clock + bgwriter, checksums, mmap rejected); refresh opens from §17.

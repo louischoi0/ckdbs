@@ -1,6 +1,6 @@
 # KDS Scheduling Specification
 
-**Status:** Technical specification — input for development agents and internal reference. `[OPEN]` items must not be assumed. Consistent with `docs/rules.md` (thread-per-core, no exceptions, deterministic testability) and `docs/heap-and-tuple.md`.
+The reactor: how work is scheduled on a core. `[OPEN]` items must not be assumed. Consistent with `docs/rules.md` (thread-per-core, no exceptions, deterministic testability) and `docs/heap-and-tuple.md`.
 
 ---
 

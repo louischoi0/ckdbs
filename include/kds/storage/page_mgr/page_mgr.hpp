@@ -8,31 +8,27 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/durability.hpp"
 
-// Buffer pool / page manager, ported from the legacy kernel engine's
-// page_mgr.c/kds_page_mgr.h: a fixed-capacity table of frames tracking
-// which pages are resident, with pin counts and dirty flags. Scope
-// matches the legacy "first cut" exactly - no eviction (pool full =>
-// OutOfSpace, same as the legacy ENOSPC) and no dirty-list/checkpointer
-// integration beyond exposing is_dirty()/MarkClean(). Both are separate,
-// documented follow-ups there too.
+// Buffer pool / page manager: a fixed-capacity table of frames tracking
+// which pages are resident, with pin counts and dirty flags. Deliberately
+// a first cut - no eviction (a full pool is OutOfSpace) and no
+// dirty-list/checkpointer integration beyond exposing
+// is_dirty()/MarkClean(). Both are follow-ups; the frame-reclamation
+// policy is an open decision in CLAUDE.md.
 //
-// Divergence from the legacy design, and why: the legacy buffer pool
-// exists to cache disk pages (a genuinely separate medium, block device
-// sectors) into RAM frames - kds_frame_read_from_disk() does a real
-// memory-to-memory copy, and kds_frame_flush() writes a frame's RAM copy
-// back out to disk. This project's current storage::PageStore backing a
-// BufferPool (InMemoryPageStore) already *is* RAM - there is no second
-// medium to copy between yet (that only arrives once a real disk-backed
-// PageStore exists, the still-open "I/O backend abstraction" item in
-// CLAUDE.md). So Frame::bytes() here is a view directly into the backing
-// store's own memory, not a separate frame-owned copy: what this file
-// keeps from the legacy design is the part that's independent of the
-// storage medium - pin/unpin (so nothing frees/reuses a page a caller is
-// still using), dirty tracking (an integration point for a future
-// flush/checkpointer), and bounded resident-page admission control (the
-// fixed frame count). Once a real disk-backed PageStore exists, Flush()
-// becomes meaningful I/O instead of bookkeeping; the API shape here is
-// meant to not need to change when that happens.
+// **There is no copy here, and that is the thing to understand about this
+// file.** A buffer pool normally caches disk pages into RAM frames, which
+// means a real memory-to-memory copy in each direction. The PageStore this
+// pool sits over (InMemoryPageStore) already *is* RAM, so there is no
+// second medium to copy between: Frame::bytes() is a view straight into
+// the backing store's own memory, not a frame-owned copy.
+//
+// What the pool therefore contributes is only what is independent of the
+// storage medium - pin/unpin (so nothing frees or reuses a page a caller
+// still holds), dirty tracking (the integration point for a flush and
+// checkpointer), and bounded resident-page admission control (the fixed
+// frame count). Once a disk-backed PageStore is the norm here, Flush()
+// becomes real I/O instead of bookkeeping, and the API shape is meant to
+// survive that unchanged.
 //
 // Concurrency: single-core only, matching rules.md #3 (thread-per-core,
 // shared-nothing) - pin counts and frame state are plain (non-atomic)
@@ -153,14 +149,13 @@ private:
 
 class BufferPool final : public PageStore {
 public:
-    // Matches the legacy engine's KDS_BUF_NR_FRAMES.
     static constexpr std::uint32_t kDefaultNrFrames = 4096;
 
     // `backing` provides the actual page bytes/persistence and must
     // outlive this pool. `nr_frames` bounds how many distinct pages can
-    // be resident at once - unlike the legacy fixed compile-time
-    // constant, this is a constructor parameter (mainly so tests can
-    // exercise the "pool full" path without needing 4096 pages).
+    // be resident at once - a constructor parameter rather than a
+    // compile-time constant, mainly so tests can exercise the "pool full"
+    // path without needing 4096 pages.
     explicit BufferPool(PageStore& backing, std::uint32_t nr_frames = kDefaultNrFrames);
 
     // Injects the WAL-before-data seam. Null until the WAL is wired up on
@@ -183,17 +178,15 @@ public:
 
     // Looks up page_id; on miss, loads it via backing_.Get() into a fresh
     // frame slot. Fails with OutOfSpace if every frame slot is already in
-    // use (no eviction implemented, same as the legacy engine) or
-    // whatever error backing_.Get() reports (e.g. NotFound if page_id was
-    // never created).
+    // use (no eviction is implemented), or whatever error backing_.Get()
+    // reports (e.g. NotFound if page_id was never created).
     StatusOr<Frame*> LookupOrLoad(PageId page_id);
 
     // Registers a brand-new page (via backing_.CreateAt()) into a fresh
-    // frame slot, pinned and marked dirty (the legacy engine's rationale
-    // still applies here even without a real disk to flush to yet: a
-    // caller-visible new page must not be silently reclaimable before
-    // anything has looked at it). Fails with AlreadyExists if page_id is
-    // already resident (mirrors the legacy "caller bug" rejection) or
+    // frame slot, pinned and marked dirty. Pinning matters even without a
+    // real disk to flush to: a caller-visible new page must not be
+    // silently reclaimable before anything has looked at it. Fails with
+    // AlreadyExists if page_id is already resident (a caller bug), or
     // OutOfSpace if the pool is full.
     StatusOr<Frame*> AllocNew(PageId page_id);
 

@@ -130,8 +130,7 @@ StatusOr<Frame*> BufferPool::LookupOrLoad(PageId page_id) {
 }
 
 StatusOr<Frame*> BufferPool::AllocNew(PageId page_id) {
-    // Up-front check: reject if already resident (caller bug), mirroring
-    // the legacy engine's kds_buf_alloc_new().
+    // Up-front check: reject if already resident, which is a caller bug.
     auto existing = Lookup(page_id);
     if (existing.ok()) {
         Unpin(*existing.value());
@@ -149,9 +148,8 @@ StatusOr<Frame*> BufferPool::AllocNew(PageId page_id) {
 
     // Marked dirty up front: a caller-visible new page must be guaranteed
     // to reach persistence even if the caller never touches it again
-    // before eviction - same rationale as the legacy engine's DIRTY flag
-    // on kds_buf_alloc_new(), even though there is no real disk to flush
-    // to yet (see file-level comment).
+    // before eviction - which holds even though there is no real disk to
+    // flush to yet (see the file-level comment).
     Frame& f = RegisterFrame(slot.value(), page_id, created.value(), /*initial_dirty=*/true);
     Pin(f);
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {

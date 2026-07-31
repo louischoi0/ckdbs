@@ -1,13 +1,10 @@
 # KDS Wire Protocol (KWP/1) — Workplan
 
-**Status:** Official work-instruction document, companion to `docs/protocol.md` (the specification; this file's own path is `docs/protocol-wp.md`). Separate from the WAL and Waystone workplans by design — task numbering is `P##` to avoid collision with Waystone's `T##`. This file holds tasks only; normative design lives in the specification. When they disagree, the specification wins — flag, don't guess.
+Work instructions, companion to `docs/protocol.md` (the specification). This file holds tasks only; normative design lives in the specification, and when they disagree the specification wins — flag, don't guess.
 
-Every task is startable now: where a neighboring subsystem is missing (executor, WAL, multi-core messaging), the task names the seam or fixture it builds against, and real integration is a later task. Spec `[OPEN]` items are isolated behind interfaces; no task requires deciding one.
+Every task is startable now: where a neighboring subsystem is missing (executor, multi-core messaging), the task names the seam or fixture it builds against, and real integration is a later task. Spec `[OPEN]` items are isolated behind interfaces; no task requires deciding one.
 
-Execution rules:
-- P01–P05 are the consistency gate: they land before any P06+ code merges.
-- Each task ships with its listed tests in the same change; `bash test.sh` green is part of "done".
-- If a task turns out to touch a spec-`[OPEN]` item — stop, flag, do not decide.
+**Note:** these tasks are numbered `P01`-`P17`, and `docs/waystone-workplan.md` also uses `P01`-`P17`. Cite the file, not the bare number.
 
 ---
 
@@ -72,7 +69,7 @@ Tests: every `Status` category maps; retryable bits match the spec's guidance ta
 Needs: P05. Parallel-friendly.
 
 **P13 — Server integration.**
-Files: `src/server/tcp_server.cpp`, `src/server/kwp_endpoint.cpp`, tests. Replace line splitting with the P06 decoder on the KWP port; per-connection preallocated frame buffers (steady-state no allocation); legacy newline dispatcher moved behind `--debug-text-port` (default off); byte-stream harness so the whole endpoint runs under deterministic simulation with scripted input.
+Files: `src/server/tcp_server.cpp`, `src/server/kwp_endpoint.cpp`, tests. Replace line splitting with the P06 decoder on the KWP port; per-connection preallocated frame buffers (steady-state no allocation); the newline dispatcher moved behind `--debug-text-port` (default off); byte-stream harness so the whole endpoint runs under deterministic simulation with scripted input.
 Tests: golden byte sessions end-to-end against the stub executor; malformed-stream fuzz at the socket layer; debug port off by default.
 Needs: P06–P12.
 
@@ -82,7 +79,7 @@ Tests: cancel mid-stream interrupts at the next yield; wrong-key no-op; cancel o
 Needs: P08, P13.
 
 **P15 — Reference client (CLI rewrite).**
-Files: `tools/ckdbs_cli.py` (KWP implementation), keep a `--legacy-text` escape hatch for the debug port. The client is also the conformance driver: it can dump/replay golden sessions.
+Files: `tools/ckdbs_cli.py` (KWP implementation), keep a `--text` escape hatch for the debug port. The client is also the conformance driver: it can dump/replay golden sessions.
 Tests: CLI-driven smoke against the P13 endpoint in CI.
 Needs: P13.
 

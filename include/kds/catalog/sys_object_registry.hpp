@@ -5,16 +5,13 @@
 
 #include "kds/catalog/rows.hpp"
 
-// In-memory registry of well-known sys-objects (namespaces, scalar
-// types) - ported from the legacy kernel engine's fixed-capacity-array-
-// plus-linear-search registry (kds_catalog_register_sys_object() /
-// kds_catalog_get_sys_object[_by_name]()). Legacy used a fixed array with
-// a panic on overflow because the kernel avoided dynamic allocation for
-// this; here a std::vector removes the need for that cap entirely (RAII
-// container, no manual capacity to get wrong), so there is no overflow
-// case to handle. The registry is bootstrap-time and small (~20 entries)
-// - a hash table would be complexity without payoff, same rationale the
-// legacy file-level comment gives.
+// In-memory registry of well-known sys-objects: namespaces and scalar
+// types, registered at bootstrap and never afterwards.
+//
+// A std::vector with a linear scan, deliberately. The registry holds about
+// twenty entries and is written once, so a hash table would be complexity
+// without payoff; and a growable container means there is no capacity cap
+// to size wrong and no overflow case to handle.
 
 namespace kds::catalog {
 

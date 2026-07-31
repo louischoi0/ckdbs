@@ -6580,3 +6580,50 @@
 1785484677 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9640552 redo_start=9640552 durable_lsn=9640632 segment=0
 1785484682 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9640632 redo_start=9640632 durable_lsn=9640712 segment=0
 1785484687 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9640712 redo_start=9640712 durable_lsn=9640792 segment=0
+1785507133 INFO [expeditor] opening database 'kds.db', wal dir 'kds.db.wal'
+1785507133 INFO [bootstrap] mounted existing database, superblock version 3; catalog bootstrap skipped
+1785507133 INFO [expeditor] INSERT durability group
+1785507133 INFO [expeditor] database ready: 110 pages, superblock version 3
+1785507133 INFO [expeditor] checkpoint cadence 5000ms
+1785507133 INFO [expeditor] listening on 127.0.0.1:15432
+1785507138 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9640792 redo_start=9640792 durable_lsn=9640872 segment=0
+1785507143 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9640872 redo_start=9640872 durable_lsn=9640952 segment=0
+1785507147 INFO [ddl] created table 'bench_1785507147_57857' oid=4000 columns=5
+1785507147 WARN [query] "DESCRIBE bench_1785507147_57857" -> ERR catalog row size mismatch in 35us
+1785507148 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9640952 redo_start=9640952 durable_lsn=9641096 segment=0
+1785507153 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9641096 redo_start=9641096 durable_lsn=9641176 segment=0
+1785507158 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9641176 redo_start=9641176 durable_lsn=9641256 segment=0
+1785507163 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9641256 redo_start=9641256 durable_lsn=9641336 segment=0
+1785507168 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9641336 redo_start=9641336 durable_lsn=9641416 segment=0
+1785507171 INFO [ddl] created table 'bench_1785507171_45165' oid=4006 columns=5
+1785507171 WARN [query] "DESCRIBE bench_1785507171_45165" -> ERR catalog row size mismatch in 35us
+1785507173 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9641416 redo_start=9641416 durable_lsn=9641544 segment=0
+1785507178 INFO [expeditor] opening database 'kds.db', wal dir 'kds.db.wal'
+1785507178 INFO [bootstrap] no superblock found; creating a fresh database (version 3)
+1785507178 INFO [catalog] bootstrapped 6 system tables and 10 types on the fixed catalog pages
+1785507179 INFO [expeditor] INSERT durability group
+1785507179 INFO [expeditor] database ready: 9 pages, superblock version 3
+1785507179 INFO [expeditor] checkpoint cadence 5000ms
+1785507179 INFO [expeditor] listening on 127.0.0.1:15432
+1785507180 INFO [ddl] created table 'bench_1785507180_13068' oid=4000 columns=5
+1785507184 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9657544 redo_start=9641576 durable_lsn=9657688 segment=0
+1785507189 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9657688 redo_start=9657688 durable_lsn=9657768 segment=0
+1785507193 INFO [ddl] created table 'bench_1785507193_56844' oid=4006 columns=5
+1785507194 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9674888 redo_start=9657800 durable_lsn=9675016 segment=0
+1785507194 INFO [btree] table oid 4006 grew a level; root is now page 131
+1785507199 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9933368 redo_start=9675048 durable_lsn=9933592 segment=0
+1785507204 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=9933592 redo_start=9933592 durable_lsn=9933672 segment=0
+1785507205 INFO [ddl] created table 'bench_1785507205_17735' oid=4012 columns=5
+1785507205 INFO [btree] table oid 4012 grew a level; root is now page 140
+1785507209 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=10672712 redo_start=9933704 durable_lsn=10673096 segment=0
+1785507214 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=11718184 redo_start=10673128 durable_lsn=11718640 segment=0
+1785507219 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12780064 redo_start=11718672 durable_lsn=12780528 segment=0
+1785507224 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12821664 redo_start=12780560 durable_lsn=12822720 segment=0
+1785507229 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12822720 redo_start=12822720 durable_lsn=12822800 segment=0
+1785507234 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12822800 redo_start=12822800 durable_lsn=12822880 segment=0
+1785507239 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12822880 redo_start=12822880 durable_lsn=12822960 segment=0
+1785507244 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12822960 redo_start=12822960 durable_lsn=12823040 segment=0
+1785507249 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12823040 redo_start=12823040 durable_lsn=12823120 segment=0
+1785507254 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12823120 redo_start=12823120 durable_lsn=12823200 segment=0
+1785507259 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12823200 redo_start=12823200 durable_lsn=12823280 segment=0
+1785507264 INFO [checkpoint] anchor published: core=0 checkpoint_lsn=12823280 redo_start=12823280 durable_lsn=12823360 segment=0

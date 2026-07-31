@@ -13,6 +13,8 @@ add_executable(kds_tests
     btree_test.cpp
     superblock_test.cpp
     row_codec_test.cpp
+    catalog_row_test.cpp
+    waystone_page_test.cpp
     scheduler_test.cpp
     log_test.cpp
     config_file_test.cpp
@@ -28,6 +30,7 @@ add_executable(kds_tests
     command_dispatcher_test.cpp
     tcp_server_test.cpp
     lexer_test.cpp
+    fingerprint_test.cpp
     parser_test.cpp
     subsystem_logging_test.cpp
     kwp_frame_test.cpp

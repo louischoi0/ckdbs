@@ -29,7 +29,7 @@
 // on a miss - never on a hit. Corruption is therefore detected at load; the
 // FULL_PAGE_IMAGE that heals it is the WAL's job (wal.md section 10).
 //
-// ---- Headerless pages (2026-07-30) --------------------------------------
+// ---- Headerless pages ---------------------------------------------------
 //
 // A page class whose payload tiles 8 KiB exactly - an array of fixed-size
 // entries sized to a power of two, addressed by shift and mask - has no
@@ -50,7 +50,7 @@
 // mechanism is only appropriate for a structure whose corruption is
 // *survivable* - one a reader validates against an authoritative source
 // and can fall back from. **No page class uses it today** (the Waystone
-// entry and directory pages it was built for were removed 2026-07-31);
+// entry and directory pages it was built for have been removed);
 // the bitmap page and its format remain, and a database that never calls
 // this pays one reserved page for them.
 //

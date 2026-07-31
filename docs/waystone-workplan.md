@@ -1,150 +1,182 @@
-# Waystone — Workplan (Actionable Task List)
+# Waystone — Workplan
 
-**Status:** Official work instructions, companion to `waystone-concept.md`. The specification is **confirmed as of 2026-07-28**; nothing below waits on a design decision. Every task is scoped to be startable immediately — where a neighboring subsystem (executor, physical optimizer) does not exist yet, the task builds against a fixed seam or fixture named in the task itself, and the later integration is its own task. Remaining `[OPEN]` items in the spec are isolated behind interfaces; no task requires deciding one.
+Work instructions, companion to `waystone-concpets.md`.
 
 Execution rules:
-- Do tasks in numeric order unless the "needs" column says otherwise; T01–T08 are the spec-consistency gate and land before any T09+ code merges.
+- Do tasks in numeric order unless "needs" says otherwise.
 - Each task ships with its listed tests in the same change; `bash test.sh` green is part of "done".
-- If a task turns out to touch an `[OPEN]` item after all — stop, flag, do not decide.
+- If a task turns out to touch an `[OPEN]` item in the spec — stop, flag, do not decide.
+- The advisory-contract test (`P12`) is regression-mandatory from the moment it exists.
 
 ---
 
-## Amendment 2026-07-30 — seek-first ordering
+## The gate: pattern identity
 
-Invariant 8 was amended (spec §3.1): a pk point lookup may probe Waystone under a validate-and-fall-back contract. That changes what is on the critical path, because the goal became **row-seek latency** rather than relayout statistics. The numbered tasks below are unchanged in content; the order they are executed in is not.
+Every task here depends on a statement having a stable identity, so Phase A comes first and is built as a bolt-on over the existing lexer rather than waiting for the blueprint parser (`docs/parser-workplan.md`). The fingerprint is a pure function of the token stream, so it can be rewritten against the flat AST later without any consumer changing — the output contract is two integers. The cost is that fingerprints change when the parser is replaced, which `kFingerprintVersion` absorbs: bump it, stored patterns retire, the engine re-learns. That is a performance event, not a correctness one.
 
-Critical path, in order — `W00` (this amendment, done) → `T08` → `T09` → `T10` → `T04`/`T12` → `T13` → `T16` → **`W07`** → measure.
+## Phase A — pattern identity
 
-`W07` is new and has no `T` number because the old plan had nowhere to put it: wire the probe into `HandleSelect` for `WHERE id = <n>`, validating per §3.1 and falling back to `ChainVisit`. Its tests are spec §12-3 in its amended form.
+**P01 — Fingerprint over the token stream.** — **done.**
+Files: `include/kds/parser/fingerprint.hpp`, `src/parser/fingerprint.cpp`, `tests/fingerprint_test.cpp`.
+Walk the lexer's tokens once. Emit `pattern_id` (hash of the shape stream, with every literal replaced by a parameter marker) and `arg_hash` (hash of the literal values in order). No second pass and no separate normalization step — the shape stream is what the lexer already produces. Hashing must be value-based: no pointers, no addresses, no container iteration order.
+Tests: `WHERE id = 42` and `WHERE id = ?` yield one `pattern_id` and different `arg_hash`es; different shapes differ; identical input hashes identically across processes; `SET`/DDL statements are excluded from fingerprinting.
+Needs: nothing.
 
-Deferred, and explicitly not needed for the seek win: `T11` (fingerprint), `T14` (aggregator/heat), `T15` (observer ring), `T17` (backfill), `T20` (pattern groups). Heat exists to drive relayout, and there is no physical optimizer to drive. `T13`'s insert hook is what keeps coverage complete, so no backfill is needed for relations that were enabled at creation — `T17` is only for enabling a relation that already holds rows.
+Decisions worth carrying forward:
 
-### Blocker found in W03 — headerless pages vs. the store's checksum `[RESOLVED 2026-07-30, option 1]`
+- **`TokenType::kParam` was added to the lexer.** `?` used to lex as `kError`, and without a token type there is no way to tell a placeholder from a lexing failure — which makes the convergence property untestable and unimplementable. It is lexed and accepted by no production; `tests/parser_test.cpp` pins that it still rejects, so giving it a type did not make it executable.
+- **Identifiers are shape, values are arguments, NULL is shape.** A different relation is a different pattern. Int and string literals emit the *same* shape marker as `?` — a bind parameter's type is unknown at parse, so distinguishing int-shaped from string-shaped holes would break convergence; the type moves to the argument stream instead. NULL carries no value to bind and gets its own marker.
+- **Literal *text* is hashed, not the decoded value.** Hashing `int_val` would let two distinct literals collide, because the lexer's decode silently wraps past 64 bits. The cost is that `42` and `042` miss each other, which costs a replay; a collision would cost a wrong location.
+- **ASCII case folding by hand, not `std::tolower`.** The latter is locale-dependent, and this hash goes on disk.
+- **Fields are length-prefixed** in the hash stream, so `FROM ab WHERE c` and `FROM a WHERE bc` cannot flatten to the same bytes. Tested directly.
+- **Collisions are survivable by construction, not by hash strength.** FNV-1a/64 is not cryptographic, but a colliding pattern's trail names tuples that fail the replay validation in spec §2, so it degrades to a miss. A collision can cost performance; it cannot produce a row.
+- **The golden-value tests were cross-checked against an independent implementation** of the same byte stream rather than recording whatever the C++ emitted. They pin a value persisted in `sys.patterns`; changing the algorithm is a format change and is P02's business.
+- Known cost of the bolt-on: this lexes the statement a second time, separately from `Parser`. The contract — text in, two integers out — is what survives the blueprint parser, which fuses the passes.
 
-Resolved by teaching the store which pages are headerless. `DevicePageStore::CreateNewHeaderless()` allocates one and records the fact in a **durable** second bitmap page — `PageType::kHeaderlessMap` at `kHeaderlessMapPageId` (2), same one-bit-per-page-id format as the free map. `StampIfHeadered()` is the single point where the stamp decision is made, and the read-miss path skips verification for a marked page.
+**P02 — Fingerprint versioning.** — **done.**
+Files: same header.
+A `kFingerprintVersion` constant with the rule stated at its definition: bump it whenever the token stream or the hash changes, and stored patterns whose version differs are ignored along with their waystones. This is the seam that lets the blueprint parser replace `P01` without a migration.
+Tests: a pattern row with a foreign version resolves as "no pattern", not as an error.
+Needs: P01.
 
-Durability is not a nicety: the store never evicts, so a page comes off the device exactly once — on first touch after open — and that is precisely when a verify would reject it. It cannot be recomputed from the catalog either, since the store is opened before bootstrap has a catalog to ask. Write order is headerless map, then free map: the free map is what makes an id exist, so a crash between them leaves a headerless bit set for an unallocated id (harmless — `IsHeaderless()` also requires allocation), where the reverse would publish a Waystone page whose bit had not landed.
+Decisions worth carrying forward:
 
-Accepted cost, stated as a test (`DamageToAHeaderlessPageIsSilentByDesign`): these pages carry no damage detection. Right for an advisory structure — a wrong entry must be *survivable*, which the probe's Keystone-id check guarantees, and survivable is stronger than detectable. Bit-rot becomes a probe miss and a fallback scan, never a wrong answer.
+- **The bump rule is narrower than "the algorithm changed".** Bump when an *already fingerprintable* statement would hash differently — a change to the token stream a statement reduces to, the shape or argument tag values, a hashed field's framing, the case-folding rule, or the hash function. Making a statement fingerprintable that previously was not (adding `DELETE` to the patternable leading words, say) **does not** need a bump: nothing already stored changes meaning, since a shape that hashed to X still hashes to X.
+- **`IsCurrentFingerprintVersion()` is an exact comparison, never `>=`.** There is no ordering between versions, only identity: an older row's `pattern_id`s were computed under different rules and name shapes that are not the ones they claim, and an inequality would silently resurrect the trails the constant exists to retire. Tested in both directions.
+- **0 is reserved and `static_assert`ed against.** A `sys.patterns` row read out of a zeroed or never-written page decodes to version 0, and that must never pass for current.
+- **A mismatch is a miss, not an error** — the predicate answers and cannot fail, so there is no error path for P04 to propagate by mistake. The catalog-level form of that test (a stored row with a foreign version resolving as "no pattern") lands with the `sys.patterns` lookup in P04; what is pinned here is the decision it rests on.
+- **The version is asserted beside the golden hashes**, not in isolation. Whoever changes the algorithm sees the golden values fail, and that failure is the reminder to bump. Proximity is the enforcement mechanism; nothing mechanical can check the pairing.
 
-### Original blocker text, kept for the reasoning
+## Phase B — the catalog relation
 
-Waystone entry and directory pages are **headerless by class** (spec §5/§6): 256 × 32 B and 2048 × 4 B tile 8 KiB exactly, and a header would cost a slot and break the shift/mask addressing the whole design rests on. `page_header.hpp` says as much.
+**P03 — `sys.patterns` row format.** — **done.**
+Files: `include/kds/catalog/rows.hpp`, `src/catalog/rows.cpp`, `include/kds/catalog/well_known.hpp`, ~~`tests/row_codec_test.cpp`~~ → **`tests/catalog_row_test.cpp`** (new). The named file is the `exec` row codec, a different subsystem; no catalog-row codec test file existed at all, since the other rows are only exercised indirectly through a live `Catalog` in `catalog_test.cpp`.
+`SysPatternRow` per spec §4 — `{oid, pattern_id, fingerprint_version, stmt_class, waystone_root, dir_depth, use_count, last_seen}` — with the usual codec discipline: named offsets, `static_assert`s, field-wise memcpy, exact-size `Decode`. Add `kSysPatternsTable` oid and `kCatalogPagePatterns` fixed page id below `kFirstUserPageId`.
+Note: another `SysTableRow`-class format break is *not* involved — this is a new relation on a new page. Bootstrap changes, so old data files still will not open, but they already do not.
+Tests: round-trip; defaults; exact-size decode refusal.
+Needs: nothing.
 
-`DevicePageStore` does not know that. `Flush()` and `FlushPages()` call `StampPageChecksum()` on **every** dirty frame, which writes a `uint32_t` at byte offset 4 — on a headerless entry page that is the upper half of entry 0's `pk`. The read path is symmetric: `ResidentBytes()` calls `VerifyPageChecksum()` on every miss, so a reloaded Waystone page would come back `Corruption`. Both halves of the round trip are broken, silently on write and loudly on read.
+Decisions worth carrying forward:
 
-This does not affect `T09`/`T10` — their tests run on `InMemoryPageStore`, which neither stamps nor verifies — but it blocks `T13` and `W07`, the first tasks that put a Waystone page in the server's real store. **Decide before starting W05.** Sketch of the options, in preference order, none picked:
+- **`dir_depth == 0` is the authority on whether a directory exists**, not `waystone_root == kInvalidPageId`. A row read out of a zeroed or never-written page decodes every field to 0, which would make its root look like page 0 — a valid-looking `PageId`, and the superblock's. Keying the question on the field whose zero value already means "none" leaves no way to spell the state wrong. `HasWaystoneDirectory()` is the only test any reader should use; writers should still store `kInvalidPageId` when clearing, but nothing may depend on it.
+- **`stmt_class` is a raw `std::uint8_t`, not an enum.** The v1 statement-class list is `[PROPOSED]` in `docs/parser.md` I2 and its ratification is an open decision in `CLAUDE.md` — defining the enum here would be deciding it. The field exists now because this is an on-disk format and adding one later is a format break; `kStmtClassUnclassified = 0` names the value every row carries until the parser can classify anything.
+- **Fields are ordered by descending alignment**, so the on-disk offsets and the struct's own offsets coincide and every field carries an `offsetof` `static_assert`. `SysTableRow` gave that up past `next_id` and has to be read more carefully as a result; there was no reason to repeat it.
+- **`Decode()` validates size and nothing else** — not the version, not the root/depth pair. It is a pure decode like every other row's; whether a version is current or a pair is coherent are questions for the layer that can act on the answer (P04).
+- **A field-independence test earns its keep here.** An offset collision between two fields survives any round-trip that writes one row and reads it back through the same code; the test encodes a row that is zero except for one field and asserts nothing else comes back non-zero. The byte-layout test pins the format now, while there is still no data to lose by reordering it.
 
-1. **Teach the store which pages are headerless.** A per-store set, populated when the page is created; excluded from stamping and verification. Cheapest, localized, and it keeps the tiling. The cost is that these pages then carry *no* damage detection, which is arguably right for an advisory structure — a wrong entry must be survivable (the probe's Keystone-id check), which is stronger than being detectable — but it interacts with the persistence-class `[OPEN]` below and should be decided with it.
-2. **A separate store or file for Waystone pages.** Clean separation, no changes to `DevicePageStore`, but a second allocator, a second free map, and a second thing to open at boot.
-3. **Give Waystone pages a header.** Rejected on its face: 8160/32 = 255 entries is not a power of two, so `pk & 0xFF` addressing dies and every lookup gains a division. It would invalidate the derivations in spec §5/§6.
+**P04 — Bootstrap and catalog API.** — **done.**
+Files: `src/catalog/catalog.cpp`, `include/kds/catalog/catalog.hpp`, `src/bootstrap/bootstrap.cpp`, `tests/catalog_test.cpp`.
+Bootstrap `sys.patterns` alongside the other system relations. Add `FindPattern(pattern_id) -> StatusOr<const PatternAccess*>` and `RegisterPattern(pattern_id, version, stmt_class)`, plus `SetPatternWaystoneRoot(oid, root, depth)` writing root and depth **as one unit** with the same validation the deleted `SetWaystoneDirectory()` had, and for the same reason.
+Cache patterns through `CatalogCache` on the same three rules as `TableAccess`: sequences never cached, absences never cached, one invalidation choke point at `BumpVersion()`.
+Tests: register/find round-trip; version mismatch resolves as absent; root+depth validated as a pair; ~~cache invalidation on registration~~ → **registration invalidates nothing**, see below.
+Needs: P03.
 
-Two `[OPEN]`s stay open and both are isolated behind seams, per the standing instruction:
+Decisions worth carrying forward:
 
-- **Heap-page epoch storage** — `EpochProvider` seam. The default implementation reports a constant epoch for every page, which is *correct* today because nothing moves a tuple, and wrong the day relayout lands. `BumpFor(page)` exists unimplemented (`T19`).
-- **Waystone page persistence class** — the hooks write through `PageStore`; whether the write is also WAL-logged is one call site in `HandleInsert`. Unlogged means a crash loses entries, probes miss, and reads fall back to the scan: slower, never wrong. Do not pick without the decision landing in spec §11.
+- **`PatternAccess` exists to *exclude* fields, not to wrap the row.** `use_count`/`last_seen` change on every execution, which is not DDL, so by `catalog_cache.hpp`'s one rule they are not cacheable and are absent from the struct — the same reason `TableAccess` carries no `next_id`. Heat is read through `GetSysPatternRow()`, off the page.
+- **`RegisterPattern` bumps no catalog version**, which reverses the deleted design. Nothing cached can go stale from a pattern appearing: absences are never cached, so no entry claims the pattern is missing, and no other cached fact mentions it. This **resolves the hazard `waystone-concpets.md` §4 flagged for this task** — registering mid-statement cannot dangle the `const TableAccess*` the statement holds, and the lazy-registration alternative the spec floated is not needed. Tested directly.
+- **`SetPatternWaystoneRoot` updates the cached entry in place** rather than invalidating — the one departure from "drop everything at one choke point". The fact belongs to exactly one pattern and is read by nothing else, so a global drop would be collateral damage of precisely the kind that dangled the deleted Waystone's `TableAccess*`. The held pointer stays valid and sees the new root; tested.
+- **The version is stamped by `RegisterPattern`, not passed in** — a change from this workplan's original signature. No caller has business recording a pattern under a fingerprint version other than the one that computed its `pattern_id`, so the parameter could only ever be passed wrong, and passing it wrong writes a row no build will resolve. Removing it makes "the cache holds current-version entries only" true by construction, and deletes the version-0 validation as unreachable.
+- **Version filtering lives in `GetSysPatternRow()`, the row lookup itself** — not in each caller. Found by a failing test: the first cut filtered in `FindPattern` only, so `RegisterPattern` cached a stale row it had just written, and a stale row on the page shadowed the current one because the scan took the first `pattern_id` match. A version bump leaves old rows in place (nothing rewrites them), so both states are reachable in production. `AStaleRowDoesNotShadowTheCurrentOne` pins it with the stale row written first.
+- **A stale row does not block re-registration.** It is invisible to `GetSysPatternRow()`, so `AlreadyExists` cannot fire on it, and a shape stays learnable across a version bump instead of being permanently blocked. The old row is left where it is; reclaiming it is P15's.
+- **Pattern oids come from `AllocateRowId(kSysPatternsTable)`** — a repurposing worth naming, since catalog rows carry no Keystone word. It is the sequence used as an oid source. `GenerateUserOid()` is in-memory and restarts at `kUserOidStart` every boot, which for a *persisted* row means two patterns sharing an oid across a restart.
+- **`sys.patterns` gets no `sys.columns` rows**, like the other five catalog relations: they are read through typed row codecs, never through a schema.
+- Test-only: a stale row is fabricated by writing straight onto the catalog page, because **no API can produce one** now that the version is stamped internally — which is also how a stale row really appears (an older build wrote it, then the version moved).
 
-## Gate: spec & repo consistency
+**P05 — `SHOW PATTERNS`.** — **done.** 5 tests.
+Files: `src/server/command_dispatcher.cpp`, `tests/command_dispatcher_test.cpp`, plus `Catalog::ListPatterns()`.
+A dispatcher command listing `pattern_id`, class, `use_count`, `last_seen`, and whether a waystone root exists. Development surface on a protocol already documented as one; KWP/1 decides the real spelling.
+Tests: empty catalog; after registration.
+Needs: P04.
 
-**T01 — Amend Keystone layout in the design spec.**
-File: `docs/heap-and-tuple.md` §4. Change layout to `id:40 | flags:8 | reserved:16`; delete `meta_handle` semantics; add "writers set 0, readers ignore; repurposing [OPEN]"; stamp `Amended 2026-07-28`.
-Done when: section shows the new layout with the dated amendment note.
+Decisions worth carrying forward:
 
-**T02 — Supersede the bounded metadata pool in the design spec.**
-File: `docs/heap-and-tuple.md` §5. Add a banner: superseded by Waystone full coverage → link `docs/waystone-concept.md`. Keep the old text below the banner for history. Remove any normative claim of the 65,536 cap elsewhere in the file.
-Done when: banner + link present; grep for `65,536|65536|meta_handle` finds only historical/banner text.
+- **`ListPatterns()` is unfiltered, unlike `GetSysPatternRow()`**, and stale rows are listed with a `stale=v<n>` marker rather than hidden. That is not a hole in the version rule: the rule protects *lookup by pattern_id*, so a stale row still cannot resolve as the pattern it names — which the test asserts alongside the listing. An inspection surface that hides the garbage a version bump left behind is an inspection surface that cannot answer the question you opened it for.
+- **`waystone=` is derived from `HasWaystoneDirectory()`, never from the root.** Printing the root directly would report page 0 for a pattern that has no directory, which is the exact confusion `dir_depth` was made the authority to prevent.
+- **`pattern_id` prints in hex.** The decimal form of a 64-bit hash is 20 undifferentiated digits, and the only thing anyone does with the value is compare it to another one.
 
-**T03 — Add the heap-page epoch to the design spec.**
-File: `docs/heap-and-tuple.md` §3. Define the per-page epoch counter (bumped whenever tuples on the page move); storage location marked `[OPEN]` (header field vs core-local table), with the note that a header field would be on-disk format under `docs/rules.md` §5.
-Done when: epoch defined once, `[OPEN]` marker present.
+## Phase C — waystone storage
 
-**T04 — Extend the catalog spec for Waystone.** — **done 2026-07-30, together with T12.**
-Files: catalog documentation + `include/kds/catalog/well_known.hpp` comments. Relation entry gains `waystone_enabled` (with distinct *coverage-complete* state) and `waystone_dir_root: PageId`. Defaults: disabled, `kInvalidPageId`.
-Done when: fields documented with defaults and DDL ownership noted.
+**P06 — Page type, header, and entry codec.** — **done.** 15 tests.
+Files: `include/kds/stats/waystone.hpp`, `src/stats/waystone_page.cpp`, `tests/waystone_page_test.cpp`, plus `PageType::kWaystone` in `common.hpp` and its `MaxSupportedFormatVersion` entry.
+`PageType::kWaystone` (a **headered** class — spec §6), the waystone header, and the 32-byte entry with `rel_oid` and `step_id`. Entries per page derived from the real header size in a named `constexpr` with the derivation in a comment; it need not be a power of two and the comment should say why that is now allowed.
+Tests: header and entry round-trips; offset/size asserts; `entry_count` bounds; a page whose `pattern_id`/`arg_hash` do not match what was asked for reads as a miss.
+Needs: nothing.
 
-Landed as **three** fields, not two: `WaystoneState` (`kDisabled`/`kBackfilling`/`kCovered`), `waystone_dir_root`, and `waystone_dir_depth`. The depth is the addition the spec did not name, and it has to be persisted rather than derived from `next_id` — a derived depth would change the instant the sequence crossed a coverage boundary, which is *before* `GrowDirectory()` relinks the root, and every lookup in that window would walk the wrong number of levels onto the wrong leaf. `Catalog::SetWaystoneDirectory()` writes all three as one unit and refuses an inconsistent triple, so every reader downstream may trust it without re-checking.
+Decisions worth carrying forward:
 
-**Format break.** `SysTableRow::kOnDiskSize` grew by 6 bytes and `Decode()` requires an exact match, so **data files written before this change no longer open** — `ERR catalog row size mismatch` on any `sys.tables` read. Fresh project, no compatibility promise: discard old data files. Worth knowing that a *partially* migrated page is broken outright rather than partially — `AllocateRowId()` scans every row on the catalog page and fails on the first old one, so even a newly created table inside an old database cannot take an insert.
+- **`rel_oid` is 8 bytes, not the 4 the spec sketched** — `catalog::Oid` is `uint64_t`, and a narrowed copy that happens to fit today aliases two relations onto one value the day it does not. `step_id` shrank to 2 bytes to pay for it (it counts relations in a join chain, not rows), so the entry is still exactly 32 bytes with every field naturally aligned and no padding. Spec §6 amended to match.
+- **Fields are ordered by descending alignment** in both structs, so on-disk offsets and struct offsets coincide and every field carries an `offsetof` `static_assert`.
+- **253 entries per page, with 24 bytes of slack.** Derived from the real header sizes rather than picked. The exact power-of-two tiling a pk-addressed structure needed is what cost it the common page header; giving that up buys back the checksum and the `page_lsn`.
+- **`WaystonePageHolds()` folds four reasons into one bool** — unformatted, wrong type, unparseable format version, wrong instance. A caller does the same thing in all four (miss, fall through), and four distinct returns would invite handling three. The wrong-instance case is load-bearing: the directory is keyed by a hash, so a collision leads a reader to a real, valid, *wrong* trail.
+- **`kWaystoneEntryValid` is the liveness test, never `pk != 0`.** A never-written entry decodes to pk 0 and page_id 0, both of which look like real values.
+- The tests that earn their keep beyond round-trips: adjacent entries not overlapping (catches a stride off-by-one, which a single round-trip cannot), the tail slack staying zero after the highest legal write, and a page of another type or a newer format version holding nothing.
 
-**Hazard handed to T13.** `SetWaystoneDirectory()` bumps the catalog version, which clears the `TableAccess` cache and dangles any `const TableAccess*` a statement is holding. `HandleInsert` holds one across its whole body, so directory growth — which happens mid-insert — must re-acquire it afterwards. Documented on the method; it is the one way to use this API wrong.
+**P07 — `arg_hash` directory.**
+Files: `src/stats/waystone_dir.cpp`, `tests/waystone_dir_test.cpp`.
+The interior-page walk, rekeyed from pk digits to `arg_hash` digits: fanout 2048, lazy allocation, depth growth by root relink, root handed in and out as a plain `PageId` (catalog wiring is P04's). Collisions resolve against the waystone header from P06 — a foreign trail is a miss, never a result.
+Tests: walk correctness across level boundaries; lazy-allocation sparseness by page count; depth growth preserves prior mappings; a synthetic collision resolves to a miss.
+Needs: P06.
 
-**T05 — Refresh `CLAUDE.md`.**
-Remove obsolete opens (metadata pool eviction; eviction-vs-validation invalidation). Add the spec §11 opens. Fix the architecture summary lines (Keystone layout; metadata pool → Waystone full coverage; hint index unchanged).
-Done when: CLAUDE.md open-decision list is byte-for-byte reconcilable with spec §11.
+**P08 — Trail write and read.**
+Files: `src/stats/waystone_store.cpp`, `tests/waystone_store_test.cpp`.
+`WriteTrail(pattern, arg_hash, span<TrailEntry>)` and `ReadTrail(pattern, arg_hash)`, including continuation onto `next_page_id` for a trail longer than one page. Overwrite semantics: re-recording an instance replaces its trail wholesale rather than merging — a merge would accumulate rows that no longer qualify, and nothing here can tell that from a row that still does.
+Tests: round-trip incl. multi-page; overwrite replaces; a trail for an unregistered pattern is a miss, not an error.
+Needs: P07.
 
-**T06 — Cross-reference in `docs/page-management.md`.**
-Add one paragraph listing Waystone directory/entry pages as `PageStore` clients and future SpaceManager consumers.
-Done when: paragraph present; no other edits.
+## Phase D — recording
 
-**T07 — Repo doc-naming hygiene.**
-Rename or redirect so every reference resolves: `KDS-DESIGN.md` ↔ `docs/heap-and-tuple.md`, `CPP-RULES.md` ↔ `docs/rules.md`; drop or stub `docs/overview.md` (duplicate of CLAUDE.md). Commit `docs/waystone-concept.md` + this file into `docs/`.
-Done when: grep for the stale names returns nothing unresolved.
+**P09 — The executor seam.**
+Files: `include/kds/stats/pattern_observer.hpp`, `tests/pattern_observer_test.cpp`.
+`PatternObserver::OnPatternResult(pattern_id, arg_hash, span<const TrailEntry>) noexcept` — the executor's only knowledge of Waystone, wait-free, droppable, with a `NullPatternObserver` that is a valid production configuration. The executor collects `(rel_oid, pk, page_id, slot, epoch, step_id)` as it goes; it must not re-derive them afterwards, since re-deriving is the search the trail exists to avoid.
+Tests: drop under saturation without blocking; drops counted and visible; null observer costs nothing (instrumented).
+Needs: P06.
 
-**T08 — Rewrite `waystone.hpp` to match the confirmed spec.**
-File: `include/kds/stats/waystone.hpp`. Delete `AdmissionPolicy` and all 16-bit-handle addressing (`kMetaHandle*`, `MetaPageIndexOf(handle)`). Keep: `SingleKeyRef`, `TupleAccessEvent` (retire the `meta_handle` field into explicit padding), `AccessObserver`/`NullAccessObserver`. Add: entry constants with `page_epoch`, pk-direct addressing helpers (`pk >> 8`, `pk & 0xFF`), directory constants (`kDirFanout = 2048`, level-coverage constexprs with derivations), `Aggregator` API per spec §9 (Ingest/DecayTick/Probe/insert-delete hooks), decay policy behind an interface.
-Done when: header compiles standalone; every constant carries its derivation comment; no reference to admission or handles remains.
+**P10 — Recording wired into the dispatcher.**
+Files: `src/server/command_dispatcher.cpp`, `tests/waystone_record_test.cpp`.
+Compute `(pattern_id, arg_hash)` at parse, register the pattern if new, collect the trail during execution, write it after the statement succeeds. Never on the failure path — a trail from a statement that errored describes a state no reader should be pointed at.
+Recording policy is `[OPEN]` (spec §9): implement behind a `RecordingPolicy` seam whose default is `[PROPOSED]` record-every-execution, so sampling and after-*n*-sightings both stay viable without a format change.
+Tests: a repeated statement produces one pattern row and one trail; a failing statement produces no trail; results unchanged with recording off.
+Needs: P04, P08, P09.
 
-## Core implementation
+## Phase E — replay
 
-**T09 — Entry codec.**
-Files: `src/stats/waystone_entry.cpp`, `tests/waystone_entry_test.cpp`. Implement `ReadMetaEntry`/`WriteMetaEntry` (field-wise memcpy, little-endian, offsets pinned by `static_assert` incl. `page_epoch` at 24). Tests: full-field round-trips, tiling exactness (256 × 32 = 8192), flag transitions.
-Needs: T08.
+**P11 — Point replay.**
+Files: `src/server/command_dispatcher.cpp`, `tests/waystone_replay_test.cpp`.
+For `kPointSelect`-shaped statements: look the instance up, replay the single entry through the spec §2 validation chain, fall through to `LocateByPk` on any miss. The validation must live in **one** function shared by point and join replay — a second copy is how one path forgets the `rel_oid` check.
+Tests: hit path returns the same row as the scan/descent; each of the four miss causes (no trail, invalid entry, epoch mismatch, wrong Keystone at the target) falls through and still returns the right row.
+Needs: P10.
 
-**T10 — Page directory.**
-Files: `src/stats/waystone_dir.cpp`, `tests/waystone_dir_test.cpp`. Multi-level walk (fanout 2048), lazy allocation via `PageStore::CreateNew`, depth growth by root relink, root handoff as a plain `PageId` in/out (catalog wiring is T12). Backed by `InMemoryPageStore`.
-Tests: pk→leaf correctness across level boundaries (pk 524,287→524,288; 2³⁰ boundary), lazy-alloc sparseness (page count == touched ranges), depth growth preserves prior mappings.
-Needs: T08–T09.
+**P12 — The advisory-contract test.** *(Do not defer this behind P13.)*
+Files: `tests/waystone_contract_test.cpp`.
+Spec §11-3 and §11-4 in full: byte-identical results across recording-on, recording-off, replay-off, waystones-deleted-mid-run, and corrupted-trail; plus the instrumented proof that a pattern with a non-pk predicate still performs its search. Regression-mandatory from here on.
+Needs: P11.
 
-**T11 — Fingerprint layer (parser side).**
-Files: `src/parser/fingerprint.cpp` + header, `tests/fingerprint_test.cpp`. Normalize the existing `Statement` variant (strip/parameterize constants), hash to `pattern_id`; `arg_hash` over bound values. Pure function of the AST — fully implementable today.
-Tests: identical shapes with different constants → same `pattern_id`; different shapes → different; stability across runs (no address-based hashing).
-Needs: nothing (parser exists). May run in parallel with T09–T10.
+**P13 — Join replay.**
+Files: executor/dispatcher, `tests/waystone_join_replay_test.cpp`.
+Replay a cross-relation trail in `step_id` order for the written-order nested-loop join. This is the case the design exists for (spec §7) and the first one whose measurement is worth quoting.
+Blocked on the executor having a join path at all — `kJoinSelect` needs parser Phase 2+ (`docs/parser-workplan.md`). Until then this task's deliverable is a fixture executor replaying scripted multi-relation trails, which is also what P12's cross-relation cases run against.
+Needs: P11, P12.
 
-**T12 — Catalog flag & storage-form wiring.** — **done 2026-07-30**, see T04 above; `TableAccess` carries the triple, `tests/waystone_catalog_test.cpp` covers defaults, round trip, validation and cache invalidation.
-Files: catalog module + `tests/catalog_test.cpp` additions. Add `waystone_enabled` (+coverage state) and `waystone_dir_root` to the relation record (on-disk rules: memcpy codec, static_asserts); relation-open path returns the storage form; DDL set/clear.
-Tests: defaults on create; round-trip through catalog pages; open path reports the right form.
-Needs: T04, T10.
+**P14 — Measure.**
+Files: `bench/bench_main.cpp`, `tools/benchmark.py`, `bench/results-waystone-v2.md`.
+Point replay vs. btree descent vs. heap chain scan, and join replay vs. descent chain, at several row counts. Quote against the bar in spec §7 (8,417 qps / 11 µs for a validated point lookup vs. 311 qps / 2,582 µs for a chain scan at 5,000 rows). If join replay does not beat a descent chain, that is a finding and it goes in the file.
+Needs: P13.
 
-**T13 — Coverage hooks (unit-level).** — **done 2026-07-30** as `waystone_hooks.{hpp,cpp}` + 15 tests. Two decisions worth carrying forward: the hooks take the directory root and depth as a `WaystoneRef` value and never touch the catalog (a hook that could grow the directory would bump the catalog version and dangle the `TableAccess*` its own caller is holding), and a pk past the current depth reports **`OutOfRange`**, distinct from `InvalidArgument`, because "grow and retry" is a normal event and a bad pk is a bug. Dispatcher wiring is *not* included — it is still behind the headerless-page/checksum decision above.
-Files: `src/stats/waystone_hooks.cpp`, `tests/waystone_hooks_test.cpp`. `OnInsert(pk, page_id, slot, epoch)` initializes the entry (`kEntryLive`) through the directory; `OnDelete(pk)` clears. Single arithmetic entry write each — anything heavier is a spec violation. Executor integration is deliberately out of scope here (T18).
-Tests: spec §12-4 hook half against HeapPage/InMemoryPageStore fixtures, incl. first-touch lazy page allocation.
-Needs: T09–T10.
+## Phase F — lifecycle
 
-**T14 — Aggregator core.**
-Files: `src/stats/waystone_aggregator.cpp`, `tests/waystone_aggregator_test.cpp`. `Ingest` (count/recency/location/epoch refresh), `DecayTick` behind a `DecayPolicy` interface (ship halving as the default *implementation*, interface keeps EWMA viable — this is not deciding the `[OPEN]`), `stats()` counters (ingested/dropped/invalidations) accurate from day one. Synthetic-event fixtures; no executor needed.
-Tests: spec §12-5 counts/decay; monotone heat ordering within a tick.
-Needs: T09–T10, T13.
-
-**T15 — Observer & ring.**
-Files: `src/stats/access_ring.cpp`, `tests/access_ring_test.cpp`. Core-local SPSC ring, preallocated, wait-free enqueue-or-drop with drop counting; `NullAccessObserver` as the disabled path. Producer side driven by a synthetic generator until T18.
-Tests: spec §12-7 (saturation drops, never blocks, counts visible); steady-state no-allocation assertion.
-Needs: T08. Parallel with T13–T14.
-
-**T16 — Probe & epoch validation.** — **done 2026-07-30** as `waystone_probe.{hpp,cpp}` + 18 tests. `Probe()` folds all four ways to be unusable (no entry, no page, cleared `kEntryLive`, epoch mismatch) into one `trusted` flag, deliberately, so a caller cannot handle three and forget the fourth. `ProbeAndVerify()` owns the §3.1 rule-2 Keystone-id check and **fails closed** — a null id-reader is `InvalidArgument`, never a silently unverified trust. `Observe()` restores trust after a fallback lookup without touching heat and without resurrecting a delete-mark. `EpochProvider` keeps the epoch-storage `[OPEN]` open.
-Files: extend aggregator + `tests/waystone_probe_test.cpp`. pk probe through the directory returning `{page_id, slot, use_count, page_epoch, trusted}`; epoch source behind an `EpochProvider` seam (stub now; real bump sites arrive with the physical optimizer, T19). Document the B+-tree-fallback obligation at the call site.
-Tests: spec §12-5 — bump ⇒ untrusted, re-observe ⇒ trusted, counts survive.
-Needs: T14.
-
-**T17 — Backfill & toggle lifecycle.**
-Files: `src/stats/waystone_backfill.cpp`, `tests/waystone_backfill_test.cpp`. Maintenance-group task scanning in key order through a `TupleScanSource` seam (stub over heap fixtures now; B+ tree plugs in later), restartable via a persisted low-water pk; coverage-complete transition; disable = wholesale drop + flag clear.
-Tests: spec §12-6 full (enable→backfill→complete; restart mid-way; disable leaves results unchanged).
-Needs: T12–T14.
-
-**T18 — Executor integration.** — **read path done 2026-07-30** (W07): `WAYSTONE ENABLE|DISABLE|STATUS` on the dispatcher, coverage maintained from `HandleInsert`, and a probe on `SELECT ... WHERE id = <n>` with unconditional fallback. Equivalence is tested against a parallel Waystone-off relation rather than by disabling and re-enabling, which `ENABLE` refuses once a relation holds rows. The observer/trace half is still deferred with T14/T15.
-Wire the observer into the executor's tuple-touch sites and the coverage hooks into the insert/delete paths; plumb `pattern_id`/`arg_hash` from the plan context (T11). Until M1 lands, keep the integration behind a fixture executor that replays scripted access traces — the trace format is this task's first deliverable and is what T14–T16 consume.
-Tests: spec §12-2 (results identical with observer off / ring saturated / structure deleted) and §12-3 in its **amended** form (read-path *equivalence* across probe-on / probe-off / disabled / pages-deleted / stale-entry-pointing-at-a-different-pk — not the retired "zero page touches" assertion) — both become regression-mandatory for every later change.
-Needs: T13–T15.
-
-**T19 — Relayout epoch bump sites.** *(interface now, call sites later)*
-Define `EpochProvider`'s mutating side (`BumpFor(page)`), invoked by page rebuild/relayout. Land the interface + tests against the stub now; the physical optimizer calls it when it exists.
-Needs: T16.
-
-**T20 — Pattern-correlated groups (hint-index seed).**
-Reconstruct per-execution `SingleKeyRef` sequences keyed by `(pattern_id, arg_hash)` from `ordinal`s; bounded per-core table; expose as probe-side prefetch candidates only (per-template trust classification stays `[OPEN]` — surface candidates, don't act on them).
-Needs: T11, T14–T16, T18 trace fixtures.
+**P15 — Invalidation and eviction.** Retention per pattern and instance eviction (spec §9, `[OPEN]` — surface a policy seam, do not pick one). Needs: P11.
+**P16 — Decay and `use_count` maintenance.** Behind a `DecayPolicy` interface; halving as the default *implementation*, which is not deciding the `[OPEN]`. Needs: P15.
+**P17 — Epoch bump sites.** `EpochProvider::BumpFor(page)` gains real callers when relayout exists. Interface and tests now, call sites later. Needs: P06.
 
 ## Standing instructions
 
-- Advisory-contract tests (T18's §12-2/§12-3) run in every CI pass from the moment they exist.
-- No allocation on observer/ingest steady-state paths; all timing via the injected clock; all page access via `PageStore`.
-- Update spec + this workplan together when an `[OPEN]` lands; move it into the spec body with the date.
+- Every consumer of a trail validates per spec §2. There is one implementation of that check (P11) and everything calls it.
+- No allocation on the observer path; all timing via the injected clock; all page access via `PageStore`.
+- Update the spec and this file together when an `[OPEN]` lands — move it into the spec body with the date, and mirror it in `CLAUDE.md`.
+
+## Out of scope, explicitly
+
+- **Set caching / completeness.** Requires amending invariant 9 and a commit-time change stamp (spec §9).
+- **Invariant 3 / invariant 10 relaxation.** Permitted by this design, not performed by it (spec §8).
+- **Removing `CreateNewHeaderless()` and `kHeaderlessMap`.** They have no caller (spec §10). Optional cleanup, unrelated to any task here.

@@ -5,6 +5,8 @@
 #include <vector>
 
 #include "kds/catalog/well_known.hpp"
+#include "kds/parser/fingerprint.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -388,6 +390,231 @@ TEST(CatalogCacheWriteAmplificationTest, CachedReadsDoNotDirtyCatalogPages) {
     // next_id lives. That one is not cached and must not be.
     ASSERT_TRUE(catalog.AllocateRowId(oid.value()).ok());
     EXPECT_EQ(store.value()->DirtyPageIds(), std::vector<PageId>{kCatalogPageTables});
+}
+
+// ---- sys.patterns (docs/waystone-concpets.md section 4) -------------------
+
+class PatternCatalogTest : public ::testing::Test {
+protected:
+    void SetUp() override { ASSERT_TRUE(catalog_.Bootstrap().ok()); }
+
+    // Writes a sys.patterns row straight onto the catalog page, bypassing
+    // RegisterPattern(). This is how a stale row actually comes to exist -
+    // an older build wrote it and then the fingerprint version was bumped -
+    // and there is deliberately no API that can produce one, since
+    // RegisterPattern() stamps the current version itself.
+    void WriteRawPatternRow(std::uint64_t pattern_id, std::uint32_t version) {
+        auto bytes = store_.Get(kCatalogPagePatterns);
+        ASSERT_TRUE(bytes.ok());
+        kds::heap::PageView page(bytes.value());
+
+        SysPatternRow row{};
+        row.oid = 900000 + pattern_id;
+        row.pattern_id = pattern_id;
+        row.fingerprint_version = version;
+        row.waystone_root = kInvalidPageId;
+        auto encoded = row.Encode();
+        ASSERT_TRUE(page.InsertTuple(encoded, kBootstrapXid).ok());
+    }
+
+    storage::InMemoryPageStore store_{128};
+    Catalog catalog_{store_};
+
+    static constexpr std::uint32_t kVersion = parser::kFingerprintVersion;
+    static constexpr std::uint32_t kForeignVersion = parser::kFingerprintVersion + 1;
+};
+
+TEST_F(PatternCatalogTest, BootstrapCreatesTheRelation) {
+    auto oid = catalog_.FindTableOidByName("patterns");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    EXPECT_EQ(oid.value(), kSysPatternsTable);
+
+    auto row = catalog_.GetSysTableRow(kSysPatternsTable);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().desc_page_id, kCatalogPagePatterns);
+}
+
+TEST_F(PatternCatalogTest, RegisterThenFindRoundTrips) {
+    auto registered = catalog_.RegisterPattern(0xABCDEF, kStmtClassUnclassified);
+    ASSERT_TRUE(registered.ok()) << registered.status().message();
+    EXPECT_EQ(registered.value()->pattern_id, 0xABCDEFu);
+    EXPECT_EQ(registered.value()->fingerprint_version, kVersion);
+    EXPECT_FALSE(registered.value()->has_waystone_directory());
+
+    auto found = catalog_.FindPattern(0xABCDEF);
+    ASSERT_TRUE(found.ok()) << found.status().message();
+    EXPECT_EQ(found.value()->oid, registered.value()->oid);
+
+    // Reference-stable, like InitTableAccess(): the caller may hold it.
+    EXPECT_EQ(found.value(), registered.value());
+}
+
+TEST_F(PatternCatalogTest, AnUnknownPatternIsNotFound) {
+    auto found = catalog_.FindPattern(12345);
+    EXPECT_FALSE(found.ok());
+    EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
+}
+
+TEST_F(PatternCatalogTest, RegisteringTwiceIsRefused) {
+    ASSERT_TRUE(catalog_.RegisterPattern(7, kStmtClassUnclassified).ok());
+    auto again = catalog_.RegisterPattern(7, kStmtClassUnclassified);
+    EXPECT_FALSE(again.ok());
+    EXPECT_EQ(again.status().code(), StatusCode::kAlreadyExists);
+}
+
+TEST_F(PatternCatalogTest, PatternOidsComeFromThePersistentSequence) {
+    auto a = catalog_.RegisterPattern(1, kStmtClassUnclassified);
+    auto b = catalog_.RegisterPattern(2, kStmtClassUnclassified);
+    ASSERT_TRUE(a.ok());
+    ASSERT_TRUE(b.ok());
+
+    // Distinct and monotonic, and - unlike GenerateUserOid() - persisted,
+    // so a restart does not reissue them onto rows that already exist.
+    EXPECT_NE(a.value()->oid, b.value()->oid);
+    EXPECT_LT(a.value()->oid, b.value()->oid);
+
+    auto table_row = catalog_.GetSysTableRow(kSysPatternsTable);
+    ASSERT_TRUE(table_row.ok());
+    EXPECT_GT(table_row.value().next_id, b.value()->oid);
+}
+
+// ---- The version gate (the catalog half of P02) ---------------------------
+
+TEST_F(PatternCatalogTest, AForeignVersionResolvesAsAbsentNotAsAnError) {
+    WriteRawPatternRow(99, kForeignVersion);
+
+    // The row is on the page, and the lookup still reports the pattern as
+    // never seen: its pattern_id was computed under rules this build does
+    // not implement, so it names a shape that is not the one it claims.
+    // NotFound, not a failure - nothing about a stale row should fail a
+    // statement.
+    auto found = catalog_.FindPattern(99);
+    EXPECT_FALSE(found.ok());
+    EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
+
+    // And the same filter applies to the row accessor, which is where it
+    // lives. A caller reaching past FindPattern() for heat must not see a
+    // stale row either.
+    EXPECT_EQ(catalog_.GetSysPatternRow(99).status().code(), StatusCode::kNotFound);
+}
+
+TEST_F(PatternCatalogTest, APatternStaleAtOneVersionCanBeReRegisteredAtTheCurrentOne) {
+    WriteRawPatternRow(55, kForeignVersion);
+
+    // Not AlreadyExists: as far as this build is concerned the pattern has
+    // never been seen, and refusing to record it would leave the shape
+    // permanently unlearnable after a version bump.
+    auto fresh = catalog_.RegisterPattern(55, kStmtClassUnclassified);
+    ASSERT_TRUE(fresh.ok()) << fresh.status().message();
+
+    auto found = catalog_.FindPattern(55);
+    ASSERT_TRUE(found.ok());
+    EXPECT_EQ(found.value()->fingerprint_version, kVersion);
+}
+
+TEST_F(PatternCatalogTest, AStaleRowDoesNotShadowTheCurrentOne) {
+    // Both rows on the page at once, stale first - the state a version bump
+    // leaves behind, since nothing rewrites the old rows. A lookup that
+    // took the first match by pattern_id would return the stale one, which
+    // is the defect this ordering exists to catch.
+    WriteRawPatternRow(77, kForeignVersion);
+    ASSERT_TRUE(catalog_.RegisterPattern(77, kStmtClassUnclassified).ok());
+
+    auto found = catalog_.FindPattern(77);
+    ASSERT_TRUE(found.ok());
+    EXPECT_EQ(found.value()->fingerprint_version, kVersion);
+
+    auto row = catalog_.GetSysPatternRow(77);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().fingerprint_version, kVersion);
+}
+
+TEST_F(PatternCatalogTest, ARegisteredRowAlwaysCarriesTheCurrentVersion) {
+    // The version is stamped by RegisterPattern(), not supplied - so there
+    // is no call that can write a row this build will not resolve.
+    auto registered = catalog_.RegisterPattern(4, kStmtClassUnclassified);
+    ASSERT_TRUE(registered.ok());
+    EXPECT_TRUE(parser::IsCurrentFingerprintVersion(registered.value()->fingerprint_version));
+}
+
+// ---- The root/depth pair --------------------------------------------------
+
+TEST_F(PatternCatalogTest, RootAndDepthAreValidatedAsAPair) {
+    ASSERT_TRUE(catalog_.RegisterPattern(10, kStmtClassUnclassified).ok());
+
+    // A root with no depth is unwalkable; a depth with no root has nothing
+    // to walk. Both are refused before the page is touched.
+    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(10, 4096, 0).code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(10, kInvalidPageId, 1).code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(10, 4096, kMaxPatternDirDepth + 1).code(),
+              StatusCode::kInvalidArgument);
+
+    // The two coherent shapes: a directory, and none.
+    EXPECT_TRUE(catalog_.SetPatternWaystoneRoot(10, 4096, 1).ok());
+    EXPECT_TRUE(catalog_.SetPatternWaystoneRoot(10, kInvalidPageId, 0).ok());
+}
+
+TEST_F(PatternCatalogTest, SettingTheRootUpdatesTheCachedEntryInPlace) {
+    auto registered = catalog_.RegisterPattern(11, kStmtClassUnclassified);
+    ASSERT_TRUE(registered.ok());
+    const PatternAccess* held = registered.value();
+    ASSERT_FALSE(held->has_waystone_directory());
+
+    ASSERT_TRUE(catalog_.SetPatternWaystoneRoot(11, 4096, 2).ok());
+
+    // The pointer the caller was holding is still valid *and* now reports
+    // the new directory - which is the whole reason this is an in-place
+    // update rather than an invalidation.
+    EXPECT_TRUE(held->has_waystone_directory());
+    EXPECT_EQ(held->waystone_root, 4096u);
+    EXPECT_EQ(held->dir_depth, 2);
+
+    // And it survives a cache drop, because the page was written too.
+    auto row = catalog_.GetSysPatternRow(11);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().waystone_root, 4096u);
+    EXPECT_EQ(row.value().dir_depth, 2);
+}
+
+TEST_F(PatternCatalogTest, SettingTheRootOfAnUnknownPatternIsNotFound) {
+    EXPECT_EQ(catalog_.SetPatternWaystoneRoot(404, 4096, 1).code(), StatusCode::kNotFound);
+}
+
+// ---- What registration must not disturb -----------------------------------
+
+TEST_F(PatternCatalogTest, RegisteringAPatternDoesNotInvalidateTableAccess) {
+    auto oid = catalog_.CreateTable(kNamespacePublic, "t", MinimalPkSchema(),
+                                     ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok());
+    auto access = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    const TableAccess* held = access.value();
+    const std::uint64_t version_before = catalog_.catalog_version();
+
+    ASSERT_TRUE(catalog_.RegisterPattern(0xF00D, kStmtClassUnclassified).ok());
+
+    // The hazard this avoids is the one the deleted per-relation Waystone
+    // walked into: a catalog write mid-statement that cleared the cache out
+    // from under the `const TableAccess*` the statement was holding.
+    // Nothing cached can go stale from a pattern appearing, so nothing is
+    // dropped and no version moves.
+    EXPECT_EQ(catalog_.catalog_version(), version_before);
+    auto again = catalog_.InitTableAccess(oid.value());
+    ASSERT_TRUE(again.ok());
+    EXPECT_EQ(again.value(), held);
+}
+
+TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
+    ASSERT_TRUE(catalog_.RegisterPattern(21, kStmtClassUnclassified).ok());
+
+    // PatternAccess deliberately has no use_count/last_seen to read: they
+    // change on every execution, which is not DDL, so they are not
+    // cacheable facts. The row is where they live.
+    auto row = catalog_.GetSysPatternRow(21);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().use_count, 0u);
+    EXPECT_EQ(row.value().last_seen, 0u);
 }
 
 }  // namespace

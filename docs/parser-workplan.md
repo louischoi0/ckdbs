@@ -1,26 +1,8 @@
-# KDS Parser — Workplan (4 Phases)
+# KDS Parser — Workplan
 
-**Status:** Official work instructions, companion to `docs/parser.md` (the blueprint). The blueprint's `[CONFIRMED]` items are built as stated; its `[PROPOSED]` class list (I2) is built as the default; its `[OPEN]` item (I14, aggregates) is **not** touched by any task here. Written 2026-07-29.
+Work instructions, companion to `docs/parser.md` (the blueprint). The blueprint's items are built as stated; its `[PROPOSED]` class list (I2) is built as the default; its `[OPEN]` item (I14, aggregates) is **not** touched by any task here.
 
-Baseline being replaced: the legacy `kds_parse()` port from `9cde1b4` — `std::string`/`std::vector` AST, copying lexer, no fingerprint, no class tag, no catalog binding. Grammar today is `CREATE TABLE` / `INSERT` / `SELECT *` / `UPDATE` with AND-only `col op val` filters. Everything else in the blueprint is unbuilt.
-
-Execution rules:
-- Phases land in order; each phase ends at a gate that must be green before the next starts.
-- Tasks within a phase run in numeric order unless "needs" says otherwise.
-- Each task ships its listed tests in the same change; `bash test.sh` green is part of "done".
-- The only consumer today is `src/server/command_dispatcher.cpp` (`parser::Parse` + `std::holds_alternative` on the `Statement` variant). Every phase keeps it compiling and its tests green; it is rewritten onto the new seam in PR04, not adapted repeatedly.
-- If a task turns out to need I14 or any `[OPEN]` in `CLAUDE.md` — stop, flag, do not decide.
-
-Phase map:
-
-| Phase | Theme | Blueprint items | Ends with |
-|---|---|---|---|
-| 1 | Foundation: representation swap, grammar unchanged | I3, I4 | Flat arena AST, zero-copy lexer, identical accepted language |
-| 2 | Identity: normalization, classification, pk range | I1, I2, I6 (PARSE half) | `pattern_id` + class tag on every AST root |
-| 3 | Grammar surface | I7, I8, I9, I10, I11, I13 | The v1 language, minus aggregates |
-| 4 | Binding & integration | I5, I6 (BIND half), I12 | oid-resolved ASTs, KWP `C_PARSE`, executor switch dispatch |
-
-Phases 1–3 are self-contained in `parser/` + dispatcher. Phase 4 crosses into catalog, KWP session, and executor; its external seams are named per task.
+Baseline being replaced: a recursive-descent parser with a `std::string`/`std::vector` AST, a copying lexer, no class tag, and no catalog binding. The grammar today is `CREATE TABLE` / `INSERT` / `SELECT *` / `UPDATE` with AND-only `col op val` filters. Fingerprinting already exists (`include/kds/parser/fingerprint.hpp`) as a separate pass over the same lexer; the work below folds it into the single pass rather than rebuilding it.
 
 ---
 
@@ -106,7 +88,7 @@ Goal: the v1 language. Every task here is additive to Phase 1–2 machinery — 
 
 **PR11 — `CREATE TABLE ... WITH (k = v, ...)` (I7).**
 Files: `src/parser/parser.cpp`, `include/kds/parser/table_options.hpp`, `tests/parser_ddl_test.cpp`.
-Option **table**, not grammar productions: `WAYSTONE = ON|OFF`, `PHYSICAL_OPTIMIZER = ON|OFF`. Unknown option → parse error naming the option and its position. Adding an option must require no grammar edit.
+Option **table**, not grammar productions; the v1 entry is `PHYSICAL_OPTIMIZER = ON|OFF`. Unknown option → parse error naming the option and its position. Adding an option must require no grammar edit.
 Done when: adding a third option is a one-line table entry (proven by a test-only option); both v1 options reach the AST as flags (catalog wiring is PR21).
 
 **PR12 — Session/admin statements (I8).**
@@ -172,9 +154,8 @@ Needs: PR19.
 
 **PR21 — DDL options → catalog flags (I7 completion).**
 Files: catalog relation record, `tests/catalog_test.cpp`.
-`WAYSTONE` and `PHYSICAL_OPTIMIZER` options round-trip into catalog flags.
-Seam: Waystone workplan **T12** owns `waystone_enabled` on the relation record — PR21 consumes it, does not redefine it. If T12 has not landed, PR21 stops at the parser-side flag and the catalog half moves behind T12.
-Needs: PR11, PR19, Waystone T12.
+The `PHYSICAL_OPTIMIZER` option round-trips into a catalog flag on the relation record. There is no `WAYSTONE` option: Waystone is keyed on a pattern, not a relation, so nothing per-relation exists for it to set.
+Needs: PR11, PR19.
 
 **PR22 — Named statements as arena snapshots (I3 completion).**
 Files: `src/parser/statement_cache.cpp`, `tests/statement_cache_test.cpp`.
@@ -206,4 +187,4 @@ Needs: PR19, PR23.
 
 ## Blocked references
 
-`docs/parser.md` §6 amendment 3 names `docs/physical-optimizer-blueprint.md`, which does not exist in the repo. The `PHYSICAL_OPTIMIZER` DDL option (PR11) is parsed as a flag regardless; the "bundle planner" note cannot be written until that document lands.
+There is no physical-optimizer specification. The `PHYSICAL_OPTIMIZER` DDL option (PR11) is parsed and stored as a flag regardless; nothing consumes it yet.
