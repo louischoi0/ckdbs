@@ -9,6 +9,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/ec2-user/ckdbs/tests/bootstrap_test.cpp" "tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o.d"
+  "/home/ec2-user/ckdbs/tests/btree_test.cpp" "tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o.d"
   "/home/ec2-user/ckdbs/tests/catalog_cache_test.cpp" "tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o.d"
   "/home/ec2-user/ckdbs/tests/catalog_test.cpp" "tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o.d"
   "/home/ec2-user/ckdbs/tests/command_dispatcher_test.cpp" "tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o.d"
@@ -44,12 +45,6 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/ec2-user/ckdbs/tests/wal_payload_test.cpp" "tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o.d"
   "/home/ec2-user/ckdbs/tests/wal_record_test.cpp" "tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o.d"
   "/home/ec2-user/ckdbs/tests/wal_stream_test.cpp" "tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o.d"
-  "/home/ec2-user/ckdbs/tests/waystone_catalog_test.cpp" "tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o.d"
-  "/home/ec2-user/ckdbs/tests/waystone_dir_test.cpp" "tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o.d"
-  "/home/ec2-user/ckdbs/tests/waystone_entry_test.cpp" "tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o.d"
-  "/home/ec2-user/ckdbs/tests/waystone_hooks_test.cpp" "tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o.d"
-  "/home/ec2-user/ckdbs/tests/waystone_probe_test.cpp" "tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o.d"
-  "/home/ec2-user/ckdbs/tests/waystone_select_test.cpp" "tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o" "gcc" "tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o.d"
   )
 
 # Targets to which this target links.

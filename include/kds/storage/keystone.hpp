@@ -1,15 +1,17 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "kds/base/status.hpp"
 
 // Every tuple's mandatory first column (heap-and-tuple.md section 4): one
 // 64-bit word, the "Keystone column" / "Keystone word",
 // `id:40 | flags:8 | reserved:16` (amended 2026-07-28; the field was
-// `meta_handle:16` back when a bounded metadata pool handed out handles -
-// Waystone addresses by id directly, so the handle is retired: write 0,
-// ignore on read, repurposing is [OPEN]). This file only does encode/decode
+// `meta_handle:16` back when a bounded metadata pool handed out handles;
+// that pool is gone and the handle is retired: write 0, ignore on read,
+// repurposing is [OPEN]). This file only does encode/decode
 // of that word - it is a row-encoding concern, independent of the physical
 // heap page layer (heap_page.hpp does not know this struct exists; it
 // just stores whatever payload bytes it's given).
@@ -58,5 +60,17 @@ struct Keystone {
     // bit pattern is a valid decoding.
     static Keystone Decode(std::uint64_t word) noexcept;
 };
+
+// The id in the Keystone word at the front of a tuple payload: an explicit
+// little-endian load (rules.md #5 - no reinterpret_cast over page bytes,
+// no compiler bitfields) followed by Decode(). Fails with Corruption if
+// the payload is too short to hold the word at all.
+//
+// This lives here rather than in each caller's anonymous namespace because
+// it now has four of them - heap_chain.cpp, btree.cpp, heap_page.cpp's
+// KeystoneIdAt(), and the row codec's pk read - and four copies of a
+// persisted format's decode is exactly what invariant 5 is guarding
+// against.
+StatusOr<std::uint64_t> KeystoneIdOfPayload(std::span<const std::byte> payload);
 
 }  // namespace kds

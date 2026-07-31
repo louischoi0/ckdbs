@@ -18,8 +18,7 @@
 // ---- What this is, next to heap_chain.hpp -------------------------------
 //
 // A heap-clustered relation is a linked list of pages: point lookup by pk
-// is O(pages) unless Waystone answers it, and a range scan has to start at
-// the head. This is the same tuple storage with an index above it - the
+// is O(pages), and a range scan has to start at the head. This is the same tuple storage with an index above it - the
 // leaves *are* heap pages (heap_page.hpp's CreateEmptyAs under a
 // kBtreeLeaf header), linked by the same `next_page_id`, holding the same
 // slotted tuples with the same MVCC header. What is added is the internal
@@ -28,8 +27,8 @@
 //
 // Reusing the leaf body rather than defining a second tuple format is
 // deliberate and load-bearing: `heap::PageView` insert/read/overwrite/
-// delete-mark, `exec::EncodeRow`/`DecodeRow`, the `HEAP_INSERT` redo
-// record, and Waystone's `(page_id, slot)` all apply to a leaf verbatim.
+// delete-mark, `exec::EncodeRow`/`DecodeRow` and the `HEAP_INSERT` redo
+// record all apply to a leaf verbatim.
 // A clustered-btree relation is therefore not a second storage engine,
 // it is the heap with a directory over it.
 //
@@ -56,9 +55,9 @@
 // Two consequences worth stating because they are easy to assume away:
 //
 //   1. **Nothing here moves a tuple**, so a leaf's `min_key` is immutable
-//      exactly as a heap page's is (invariant 2), and Waystone's page-epoch
-//      check stays trivially true for btree relations too (CLAUDE.md's
-//      warning about not designing as if that lasts applies unchanged).
+//      exactly as a heap page's is (invariant 2). That is a property of
+//      what is unimplemented - no relayout, no compaction - not a
+//      guarantee to design against.
 //   2. Leaves fill left-to-right and are never merged, so the tree's space
 //      utilisation matches the heap chain's - no 50% worst case, and no
 //      reuse of space freed by DELETE either, for the same missing page
@@ -85,12 +84,20 @@ namespace kds::btree {
 // shared with the heap chain and live in insert_placement.hpp:
 // `kMaxBtreeDepth`, `StructuralChange`, `InsertPlacement`.
 
-// Where a tuple lives. Deliberately the same shape a Waystone probe
-// reports, so a caller can treat "the index said here" and "the probe said
-// here" identically.
+// Where a tuple lives: what a descent hands back to a reader.
 struct Location {
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;
+    // The leaf's bytes, still resident from the descent that found the
+    // tuple - so the caller reads it without asking the store for a page
+    // the lookup just had in hand. Empty when the Location did not come
+    // from a descent; a caller that cannot assume otherwise checks
+    // `.empty()` and falls back to fetching page_id itself.
+    //
+    // Dynamic extent, not std::span<std::byte, kPageSize>: a fixed-extent
+    // span is not default-constructible, and this field has to have an
+    // "unset" state. It is always either empty or exactly kPageSize long.
+    std::span<std::byte> leaf{};
 };
 
 // Formats `page` as a brand-new relation's root: an empty leaf with
@@ -127,16 +134,17 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
 // one leaf scan, against the heap chain's O(pages).
 //
 // Fails with NotFound if no live tuple in that leaf carries `id` - which,
-// because the descent is exact, means the row does not exist. Unlike a
-// Waystone probe this answer is **authoritative**: the tree is the
-// relation's storage, not a hint over it.
+// because the descent is exact, means the row does not exist. The answer
+// is **authoritative**: the tree is the relation's storage, not a hint
+// over it.
 StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id);
 
 // Calls `fn` once per slot of every leaf, left to right - which is pk
 // order page by page, tuples within a leaf staying unordered exactly as in
 // a heap page. Signature matches heap::ChainVisit deliberately, so a
-// caller can hand the same lambda to either.
-Status BtreeVisit(storage::PageStore& store, PageId root,
+// caller can hand the same lambda to either - `access` included, with the
+// same meaning and the same consequence for getting it wrong.
+Status BtreeVisit(storage::PageStore& store, PageId root, storage::PageAccess access,
                   const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn);
 
 // Levels from root to leaf inclusive: 1 while the root is still a leaf.

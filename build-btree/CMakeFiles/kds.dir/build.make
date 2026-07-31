@@ -363,66 +363,10 @@ CMakeFiles/kds.dir/src/catalog/sys_object_registry.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds.dir/src/catalog/sys_object_registry.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/src/catalog/sys_object_registry.cpp -o CMakeFiles/kds.dir/src/catalog/sys_object_registry.cpp.s
 
-CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o: CMakeFiles/kds.dir/flags.make
-CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o: ../src/stats/waystone_entry.cpp
-CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building CXX object CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o -MF CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o.d -o CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o -c /home/ec2-user/ckdbs/src/stats/waystone_entry.cpp
-
-CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/src/stats/waystone_entry.cpp > CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.i
-
-CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/src/stats/waystone_entry.cpp -o CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.s
-
-CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o: CMakeFiles/kds.dir/flags.make
-CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o: ../src/stats/waystone_dir.cpp
-CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building CXX object CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o -MF CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o.d -o CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o -c /home/ec2-user/ckdbs/src/stats/waystone_dir.cpp
-
-CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/src/stats/waystone_dir.cpp > CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.i
-
-CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/src/stats/waystone_dir.cpp -o CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.s
-
-CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o: CMakeFiles/kds.dir/flags.make
-CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o: ../src/stats/waystone_hooks.cpp
-CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building CXX object CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o -MF CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o.d -o CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o -c /home/ec2-user/ckdbs/src/stats/waystone_hooks.cpp
-
-CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/src/stats/waystone_hooks.cpp > CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.i
-
-CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/src/stats/waystone_hooks.cpp -o CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.s
-
-CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o: CMakeFiles/kds.dir/flags.make
-CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o: ../src/stats/waystone_probe.cpp
-CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building CXX object CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o -MF CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o.d -o CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o -c /home/ec2-user/ckdbs/src/stats/waystone_probe.cpp
-
-CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/src/stats/waystone_probe.cpp > CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.i
-
-CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/src/stats/waystone_probe.cpp -o CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.s
-
 CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o: ../src/catalog/catalog_cache.cpp
 CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building CXX object CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building CXX object CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o -MF CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o.d -o CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o -c /home/ec2-user/ckdbs/src/catalog/catalog_cache.cpp
 
 CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.i: cmake_force
@@ -436,7 +380,7 @@ CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/catalog/catalog.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/catalog/catalog.cpp.o: ../src/catalog/catalog.cpp
 CMakeFiles/kds.dir/src/catalog/catalog.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building CXX object CMakeFiles/kds.dir/src/catalog/catalog.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building CXX object CMakeFiles/kds.dir/src/catalog/catalog.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/catalog/catalog.cpp.o -MF CMakeFiles/kds.dir/src/catalog/catalog.cpp.o.d -o CMakeFiles/kds.dir/src/catalog/catalog.cpp.o -c /home/ec2-user/ckdbs/src/catalog/catalog.cpp
 
 CMakeFiles/kds.dir/src/catalog/catalog.cpp.i: cmake_force
@@ -450,7 +394,7 @@ CMakeFiles/kds.dir/src/catalog/catalog.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o: ../src/bootstrap/bootstrap.cpp
 CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building CXX object CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building CXX object CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o -MF CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o.d -o CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o -c /home/ec2-user/ckdbs/src/bootstrap/bootstrap.cpp
 
 CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.i: cmake_force
@@ -464,7 +408,7 @@ CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: ../src/server/command_dispatcher.cpp
 CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_29) "Building CXX object CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building CXX object CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o -MF CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o.d -o CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o -c /home/ec2-user/ckdbs/src/server/command_dispatcher.cpp
 
 CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.i: cmake_force
@@ -478,7 +422,7 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/server/expeditor.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/server/expeditor.cpp.o: ../src/server/expeditor.cpp
 CMakeFiles/kds.dir/src/server/expeditor.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_30) "Building CXX object CMakeFiles/kds.dir/src/server/expeditor.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building CXX object CMakeFiles/kds.dir/src/server/expeditor.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/server/expeditor.cpp.o -MF CMakeFiles/kds.dir/src/server/expeditor.cpp.o.d -o CMakeFiles/kds.dir/src/server/expeditor.cpp.o -c /home/ec2-user/ckdbs/src/server/expeditor.cpp
 
 CMakeFiles/kds.dir/src/server/expeditor.cpp.i: cmake_force
@@ -492,7 +436,7 @@ CMakeFiles/kds.dir/src/server/expeditor.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/server/config_file.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/server/config_file.cpp.o: ../src/server/config_file.cpp
 CMakeFiles/kds.dir/src/server/config_file.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_31) "Building CXX object CMakeFiles/kds.dir/src/server/config_file.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building CXX object CMakeFiles/kds.dir/src/server/config_file.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/server/config_file.cpp.o -MF CMakeFiles/kds.dir/src/server/config_file.cpp.o.d -o CMakeFiles/kds.dir/src/server/config_file.cpp.o -c /home/ec2-user/ckdbs/src/server/config_file.cpp
 
 CMakeFiles/kds.dir/src/server/config_file.cpp.i: cmake_force
@@ -506,7 +450,7 @@ CMakeFiles/kds.dir/src/server/config_file.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/server/tcp_server.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/server/tcp_server.cpp.o: ../src/server/tcp_server.cpp
 CMakeFiles/kds.dir/src/server/tcp_server.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building CXX object CMakeFiles/kds.dir/src/server/tcp_server.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building CXX object CMakeFiles/kds.dir/src/server/tcp_server.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/server/tcp_server.cpp.o -MF CMakeFiles/kds.dir/src/server/tcp_server.cpp.o.d -o CMakeFiles/kds.dir/src/server/tcp_server.cpp.o -c /home/ec2-user/ckdbs/src/server/tcp_server.cpp
 
 CMakeFiles/kds.dir/src/server/tcp_server.cpp.i: cmake_force
@@ -520,7 +464,7 @@ CMakeFiles/kds.dir/src/server/tcp_server.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/parser/lexer.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/parser/lexer.cpp.o: ../src/parser/lexer.cpp
 CMakeFiles/kds.dir/src/parser/lexer.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Building CXX object CMakeFiles/kds.dir/src/parser/lexer.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_29) "Building CXX object CMakeFiles/kds.dir/src/parser/lexer.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/parser/lexer.cpp.o -MF CMakeFiles/kds.dir/src/parser/lexer.cpp.o.d -o CMakeFiles/kds.dir/src/parser/lexer.cpp.o -c /home/ec2-user/ckdbs/src/parser/lexer.cpp
 
 CMakeFiles/kds.dir/src/parser/lexer.cpp.i: cmake_force
@@ -534,7 +478,7 @@ CMakeFiles/kds.dir/src/parser/lexer.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/parser/ast.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/parser/ast.cpp.o: ../src/parser/ast.cpp
 CMakeFiles/kds.dir/src/parser/ast.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_34) "Building CXX object CMakeFiles/kds.dir/src/parser/ast.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_30) "Building CXX object CMakeFiles/kds.dir/src/parser/ast.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/parser/ast.cpp.o -MF CMakeFiles/kds.dir/src/parser/ast.cpp.o.d -o CMakeFiles/kds.dir/src/parser/ast.cpp.o -c /home/ec2-user/ckdbs/src/parser/ast.cpp
 
 CMakeFiles/kds.dir/src/parser/ast.cpp.i: cmake_force
@@ -548,7 +492,7 @@ CMakeFiles/kds.dir/src/parser/ast.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/parser/parser.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/parser/parser.cpp.o: ../src/parser/parser.cpp
 CMakeFiles/kds.dir/src/parser/parser.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_35) "Building CXX object CMakeFiles/kds.dir/src/parser/parser.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_31) "Building CXX object CMakeFiles/kds.dir/src/parser/parser.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/parser/parser.cpp.o -MF CMakeFiles/kds.dir/src/parser/parser.cpp.o.d -o CMakeFiles/kds.dir/src/parser/parser.cpp.o -c /home/ec2-user/ckdbs/src/parser/parser.cpp
 
 CMakeFiles/kds.dir/src/parser/parser.cpp.i: cmake_force
@@ -562,7 +506,7 @@ CMakeFiles/kds.dir/src/parser/parser.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o: ../src/wire/frame_codec.cpp
 CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_36) "Building CXX object CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building CXX object CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o -MF CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o.d -o CMakeFiles/kds.dir/src/wire/frame_codec.cpp.o -c /home/ec2-user/ckdbs/src/wire/frame_codec.cpp
 
 CMakeFiles/kds.dir/src/wire/frame_codec.cpp.i: cmake_force
@@ -576,7 +520,7 @@ CMakeFiles/kds.dir/src/wire/frame_codec.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/record.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/record.cpp.o: ../src/wal/record.cpp
 CMakeFiles/kds.dir/src/wal/record.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_37) "Building CXX object CMakeFiles/kds.dir/src/wal/record.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Building CXX object CMakeFiles/kds.dir/src/wal/record.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/record.cpp.o -MF CMakeFiles/kds.dir/src/wal/record.cpp.o.d -o CMakeFiles/kds.dir/src/wal/record.cpp.o -c /home/ec2-user/ckdbs/src/wal/record.cpp
 
 CMakeFiles/kds.dir/src/wal/record.cpp.i: cmake_force
@@ -590,7 +534,7 @@ CMakeFiles/kds.dir/src/wal/record.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/payload.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/payload.cpp.o: ../src/wal/payload.cpp
 CMakeFiles/kds.dir/src/wal/payload.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_38) "Building CXX object CMakeFiles/kds.dir/src/wal/payload.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_34) "Building CXX object CMakeFiles/kds.dir/src/wal/payload.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/payload.cpp.o -MF CMakeFiles/kds.dir/src/wal/payload.cpp.o.d -o CMakeFiles/kds.dir/src/wal/payload.cpp.o -c /home/ec2-user/ckdbs/src/wal/payload.cpp
 
 CMakeFiles/kds.dir/src/wal/payload.cpp.i: cmake_force
@@ -604,7 +548,7 @@ CMakeFiles/kds.dir/src/wal/payload.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/stream.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/stream.cpp.o: ../src/wal/stream.cpp
 CMakeFiles/kds.dir/src/wal/stream.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_39) "Building CXX object CMakeFiles/kds.dir/src/wal/stream.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_35) "Building CXX object CMakeFiles/kds.dir/src/wal/stream.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/stream.cpp.o -MF CMakeFiles/kds.dir/src/wal/stream.cpp.o.d -o CMakeFiles/kds.dir/src/wal/stream.cpp.o -c /home/ec2-user/ckdbs/src/wal/stream.cpp
 
 CMakeFiles/kds.dir/src/wal/stream.cpp.i: cmake_force
@@ -618,7 +562,7 @@ CMakeFiles/kds.dir/src/wal/stream.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/manager.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/manager.cpp.o: ../src/wal/manager.cpp
 CMakeFiles/kds.dir/src/wal/manager.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_40) "Building CXX object CMakeFiles/kds.dir/src/wal/manager.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_36) "Building CXX object CMakeFiles/kds.dir/src/wal/manager.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/manager.cpp.o -MF CMakeFiles/kds.dir/src/wal/manager.cpp.o.d -o CMakeFiles/kds.dir/src/wal/manager.cpp.o -c /home/ec2-user/ckdbs/src/wal/manager.cpp
 
 CMakeFiles/kds.dir/src/wal/manager.cpp.i: cmake_force
@@ -632,7 +576,7 @@ CMakeFiles/kds.dir/src/wal/manager.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o: ../src/wal/checkpointer.cpp
 CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_41) "Building CXX object CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_37) "Building CXX object CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o -MF CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o.d -o CMakeFiles/kds.dir/src/wal/checkpointer.cpp.o -c /home/ec2-user/ckdbs/src/wal/checkpointer.cpp
 
 CMakeFiles/kds.dir/src/wal/checkpointer.cpp.i: cmake_force
@@ -646,7 +590,7 @@ CMakeFiles/kds.dir/src/wal/checkpointer.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/log_device.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/log_device.cpp.o: ../src/wal/log_device.cpp
 CMakeFiles/kds.dir/src/wal/log_device.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_42) "Building CXX object CMakeFiles/kds.dir/src/wal/log_device.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_38) "Building CXX object CMakeFiles/kds.dir/src/wal/log_device.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/log_device.cpp.o -MF CMakeFiles/kds.dir/src/wal/log_device.cpp.o.d -o CMakeFiles/kds.dir/src/wal/log_device.cpp.o -c /home/ec2-user/ckdbs/src/wal/log_device.cpp
 
 CMakeFiles/kds.dir/src/wal/log_device.cpp.i: cmake_force
@@ -660,7 +604,7 @@ CMakeFiles/kds.dir/src/wal/log_device.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o: ../src/wal/memory_log_device.cpp
 CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_43) "Building CXX object CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_39) "Building CXX object CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o -MF CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o.d -o CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.o -c /home/ec2-user/ckdbs/src/wal/memory_log_device.cpp
 
 CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.i: cmake_force
@@ -674,7 +618,7 @@ CMakeFiles/kds.dir/src/wal/memory_log_device.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o: ../src/wal/file_log_device.cpp
 CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_44) "Building CXX object CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_40) "Building CXX object CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o -MF CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o.d -o CMakeFiles/kds.dir/src/wal/file_log_device.cpp.o -c /home/ec2-user/ckdbs/src/wal/file_log_device.cpp
 
 CMakeFiles/kds.dir/src/wal/file_log_device.cpp.i: cmake_force
@@ -688,7 +632,7 @@ CMakeFiles/kds.dir/src/wal/file_log_device.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/exec/row_codec.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/exec/row_codec.cpp.o: ../src/exec/row_codec.cpp
 CMakeFiles/kds.dir/src/exec/row_codec.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_45) "Building CXX object CMakeFiles/kds.dir/src/exec/row_codec.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_41) "Building CXX object CMakeFiles/kds.dir/src/exec/row_codec.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/exec/row_codec.cpp.o -MF CMakeFiles/kds.dir/src/exec/row_codec.cpp.o.d -o CMakeFiles/kds.dir/src/exec/row_codec.cpp.o -c /home/ec2-user/ckdbs/src/exec/row_codec.cpp
 
 CMakeFiles/kds.dir/src/exec/row_codec.cpp.i: cmake_force
@@ -702,7 +646,7 @@ CMakeFiles/kds.dir/src/exec/row_codec.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/sched/clock.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/sched/clock.cpp.o: ../src/sched/clock.cpp
 CMakeFiles/kds.dir/src/sched/clock.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_46) "Building CXX object CMakeFiles/kds.dir/src/sched/clock.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_42) "Building CXX object CMakeFiles/kds.dir/src/sched/clock.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/sched/clock.cpp.o -MF CMakeFiles/kds.dir/src/sched/clock.cpp.o.d -o CMakeFiles/kds.dir/src/sched/clock.cpp.o -c /home/ec2-user/ckdbs/src/sched/clock.cpp
 
 CMakeFiles/kds.dir/src/sched/clock.cpp.i: cmake_force
@@ -716,7 +660,7 @@ CMakeFiles/kds.dir/src/sched/clock.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/sched/scheduler.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/sched/scheduler.cpp.o: ../src/sched/scheduler.cpp
 CMakeFiles/kds.dir/src/sched/scheduler.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_47) "Building CXX object CMakeFiles/kds.dir/src/sched/scheduler.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_43) "Building CXX object CMakeFiles/kds.dir/src/sched/scheduler.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/sched/scheduler.cpp.o -MF CMakeFiles/kds.dir/src/sched/scheduler.cpp.o.d -o CMakeFiles/kds.dir/src/sched/scheduler.cpp.o -c /home/ec2-user/ckdbs/src/sched/scheduler.cpp
 
 CMakeFiles/kds.dir/src/sched/scheduler.cpp.i: cmake_force
@@ -730,7 +674,7 @@ CMakeFiles/kds.dir/src/sched/scheduler.cpp.s: cmake_force
 CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o: CMakeFiles/kds.dir/flags.make
 CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o: ../src/sched/epoll_io_backend.cpp
 CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o: CMakeFiles/kds.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_48) "Building CXX object CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_44) "Building CXX object CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o -MF CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o.d -o CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o -c /home/ec2-user/ckdbs/src/sched/epoll_io_backend.cpp
 
 CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.i: cmake_force
@@ -764,10 +708,6 @@ kds_OBJECTS = \
 "CMakeFiles/kds.dir/src/catalog/rows.cpp.o" \
 "CMakeFiles/kds.dir/src/catalog/schema.cpp.o" \
 "CMakeFiles/kds.dir/src/catalog/sys_object_registry.cpp.o" \
-"CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o" \
-"CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o" \
-"CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o" \
-"CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o" \
 "CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o" \
 "CMakeFiles/kds.dir/src/catalog/catalog.cpp.o" \
 "CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o" \
@@ -816,10 +756,6 @@ libkds.a: CMakeFiles/kds.dir/src/catalog/oid.cpp.o
 libkds.a: CMakeFiles/kds.dir/src/catalog/rows.cpp.o
 libkds.a: CMakeFiles/kds.dir/src/catalog/schema.cpp.o
 libkds.a: CMakeFiles/kds.dir/src/catalog/sys_object_registry.cpp.o
-libkds.a: CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o
-libkds.a: CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o
-libkds.a: CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o
-libkds.a: CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o
 libkds.a: CMakeFiles/kds.dir/src/catalog/catalog_cache.cpp.o
 libkds.a: CMakeFiles/kds.dir/src/catalog/catalog.cpp.o
 libkds.a: CMakeFiles/kds.dir/src/bootstrap/bootstrap.cpp.o
@@ -845,7 +781,7 @@ libkds.a: CMakeFiles/kds.dir/src/sched/scheduler.cpp.o
 libkds.a: CMakeFiles/kds.dir/src/sched/epoll_io_backend.cpp.o
 libkds.a: CMakeFiles/kds.dir/build.make
 libkds.a: CMakeFiles/kds.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_49) "Linking CXX static library libkds.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_45) "Linking CXX static library libkds.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/kds.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/kds.dir/link.txt --verbose=$(VERBOSE)
 

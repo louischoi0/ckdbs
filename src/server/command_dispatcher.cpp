@@ -11,8 +11,6 @@
 
 #include "kds/exec/row_codec.hpp"
 #include "kds/parser/parser.hpp"
-#include "kds/stats/waystone_dir.hpp"
-#include "kds/stats/waystone_probe.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
@@ -146,10 +144,6 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
     if (IEquals(cmd, "SYNC")) {
         return HandleSync();
     }
-    if (IEquals(cmd, "WAYSTONE")) {
-        return HandleWaystone(Trim(rest));
-    }
-
     return {"ERR unknown command", false};
 }
 
@@ -176,91 +170,6 @@ DispatchOutcome CommandDispatcher::HandleSync() {
     // point, so it is one of the few things worth having in a default log.
     if (logging(LogLevel::kInfo)) log_->Info("storage", "client SYNC: store persisted");
     return {"OK synced", false};
-}
-
-DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view args) {
-    auto [verb, rest] = SplitFirstToken(args);
-    const std::string_view name = Trim(rest);
-
-    if (IEquals(verb, "STATUS")) {
-        std::ostringstream os;
-        os << "probe_hits=" << waystone_probe_hits_
-           << " probe_misses=" << waystone_probe_misses_;
-        if (!name.empty()) {
-            auto oid = catalog_.FindTableOidByName(name);
-            if (!oid.ok()) return {"ERR " + oid.status().message(), false};
-            auto access = catalog_.InitTableAccess(oid.value());
-            if (!access.ok()) return {"ERR " + access.status().message(), false};
-            os << " state=" << static_cast<int>(access.value()->waystone_state)
-               << " dir_root=" << access.value()->waystone_dir_root
-               << " dir_depth=" << static_cast<int>(access.value()->waystone_dir_depth);
-        }
-        return {os.str(), false};
-    }
-
-    if (name.empty()) {
-        return {"ERR WAYSTONE " + std::string(verb) + " requires a table name", false};
-    }
-    auto oid = catalog_.FindTableOidByName(name);
-    if (!oid.ok()) return {"ERR " + oid.status().message(), false};
-
-    if (IEquals(verb, "ENABLE")) {
-        auto access = catalog_.InitTableAccess(oid.value());
-        if (!access.ok()) return {"ERR " + access.status().message(), false};
-        if (catalog::WaystoneActive(access.value()->waystone_state)) {
-            return {"OK already enabled", false};
-        }
-
-        // Depth from the relation's *next* id, not its current one: the
-        // directory has to cover the ids this relation is about to issue,
-        // and provisioning one level short would force a growth on the
-        // very first insert.
-        auto row = catalog_.GetSysTableRow(oid.value());
-        if (!row.ok()) return {"ERR " + row.status().message(), false};
-        auto depth = stats::DirDepthFor(row.value().next_id);
-        if (!depth.ok()) return {"ERR " + depth.status().message(), false};
-
-        auto root = stats::CreateDirPage(page_store_);
-        if (!root.ok()) return {"ERR " + root.status().message(), false};
-
-        // A relation with rows already in it needs a backfill before
-        // coverage can be claimed (spec section 7); an empty one is
-        // trivially covered. Backfill (T17) does not exist, so a
-        // non-empty relation is refused rather than silently left with
-        // partial coverage that a later reader might trust.
-        if (row.value().next_id != catalog::kFirstRowId) {
-            return {"ERR cannot enable Waystone on a relation that already holds rows; "
-                    "backfill is not implemented",
-                    false};
-        }
-
-        if (Status s = catalog_.SetWaystoneDirectory(oid.value(), catalog::WaystoneState::kCovered,
-                                                     root.value(),
-                                                     static_cast<std::uint8_t>(depth.value()));
-            !s.ok()) {
-            return {"ERR " + s.message(), false};
-        }
-        return {"OK waystone enabled root=" + std::to_string(root.value()) +
-                    " depth=" + std::to_string(depth.value()),
-                false};
-    }
-
-    if (IEquals(verb, "DISABLE")) {
-        // The directory and entry pages are deliberately leaked rather
-        // than freed: the store has no free-page path yet (page.md's
-        // SpaceManager), and orphaning pages is the safe half of that
-        // trade. Dropping the root reference is what makes them
-        // unreachable, and re-enabling allocates a fresh directory.
-        if (Status s = catalog_.SetWaystoneDirectory(
-                oid.value(), catalog::WaystoneState::kDisabled, kInvalidPageId, 0);
-            !s.ok()) {
-            return {"ERR " + s.message(), false};
-        }
-        return {"OK waystone disabled", false};
-    }
-
-    return {"ERR unknown WAYSTONE verb: " + std::string(verb) + " (ENABLE|DISABLE|STATUS)",
-            false};
 }
 
 DispatchOutcome CommandDispatcher::HandleShowMeta() {
@@ -686,9 +595,8 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
     // now: the new root's contents are logged above, and a root published
     // before the pages under it are described is a root recovery cannot
     // follow. This invalidates the catalog cache, so `ta` is dangling from
-    // here on - the rest of this function uses only `oid`, `id`, `placed`,
-    // and the copy taken below.
-    const catalog::TableAccess ta_after_relink = ta;
+    // here on - the rest of this function uses only `oid`, `id` and
+    // `placed`.
     if (placed.value().new_root != kInvalidPageId) {
         if (Status s = catalog_.UpdateRelationDescPage(oid.value(), placed.value().new_root);
             !s.ok()) {
@@ -705,25 +613,6 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
             log_->Info("btree", "table oid " + std::to_string(oid.value()) +
                                     " grew a level; root is now page " +
                                     std::to_string(placed.value().new_root));
-        }
-    }
-
-    // Coverage: the tuple exists, so its entry must too (spec section 3).
-    // Deliberately after LogInsert and deliberately not fatal - Waystone is
-    // advisory, and an INSERT that landed and was logged must not be
-    // reported as failed because a hint could not be recorded. The cost of
-    // swallowing it is a probe miss and a fallback scan for this one id.
-    //
-    // Nothing below this point may touch `ta`: on a directory growth
-    // RecordWaystoneInsert() writes the catalog, which clears the cache
-    // and leaves the reference dangling. The rest of this function uses
-    // only oid, id and placed.
-    if (catalog::WaystoneActive(ta_after_relink.waystone_state)) {
-        auto updated = RecordWaystoneInsert(ta_after_relink, id.value(), placed.value());
-        if (!updated.ok() && logging(LogLevel::kWarn)) {
-            log_->Warn("waystone", "could not record id " + std::to_string(id.value()) +
-                                       " for table oid " + std::to_string(oid.value()) + ": " +
-                                       updated.status().message());
         }
     }
 
@@ -756,22 +645,6 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
                 " page=" + std::to_string(placed.value().page_id) +
                 " slot=" + std::to_string(placed.value().slot),
             false};
-}
-
-std::optional<std::uint64_t> CommandDispatcher::KeystoneIdAtSlot(storage::PageStore& store,
-                                                                 PageId page_id,
-                                                                 std::uint16_t slot, void*) {
-    auto bytes = store.Get(page_id);
-    if (!bytes.ok()) return std::nullopt;
-
-    heap::PageView page(bytes.value());
-    auto tuple = page.ReadTuple(slot);
-    if (!tuple.ok()) return std::nullopt;  // retired, out of range, or dead
-    if (tuple.value().payload.size() < kKeystoneWordSize) return std::nullopt;
-
-    std::uint64_t word = 0;
-    std::memcpy(&word, tuple.value().payload.data(), sizeof(word));
-    return Keystone::Decode(word).id;
 }
 
 StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
@@ -819,66 +692,24 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
 }
 
 Status CommandDispatcher::VisitRelation(
-    const catalog::TableAccess& access,
+    const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn) {
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap:
-            return heap::ChainVisit(page_store_, access.desc_page_id, fn);
+            return heap::ChainVisit(page_store_, access.desc_page_id, page_access, fn);
         case catalog::ClusteredType::kBtree:
-            return btree::BtreeVisit(page_store_, access.desc_page_id, fn);
+            return btree::BtreeVisit(page_store_, access.desc_page_id, page_access, fn);
     }
     return Status::Corruption("relation oid " + std::to_string(access.oid) +
                               " has an unknown clustered_type");
-}
-
-StatusOr<const catalog::TableAccess*> CommandDispatcher::RecordWaystoneInsert(
-    const catalog::TableAccess& access, std::uint64_t id,
-    const storage::InsertPlacement& placed) {
-    const catalog::TableAccess* current = &access;
-    stats::WaystoneRef ws = WaystoneRefOf(*current);
-
-    Status s = stats::OnInsert(page_store_, ws, id, placed.page_id, placed.slot,
-                               epochs_.EpochOf(placed.page_id));
-
-    // OutOfRange is the directory saying "I am too shallow for this id" -
-    // an expected event once per coverage boundary, not a failure. Grow,
-    // persist the new root and depth, re-acquire, retry once.
-    if (s.code() == StatusCode::kOutOfRange) {
-        auto grown = stats::GrowDirectory(page_store_, ws.dir_root, ws.depth);
-        if (!grown.ok()) return grown.status();
-
-        const auto depth = static_cast<std::uint8_t>(ws.depth + 1);
-        if (Status set = catalog_.SetWaystoneDirectory(current->oid, current->waystone_state,
-                                                       grown.value(), depth);
-            !set.ok()) {
-            return set;
-        }
-        if (logging(LogLevel::kInfo)) {
-            log_->Info("waystone", "table oid " + std::to_string(current->oid) +
-                                       " directory deepened to " + std::to_string(depth) +
-                                       " for id " + std::to_string(id));
-        }
-
-        // SetWaystoneDirectory bumped the catalog version, which cleared
-        // the cache: `access` is dangling from here on. Re-acquired rather
-        // than reused, and returned so the caller cannot keep the old one.
-        auto refreshed = catalog_.InitTableAccess(current->oid);
-        if (!refreshed.ok()) return refreshed.status();
-        current = refreshed.value();
-
-        s = stats::OnInsert(page_store_, WaystoneRefOf(*current), id, placed.page_id,
-                            placed.slot, epochs_.EpochOf(placed.page_id));
-    }
-    if (!s.ok()) return s;
-    return current;
 }
 
 std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
     const catalog::TableAccess& access, const std::vector<parser::Condition>& where) const {
     // Deliberately storage-agnostic: this answers "is this statement a bare
     // pk point lookup", which is a property of the WHERE clause alone.
-    // Whether *anything* can shortcut it - a tree descent, a Waystone probe,
-    // or neither - is LocateByPk's question.
+    // Whether anything can shortcut it - a tree descent, or nothing at
+    // all - is LocateByPk's question.
     if (access.schema.columns.empty()) return std::nullopt;
     // Exactly one condition: an extra AND could exclude the row the probe
     // would find, and the probe cannot evaluate the second predicate.
@@ -906,12 +737,14 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
         // and a NotFound means no such row - the scan it replaces would
         // visit the same leaf and find the same nothing. This is the one
         // place a point lookup may skip the scan on a miss, and it is
-        // allowed precisely because it is not a hint (contrast invariant 8,
-        // which governs Waystone and is untouched by this).
+        // allowed precisely because it is not a hint.
         auto found = btree::BtreeLookup(page_store_, access.desc_page_id, pk);
         if (found.ok()) {
-            return PkLookup{PkLookup::Kind::kAt,
-                            TupleLocation{found.value().page_id, found.value().slot}};
+            // Carrying the leaf out is what keeps the caller from asking
+            // the store for a page the descent just held.
+            return PkLookup{
+                PkLookup::Kind::kAt,
+                TupleLocation{found.value().page_id, found.value().slot, found.value().leaf}};
         }
         if (found.status().code() == StatusCode::kNotFound) {
             return PkLookup{PkLookup::Kind::kAbsent, {}};
@@ -929,31 +762,17 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
         return PkLookup{PkLookup::Kind::kScan, {}};
     }
 
-    if (!catalog::WaystoneActive(access.waystone_state)) {
-        return PkLookup{PkLookup::Kind::kScan, {}};
-    }
-    if (std::optional<TupleLocation> at = ProbeForPk(access, pk); at.has_value()) {
-        return PkLookup{PkLookup::Kind::kAt, *at};
-    }
-    // A Waystone miss is never kAbsent: spec 3.1 rule 1 says a miss is not
-    // an answer.
+    // A heap relation has no pk index: the chain scan is the only path,
+    // and it is authoritative.
     return PkLookup{PkLookup::Kind::kScan, {}};
 }
 
-std::optional<TupleLocation> CommandDispatcher::ProbeForPk(const catalog::TableAccess& access,
-                                                           std::uint64_t pk) {
-    auto probed = stats::ProbeAndVerify(page_store_, WaystoneRefOf(access), epochs_, pk,
-                                        &CommandDispatcher::KeystoneIdAtSlot, nullptr);
-    // A Status here is a caller error (unusable directory, pk past the
-    // depth) and is still only a reason to scan: the query has an answer
-    // either way, and refusing to produce it because a hint structure
-    // complained would be the advisory contract broken outright.
-    if (!probed.ok() || !probed.value().trusted) {
-        ++waystone_probe_misses_;
-        return std::nullopt;
+StatusOr<std::span<std::byte, kPageSize>> CommandDispatcher::PageForRead(
+    const TupleLocation& at) {
+    if (!at.page.empty()) {
+        return std::span<std::byte, kPageSize>(at.page.data(), kPageSize);
     }
-    ++waystone_probe_hits_;
-    return TupleLocation{probed.value().page_id, probed.value().slot};
+    return page_store_.GetForRead(at.page_id);
 }
 
 DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
@@ -1020,7 +839,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
             return {os.str(), false};  // header line only: no such row
         }
         if (found.kind == PkLookup::Kind::kAt) {
-            auto bytes = page_store_.Get(found.at.page_id);
+            auto bytes = PageForRead(found.at);
             if (bytes.ok()) {
                 heap::PageView page(bytes.value());
                 auto tuple = page.ReadTuple(found.at.slot);
@@ -1049,7 +868,8 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
     // WHERE cannot match, and no use of the tree's separators to start
     // partway in. Both are range-scan work the point path did not need.
     Status scan = VisitRelation(
-        ta, [&](PageId, heap::PageView& page, std::uint16_t slot) -> Status {
+        ta, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page, std::uint16_t slot) -> Status {
             auto tuple = page.ReadTuple(slot);
             if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
             return emit(tuple.value().payload);
@@ -1094,7 +914,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         if (ta.schema.FindColumn(assignment.col_name) == nullptr) {
             return {"ERR unknown column '" + assignment.col_name + "'", false};
         }
-        // The pk is the tuple's identity, not a field of it: Waystone and
+        // The pk is the tuple's identity, not a field of it: the btree and
         // any future hint index address a tuple by this id, so changing it
         // in place would silently retarget every reference to the row.
         if (assignment.col_name == pk_name) {
@@ -1148,8 +968,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         //
         // Note this keeps the row on its own page even across a chain: an
         // update never moves a tuple, so no page's min_key can be
-        // invalidated by one - and no Waystone entry needs re-observing,
-        // which is why the probe path below records nothing.
+        // invalidated by one.
         if (Status s = page.OverwriteTuple(slot, encoded.value(), tuple.value().trx_id,
                                             tuple.value().undo_ptr);
             !s.ok()) {
@@ -1174,6 +993,10 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
             return {"UPDATED 0", false};  // no such row, on the tree's authority
         }
         if (found.kind == PkLookup::Kind::kAt) {
+            // Get(), not the span the locator carried out: the descent
+            // fetched that leaf read-only, so writing through it would
+            // leave the frame clean and the overwrite would never be
+            // written back. Same frame, one hash lookup, dirty flag set.
             auto bytes = page_store_.Get(found.at.page_id);
             if (bytes.ok()) {
                 heap::PageView page(bytes.value());
@@ -1191,7 +1014,8 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
     }
 
     Status scan = VisitRelation(
-        ta, [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
+        ta, storage::PageAccess::kWrite,
+        [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
             return apply(page_id, page, slot);
         });
     if (!scan.ok()) {

@@ -207,7 +207,8 @@ CMakeFiles/kds.dir/src/catalog/catalog.cpp.o: \
  /usr/include/c++/11/algorithm /usr/include/c++/11/bits/ranges_algo.h \
  /usr/include/c++/11/bits/ranges_util.h \
  /usr/include/c++/11/pstl/glue_algorithm_defs.h \
- /home/ec2-user/ckdbs/include/kds/stats/waystone_dir.hpp \
- /home/ec2-user/ckdbs/include/kds/stats/waystone.hpp \
- /home/ec2-user/ckdbs/include/kds/storage/keystone.hpp \
- /home/ec2-user/ckdbs/include/kds/storage/heap/heap_page.hpp
+ /home/ec2-user/ckdbs/include/kds/storage/btree/btree.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/btree/btree_page.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/heap/heap_page.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/insert_placement.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/keystone.hpp

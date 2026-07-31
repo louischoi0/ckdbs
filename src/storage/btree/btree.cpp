@@ -11,23 +11,16 @@ namespace kds::btree {
 
 namespace {
 
-// Little-endian load of the leading Keystone word, and the id in it. Kept
-// local for the reason heap_chain.cpp keeps its own copy: it is three
-// lines, and an explicit shift/mask read is what rules.md #5 asks of
-// anything that came off a page.
-std::uint64_t LoadLe64(const std::byte* in) {
-    std::uint64_t v = 0;
-    for (int i = 7; i >= 0; --i) {
-        v = (v << 8) | static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(in[i]));
-    }
-    return v;
-}
-
-StatusOr<std::uint64_t> PayloadKeystoneId(std::span<const std::byte> payload) {
-    if (payload.size() < kKeystoneWordSize) {
-        return Status::Corruption("tuple payload is shorter than its Keystone word");
-    }
-    return Keystone::Decode(LoadLe64(payload.data())).id;
+// The Keystone id of the tuple at `slot`, or NotFound if that slot holds
+// no tuple (out of range or retired). `nr_slots` is hoisted by the caller,
+// so a search over a page reads the page header once rather than once per
+// probe. Corruption propagates: a payload too short to hold a Keystone
+// word is damage, not a miss.
+StatusOr<std::uint64_t> SlotKeystoneId(heap::PageView& leaf, std::uint16_t slot,
+                                        std::uint16_t nr_slots) {
+    auto payload = leaf.PayloadAt(slot, nr_slots);
+    if (!payload.ok()) return payload.status();
+    return KeystoneIdOfPayload(payload.value());
 }
 
 // A page's type as the tree understands it. Anything that is neither an
@@ -51,10 +44,31 @@ bool IsLeafPage(std::span<const std::byte, kPageSize> page) {
 struct Descent {
     std::array<PageId, storage::kMaxBtreeDepth> path{};
     std::uint16_t depth = 0;  // index of the leaf within `path`
+    // The leaf's bytes, already fetched. Carried out so callers do not
+    // re-Get a page the descent just held - a lookup used to fetch its
+    // leaf three times over (here, again in BtreeLookup, and a third time
+    // in the statement layer to read the located tuple). Dynamic extent
+    // for the same reason Location::leaf is - a fixed-extent span cannot
+    // be default-constructed.
+    std::span<std::byte> leaf{};
 };
 
+// A descent's leaf bytes back at their true fixed extent. The span is
+// dynamic only because Descent needs an unset state; anything that reaches
+// here came from a store fetch and is exactly one page long.
+std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
+    return std::span<std::byte, kPageSize>(bytes.data(), kPageSize);
+}
+
 // Follows child pointers for `key` from `root`, recording the path.
-StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_t key) {
+//
+// Internal nodes are never modified by a descent, so they are always
+// fetched read-only. `leaf_for_write` says whether the *leaf* is about to
+// be mutated: an insert takes it for write so the frame is marked dirty, a
+// lookup does not, which is what keeps a read-only statement from
+// scheduling a write-back of everything it read (page_store.hpp).
+StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_t key,
+                            bool leaf_for_write) {
     Descent d;
     PageId current = root;
     for (;;) {
@@ -65,9 +79,21 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
         }
         d.path[d.depth] = current;
 
-        auto bytes = store.Get(current);
+        auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        if (IsLeafPage(bytes.value())) return d;
+        if (IsLeafPage(bytes.value())) {
+            if (!leaf_for_write) {
+                d.leaf = bytes.value();
+                return d;
+            }
+            // Re-fetch for write: the frame is already resident, so this
+            // is a hash lookup that flips the dirty flag, and it happens
+            // only on the insert path where a WAL append dwarfs it.
+            auto writable = store.Get(current);
+            if (!writable.ok()) return writable.status();
+            d.leaf = writable.value();
+            return d;
+        }
 
         if (Status s = RequireType(bytes.value(), current, PageType::kBtreeInternal); !s.ok()) {
             return s;
@@ -85,7 +111,7 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root) {
             return Status::Corruption("btree from page " + std::to_string(root) + " exceeded " +
                                       std::to_string(storage::kMaxBtreeDepth) + " levels");
         }
-        auto bytes = store.Get(current);
+        auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         if (IsLeafPage(bytes.value())) return current;
 
@@ -102,13 +128,69 @@ StatusOr<std::uint64_t> MaxLiveId(heap::PageView& leaf) {
     std::uint64_t max_id = 0;
     const std::uint16_t n = leaf.slot_count();
     for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = leaf.ReadTuple(i);
-        if (!tuple.ok()) continue;  // retired or out-of-range slot
-        auto id = PayloadKeystoneId(tuple.value().payload);
+        auto id = SlotKeystoneId(leaf, i, n);
+        if (id.status().code() == StatusCode::kNotFound) continue;  // retired slot
         if (!id.ok()) return id.status();
         if (id.value() > max_id) max_id = id.value();
     }
     return max_id;
+}
+
+// Where `id` sits among a leaf's slots, or NotFound.
+//
+// Two passes, and the second is what makes the first safe to attempt.
+//
+// Slots in a leaf are in ascending key order in every tree this engine
+// builds today: ids are issued monotonically (invariant 10), a descent
+// routes each new id to the one leaf whose range covers it, and the split
+// path refuses outright to divide a page's contents (see BtreeInsert
+// below). Dead slots keep their position, so retirement does not disturb
+// the order either. That makes a binary search correct - but nothing here
+// *depends* on it, because a search that finds nothing falls through to
+// the linear scan that was the only implementation before. An unsorted
+// leaf costs a wasted log2(n) probes and still returns the right answer.
+//
+// Dead slots are the one wrinkle: they carry no key, so a probe can land
+// on a hole. Stepping to the nearest live slot inside the window keeps the
+// search going; a window with no live slot at all is a miss, which the
+// linear pass then confirms or corrects.
+StatusOr<std::uint16_t> FindSlotForId(heap::PageView& leaf, std::uint64_t id,
+                                       std::uint16_t nr_slots) {
+    std::uint16_t lo = 0;
+    std::uint16_t hi = nr_slots;  // exclusive
+    while (lo < hi) {
+        const std::uint16_t mid = static_cast<std::uint16_t>(lo + (hi - lo) / 2);
+
+        // Nearest live slot at or after mid, within the window.
+        std::uint16_t probe = mid;
+        StatusOr<std::uint64_t> key = Status::NotFound("");
+        for (; probe < hi; ++probe) {
+            key = SlotKeystoneId(leaf, probe, nr_slots);
+            if (key.ok()) break;
+            if (key.status().code() != StatusCode::kNotFound) return key.status();
+        }
+        if (probe >= hi) {
+            // Every slot in [mid, hi) is dead; the live ones, if any, are
+            // below mid.
+            hi = mid;
+            continue;
+        }
+
+        if (key.value() == id) return probe;
+        if (key.value() < id) {
+            lo = static_cast<std::uint16_t>(probe + 1);
+        } else {
+            hi = mid;
+        }
+    }
+
+    for (std::uint16_t i = 0; i < nr_slots; ++i) {
+        auto key = SlotKeystoneId(leaf, i, nr_slots);
+        if (key.status().code() == StatusCode::kNotFound) continue;
+        if (!key.ok()) return key.status();
+        if (key.value() == id) return i;
+    }
+    return Status::NotFound("no such key in leaf");
 }
 
 }  // namespace
@@ -126,7 +208,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // Same cross-check ChainInsert makes, for the same reason: two
     // disagreeing copies of a tuple's identity is the kind of defect that
     // stays silent for months.
-    auto encoded_id = PayloadKeystoneId(payload);
+    auto encoded_id = KeystoneIdOfPayload(payload);
     if (!encoded_id.ok()) return encoded_id.status();
     if (encoded_id.value() != id) {
         return Status::Corruption("tuple's Keystone id " + std::to_string(encoded_id.value()) +
@@ -134,13 +216,10 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
                                   ")");
     }
 
-    auto descent = DescendTo(store, root, id);
+    auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
-
-    auto leaf_bytes = store.Get(leaf_id);
-    if (!leaf_bytes.ok()) return leaf_bytes.status();
-    heap::PageView leaf(leaf_bytes.value());
+    heap::PageView leaf(AsPage(descent.value().leaf));
 
     // Invariant 3, enforced at the one door tuples come through - and the
     // descent already guarantees no other leaf may hold this id, so being
@@ -157,12 +236,15 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // Still a sanity check on the id sequence rather than a uniqueness
     // index - a delete-marked tuple holds its key until the slot is
     // physically retired.
+    //
+    // Linear rather than FindSlotForId(): this check expects to find
+    // nothing, and a miss is exactly the case where the binary search pays
+    // its probes and then falls through to this scan anyway.
     {
         const std::uint16_t n = leaf.slot_count();
         for (std::uint16_t i = 0; i < n; ++i) {
-            auto tuple = leaf.ReadTuple(i);
-            if (!tuple.ok()) continue;
-            auto existing = PayloadKeystoneId(tuple.value().payload);
+            auto existing = SlotKeystoneId(leaf, i, n);
+            if (existing.status().code() == StatusCode::kNotFound) continue;
             if (!existing.ok()) return existing.status();
             if (existing.value() == id) {
                 return Status::AlreadyExists("duplicate primary key " + std::to_string(id) +
@@ -294,30 +376,19 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
 }
 
 StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id) {
-    auto descent = DescendTo(store, root, id);
+    auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
+    heap::PageView leaf(AsPage(descent.value().leaf));
 
-    auto bytes = store.Get(leaf_id);
-    if (!bytes.ok()) return bytes.status();
-    heap::PageView leaf(bytes.value());
-
-    // Tuples within a leaf are unordered - the "semi-sorted" property of
-    // heap-and-tuple.md section 3 carries over unchanged - so this is a
-    // linear scan of one page, bounded by how many tuples fit in 8 KB.
-    const std::uint16_t n = leaf.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = leaf.ReadTuple(i);
-        if (!tuple.ok()) continue;  // retired or out-of-range slot
-        auto existing = PayloadKeystoneId(tuple.value().payload);
-        if (!existing.ok()) return existing.status();
-        if (existing.value() == id) return Location{leaf_id, i};
-    }
+    auto slot = FindSlotForId(leaf, id, leaf.slot_count());
+    if (slot.ok()) return Location{leaf_id, slot.value(), descent.value().leaf};
+    if (slot.status().code() != StatusCode::kNotFound) return slot.status();
     return Status::NotFound("no tuple with primary key " + std::to_string(id) + " in leaf " +
                             std::to_string(leaf_id));
 }
 
-Status BtreeVisit(storage::PageStore& store, PageId root,
+Status BtreeVisit(storage::PageStore& store, PageId root, storage::PageAccess access,
                   const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn) {
     auto first = LeftmostLeaf(store, root);
     if (!first.ok()) return first.status();
@@ -333,7 +404,8 @@ Status BtreeVisit(storage::PageStore& store, PageId root,
                                       " pages; the sibling links are cyclic or corrupt");
         }
 
-        auto bytes = store.Get(current);
+        auto bytes = access == storage::PageAccess::kWrite ? store.Get(current)
+                                                           : store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         if (Status s = RequireType(bytes.value(), current, PageType::kBtreeLeaf); !s.ok()) {
             return s;
@@ -354,7 +426,7 @@ Status BtreeVisit(storage::PageStore& store, PageId root,
 }
 
 StatusOr<std::uint16_t> BtreeHeight(storage::PageStore& store, PageId root) {
-    auto bytes = store.Get(root);
+    auto bytes = store.GetForRead(root);
     if (!bytes.ok()) return bytes.status();
     if (IsLeafPage(bytes.value())) return std::uint16_t{1};
     if (Status s = RequireType(bytes.value(), root, PageType::kBtreeInternal); !s.ok()) return s;
@@ -379,7 +451,7 @@ StatusOr<std::uint32_t> BtreeLeafCount(storage::PageStore& store, PageId root) {
                                       " exceeds " + std::to_string(heap::kMaxChainPages) +
                                       " pages; the sibling links are cyclic or corrupt");
         }
-        auto bytes = store.Get(current);
+        auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         ++leaves;
 

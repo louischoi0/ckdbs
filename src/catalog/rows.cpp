@@ -53,10 +53,6 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     auto ct = static_cast<std::uint8_t>(clustered_type);
     std::memcpy(base + kClusteredTypeOffset, &ct, sizeof(ct));
     std::memcpy(base + kNextIdOffset, &next_id, sizeof(next_id));
-    auto ws = static_cast<std::uint8_t>(waystone_state);
-    std::memcpy(base + kWaystoneStateOffset, &ws, sizeof(ws));
-    std::memcpy(base + kWaystoneDirRootOffset, &waystone_dir_root, sizeof(waystone_dir_root));
-    std::memcpy(base + kWaystoneDirDepthOffset, &waystone_dir_depth, sizeof(waystone_dir_depth));
     return buf;
 }
 
@@ -73,13 +69,6 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&ct, base + kClusteredTypeOffset, sizeof(ct));
     row.clustered_type = static_cast<ClusteredType>(ct);
     std::memcpy(&row.next_id, base + kNextIdOffset, sizeof(row.next_id));
-    std::uint8_t ws;
-    std::memcpy(&ws, base + kWaystoneStateOffset, sizeof(ws));
-    row.waystone_state = static_cast<WaystoneState>(ws);
-    std::memcpy(&row.waystone_dir_root, base + kWaystoneDirRootOffset,
-                sizeof(row.waystone_dir_root));
-    std::memcpy(&row.waystone_dir_depth, base + kWaystoneDirDepthOffset,
-                sizeof(row.waystone_dir_depth));
     return row;
 }
 

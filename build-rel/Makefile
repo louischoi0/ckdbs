@@ -707,101 +707,53 @@ src/server/tcp_server.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/server/tcp_server.cpp.s
 .PHONY : src/server/tcp_server.cpp.s
 
-src/stats/waystone_dir.o: src/stats/waystone_dir.cpp.o
-.PHONY : src/stats/waystone_dir.o
+src/storage/btree/btree.o: src/storage/btree/btree.cpp.o
+.PHONY : src/storage/btree/btree.o
 
 # target to build an object file
-src/stats/waystone_dir.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.o
-.PHONY : src/stats/waystone_dir.cpp.o
+src/storage/btree/btree.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o
+.PHONY : src/storage/btree/btree.cpp.o
 
-src/stats/waystone_dir.i: src/stats/waystone_dir.cpp.i
-.PHONY : src/stats/waystone_dir.i
+src/storage/btree/btree.i: src/storage/btree/btree.cpp.i
+.PHONY : src/storage/btree/btree.i
 
 # target to preprocess a source file
-src/stats/waystone_dir.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.i
-.PHONY : src/stats/waystone_dir.cpp.i
+src/storage/btree/btree.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/storage/btree/btree.cpp.i
+.PHONY : src/storage/btree/btree.cpp.i
 
-src/stats/waystone_dir.s: src/stats/waystone_dir.cpp.s
-.PHONY : src/stats/waystone_dir.s
+src/storage/btree/btree.s: src/storage/btree/btree.cpp.s
+.PHONY : src/storage/btree/btree.s
 
 # target to generate assembly for a file
-src/stats/waystone_dir.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_dir.cpp.s
-.PHONY : src/stats/waystone_dir.cpp.s
+src/storage/btree/btree.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/storage/btree/btree.cpp.s
+.PHONY : src/storage/btree/btree.cpp.s
 
-src/stats/waystone_entry.o: src/stats/waystone_entry.cpp.o
-.PHONY : src/stats/waystone_entry.o
+src/storage/btree/btree_page.o: src/storage/btree/btree_page.cpp.o
+.PHONY : src/storage/btree/btree_page.o
 
 # target to build an object file
-src/stats/waystone_entry.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.o
-.PHONY : src/stats/waystone_entry.cpp.o
+src/storage/btree/btree_page.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/storage/btree/btree_page.cpp.o
+.PHONY : src/storage/btree/btree_page.cpp.o
 
-src/stats/waystone_entry.i: src/stats/waystone_entry.cpp.i
-.PHONY : src/stats/waystone_entry.i
-
-# target to preprocess a source file
-src/stats/waystone_entry.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.i
-.PHONY : src/stats/waystone_entry.cpp.i
-
-src/stats/waystone_entry.s: src/stats/waystone_entry.cpp.s
-.PHONY : src/stats/waystone_entry.s
-
-# target to generate assembly for a file
-src/stats/waystone_entry.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_entry.cpp.s
-.PHONY : src/stats/waystone_entry.cpp.s
-
-src/stats/waystone_hooks.o: src/stats/waystone_hooks.cpp.o
-.PHONY : src/stats/waystone_hooks.o
-
-# target to build an object file
-src/stats/waystone_hooks.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.o
-.PHONY : src/stats/waystone_hooks.cpp.o
-
-src/stats/waystone_hooks.i: src/stats/waystone_hooks.cpp.i
-.PHONY : src/stats/waystone_hooks.i
+src/storage/btree/btree_page.i: src/storage/btree/btree_page.cpp.i
+.PHONY : src/storage/btree/btree_page.i
 
 # target to preprocess a source file
-src/stats/waystone_hooks.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.i
-.PHONY : src/stats/waystone_hooks.cpp.i
+src/storage/btree/btree_page.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/storage/btree/btree_page.cpp.i
+.PHONY : src/storage/btree/btree_page.cpp.i
 
-src/stats/waystone_hooks.s: src/stats/waystone_hooks.cpp.s
-.PHONY : src/stats/waystone_hooks.s
-
-# target to generate assembly for a file
-src/stats/waystone_hooks.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_hooks.cpp.s
-.PHONY : src/stats/waystone_hooks.cpp.s
-
-src/stats/waystone_probe.o: src/stats/waystone_probe.cpp.o
-.PHONY : src/stats/waystone_probe.o
-
-# target to build an object file
-src/stats/waystone_probe.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.o
-.PHONY : src/stats/waystone_probe.cpp.o
-
-src/stats/waystone_probe.i: src/stats/waystone_probe.cpp.i
-.PHONY : src/stats/waystone_probe.i
-
-# target to preprocess a source file
-src/stats/waystone_probe.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.i
-.PHONY : src/stats/waystone_probe.cpp.i
-
-src/stats/waystone_probe.s: src/stats/waystone_probe.cpp.s
-.PHONY : src/stats/waystone_probe.s
+src/storage/btree/btree_page.s: src/storage/btree/btree_page.cpp.s
+.PHONY : src/storage/btree/btree_page.s
 
 # target to generate assembly for a file
-src/stats/waystone_probe.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/stats/waystone_probe.cpp.s
-.PHONY : src/stats/waystone_probe.cpp.s
+src/storage/btree/btree_page.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/src/storage/btree/btree_page.cpp.s
+.PHONY : src/storage/btree/btree_page.cpp.s
 
 src/storage/crc32c.o: src/storage/crc32c.cpp.o
 .PHONY : src/storage/crc32c.o
@@ -1387,18 +1339,12 @@ help:
 	@echo "... src/server/tcp_server.o"
 	@echo "... src/server/tcp_server.i"
 	@echo "... src/server/tcp_server.s"
-	@echo "... src/stats/waystone_dir.o"
-	@echo "... src/stats/waystone_dir.i"
-	@echo "... src/stats/waystone_dir.s"
-	@echo "... src/stats/waystone_entry.o"
-	@echo "... src/stats/waystone_entry.i"
-	@echo "... src/stats/waystone_entry.s"
-	@echo "... src/stats/waystone_hooks.o"
-	@echo "... src/stats/waystone_hooks.i"
-	@echo "... src/stats/waystone_hooks.s"
-	@echo "... src/stats/waystone_probe.o"
-	@echo "... src/stats/waystone_probe.i"
-	@echo "... src/stats/waystone_probe.s"
+	@echo "... src/storage/btree/btree.o"
+	@echo "... src/storage/btree/btree.i"
+	@echo "... src/storage/btree/btree.s"
+	@echo "... src/storage/btree/btree_page.o"
+	@echo "... src/storage/btree/btree_page.i"
+	@echo "... src/storage/btree/btree_page.s"
 	@echo "... src/storage/crc32c.o"
 	@echo "... src/storage/crc32c.i"
 	@echo "... src/storage/crc32c.s"

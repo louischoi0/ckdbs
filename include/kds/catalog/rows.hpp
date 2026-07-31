@@ -56,16 +56,6 @@ static_assert(offsetof(SysObjectRow, name) == SysObjectRow::kNameOffset);
 
 // ---- sys.tables -----------------------------------------------------------
 
-// The three Waystone fields (docs/waystone-concpets.md §7, landed
-// 2026-07-30 as W04) are the relation's whole Waystone identity: whether
-// it has one, where its directory starts, and how deep that directory is.
-//
-// §4.1's precondition - a Waystone-enabled relation must use
-// system-generated autoincrement pks, because entry_index = pk and a
-// caller-supplied or reused pk would alias an existing entry - needs no
-// enforcement here: CLAUDE.md invariant 10 already requires that of
-// *every* relation (widened 2026-07-29), and Catalog::AllocateRowId() is
-// the only way an id is issued.
 struct SysTableRow {
     Oid oid;
     Oid namespace_oid;
@@ -76,30 +66,10 @@ struct SysTableRow {
     // system-generated and autoincrement (heap-and-tuple.md section 4,
     // CLAUDE.md invariant 10), and the sequence has to be *persistent*
     // rather than derived: deriving it as max(id)+1 would reissue an id
-    // after the highest tuple is deleted, and Waystone addresses tuples by
-    // id directly, so a reissued id silently aliases a retired one. First
-    // id issued is 1, keeping 0 free as "unset".
+    // after the highest tuple is deleted, and an id is the tuple's
+    // identity, not a free slot to hand out twice. First id issued is 1,
+    // keeping 0 free as "unset".
     std::uint64_t next_id;
-
-    // ---- Waystone (docs/waystone-concpets.md §7) -------------------------
-    //
-    // Defaults are disabled / kInvalidPageId / 0, so a relation created
-    // without asking for Waystone costs exactly what it did before.
-    WaystoneState waystone_state;
-
-    // Root of the relation's page directory (spec §6), kInvalidPageId when
-    // disabled. Changes only when the directory deepens, which relinks a
-    // new root over the old one.
-    PageId waystone_dir_root;
-
-    // Levels the directory walk traverses, 0 when disabled and otherwise
-    // in 1..kMaxDirDepth. **Persisted rather than derived**: deriving it
-    // from next_id would change the moment the sequence crossed a coverage
-    // boundary, which is *before* GrowDirectory() relinks the root - and
-    // every lookup in that window would walk the wrong number of levels
-    // and land on the wrong leaf. The stored depth and the actual root are
-    // one fact and are written together.
-    std::uint8_t waystone_dir_depth;
 
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
@@ -109,12 +79,7 @@ struct SysTableRow {
     // uint64 rather than 8-byte-aligned: catalog rows are packed byte
     // streams read through memcpy, never overlaid on the buffer.
     static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kWaystoneStateOffset = kNextIdOffset + sizeof(std::uint64_t);
-    static constexpr std::size_t kWaystoneDirRootOffset =
-        kWaystoneStateOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kWaystoneDirDepthOffset =
-        kWaystoneDirRootOffset + sizeof(PageId);
-    static constexpr std::size_t kOnDiskSize = kWaystoneDirDepthOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kOnDiskSize = kNextIdOffset + sizeof(std::uint64_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);

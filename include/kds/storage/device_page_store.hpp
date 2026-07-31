@@ -31,12 +31,12 @@
 //
 // ---- Headerless pages (2026-07-30) --------------------------------------
 //
-// Waystone entry and directory pages carry no common header: 256 x 32 B and
-// 2048 x 4 B tile 8 KiB exactly, and a header would cost a slot and break
-// the shift/mask addressing that is the point of those layouts
-// (docs/waystone-concpets.md sections 5 and 6). Stamping a checksum into
-// one at offset 4 would overwrite data - the upper half of entry 0's pk -
-// and verifying one on read would reject it.
+// A page class whose payload tiles 8 KiB exactly - an array of fixed-size
+// entries sized to a power of two, addressed by shift and mask - has no
+// room for the common header, and no caller wants one: a header would cost
+// an entry and break the addressing that is the point of such a layout.
+// Stamping a checksum into one at offset 4 would overwrite data, and
+// verifying one on read would reject it.
 //
 // CreateNewHeaderless() marks a page as such, and the mark is **durable**,
 // in a second bitmap page of the same shape as the free map
@@ -46,19 +46,24 @@
 // recomputed from the catalog either, because the store is opened before
 // bootstrap has a catalog to ask.
 //
-// The cost is that these pages carry no damage detection at all. That is
-// the right trade for an advisory structure and not a concession: a wrong
-// Waystone entry must be *survivable*, which the probe's Keystone-id check
-// guarantees (spec section 3.1), and survivable is strictly stronger than
-// detectable. It does mean silent bit-rot in a Waystone page shows up as a
-// probe miss and a fallback scan, never as a wrong answer.
+// The cost is that these pages carry no damage detection at all, so the
+// mechanism is only appropriate for a structure whose corruption is
+// *survivable* - one a reader validates against an authoritative source
+// and can fall back from. **No page class uses it today** (the Waystone
+// entry and directory pages it was built for were removed 2026-07-31);
+// the bitmap page and its format remain, and a database that never calls
+// this pays one reserved page for them.
 //
 // Not here, deliberately:
 //   - No eviction. Everything touched stays resident, as InMemoryPageStore
 //     already did. Clock eviction needs PageRef (page.md section 3) and
 //     the frame-reclamation policy is an open decision in CLAUDE.md.
-//   - Every page handed out is marked dirty, because PageStore v1 hands
-//     out a raw mutable span with no MarkDirty(). PageRef fixes that.
+//   - Dirty tracking is by which accessor the caller chose, not by what it
+//     actually wrote: Get() marks the frame dirty, GetForRead() leaves it
+//     alone, and both hand out the same raw mutable span. A reader that
+//     calls Get() costs a needless write-back; a writer that calls
+//     GetForRead() loses its write. PageRef (page.md section 3) is what
+//     replaces the convention with a type.
 //   - One free-map page, so coverage is kFreeMapBitsPerPage ids; beyond
 //     that is OutOfRange, not silently unmapped.
 //
@@ -122,6 +127,11 @@ public:
     StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override;
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
     StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
+
+    // Get() that leaves the frame clean (page_store.hpp). Without it a
+    // read-only statement dirties every page it touches and the next
+    // checkpoint writes the whole working set back with nothing changed.
+    StatusOr<std::span<std::byte, kPageSize>> GetForRead(PageId page_id) override;
 
     // CreateNew() for a page that will carry no common header - see the
     // note above. The whole 8 KiB is the caller's, and this store will
@@ -208,8 +218,12 @@ private:
     // the batch.
     Status AwaitWalGate(std::span<const PageId> page_ids);
 
-    StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id);
-    std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes);
+    // `mark_dirty` is false only for a read-only fetch: a frame faulted in
+    // by a reader has not been modified, so it enters the map clean and
+    // nothing writes it back.
+    StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty);
+    std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes,
+                                                bool dirty);
     Status EnsureAddressable(PageId page_id);
 
     std::span<std::byte, kPageSize> free_map_bytes() noexcept {

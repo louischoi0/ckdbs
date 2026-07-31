@@ -29,15 +29,20 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
 #include "kds/sched/clock.hpp"
+#include "kds/storage/btree/btree.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/page_mgr/checkpoint_target.hpp"
 #include "kds/storage/page_mgr/page_mgr.hpp"
@@ -543,6 +548,262 @@ void BenchSegmentRoll(std::uint64_t rolls) {
           "amortized; segment size 64 KiB");
 }
 
+// ---- Clustered storage: B+ tree vs heap chain ---------------------------
+//
+// The two organizations a relation can have (`sys.tables.clustered_type`):
+// a chain of heap pages (heap_chain.hpp) or a clustered B+ tree over the
+// same leaf format (btree.hpp). They store the identical bytes, so the
+// only thing worth measuring is what the directory above the leaves buys
+// and what it costs:
+//
+//   insert        what the descent + occasional split adds to a tail
+//                 append that already knows where the tail is
+//   point lookup  O(depth) page fetches against a chain walk that reads
+//                 every page until it finds the id - the whole reason
+//                 kBtree exists, and the number that has to be read with
+//                 the relation's row count beside it, because only one of
+//                 the two curves is flat
+//   full scan     leaves are walked through the same sibling link the
+//                 chain uses, so this should be a wash; it is here to
+//                 show that the tree does not make a scan worse
+//
+// Backed by InMemoryPageStore with no WAL and no server: this is the
+// storage layer's own cost. tools/benchmark.py --clustered btree measures
+// the same two organizations through the socket, where a logged insert's
+// fsync is the dominant term and these differences are invisible.
+
+enum class Clustered { kHeap, kBtree };
+
+const char* Label(Clustered c) { return c == Clustered::kBtree ? "btree" : "heap"; }
+
+// A tuple whose leading Keystone word carries `id`, padded to `size` with
+// filler standing in for body columns. Both organizations require the
+// word (they read the id back out of it), so this is not tree-specific.
+std::vector<std::byte> KeystoneTuple(std::uint64_t id, std::size_t size) {
+    auto word = kds::Keystone::Encode(id, 0, 0);
+    if (!word.ok()) {
+        Fatal(word.status(), "encoding a keystone word");
+    }
+    std::vector<std::byte> tuple(std::max(size, kds::kKeystoneWordSize));
+    std::memcpy(tuple.data(), &word.value(), kds::kKeystoneWordSize);
+    for (std::size_t i = kds::kKeystoneWordSize; i < tuple.size(); ++i) {
+        tuple[i] = static_cast<std::byte>(i & 0xFF);
+    }
+    return tuple;
+}
+
+// A relation of one organization or the other, root included. The root
+// moves when a tree gains a level, so it is state, not a constant.
+struct Relation {
+    std::unique_ptr<kds::storage::InMemoryPageStore> store;
+    kds::PageId root = kds::kInvalidPageId;
+    Clustered clustered = Clustered::kHeap;
+};
+
+Relation MakeRelation(Clustered clustered) {
+    Relation rel;
+    rel.clustered = clustered;
+    rel.store = std::make_unique<kds::storage::InMemoryPageStore>();
+
+    auto created = rel.store->CreateNew();
+    if (!created.ok()) {
+        Fatal(created.status(), "allocating a relation root");
+    }
+    rel.root = created.value().first;
+
+    // Exactly what Catalog::CreateTable() does for each clustered type:
+    // one page either way, and a tree that is still a bare leaf.
+    if (clustered == Clustered::kBtree) {
+        if (kds::Status s = kds::btree::FormatRoot(created.value().second); !s.ok()) {
+            Fatal(s, "formatting a btree root");
+        }
+    } else {
+        auto view = kds::heap::PageView::CreateEmpty(created.value().second, 0);
+        if (!view.ok()) {
+            Fatal(view.status(), "formatting a heap root");
+        }
+    }
+    return rel;
+}
+
+// One insert into whichever storage `rel` uses, mirroring
+// CommandDispatcher::InsertIntoRelation() minus the WAL: a tree that grew
+// a level reports a new root, which the dispatcher persists and this
+// keeps in memory.
+void InsertRow(Relation& rel, std::uint64_t id, std::span<const std::byte> payload) {
+    if (rel.clustered == Clustered::kBtree) {
+        auto placed = kds::btree::BtreeInsert(*rel.store, rel.root, id, payload, 1);
+        if (!placed.ok()) {
+            Fatal(placed.status(), "btree insert");
+        }
+        if (placed.value().new_root != kds::kInvalidPageId) {
+            rel.root = placed.value().new_root;
+        }
+        return;
+    }
+    auto placed = kds::heap::ChainInsert(*rel.store, rel.root, id, payload, 1);
+    if (!placed.ok()) {
+        Fatal(placed.status(), "chain insert");
+    }
+}
+
+// Ids are system-issued and monotonic (invariant 10), so a bulk load is
+// 1..rows and every id is resident afterwards - which is what lets the
+// lookup bench below probe without generating misses.
+Relation BuildRelation(Clustered clustered, std::uint64_t rows, std::size_t tuple_size) {
+    Relation rel = MakeRelation(clustered);
+    for (std::uint64_t id = 1; id <= rows; ++id) {
+        const auto tuple = KeystoneTuple(id, tuple_size);
+        InsertRow(rel, id, tuple);
+    }
+    return rel;
+}
+
+// The heap chain's point lookup: there is no index, so this is the walk
+// the dispatcher performs on a heap relation - every page, every slot,
+// until the id turns up. The sentinel status stops ChainVisit early
+// (a non-ok Status from the callback ends the walk), which is what makes
+// this an average-case half-chain read rather than a full scan.
+bool HeapScanLookup(Relation& rel, std::uint64_t id) {
+    bool found = false;
+    kds::Status s = kds::heap::ChainVisit(
+        *rel.store, rel.root, kds::storage::PageAccess::kRead,
+        [&](kds::PageId, kds::heap::PageView& view, std::uint16_t slot) {
+            auto tuple = view.ReadTuple(slot);
+            if (!tuple.ok() || tuple.value().payload.size() < kds::kKeystoneWordSize) {
+                return kds::Status::OK();
+            }
+            std::uint64_t word = 0;
+            std::memcpy(&word, tuple.value().payload.data(), kds::kKeystoneWordSize);
+            if (kds::Keystone::Decode(word).id != id) {
+                return kds::Status::OK();
+            }
+            found = true;
+            return kds::Status::AlreadyExists("found");
+        });
+    if (!found && !s.ok()) {
+        Fatal(s, "chain scan");
+    }
+    return found;
+}
+
+std::string RowsTag(std::uint64_t rows) {
+    return rows >= 1000 ? std::to_string(rows / 1000) + "k rows" : std::to_string(rows) + " rows";
+}
+
+// Bulk load: the cost of getting `rows` tuples in, split by organization.
+// Page allocation and (for the tree) splits and level growth are inside
+// the timed region, because an insert pays for them.
+void BenchClusteredInsert(Clustered clustered, std::uint64_t rows, std::size_t tuple_size) {
+    // Payloads built up front: string/vector churn is not what is being
+    // measured, and the heap-page bench above makes the same choice.
+    std::vector<std::vector<std::byte>> tuples;
+    tuples.reserve(rows);
+    for (std::uint64_t id = 1; id <= rows; ++id) {
+        tuples.push_back(KeystoneTuple(id, tuple_size));
+    }
+
+    Bench(std::string(Label(clustered)) + " insert (" + std::to_string(tuple_size) + "B tuple)",
+          "-", rows, [&](std::uint64_t n) {
+              Relation rel = MakeRelation(clustered);
+              double bytes = 0;
+              for (std::uint64_t i = 0; i < n; ++i) {
+                  InsertRow(rel, i + 1, tuples[i]);
+                  bytes += static_cast<double>(tuples[i].size());
+              }
+              return bytes;
+          },
+          "bulk load, ascending ids");
+}
+
+// The number the tree exists for. Same probe sequence for both
+// organizations (same seed), so the only difference is how the id is
+// found. Read the two side by side *and* across row counts: the tree's
+// line is flat, the chain's is not.
+void BenchClusteredLookup(Clustered clustered, std::uint64_t rows, std::uint64_t probes,
+                          std::size_t tuple_size) {
+    Relation rel = BuildRelation(clustered, rows, tuple_size);
+
+    std::mt19937_64 rng(1);
+    std::vector<std::uint64_t> ids(probes);
+    for (std::uint64_t& id : ids) {
+        id = (rng() % rows) + 1;
+    }
+
+    Bench(std::string(Label(clustered)) + " point lookup (" + RowsTag(rows) + ")", "-", probes,
+          [&](std::uint64_t n) {
+              for (std::uint64_t i = 0; i < n; ++i) {
+                  if (clustered == Clustered::kBtree) {
+                      auto found = kds::btree::BtreeLookup(*rel.store, rel.root, ids[i]);
+                      if (!found.ok()) {
+                          Fatal(found.status(), "btree lookup");
+                      }
+                  } else if (!HeapScanLookup(rel, ids[i])) {
+                      Fatal(kds::Status::NotFound("id " + std::to_string(ids[i])), "chain scan");
+                  }
+              }
+              return 0.0;
+          },
+          clustered == Clustered::kBtree ? "descent, every probe a hit"
+                                         : "chain scan, every probe a hit");
+}
+
+// The scan both organizations do the same way: leaves are linked by the
+// same next_page_id the chain uses. Counted per tuple visited, not per
+// scan, so the two rows are directly comparable.
+void BenchClusteredScan(Clustered clustered, std::uint64_t rows, std::uint64_t rounds,
+                        std::size_t tuple_size) {
+    Relation rel = BuildRelation(clustered, rows, tuple_size);
+
+    Bench(std::string(Label(clustered)) + " full scan (" + RowsTag(rows) + ")", "-",
+          rows * rounds, [&](std::uint64_t n) {
+              const std::uint64_t total_rounds = n / rows;
+              std::uint64_t seen = 0;
+              for (std::uint64_t r = 0; r < total_rounds; ++r) {
+                  auto visit = [&](kds::PageId, kds::heap::PageView& view, std::uint16_t slot) {
+                      auto tuple = view.ReadTuple(slot);
+                      if (tuple.ok()) {
+                          ++seen;
+                      }
+                      return kds::Status::OK();
+                  };
+                  kds::Status walked =
+                      clustered == Clustered::kBtree
+                          ? kds::btree::BtreeVisit(*rel.store, rel.root,
+                                                   kds::storage::PageAccess::kRead, visit)
+                          : kds::heap::ChainVisit(*rel.store, rel.root,
+                                                  kds::storage::PageAccess::kRead, visit);
+                  if (!walked.ok()) {
+                      Fatal(walked, "full scan");
+                  }
+              }
+              return static_cast<double>(seen) * static_cast<double>(tuple_size);
+          },
+          "per tuple visited");
+}
+
+// How many pages the tree spends on the directory above its leaves - the
+// space side of the same trade, printed rather than timed because it is
+// not a rate.
+void ReportBtreeShape(std::uint64_t rows, std::size_t tuple_size) {
+    Relation tree = BuildRelation(Clustered::kBtree, rows, tuple_size);
+    Relation chain = BuildRelation(Clustered::kHeap, rows, tuple_size);
+
+    auto height = kds::btree::BtreeHeight(*tree.store, tree.root);
+    auto leaves = kds::btree::BtreeLeafCount(*tree.store, tree.root);
+    auto chain_pages = kds::heap::ChainLength(*chain.store, chain.root);
+    if (!height.ok() || !leaves.ok() || !chain_pages.ok()) {
+        Fatal(height.ok() ? (leaves.ok() ? chain_pages.status() : leaves.status())
+                          : height.status(),
+              "measuring relation shape");
+    }
+
+    std::printf("  %-44s %-7s height %u, %u leaves, %zu pages total"
+                " (chain: %u pages)\n",
+                ("btree shape (" + RowsTag(rows) + ")").c_str(), "-", height.value(),
+                leaves.value(), tree.store->page_count(), chain_pages.value());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -589,6 +850,31 @@ int main(int argc, char** argv) {
     BenchPoolHit(2'000'000 / scale);
     BenchPoolFlush(false, 256, 200 / scale);
     BenchPoolFlush(true, 256, 20 / scale);
+
+    // 64B tuples: ~100 to an 8 KB page, so the row counts below are ~10,
+    // ~100 and ~1000 pages of relation - the range where the chain's walk
+    // goes from cheap to the thing the tree replaces. Probe counts fall as
+    // rows rise for the chain only, because its per-probe cost rises with
+    // them; the tree's stays flat, which is the point.
+    std::printf("\nClustered storage - B+ tree vs heap chain (in-memory store, no WAL)\n");
+    constexpr std::size_t kRowSize = 64;
+    // Quick mode shrinks the relations too, not just the op counts: a
+    // lookup bench pays for its fixture before it measures anything, and
+    // in CI the fixture is the whole cost.
+    const std::uint64_t rows_big = 100'000 / scale;
+    const std::uint64_t rows_mid = 10'000 / scale;
+    const std::uint64_t rows_small = 1'000 / scale;
+    BenchClusteredInsert(Clustered::kHeap, 200'000 / scale, kRowSize);
+    BenchClusteredInsert(Clustered::kBtree, 200'000 / scale, kRowSize);
+    BenchClusteredLookup(Clustered::kHeap, rows_small, 20'000 / scale, kRowSize);
+    BenchClusteredLookup(Clustered::kBtree, rows_small, 200'000 / scale, kRowSize);
+    BenchClusteredLookup(Clustered::kHeap, rows_mid, 2'000 / scale, kRowSize);
+    BenchClusteredLookup(Clustered::kBtree, rows_mid, 200'000 / scale, kRowSize);
+    BenchClusteredLookup(Clustered::kHeap, rows_big, 200 / scale, kRowSize);
+    BenchClusteredLookup(Clustered::kBtree, rows_big, 200'000 / scale, kRowSize);
+    BenchClusteredScan(Clustered::kHeap, rows_big, 20 / scale, kRowSize);
+    BenchClusteredScan(Clustered::kBtree, rows_big, 20 / scale, kRowSize);
+    ReportBtreeShape(rows_big, kRowSize);
 
     std::printf("\nCheckpoint\n");
     BenchCheckpoint(false, 256, 200 / scale);

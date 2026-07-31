@@ -17,72 +17,62 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /usr/include/bits/types.h /usr/include/bits/typesizes.h \
  /usr/include/bits/time64.h /usr/include/bits/wchar.h \
  /usr/include/bits/stdint-intn.h /usr/include/bits/stdint-uintn.h \
- /usr/include/c++/11/optional /usr/include/c++/11/utility \
- /usr/include/c++/11/bits/stl_relops.h \
- /usr/include/c++/11/bits/stl_pair.h /usr/include/c++/11/bits/move.h \
- /usr/include/c++/11/type_traits /usr/include/c++/11/compare \
+ /usr/include/c++/11/functional /usr/include/c++/11/bits/stl_function.h \
+ /usr/include/c++/11/bits/move.h /usr/include/c++/11/type_traits \
+ /usr/include/c++/11/backward/binders.h /usr/include/c++/11/new \
+ /usr/include/c++/11/bits/exception.h /usr/include/c++/11/tuple \
+ /usr/include/c++/11/utility /usr/include/c++/11/bits/stl_relops.h \
+ /usr/include/c++/11/bits/stl_pair.h /usr/include/c++/11/compare \
  /usr/include/c++/11/concepts /usr/include/c++/11/initializer_list \
  /usr/include/c++/11/ext/numeric_traits.h \
  /usr/include/c++/11/bits/cpp_type_traits.h \
- /usr/include/c++/11/ext/type_traits.h /usr/include/c++/11/exception \
- /usr/include/c++/11/bits/exception.h \
- /usr/include/c++/11/bits/exception_ptr.h \
+ /usr/include/c++/11/ext/type_traits.h /usr/include/c++/11/array \
+ /usr/include/c++/11/bits/functexcept.h \
  /usr/include/c++/11/bits/exception_defines.h \
- /usr/include/c++/11/bits/cxxabi_init_exception.h \
- /usr/lib/gcc/x86_64-amazon-linux/11/include/stddef.h \
- /usr/include/c++/11/typeinfo /usr/include/c++/11/bits/hash_bytes.h \
- /usr/include/c++/11/new /usr/include/c++/11/bits/nested_exception.h \
- /usr/include/c++/11/bits/enable_special_members.h \
- /usr/include/c++/11/bits/functional_hash.h \
- /usr/include/c++/11/bits/stl_construct.h \
+ /usr/include/c++/11/bits/stl_algobase.h \
  /usr/include/c++/11/bits/stl_iterator_base_types.h \
  /usr/include/c++/11/bits/iterator_concepts.h \
  /usr/include/c++/11/bits/ptr_traits.h \
  /usr/include/c++/11/bits/ranges_cmp.h \
  /usr/include/c++/11/bits/stl_iterator_base_funcs.h \
  /usr/include/c++/11/bits/concept_check.h \
- /usr/include/c++/11/debug/assertions.h /usr/include/c++/11/span \
- /usr/include/c++/11/array /usr/include/c++/11/bits/functexcept.h \
- /usr/include/c++/11/bits/stl_algobase.h \
+ /usr/include/c++/11/debug/assertions.h \
  /usr/include/c++/11/bits/stl_iterator.h \
+ /usr/include/c++/11/bits/stl_construct.h \
  /usr/include/c++/11/debug/debug.h \
  /usr/include/c++/11/bits/predefined_ops.h \
- /usr/include/c++/11/bits/range_access.h /usr/include/c++/11/cstddef \
- /usr/include/c++/11/bits/ranges_base.h \
- /usr/include/c++/11/bits/max_size_type.h /usr/include/c++/11/numbers \
- /usr/include/c++/11/string /usr/include/c++/11/bits/stringfwd.h \
- /usr/include/c++/11/bits/memoryfwd.h \
- /usr/include/c++/11/bits/char_traits.h \
- /usr/include/c++/11/bits/postypes.h /usr/include/c++/11/cwchar \
- /usr/include/wchar.h /usr/include/bits/floatn.h \
- /usr/include/bits/floatn-common.h \
- /usr/lib/gcc/x86_64-amazon-linux/11/include/stdarg.h \
- /usr/include/bits/types/wint_t.h /usr/include/bits/types/mbstate_t.h \
- /usr/include/bits/types/__mbstate_t.h /usr/include/bits/types/__FILE.h \
- /usr/include/bits/types/FILE.h /usr/include/bits/types/locale_t.h \
- /usr/include/bits/types/__locale_t.h \
- /usr/include/c++/11/bits/allocator.h \
+ /usr/include/c++/11/bits/range_access.h \
+ /usr/include/c++/11/bits/uses_allocator.h \
+ /usr/include/c++/11/bits/invoke.h \
+ /usr/include/c++/11/bits/functional_hash.h \
+ /usr/include/c++/11/bits/hash_bytes.h /usr/include/c++/11/bits/refwrap.h \
+ /usr/include/c++/11/bits/std_function.h /usr/include/c++/11/typeinfo \
+ /usr/include/c++/11/unordered_map /usr/include/c++/11/bits/allocator.h \
  /usr/include/c++/11/x86_64-amazon-linux/bits/c++allocator.h \
  /usr/include/c++/11/ext/new_allocator.h \
- /usr/include/c++/11/bits/localefwd.h \
- /usr/include/c++/11/x86_64-amazon-linux/bits/c++locale.h \
- /usr/include/c++/11/clocale /usr/include/locale.h \
- /usr/include/bits/locale.h /usr/include/c++/11/iosfwd \
- /usr/include/c++/11/cctype /usr/include/ctype.h \
- /usr/include/bits/endian.h /usr/include/bits/endianness.h \
- /usr/include/c++/11/bits/ostream_insert.h \
- /usr/include/c++/11/bits/cxxabi_forced.h \
- /usr/include/c++/11/bits/stl_function.h \
- /usr/include/c++/11/backward/binders.h \
+ /usr/include/c++/11/bits/memoryfwd.h \
+ /usr/include/c++/11/ext/alloc_traits.h \
+ /usr/include/c++/11/bits/alloc_traits.h \
+ /usr/include/c++/11/ext/aligned_buffer.h \
+ /usr/include/c++/11/bits/hashtable.h \
+ /usr/include/c++/11/bits/hashtable_policy.h \
+ /usr/include/c++/11/bits/enable_special_members.h \
+ /usr/include/c++/11/bits/node_handle.h \
+ /usr/include/c++/11/bits/unordered_map.h \
+ /usr/include/c++/11/bits/erase_if.h /usr/include/c++/11/vector \
  /usr/include/c++/11/bits/stl_algo.h /usr/include/c++/11/cstdlib \
- /usr/include/stdlib.h /usr/include/bits/waitflags.h \
- /usr/include/bits/waitstatus.h /usr/include/sys/types.h \
- /usr/include/bits/types/clock_t.h /usr/include/bits/types/clockid_t.h \
- /usr/include/bits/types/time_t.h /usr/include/bits/types/timer_t.h \
- /usr/include/endian.h /usr/include/bits/byteswap.h \
- /usr/include/bits/uintn-identity.h /usr/include/sys/select.h \
- /usr/include/bits/select.h /usr/include/bits/types/sigset_t.h \
- /usr/include/bits/types/__sigset_t.h \
+ /usr/include/stdlib.h \
+ /usr/lib/gcc/x86_64-amazon-linux/11/include/stddef.h \
+ /usr/include/bits/waitflags.h /usr/include/bits/waitstatus.h \
+ /usr/include/bits/floatn.h /usr/include/bits/floatn-common.h \
+ /usr/include/bits/types/locale_t.h /usr/include/bits/types/__locale_t.h \
+ /usr/include/sys/types.h /usr/include/bits/types/clock_t.h \
+ /usr/include/bits/types/clockid_t.h /usr/include/bits/types/time_t.h \
+ /usr/include/bits/types/timer_t.h /usr/include/endian.h \
+ /usr/include/bits/endian.h /usr/include/bits/endianness.h \
+ /usr/include/bits/byteswap.h /usr/include/bits/uintn-identity.h \
+ /usr/include/sys/select.h /usr/include/bits/select.h \
+ /usr/include/bits/types/sigset_t.h /usr/include/bits/types/__sigset_t.h \
  /usr/include/bits/types/struct_timeval.h \
  /usr/include/bits/types/struct_timespec.h \
  /usr/include/bits/pthreadtypes.h /usr/include/bits/thread-shared-types.h \
@@ -95,6 +85,29 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /usr/include/c++/11/bits/stl_heap.h \
  /usr/include/c++/11/bits/stl_tempbuf.h \
  /usr/include/c++/11/bits/uniform_int_dist.h \
+ /usr/include/c++/11/bits/stl_uninitialized.h \
+ /usr/include/c++/11/bits/stl_vector.h \
+ /usr/include/c++/11/bits/stl_bvector.h \
+ /usr/include/c++/11/bits/vector.tcc /usr/include/c++/11/optional \
+ /usr/include/c++/11/exception /usr/include/c++/11/bits/exception_ptr.h \
+ /usr/include/c++/11/bits/cxxabi_init_exception.h \
+ /usr/include/c++/11/bits/nested_exception.h /usr/include/c++/11/span \
+ /usr/include/c++/11/cstddef /usr/include/c++/11/bits/ranges_base.h \
+ /usr/include/c++/11/bits/max_size_type.h /usr/include/c++/11/numbers \
+ /usr/include/c++/11/string /usr/include/c++/11/bits/stringfwd.h \
+ /usr/include/c++/11/bits/char_traits.h \
+ /usr/include/c++/11/bits/postypes.h /usr/include/c++/11/cwchar \
+ /usr/include/wchar.h \
+ /usr/lib/gcc/x86_64-amazon-linux/11/include/stdarg.h \
+ /usr/include/bits/types/wint_t.h /usr/include/bits/types/mbstate_t.h \
+ /usr/include/bits/types/__mbstate_t.h /usr/include/bits/types/__FILE.h \
+ /usr/include/bits/types/FILE.h /usr/include/c++/11/bits/localefwd.h \
+ /usr/include/c++/11/x86_64-amazon-linux/bits/c++locale.h \
+ /usr/include/c++/11/clocale /usr/include/locale.h \
+ /usr/include/bits/locale.h /usr/include/c++/11/iosfwd \
+ /usr/include/c++/11/cctype /usr/include/ctype.h \
+ /usr/include/c++/11/bits/ostream_insert.h \
+ /usr/include/c++/11/bits/cxxabi_forced.h \
  /usr/include/c++/11/bits/basic_string.h \
  /usr/include/c++/11/ext/atomicity.h \
  /usr/include/c++/11/x86_64-amazon-linux/bits/gthr.h \
@@ -113,9 +126,7 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /usr/include/bits/types/struct___jmp_buf_tag.h \
  /usr/include/bits/pthread_stack_min-dynamic.h \
  /usr/include/c++/11/x86_64-amazon-linux/bits/atomic_word.h \
- /usr/include/sys/single_threaded.h \
- /usr/include/c++/11/ext/alloc_traits.h \
- /usr/include/c++/11/bits/alloc_traits.h /usr/include/c++/11/string_view \
+ /usr/include/sys/single_threaded.h /usr/include/c++/11/string_view \
  /usr/include/c++/11/bits/string_view.tcc \
  /usr/include/c++/11/ext/string_conversions.h /usr/include/c++/11/cstdio \
  /usr/include/stdio.h /usr/include/bits/types/__fpos_t.h \
@@ -128,17 +139,11 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /usr/include/asm/errno.h /usr/include/asm-generic/errno.h \
  /usr/include/asm-generic/errno-base.h /usr/include/bits/types/error_t.h \
  /usr/include/c++/11/bits/charconv.h \
- /usr/include/c++/11/bits/basic_string.tcc /usr/include/c++/11/vector \
- /usr/include/c++/11/bits/stl_uninitialized.h \
- /usr/include/c++/11/bits/stl_vector.h \
- /usr/include/c++/11/bits/stl_bvector.h \
- /usr/include/c++/11/bits/vector.tcc \
+ /usr/include/c++/11/bits/basic_string.tcc \
  /home/ec2-user/ckdbs/include/kds/base/log.hpp /usr/include/c++/11/memory \
  /usr/include/c++/11/bits/stl_raw_storage_iter.h \
  /usr/include/c++/11/bits/align.h /usr/include/c++/11/bit \
- /usr/include/c++/11/bits/uses_allocator.h \
- /usr/include/c++/11/bits/unique_ptr.h /usr/include/c++/11/tuple \
- /usr/include/c++/11/bits/invoke.h /usr/include/c++/11/ostream \
+ /usr/include/c++/11/bits/unique_ptr.h /usr/include/c++/11/ostream \
  /usr/include/c++/11/ios /usr/include/c++/11/bits/ios_base.h \
  /usr/include/c++/11/bits/locale_classes.h \
  /usr/include/c++/11/bits/locale_classes.tcc \
@@ -158,8 +163,6 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /usr/include/c++/11/bits/shared_ptr.h \
  /usr/include/c++/11/bits/shared_ptr_base.h \
  /usr/include/c++/11/bits/allocated_ptr.h \
- /usr/include/c++/11/bits/refwrap.h \
- /usr/include/c++/11/ext/aligned_buffer.h \
  /usr/include/c++/11/ext/concurrence.h \
  /usr/include/c++/11/bits/shared_ptr_atomic.h \
  /usr/include/c++/11/bits/atomic_base.h \
@@ -189,12 +192,6 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /home/ec2-user/ckdbs/include/kds/base/status.hpp \
  /home/ec2-user/ckdbs/include/kds/catalog/catalog.hpp \
  /home/ec2-user/ckdbs/include/kds/catalog/catalog_cache.hpp \
- /usr/include/c++/11/functional /usr/include/c++/11/bits/std_function.h \
- /usr/include/c++/11/unordered_map /usr/include/c++/11/bits/hashtable.h \
- /usr/include/c++/11/bits/hashtable_policy.h \
- /usr/include/c++/11/bits/node_handle.h \
- /usr/include/c++/11/bits/unordered_map.h \
- /usr/include/c++/11/bits/erase_if.h \
  /home/ec2-user/ckdbs/include/kds/catalog/rows.hpp \
  /home/ec2-user/ckdbs/include/kds/base/common.hpp \
  /home/ec2-user/ckdbs/include/kds/catalog/oid.hpp \
@@ -207,11 +204,11 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /usr/include/c++/11/variant /usr/include/c++/11/bits/parse_numbers.h \
  /home/ec2-user/ckdbs/include/kds/sched/clock.hpp \
  /home/ec2-user/ckdbs/include/kds/server/superblock.hpp \
- /home/ec2-user/ckdbs/include/kds/stats/waystone.hpp \
- /home/ec2-user/ckdbs/include/kds/storage/keystone.hpp \
- /home/ec2-user/ckdbs/include/kds/stats/waystone_hooks.hpp \
- /home/ec2-user/ckdbs/include/kds/storage/heap/heap_chain.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/btree/btree.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/btree/btree_page.hpp \
  /home/ec2-user/ckdbs/include/kds/storage/heap/heap_page.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/insert_placement.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/heap/heap_chain.hpp \
  /home/ec2-user/ckdbs/include/kds/wal/manager.hpp \
  /home/ec2-user/ckdbs/include/kds/wal/durability.hpp \
  /home/ec2-user/ckdbs/include/kds/wal/record.hpp \
@@ -228,6 +225,5 @@ CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o: \
  /home/ec2-user/ckdbs/include/kds/parser/parser.hpp \
  /home/ec2-user/ckdbs/include/kds/parser/lexer.hpp \
  /home/ec2-user/ckdbs/include/kds/parser/token.hpp \
- /home/ec2-user/ckdbs/include/kds/stats/waystone_dir.hpp \
- /home/ec2-user/ckdbs/include/kds/stats/waystone_probe.hpp \
+ /home/ec2-user/ckdbs/include/kds/storage/keystone.hpp \
  /home/ec2-user/ckdbs/include/kds/wal/payload.hpp

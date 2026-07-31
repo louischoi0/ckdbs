@@ -215,9 +215,6 @@ tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o: \
  /home/ec2-user/ckdbs/include/kds/parser/ast.hpp \
  /usr/include/c++/11/variant /usr/include/c++/11/bits/parse_numbers.h \
  /home/ec2-user/ckdbs/include/kds/server/superblock.hpp \
- /home/ec2-user/ckdbs/include/kds/stats/waystone.hpp \
- /home/ec2-user/ckdbs/include/kds/storage/keystone.hpp \
- /home/ec2-user/ckdbs/include/kds/stats/waystone_hooks.hpp \
  /home/ec2-user/ckdbs/include/kds/storage/btree/btree.hpp \
  /home/ec2-user/ckdbs/include/kds/storage/btree/btree_page.hpp \
  /home/ec2-user/ckdbs/include/kds/storage/heap/heap_page.hpp \

@@ -38,8 +38,8 @@
 // ---- Why the keys are uint64 and not the tuples' 40-bit ids ------------
 //
 // Invariant 6: an id stored outside the tuple header is a zero-extended
-// uint64 with the upper 24 bits 0. Same convention as min_key and the
-// Waystone back-refs, so no separate width to reason about.
+// uint64 with the upper 24 bits 0. Same convention as min_key, so no
+// separate width to reason about.
 //
 // Concurrency: InternalView is a thin view over caller-owned bytes with no
 // synchronization of its own, exactly like heap::PageView. The caller
@@ -112,9 +112,9 @@ inline constexpr std::size_t kInternalEntriesOffset =
     kInternalHeaderOffset + kInternalHeaderSize;  // 48
 
 // (8192 - 48) / 12 = 678, with 8 bytes of slack at the page tail. Not
-// rounded down to a power of two: unlike Waystone's entry pages, nothing
-// addresses an internal entry by shift/mask - the array is binary-searched
-// - so the only thing a power of two would buy is fewer usable entries.
+// rounded down to a power of two: nothing addresses an internal entry by
+// shift/mask - the array is binary-searched - so the only thing a power of
+// two would buy is fewer usable entries.
 inline constexpr std::uint16_t kInternalMaxEntries =
     static_cast<std::uint16_t>((kPageSize - kInternalEntriesOffset) / kInternalEntrySize);
 static_assert(kInternalMaxEntries == 678);

@@ -32,10 +32,10 @@ static_assert(kInvalidPageId >= kMaxPageCount, "invalid sentinel must sit outsid
 // invalid/unformatted, which is what a freshly zeroed (or sparse, never
 // written) page reads back as.
 //
-// Only "headered" page classes appear here. Waystone entry and directory
-// pages are headerless by design (docs/page.md section 1) - their tilings
-// are exact powers of two and a header would break the shift/mask
-// addressing - so they carry no page_type at all.
+// Only "headered" page classes appear here. A page class whose payload
+// tiles the page exactly (docs/page.md section 1) - a power-of-two entry
+// array addressed by shift and mask - is headerless by design and carries
+// no page_type at all. None exists today; see kHeaderlessMap below.
 enum class PageType : std::uint8_t {
     kInvalid = 0,
     kHeap = 1,
@@ -45,10 +45,12 @@ enum class PageType : std::uint8_t {
     kCatalog = 5,
     kSuperBlock = 6,
     kFreeMap = 7,
-    // Bitmap of which page ids are *headerless* - Waystone entry and
-    // directory pages, whose exact power-of-two tilings leave no room for
-    // a common header (docs/waystone-concpets.md sections 5 and 6). Same
-    // one-bit-per-page-id format as kFreeMap; see free_map.hpp.
+    // Bitmap of which page ids are *headerless*: pages whose exact
+    // power-of-two tiling leaves no room for a common header. Same
+    // one-bit-per-page-id format as kFreeMap; see free_map.hpp. No page
+    // class claims one today - the Waystone entry and directory pages it
+    // was built for were removed 2026-07-31 - but the bitmap is on-disk
+    // format and stays.
     //
     // It has to be durable rather than a side table: DevicePageStore never
     // evicts, so a page is read back from the device exactly once - on

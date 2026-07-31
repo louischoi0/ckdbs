@@ -37,15 +37,6 @@ struct TableAccess {
     Schema schema;
     PageId desc_page_id;
     ClusteredType clustered_type;
-
-    // Mirrored from the relation's sys.tables row so the insert and read
-    // paths can ask "does this relation have a Waystone, and where" without
-    // re-scanning a catalog page per statement. Like every other field
-    // here they are cached, so anything that changes them must go through
-    // Catalog::BumpVersion() - see Catalog::SetWaystoneDirectory().
-    WaystoneState waystone_state = WaystoneState::kDisabled;
-    PageId waystone_dir_root = kInvalidPageId;
-    std::uint8_t waystone_dir_depth = 0;
 };
 
 }  // namespace kds::catalog

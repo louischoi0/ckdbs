@@ -164,6 +164,30 @@ bootstrap_test.cpp.s:
 	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.s
 .PHONY : bootstrap_test.cpp.s
 
+btree_test.o: btree_test.cpp.o
+.PHONY : btree_test.o
+
+# target to build an object file
+btree_test.cpp.o:
+	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o
+.PHONY : btree_test.cpp.o
+
+btree_test.i: btree_test.cpp.i
+.PHONY : btree_test.i
+
+# target to preprocess a source file
+btree_test.cpp.i:
+	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/btree_test.cpp.i
+.PHONY : btree_test.cpp.i
+
+btree_test.s: btree_test.cpp.s
+.PHONY : btree_test.s
+
+# target to generate assembly for a file
+btree_test.cpp.s:
+	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/btree_test.cpp.s
+.PHONY : btree_test.cpp.s
+
 catalog_cache_test.o: catalog_cache_test.cpp.o
 .PHONY : catalog_cache_test.o
 
@@ -1004,150 +1028,6 @@ wal_stream_test.cpp.s:
 	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.s
 .PHONY : wal_stream_test.cpp.s
 
-waystone_catalog_test.o: waystone_catalog_test.cpp.o
-.PHONY : waystone_catalog_test.o
-
-# target to build an object file
-waystone_catalog_test.cpp.o:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o
-.PHONY : waystone_catalog_test.cpp.o
-
-waystone_catalog_test.i: waystone_catalog_test.cpp.i
-.PHONY : waystone_catalog_test.i
-
-# target to preprocess a source file
-waystone_catalog_test.cpp.i:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.i
-.PHONY : waystone_catalog_test.cpp.i
-
-waystone_catalog_test.s: waystone_catalog_test.cpp.s
-.PHONY : waystone_catalog_test.s
-
-# target to generate assembly for a file
-waystone_catalog_test.cpp.s:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.s
-.PHONY : waystone_catalog_test.cpp.s
-
-waystone_dir_test.o: waystone_dir_test.cpp.o
-.PHONY : waystone_dir_test.o
-
-# target to build an object file
-waystone_dir_test.cpp.o:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o
-.PHONY : waystone_dir_test.cpp.o
-
-waystone_dir_test.i: waystone_dir_test.cpp.i
-.PHONY : waystone_dir_test.i
-
-# target to preprocess a source file
-waystone_dir_test.cpp.i:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.i
-.PHONY : waystone_dir_test.cpp.i
-
-waystone_dir_test.s: waystone_dir_test.cpp.s
-.PHONY : waystone_dir_test.s
-
-# target to generate assembly for a file
-waystone_dir_test.cpp.s:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.s
-.PHONY : waystone_dir_test.cpp.s
-
-waystone_entry_test.o: waystone_entry_test.cpp.o
-.PHONY : waystone_entry_test.o
-
-# target to build an object file
-waystone_entry_test.cpp.o:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o
-.PHONY : waystone_entry_test.cpp.o
-
-waystone_entry_test.i: waystone_entry_test.cpp.i
-.PHONY : waystone_entry_test.i
-
-# target to preprocess a source file
-waystone_entry_test.cpp.i:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.i
-.PHONY : waystone_entry_test.cpp.i
-
-waystone_entry_test.s: waystone_entry_test.cpp.s
-.PHONY : waystone_entry_test.s
-
-# target to generate assembly for a file
-waystone_entry_test.cpp.s:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.s
-.PHONY : waystone_entry_test.cpp.s
-
-waystone_hooks_test.o: waystone_hooks_test.cpp.o
-.PHONY : waystone_hooks_test.o
-
-# target to build an object file
-waystone_hooks_test.cpp.o:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o
-.PHONY : waystone_hooks_test.cpp.o
-
-waystone_hooks_test.i: waystone_hooks_test.cpp.i
-.PHONY : waystone_hooks_test.i
-
-# target to preprocess a source file
-waystone_hooks_test.cpp.i:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.i
-.PHONY : waystone_hooks_test.cpp.i
-
-waystone_hooks_test.s: waystone_hooks_test.cpp.s
-.PHONY : waystone_hooks_test.s
-
-# target to generate assembly for a file
-waystone_hooks_test.cpp.s:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.s
-.PHONY : waystone_hooks_test.cpp.s
-
-waystone_probe_test.o: waystone_probe_test.cpp.o
-.PHONY : waystone_probe_test.o
-
-# target to build an object file
-waystone_probe_test.cpp.o:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o
-.PHONY : waystone_probe_test.cpp.o
-
-waystone_probe_test.i: waystone_probe_test.cpp.i
-.PHONY : waystone_probe_test.i
-
-# target to preprocess a source file
-waystone_probe_test.cpp.i:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.i
-.PHONY : waystone_probe_test.cpp.i
-
-waystone_probe_test.s: waystone_probe_test.cpp.s
-.PHONY : waystone_probe_test.s
-
-# target to generate assembly for a file
-waystone_probe_test.cpp.s:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.s
-.PHONY : waystone_probe_test.cpp.s
-
-waystone_select_test.o: waystone_select_test.cpp.o
-.PHONY : waystone_select_test.o
-
-# target to build an object file
-waystone_select_test.cpp.o:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o
-.PHONY : waystone_select_test.cpp.o
-
-waystone_select_test.i: waystone_select_test.cpp.i
-.PHONY : waystone_select_test.i
-
-# target to preprocess a source file
-waystone_select_test.cpp.i:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.i
-.PHONY : waystone_select_test.cpp.i
-
-waystone_select_test.s: waystone_select_test.cpp.s
-.PHONY : waystone_select_test.s
-
-# target to generate assembly for a file
-waystone_select_test.cpp.s:
-	cd /home/ec2-user/ckdbs/build-btree && $(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.s
-.PHONY : waystone_select_test.cpp.s
-
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -1161,6 +1041,9 @@ help:
 	@echo "... bootstrap_test.o"
 	@echo "... bootstrap_test.i"
 	@echo "... bootstrap_test.s"
+	@echo "... btree_test.o"
+	@echo "... btree_test.i"
+	@echo "... btree_test.s"
 	@echo "... catalog_cache_test.o"
 	@echo "... catalog_cache_test.i"
 	@echo "... catalog_cache_test.s"
@@ -1266,24 +1149,6 @@ help:
 	@echo "... wal_stream_test.o"
 	@echo "... wal_stream_test.i"
 	@echo "... wal_stream_test.s"
-	@echo "... waystone_catalog_test.o"
-	@echo "... waystone_catalog_test.i"
-	@echo "... waystone_catalog_test.s"
-	@echo "... waystone_dir_test.o"
-	@echo "... waystone_dir_test.i"
-	@echo "... waystone_dir_test.s"
-	@echo "... waystone_entry_test.o"
-	@echo "... waystone_entry_test.i"
-	@echo "... waystone_entry_test.s"
-	@echo "... waystone_hooks_test.o"
-	@echo "... waystone_hooks_test.i"
-	@echo "... waystone_hooks_test.s"
-	@echo "... waystone_probe_test.o"
-	@echo "... waystone_probe_test.i"
-	@echo "... waystone_probe_test.s"
-	@echo "... waystone_select_test.o"
-	@echo "... waystone_select_test.i"
-	@echo "... waystone_select_test.s"
 .PHONY : help
 
 

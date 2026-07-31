@@ -102,10 +102,17 @@ def run_phase(execute, name, commands, detail=""):
 
 def report(phases, meta, footer=()):
     """Prints the standard table. `meta` needs engine/columns/rows/host/port/
-    table; `footer` is the backend's own caveats, one line each."""
+    table; `footer` is the backend's own caveats, one line each.
+
+    `meta['clustered']` is optional and ckdbs-only: which storage the
+    relation uses (heap chain vs clustered B+ tree). Printed on the header
+    line when present because it changes what the point-select and update
+    phases do, so a table without it beside them is unreadable.
+    """
     print()
+    storage = f", {meta['clustered']}-clustered" if meta.get("clustered") else ""
     print(f"{meta['engine']} benchmark - {meta['columns']} columns, "
-          f"{meta['rows']} rows resident, 1 connection")
+          f"{meta['rows']} rows resident{storage}, 1 connection")
     print(f"server {meta['host']}:{meta['port']}  table {meta['table']}")
     print()
     header = (f"{'phase':<{NAME_WIDTH}}{'ops':>8}{'qps':>12}{'mean us':>10}"

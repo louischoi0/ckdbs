@@ -27,13 +27,18 @@ latency distribution:
 Two properties of today's engine shape the numbers, and quoting them
 without both is misleading:
 
-1. **Index behaviour depends on --waystone.** Without it there is no index
-   at all: a `WHERE id = <n>` SELECT or UPDATE is a full scan of the
-   relation's whole page chain (docs/client-manual.md section 3), so both
-   phases' QPS fall roughly as 1/--rows and neither number means anything
-   without the row count beside it. With --waystone both become O(1)
-   probes and go flat in row count. The full-scan phase is unaffected
-   either way - it reads every page by definition.
+1. **Index behaviour depends on --clustered.** A heap relation has no
+   index at all: a `WHERE id = <n>` SELECT or UPDATE is a full scan of
+   the relation's whole page chain (docs/client-manual.md section 3), so
+   both phases' QPS fall roughly as 1/--rows and neither number means
+   anything without the row count beside it. The way out is
+   `--clustered btree`: the relation *is* a B+ tree on the pk, so a point
+   lookup is an O(depth) descent and is authoritative - a miss is an
+   answer rather than a fallback. That goes flat in row count on the read
+   phases and changes what the insert phase does (a descent and the
+   occasional split). The full-scan phase is unaffected either way: it
+   reads every page by definition, and the tree's leaves are chained
+   exactly as the heap's pages are.
 2. **The server serves one connection at a time** (see the concurrency
    note in include/kds/server/tcp_server.hpp), so this is deliberately a
    single-connection, one-request-at-a-time driver. Adding client threads
@@ -52,6 +57,10 @@ Usage:
     python3 tools/benchmark.py
     python3 tools/benchmark.py --rows 5000 --read-ops 2000 --update-ops 2000
     python3 tools/benchmark.py --host 127.0.0.1 --port 15432 --json out.json
+
+    # the two access paths, same rows, diffable JSON:
+    python3 tools/benchmark.py --rows 20000 --json scan.json
+    python3 tools/benchmark.py --rows 20000 --clustered btree --json bt.json
 
 Each run creates its own table (`bench_<pid>_<epoch>` by default) so a
 persistent data file can be benchmarked repeatedly without earlier runs'
@@ -87,7 +96,7 @@ TEXT_LEN = 16
 FATAL_HINTS = {
     "catalog row size mismatch":
         "the data file was written before the sys.tables row format changed\n"
-        "(Waystone fields, 2026-07-30) and cannot be read by this build.\n"
+        "(Waystone fields removed, 2026-07-31) and cannot be read by this build.\n"
         "Start the server on a fresh data file - there is no migration.",
     "unsupported": "the data file was written by a different build of the engine.",
 }
@@ -124,27 +133,19 @@ def check_phase(phase):
     return phase
 
 
-def create_table(conn, table):
-    reply = format_reply(conn.send_command(f"CREATE TABLE {table} ({COLUMNS})"))
+def create_table(conn, table, clustered):
+    """Creates the run's table in one storage organization or the other.
+
+    The trailing HEAP/BTREE word is the CREATE TABLE storage clause
+    (docs/client-manual.md section 3): HEAP is a chain of heap pages, BTREE
+    is a clustered B+ tree over the same leaf format. It is a create-time
+    property with no ALTER, so the two are only ever compared across runs.
+    """
+    clause = "" if clustered == "heap" else f" {clustered.upper()}"
+    reply = format_reply(conn.send_command(f"CREATE TABLE {table} ({COLUMNS}){clause}"))
     if reply.startswith("ERR"):
-        fail("could not create the benchmark table", reply)
+        fail(f"could not create the benchmark table as {clustered}", reply)
     return reply
-
-
-def enable_waystone(conn, table):
-    """Turns on the pk->location structure for this run's table. Must run
-    before any insert: enabling is refused on a relation that already
-    holds rows, because backfill does not exist and partial coverage a
-    reader might trust is worse than none."""
-    reply = format_reply(conn.send_command(f"WAYSTONE ENABLE {table}"))
-    if reply.startswith("ERR"):
-        fail("could not enable Waystone", reply)
-    return reply
-
-
-def waystone_status(conn, table):
-    reply = format_reply(conn.send_command(f"WAYSTONE STATUS {table}"))
-    return None if reply.startswith("ERR") else reply
 
 
 def insert_commands(table, rows, rng):
@@ -155,6 +156,33 @@ def insert_commands(table, rows, rng):
         yield (f"INSERT INTO {table} VALUES "
                f"({rng.randint(0, 1_000_000)}, {rng.randint(0, 30000)}, "
                f"{rng.randint(0, 1)}, '{text}')")
+
+
+CLUSTERED_LINE = re.compile(r"clustered_type=(\w+)")
+
+
+def verify_clustered(conn, table, clustered):
+    """Reads the storage organization back off the server rather than
+    trusting the CREATE. --table can point at a table an earlier run
+    created with the other clause, and an unnoticed mismatch turns a
+    heap-vs-btree comparison into two runs of the same thing."""
+    reply = format_reply(conn.send_command(f"DESCRIBE {table}"))
+    m = CLUSTERED_LINE.search(reply)
+    if m is None:
+        fail("could not read the table's clustered_type back", reply)
+    actual = m.group(1).lower()
+    if actual != clustered:
+        fail(f"table {table} is {actual}-clustered, but --clustered {clustered} was asked for "
+             f"(a pre-existing --table keeps the organization it was created with)")
+    return actual
+
+
+def access_path(clustered):
+    """How the server will find a row by pk in this run, as
+    CommandDispatcher::LocateByPk() decides it: a clustered B+ tree
+    relation descends and the descent is authoritative; a heap relation
+    has no index and scans the chain."""
+    return "btree descent" if clustered == "btree" else "full chain scan"
 
 
 def count_rows(conn, table):
@@ -247,11 +275,13 @@ def main():
     parser.add_argument("--timeout", type=float, default=60.0,
                         help="socket timeout in seconds (default: 60); a full scan of a "
                              "large table is a slow single reply")
-    parser.add_argument("--waystone", action="store_true",
-                        help="enable Waystone on the benchmark table before "
-                             "inserting, so the point-select and update phases "
-                             "probe for the row's location instead of scanning "
-                             "the page chain")
+    parser.add_argument("--clustered", choices=("heap", "btree"), default="heap",
+                        help="storage organization of the benchmark table (default: heap). "
+                             "btree creates it with the CREATE TABLE ... BTREE clause, so a "
+                             "point SELECT/UPDATE descends the clustered index instead of "
+                             "scanning the page chain - flat in row count, and "
+                             "authoritative, so a miss costs a descent rather than a "
+                             "fallback scan")
     parser.add_argument("--sync", action="store_true",
                         help="send SYNC after the write phases and time it")
     parser.add_argument("--json", metavar="PATH",
@@ -283,13 +313,14 @@ def main():
     try:
         for _ in range(args.warmup):
             conn.send_command("PING")
-        create_table(conn, table)
-        if args.waystone:
-            enable_waystone(conn, table)
+        create_table(conn, table, args.clustered)
+        verify_clustered(conn, table, args.clustered)
 
         phases.append(check_phase(run_phase(
             execute, "insert", insert_commands(table, args.rows, rng),
-            detail=f"4 body columns per row, one varchar of {TEXT_LEN} chars")))
+            detail=f"4 body columns per row, one varchar of {TEXT_LEN} chars, " +
+                   ("tail append into the page chain" if args.clustered == "heap"
+                    else "descent to the rightmost leaf, split on full"))))
 
         resident = count_rows(conn, table)
         # Probe ids from the range this run just issued. Ids are unique and
@@ -301,7 +332,7 @@ def main():
             (f"SELECT * FROM {table} WHERE id = {rng.randint(1, hi)}"
              for _ in range(args.read_ops)),
             detail=f"WHERE id = <random 1..{hi}>, " +
-                   ("waystone probe" if args.waystone else "full chain scan"))))
+                   access_path(args.clustered))))
 
         if args.scan_ops:
             scan = run_phase(execute, "full-scan",
@@ -317,17 +348,13 @@ def main():
              f"WHERE id = {rng.randint(1, hi)}"
              for _ in range(args.update_ops)),
             detail="fixed-width column only (in-place overwrite), " +
-                   ("waystone probe" if args.waystone else "full chain scan"))))
+                   access_path(args.clustered))))
 
         if args.sync:
             phases.append(check_phase(run_phase(
                 execute, "sync", ["SYNC"],
                 detail="page store flushed to the data file")))
 
-        # Read while the connection is open: probe hit/miss counters are
-        # the only direct evidence the fast path was taken at all, as
-        # opposed to silently falling through to the scan every time.
-        ws_status = waystone_status(conn, table) if args.waystone else None
     finally:
         conn.close()
 
@@ -347,15 +374,22 @@ def main():
         "rows": resident,
         "seed": args.seed,
         "durability": durability,
-        "waystone": ws_status,
+        "clustered": args.clustered,
     }
+
+    if args.clustered == "btree":
+        access_note = ("point-select and update descend the clustered B+ tree: O(depth) "
+                       "page fetches, so their qps is flat in the relation's size, and "
+                       "the answer is authoritative - a pk that does not exist costs a "
+                       "descent, not a fallback scan. The insert phase pays for that: a "
+                       "descent per row, plus a leaf split and a full-page image in the "
+                       "WAL once per page of relation.")
+    else:
+        access_note = ("point-select and update are both full page-chain scans (no "
+                       f"index): their qps is a function of the {resident} resident rows.")
+
     report(phases, meta, footer=[
-        ("point-select and update both probe Waystone for the row's "
-         "location: O(1) in the relation's size, so unlike the full-scan "
-         "phase their qps does not fall as rows grow."
-         if ws_status else
-         "point-select and update are both full page-chain scans (no "
-         f"index): their qps is a function of the {resident} resident rows."),
+        access_note,
         f"INSERT is WAL-logged{durability_note}: under strict/group the reply "
         "waits on an fsync, which on a real disk dominates everything the "
         "engine does (~1 ms vs ~12 us of engine time) - so an insert number "
@@ -363,12 +397,9 @@ def main():
         "CREATE TABLE are still unlogged. Do not measure this on tmpfs, where "
         "fsync is free and all three classes look identical.",
         "latencies include the Python client's own socket cost.",
-    ] + ([f"waystone: {ws_status} - a point-select probes for the row's "
-          "location; probe_misses counts the ones that fell through to a "
-          "full chain scan, and a result is identical either way."]
-         if ws_status else
-         ["waystone is OFF for this table: a point-select is a full chain "
-          "scan. Re-run with --waystone to probe instead."]))
+    ] + ([] if args.clustered == "btree" else
+         ["no index on this table: a point-select is a full chain scan. Re-run with "
+          "--clustered btree (the relation stored as a clustered index) to compare."]))
 
     if args.server_log:
         try:

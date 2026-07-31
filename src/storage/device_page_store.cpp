@@ -103,7 +103,7 @@ Status DevicePageStore::FlushMaps() {
     // map is what makes a page id *exist*, so a crash between the two
     // leaves a headerless bit set for an id nothing allocated - harmless,
     // since IsHeaderless() also requires allocation. The reverse order
-    // would publish an allocated Waystone page whose headerless bit had
+    // would publish an allocated headerless page whose headerless bit had
     // not landed, and the next read of it would verify a checksum that was
     // never written and call the page corrupt.
     StampPageChecksum(headerless_map_bytes());
@@ -147,15 +147,19 @@ Status DevicePageStore::EnsureAddressable(PageId page_id) {
 }
 
 std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
-                                                             std::unique_ptr<Page> bytes) {
+                                                             std::unique_ptr<Page> bytes,
+                                                             bool dirty) {
     std::span<std::byte, kPageSize> view(*bytes);
-    frames_.insert_or_assign(page_id, Frame{std::move(bytes), /*dirty=*/true});
+    frames_.insert_or_assign(page_id, Frame{std::move(bytes), dirty});
     return view;
 }
 
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
+                                                                         bool mark_dirty) {
     if (auto it = frames_.find(page_id); it != frames_.end()) {
-        it->second.dirty = true;
+        // Never clears the flag: a frame already dirty from an earlier
+        // mutation stays dirty however many readers touch it afterwards.
+        if (mark_dirty) it->second.dirty = true;
         return std::span<std::byte, kPageSize>(*it->second.bytes);
     }
 
@@ -192,7 +196,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("pagestore", "read page=" + std::to_string(page_id) + " from device");
     }
-    return InsertFrame(page_id, std::move(bytes));
+    return InsertFrame(page_id, std::move(bytes), mark_dirty);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAt(PageId page_id) {
@@ -215,7 +219,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAt(PageId page_
         log_->Trace("pagestore", "alloc page=" + std::to_string(page_id) + " (allocated=" +
                                      std::to_string(allocated_pages()) + ")");
     }
-    return InsertFrame(page_id, std::move(bytes));
+    // A brand-new page exists only in this frame until it is written back,
+    // so it is dirty by definition.
+    return InsertFrame(page_id, std::move(bytes), /*dirty=*/true);
 }
 
 StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::CreateNew() {
@@ -237,7 +243,14 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Get(PageId page_id) {
     if (!IsAllocated(page_id)) {
         return Status::NotFound("page id not found");
     }
-    return ResidentBytes(page_id);
+    return ResidentBytes(page_id, /*mark_dirty=*/true);
+}
+
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForRead(PageId page_id) {
+    if (!IsAllocated(page_id)) {
+        return Status::NotFound("page id not found");
+    }
+    return ResidentBytes(page_id, /*mark_dirty=*/false);
 }
 
 Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
@@ -273,14 +286,13 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
         // Skipped for the same reason the stamping loop in Flush() skips it
         // (StampIfHeadered): a headerless page has no page_lsn field, so the
         // bytes at that offset are entry data. Reading them yields a
-        // meaningless watermark - a Waystone directory page reads as
+        // meaningless watermark - a page of 0xFF entry bytes reads as
         // 0xFFFF... - and EnsureDurable can only refuse it, which failed
-        // every Flush() on any database with a dirty Waystone page and so
+        // every Flush() on any database with a dirty headerless page and so
         // made SYNC and the checkpointer unable to persist anything at all.
-        // Correct today because Waystone pages are unlogged (CLAUDE.md open
-        // decision: persistence class), so the gate has nothing to wait for.
-        // If they become logged, their LSN has to reach the gate out of
-        // band rather than through a field the format does not have.
+        // Sound only while headerless pages are unlogged. If a headerless
+        // class becomes logged, its LSN has to reach the gate out of band
+        // rather than through a field the format does not have.
         if (IsHeaderless(page_id)) continue;
         const std::uint64_t page_lsn =
             GetPageLsn(std::span<const std::byte, kPageSize>(*it->second.bytes));

@@ -181,10 +181,24 @@ tests/CMakeFiles/kds_tests.dir/heap_chain_test.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/heap_chain_test.cpp.s"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/heap_chain_test.cpp -o CMakeFiles/kds_tests.dir/heap_chain_test.cpp.s
 
+tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
+tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o: ../tests/btree_test.cpp
+tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o"
+	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o -MF CMakeFiles/kds_tests.dir/btree_test.cpp.o.d -o CMakeFiles/kds_tests.dir/btree_test.cpp.o -c /home/ec2-user/ckdbs/tests/btree_test.cpp
+
+tests/CMakeFiles/kds_tests.dir/btree_test.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds_tests.dir/btree_test.cpp.i"
+	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/tests/btree_test.cpp > CMakeFiles/kds_tests.dir/btree_test.cpp.i
+
+tests/CMakeFiles/kds_tests.dir/btree_test.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/btree_test.cpp.s"
+	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/btree_test.cpp -o CMakeFiles/kds_tests.dir/btree_test.cpp.s
+
 tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.o: ../tests/superblock_test.cpp
 tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.o -MF CMakeFiles/kds_tests.dir/superblock_test.cpp.o.d -o CMakeFiles/kds_tests.dir/superblock_test.cpp.o -c /home/ec2-user/ckdbs/tests/superblock_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.i: cmake_force
@@ -198,7 +212,7 @@ tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.o: ../tests/row_codec_test.cpp
 tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.o -MF CMakeFiles/kds_tests.dir/row_codec_test.cpp.o.d -o CMakeFiles/kds_tests.dir/row_codec_test.cpp.o -c /home/ec2-user/ckdbs/tests/row_codec_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.i: cmake_force
@@ -212,7 +226,7 @@ tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.o: ../tests/scheduler_test.cpp
 tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building CXX object tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.o -MF CMakeFiles/kds_tests.dir/scheduler_test.cpp.o.d -o CMakeFiles/kds_tests.dir/scheduler_test.cpp.o -c /home/ec2-user/ckdbs/tests/scheduler_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.i: cmake_force
@@ -226,7 +240,7 @@ tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/log_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/log_test.cpp.o: ../tests/log_test.cpp
 tests/CMakeFiles/kds_tests.dir/log_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building CXX object tests/CMakeFiles/kds_tests.dir/log_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building CXX object tests/CMakeFiles/kds_tests.dir/log_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/log_test.cpp.o -MF CMakeFiles/kds_tests.dir/log_test.cpp.o.d -o CMakeFiles/kds_tests.dir/log_test.cpp.o -c /home/ec2-user/ckdbs/tests/log_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/log_test.cpp.i: cmake_force
@@ -240,7 +254,7 @@ tests/CMakeFiles/kds_tests.dir/log_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.o: ../tests/config_file_test.cpp
 tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building CXX object tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building CXX object tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.o -MF CMakeFiles/kds_tests.dir/config_file_test.cpp.o.d -o CMakeFiles/kds_tests.dir/config_file_test.cpp.o -c /home/ec2-user/ckdbs/tests/config_file_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.i: cmake_force
@@ -254,7 +268,7 @@ tests/CMakeFiles/kds_tests.dir/config_file_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o: ../tests/superblock_checkpoint_anchor_test.cpp
 tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building CXX object tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Building CXX object tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o -MF CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o.d -o CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.o -c /home/ec2-user/ckdbs/tests/superblock_checkpoint_anchor_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.i: cmake_force
@@ -268,7 +282,7 @@ tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_test.cpp.s: cmake_fo
 tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o: ../tests/in_memory_page_store_test.cpp
 tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Building CXX object tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Building CXX object tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o -MF CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o.d -o CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o -c /home/ec2-user/ckdbs/tests/in_memory_page_store_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.i: cmake_force
@@ -282,7 +296,7 @@ tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.o: ../tests/free_map_test.cpp
 tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Building CXX object tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building CXX object tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.o -MF CMakeFiles/kds_tests.dir/free_map_test.cpp.o.d -o CMakeFiles/kds_tests.dir/free_map_test.cpp.o -c /home/ec2-user/ckdbs/tests/free_map_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.i: cmake_force
@@ -296,7 +310,7 @@ tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o: ../tests/device_page_store_test.cpp
 tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building CXX object tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building CXX object tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o -MF CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o.d -o CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o -c /home/ec2-user/ckdbs/tests/device_page_store_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.i: cmake_force
@@ -307,94 +321,10 @@ tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/device_page_store_test.cpp.s"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/device_page_store_test.cpp -o CMakeFiles/kds_tests.dir/device_page_store_test.cpp.s
 
-tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
-tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o: ../tests/waystone_entry_test.cpp
-tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building CXX object tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o -MF CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o.d -o CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o -c /home/ec2-user/ckdbs/tests/waystone_entry_test.cpp
-
-tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.i"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/tests/waystone_entry_test.cpp > CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.i
-
-tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.s"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/waystone_entry_test.cpp -o CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.s
-
-tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
-tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o: ../tests/waystone_dir_test.cpp
-tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Building CXX object tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o -MF CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o.d -o CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o -c /home/ec2-user/ckdbs/tests/waystone_dir_test.cpp
-
-tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.i"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/tests/waystone_dir_test.cpp > CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.i
-
-tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.s"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/waystone_dir_test.cpp -o CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.s
-
-tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
-tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o: ../tests/waystone_catalog_test.cpp
-tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_20) "Building CXX object tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o -MF CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o.d -o CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o -c /home/ec2-user/ckdbs/tests/waystone_catalog_test.cpp
-
-tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.i"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/tests/waystone_catalog_test.cpp > CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.i
-
-tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.s"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/waystone_catalog_test.cpp -o CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.s
-
-tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
-tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o: ../tests/waystone_hooks_test.cpp
-tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_21) "Building CXX object tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o -MF CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o.d -o CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o -c /home/ec2-user/ckdbs/tests/waystone_hooks_test.cpp
-
-tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.i"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/tests/waystone_hooks_test.cpp > CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.i
-
-tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.s"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/waystone_hooks_test.cpp -o CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.s
-
-tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
-tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o: ../tests/waystone_probe_test.cpp
-tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building CXX object tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o -MF CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o.d -o CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o -c /home/ec2-user/ckdbs/tests/waystone_probe_test.cpp
-
-tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.i"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/tests/waystone_probe_test.cpp > CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.i
-
-tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.s"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/waystone_probe_test.cpp -o CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.s
-
-tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
-tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o: ../tests/waystone_select_test.cpp
-tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building CXX object tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o -MF CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o.d -o CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o -c /home/ec2-user/ckdbs/tests/waystone_select_test.cpp
-
-tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/kds_tests.dir/waystone_select_test.cpp.i"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/ec2-user/ckdbs/tests/waystone_select_test.cpp > CMakeFiles/kds_tests.dir/waystone_select_test.cpp.i
-
-tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/kds_tests.dir/waystone_select_test.cpp.s"
-	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/ec2-user/ckdbs/tests/waystone_select_test.cpp -o CMakeFiles/kds_tests.dir/waystone_select_test.cpp.s
-
 tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o: ../tests/catalog_cache_test.cpp
 tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building CXX object tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Building CXX object tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o -MF CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o.d -o CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o -c /home/ec2-user/ckdbs/tests/catalog_cache_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.i: cmake_force
@@ -408,7 +338,7 @@ tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o: ../tests/catalog_test.cpp
 tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building CXX object tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_20) "Building CXX object tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o -MF CMakeFiles/kds_tests.dir/catalog_test.cpp.o.d -o CMakeFiles/kds_tests.dir/catalog_test.cpp.o -c /home/ec2-user/ckdbs/tests/catalog_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.i: cmake_force
@@ -422,7 +352,7 @@ tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o: ../tests/insert_wal_test.cpp
 tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building CXX object tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_21) "Building CXX object tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o -MF CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o.d -o CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o -c /home/ec2-user/ckdbs/tests/insert_wal_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.i: cmake_force
@@ -436,7 +366,7 @@ tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o: ../tests/bootstrap_test.cpp
 tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building CXX object tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building CXX object tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o -MF CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o.d -o CMakeFiles/kds_tests.dir/bootstrap_test.cpp.o -c /home/ec2-user/ckdbs/tests/bootstrap_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.i: cmake_force
@@ -450,7 +380,7 @@ tests/CMakeFiles/kds_tests.dir/bootstrap_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o: ../tests/page_mgr_test.cpp
 tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building CXX object tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building CXX object tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o -MF CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o.d -o CMakeFiles/kds_tests.dir/page_mgr_test.cpp.o -c /home/ec2-user/ckdbs/tests/page_mgr_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.i: cmake_force
@@ -464,7 +394,7 @@ tests/CMakeFiles/kds_tests.dir/page_mgr_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o: ../tests/command_dispatcher_test.cpp
 tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_29) "Building CXX object tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building CXX object tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o -MF CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o.d -o CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.o -c /home/ec2-user/ckdbs/tests/command_dispatcher_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.i: cmake_force
@@ -478,7 +408,7 @@ tests/CMakeFiles/kds_tests.dir/command_dispatcher_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o: ../tests/tcp_server_test.cpp
 tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_30) "Building CXX object tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building CXX object tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o -MF CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o.d -o CMakeFiles/kds_tests.dir/tcp_server_test.cpp.o -c /home/ec2-user/ckdbs/tests/tcp_server_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.i: cmake_force
@@ -492,7 +422,7 @@ tests/CMakeFiles/kds_tests.dir/tcp_server_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.o: ../tests/lexer_test.cpp
 tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_31) "Building CXX object tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building CXX object tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.o -MF CMakeFiles/kds_tests.dir/lexer_test.cpp.o.d -o CMakeFiles/kds_tests.dir/lexer_test.cpp.o -c /home/ec2-user/ckdbs/tests/lexer_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.i: cmake_force
@@ -506,7 +436,7 @@ tests/CMakeFiles/kds_tests.dir/lexer_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/parser_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/parser_test.cpp.o: ../tests/parser_test.cpp
 tests/CMakeFiles/kds_tests.dir/parser_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building CXX object tests/CMakeFiles/kds_tests.dir/parser_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building CXX object tests/CMakeFiles/kds_tests.dir/parser_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/parser_test.cpp.o -MF CMakeFiles/kds_tests.dir/parser_test.cpp.o.d -o CMakeFiles/kds_tests.dir/parser_test.cpp.o -c /home/ec2-user/ckdbs/tests/parser_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/parser_test.cpp.i: cmake_force
@@ -520,7 +450,7 @@ tests/CMakeFiles/kds_tests.dir/parser_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o: ../tests/subsystem_logging_test.cpp
 tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Building CXX object tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building CXX object tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o -MF CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o.d -o CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.o -c /home/ec2-user/ckdbs/tests/subsystem_logging_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.i: cmake_force
@@ -534,7 +464,7 @@ tests/CMakeFiles/kds_tests.dir/subsystem_logging_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o: ../tests/kwp_frame_test.cpp
 tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_34) "Building CXX object tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_29) "Building CXX object tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o -MF CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o.d -o CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.o -c /home/ec2-user/ckdbs/tests/kwp_frame_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.i: cmake_force
@@ -548,7 +478,7 @@ tests/CMakeFiles/kds_tests.dir/kwp_frame_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o: ../tests/wal_record_test.cpp
 tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_35) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_30) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.o -MF CMakeFiles/kds_tests.dir/wal_record_test.cpp.o.d -o CMakeFiles/kds_tests.dir/wal_record_test.cpp.o -c /home/ec2-user/ckdbs/tests/wal_record_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.i: cmake_force
@@ -562,7 +492,7 @@ tests/CMakeFiles/kds_tests.dir/wal_record_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o: ../tests/wal_payload_test.cpp
 tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_36) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_31) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o -MF CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o.d -o CMakeFiles/kds_tests.dir/wal_payload_test.cpp.o -c /home/ec2-user/ckdbs/tests/wal_payload_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.i: cmake_force
@@ -576,7 +506,7 @@ tests/CMakeFiles/kds_tests.dir/wal_payload_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o: ../tests/wal_stream_test.cpp
 tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_37) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o -MF CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o.d -o CMakeFiles/kds_tests.dir/wal_stream_test.cpp.o -c /home/ec2-user/ckdbs/tests/wal_stream_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.i: cmake_force
@@ -590,7 +520,7 @@ tests/CMakeFiles/kds_tests.dir/wal_stream_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o: ../tests/wal_manager_test.cpp
 tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_38) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o -MF CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o.d -o CMakeFiles/kds_tests.dir/wal_manager_test.cpp.o -c /home/ec2-user/ckdbs/tests/wal_manager_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.i: cmake_force
@@ -604,7 +534,7 @@ tests/CMakeFiles/kds_tests.dir/wal_manager_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o: ../tests/page_mgr_wal_gate_test.cpp
 tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_39) "Building CXX object tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_34) "Building CXX object tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o -MF CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o.d -o CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.o -c /home/ec2-user/ckdbs/tests/page_mgr_wal_gate_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.i: cmake_force
@@ -618,7 +548,7 @@ tests/CMakeFiles/kds_tests.dir/page_mgr_wal_gate_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o: ../tests/wal_checkpointer_test.cpp
 tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_40) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_35) "Building CXX object tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o -MF CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o.d -o CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.o -c /home/ec2-user/ckdbs/tests/wal_checkpointer_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.i: cmake_force
@@ -632,7 +562,7 @@ tests/CMakeFiles/kds_tests.dir/wal_checkpointer_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o: ../tests/memory_log_device_test.cpp
 tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_41) "Building CXX object tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_36) "Building CXX object tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o -MF CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o.d -o CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.o -c /home/ec2-user/ckdbs/tests/memory_log_device_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.i: cmake_force
@@ -646,7 +576,7 @@ tests/CMakeFiles/kds_tests.dir/memory_log_device_test.cpp.s: cmake_force
 tests/CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o: tests/CMakeFiles/kds_tests.dir/flags.make
 tests/CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o: ../tests/file_log_device_test.cpp
 tests/CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o: tests/CMakeFiles/kds_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_42) "Building CXX object tests/CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_37) "Building CXX object tests/CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o"
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT tests/CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o -MF CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o.d -o CMakeFiles/kds_tests.dir/file_log_device_test.cpp.o -c /home/ec2-user/ckdbs/tests/file_log_device_test.cpp
 
 tests/CMakeFiles/kds_tests.dir/file_log_device_test.cpp.i: cmake_force
@@ -667,6 +597,7 @@ kds_tests_OBJECTS = \
 "CMakeFiles/kds_tests.dir/keystone_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/heap_page_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/heap_chain_test.cpp.o" \
+"CMakeFiles/kds_tests.dir/btree_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/superblock_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/row_codec_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/scheduler_test.cpp.o" \
@@ -676,12 +607,6 @@ kds_tests_OBJECTS = \
 "CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/free_map_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o" \
-"CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o" \
-"CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o" \
-"CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o" \
-"CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o" \
-"CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o" \
-"CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/catalog_test.cpp.o" \
 "CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o" \
@@ -713,6 +638,7 @@ tests/kds_tests: tests/CMakeFiles/kds_tests.dir/memory_page_device_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/keystone_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/heap_page_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/heap_chain_test.cpp.o
+tests/kds_tests: tests/CMakeFiles/kds_tests.dir/btree_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/superblock_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/row_codec_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/scheduler_test.cpp.o
@@ -722,12 +648,6 @@ tests/kds_tests: tests/CMakeFiles/kds_tests.dir/superblock_checkpoint_anchor_tes
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/in_memory_page_store_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/free_map_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/device_page_store_test.cpp.o
-tests/kds_tests: tests/CMakeFiles/kds_tests.dir/waystone_entry_test.cpp.o
-tests/kds_tests: tests/CMakeFiles/kds_tests.dir/waystone_dir_test.cpp.o
-tests/kds_tests: tests/CMakeFiles/kds_tests.dir/waystone_catalog_test.cpp.o
-tests/kds_tests: tests/CMakeFiles/kds_tests.dir/waystone_hooks_test.cpp.o
-tests/kds_tests: tests/CMakeFiles/kds_tests.dir/waystone_probe_test.cpp.o
-tests/kds_tests: tests/CMakeFiles/kds_tests.dir/waystone_select_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/catalog_cache_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/catalog_test.cpp.o
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/insert_wal_test.cpp.o
@@ -752,7 +672,7 @@ tests/kds_tests: libkds.a
 tests/kds_tests: /usr/lib64/libgtest_main.so.1.11.0
 tests/kds_tests: /usr/lib64/libgtest.so.1.11.0
 tests/kds_tests: tests/CMakeFiles/kds_tests.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_43) "Linking CXX executable kds_tests"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=$(CMAKE_PROGRESS_38) "Linking CXX executable kds_tests"
 	cd /home/ec2-user/ckdbs/build-btree/tests && $(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/kds_tests.dir/link.txt --verbose=$(VERBOSE)
 	cd /home/ec2-user/ckdbs/build-btree/tests && /usr/bin/cmake -D TEST_TARGET=kds_tests -D TEST_EXECUTABLE=/home/ec2-user/ckdbs/build-btree/tests/kds_tests -D TEST_EXECUTOR= -D TEST_WORKING_DIR=/home/ec2-user/ckdbs/build-btree/tests -D TEST_EXTRA_ARGS= -D TEST_PROPERTIES= -D TEST_PREFIX= -D TEST_SUFFIX= -D TEST_FILTER= -D NO_PRETTY_TYPES=FALSE -D NO_PRETTY_VALUES=FALSE -D TEST_LIST=kds_tests_TESTS -D CTEST_FILE=/home/ec2-user/ckdbs/build-btree/tests/kds_tests[1]_tests.cmake -D TEST_DISCOVERY_TIMEOUT=5 -D TEST_XML_OUTPUT_DIR= -P /usr/share/cmake/Modules/GoogleTestAddTests.cmake
 

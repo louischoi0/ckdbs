@@ -196,8 +196,7 @@ public:
     //
     // Reusing the layout rather than defining a second slotted page is the
     // point: InsertTuple/ReadTuple/OverwriteTuple/DeleteMark, the row
-    // codec, HEAP_INSERT redo and the Waystone probe's (page, slot) all
-    // work on a leaf unchanged. `type` must be kHeap or kBtreeLeaf;
+    // codec and HEAP_INSERT redo all work on a leaf unchanged. `type` must be kHeap or kBtreeLeaf;
     // anything else is InvalidArgument, because nothing else has this body.
     static StatusOr<PageView> CreateEmptyAs(std::span<std::byte, kPageSize> page,
                                              std::uint64_t min_key, PageType type);
@@ -234,6 +233,28 @@ public:
     // versus `trx_id`, which is not this layer's decision. Fails with
     // NotFound only if `slot` is out of range or physically retired.
     StatusOr<Tuple> ReadTuple(std::uint16_t slot) const;
+
+    // Just the payload bytes of the tuple at `slot` - ReadTuple() without
+    // the MVCC header decode, and without re-reading the page header.
+    // `nr_slots` is the caller's already-read slot_count(): a key search
+    // over a page reads the header once and passes it in, where ReadTuple()
+    // re-reads all five header fields on every single call. That is the
+    // point of this method - a search probe touches the slot directory and
+    // the payload, nothing else.
+    //
+    // Deliberately returns bytes, not a decoded key: what the leading bytes
+    // of a payload *mean* is the row encoding's business, and this layer
+    // does not know that the Keystone column exists (see the layering note
+    // at the top of heap_page.cpp). Callers searching by primary key pair
+    // this with KeystoneIdOfPayload() from storage/keystone.hpp.
+    //
+    // Fails with NotFound on exactly the slots ReadTuple() does (out of
+    // range, or physically retired), so a search can treat NotFound as "no
+    // key here" and keep going. A delete-marked slot still has its bytes
+    // and still returns them, for the same reason ReadTuple() still returns
+    // the tuple: visibility is not this layer's decision.
+    StatusOr<std::span<const std::byte>> PayloadAt(std::uint16_t slot,
+                                                    std::uint16_t nr_slots) const;
 
     // Returns the payload capacity (slot.length - kTupleHeaderOnDiskSize)
     // reserved for the tuple at `slot` - the largest new payload

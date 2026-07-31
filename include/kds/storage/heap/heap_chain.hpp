@@ -124,7 +124,13 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 // Retired and out-of-range slots are skipped, matching PageView::ReadTuple.
 // Delete-marked tuples ARE visited: whether a reader may see one depends on
 // its snapshot versus the deleter's trx_id, which is not this layer's call.
-Status ChainVisit(storage::PageStore& store, PageId head,
+//
+// `access` says which of those two `fn` actually is. kRead fetches pages
+// through PageStore::GetForRead(), so a SELECT does not leave the whole
+// relation dirty behind it; kWrite is required of any visitor that
+// overwrites or delete-marks, and passing kRead from one of those loses
+// the write.
+Status ChainVisit(storage::PageStore& store, PageId head, storage::PageAccess access,
                   const std::function<Status(PageId, PageView&, std::uint16_t)>& fn);
 
 }  // namespace kds::heap

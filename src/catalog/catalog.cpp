@@ -4,7 +4,6 @@
 #include <array>
 #include <cctype>
 
-#include "kds/stats/waystone_dir.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
@@ -228,12 +227,6 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.desc_page_id = desc_page_id;
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
-    // Waystone is opt-in and off at creation (spec section 7). Turning it
-    // on is a separate DDL step (SetWaystoneDirectory), which keeps
-    // CREATE TABLE's cost identical to what it was.
-    row.waystone_state = WaystoneState::kDisabled;
-    row.waystone_dir_root = kInvalidPageId;
-    row.waystone_dir_depth = 0;
     Status s = InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
@@ -482,9 +475,6 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.schema = std::move(schema.value());
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
-    access.waystone_state = table_row.value().waystone_state;
-    access.waystone_dir_root = table_row.value().waystone_dir_root;
-    access.waystone_dir_depth = table_row.value().waystone_dir_depth;
     return cache_.PutTableAccess(std::move(access));
 }
 
@@ -518,9 +508,9 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         const std::uint64_t id = row.value().next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
-            // bottom would alias ids that Waystone addresses directly.
-            // Id-reuse / low-range reclamation is an open decision
-            // (CLAUDE.md), so this refuses rather than picking one.
+            // bottom would hand out an id that is still some tuple's
+            // identity. Id-reuse / low-range reclamation is an open
+            // decision (CLAUDE.md), so this refuses rather than picking one.
             return Status::OutOfRange("relation has exhausted the Keystone id space");
         }
 
@@ -579,68 +569,6 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
             log_->Debug("catalog", "table oid " + std::to_string(table_oid) +
                                        " desc page " + std::to_string(old_desc_page_id) + " -> " +
                                        std::to_string(new_desc_page_id));
-        }
-        return s;
-    }
-
-    return Status::NotFound("no sys.tables row for this oid");
-}
-
-Status Catalog::SetWaystoneDirectory(Oid table_oid, WaystoneState state, PageId dir_root,
-                                     std::uint8_t dir_depth) {
-    // Checked before the page is touched: a half-written triple is the one
-    // outcome that would leave the relation unwalkable.
-    if (state == WaystoneState::kDisabled) {
-        if (dir_root != kInvalidPageId || dir_depth != 0) {
-            return Status::InvalidArgument(
-                "catalog: a disabled Waystone must carry no directory root and depth 0");
-        }
-    } else {
-        if (dir_root == kInvalidPageId) {
-            return Status::InvalidArgument(
-                "catalog: an enabled Waystone needs a directory root page");
-        }
-        if (dir_depth < 1 || dir_depth > stats::kMaxDirDepth) {
-            return Status::InvalidArgument(
-                "catalog: Waystone directory depth " + std::to_string(dir_depth) +
-                " is outside 1.." + std::to_string(stats::kMaxDirDepth));
-        }
-    }
-
-    auto bytes = store_.Get(kCatalogPageTables);
-    if (!bytes.ok()) return bytes.status();
-
-    heap::PageView page(bytes.value());
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
-        }
-
-        auto row = SysTableRow::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        if (row.value().oid != table_oid) continue;
-
-        row.value().waystone_state = state;
-        row.value().waystone_dir_root = dir_root;
-        row.value().waystone_dir_depth = dir_depth;
-        auto encoded = row.value().Encode();
-        Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
-        // All three are TableAccess fields, so a cached entry is stale the
-        // moment they change. Bumped only on success: a failed overwrite
-        // changed nothing and invalidating would just cost a re-scan.
-        if (s.ok()) BumpVersion("waystone directory change");
-        if (s.ok() && log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-            // Info, alongside the other DDL: enabling Waystone changes the
-            // relation's storage form and its per-insert cost, which is
-            // the kind of thing an operator wants in a default log.
-            log_->Info("catalog", "table oid " + std::to_string(table_oid) +
-                                      " waystone state=" +
-                                      std::to_string(static_cast<int>(state)) + " root=" +
-                                      std::to_string(dir_root) + " depth=" +
-                                      std::to_string(dir_depth));
         }
         return s;
     }

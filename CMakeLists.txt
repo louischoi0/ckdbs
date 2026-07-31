@@ -33,10 +33,6 @@ add_library(kds
     src/catalog/rows.cpp
     src/catalog/schema.cpp
     src/catalog/sys_object_registry.cpp
-    src/stats/waystone_entry.cpp
-    src/stats/waystone_dir.cpp
-    src/stats/waystone_hooks.cpp
-    src/stats/waystone_probe.cpp
     src/catalog/catalog_cache.cpp
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp

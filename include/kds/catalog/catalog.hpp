@@ -148,33 +148,6 @@ public:
     // delete+insert, mirroring the legacy kds_catalog_update_relation_desc_page().
     Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id);
 
-    // Sets the relation's Waystone fields as one unit (spec section 7):
-    // enabling with a provisioned directory root, recording a deepened
-    // directory, promoting kBackfilling to kCovered, or disabling.
-    //
-    // The three are written together because they are one fact. A root
-    // without its depth is unwalkable, and a depth that disagrees with the
-    // root sends every lookup to the wrong leaf - so there is deliberately
-    // no setter for one of them.
-    //
-    // Validated: kDisabled requires kInvalidPageId and depth 0, and any
-    // other state requires a real root and a depth in 1..kMaxDirDepth.
-    // Refusing an inconsistent pair here is what lets every reader treat
-    // the triple as trustworthy without re-checking it.
-    //
-    // Bumps the catalog version on success, because TableAccess caches all
-    // three. **A caller holding a `const TableAccess*` must re-acquire it
-    // afterwards** - the bump clears the cache and the old pointer dangles.
-    // That matters most for directory growth, which happens in the middle
-    // of an insert that is already holding one.
-    //
-    // Fails with NotFound if no sys.tables row names `table_oid`, and with
-    // InvalidArgument for an inconsistent triple. Dropping the old
-    // directory's pages on disable is the caller's business: this writes
-    // the row, it does not own page lifetime.
-    Status SetWaystoneDirectory(Oid table_oid, WaystoneState state, PageId dir_root,
-                                std::uint8_t dir_depth);
-
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type);

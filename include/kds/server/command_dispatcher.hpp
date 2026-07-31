@@ -13,8 +13,6 @@
 #include "kds/parser/ast.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
-#include "kds/stats/waystone.hpp"
-#include "kds/stats/waystone_hooks.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/page_store.hpp"
@@ -83,43 +81,20 @@
 // exactly one place - `InsertIntoRelation`, `VisitRelation`, `LocateByPk`.
 // Everything else in this file is storage-agnostic, which is possible
 // because a btree **leaf is a heap page**: the row codec, `PageView`
-// reads/overwrites, `HEAP_INSERT`, Waystone's `(page_id, slot)` and the
-// `SHOW PAGE` dump all work on either without knowing which they hold.
+// reads/overwrites, `HEAP_INSERT` and the `SHOW PAGE` dump all work on
+// either without knowing which they hold.
 //
 // The observable differences are narrow and worth stating:
 //
 //   - `SELECT`/`UPDATE ... WHERE id = <n>` on a btree relation descends
 //     the tree, which is **authoritative** - a miss means the row does not
 //     exist, and no scan follows. The same statement on a heap relation
-//     may probe Waystone, which is advisory and always falls back.
+//     scans the chain, because a heap relation has no pk index at all.
 //   - `INSERT` may split a leaf and grow the tree a level, in which case
 //     the relation's `desc_page_id` is repointed at the new root before
 //     the client is answered.
 //   - A full scan of either is a left-to-right walk of the same
 //     `next_page_id` links, so `SELECT *` returns rows in the same order.
-//
-// ---- Waystone (2026-07-30) ----------------------------------------------
-//
-// Off for every relation until `WAYSTONE ENABLE <table>` turns it on
-// (docs/waystone-concpets.md section 7). While it is on:
-//
-//   INSERT  additionally writes one 32-byte entry through the relation's
-//           page directory - O(1), a handful of page touches, no fsync.
-//   SELECT  with a `WHERE id = <const>` predicate probes for the tuple's
-//           location instead of scanning the chain.
-//
-// The probe is advisory and the fallback is unconditional: a miss, a
-// stale entry, an epoch mismatch, or a tuple at the named slot carrying
-// the wrong Keystone id all fall through to the same full `ChainVisit`
-// the query would have done anyway (invariant 8 as amended, spec 3.1).
-// The one property that must survive every change here is that turning
-// Waystone off, or deleting its pages, changes no result.
-//
-// `WAYSTONE ENABLE` is a dispatcher command rather than `CREATE TABLE`
-// syntax because the parser is being replaced wholesale (docs/parser.md
-// PR01+) and adding a keyword to the legacy grammar would be work thrown
-// away. It is a development surface on a protocol already documented as
-// one; KWP/1 decides the real spelling.
 //
 // ---- Ordering: the records are appended after the page is mutated -------
 //
@@ -141,12 +116,17 @@ struct DispatchOutcome {
     bool should_stop = false;
 };
 
-// Where a tuple lives, as a Waystone probe reports it. Local to the
+// Where a tuple lives, as a point lookup reports it. Local to the
 // dispatcher because it is the shape of an answer to "skip the scan and
 // look here", not a storage-layer concept.
 struct TupleLocation {
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;
+    // The page's bytes, when whoever produced this location already had
+    // them - a btree descent does. Empty means "fetch page_id yourself";
+    // a reader must handle both. Dynamic extent because it has to have an
+    // unset state (btree.hpp Location::leaf).
+    std::span<std::byte> page{};
 };
 
 class CommandDispatcher {
@@ -253,7 +233,7 @@ public:
     //                         -> a full ordered scan of the relation,
     //                            WHERE-filtered; a bare `WHERE <pk> = <n>`
     //                            instead takes the point path (a tree
-    //                            descent, or a Waystone probe).
+    //                            descent, on a btree relation).
     //                            One wire line: "col1,col2,..." then one
     //                            "\n"-escaped (see SHOW PAGE above) section
     //                            per matching row, comma-joined values.
@@ -289,7 +269,11 @@ private:
 
     // A full ordered scan of the relation, whichever storage it uses. Both
     // walk sibling/next links left to right, so the row order is identical.
-    Status VisitRelation(const catalog::TableAccess& access,
+    //
+    // `page_access` must be kWrite whenever `fn` modifies a tuple - UPDATE
+    // and DELETE scan through here - and kRead otherwise, which is what
+    // keeps a SELECT from dirtying every page it reads (page_store.hpp).
+    Status VisitRelation(const catalog::TableAccess& access, storage::PageAccess page_access,
                          const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn);
 
     // Appends the record set above for one placed tuple, stamps page_lsn
@@ -309,36 +293,17 @@ private:
     Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id);
 
-    DispatchOutcome HandleWaystone(std::string_view args);
-
-    // Records a freshly inserted tuple's location, growing the relation's
-    // directory first if the new id has outrun it.
-    //
-    // Returns the (possibly re-acquired) TableAccess, because growth is a
-    // catalog write and a catalog write invalidates the cache: the caller's
-    // `const TableAccess*` is dangling afterwards. Returning the new one
-    // makes that impossible to forget, which a `Status` return would not.
-    //
-    // A failure here is logged and swallowed by the caller, never surfaced:
-    // Waystone is advisory, and an INSERT that succeeded must not be
-    // reported as failed because a hint structure could not be updated.
-    StatusOr<const catalog::TableAccess*> RecordWaystoneInsert(
-        const catalog::TableAccess& access, std::uint64_t id,
-        const storage::InsertPlacement& placed);
-
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer
-    // differs, and that difference is invariant 8's whole content:
+    // differs:
     //
-    //   kScan    no shortcut - or one that declined. Scan; the scan is the
-    //            authoritative path and produces the same answer.
-    //   kAt      look at this (page, slot). For a btree this is the
-    //            authoritative descent; for a heap relation it is a
-    //            Waystone probe that has already validated epoch and
-    //            Keystone id.
+    //   kScan    no shortcut. Scan; the scan is the authoritative path and
+    //            produces the same answer. Every heap relation lands here,
+    //            having no pk index to descend.
+    //   kAt      look at this (page, slot) - a btree descent, which is
+    //            authoritative.
     //   kAbsent  **no such row**, on authority. Only a btree descent can
-    //            say this - a Waystone miss never can (spec 3.1 rule 1), so
-    //            a heap relation never produces it.
+    //            say this, so a heap relation never produces it.
     struct PkLookup {
         enum class Kind { kScan, kAt, kAbsent };
         Kind kind = Kind::kScan;
@@ -346,36 +311,27 @@ private:
     };
     PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
 
-    // The location a `WHERE id = <const>` select should look at first, or
-    // nullopt to scan. Every reason to decline - relation not enabled,
-    // predicate not a bare pk equality, entry missing or stale, wrong
-    // Keystone id at the target - collapses to nullopt, because the caller
-    // must do the same thing in all of them.
-    std::optional<TupleLocation> ProbeForPk(const catalog::TableAccess& access,
-                                                  std::uint64_t pk);
+    // The bytes of the page a located tuple sits on, for a reader. Reuses
+    // the span the locator carried out when it has one, and fetches
+    // read-only when it does not.
+    //
+    // Read paths only. A writer must go through page_store_.Get() even
+    // when TupleLocation::page is populated: the span is the same frame
+    // either way, but only Get() marks it dirty, and a write to a frame
+    // nothing will write back is a write that never happened.
+    StatusOr<std::span<std::byte, kPageSize>> PageForRead(const TupleLocation& at);
 
     // The pk value a WHERE clause is a *bare* equality against, or nullopt
     // if it is anything else - no WHERE, more than one condition, a non-pk
-    // column, a non-equality operator, a non-integer or negative literal,
-    // or a relation with no live Waystone.
+    // column, a non-equality operator, or a non-integer or negative
+    // literal.
     //
     // Shared by SELECT and UPDATE so the two cannot disagree about which
-    // predicates are probeable. Duplicating this check is how one path ends
-    // up probing a query the other correctly scans.
+    // predicates take the point path. Duplicating this check is how one
+    // path ends up descending for a query the other correctly scans.
     std::optional<std::uint64_t> PkEqualityTarget(
         const catalog::TableAccess& access,
         const std::vector<parser::Condition>& where) const;
-
-    // Reads `pk` out of the Keystone word of the tuple at (page, slot).
-    // Passed to stats::ProbeAndVerify as its id reader.
-    static std::optional<std::uint64_t> KeystoneIdAtSlot(storage::PageStore& store,
-                                                         PageId page_id, std::uint16_t slot,
-                                                         void* ctx);
-
-    // The relation's Waystone as the hooks and probe want it.
-    static stats::WaystoneRef WaystoneRefOf(const catalog::TableAccess& access) noexcept {
-        return stats::WaystoneRef{access.waystone_dir_root, access.waystone_dir_depth};
-    }
 
     // Diagnostics. Levels are chosen so the default (info) is quiet under
     // load: DDL and SYNC are Info because they are rare and consequential,
@@ -398,17 +354,6 @@ private:
     const sched::Clock* clock_;
     wal::WalManager* wal_;
     wal::DurabilityClass durability_;
-
-    // Every page at epoch 0 until a physical optimizer exists to bump one
-    // (waystone-workplan.md T19). Correct today because nothing moves a
-    // tuple; owned here rather than injected because there is exactly one
-    // implementation and swapping it is T19's job, not a caller's.
-    stats::StaticEpochProvider epochs_;
-
-    // Probe accounting, so "is Waystone doing anything" is answerable
-    // without a profiler. Reported by WAYSTONE STATUS.
-    std::uint64_t waystone_probe_hits_ = 0;
-    std::uint64_t waystone_probe_misses_ = 0;
 
     // Implicit-transaction ids for the statements this dispatcher logs.
     // Process-local and restarting from 1 every boot, which is wrong the

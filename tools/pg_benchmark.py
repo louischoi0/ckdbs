@@ -14,10 +14,10 @@ Three things make this a fair baseline rather than a rigged one, and a number
 quoted without them is misleading:
 
 1. **Index parity is explicit, not assumed.** Which variant is comparable
-   depends on the ckdbs run it is being diffed against, and as of 2026-07-30
-   that changed: a Waystone-enabled relation has an O(1) pk lookup on SELECT
-   and UPDATE, so **`pk` is now the apples-to-apples variant** for a
-   `benchmark.py --waystone` run, and `noidx` is the one for a run without it.
+   depends on the ckdbs run it is being diffed against: a `--clustered btree`
+   relation has an O(depth) pk lookup on SELECT and UPDATE, so **`pk` is the
+   apples-to-apples variant** for that run, and `noidx` is the one for a
+   heap-clustered run, which has no index at all.
    `--index both` (default) runs every phase twice so either diff is available.
    Phase names carry the variant: `point-select[noidx]` vs `point-select[pk]`.
 2. **The id column is server-generated on both sides.** ckdbs invariant 10

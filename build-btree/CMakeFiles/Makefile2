@@ -100,12 +100,12 @@ tests/clean: tests/CMakeFiles/kds_tests.dir/clean
 CMakeFiles/kds.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds.dir/build.make CMakeFiles/kds.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49 "Built target kds"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45 "Built target kds"
 .PHONY : CMakeFiles/kds.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/kds.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 49
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 45
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/kds.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 0
 .PHONY : CMakeFiles/kds.dir/rule
@@ -126,12 +126,12 @@ CMakeFiles/kds.dir/clean:
 CMakeFiles/kds_server.dir/all: CMakeFiles/kds.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds_server.dir/build.make CMakeFiles/kds_server.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/kds_server.dir/build.make CMakeFiles/kds_server.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=50,51 "Built target kds_server"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=46,47 "Built target kds_server"
 .PHONY : CMakeFiles/kds_server.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/kds_server.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 51
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 47
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/kds_server.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 0
 .PHONY : CMakeFiles/kds_server.dir/rule
@@ -152,12 +152,12 @@ CMakeFiles/kds_server.dir/clean:
 tests/CMakeFiles/kds_tests.dir/all: CMakeFiles/kds.dir/all
 	$(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/depend
 	$(MAKE) $(MAKESILENT) -f tests/CMakeFiles/kds_tests.dir/build.make tests/CMakeFiles/kds_tests.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94 "Built target kds_tests"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/ec2-user/ckdbs/build-btree/CMakeFiles --progress-num=48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85 "Built target kds_tests"
 .PHONY : tests/CMakeFiles/kds_tests.dir/all
 
 # Build rule for subdir invocation for target.
 tests/CMakeFiles/kds_tests.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 92
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 83
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 tests/CMakeFiles/kds_tests.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/ec2-user/ckdbs/build-btree/CMakeFiles 0
 .PHONY : tests/CMakeFiles/kds_tests.dir/rule
