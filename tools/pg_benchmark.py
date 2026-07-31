@@ -13,11 +13,12 @@ outputs are diffable phase by phase:
 Three things make this a fair baseline rather than a rigged one, and a number
 quoted without them is misleading:
 
-1. **Index parity is explicit, not assumed.** ckdbs has no index today: a
-   `WHERE id = <n>` SELECT scans the whole page chain. So `--index both`
-   (default) runs every phase twice - once on a heap table with no index at
-   all (`noidx`, PostgreSQL seqscans, the apples-to-apples comparison) and
-   once with a PRIMARY KEY (`pk`, what PostgreSQL actually does for anyone).
+1. **Index parity is explicit, not assumed.** Which variant is comparable
+   depends on the ckdbs run it is being diffed against, and as of 2026-07-30
+   that changed: a Waystone-enabled relation has an O(1) pk lookup on SELECT
+   and UPDATE, so **`pk` is now the apples-to-apples variant** for a
+   `benchmark.py --waystone` run, and `noidx` is the one for a run without it.
+   `--index both` (default) runs every phase twice so either diff is available.
    Phase names carry the variant: `point-select[noidx]` vs `point-select[pk]`.
 2. **The id column is server-generated on both sides.** ckdbs invariant 10
    forbids a caller-supplied pk, so the table uses
@@ -25,13 +26,14 @@ quoted without them is misleading:
    body columns. An identity column is a sequence, not an index, so the
    `noidx` variant really has zero indexes (`SHOW INDEXES` in the run header
    proves it).
-3. **Durability is not silently different.** Each statement here is its own
-   implicit transaction, so with `synchronous_commit = on` (PostgreSQL's
-   default, and this tool's default) every INSERT/UPDATE waits for a WAL
-   fsync. Today's ckdbs server does not append to its WAL at all and is only
-   durable at `SYNC` (see CLAUDE.md's WAL note), so its write phases are not
-   paying that cost. `--synchronous-commit off` is the closer analogue of the
-   current ckdbs write path; run both and quote which one you mean.
+3. **Durability is not silently different**, and the mapping is per statement
+   as of 2026-07-30. ckdbs INSERT *is* WAL-logged now, so
+   `synchronous_commit = on` (PostgreSQL's default and this tool's) is the
+   right analogue of `durability = strict|group`, and `off` of
+   `durability = relaxed`. ckdbs UPDATE is still **entirely unlogged**, so
+   only `--synchronous-commit off` is comparable for that phase - quoting a
+   ckdbs update against PostgreSQL's default compares a non-durable write to
+   a durable one. Run both and say which you mean.
 
 Timing is a wall clock around one send + one receive through tools/pg_wire.py
 (no libpq, no psycopg - see that module's docstring), so latencies include

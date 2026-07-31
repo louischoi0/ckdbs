@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "engine": "PostgreSQL 17.10",
+    "host": "127.0.0.1",
+    "port": 15433,
+    "table": "pgbench_1785398379_32644_{noidx,pk}",
+    "columns": 5,
+    "rows": 10000,
+    "seed": 1,
+    "index_variants": [
+      "noidx",
+      "pk"
+    ],
+    "synchronous_commit": "on",
+    "analyze": false
+  },
+  "phases": [
+    {
+      "phase": "insert[noidx]",
+      "detail": "4 body columns per row, one varchar of 16 chars",
+      "ops": 10000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 12.995178,
+      "qps": 769.5,
+      "mean_us": 1267.3,
+      "p50_us": 1185.6,
+      "p95_us": 1592.5,
+      "p99_us": 2868.9,
+      "max_us": 9578.4
+    },
+    {
+      "phase": "point-select[noidx]",
+      "detail": "WHERE id = <random 1..10000>, no index at all: WHERE id = <n> is a seqscan, matching ckdbs's indexless read path",
+      "ops": 1000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 1.425939,
+      "qps": 701.3,
+      "mean_us": 1414.5,
+      "p50_us": 1238.4,
+      "p95_us": 2061.2,
+      "p99_us": 3944.8,
+      "max_us": 11232.5
+    },
+    {
+      "phase": "full-scan[noidx]",
+      "detail": "10000 rows per reply, 165,400 rows/s",
+      "ops": 2,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.120919,
+      "qps": 16.5,
+      "mean_us": 60452.6,
+      "p50_us": 53612.8,
+      "p95_us": 67292.4,
+      "p99_us": 67292.4,
+      "max_us": 67292.4
+    },
+    {
+      "phase": "update[noidx]",
+      "detail": "fixed-width column only; PostgreSQL still writes a new row version (MVCC), unlike ckdbs's in-place overwrite",
+      "ops": 1000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 2.738611,
+      "qps": 365.1,
+      "mean_us": 2718.3,
+      "p50_us": 2371.6,
+      "p95_us": 4367.3,
+      "p99_us": 7406.7,
+      "max_us": 8718.6
+    },
+    {
+      "phase": "insert[pk]",
+      "detail": "4 body columns per row, one varchar of 16 chars",
+      "ops": 10000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 13.287208,
+      "qps": 752.6,
+      "mean_us": 1295.2,
+      "p50_us": 1203.3,
+      "p95_us": 1668.8,
+      "p99_us": 3079.2,
+      "max_us": 9955.7
+    },
+    {
+      "phase": "point-select[pk]",
+      "detail": "WHERE id = <random 1..10000>, PRIMARY KEY on id: btree index scan, what PostgreSQL does by default",
+      "ops": 1000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.260388,
+      "qps": 3840.4,
+      "mean_us": 252.3,
+      "p50_us": 211.5,
+      "p95_us": 351.4,
+      "p99_us": 1105.7,
+      "max_us": 4605.1
+    },
+    {
+      "phase": "full-scan[pk]",
+      "detail": "10000 rows per reply, 175,014 rows/s",
+      "ops": 2,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.114276,
+      "qps": 17.5,
+      "mean_us": 57131.0,
+      "p50_us": 52072.1,
+      "p95_us": 62190.0,
+      "p99_us": 62190.0,
+      "max_us": 62190.0
+    },
+    {
+      "phase": "update[pk]",
+      "detail": "fixed-width column only; PostgreSQL still writes a new row version (MVCC), unlike ckdbs's in-place overwrite",
+      "ops": 1000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 1.299341,
+      "qps": 769.6,
+      "mean_us": 1284.9,
+      "p50_us": 1203.9,
+      "p95_us": 1545.4,
+      "p99_us": 2783.6,
+      "max_us": 10050.3
+    }
+  ]
+}

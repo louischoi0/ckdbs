@@ -42,6 +42,21 @@ public:
     // mutation. Fails with NotFound if page_id was never created.
     virtual StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) = 0;
 
+    // CreateNew() for a page that carries no common page header - the
+    // whole 8 KiB belongs to the caller. Waystone's entry and directory
+    // pages are the only ones today (docs/waystone-concpets.md §§5-6):
+    // their tilings are exact powers of two and a header would cost a slot
+    // and break the shift/mask addressing.
+    //
+    // The default is plain CreateNew(), which is correct for any store
+    // that neither stamps nor verifies a page checksum - there is nothing
+    // to opt out of. A store that does (DevicePageStore) overrides it to
+    // record the fact durably, because getting this wrong writes a
+    // checksum over live data at byte 4.
+    virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderless() {
+        return CreateNew();
+    }
+
     // Records that the WAL record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn, which is what a store's write-back path
     // compares against the log's durable watermark (wal.md section 8-1).

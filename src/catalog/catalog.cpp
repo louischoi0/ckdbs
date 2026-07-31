@@ -5,6 +5,7 @@
 #include <cctype>
 
 #include "kds/stats/waystone_dir.hpp"
+#include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 
@@ -285,11 +286,6 @@ Status Catalog::InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_p
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                     ClusteredType clustered_type) {
-    if (clustered_type != ClusteredType::kHeap) {
-        // ClusteredType::kBtree needs the not-yet-ported btree code
-        // (kernel/kds/btree.c) - rejected rather than half-implemented.
-        return Status::InvalidArgument("btree clustered tables are not implemented yet");
-    }
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
@@ -299,8 +295,24 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     if (!created.ok()) return created.status();
     auto [root_id, root_bytes] = created.value();
 
-    auto root_page = heap::PageView::CreateEmpty(root_bytes, 0);
-    if (!root_page.ok()) return root_page.status();
+    // Both clustered types root at `desc_page_id` and both start as one
+    // page - a heap page for kHeap, a B+ tree leaf for kBtree (btree.hpp).
+    // A btree relation grows its first internal level only when that leaf
+    // splits, so a small table costs exactly what it did before, and the
+    // choice is invisible to every layer above until the relation is big
+    // enough for it to matter.
+    Status formatted = Status::OK();
+    switch (clustered_type) {
+        case ClusteredType::kHeap: {
+            auto root_page = heap::PageView::CreateEmpty(root_bytes, 0);
+            if (!root_page.ok()) formatted = root_page.status();
+            break;
+        }
+        case ClusteredType::kBtree:
+            formatted = btree::FormatRoot(root_bytes);
+            break;
+    }
+    if (!formatted.ok()) return formatted;
 
     Oid new_oid = GenerateUserOid();
 

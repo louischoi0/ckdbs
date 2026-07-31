@@ -2,6 +2,7 @@ find_package(GTest REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(kds_tests
+    status_test.cpp
     crc32c_test.cpp
     page_header_test.cpp
     file_page_device_test.cpp
@@ -23,6 +24,7 @@ add_executable(kds_tests
     waystone_catalog_test.cpp
     waystone_hooks_test.cpp
     waystone_probe_test.cpp
+    waystone_select_test.cpp
     catalog_cache_test.cpp
     catalog_test.cpp
     insert_wal_test.cpp

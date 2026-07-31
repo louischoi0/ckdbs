@@ -130,7 +130,7 @@ Files: `src/stats/waystone_backfill.cpp`, `tests/waystone_backfill_test.cpp`. Ma
 Tests: spec §12-6 full (enable→backfill→complete; restart mid-way; disable leaves results unchanged).
 Needs: T12–T14.
 
-**T18 — Executor integration.** *(startable as a stub today; completes with roadmap M1)*
+**T18 — Executor integration.** — **read path done 2026-07-30** (W07): `WAYSTONE ENABLE|DISABLE|STATUS` on the dispatcher, coverage maintained from `HandleInsert`, and a probe on `SELECT ... WHERE id = <n>` with unconditional fallback. Equivalence is tested against a parallel Waystone-off relation rather than by disabling and re-enabling, which `ENABLE` refuses once a relation holds rows. The observer/trace half is still deferred with T14/T15.
 Wire the observer into the executor's tuple-touch sites and the coverage hooks into the insert/delete paths; plumb `pattern_id`/`arg_hash` from the plan context (T11). Until M1 lands, keep the integration behind a fixture executor that replays scripted access traces — the trace format is this task's first deliverable and is what T14–T16 consume.
 Tests: spec §12-2 (results identical with observer off / ring saturated / structure deleted) and §12-3 in its **amended** form (read-path *equivalence* across probe-on / probe-off / disabled / pages-deleted / stale-entry-pointing-at-a-different-pk — not the retired "zero page touches" assertion) — both become regression-mandatory for every later change.
 Needs: T13–T15.

@@ -126,7 +126,7 @@ public:
     // CreateNew() for a page that will carry no common header - see the
     // note above. The whole 8 KiB is the caller's, and this store will
     // neither stamp nor verify a checksum on it, now or after a reopen.
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderless();
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderless() override;
 
     // Whether `page_id` was created headerless. False for an id that does
     // not exist, which is the safe answer: an unknown page is treated as

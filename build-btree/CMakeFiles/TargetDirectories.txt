@@ -1,0 +1,9 @@
+/home/ec2-user/ckdbs/build-btree/CMakeFiles/kds.dir
+/home/ec2-user/ckdbs/build-btree/CMakeFiles/kds_server.dir
+/home/ec2-user/ckdbs/build-btree/CMakeFiles/test.dir
+/home/ec2-user/ckdbs/build-btree/CMakeFiles/edit_cache.dir
+/home/ec2-user/ckdbs/build-btree/CMakeFiles/rebuild_cache.dir
+/home/ec2-user/ckdbs/build-btree/tests/CMakeFiles/kds_tests.dir
+/home/ec2-user/ckdbs/build-btree/tests/CMakeFiles/test.dir
+/home/ec2-user/ckdbs/build-btree/tests/CMakeFiles/edit_cache.dir
+/home/ec2-user/ckdbs/build-btree/tests/CMakeFiles/rebuild_cache.dir

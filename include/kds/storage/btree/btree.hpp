@@ -1,0 +1,150 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <functional>
+#include <span>
+
+#include "kds/base/status.hpp"
+#include "kds/storage/btree/btree_page.hpp"
+#include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/insert_placement.hpp"
+#include "kds/storage/page_store.hpp"
+
+// The clustered B+ tree: a relation whose `sys.tables.clustered_type` is
+// `kBtree` stores its tuples in this tree's leaves, rooted at the same
+// `desc_page_id` a heap-clustered relation roots its chain at.
+//
+// ---- What this is, next to heap_chain.hpp -------------------------------
+//
+// A heap-clustered relation is a linked list of pages: point lookup by pk
+// is O(pages) unless Waystone answers it, and a range scan has to start at
+// the head. This is the same tuple storage with an index above it - the
+// leaves *are* heap pages (heap_page.hpp's CreateEmptyAs under a
+// kBtreeLeaf header), linked by the same `next_page_id`, holding the same
+// slotted tuples with the same MVCC header. What is added is the internal
+// levels (btree_page.hpp), which turn a pk lookup into O(log n) page
+// fetches and let a range scan start at the first qualifying leaf.
+//
+// Reusing the leaf body rather than defining a second tuple format is
+// deliberate and load-bearing: `heap::PageView` insert/read/overwrite/
+// delete-mark, `exec::EncodeRow`/`DecodeRow`, the `HEAP_INSERT` redo
+// record, and Waystone's `(page_id, slot)` all apply to a leaf verbatim.
+// A clustered-btree relation is therefore not a second storage engine,
+// it is the heap with a directory over it.
+//
+// ---- Splits move nothing, and that is on purpose ------------------------
+//
+// Invariant 10 makes every pk system-issued, monotonically increasing.
+// A descent for a new id therefore always ends at the **rightmost** leaf,
+// and when that leaf is full the split is:
+//
+//     new leaf, low key = the id that caused the split, tuple goes there;
+//     old leaf's next_page_id repointed at it; the same id copied up as
+//     the parent's separator.
+//
+// No key is ever moved between pages. That is the identical bargain
+// heap_chain.hpp strikes, and it is struck for the identical reason: **the
+// heap page split policy is an open decision in CLAUDE.md** (how a full
+// page's contents get divided, and where the new boundary goes), and a
+// tree that divides page contents would decide it as a side effect. So it
+// does not. A split of a leaf whose contents would have to be divided -
+// which requires an id below the leaf's existing maximum, i.e. a
+// non-monotonic sequence - is refused with OutOfSpace naming the open
+// decision, not silently guessed at.
+//
+// Two consequences worth stating because they are easy to assume away:
+//
+//   1. **Nothing here moves a tuple**, so a leaf's `min_key` is immutable
+//      exactly as a heap page's is (invariant 2), and Waystone's page-epoch
+//      check stays trivially true for btree relations too (CLAUDE.md's
+//      warning about not designing as if that lasts applies unchanged).
+//   2. Leaves fill left-to-right and are never merged, so the tree's space
+//      utilisation matches the heap chain's - no 50% worst case, and no
+//      reuse of space freed by DELETE either, for the same missing page
+//      compaction.
+//
+// ---- Structural changes are reported, not logged here -------------------
+//
+// This file mutates pages; it does not know about the WAL. An insert
+// reports every page it created or restructured (`BtreeInsertResult::
+// changes()`), in the order redo has to apply them, and the caller emits
+// the records. Same division as heap_chain.hpp, where `linked_from` and
+// `grew_chain` exist for exactly that.
+//
+// Concurrency: none of its own, like heap_chain.hpp. Descent takes and
+// releases each page through the PageStore; the caller holds the pin/latch
+// discipline (CLAUDE.md's page-latch consistency model). There is no
+// latch coupling and no B-link right-link protocol, because there is no
+// concurrent mutation to protect against yet - the server is one
+// cooperative thread and nothing here suspends.
+
+namespace kds::btree {
+
+// The descent's depth bound and the shape an insert reports back are
+// shared with the heap chain and live in insert_placement.hpp:
+// `kMaxBtreeDepth`, `StructuralChange`, `InsertPlacement`.
+
+// Where a tuple lives. Deliberately the same shape a Waystone probe
+// reports, so a caller can treat "the index said here" and "the probe said
+// here" identically.
+struct Location {
+    PageId page_id = kInvalidPageId;
+    std::uint16_t slot = 0;
+};
+
+// Formats `page` as a brand-new relation's root: an empty leaf with
+// min_key 0, so a relation that never outgrows one page is exactly one
+// page, the same as a heap-clustered one. The tree gains its first
+// internal level only when this leaf splits.
+Status FormatRoot(std::span<std::byte, kPageSize> page);
+
+// Inserts `payload` (whose leading Keystone word must carry `id`) into the
+// tree rooted at `root`, splitting and growing as needed.
+//
+// Fails with:
+//   AlreadyExists  a live tuple in the target leaf already carries `id`
+//   OutOfRange     `id` is below the target leaf's min_key (invariant 3)
+//   OutOfSpace     the leaf is full and `id` does not sort above its
+//                  contents, so making room would need the undecided split
+//                  policy; or a tuple no empty leaf could hold
+//   Corruption     the payload is too short for a Keystone word, its id
+//                  disagrees with `id`, or the descent exceeded
+//                  kMaxBtreeDepth / hit a page of the wrong type
+//   ...            whatever the store reports when a page cannot be
+//                  allocated
+//
+// On failure nothing is reported as structural, but pages *may* already
+// have been allocated (an allocation with no free-page path to undo it,
+// same as ChainInsert). They are never linked in, so nothing reaches them.
+StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
+                                                std::uint64_t id,
+                                                std::span<const std::byte> payload,
+                                                std::uint64_t trx_id);
+
+// Descends to the leaf that owns `id` and finds its live slot. This is the
+// point-lookup the whole structure exists for: O(depth) page fetches plus
+// one leaf scan, against the heap chain's O(pages).
+//
+// Fails with NotFound if no live tuple in that leaf carries `id` - which,
+// because the descent is exact, means the row does not exist. Unlike a
+// Waystone probe this answer is **authoritative**: the tree is the
+// relation's storage, not a hint over it.
+StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id);
+
+// Calls `fn` once per slot of every leaf, left to right - which is pk
+// order page by page, tuples within a leaf staying unordered exactly as in
+// a heap page. Signature matches heap::ChainVisit deliberately, so a
+// caller can hand the same lambda to either.
+Status BtreeVisit(storage::PageStore& store, PageId root,
+                  const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn);
+
+// Levels from root to leaf inclusive: 1 while the root is still a leaf.
+// For DESCRIBE/SHOW and tests, not a hot path.
+StatusOr<std::uint16_t> BtreeHeight(storage::PageStore& store, PageId root);
+
+// Leaves in the tree, walked through the sibling links. Same audience as
+// BtreeHeight().
+StatusOr<std::uint32_t> BtreeLeafCount(storage::PageStore& store, PageId root);
+
+}  // namespace kds::btree

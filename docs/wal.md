@@ -139,7 +139,7 @@ Three properties of that first path are worth stating, because they are the shap
 - **Records are appended after the page is mutated, not while it is latched.** §8-1 asks for the latter. What makes the former sound *here* is narrow: the server is a single cooperative thread, no flush can interleave between the mutation and the `page_lsn` stamp, and the store's gate covers every instant after it. Any path that suspends mid-statement must generate its record under the latch instead.
 - **A failed append leaves the tuple in the page.** The client gets an `ERR`, but there is no transaction manager to unwind the heap insert, so the row exists and is unlogged — a lost write on a crash, not a wrong answer now. The abort path that closes this belongs to the transaction layer.
 
-Implicit-transaction ids are a process-local counter starting at 1 each boot. That is wrong the moment recovery reads two boots of one stream and sees colliding ids; durable txn-id allocation is part of §14's item 4.
+Implicit-transaction ids are a process-local counter starting at 1 each boot. That is wrong the moment recovery reads two boots of one stream and sees colliding ids; durable txn-id allocation is part of §14's item 4. **Superseded 2026-07-31** by `docs/txn.md` §2's block-reserved allocator over a superblock v4 field; the abort path that §11a's second bullet asks for also lands there (`docs/txn.md` §6). What remains true, and is now stated precisely in `docs/txn.md` §8: because recovery still does not exist, an uncommitted row surviving a crash reads as *committed* on the next boot.
 
 ## 12. Recovery `[PROPOSED]`
 
@@ -168,7 +168,7 @@ Still required:
 1. ~~**Design spec — tuple header (MVCC):** replace `xmin/xmax/undo_ptr` with **`trx_id` (48-bit writer) + `undo_ptr` + delete-mark flag** per §5.1~~ — **satisfied 2026-07-29**: `docs/heap-and-tuple.md` §3.2 amended and invariant 12 added; implemented in `include/kds/storage/heap/heap_page.hpp` (20-byte header, `kSlotFlagDeleted`, `PageView::DeleteMark`). The lock role stays in the Keystone lock byte.
 2. ~~**Design spec — heap section:** `PAGE_INIT` as the sole logger of `min_key`.~~ — **satisfied 2026-07-30**: chain growth is the only thing that creates a heap page, and it emits `PAGE_INIT` carrying the new page's `min_key` (§11a). No other record encodes it.
 3. ~~**Superblock spec:** per-core WAL anchors (current segment, durable LSN, redo start).~~ — **satisfied 2026-07-29**: superblock v3 carries a fixed `kMaxWalCores`-slot anchor table indexed by `core_id`, each entry `{checkpoint_lsn, redo_start_lsn, durable_lsn, segment_no}` (32 B), implemented in `include/kds/server/superblock.hpp` (`WalAnchorFields`, `SetWalAnchor`/`wal_anchor`) with `SuperBlockCheckpointAnchor` as the `wal::CheckpointAnchor` implementation. An all-zero entry means "never checkpointed" and sends recovery to the start of the stream; `wal_anchor_count` records the last run's core count so §3's changed-core-count question stays open rather than being decided by reindexing.
-4. **Transaction/MVCC spec (when written):** undo-page layout, undo retention policy, snapshot-too-old semantics; 48-bit txn-id wraparound/epoch.
+4. **Transaction/MVCC spec** — **written 2026-07-31 as `docs/txn.md`.** It closes *undo-page layout* (§3) and adds the isolation model, visibility predicate, conflict policy and rollback contract this item did not anticipate. Still outstanding within it: undo retention policy, snapshot-too-old semantics, 48-bit txn-id wraparound/epoch — all three carried forward as `docs/txn.md` §9 with the seams that keep them open.
 5. **`docs/wire-protocol.md` / error registry:** add `SnapshotTooOld` (retryable = context-dependent — define with §15) to the error taxonomy.
 6. **`CLAUDE.md`:** WAL opens (§15) in the open list; durability-model and MVCC-header summary lines.
 
@@ -177,9 +177,9 @@ Still required:
 - Segment size; ring capacity; `D3` flush interval defaults.
 - Cross-core transaction commit protocol; recovery under changed core counts (§3).
 - I/O backend (inherited); the seam's durability verb (FUA/fsync semantics) — define with the backend.
-- **Undo retention policy** and `SnapshotTooOld` surfacing (error class, retryability) — undo-based MVCC's structural trade (the ORA-01555 family), owned by the transaction spec but constraining WAL segment/undo recycling here.
-- 48-bit `trx_id` wraparound/epoch handling.
-- Undo-page layout details (`UNDO_WRITE` targets).
+- **Undo retention policy** and `SnapshotTooOld` surfacing (error class, retryability) — undo-based MVCC's structural trade (the ORA-01555 family), owned by the transaction spec but constraining WAL segment/undo recycling here. *(Still open; `docs/txn.md` §9 records why it is structurally unreachable until purge exists, and which seam keeps it open.)*
+- 48-bit `trx_id` wraparound/epoch handling. *(Still open. `docs/txn.md` §9: exhaustion is `OutOfRange`, never wrapped.)*
+- ~~Undo-page layout details (`UNDO_WRITE` targets).~~ — **satisfied 2026-07-31**: ratified in `docs/txn.md` §3. Headered pages (`PageType::kUndo`), a 24-byte page header, 28-byte unpadded records, `undo_ptr = (page_id << 16) | offset`, and a mapping onto the existing `UndoWritePayload` with **no amendment to this document's §5.2**.
 - Archive hook transport (filesystem copy vs pluggable).
 
 ## 16. Testing Requirements
@@ -190,7 +190,7 @@ All deterministic (injected clock + `IoBackend` fault injection; rules.md §4). 
 2. **Ordering:** instrumented backend proves §8-1..3 under randomized scheduling — no data write ever precedes its log durability; `MarkClean` unreachable outside flush completion (shared test with storage-layout §18-4).
 3. **Crash matrix:** crashes injected at every phase boundary (append / partial segment write / between commit-durable and ack / mid-checkpoint / each recovery phase); recovery yields exactly the acknowledged-commit state; replaying recovery twice is a no-op.
 4. **Torn writes:** partial-page and partial-record corruption injected; checksum detects at load, FPI restores in recovery (composition test with storage-layout §18-5).
-5. **MVCC records:** delete-mark by a winner survives; delete-mark by a loser is cleared by undo; `UNDO_WRITE` chain links (prior writer id + prior undo_ptr) reconstruct validity intervals with no `xmax` anywhere — a reader fixture verifies visibility across a rebuilt chain.
+5. **MVCC records:** delete-mark by a winner survives; delete-mark by a loser is cleared by undo; `UNDO_WRITE` chain links (prior writer id + prior undo_ptr) reconstruct validity intervals with no `xmax` anywhere — a reader fixture verifies visibility across a rebuilt chain. *(Owned by `docs/txn.md` §10 item 4 as of 2026-07-31.)*
 6. **Durability classes:** `D1/D2` never lose an acked commit under any injected crash; `D3` loss bounded by the configured window — bound asserted; `RELAXED` flag present on D3 acks.
 7. **Group commit:** N concurrent committers, one flush; all resume with durable LSN ≥ their commit LSN.
 8. **Backpressure:** ring saturation suspends producers without deadlock; stall metrics visible.

@@ -186,6 +186,22 @@ public:
     static StatusOr<PageView> CreateEmpty(std::span<std::byte, kPageSize> page,
                                            std::uint64_t min_key);
 
+    // CreateEmpty() for a page that stamps a different `page_type` in the
+    // common header while keeping this exact body layout. The one caller
+    // is the B+ tree, whose **leaves are heap pages** (btree.hpp): a leaf
+    // holds tuples in the same slot directory, with the same MVCC tuple
+    // header, and is walked by the same next_page_id link - the only
+    // differences are the header byte that says so and what `min_key` and
+    // the link *mean* (the leaf's low key, and its right sibling).
+    //
+    // Reusing the layout rather than defining a second slotted page is the
+    // point: InsertTuple/ReadTuple/OverwriteTuple/DeleteMark, the row
+    // codec, HEAP_INSERT redo and the Waystone probe's (page, slot) all
+    // work on a leaf unchanged. `type` must be kHeap or kBtreeLeaf;
+    // anything else is InvalidArgument, because nothing else has this body.
+    static StatusOr<PageView> CreateEmptyAs(std::span<std::byte, kPageSize> page,
+                                             std::uint64_t min_key, PageType type);
+
     std::uint64_t min_key() const;
     std::uint16_t slot_count() const;
     std::uint16_t lower() const;

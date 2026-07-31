@@ -270,6 +270,18 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
     for (const PageId page_id : page_ids) {
         auto it = frames_.find(page_id);
         if (it == frames_.end() || !it->second.dirty) continue;
+        // Skipped for the same reason the stamping loop in Flush() skips it
+        // (StampIfHeadered): a headerless page has no page_lsn field, so the
+        // bytes at that offset are entry data. Reading them yields a
+        // meaningless watermark - a Waystone directory page reads as
+        // 0xFFFF... - and EnsureDurable can only refuse it, which failed
+        // every Flush() on any database with a dirty Waystone page and so
+        // made SYNC and the checkpointer unable to persist anything at all.
+        // Correct today because Waystone pages are unlogged (CLAUDE.md open
+        // decision: persistence class), so the gate has nothing to wait for.
+        // If they become logged, their LSN has to reach the gate out of
+        // band rather than through a field the format does not have.
+        if (IsHeaderless(page_id)) continue;
         const std::uint64_t page_lsn =
             GetPageLsn(std::span<const std::byte, kPageSize>(*it->second.bytes));
         if (page_lsn > highest) highest = page_lsn;

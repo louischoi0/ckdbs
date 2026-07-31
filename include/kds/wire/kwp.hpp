@@ -136,14 +136,20 @@ enum class DurabilityLevel : std::uint8_t {
 // ---- Error taxonomy (docs/protocol.md §11) ---------------------------------
 // Wire-level error categories: deliberately a superset of
 // kds::StatusCode (kds/base/status.hpp). kInternal/kProtocol/
-// kUnsupported/kTxnConflict/kCancelled have no engine-level Status
-// equivalent today - they are wire/session-only categories that can
-// occur before or outside any engine call (e.g. a malformed frame is
-// kProtocol, not any kind of Status). The Status -> ErrorCategory mapping
-// table for the categories that DO overlap is not part of this header;
-// it lands with the error registry (docs/protocol-wp.md P12,
-// src/wire/error_registry.cpp), including its append-only golden-list
-// guard.
+// kUnsupported/kCancelled have no engine-level Status equivalent - they
+// are wire/session-only categories that can occur before or outside any
+// engine call (e.g. a malformed frame is kProtocol, not any kind of
+// Status). The Status -> ErrorCategory mapping table for the categories
+// that DO overlap is not part of this header; it lands with the error
+// registry (docs/protocol-wp.md P12, src/wire/error_registry.cpp),
+// including its append-only golden-list guard.
+//
+// kTxnConflict gained its engine-level equivalent on 2026-07-31:
+// StatusCode::kTxnConflict maps here with **retryable = 1**, which
+// docs/protocol.md §11 makes part of the compatibility surface. It is the
+// only retryable category (kds::IsRetryable is the engine-side spelling of
+// the same fact), so P12's registry must not derive the bit per category by
+// hand - it should ask IsRetryable for the codes that map from a Status.
 enum class ErrorCategory : std::uint16_t {
     kInvalidArgument = 0,
     kNotFound,

@@ -61,7 +61,10 @@ StatusOr<int> DirDepthFor(std::uint64_t pk) {
 }
 
 StatusOr<PageId> CreateDirPage(storage::PageStore& store) {
-    auto created = store.CreateNew();
+    // Headerless: 2048 x 4 bytes tiles the page exactly, so a common
+    // header would cost a child slot and a checksum stamped at byte 4
+    // would overwrite child 1.
+    auto created = store.CreateNewHeaderless();
     if (!created.ok()) return created.status();
     auto [page_id, bytes] = created.value();
     FormatDirPage(bytes);
@@ -112,7 +115,8 @@ StatusOr<PageId> LookupOrCreateEntryPage(storage::PageStore& store, PageId root,
         const bool leaf = (level == depth - 1);
         PageId fresh = kInvalidPageId;
         if (leaf) {
-            auto created = store.CreateNew();
+            // Headerless for the same reason: 256 x 32 tiles it exactly.
+            auto created = store.CreateNewHeaderless();
             if (!created.ok()) return created.status();
             fresh = created.value().first;
         } else {

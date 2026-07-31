@@ -61,14 +61,22 @@ void PageView::WriteSlot(std::uint16_t idx, const HeapSlotFields& s) {
 
 StatusOr<PageView> PageView::CreateEmpty(std::span<std::byte, kPageSize> page,
                                           std::uint64_t min_key) {
+    return CreateEmptyAs(page, min_key, PageType::kHeap);
+}
+
+StatusOr<PageView> PageView::CreateEmptyAs(std::span<std::byte, kPageSize> page,
+                                            std::uint64_t min_key, PageType type) {
+    if (type != PageType::kHeap && type != PageType::kBtreeLeaf) {
+        return Status::InvalidArgument("only kHeap and kBtreeLeaf pages carry a heap page body");
+    }
     if (min_key > kMaxTupleId) {
         return Status::InvalidArgument("min_key exceeds 40-bit tuple id range");
     }
 
-    // Zeroes the page and writes the common header (page_type kHeap,
-    // page_lsn 0, checksum 0 - the checksum is stamped at flush time,
-    // page.md section 8). Everything this file writes lives above it.
-    storage::FormatPage(page, PageType::kHeap);
+    // Zeroes the page and writes the common header (the requested page
+    // type, page_lsn 0, checksum 0 - the checksum is stamped at flush
+    // time, page.md section 8). Everything this file writes lives above it.
+    storage::FormatPage(page, type);
 
     PageView view(page);
 

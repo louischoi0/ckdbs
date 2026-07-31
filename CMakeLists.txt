@@ -21,6 +21,8 @@ add_library(kds
     src/storage/keystone.cpp
     src/storage/heap/heap_page.cpp
     src/storage/heap/heap_chain.cpp
+    src/storage/btree/btree_page.cpp
+    src/storage/btree/btree.cpp
     src/storage/free_map.cpp
     src/storage/in_memory_page_store.cpp
     src/storage/device_page_store.cpp

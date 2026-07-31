@@ -20,7 +20,24 @@ enum class StatusCode {
     kOutOfRange,
     kCorruption,
     kIoError,
+    // A write lost a first-updater-wins race (docs/txn.md §5): the row was
+    // written by a transaction still in flight, or one that committed after
+    // the writer's read view. Appending is free - nothing persists a
+    // StatusCode, and no on-disk format encodes one.
+    //
+    // The only **retryable** code in this enum, and the distinction matters
+    // outward: it maps to wire::ErrorCategory::kTxnConflict with
+    // retryable = 1, which docs/protocol.md §11 calls part of the
+    // compatibility surface because client libraries build retry loops on
+    // that bit. Every other code here means "this will fail the same way
+    // again".
+    kTxnConflict,
 };
+
+// True for a Status a caller may sensibly re-issue the same statement for.
+// Spelled out here rather than at each call site so the wire layer's
+// `retryable` bit and the engine's notion of retryable cannot drift.
+constexpr bool IsRetryable(StatusCode code) noexcept { return code == StatusCode::kTxnConflict; }
 
 class [[nodiscard]] Status {
 public:
@@ -46,10 +63,16 @@ public:
         return Status(StatusCode::kCorruption, std::move(msg));
     }
     static Status IoError(std::string msg) { return Status(StatusCode::kIoError, std::move(msg)); }
+    static Status TxnConflict(std::string msg) {
+        return Status(StatusCode::kTxnConflict, std::move(msg));
+    }
 
     bool ok() const noexcept { return code_ == StatusCode::kOk; }
     StatusCode code() const noexcept { return code_; }
     const std::string& message() const noexcept { return message_; }
+
+    // Whether re-issuing the statement that produced this could succeed.
+    bool retryable() const noexcept { return IsRetryable(code_); }
 
 private:
     Status(StatusCode code, std::string message) : code_(code), message_(std::move(message)) {}

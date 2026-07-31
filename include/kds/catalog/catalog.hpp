@@ -22,10 +22,10 @@
 //     which doesn't exist in this project yet - see page_store.hpp.
 //     Swap in a real buffer-pool-backed PageStore later without touching
 //     this file.
-//   - CreateTable() only supports ClusteredType::kHeap for now:
-//     ClusteredType::kBtree needs the not-yet-ported btree code
-//     (kernel/kds/btree.c) and is rejected with InvalidArgument rather
-//     than half-implemented.
+//   - CreateTable() supports both ClusteredType values. Either way the
+//     relation is one page at creation - a heap page or a B+ tree leaf -
+//     rooted at `desc_page_id`; what differs is what grows out of it
+//     (heap_chain.hpp vs btree.hpp).
 //   - No transaction manager exists yet, so every row this file writes
 //     is stamped with kBootstrapXid, same as the legacy engine's
 //     approach before its transaction manager existed.
@@ -76,9 +76,9 @@ public:
     // persisted across restarts.
     Oid GenerateUserOid() noexcept;
 
-    // Creates a new table: allocates its storage root page and inserts
-    // the corresponding sys.objects/sys.tables/sys.columns rows. Only
-    // ClusteredType::kHeap is implemented today (see file comment).
+    // Creates a new table: allocates its storage root page, formats it for
+    // the requested clustered type, and inserts the corresponding
+    // sys.objects/sys.tables/sys.columns rows.
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                ClusteredType clustered_type);
 
