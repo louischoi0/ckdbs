@@ -49,10 +49,11 @@
 // The cost is that these pages carry no damage detection at all, so the
 // mechanism is only appropriate for a structure whose corruption is
 // *survivable* - one a reader validates against an authoritative source
-// and can fall back from. **No page class uses it today** (the Waystone
-// entry and directory pages it was built for have been removed);
-// the bitmap page and its format remain, and a database that never calls
-// this pays one reserved page for them.
+// and can fall back from. Exactly one page class qualifies today: the
+// interior pages of the waystone directory (stats/waystone_dir.hpp), whose
+// 2048 child ids tile the page exactly and whose damage costs a lookup that
+// falls through to the authoritative path. A database with no waystone
+// directory pays one reserved page for the bitmap and nothing else.
 //
 // Not here, deliberately:
 //   - No eviction. Everything touched stays resident, as InMemoryPageStore

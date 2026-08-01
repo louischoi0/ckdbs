@@ -1,5 +1,0 @@
-if(EXISTS "/home/ec2-user/ckdbs/build-btree/tests/kds_tests[1]_tests.cmake")
-  include("/home/ec2-user/ckdbs/build-btree/tests/kds_tests[1]_tests.cmake")
-else()
-  add_test(kds_tests_NOT_BUILT kds_tests_NOT_BUILT)
-endif()

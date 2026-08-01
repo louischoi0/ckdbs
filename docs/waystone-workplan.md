@@ -112,11 +112,20 @@ Decisions worth carrying forward:
 - **`kWaystoneEntryValid` is the liveness test, never `pk != 0`.** A never-written entry decodes to pk 0 and page_id 0, both of which look like real values.
 - The tests that earn their keep beyond round-trips: adjacent entries not overlapping (catches a stride off-by-one, which a single round-trip cannot), the tail slack staying zero after the highest legal write, and a page of another type or a newer format version holding nothing.
 
-**P07 — `arg_hash` directory.**
-Files: `src/stats/waystone_dir.cpp`, `tests/waystone_dir_test.cpp`.
+**P07 — `arg_hash` directory.** — **done.** 19 tests.
+Files: `include/kds/stats/waystone_dir.hpp` (new), `src/stats/waystone_dir.cpp`, `tests/waystone_dir_test.cpp`.
 The interior-page walk, rekeyed from pk digits to `arg_hash` digits: fanout 2048, lazy allocation, depth growth by root relink, root handed in and out as a plain `PageId` (catalog wiring is P04's). Collisions resolve against the waystone header from P06 — a foreign trail is a miss, never a result.
-Tests: walk correctness across level boundaries; lazy-allocation sparseness by page count; depth growth preserves prior mappings; a synthetic collision resolves to a miss.
+Tests: walk correctness across level boundaries; lazy-allocation sparseness by page count; ~~depth growth preserves prior mappings~~ → **depth growth preserves the mappings it can and cools the rest**, see below; a synthetic collision resolves to a miss.
 Needs: P06.
+
+Decisions worth carrying forward:
+
+- **Growth is a cache flush, and the test says so.** Root relink preserves a prior mapping only when the new top digit — `arg_hash` bits [11*d*, 11*d*+11) — is zero, i.e. for 1 key in 2048. The dense pk key had that zero by construction; a hash does not, and no O(1) growth can give it one. This is the one place the spec's inherited wording was wrong rather than merely incomplete, so §5 was amended instead of the code being bent to it: the workplan's original "preserves prior mappings" is now two tests, one for the surviving digit and one — `GrowthCoolsEveryOtherInstanceWithoutCorruptingOne` — for the honest majority case. Cooling is safe by invariant 8 and self-healing, since the next execution re-records; the old subtree is not leaked either, it hangs off slot 0 and a key that now addresses one of its pages gets a header mismatch.
+- **No key is ever out of range.** The pk walk refused an id past the directory's coverage, because a folded digit would have aliased two real tuples. There is no analogue here: a hash has no coverage, the bits above 11*d* simply are not consumed, and the aliasing that produces *is* the collision the header check exists for. `CheckAddressable()` has no successor.
+- **The directory resolves an address; it never displaces.** `LookupOrCreateWaystonePage()` returns the page at the address even when it already holds a foreign instance, and a page it does allocate is left **zeroed, not formatted** — `PageType::kInvalid`, so `WaystonePageHolds()` reports false and a reader falls through exactly as for an empty slot. Formatting and the choice of what to do about an occupant belong to the writer (P08) and to the `[OPEN]` collision policy in spec §9; deciding either here would have closed it by accident.
+- **Interior pages are headerless, which reclaims `CreateNewHeaderless()`.** 2048 × 4 tiles the page exactly, and a headered frame gets a checksum stamped at byte 4 — child 1. `IsHeaderless()` is asserted on the root, `false` on the waystone it points at, and the pair is round-tripped through a `Flush()` and a reopen so the hazard is tested rather than described. Spec §10's "no caller" note is retired.
+- **Lookup reads through `GetForRead()`**, create through `Get()`. A replay walks the directory on the statement path and must not dirty every interior page it touches; the walk that allocates is writing anyway.
+- **A dangling child id is reported, not followed.** Interior pages carry no checksum, so damage surfaces as the store's `NotFound` rather than as a walk into a page that was never created. That is an error for this layer, and a miss for the replay path above it (P11) — the distinction is deliberate: this function cannot tell damage from a store failure, and the layer that falls through can afford not to care.
 
 **P08 — Trail write and read.**
 Files: `src/stats/waystone_store.cpp`, `tests/waystone_store_test.cpp`.
@@ -179,4 +188,4 @@ Needs: P13.
 
 - **Set caching / completeness.** Requires amending invariant 9 and a commit-time change stamp (spec §9).
 - **Invariant 3 / invariant 10 relaxation.** Permitted by this design, not performed by it (spec §8).
-- **Removing `CreateNewHeaderless()` and `kHeaderlessMap`.** They have no caller (spec §10). Optional cleanup, unrelated to any task here.
+- ~~**Removing `CreateNewHeaderless()` and `kHeaderlessMap`.**~~ Retired by P07: the directory's interior pages are headerless, so both have a caller again (spec §5, §10).

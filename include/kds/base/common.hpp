@@ -35,7 +35,8 @@ static_assert(kInvalidPageId >= kMaxPageCount, "invalid sentinel must sit outsid
 // Only "headered" page classes appear here. A page class whose payload
 // tiles the page exactly (docs/page.md section 1) - a power-of-two entry
 // array addressed by shift and mask - is headerless by design and carries
-// no page_type at all. None exists today; see kHeaderlessMap below.
+// no page_type at all. The waystone directory's interior pages are the one
+// such class today; see kHeaderlessMap below.
 enum class PageType : std::uint8_t {
     kInvalid = 0,
     kHeap = 1,
@@ -47,10 +48,9 @@ enum class PageType : std::uint8_t {
     kFreeMap = 7,
     // Bitmap of which page ids are *headerless*: pages whose exact
     // power-of-two tiling leaves no room for a common header. Same
-    // one-bit-per-page-id format as kFreeMap; see free_map.hpp. No page
-    // class claims one today - the Waystone entry and directory pages it
-    // was built for have been removed - but the bitmap is on-disk
-    // format and stays.
+    // one-bit-per-page-id format as kFreeMap; see free_map.hpp. One page
+    // class claims it: the waystone directory's interior pages, whose 2048
+    // child ids tile the page exactly (stats/waystone_dir.hpp).
     //
     // It has to be durable rather than a side table: DevicePageStore never
     // evicts, so a page is read back from the device exactly once - on

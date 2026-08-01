@@ -74,9 +74,10 @@ public:
     // CreateNew() for a page that carries no common page header - the
     // whole 8 KiB belongs to the caller. For a payload that tiles the page
     // exactly: a power-of-two entry array a header would cost an entry of,
-    // breaking the shift/mask addressing that is the point of it. **No
-    // caller today** - see DevicePageStore's header for what this costs
-    // and why the mechanism stayed.
+    // breaking the shift/mask addressing that is the point of it. Its one
+    // caller is the waystone directory's interior pages
+    // (stats/waystone_dir.hpp) - see DevicePageStore's header for what
+    // giving up the header costs.
     //
     // The default is plain CreateNew(), which is correct for any store
     // that neither stamps nor verifies a page checksum - there is nothing

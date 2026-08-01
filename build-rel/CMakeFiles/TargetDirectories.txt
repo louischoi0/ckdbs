@@ -1,5 +1,0 @@
-/home/ec2-user/ckdbs/build-rel/CMakeFiles/kds.dir
-/home/ec2-user/ckdbs/build-rel/CMakeFiles/kds_server.dir
-/home/ec2-user/ckdbs/build-rel/CMakeFiles/kds_bench.dir
-/home/ec2-user/ckdbs/build-rel/CMakeFiles/edit_cache.dir
-/home/ec2-user/ckdbs/build-rel/CMakeFiles/rebuild_cache.dir

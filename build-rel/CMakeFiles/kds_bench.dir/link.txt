@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/kds_bench.dir/bench/bench_main.cpp.o -o kds_bench  libkds.a 

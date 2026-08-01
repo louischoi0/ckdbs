@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/kds_server.dir/src/server/main.cpp.o -o kds_server  libkds.a 

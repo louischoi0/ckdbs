@@ -15,6 +15,7 @@ add_executable(kds_tests
     row_codec_test.cpp
     catalog_row_test.cpp
     waystone_page_test.cpp
+    waystone_dir_test.cpp
     scheduler_test.cpp
     log_test.cpp
     config_file_test.cpp

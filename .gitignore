@@ -1,3 +1,17 @@
-build/
-build-release/
+# Build trees. Any directory named build*/ - build/, build-btree/,
+# build-rel/, build-release/ - is a cmake output tree, so it carries the
+# object files, the static library and the kds_server/kds_tests/kds_bench
+# executables. build.sh is a script and is not matched by this.
+build*/
+
+# Runtime state of a server that was actually run: the data file, its WAL
+# segment directory (kds.db.wal/), and the log. kds.conf.sample is
+# committed; a real kds.conf is not.
+*.log
+kds.db
+kds.db.*
+kds.conf
+
+# Editor and interpreter droppings.
+*.sw[po]
 __pycache__/

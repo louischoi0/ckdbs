@@ -82,7 +82,11 @@ arg_hash    --> waystone for that instance (directory walk under waystone_root)
 
 The second level is an inode-style page directory: interior pages of 2048 `PageId` children, walked by digits of the `arg_hash`, lazily allocated, deepened by relinking the root. Depth is bounded at `kMaxPatternDirDepth` = 6, derived rather than chosen — ceil(64 / 11) levels address a 64-bit key at a fanout of 2^11.
 
-It is a hash directory, not a radix index over a dense key, so **collisions are possible**. An `arg_hash` collision must be resolved by the waystone's own header, which stores the `arg_hash` it was recorded for; a mismatch is a miss, never a wrong trail. Handling repeated collisions (chain vs. displace vs. drop) is `[OPEN]`.
+It is a hash directory, not a radix index over a dense key, so **collisions are possible**. An `arg_hash` collision must be resolved by the waystone's own header, which stores the `arg_hash` it was recorded for; a mismatch is a miss, never a wrong trail. Handling repeated collisions (chain vs. displace vs. drop) is `[OPEN]`. A walk at depth *d* consumes the low 11*d* bits and ignores the rest: no key is ever out of range — the structure this replaced refused a pk past its coverage, and a hash has no coverage to exceed.
+
+**Amended 2026-07-31 (P07): growth is a cache flush, not a rehash.** Relinking the root is O(1) and preserves prior mappings *only* for keys whose new top digit — bits [11*d*, 11*d*+11) of the `arg_hash` — is zero, which is 1 in 2048 of them. On the dense pk key this design replaced, every stored key had that zero by construction; a hash does not, and no O(1) growth can give it one. Everything else is cooled, not corrupted: the old subtree stays reachable under slot 0, a key that now addresses one of its pages gets a header mismatch and a miss, and the next execution re-records the trail at the new address. Safe by invariant 8, and the reason growth must be paid for by capacity — each level multiplies addressable instances by 2048 — rather than performed routinely.
+
+**Interior pages are headerless.** 2048 × 4 bytes tiles 8 KiB exactly, which is why the fanout is 2048; a common header would cost a child slot, and `DevicePageStore` stamps a checksum at byte offset 4 of every headered frame — child 1. They are allocated through `PageStore::CreateNewHeaderless()`, which records the fact durably. The cost is that a damaged interior page carries no checksum to catch it; it leads a walk to a page that is not the instance's waystone, which the header check turns into the same miss a cold directory gives.
 
 ## 6. Page format `[PROPOSED]`
 
@@ -159,7 +163,7 @@ A pk-direct waystone is a radix tree over the same key the clustered B+ tree alr
 
 This design duplicates nothing. **No index maps a pattern instance to a cross-relation tuple set**, and that gap is what Waystone fills.
 
-One artifact remains from that removal: `DevicePageStore::CreateNewHeaderless()` and the durable `kHeaderlessMap` bitmap page have no caller, because §6 makes waystone pages headered. Removing them is optional cleanup.
+One artifact was left by that removal and has since been reclaimed: `DevicePageStore::CreateNewHeaderless()` and the durable `kHeaderlessMap` bitmap page were caller-less once §6 made waystone pages headered, and P07 gave them one — the directory's interior pages, which tile the page exactly for the same reason the old entry pages did (§5). The waystone pages themselves stay headered; it is only the structure that finds them that gives up its checksum.
 
 ## 11. Testing requirements
 
