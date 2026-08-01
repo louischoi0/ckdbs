@@ -32,11 +32,47 @@ REPL-only local commands (never sent to the server):
     help / ?     list known server commands
     exit / quit  close the connection and exit (does NOT stop the server -
                  use the server's own STOP command for that)
+
+Line editing in the REPL, via the stdlib readline module:
+    up / down    walk back and forward through the command history
+    left/right   move the cursor within the line; ctrl-a and ctrl-e jump to
+                 its start and end, alt-b and alt-f move by word
+    ctrl-r       search backwards through history incrementally
+    ctrl-c       abandon the line being edited without leaving the REPL
+    ctrl-d       leave the REPL (on an empty line)
+
+History is kept in ~/.ckdbs_history, capped at 1000 entries and shared
+across sessions, so a long SELECT typed yesterday is one ctrl-r away.
+Consecutive duplicates are not recorded twice. On a platform without
+readline the REPL still works, just without any of the above.
 """
 
 import argparse
+import atexit
+import os
 import socket
 import sys
+
+# Importing readline is the whole line-editing feature: it hooks input(),
+# which is what gives the REPL up/down through history, left/right and
+# ctrl-a/e to move within a line, and ctrl-r to search. Nothing below calls
+# into it for that - the import is the mechanism, which is why it is not
+# behind a "if interactive" guard.
+#
+# Guarded anyway because it is a POSIX module: on Windows it is absent
+# unless pyreadline3 is installed, and a CLI that cannot start there is
+# worse than one that starts without arrow keys.
+try:
+    import readline
+except ImportError:  # pragma: no cover - Windows without pyreadline3
+    readline = None
+
+# History persists across sessions: a REPL that forgets what you typed the
+# moment you leave is a REPL you retype long SELECTs into. Kept in the home
+# directory rather than beside the data file, because it belongs to the
+# person, not to the database.
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".ckdbs_history")
+HISTORY_LIMIT = 1000
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 15432
@@ -196,14 +232,75 @@ def run_one_shot(conn, command):
     _print_response(command, conn.send_command(command))
 
 
+def _init_history():
+    """Loads the saved history and arranges for it to be saved on exit.
+
+    Registered with atexit rather than saved in the REPL's finally block so
+    it also survives the paths that do not return through it - an
+    unhandled exception, or the STOP command taking the server down under
+    us. History you lose on the one session that ended badly is history you
+    stop trusting.
+    """
+    if readline is None:
+        return
+    try:
+        readline.read_history_file(HISTORY_FILE)
+    except FileNotFoundError:
+        pass  # first run
+    except OSError:
+        pass  # unreadable (permissions, a directory in its place) - not fatal
+
+    readline.set_history_length(HISTORY_LIMIT)
+
+    def save():
+        try:
+            readline.write_history_file(HISTORY_FILE)
+        except OSError:
+            pass  # a read-only home is not a reason to fail on the way out
+
+    atexit.register(save)
+
+
+def _drop_duplicate_history_entry():
+    """Removes the line just entered when it repeats the one before it.
+
+    readline appends every line unconditionally, so pressing enter on the
+    same statement three times puts three copies between you and the thing
+    you were actually looking for. Consecutive duplicates only - a command
+    repeated later in the session is a real thing to scroll back to.
+    """
+    if readline is None:
+        return
+    n = readline.get_current_history_length()
+    if n < 2 or readline.get_history_item(n) != readline.get_history_item(n - 1):
+        return
+    # The two APIs disagree about indexing on purpose-of-nobody's:
+    # get_history_item is 1-based, remove_history_item is 0-based. So the
+    # last entry is n for the getter and n - 1 for the remover.
+    readline.remove_history_item(n - 1)
+
+
 def run_repl(conn):
-    print("ckdbs interactive CLI. Type 'help' for known commands, 'exit' to quit.")
+    _init_history()
+    editing = "" if readline is not None else \
+        " (no line editing: the readline module is unavailable)"
+    print(f"ckdbs interactive CLI. Type 'help' for known commands, 'exit' to quit.{editing}")
+
     while True:
         try:
             line = input("ckdbs> ")
         except EOFError:
             print()
             break
+        except KeyboardInterrupt:
+            # Ctrl-C abandons the line being edited, it does not end the
+            # session - which is what every other SQL shell does, and what
+            # anyone who has just learned the line editor will expect the
+            # first time they mistype a long statement.
+            print("^C")
+            continue
+
+        _drop_duplicate_history_entry()
 
         stripped = line.strip()
         if not stripped:

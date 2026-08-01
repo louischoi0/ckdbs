@@ -126,13 +126,14 @@ TEST(HeapChainTest, EveryTupleIsReadableBackInIdOrder) {
     FillChain(store, head, 40, /*filler=*/1016);
 
     std::vector<std::uint64_t> seen;
-    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
-                          [&](PageId, PageView& page, std::uint16_t slot) -> Status {
-                              auto tuple = page.ReadTuple(slot);
-                              if (!tuple.ok()) return Status::OK();
-                              seen.push_back(IdOf(tuple.value().payload));
-                              return Status::OK();
-                          });
+    Status s = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId, PageView& page, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) return storage::VisitControl::kContinue;
+            seen.push_back(IdOf(tuple.value().payload));
+            return storage::VisitControl::kContinue;
+        });
     ASSERT_TRUE(s.ok()) << s.message();
 
     ASSERT_EQ(seen.size(), 40u);
@@ -156,18 +157,19 @@ TEST(HeapChainTest, EachPagesIdsAreBelowTheNextPagesMinKey) {
     std::vector<std::uint64_t> min_keys;
     std::vector<std::vector<std::uint64_t>> ids_per_page;
 
-    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
-                          [&](PageId page_id, PageView& page, std::uint16_t slot) -> Status {
-                              if (pages.empty() || pages.back() != page_id) {
-                                  pages.push_back(page_id);
-                                  min_keys.push_back(page.min_key());
-                                  ids_per_page.emplace_back();
-                              }
-                              auto tuple = page.ReadTuple(slot);
-                              if (!tuple.ok()) return Status::OK();
-                              ids_per_page.back().push_back(IdOf(tuple.value().payload));
-                              return Status::OK();
-                          });
+    Status s = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId page_id, PageView& page, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            if (pages.empty() || pages.back() != page_id) {
+                pages.push_back(page_id);
+                min_keys.push_back(page.min_key());
+                ids_per_page.emplace_back();
+            }
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) return storage::VisitControl::kContinue;
+            ids_per_page.back().push_back(IdOf(tuple.value().payload));
+            return storage::VisitControl::kContinue;
+        });
     ASSERT_TRUE(s.ok()) << s.message();
     ASSERT_GT(pages.size(), 1u) << "test needs a multi-page chain to mean anything";
 
@@ -291,15 +293,130 @@ TEST(HeapChainTest, AVisitorsErrorStopsTheWalk) {
     FillChain(store, head, 10, /*filler=*/56);
 
     int visits = 0;
-    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
-                          [&](PageId, PageView&, std::uint16_t) -> Status {
-        ++visits;
-        if (visits == 3) return Status::InvalidArgument("stop here");
-        return Status::OK();
-    });
+    Status s = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId, PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            ++visits;
+            if (visits == 3) return Status::InvalidArgument("stop here");
+            return storage::VisitControl::kContinue;
+        });
     EXPECT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(visits, 3);
+}
+
+// ---- Stoppable walks (docs/parser-v2.md I15 rule 4) ----------------------
+//
+// The property in all three: kStop ends the walk with **Status::OK()**, so
+// a caller can tell "I found what I wanted" from "something broke" without
+// reading a message. The test above is the other half of that pair - same
+// stopping point, opposite verdict.
+
+// Counts the slots on the first page of a filled chain. The boundary test
+// needs it, and deriving it from the placements beats hard-coding a number
+// that changes whenever the header or a filler size does.
+std::size_t SlotsOnFirstPage(const std::vector<ChainInsertResult>& placed) {
+    std::size_t n = 0;
+    for (const auto& p : placed) {
+        if (p.page_id == placed.front().page_id) ++n;
+    }
+    return n;
+}
+
+TEST(HeapChainTest, AVisitorCanStopMidPageAndTheWalkSucceeds) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    const auto placed = FillChain(store, head, 40, /*filler=*/1016);
+    ASSERT_GT(SlotsOnFirstPage(placed), 3u) << "test needs the stop to land mid-page";
+
+    int visits = 0;
+    Status s = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId, PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            ++visits;
+            return visits == 3 ? storage::VisitControl::kStop : storage::VisitControl::kContinue;
+        });
+    EXPECT_TRUE(s.ok()) << s.message();
+    EXPECT_EQ(visits, 3) << "the walk continued past the stop";
+}
+
+TEST(HeapChainTest, StoppingOnAPagesLastSlotNeverFetchesTheNextPage) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    const auto placed = FillChain(store, head, 40, /*filler=*/1016);
+
+    const PageId first_page = placed.front().page_id;
+    const std::size_t on_first = SlotsOnFirstPage(placed);
+    ASSERT_LT(on_first, placed.size()) << "test needs a multi-page chain to mean anything";
+
+    // The boundary case the loop is easiest to get wrong at: the stop
+    // happens on the last slot of a page, where the very next thing the
+    // walk would otherwise do is follow next_page_id. If it checks the
+    // outcome after that hop instead of before, this still passes the
+    // count check but has already paid for a page fetch - so the assertion
+    // is on the pages *seen*, not just on the visit count.
+    std::size_t visits = 0;
+    std::vector<PageId> pages_seen;
+    Status s = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId page_id, PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            if (pages_seen.empty() || pages_seen.back() != page_id) pages_seen.push_back(page_id);
+            ++visits;
+            return visits == on_first ? storage::VisitControl::kStop
+                                      : storage::VisitControl::kContinue;
+        });
+    EXPECT_TRUE(s.ok()) << s.message();
+    EXPECT_EQ(visits, on_first);
+    ASSERT_EQ(pages_seen.size(), 1u) << "the walk crossed into the next page after kStop";
+    EXPECT_EQ(pages_seen.front(), first_page);
+}
+
+TEST(HeapChainTest, StoppingOnTheLastSlotOfTheChainIsIndistinguishableFromFinishing) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    const auto placed = FillChain(store, head, 40, /*filler=*/1016);
+
+    // Stopping on the final slot and running off the end must produce the
+    // same verdict - otherwise `Exists` over a matching last row would
+    // report differently from `Exists` over no match at all.
+    std::size_t visits = 0;
+    Status stopped = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId, PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            ++visits;
+            return visits == placed.size() ? storage::VisitControl::kStop
+                                           : storage::VisitControl::kContinue;
+        });
+    EXPECT_TRUE(stopped.ok()) << stopped.message();
+    EXPECT_EQ(visits, placed.size());
+
+    std::size_t ran_out = 0;
+    Status finished = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId, PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            ++ran_out;
+            return storage::VisitControl::kContinue;
+        });
+    EXPECT_TRUE(finished.ok()) << finished.message();
+    EXPECT_EQ(ran_out, visits);
+}
+
+TEST(HeapChainTest, AVisitorReturningAnOkStatusInsteadOfContinueIsRefused) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 10, /*filler=*/56);
+
+    // `return Status::OK();` is what every visitor said before the walk
+    // became stoppable, so it is the mistake a port makes. It builds a
+    // StatusOr that reports ok() with no value in it, and reading that
+    // value would be undefined - so the walk refuses it by name instead.
+    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
+                          [](PageId, PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+                              return Status::OK();
+                          });
+    EXPECT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(s.message().find("VisitControl"), std::string::npos) << s.message();
 }
 
 }  // namespace

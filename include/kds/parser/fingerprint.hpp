@@ -38,9 +38,14 @@
 // **Identifiers are shape.** `SELECT * FROM accounts WHERE id = 1` and
 // `SELECT * FROM trades WHERE id = 1` are different patterns, because
 // they read different relations and a trail from one is worthless to the
-// other. Keywords are identifiers too as far as this lexer is concerned
-// (it has no keyword token type), which conveniently makes SELECT and
-// UPDATE differ for free.
+// other. Keywords are hashed as identifiers - same tag, same folded text -
+// which makes SELECT and UPDATE differ for free.
+//
+// That the lexer now has a keyword token type (V04) changes nothing here,
+// and must not: those seven words were identifiers to it before, so
+// tagging them differently would move the pattern_id of every stored
+// statement containing one. Reserving a word is a grammar change, never a
+// fingerprint change.
 //
 // Identifiers are folded to lower case, so `SELECT`/`select` and
 // `accounts`/`ACCOUNTS` converge - matching the case-insensitive

@@ -9,7 +9,11 @@
 
 #include <vector>
 
+#include "kds/exec/catalog_view.hpp"
+#include "kds/exec/chain_frame.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/exec/step_vm.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
@@ -34,6 +38,17 @@ bool IEquals(std::string_view a, std::string_view b) {
                       std::tolower(static_cast<unsigned char>(y));
            });
 }
+
+// CheckWhereQualifiers lived here from V06 to V17. It checked a qualified
+// WHERE column against the statement's one binding, and refused subquery
+// and column-on-the-right predicates - all three because the old
+// name-matching evaluator would have answered them *wrongly* rather than
+// failing.
+//
+// It is gone rather than kept: exec::CompilePredicates resolves the same
+// clause against the same relation and produces the same three answers,
+// and a second resolver is a second opinion about what a name means. The
+// one that stayed is the one execution actually uses.
 
 // Splits `line` into the first whitespace-delimited token and "the rest"
 // (trimmed), so multi-word commands like "SHOW META"/"FIND TABLE x" can
@@ -145,6 +160,15 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
     }
     if (IEquals(cmd, "SYNC")) {
         return HandleSync();
+    }
+    // WITH is routed to the SELECT path rather than falling through to
+    // "unknown command": the parser answers it with the truthful "CTEs
+    // are not supported, subqueries are allowed in predicate position
+    // only" and an exact position (spec §2). Dispatching on the first
+    // word alone would hide that behind a generic refusal, and a client
+    // would have no idea whether the word was unrecognized or declined.
+    if (IEquals(cmd, "WITH")) {
+        return HandleSelect(Trim(line));
     }
     return {"ERR unknown command", false};
 }
@@ -735,7 +759,8 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
 
 Status CommandDispatcher::VisitRelation(
     const catalog::TableAccess& access, storage::PageAccess page_access,
-    const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn) {
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn) {
     switch (access.clustered_type) {
         case catalog::ClusteredType::kHeap:
             return heap::ChainVisit(page_store_, access.desc_page_id, page_access, fn);
@@ -765,7 +790,7 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
     // so a negative literal is a guaranteed miss - and casting it to
     // uint64 would probe an enormous pk instead.
     if (cond.val.int_val < 0) return std::nullopt;
-    if (!IEquals(cond.col_name, catalog::NameView(access.schema.columns.front().name))) {
+    if (!IEquals(cond.col.name, catalog::NameView(access.schema.columns.front().name))) {
         return std::nullopt;
     }
     return static_cast<std::uint64_t>(cond.val.int_val);
@@ -817,6 +842,96 @@ StatusOr<std::span<std::byte, kPageSize>> CommandDispatcher::PageForRead(
     return page_store_.GetForRead(at.page_id);
 }
 
+DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt) {
+    auto view = exec::ReadCatalogView(catalog_, stmt.from.table_name);
+    if (!view.ok()) {
+        return {"ERR " + view.status().message(), false};
+    }
+    const exec::CatalogView& rows = view.value();
+
+    // The projection is resolved against the view's own column list rather
+    // than a Schema, because a view has none - the names here are the
+    // header the reply prints, not a stored definition.
+    std::vector<std::size_t> project;
+    if (stmt.star()) {
+        for (std::size_t i = 0; i < rows.column_names.size(); ++i) project.push_back(i);
+    } else {
+        for (const parser::ColumnName& col : stmt.projection) {
+            if (col.qualified() && !IEquals(col.qualifier, stmt.from.binding())) {
+                return {"ERR '" + col.qualifier + "." + col.name + "' names no relation in "
+                        "this statement", false};
+            }
+            std::size_t found = rows.column_names.size();
+            for (std::size_t i = 0; i < rows.column_names.size(); ++i) {
+                if (IEquals(rows.column_names[i], col.name)) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found == rows.column_names.size()) {
+                return {"ERR view sys." + stmt.from.table_name + " has no column '" + col.name +
+                        "'", false};
+            }
+            project.push_back(found);
+        }
+    }
+
+    // A WHERE clause still applies. The values are ordinary AstValues by
+    // now, so this compares them exactly as the row evaluator does - but
+    // by *name*, because a view has no schema to resolve an index against.
+    // That is the one place a view is not the real path; it is confined
+    // here, and a subquery predicate is refused rather than half-applied.
+    std::ostringstream os;
+    bool first_col = true;
+    for (std::size_t index : project) {
+        if (!first_col) os << ',';
+        os << rows.column_names[index];
+        first_col = false;
+    }
+
+    for (const std::vector<parser::AstValue>& row : rows.rows) {
+        bool matched = true;
+        for (const parser::Condition& cond : stmt.where) {
+            if (cond.has_subquery()) {
+                return {"ERR a subquery predicate over a catalog view is not supported: the "
+                        "view is materialized, so there is no relation for a sub-chain to "
+                        "correlate against", false};
+            }
+            if (cond.rhs_kind == parser::RhsKind::kColumn) {
+                return {"ERR a column-to-column comparison over a catalog view is not "
+                        "supported", false};
+            }
+            std::size_t at = rows.column_names.size();
+            for (std::size_t i = 0; i < rows.column_names.size(); ++i) {
+                if (IEquals(rows.column_names[i], cond.col.name)) {
+                    at = i;
+                    break;
+                }
+            }
+            if (at == rows.column_names.size()) {
+                return {"ERR view sys." + stmt.from.table_name + " has no column '" +
+                        cond.col.name + "'", false};
+            }
+            // type_val 0: the view's values carry their own kind, and none
+            // of them is a uint64 column needing the digit-text path.
+            if (!exec::CompareValues(/*type_val=*/0, row[at], cond.val, cond.op)) {
+                matched = false;
+                break;
+            }
+        }
+        if (!matched) continue;
+
+        os << "\\n";
+        bool first_val = true;
+        for (std::size_t index : project) {
+            if (!first_val) os << ',';
+            os << exec::FormatValue(row[index]);
+            first_val = false;
+        }
+    }
+    return {os.str(), false};
+}
+
 DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
@@ -827,99 +942,118 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
     }
     auto& stmt = std::get<parser::SelectStmt>(parsed.value());
 
-    auto oid = catalog_.FindTableOidByName(stmt.table_name);
-    if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
+    // No guards here any more. V05, V06 and V07 each added a refusal
+    // because the single-relation scan below would have answered their
+    // statements *wrongly* rather than failing - a join scanning only its
+    // first relation, a projection emitting every column, a subquery
+    // predicate matching no column and dropping every row. The compiler
+    // and the step VM answer all three now, so the refusals are gone
+    // rather than kept "just in case": a guard that no longer guards
+    // anything is a guard nobody maintains.
+    //
+    // A catalog view (`SELECT * FROM sys.tables`) is answered before the
+    // compiler is asked for a chain, because it is not a relation: its
+    // rows are produced by the catalog's typed readers, not walked out of
+    // pages, so there is nothing for a step to read (exec/catalog_view.hpp
+    // says why the on-disk formats cannot be unified).
+    if (!stmt.from.schema.empty() || !stmt.joins.empty()) {
+        const bool from_is_view =
+            IEquals(stmt.from.schema, exec::kCatalogSchema) &&
+            exec::IsCatalogView(stmt.from.table_name);
+        bool any_join_is_view = false;
+        for (const parser::JoinClause& join : stmt.joins) {
+            if (!join.relation.schema.empty()) any_join_is_view = true;
+        }
+        if (from_is_view || any_join_is_view) {
+            if (!stmt.joins.empty()) {
+                return {"ERR a catalog view cannot be joined: sys.* rows are produced by the "
+                        "catalog's readers rather than read from pages, so there is no "
+                        "relation for a join step to walk",
+                        false};
+            }
+            return HandleCatalogView(stmt);
+        }
+    }
+    if (!stmt.from.schema.empty()) {
+        // Two different mistakes, two different messages. A known schema
+        // with an unknown view is a typo in the view name; an unknown
+        // schema is a wrong idea about what schemas exist. Reporting the
+        // second for the first sends the reader looking in the wrong
+        // place, which is the whole failure mode a positioned error
+        // exists to avoid.
+        if (IEquals(stmt.from.schema, exec::kCatalogSchema)) {
+            std::string known;
+            for (const std::string& name : exec::CatalogViewNames()) {
+                if (!known.empty()) known += ", ";
+                known += "sys." + name;
+            }
+            return {"ERR no catalog view named 'sys." + stmt.from.table_name + "' (known: " +
+                        known + ")",
+                    false};
+        }
+        return {"ERR unknown schema '" + stmt.from.schema +
+                    "'; the only qualified relations are the catalog views under `sys`",
+                false};
     }
 
-    auto access = catalog_.InitTableAccess(oid.value());
-    if (!access.ok()) {
-        return {"ERR " + access.status().message(), false};
+    // V17: parse -> compile -> execute. Everything that used to be
+    // decided here - which relation, which access path, where each
+    // predicate is evaluated - was settled by the compiler and is sitting
+    // in the chain. What is left is formatting.
+    auto chain = exec::Compile(catalog_, stmt);
+    if (!chain.ok()) {
+        return {"ERR " + chain.status().message(), false};
     }
-    // Borrowed from the catalog's cache, not owned: valid for this
-    // statement, including across AllocateRowId() (catalog.hpp).
-    const catalog::TableAccess& ta = *access.value();
 
     // Same one-line-per-response contract as SHOW PAGE: a header line of
     // column names, then one "\n"-escaped section per matching row
     // (comma-joined values), never a raw newline byte.
     std::ostringstream os;
     bool first_col = true;
-    for (const auto& col : ta.schema.columns) {
+    for (const std::string& name : chain.value().column_names) {
         if (!first_col) os << ',';
-        os << catalog::NameView(col.name);
+        os << name;
         first_col = false;
     }
 
-    // Emits one row if it matches the WHERE. Shared by the probe path and
-    // the scan so there is exactly one formatter and the two cannot drift
-    // into producing different bytes for the same tuple - which is the
-    // whole equivalence property the advisory contract rests on.
-    auto emit = [&](std::span<const std::byte> payload) -> Status {
-        auto row = exec::DecodeRow(ta.schema, payload);
-        if (!row.ok()) return row.status();
-        if (!exec::MatchesWhere(ta.schema, row.value(), stmt.where)) return Status::OK();
+    // Resolved once, outside the row loop: the projection reads the frame
+    // by index, and `SELECT *` means every column of the one step - which
+    // the grammar admits only for a single relation (V06).
+    const exec::StepChain& compiled = chain.value();
 
-        os << "\\n";
-        bool first_val = true;
-        for (const auto& v : row.value()) {
-            if (!first_val) os << ',';
-            os << exec::FormatValue(v);
-            first_val = false;
-        }
-        return Status::OK();
-    };
-
-    // The point-lookup fast path, taken only for a WHERE that is exactly
-    // one equality against the pk column - anything else, including an
-    // extra AND, falls straight through to the scan below. Which shortcut
-    // is available, and whether its "no" is trustworthy, is LocateByPk's
-    // call; see PkLookup for why the two differ.
-    if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
-        const PkLookup found = LocateByPk(ta, *pk);
-        if (found.kind == PkLookup::Kind::kAbsent) {
-            return {os.str(), false};  // header line only: no such row
-        }
-        if (found.kind == PkLookup::Kind::kAt) {
-            auto bytes = PageForRead(found.at);
-            if (bytes.ok()) {
-                heap::PageView page(bytes.value());
-                auto tuple = page.ReadTuple(found.at.slot);
-                // The locator already confirmed the Keystone id at this
-                // slot, so a read failure here means the page changed
-                // underneath us. Fall through rather than fail: the scan is
-                // still correct.
-                if (tuple.ok()) {
-                    if (Status s = emit(tuple.value().payload); !s.ok()) {
-                        return {"ERR " + s.message(), false};
-                    }
-                    if (logging(LogLevel::kTrace)) {
-                        log_->Trace("query", "pk " + std::to_string(*pk) + " served from " +
-                                                 std::to_string(found.at.page_id) + ":" +
-                                                 std::to_string(found.at.slot));
-                    }
-                    return {os.str(), false};
+    Status ran = exec::Execute(
+        catalog_, page_store_, compiled,
+        [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            os << "\\n";
+            bool first_val = true;
+            if (compiled.star()) {
+                auto access = catalog_.InitTableAccess(compiled.steps[0].rel_oid);
+                if (!access.ok()) return access.status();
+                for (std::size_t i = 0; i < access.value()->schema.columns.size(); ++i) {
+                    if (!first_val) os << ',';
+                    os << exec::FormatValue(
+                        frame.Get(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)}));
+                    first_val = false;
+                }
+            } else {
+                for (const exec::ColumnRef& ref : compiled.projection) {
+                    if (!first_val) os << ',';
+                    os << exec::FormatValue(frame.Get(ref));
+                    first_val = false;
                 }
             }
-        }
+            return storage::VisitControl::kContinue;
+        },
+        /*stats=*/nullptr, budget_);
+    if (!ran.ok()) {
+        return {"ERR " + ran.message(), false};
     }
 
-    // Full scan, left to right - which is id order page by page for either
-    // storage, so rows come back roughly sorted by pk without anything
-    // sorting them. Still a scan: no min_key-based pruning of pages the
-    // WHERE cannot match, and no use of the tree's separators to start
-    // partway in. Both are range-scan work the point path did not need.
-    Status scan = VisitRelation(
-        ta, storage::PageAccess::kRead,
-        [&](PageId, heap::PageView& page, std::uint16_t slot) -> Status {
-            auto tuple = page.ReadTuple(slot);
-            if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
-            return emit(tuple.value().payload);
-        });
-    if (!scan.ok()) {
-        return {"ERR " + scan.message(), false};
+    if (logging(LogLevel::kTrace)) {
+        log_->Trace("query", "chain of " + std::to_string(compiled.steps.size()) +
+                                 " step(s), class " +
+                                 std::to_string(static_cast<int>(compiled.klass)));
     }
-
     return {os.str(), false};
 }
 
@@ -964,6 +1098,17 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         }
     }
 
+    // The WHERE clause compiles to the same resolved predicates a chain
+    // step carries, and is evaluated by the same evaluator (V16). UPDATE
+    // reads one relation, so the frame has one step.
+    auto predicates = exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where);
+    if (!predicates.ok()) {
+        return {"ERR " + predicates.status().message(), false};
+    }
+    const std::vector<const catalog::Schema*> schemas = {&ta.schema};
+    exec::ChainFrame frame;
+    frame.Open(schemas, /*parent=*/nullptr);
+
     std::uint32_t updated = 0;
     std::uint32_t pages_touched = 0;
     PageId last_page = kInvalidPageId;
@@ -980,9 +1125,17 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         auto row = exec::DecodeRow(ta.schema, tuple.value().payload);
         if (!row.ok()) return row.status();
 
-        if (!exec::MatchesWhere(ta.schema, row.value(), stmt.where)) {
-            return Status::OK();
+        // Decoded a second time into the frame so the predicates read it
+        // by index. UPDATE rewrites the row afterwards, which is why it
+        // keeps an owned copy as well - the frame is for evaluation only.
+        if (Status s = exec::DecodeRowInto(ta.schema, tuple.value().payload, frame.SlotsFor(0));
+            !s.ok()) {
+            return s;
         }
+        auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
+                                               frame, /*stats=*/nullptr, budget_);
+        if (!matched.ok()) return matched.status();
+        if (!matched.value()) return Status::OK();
 
         for (const auto& assignment : stmt.assignments) {
             for (std::size_t c = 0; c < ta.schema.columns.size(); ++c) {
@@ -1057,8 +1210,12 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
 
     Status scan = VisitRelation(
         ta, storage::PageAccess::kWrite,
-        [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
-            return apply(page_id, page, slot);
+        [&](PageId page_id, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            // UPDATE has no early exit: it must consider every row, since
+            // the WHERE is evaluated per tuple and any of them may match.
+            if (Status s = apply(page_id, page, slot); !s.ok()) return s;
+            return storage::VisitControl::kContinue;
         });
     if (!scan.ok()) {
         // Partial by design: rows updated before the failure stay updated.

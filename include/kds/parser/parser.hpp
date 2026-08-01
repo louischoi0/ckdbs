@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <memory>
 #include <string_view>
 
 #include "kds/base/status.hpp"
@@ -32,13 +34,39 @@ public:
 private:
     StatusOr<CreateTableStmt> ParseCreateTable();
     StatusOr<InsertStmt> ParseInsert();
-    StatusOr<SelectStmt> ParseSelect();
     StatusOr<UpdateStmt> ParseUpdate();
+
+    // `depth` is how many query blocks enclose this one: 0 at the top
+    // level, +1 per predicate-position subquery. Carried as a parameter
+    // rather than as parser state because it must unwind exactly with the
+    // recursion, and a member would have to be restored by hand on every
+    // error path (V07).
+    StatusOr<SelectStmt> ParseSelect(std::uint32_t depth);
+
+    // `( SELECT ... )` in predicate position. Consumes both parens and
+    // enforces kMaxSubqueryDepth.
+    StatusOr<std::shared_ptr<SelectStmt>> ParseSubquery(std::uint32_t depth);
+
+    // FROM-list productions (V05). ParseRelationRef takes `<name> [AS
+    // <alias>]`; ParseJoins takes zero or more `JOIN <rel> ON <q> = <q>`
+    // and appends them in written order.
+    StatusOr<RelationRef> ParseRelationRef();
+    Status ParseJoins(SelectStmt& stmt);
+    Status CheckDistinctBindings(const SelectStmt& stmt) const;
+
+    // `x` or `a.x`. ParseQualifiedColumn is the ON-clause form: the same
+    // production, refusing the unqualified spelling.
+    StatusOr<ColumnName> ParseColumnName();
+    StatusOr<ColumnName> ParseQualifiedColumn();
+
+    // `*`, or a comma-separated list of column names. Star leaves
+    // SelectStmt::projection empty (V06).
+    Status ParseSelectList(SelectStmt& stmt);
 
     StatusOr<AstValue> ParseValue();
     StatusOr<CompareOp> ParseCompareOp();
-    StatusOr<Condition> ParseOneCondition();
-    StatusOr<std::vector<Condition>> ParseOptionalWhere();
+    StatusOr<Condition> ParseOneCondition(std::uint32_t depth);
+    StatusOr<std::vector<Condition>> ParseOptionalWhere(std::uint32_t depth);
 
     StatusOr<std::string> ParseIdent();
     Status ExpectKeyword(std::string_view keyword);

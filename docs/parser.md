@@ -1,5 +1,9 @@
 # KDS Parser — Blueprint
 
+> **SUPERSEDED 2026-08-01 by `docs/parser-v2.md`. Kept as history; do not build from this file.**
+>
+> v2 reverses I9 on subqueries (nested SELECT is admissible on the right-hand side of a subquery predicate, correlated included; derived tables and CTEs stay out), moves I2's statement class from the statement to the query block, extends I12 to subqueries and forbids decorrelation rewrites, and adds three items this document has no equivalent of: nested-access rules, NULL/cardinality semantics, and what a waystone may replace in a join. Everything else is carried forward as written. The task breakdown moved to `docs/parser-v2-workplan.md`; `docs/parser-workplan.md` is superseded with it.
+
 What the KDS parser must be. Written as *instructions*: each item states what to build and when it counts as done. `[PROPOSED]` marks a default to amend before building if needed; `[OPEN]` must not be assumed. Consistent with `docs/rules.md`, `docs/protocol.md` (KWP §5), `docs/waystone-concpets.md` (the fingerprint layer), and `docs/heap-and-tuple.md` (invariant 7). Task breakdown: `docs/parser-workplan.md` (4 phases, PR01-PR24).
 
 **Status: unbuilt.** The parser in the tree is a recursive-descent implementation with an owning AST, a copying lexer, and no catalog binding. The one piece of this blueprint that exists is the fingerprint (`include/kds/parser/fingerprint.hpp`), built as a separate pass over the same lexer for Waystone; I1 describes the contract it already honors.

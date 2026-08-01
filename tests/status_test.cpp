@@ -20,7 +20,8 @@ const std::vector<StatusCode>& AllErrorCodes() {
     static const std::vector<StatusCode> codes = {
         StatusCode::kInvalidArgument, StatusCode::kOutOfSpace,  StatusCode::kNotFound,
         StatusCode::kAlreadyExists,   StatusCode::kOutOfRange,  StatusCode::kCorruption,
-        StatusCode::kIoError,         StatusCode::kTxnConflict,
+        StatusCode::kIoError,         StatusCode::kTxnConflict, StatusCode::kUnsupported,
+        StatusCode::kCardinalityViolation, StatusCode::kResourceExhausted,
     };
     return codes;
 }
@@ -35,6 +36,11 @@ Status Make(StatusCode code) {
         case StatusCode::kCorruption:      return Status::Corruption("m");
         case StatusCode::kIoError:         return Status::IoError("m");
         case StatusCode::kTxnConflict:     return Status::TxnConflict("m");
+        case StatusCode::kUnsupported:     return Status::Unsupported("m");
+        case StatusCode::kCardinalityViolation:
+            return Status::CardinalityViolation("m");
+        case StatusCode::kResourceExhausted:
+            return Status::ResourceExhausted("m");
         case StatusCode::kOk:              return Status::OK();
     }
     // Unreachable for a code in AllErrorCodes(); a new enumerator lands
@@ -80,6 +86,39 @@ TEST(StatusTest, TxnConflictCarriesItsReason) {
     EXPECT_EQ(s.code(), StatusCode::kTxnConflict);
     EXPECT_TRUE(s.retryable());
     EXPECT_NE(s.message().find("id=42"), std::string::npos);
+}
+
+TEST(StatusTest, UnsupportedIsDistinctFromInvalidArgumentAndNotRetryable) {
+    // docs/parser-v2.md J2: a reserved-but-inexecutable form is well-formed
+    // input the engine declines, not malformed input. Folding it into
+    // kInvalidArgument would tell a client to go looking for a typo, and
+    // retrying it would fail identically forever.
+    const Status s = Status::Unsupported("derived tables are not supported at position 21");
+    EXPECT_EQ(s.code(), StatusCode::kUnsupported);
+    EXPECT_NE(s.code(), StatusCode::kInvalidArgument);
+    EXPECT_FALSE(s.retryable());
+    EXPECT_NE(s.message().find("position 21"), std::string::npos);
+}
+
+TEST(StatusTest, CardinalityViolationIsNotRetryable) {
+    // docs/parser-v2.md §2: a scalar subquery that returned more than one
+    // row. Re-running it against unchanged data returns the same extra
+    // rows, so retryable = 0 - even though, unlike every other code here,
+    // it is a *runtime* verdict that a later data change could lift.
+    const Status s = Status::CardinalityViolation("scalar subquery returned 3 rows");
+    EXPECT_EQ(s.code(), StatusCode::kCardinalityViolation);
+    EXPECT_FALSE(s.retryable());
+    EXPECT_NE(s.message().find("3 rows"), std::string::npos);
+}
+
+TEST(StatusTest, ResourceExhaustedIsNotRetryable) {
+    // A spent work budget (exec/budget.hpp). Re-running the statement does
+    // the same work and stops in the same place, so retrying is pure
+    // waste - the fix is a different statement, or a higher ceiling.
+    const Status s = Status::ResourceExhausted("statement exceeded its row-touch budget of 100");
+    EXPECT_EQ(s.code(), StatusCode::kResourceExhausted);
+    EXPECT_FALSE(s.retryable());
+    EXPECT_NE(s.message().find("row-touch budget"), std::string::npos);
 }
 
 TEST(StatusOrTest, HoldsAValueOrAStatusNeverBoth) {

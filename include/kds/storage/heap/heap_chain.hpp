@@ -7,6 +7,7 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/storage/visit.hpp"
 
 // A relation's heap as a linked chain of pages, walked through the
 // `next_page_id` link every heap page already reserves (heap_page.hpp's
@@ -118,8 +119,14 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 // Calls `fn` once per live slot of every page in the chain, in chain order
 // (which is id order page-wise, per the ordering property above). The
 // PageView handed to `fn` is mutable so a scan can overwrite in place -
-// UPDATE's HOT path does exactly that. A non-ok Status from `fn` stops the
-// walk and is returned as-is.
+// UPDATE's HOT path does exactly that.
+//
+// `fn` says what happens next (storage/visit.hpp): kContinue walks on,
+// kStop ends the walk **successfully** - the return is Status::OK() and
+// the pages after the stopping point are never fetched - and a non-ok
+// Status stops it and is returned as-is. A visitor that returns
+// Status::OK() instead of kContinue is refused with InvalidArgument rather
+// than being guessed at.
 //
 // Retired and out-of-range slots are skipped, matching PageView::ReadTuple.
 // Delete-marked tuples ARE visited: whether a reader may see one depends on
@@ -130,7 +137,8 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 // relation dirty behind it; kWrite is required of any visitor that
 // overwrites or delete-marks, and passing kRead from one of those loses
 // the write.
-Status ChainVisit(storage::PageStore& store, PageId head, storage::PageAccess access,
-                  const std::function<Status(PageId, PageView&, std::uint16_t)>& fn);
+Status ChainVisit(
+    storage::PageStore& store, PageId head, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn);
 
 }  // namespace kds::heap

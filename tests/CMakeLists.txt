@@ -33,6 +33,16 @@ add_executable(kds_tests
     lexer_test.cpp
     fingerprint_test.cpp
     parser_test.cpp
+    parser_golden_test.cpp
+    parser_join_test.cpp
+    parser_projection_test.cpp
+    parser_subquery_test.cpp
+    parser_fuzz_test.cpp
+    step_compile_test.cpp
+    step_correlation_test.cpp
+    exec_chain_test.cpp
+    exec_subquery_test.cpp
+    exec_budget_test.cpp
     subsystem_logging_test.cpp
     kwp_frame_test.cpp
     wal_record_test.cpp
@@ -45,6 +55,18 @@ add_executable(kds_tests
     file_log_device_test.cpp
 )
 target_link_libraries(kds_tests PRIVATE kds GTest::gtest GTest::gtest_main Threads::Threads)
+
+# The V01 golden corpus is data, not source: the test reads it at run time
+# so a corpus edit does not force a rebuild. The path is baked in rather
+# than resolved relative to the working directory, because ctest and a
+# directly-invoked binary do not agree on what that is.
+target_compile_definitions(kds_tests
+    PRIVATE KDS_PARSER_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/testdata/parser_corpus.txt")
+
+# V13's hygiene check greps the parser sources for productions that exist
+# only to accept another dialect's spelling (spec I13). It reads them at
+# run time, so it needs the repo root rather than the build tree.
+target_compile_definitions(kds_tests PRIVATE KDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 include(GoogleTest)
 gtest_discover_tests(kds_tests)

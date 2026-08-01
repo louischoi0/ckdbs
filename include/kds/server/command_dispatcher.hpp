@@ -10,6 +10,7 @@
 
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/budget.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
@@ -145,14 +146,16 @@ public:
     CommandDispatcher(SuperBlock& superblock, catalog::Catalog& catalog,
                        storage::PageStore& page_store, Logger* log = nullptr,
                        const sched::Clock* clock = nullptr, wal::WalManager* wal = nullptr,
-                       wal::DurabilityClass durability = wal::DurabilityClass::kGroup) noexcept
+                       wal::DurabilityClass durability = wal::DurabilityClass::kGroup,
+                       exec::Budget budget = exec::Budget()) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
           log_(log),
           clock_(clock),
           wal_(wal),
-          durability_(durability) {}
+          durability_(durability),
+          budget_(budget) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -280,8 +283,20 @@ private:
     // `page_access` must be kWrite whenever `fn` modifies a tuple - UPDATE
     // and DELETE scan through here - and kRead otherwise, which is what
     // keeps a SELECT from dirtying every page it reads (page_store.hpp).
-    Status VisitRelation(const catalog::TableAccess& access, storage::PageAccess page_access,
-                         const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn);
+    //
+    // `fn` returns storage::VisitControl: kStop ends the scan successfully,
+    // which is what `LIMIT` and an `Exists` step will need and what no
+    // caller here does yet.
+    // `SELECT ... FROM sys.<view>`. Answered without the compiler: a
+    // catalog view is materialized from the catalog's typed readers, not
+    // walked out of pages, so it is not a relation a step can read
+    // (exec/catalog_view.hpp).
+    DispatchOutcome HandleCatalogView(const parser::SelectStmt& stmt);
+
+    Status VisitRelation(
+        const catalog::TableAccess& access, storage::PageAccess page_access,
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>& fn);
 
     // Appends the record set above for one placed tuple, stamps page_lsn
     // on every page it touched, and applies the durability class. A no-op
@@ -361,6 +376,11 @@ private:
     const sched::Clock* clock_;
     wal::WalManager* wal_;
     wal::DurabilityClass durability_;
+
+    // The per-statement work ceiling, from `max_rows_touched`. Held by
+    // value and handed to each execution, which takes its own copy - so
+    // one statement's spend never carries into the next.
+    exec::Budget budget_;
 
     // Implicit-transaction ids for the statements this dispatcher logs.
     // Process-local and restarting from 1 every boot, which is wrong the

@@ -95,6 +95,127 @@ TEST(LexerTest, BindParameterIsItsOwnTokenNotAnError) {
     EXPECT_EQ(toks[0].text, "?");
 }
 
+// ---- V04: reserved words, the dot, positions, raw digits ------------------
+
+TEST(LexerTest, ReservedWordsLexAsKeywordsCaseInsensitively) {
+    struct Case {
+        const char* text;
+        Keyword kw;
+    };
+    const Case cases[] = {
+        {"JOIN", Keyword::kJoin},       {"on", Keyword::kOn},   {"As", Keyword::kAs},
+        {"IN", Keyword::kIn},           {"exists", Keyword::kExists},
+        {"NoT", Keyword::kNot},         {"BETWEEN", Keyword::kBetween},
+    };
+    for (const Case& c : cases) {
+        Lexer lex(c.text);
+        Token t = lex.Next();
+        EXPECT_EQ(t.type, TokenType::kKeyword) << c.text;
+        EXPECT_EQ(t.kw, c.kw) << c.text;
+        // Text is preserved as written: the fingerprint folds it itself,
+        // and an error message should quote what the client typed.
+        EXPECT_EQ(t.text, c.text);
+    }
+}
+
+TEST(LexerTest, WordsTheGrammarMatchesByTextAreStillIdentifiers) {
+    // Reserving a word makes it unusable as a column name, so the list is
+    // deliberately short. These are matched by text where the grammar
+    // wants them (Parser::ExpectKeyword) and stay identifiers everywhere
+    // else - a column may still be called `values` or `set`.
+    for (auto text : {"SELECT", "FROM", "WHERE", "AND", "VALUES", "SET", "TABLE", "HEAP"}) {
+        Lexer lex(text);
+        EXPECT_EQ(lex.Next().type, TokenType::kIdent) << text;
+    }
+}
+
+TEST(LexerTest, QualifiedNameLexesAsThreeTokens) {
+    // `a.x` could not be tokenized at all before V04: the '.' was a
+    // kError, which is why every corpus statement containing one had no
+    // fingerprint.
+    auto toks = LexAll("a.x");
+    ASSERT_EQ(toks.size(), 4u);  // ident, dot, ident, EOF
+    EXPECT_EQ(toks[0].type, TokenType::kIdent);
+    EXPECT_EQ(toks[0].text, "a");
+    EXPECT_EQ(toks[1].type, TokenType::kDot);
+    EXPECT_EQ(toks[2].type, TokenType::kIdent);
+    EXPECT_EQ(toks[2].text, "x");
+}
+
+TEST(LexerTest, ADotAfterDigitsDoesNotSplitAnIntegerLiteral) {
+    // There is no float type, so `1.5` is not one token. It is an integer,
+    // a dot and an integer - which will fail to parse, and should, rather
+    // than being silently truncated to 1.
+    auto toks = LexAll("1.5");
+    ASSERT_EQ(toks.size(), 4u);
+    EXPECT_EQ(toks[0].type, TokenType::kIntLit);
+    EXPECT_EQ(toks[0].int_val, 1);
+    EXPECT_EQ(toks[1].type, TokenType::kDot);
+    EXPECT_EQ(toks[2].type, TokenType::kIntLit);
+    EXPECT_EQ(toks[2].int_val, 5);
+}
+
+TEST(LexerTest, EveryTokenCarriesItsExactByteRange) {
+    //                0123456789...
+    const std::string_view sql = "SELECT * FROM t WHERE name = 'ab'";
+    auto toks = LexAll(sql);
+    ASSERT_EQ(toks.size(), 9u);  // SELECT * FROM t WHERE name = 'ab' EOF
+
+    for (const Token& t : toks) {
+        if (t.type == TokenType::kEof) continue;
+        // The recorded range must reproduce the token as written - which
+        // is the property an "exact position" in an error message needs,
+        // and the one a length computed from the decoded text would lose.
+        EXPECT_LE(t.byte_offset + t.length, sql.size());
+        const std::string_view raw = sql.substr(t.byte_offset, t.length);
+        if (t.type == TokenType::kStrLit) {
+            EXPECT_EQ(raw, "'ab'") << "a string's extent covers its quotes";
+        } else {
+            EXPECT_EQ(raw, t.text);
+        }
+    }
+
+    EXPECT_EQ(toks[0].byte_offset, 0u);
+    EXPECT_EQ(toks[0].length, 6u);
+    EXPECT_EQ(toks[7].type, TokenType::kStrLit);
+    EXPECT_EQ(toks[7].byte_offset, 29u);
+    EXPECT_EQ(toks[7].length, 4u);
+}
+
+TEST(LexerTest, PositionsSkipWhitespaceAndComments) {
+    const std::string_view sql = "  -- lead\n  PING";
+    auto toks = LexAll(sql);
+    ASSERT_EQ(toks.size(), 2u);
+    // Points at the token, not at the whitespace that preceded it.
+    EXPECT_EQ(toks[0].byte_offset, 12u);
+    EXPECT_EQ(sql.substr(toks[0].byte_offset, toks[0].length), "PING");
+
+    // End of input has a position and no extent, so a "something is
+    // missing here" error can still point somewhere real.
+    EXPECT_EQ(toks[1].type, TokenType::kEof);
+    EXPECT_EQ(toks[1].byte_offset, sql.size());
+    EXPECT_EQ(toks[1].length, 0u);
+}
+
+TEST(LexerTest, IntegerLiteralsKeepTheirDigitsAlongsideTheDecodedValue) {
+    auto toks = LexAll("42 -7");
+    EXPECT_EQ(toks[0].digits(), "42");
+    EXPECT_FALSE(toks[0].negative);
+    EXPECT_EQ(toks[1].digits(), "7") << "the sign is not part of the digit run";
+    EXPECT_TRUE(toks[1].negative);
+    EXPECT_EQ(toks[1].int_val, -7);
+}
+
+TEST(LexerTest, DigitsSurviveAnIntegerThatOverflowsTheSignedDecode) {
+    // The reason the digits are kept at all: int_val wraps, so it cannot
+    // answer "is this literal inside the 40-bit pk range?" - the check at
+    // V30 reads digits() instead. 2^64 - 1 decodes to -1 here.
+    auto toks = LexAll("18446744073709551615");
+    ASSERT_EQ(toks[0].type, TokenType::kIntLit);
+    EXPECT_EQ(toks[0].digits(), "18446744073709551615");
+    EXPECT_EQ(toks[0].int_val, -1) << "documenting the wrap, not endorsing it";
+}
+
 TEST(LexerTest, PeekDoesNotConsume) {
     Lexer lex("PING PONG");
     const Token& p1 = lex.Peek();

@@ -135,14 +135,16 @@ enum class DurabilityLevel : std::uint8_t {
 
 // ---- Error taxonomy (docs/protocol.md §11) ---------------------------------
 // Wire-level error categories: deliberately a superset of
-// kds::StatusCode (kds/base/status.hpp). kInternal/kProtocol/
-// kUnsupported/kCancelled have no engine-level Status equivalent - they
-// are wire/session-only categories that can occur before or outside any
-// engine call (e.g. a malformed frame is kProtocol, not any kind of
-// Status). The Status -> ErrorCategory mapping table for the categories
-// that DO overlap is not part of this header; it lands with the error
-// registry (docs/protocol-wp.md P12, src/wire/error_registry.cpp),
-// including its append-only golden-list guard.
+// kds::StatusCode (kds/base/status.hpp). kInternal/kProtocol/kCancelled
+// have no engine-level Status equivalent - they are wire/session-only
+// categories that can occur before or outside any engine call (e.g. a
+// malformed frame is kProtocol, not any kind of Status). kUnsupported was
+// in that list until docs/parser-v2.md I18 gave the language a use for it
+// at the engine level; StatusCode::kUnsupported now exists and maps here.
+// The Status -> ErrorCategory mapping table for the categories that DO
+// overlap is not part of this header; it lands with the error registry
+// (docs/protocol-wp.md P12, src/wire/error_registry.cpp), including its
+// append-only golden-list guard.
 //
 // kTxnConflict has an engine-level equivalent:
 // StatusCode::kTxnConflict maps here with **retryable = 1**, which
@@ -163,6 +165,17 @@ enum class ErrorCategory : std::uint16_t {
     kUnsupported,
     kTxnConflict,
     kCancelled,
+    // Appended for StatusCode::kCardinalityViolation. Spec §11 says
+    // categories "mirror engine Status" over an open-ended list, so a new
+    // engine code earns a category rather than being folded into
+    // kInvalidArgument - a client cannot fix a cardinality violation by
+    // fixing its arguments. Appended at the end and never renumbered:
+    // the numbering is the compatibility surface.
+    kCardinalityViolation,
+    // Appended for StatusCode::kResourceExhausted, same reasoning as
+    // above: a client cannot fix a spent work budget by fixing its
+    // arguments, so folding it into kInvalidArgument would misdirect.
+    kResourceExhausted,
 };
 
 // Packs a wire error code as `category u16 << 16 | detail u16` (spec

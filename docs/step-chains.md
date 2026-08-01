@@ -1,6 +1,12 @@
 # KDS Step Chains — Joins, Subqueries & the Waystone Trail (Specification)
 
-**Status:** **Official specification**, decisions confirmed 2026-08-01 (J1–J5, §0). Amends `docs/parser.md` I9 (§8-1) and generalizes the execution concept behind `kJoinSelect`. Companion tasks: `docs/step-chain-workplan.md`. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/waystone-concpets.md` (trail model, replay contract), `docs/parser.md`, `docs/rules.md`, `docs/txn.md`.
+> **MERGED INTO `docs/parser-v2.md` 2026-08-01. Kept as history; do not build from this file.**
+>
+> Two specifications were written for one subject — this one and the v2 parser blueprint — and they contradicted each other on classification, vehicle, fingerprint versioning, `EXISTS` replay and recording policy. They are now one document. **Everything decided here survived**: J1-J5 verbatim, the step chain and its access kinds, the `kJoinSelect` absorption, global step numbering, n = 2 recording, and the `Unsupported` discipline. What the merge added: the four engine-level gaps this spec depended on without naming them — `StatusCode::kUnsupported` does not exist, a relation walk cannot be stopped (so `Exists` could not short-circuit), nested access into the page layer is safe only because nothing evicts, and **§4's replay contract is not sufficient for a `Probe` step** (see `parser-v2.md` I17, rule 0: every rule in `waystone-concpets.md` §2 validates the trail against storage and none looks at the query, so a producing row updated between record and replay replays the wrong row).
+>
+> Tasks moved from `step-chains-workplan.md` (`SC01`-`SC10`) to `docs/parser-v2-workplan.md` (`V00`-`V32`), which carries a task-by-task map.
+
+**Status:** superseded. Originally: **Official specification**, decisions confirmed 2026-08-01 (J1–J5, §0). Amends `docs/parser.md` I9 (§8-1) and generalizes the execution concept behind `kJoinSelect`. Companion tasks: `docs/step-chain-workplan.md`. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/waystone-concpets.md` (trail model, replay contract), `docs/parser.md`, `docs/rules.md`, `docs/txn.md`.
 
 ## 0. Decision Record `[CONFIRMED 2026-08-01]`
 

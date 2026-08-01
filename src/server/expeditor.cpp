@@ -17,7 +17,8 @@ std::string Expeditor::Config::LogPath() const {
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file", "port",      "wal_dir",   "checkpoint_interval_ms", "durability",
-            "wal_drain_interval_us", "log_dir",   "log_file",               "log_level"};
+            "wal_drain_interval_us", "log_dir",   "log_file",               "log_level",
+            "max_rows_touched"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -63,6 +64,15 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(file.origin() + ": " + parsed.status().message());
         }
         durability = parsed.value();
+    }
+    if (file.Has("max_rows_touched")) {
+        auto v = file.GetUint("max_rows_touched");
+        if (!v.ok()) return v.status();
+        // No range check beyond the parse: 0 is a documented value
+        // (unlimited) and there is no upper bound worth inventing - a
+        // ceiling too high to reach is the same as no ceiling, which the
+        // operator has already asked for by setting it.
+        max_rows_touched = v.value();
     }
     if (file.Has("wal_drain_interval_us")) {
         auto v = file.GetUint("wal_drain_interval_us");
@@ -157,7 +167,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->dispatcher_.emplace(expeditor->database_->superblock,
                                    expeditor->database_->catalog, *expeditor->store_,
                                    &*expeditor->logger_, &expeditor->clock_,
-                                   &*expeditor->wal_, expeditor->config_.durability);
+                                   &*expeditor->wal_, expeditor->config_.durability,
+                                   exec::Budget(expeditor->config_.max_rows_touched));
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
                                  wal::DurabilityClassName(expeditor->config_.durability));

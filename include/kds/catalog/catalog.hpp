@@ -221,6 +221,16 @@ public:
     // id; a caller that wants to look at the relation reads this.
     StatusOr<std::vector<SysPatternRow>> ListPatterns();
 
+    // Every sys.types row, through the same cached snapshot
+    // ResolveTypeByName() reads. Exposed for the `sys.types` catalog view
+    // (exec/catalog_view.hpp), which needs to enumerate what the
+    // by-name lookup can only probe one at a time.
+    //
+    // The snapshot is safe to hand out because types are bootstrap-only:
+    // nothing creates one at runtime, so unlike the table list it cannot
+    // go stale under a caller.
+    StatusOr<const std::vector<SysTypeRow>*> ListTypes();
+
     // The pattern's row straight off the page, never from the cache.
     //
     // The counterpart of GetSysTableRow(): it exists for the fields

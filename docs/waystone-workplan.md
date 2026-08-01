@@ -12,7 +12,7 @@ Execution rules:
 
 ## The gate: pattern identity
 
-Every task here depends on a statement having a stable identity, so Phase A comes first and is built as a bolt-on over the existing lexer rather than waiting for the blueprint parser (`docs/parser-workplan.md`). The fingerprint is a pure function of the token stream, so it can be rewritten against the flat AST later without any consumer changing — the output contract is two integers. The cost is that fingerprints change when the parser is replaced, which `kFingerprintVersion` absorbs: bump it, stored patterns retire, the engine re-learns. That is a performance event, not a correctness one.
+Every task here depends on a statement having a stable identity, so Phase A comes first and is built as a bolt-on over the existing lexer rather than waiting for the blueprint parser (`docs/parser-v2-workplan.md` phase V-6). The fingerprint is a pure function of the token stream, so it can be rewritten against the flat AST later without any consumer changing — the output contract is two integers. **Amended 2026-08-01:** that rewrite is now required to be *hash-preserving* rather than merely versioned — V01 pins every pre-existing `pattern_id` and V29 folds the pass in without moving one — so `kFingerprintVersion` is not expected to bump. If it ever does, it absorbs the change the same way: stored patterns retire, the engine re-learns, a performance event and not a correctness one.
 
 ## Phase A — pattern identity
 
@@ -59,7 +59,7 @@ Needs: nothing.
 Decisions worth carrying forward:
 
 - **`dir_depth == 0` is the authority on whether a directory exists**, not `waystone_root == kInvalidPageId`. A row read out of a zeroed or never-written page decodes every field to 0, which would make its root look like page 0 — a valid-looking `PageId`, and the superblock's. Keying the question on the field whose zero value already means "none" leaves no way to spell the state wrong. `HasWaystoneDirectory()` is the only test any reader should use; writers should still store `kInvalidPageId` when clearing, but nothing may depend on it.
-- **`stmt_class` is a raw `std::uint8_t`, not an enum.** The v1 statement-class list is `[PROPOSED]` in `docs/parser.md` I2 and its ratification is an open decision in `CLAUDE.md` — defining the enum here would be deciding it. The field exists now because this is an on-disk format and adding one later is a format break; `kStmtClassUnclassified = 0` names the value every row carries until the parser can classify anything.
+- **`stmt_class` is a raw `std::uint8_t`, not an enum.** The v1 statement-class list is `[PROPOSED]` in `docs/parser-v2.md` I2 and its ratification is an open decision in `CLAUDE.md` — defining the enum here would be deciding it. The field exists now because this is an on-disk format and adding one later is a format break; `kStmtClassUnclassified = 0` names the value every row carries until the parser can classify anything.
 - **Fields are ordered by descending alignment**, so the on-disk offsets and the struct's own offsets coincide and every field carries an `offsetof` `static_assert`. `SysTableRow` gave that up past `next_id` and has to be read more carefully as a result; there was no reason to repeat it.
 - **`Decode()` validates size and nothing else** — not the version, not the root/depth pair. It is a pure decode like every other row's; whether a version is current or a pair is coherent are questions for the layer that can act on the answer (P04).
 - **A field-independence test earns its keep here.** An offset collision between two fields survives any round-trip that writes one row and reads it back through the same code; the test encodes a row that is zero except for one field and asserts nothing else comes back non-zero. The byte-layout test pins the format now, while there is still no data to lose by reordering it.
@@ -164,7 +164,9 @@ Needs: P11.
 **P13 — Join replay.**
 Files: executor/dispatcher, `tests/waystone_join_replay_test.cpp`.
 Replay a cross-relation trail in `step_id` order for the written-order nested-loop join. This is the case the design exists for (spec §7) and the first one whose measurement is worth quoting.
-Blocked on the executor having a join path at all — `kJoinSelect` needs parser Phase 2+ (`docs/parser-workplan.md`). Until then this task's deliverable is a fixture executor replaying scripted multi-relation trails, which is also what P12's cross-relation cases run against.
+Blocked on the executor having a join path at all — that lands in `docs/parser-v2-workplan.md` phase V-4 (V28), with the bound step list this task replays from in V36 and the mandatory probe-key check in V37. Until then this task's deliverable is a fixture executor replaying scripted multi-relation trails, which is also what P12's cross-relation cases run against.
+
+**Amended 2026-08-01 by `docs/parser-v2.md` I17, and it is a correctness amendment, not a scheduling one.** Replay must be driven by the bound plan's **step list**, never by `stmt_class` — a statement whose root is `kPointSelect` and whose subquery is a join would otherwise have a trail nobody replays. And §2's validation chain is **not sufficient for a join step**: every rule in it validates the trail against storage and none looks at the query, so if the driving row's join column is updated between recording and replay, an entry for the old key passes `rel_oid`, Keystone id, epoch and visibility, and the join emits the wrong row. Rule 0 — re-derive the probe key from the current outer row and require it to equal the entry's `pk` — is mandatory before any join replay ships. V37 lands it together with the §2 and §11 amendments.
 Needs: P11, P12.
 
 **P14 — Measure.**

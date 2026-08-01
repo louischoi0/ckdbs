@@ -116,13 +116,15 @@ struct ScannedRow {
 
 std::vector<ScannedRow> ScanAll(storage::PageStore& store, PageId root) {
     std::vector<ScannedRow> rows;
-    Status s = BtreeVisit(store, root, storage::PageAccess::kRead,
-                          [&](PageId page_id, heap::PageView& leaf, std::uint16_t slot) -> Status {
-                              auto tuple = leaf.ReadTuple(slot);
-                              if (!tuple.ok()) return Status::OK();  // retired slot
-                              rows.push_back({page_id, IdOf(tuple.value().payload)});
-                              return Status::OK();
-                          });
+    Status s = BtreeVisit(
+        store, root, storage::PageAccess::kRead,
+        [&](PageId page_id, heap::PageView& leaf,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = leaf.ReadTuple(slot);
+            if (!tuple.ok()) return storage::VisitControl::kContinue;  // retired slot
+            rows.push_back({page_id, IdOf(tuple.value().payload)});
+            return storage::VisitControl::kContinue;
+        });
     EXPECT_TRUE(s.ok()) << s.message();
     return rows;
 }
@@ -554,15 +556,95 @@ TEST(BtreeTest, AVisitorsErrorStopsTheWalk) {
     tree.Fill(10, kSmallFiller);
 
     int visits = 0;
-    Status s = BtreeVisit(store, tree.root, storage::PageAccess::kRead,
-                          [&](PageId, heap::PageView&, std::uint16_t) -> Status {
-                              ++visits;
-                              if (visits == 3) return Status::InvalidArgument("stop here");
-                              return Status::OK();
-                          });
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            ++visits;
+            if (visits == 3) return Status::InvalidArgument("stop here");
+            return storage::VisitControl::kContinue;
+        });
     EXPECT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(visits, 3);
+}
+
+// ---- Stoppable walks (docs/parser-v2.md I15 rule 4) ----------------------
+//
+// The leaf-sibling walk gets the same contract as the heap chain, tested
+// the same way, because BtreeVisit and ChainVisit exist to be handed the
+// same lambda - a divergence in what kStop means between them would be a
+// wrong answer on one storage form and not the other.
+
+TEST(BtreeTest, AVisitorCanStopMidLeafAndTheWalkSucceeds) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    tree.Fill(10, kSmallFiller);
+
+    int visits = 0;
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            ++visits;
+            return visits == 3 ? storage::VisitControl::kStop : storage::VisitControl::kContinue;
+        });
+    EXPECT_TRUE(s.ok()) << s.message();
+    EXPECT_EQ(visits, 3) << "the walk continued past the stop";
+}
+
+TEST(BtreeTest, StoppingOnALeafsLastSlotNeverFetchesTheNextLeaf) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    // One row per leaf, so slot 0 *is* the last slot of its leaf and the
+    // stop lands exactly on the sibling-link boundary.
+    tree.Fill(4, kOnePerLeafFiller);
+    const auto rows = ScanAll(store, tree.root);
+    ASSERT_EQ(rows.size(), 4u);
+    ASSERT_NE(rows[0].page_id, rows[1].page_id) << "test needs one row per leaf";
+
+    std::vector<PageId> pages_seen;
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [&](PageId page_id, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            pages_seen.push_back(page_id);
+            return storage::VisitControl::kStop;
+        });
+    EXPECT_TRUE(s.ok()) << s.message();
+    ASSERT_EQ(pages_seen.size(), 1u) << "the walk crossed the sibling link after kStop";
+    EXPECT_EQ(pages_seen.front(), rows[0].page_id);
+}
+
+TEST(BtreeTest, StoppingOnTheLastSlotOfTheLastLeafIsIndistinguishableFromFinishing) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    tree.Fill(10, kSmallFiller);
+    const std::size_t total = ScanAll(store, tree.root).size();
+    ASSERT_EQ(total, 10u);
+
+    std::size_t visits = 0;
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            ++visits;
+            return visits == total ? storage::VisitControl::kStop
+                                   : storage::VisitControl::kContinue;
+        });
+    EXPECT_TRUE(s.ok()) << s.message();
+    EXPECT_EQ(visits, total);
+}
+
+TEST(BtreeTest, AVisitorReturningAnOkStatusInsteadOfContinueIsRefused) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    tree.Fill(5, kSmallFiller);
+
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            return Status::OK();
+        });
+    EXPECT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(s.message().find("VisitControl"), std::string::npos) << s.message();
 }
 
 // ---- Refusals ------------------------------------------------------------
@@ -703,8 +785,11 @@ TEST(BtreeTest, ANonLeafReachedThroughASiblingLinkIsReported) {
     ASSERT_TRUE(leaf_bytes.ok()) << leaf_bytes.status().message();
     heap::PageView(leaf_bytes.value()).set_next_page_id(tree.root);
 
-    Status s = BtreeVisit(store, tree.root, storage::PageAccess::kRead,
-                          [](PageId, heap::PageView&, std::uint16_t) { return Status::OK(); });
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [](PageId, heap::PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            return storage::VisitControl::kContinue;
+        });
     EXPECT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kCorruption);
 }
