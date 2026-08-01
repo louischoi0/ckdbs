@@ -6,14 +6,9 @@ The authoritative specification for how KDS stores a row. Companion specs own th
 
 ---
 
-## 1. What KDS Is
+## 1. Scope
 
-An **OLTP-specialized database storage engine** for financial systems, written as userspace C++. It is not a general-purpose DBMS and its feature scope is deliberately narrow.
-
-Two mechanisms differentiate it, and both are engine-native rather than optimizer tricks:
-
-- **Statistics drive physical placement.** Runtime access data reorganizes where tuples physically live, not merely how a query is planned.
-- **Waystone** records where a previous execution of a query pattern found its rows, so a repeated pattern can look directly instead of searching.
+This document specifies row storage only: heap organization, page layout, the tuple format, and the structures that address a tuple. What KDS *is* — positioning, differentiators, feature scope — lives in the project `README.md` and is deliberately not restated here.
 
 ## 2. Pages
 
@@ -57,8 +52,36 @@ A relation is a **chain of heap pages** linked through the `next_page_id` tail r
 - The slot directory grows downward from the heap area offset; tuple data grows upward from the top; free space is the gap (`upper - lower`).
 - The page tail permanently reserves `sizeof(PageId)` bytes for the `next_page_id` chain link, excluded from free-space accounting.
 - The per-tuple MVCC header is **`trx_id` (48-bit writer, zero-extended to 8 bytes) + `undo_ptr` + `data_len` + flags — 20 bytes, with no `xmax`**. A version's death is the next version's birth: walking the undo chain already names the overwriting transaction, so storing that boundary a second time in the older version would be recording one fact twice. `trx_id` is whichever transaction last stamped the version — insert, overwrite, or delete-mark. The lock-slot role `xmax` plays in PostgreSQL belongs to the Keystone flags byte here (§4).
+- Under the fixed-length rule (§3.3), a relation's row size is a schema constant, so a slot's `length` and the header's `data_len` carry no new information; they are retained for format stability and treated as **checked redundancy** — a value disagreeing with the schema constant is `Corruption`, never interpreted.
 - **DELETE is a delete-mark**: the slot's `DELETED` flag plus the deleter's `trx_id`, with the tuple bytes left in place for snapshots that predate it. Physical reclamation is slot retirement (`DEAD`), a separate operation for a purge pass — hence two WAL records, `HEAP_DELETE_MARK` and `SLOT_RETIRE`.
 - Slot entries carry their own `flags` (`DEAD`, `DELETED`) and `length`. Retirement marks a slot dead rather than compacting eagerly.
+
+### 3.3 Fixed-length tuples & the tagged cell
+
+**Every tuple is fixed-length.** A relation's tuple layout is a sequence of fixed-size cells at offsets computable from the schema alone; row size is a per-relation constant, asserted in the row codec rather than policed by convention. Fixed-width types occupy their natural widths. Every variable-width type (`TEXT`, future blobs) occupies exactly **one tagged cell** of `kds.inline_cell_width` bytes, regardless of the value stored.
+
+The rule exists for tuple mobility. An UPDATE that grows a row is what forces tuples to move in conventional engines (broken HOT chains, row migration) — and here it would additionally burn Waystone trail entries through epoch churn. With fixed cells **an UPDATE can never migrate a tuple**; combined with the immutable `min_key`, a tuple's address is stable for life until relayout moves it on purpose. Secondary gains: relayout is cell-`memcpy` with exact fill-factor math, in-page addressing is arithmetic, and the row codec reads static offsets. The accepted cost is stated plainly: variable-length management is *relocated* into the var-heap (§3.4), not eliminated, and fixed cells spend padding on short values.
+
+Tagged cell layout, width `W = kds.inline_cell_width` (memcpy codec, `static_assert`ed, LE — `rules.md` §§2, 5):
+
+| Tag (`u8` at offset 0) | Layout after tag | Meaning |
+|---|---|---|
+| `kNull` | zeros | SQL NULL; maps 1:1 to the wire NULL convention |
+| `kInline` | `len u16`, then `len` bytes, zero padding | value fits: `len ≤ W − 3` |
+| `kSpilled` | `len u32`, `varheap_ptr u64` (`page_id u32 · slot u16 · reserved u16`) | bytes live in the var-heap (§3.4) |
+
+- The spill decision is a pure function of value length; an UPDATE crossing the boundary changes the cell's *tag*, never the tuple's size. A tag byte (rather than sentinels) is what lets NULL, empty, and spilled be distinguished without touching the var-heap, and is where future cell kinds land without a format bump.
+- **`kds.inline_cell_width` is configuration-referenced but instance-pinned**: read once at bootstrap, written into the superblock, validated at every startup — a disagreement refuses to start, naming both values. On-disk layout depends on it, so it cannot be hot-changed; rewriting existing data for a new width is `Unsupported`. A global constant was chosen over per-column declared widths deliberately: one number instead of a schema decision users can get wrong, one codec path, and no `VARCHAR(n)`/`ALTER WIDEN` surface at all. The recorded cost is uniform padding where a per-column width would have been tighter.
+- Default **64 bytes** `[OPEN: value]` — sized so common OLTP strings never spill; to be settled against measured string-length distributions of target schemas. The semantics above hold regardless of the number.
+
+### 3.4 Var-heap
+
+The out-of-line store for spilled values. Its design goal is to be **boring**: the mobility problem was removed from the heap and must not reappear here.
+
+- **Immutable per version.** Writing a spilled value appends `{len, bytes}` to a `kVarHeap` page and returns its pointer; values are never rewritten and never moved. Consequences, which are the rationale: an old-version reader follows the old pointer to bytes that cannot have changed, so MVCC correctness is free; pointers need no epoch, no validation, no forwarding; the var-heap is **relayout-exempt by construction**; and reclamation is a rider on purge — when a version dies, its values die with it. The accepted cost: churn-heavy string updates consume space until purge catches up, making purge cadence a sizing input.
+- **Logged, headered, checksummed** — an ordinary authoritative page class, `wal.md`'s `VARHEAP_APPEND` record. Stated explicitly because the recent reflex runs the other way: waystone/trail pages are advisory, but a var-heap value is committed data — losing one loses a value, not a hint. Advisory rules do not apply here.
+- Update ordering: `VARHEAP_APPEND` (new value) → cell overwrite (`HEAP_OVERWRITE`, old cell image into undo), in one transaction, replayed by ordinary winner/loser recovery. A crash between them leaves an unreferenced value for purge's sweep. No var-heap-specific recovery logic may exist.
+- Storage is invisible on the wire: `TEXT` is length-prefixed bytes to clients regardless of inline or spilled, and must stay so.
 
 ## 4. Keystone Column
 
@@ -107,7 +130,7 @@ There is no single canonical in-memory tuple and no hash table enforcing that an
 
 KDS collects access statistics and uses them to **physically optimize tuple placement**, starting with heap pages.
 
-Relayout must respect the `min_key` insertion rule (§3.1), keep the B+ tree consistent (entries updated or lazily repaired for moved tuples), and bump the page epoch (§3.1a) so every recorded location on that page becomes untrusted at once.
+Relayout must respect the `min_key` insertion rule (§3.1), keep the B+ tree consistent (entries updated or lazily repaired for moved tuples), and bump the page epoch (§3.1a) so every recorded location on that page becomes untrusted at once. Under the fixed-length rule (§3.3) a relayout is a copy of fixed cells — exact fill-factor math, no per-tuple size negotiation — and `kVarHeap` pages are outside its jurisdiction entirely (§3.4).
 
 Key-boundary re-partitioning mainly benefits range locality; for single-pk point lookups the acceleration comes from Waystone instead. The two coexist and address different shapes.
 
@@ -129,6 +152,8 @@ Never violated, never "temporarily" bypassed.
 10. No single canonical in-memory tuple is enforced; consistency comes from page pin and latch discipline (§6).
 11. Every relation requires system-generated, autoincrement `id` values; a caller-supplied pk on insert is a defect (§4).
 12. The tuple MVCC header is exactly `trx_id:48 (zero-extended to 64) | undo_ptr | data_len | flags` = 20 bytes. There is no `xmax`; a version's validity interval is reconstructed from the undo chain, and DELETE is the slot's `DELETED` mark plus the deleter's `trx_id`.
+13. **Every tuple is fixed-length.** A relation's row size is a schema constant; variable-width values occupy tagged cells of exactly `kds.inline_cell_width` bytes (§3.3), and that width is instance-pinned in the superblock. No code path produces a tuple whose size differs from its relation's constant.
+14. **Var-heap values are immutable per version** and `kVarHeap` pages are never relocated; the class is logged, headered, and checksummed — authoritative data, not advisory (§3.4).
 
 ## 9. Open Decisions
 
@@ -136,6 +161,9 @@ Collected from the sections above, plus those owned by companion specs.
 
 - Per-page epoch storage location, width, and wraparound (§3.1a).
 - Heap page split policy; free-space reuse and page compaction, both gated on reader registration (§3.1b).
+- `kds.inline_cell_width` default value (§3.3) — settle against measured target-schema string-length distributions.
+- Spilled-value size cap; prefix-inline revisit trigger (adopt only if string-equality steps become a measured cost) (§§3.3–3.4).
+- Purge-cadence sizing metric for var-heap headroom (§3.4).
 - Repurposing of the 16 reserved Keystone bits (§4).
 - Id-reuse / low-range reclamation for high-churn relations (§4).
 - Buffer-pool page-frame reclamation policy (§6).
