@@ -25,13 +25,15 @@
 // without DDL? If yes, it is not cacheable.
 //
 //   cached, dropped on the DDL version bump:
-//     name -> oid            (sys.objects)
-//     oid  -> TableAccess    (sys.tables + sys.columns)
-//     the table list         (sys.objects)
+//     name -> oid                    (sys.objects)
+//     oid  -> TableAccess            (sys.tables + sys.columns)
+//     the table list                 (sys.objects)
+//     pattern_id -> PatternAccess    (sys.patterns)
 //   cached, never dropped:
 //     sys.types              written only by Catalog::Bootstrap()
 //   never cached, always read from the page:
 //     next_id, and therefore GetSysTableRow()/AllocateRowId()
+//     a pattern's use_count/last_seen, and therefore GetSysPatternRow()
 //
 // That last line is load-bearing twice over. AllocateRowId() bumps a field
 // of the same sys.tables row a TableAccess is built from, and it runs
@@ -101,6 +103,39 @@ public:
     // entry already present wins over `access`, for the same reason.
     const TableAccess* PutTableAccess(TableAccess access);
 
+    // ---- pattern_id -> PatternAccess (sys.patterns) ----------------------
+    //
+    // Keyed by the fingerprint rather than by oid, because that is what
+    // every caller arrives holding (rows.hpp's note on SysPatternRow).
+    // What may be cached is decided by this header's one question, and the
+    // answer is written into PatternAccess itself (schema.hpp): heat moves
+    // without DDL, so it is not in the struct and cannot be cached by
+    // accident.
+
+    const PatternAccess* FindPattern(std::uint64_t pattern_id) noexcept;
+
+    // Reference-stable and already-present-wins, exactly like
+    // PutTableAccess() and for the same reason.
+    const PatternAccess* PutPattern(PatternAccess access);
+
+    // Points a cached pattern at a new directory, in place.
+    //
+    // An *update* rather than an invalidation, which is the one place this
+    // cache departs from "drop everything at one choke point" - so the
+    // reason is worth stating. The fact being changed belongs to exactly
+    // one pattern and is read by nothing else, so dropping every cached
+    // relation to publish it would be collateral damage; and it is
+    // precisely that collateral damage, in the deleted per-relation
+    // Waystone, that dangled the `const TableAccess*` a running INSERT was
+    // holding. Updating in place keeps the entry's address, so a caller
+    // holding the pointer sees the new root and keeps a valid pointer.
+    //
+    // A no-op when the pattern is not cached: there is nothing stale to
+    // fix, and filling the entry here would cache a fact the caller may
+    // never ask for.
+    void UpdatePatternWaystone(std::uint64_t pattern_id, PageId root,
+                               std::uint8_t depth) noexcept;
+
     // ---- sys.types (bootstrap-immutable) --------------------------------
 
     // nullptr means "not loaded yet, scan the page"; a non-null empty
@@ -152,6 +187,7 @@ public:
     bool types_loaded() const noexcept { return types_.has_value(); }
     std::size_t table_access_entries() const noexcept { return table_access_.size(); }
     std::size_t name_entries() const noexcept { return name_to_oid_.size(); }
+    std::size_t pattern_entries() const noexcept { return patterns_.size(); }
 
 private:
     // Transparent hash so a lookup by string_view does not have to
@@ -170,10 +206,15 @@ private:
     std::unordered_map<Oid, TableAccess> table_access_;
     std::unordered_map<std::string, Oid, NameHash, std::equal_to<>> name_to_oid_;
 
+    // Node-based for the same reference-stability reason as table_access_,
+    // and additionally because UpdatePatternWaystone() mutates an entry a
+    // caller may be holding.
+    std::unordered_map<std::uint64_t, PatternAccess> patterns_;
+
     // A vector with a linear scan, not a map: sys.types has ten rows and
-    // both lookups (by name, by type_val) are single-field compares - the
-    // same call the legacy registry makes in sys_object_registry.hpp, for
-    // the same reason. std::optional distinguishes "loaded and empty" from
+    // both lookups (by name, by type_val) are single-field compares, the
+    // same trade sys_object_registry.hpp makes for the same reason.
+    // std::optional distinguishes "loaded and empty" from
     // "not loaded", which a bare empty vector cannot.
     std::optional<std::vector<SysTypeRow>> types_;
     std::optional<std::vector<SysObjectRow>> table_list_;

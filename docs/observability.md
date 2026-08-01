@@ -1,8 +1,6 @@
-# KDS Observability — Tracing & Inspection (development surface)
+# KDS Observability — Tracing & Inspection
 
-**Status:** Architecture sketch — proposal, not a confirmed decision. Nothing here is implemented. Marker legend matches `docs/wal.md`: `[PROPOSED]` — this document's default, adopt or amend before implementing; `[OPEN]` — must not be assumed. Consistent with `docs/rules.md` (§3 shared-nothing, §4 injectable clock/IO), `docs/sched.md` (reactor phases, scheduling groups), and `docs/wal.md` §13.
-
-**Scope boundary, stated first because it is the thing most likely to erode.** This is a *development and inspection* surface: per-request timing broken down by layer, so a developer can answer "where did those 4 ms go". It is **not** the operator-facing metrics of `wal.md` §13 (durable-vs-appended LSN, group-commit batch sizes, checkpoint duration), which are product features with a different lifetime, a different consumer, and a different stability contract. The two share a clock and nothing else. Keep them in separate headers so neither grows into the other.
+A proposal for per-request tracing and inspection. **Nothing here is decided and nothing is implemented.** `[PROPOSED]` marks this document's default; `[OPEN]` must not be assumed. Consistent with `docs/rules.md` (§3 shared-nothing, §4 injectable clock/IO), `docs/sched.md` (reactor phases, scheduling groups), and `docs/wal.md` §13.
 
 ---
 

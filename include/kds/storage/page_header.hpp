@@ -18,12 +18,10 @@
 // 8 KiB with the checksum field zeroed" - is a property of this layout,
 // not of any page type.
 //
-// Waystone entry and directory pages are headerless by class and never
-// pass through here (page.md section 1). That is a property of their
-// layout - exact power-of-two tilings that a header would break - and not
-// of invariant 8, which as of 2026-07-30 permits read-path probes
-// (docs/waystone-concpets.md section 3.1). Headerless also means no
-// page_lsn, which is why their persistence class is a live [OPEN].
+// A headerless page class never passes through here (page.md section 1) -
+// a property of its layout, an exact power-of-two tiling a header would
+// break. Headerless also means no page_lsn, so such a class cannot be
+// WAL-logged as it stands. No such class exists today.
 //
 // Encoding rules per rules.md sections 2 and 5: a mirror struct with
 // offsetof static_asserts, field-wise memcpy through named offsets, fixed

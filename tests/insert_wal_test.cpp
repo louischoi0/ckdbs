@@ -171,7 +171,7 @@ TEST_F(InsertWalTest, TheLoggedTupleIsByteIdenticalToTheOneInThePage) {
 }
 
 TEST_F(InsertWalTest, NoWalManagerMeansNoRecordsAndTheInsertStillWorks) {
-    // The pre-2026-07-30 shape, which the socket-free tests still use.
+    // The unlogged shape, which the socket-free tests still use.
     CommandDispatcher d(boot_->superblock, boot_->catalog, *store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v int32)").response.substr(0, 7), "CREATED");
 

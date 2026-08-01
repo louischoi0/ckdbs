@@ -53,10 +53,6 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     auto ct = static_cast<std::uint8_t>(clustered_type);
     std::memcpy(base + kClusteredTypeOffset, &ct, sizeof(ct));
     std::memcpy(base + kNextIdOffset, &next_id, sizeof(next_id));
-    auto ws = static_cast<std::uint8_t>(waystone_state);
-    std::memcpy(base + kWaystoneStateOffset, &ws, sizeof(ws));
-    std::memcpy(base + kWaystoneDirRootOffset, &waystone_dir_root, sizeof(waystone_dir_root));
-    std::memcpy(base + kWaystoneDirDepthOffset, &waystone_dir_depth, sizeof(waystone_dir_depth));
     return buf;
 }
 
@@ -73,13 +69,6 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&ct, base + kClusteredTypeOffset, sizeof(ct));
     row.clustered_type = static_cast<ClusteredType>(ct);
     std::memcpy(&row.next_id, base + kNextIdOffset, sizeof(row.next_id));
-    std::uint8_t ws;
-    std::memcpy(&ws, base + kWaystoneStateOffset, sizeof(ws));
-    row.waystone_state = static_cast<WaystoneState>(ws);
-    std::memcpy(&row.waystone_dir_root, base + kWaystoneDirRootOffset,
-                sizeof(row.waystone_dir_root));
-    std::memcpy(&row.waystone_dir_depth, base + kWaystoneDirDepthOffset,
-                sizeof(row.waystone_dir_depth));
     return row;
 }
 
@@ -163,6 +152,47 @@ StatusOr<SysIndexRow> SysIndexRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&row.col_pos, base + kColPosOffset, sizeof(row.col_pos));
     std::memcpy(&row.col_type, base + kColTypeOffset, sizeof(row.col_type));
     std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
+    return row;
+}
+
+// ---- sys.patterns ----------------------------------------------------
+
+std::array<std::byte, SysPatternRow::kOnDiskSize> SysPatternRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kOidOffset, &oid, sizeof(oid));
+    std::memcpy(base + kPatternIdOffset, &pattern_id, sizeof(pattern_id));
+    std::memcpy(base + kLastSeenOffset, &last_seen, sizeof(last_seen));
+    std::memcpy(base + kFingerprintVersionOffset, &fingerprint_version,
+                sizeof(fingerprint_version));
+    std::memcpy(base + kWaystoneRootOffset, &waystone_root, sizeof(waystone_root));
+    std::memcpy(base + kUseCountOffset, &use_count, sizeof(use_count));
+    std::memcpy(base + kStmtClassOffset, &stmt_class, sizeof(stmt_class));
+    std::memcpy(base + kDirDepthOffset, &dir_depth, sizeof(dir_depth));
+    return buf;
+}
+
+StatusOr<SysPatternRow> SysPatternRow::Decode(std::span<const std::byte> bytes) {
+    if (Status s = CheckSize(bytes, kOnDiskSize); !s.ok()) return s;
+
+    SysPatternRow row{};
+    const std::byte* base = bytes.data();
+    std::memcpy(&row.oid, base + kOidOffset, sizeof(row.oid));
+    std::memcpy(&row.pattern_id, base + kPatternIdOffset, sizeof(row.pattern_id));
+    std::memcpy(&row.last_seen, base + kLastSeenOffset, sizeof(row.last_seen));
+    std::memcpy(&row.fingerprint_version, base + kFingerprintVersionOffset,
+                sizeof(row.fingerprint_version));
+    std::memcpy(&row.waystone_root, base + kWaystoneRootOffset, sizeof(row.waystone_root));
+    std::memcpy(&row.use_count, base + kUseCountOffset, sizeof(row.use_count));
+    std::memcpy(&row.stmt_class, base + kStmtClassOffset, sizeof(row.stmt_class));
+    std::memcpy(&row.dir_depth, base + kDirDepthOffset, sizeof(row.dir_depth));
+    // Deliberately no validation of the decoded values - not of
+    // fingerprint_version, not of the root/depth pair. This is a pure
+    // decode, like every Decode() above it: the size check is the only
+    // corruption signal it owns, and whether a version is current or a
+    // root/depth pair is coherent are questions for the layer that acts on
+    // them (P04), which is also the only layer that can do anything about
+    // the answer.
     return row;
 }
 

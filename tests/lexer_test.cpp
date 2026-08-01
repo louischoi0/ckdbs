@@ -85,6 +85,16 @@ TEST(LexerTest, UnrecognizedCharacterIsError) {
     ASSERT_EQ(toks[0].type, TokenType::kError);
 }
 
+TEST(LexerTest, BindParameterIsItsOwnTokenNotAnError) {
+    // `?` used to lex as kError. It has a type now so fingerprinting can
+    // tell a placeholder from a lexing failure (fingerprint.hpp) - but it
+    // is still accepted by no production, which the parser test below
+    // pins.
+    auto toks = LexAll("?");
+    ASSERT_EQ(toks[0].type, TokenType::kParam);
+    EXPECT_EQ(toks[0].text, "?");
+}
+
 TEST(LexerTest, PeekDoesNotConsume) {
     Lexer lex("PING PONG");
     const Token& p1 = lex.Peek();

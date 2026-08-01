@@ -2,6 +2,7 @@ find_package(GTest REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(kds_tests
+    status_test.cpp
     crc32c_test.cpp
     page_header_test.cpp
     file_page_device_test.cpp
@@ -9,8 +10,12 @@ add_executable(kds_tests
     keystone_test.cpp
     heap_page_test.cpp
     heap_chain_test.cpp
+    btree_test.cpp
     superblock_test.cpp
     row_codec_test.cpp
+    catalog_row_test.cpp
+    waystone_page_test.cpp
+    waystone_dir_test.cpp
     scheduler_test.cpp
     log_test.cpp
     config_file_test.cpp
@@ -18,11 +23,6 @@ add_executable(kds_tests
     in_memory_page_store_test.cpp
     free_map_test.cpp
     device_page_store_test.cpp
-    waystone_entry_test.cpp
-    waystone_dir_test.cpp
-    waystone_catalog_test.cpp
-    waystone_hooks_test.cpp
-    waystone_probe_test.cpp
     catalog_cache_test.cpp
     catalog_test.cpp
     insert_wal_test.cpp
@@ -31,6 +31,7 @@ add_executable(kds_tests
     command_dispatcher_test.cpp
     tcp_server_test.cpp
     lexer_test.cpp
+    fingerprint_test.cpp
     parser_test.cpp
     subsystem_logging_test.cpp
     kwp_frame_test.cpp

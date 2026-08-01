@@ -328,8 +328,8 @@ TEST(DevicePageStoreTest, ChecksumsAreStampedOnWriteAndVerifiedOnLoad) {
 
 // ---- Headerless pages ---------------------------------------------------
 //
-// Waystone entry and directory pages tile 8 KiB exactly and carry no
-// common header (docs/waystone-concpets.md sections 5 and 6), so byte 4 -
+// A headerless page's payload tiles 8 KiB exactly and carries no common
+// header (docs/page.md section 1), so byte 4 -
 // where every other page keeps its checksum - is data. These tests are
 // about the two moments that would destroy it: the stamp on write-out and
 // the verify on read-back.
@@ -379,7 +379,7 @@ TEST(DevicePageStoreHeaderlessTest, FlushDoesNotStampAChecksumOverItsBytes) {
     ASSERT_TRUE(store->Flush().ok());
 
     // Still byte-identical in the frame: the stamp would have overwritten
-    // bytes 4..8, which on a Waystone entry page is half of entry 0's pk.
+    // bytes 4..8, which on a headerless page is live entry data.
     auto after = store->Get(id);
     ASSERT_TRUE(after.ok());
     EXPECT_TRUE(MatchesWhole(after.value(), 3));
@@ -471,7 +471,7 @@ TEST(DevicePageStoreHeaderlessTest, DamageToAHeaderlessPageIsSilentByDesign) {
 TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesTheId) {
     // Ordering that matters on a crash: the free map is what makes an id
     // exist, so it goes last. The reverse would publish an allocated
-    // Waystone page whose headerless bit had not landed, and the next read
+    // headerless page whose bit had not landed, and the next read
     // of it would verify a checksum nobody wrote.
     auto device = MakeDevice();
     auto store = OpenStore(*device);

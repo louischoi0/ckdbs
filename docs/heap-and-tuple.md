@@ -1,150 +1,172 @@
-# KDS Design Specification
+# KDS Design Specification — Heap & Tuple
 
-**Status:** Living document — input for development agents. Sections marked `[CONFIRMED]` are settled design; `[OPEN]` items must not be assumed by implementers. This file is the design spec CLAUDE.md and other docs refer to as "KDS-DESIGN.md" — that name is historical (pre-dates the move into `docs/`); this path is the actual, current location.
-**Last updated:** 2026-07-27 (Keystone layout and metadata-pool sections amended 2026-07-28 — see §4, §5; in-memory single-copy rule retired 2026-07-28 in favor of page-latch consistency — see §7; tuple MVCC header amended 2026-07-29 to `trx_id` + `undo_ptr`, `xmax` removed — see §3.2)
+The authoritative specification for how KDS stores a row. Companion specs own the layers above and beside it: `waystone-concpets.md` (pattern-keyed access trails), `txn.md` (transactions and MVCC), `wal.md` (logging and recovery), `page.md` (page management and buffering), `parser.md`, `protocol.md`, `rules.md` (C++ rules), `sched.md`.
+
+`[OPEN]` marks a decision that has not been made. Implementers must not assume one; either ask, or build behind an interface that keeps every option viable.
 
 ---
 
-## 1. Project Direction `[CONFIRMED]`
+## 1. Scope
 
-- KDS is an **OLTP-specialized database storage engine** targeting high performance for financial systems.
-- **Kernel integration is on hold.** KDS is being redesigned as ordinary **userspace software**. Existing kernel-module code (C, Linux kernel style) serves as the reference/porting base.
-- Differentiation strategy: runtime **statistics drive physical data placement** (not merely optimizer decisions), plus an **automatic hint index** for repeated query patterns. Feature scope is deliberately narrower than general-purpose DBMSs; the focus is speed.
+This document specifies row storage only: heap organization, page layout, the tuple format, and the structures that address a tuple. What KDS *is* — positioning, differentiators, feature scope — lives in the project `README.md` and is deliberately not restated here.
 
-## 2. Pages `[CONFIRMED]`
+## 2. Pages
 
-- Page size: **8 KB (8192 bytes)**.
-- Page ID: **unsigned 32-bit** (`u32`). Target capacity 16 TB = 2^31 pages, using exactly half the u32 space. `0xFFFFFFFF` is available as `INVALID_PAGE_ID`. Page IDs must never be stored in signed types (2^31 overflows `s32`).
-- Do **not** pack status flags into page-ID fields; status bits live in their own fields.
+- Page size is **8192 bytes**.
+- Page ids are **unsigned 32-bit**. Capacity 16 TB = 2^31 pages, half the `uint32_t` space. `0xFFFFFFFF` is `kInvalidPageId`. Page ids are never stored in a signed type — 2^31 overflows `int32_t`.
+- Status flags are never packed into a page-id field. Status bits get their own field.
 
-## 3. Heap Organization `[CONFIRMED]`
+## 3. Heap Organization
 
-### 3.1 Semi-sorted heap with immutable `min_key`
+### 3.1 Semi-sorted heap
 
-- Heap pages form a **semi-sorted heap**: each heap page header carries status flags and an **immutable `min_key`** fixed at page creation.
-- **Insertion rule (invariant):** no tuple whose PK is below the page's `min_key` may ever be inserted into that page.
-- **Within a page, tuples are unordered** (normal heap append semantics; O(1) insert into free space).
-- Because `min_key` never changes, readers can prune pages by key range **without locking**.
-- Physical relayout must always honor the target page's `min_key` bound. Relocation across key ranges is done by writing tuples into **new pages with newly assigned `min_key` values**, never by mutating an existing page's `min_key`.
+Each heap page header carries status flags and an **immutable `min_key`**, fixed when the page is created.
 
-### 3.1a Per-page epoch counter `[CONFIRMED, amended 2026-07-28]`
+- **No tuple whose pk is below a page's `min_key` may ever be placed in it.** This holds for relayout as much as for insert.
+- **Tuples within a page are unordered** — heap append semantics, O(1) insert into free space.
+- Because `min_key` never changes, a reader can prune pages by key range **without locking**. That is the property the immutability exists to buy.
+- Relayout honors the target page's `min_key`. Moving tuples across key ranges means writing them into **new pages with newly assigned `min_key` values**, never mutating an existing page's.
 
-- Every heap page header carries an **epoch counter**, bumped whenever the tuples physically on that page move (relayout, page rebuild). Unlike `min_key`, the epoch is mutable by design.
-- Purpose: Waystone (`docs/waystone-concpets.md` §3) records the page epoch at the moment it observes a tuple's location; a consumer trusts that location only while `entry.page_epoch == page's current epoch`. This is how an advisory structure avoids being a second authoritative index — no synchronous double-write on relayout, just an epoch bump.
-- Storage location `[OPEN]`: header field (on-disk format, follows §5 of `docs/rules.md`) vs. a core-local epoch table keyed by `page_id`. Epoch width and wraparound handling are also `[OPEN]`. Do not assume either.
+### 3.1a Per-page epoch counter
 
-### 3.1b Chain growth by tail append `[CONFIRMED 2026-07-29]`
+Every heap page header carries an **epoch counter**, bumped whenever the tuples physically on that page move. Unlike `min_key`, it is mutable by design.
 
-A relation is a **chain of heap pages** linked through the `next_page_id` tail reservation (§3.2), rooted at `sys.tables.desc_page_id`. Implemented in `include/kds/storage/heap/heap_chain.hpp`; before it, a relation was one page and an INSERT failed with `OutOfSpace` once 8 KB of tuples had landed.
+Waystone records a page's epoch when it observes a tuple's location, and a consumer trusts that location only while the recorded epoch still matches the page's. This is how an advisory structure avoids becoming a second authoritative index: relayout bumps one counter instead of synchronously rewriting every entry that pointed into the page.
 
-- **Growth is tail append, never a split.** Every insert goes to the last page in the chain. When that page has no room, a new page is allocated, the tuple is written into it, and only then is the new page linked on — the link is what makes the page reachable, so publishing it before the tuple would expose an empty tail.
-- **A new page's `min_key` is the id of the tuple that caused the growth** — the smallest id it can ever hold, since ids only increase (§4). No existing page's `min_key` is touched, so §3.1's immutability holds by construction.
-- **Ordering property.** Because ids increase and every insert appends, each page's ids lie entirely below the next page's `min_key`. The chain is therefore key-ordered page by page, while tuples *within* a page stay unordered — the "semi-sorted" of §3.1 now holds across pages as well as within one. Two consequences are relied on in code: a duplicate of an incoming id can only be in the tail page (so the check is O(1) pages, not O(chain)), and an id below the tail's `min_key` cannot be placed anywhere legally and is refused as a backwards id sequence.
-- **This does not decide the split policy.** Dividing a full page's contents and choosing a new boundary — the `[OPEN]` item in `CLAUDE.md` — is untouched: nothing here ever moves a tuple off a page or assigns a `min_key` to a page that already holds tuples. A split policy lands beside this, and pages produced by tail append stay valid under it.
-- **No free-space reuse.** A page that fills and then has rows deleted is never revisited; the chain only grows at the tail. Reclaiming that space needs page compaction, which needs a transaction manager to know no snapshot still needs the bytes. A delete-heavy relation therefore grows monotonically.
-- Walks are bounded by `kMaxChainPages` (2^20 pages = 8 GiB per relation); exceeding it is reported as `Corruption` rather than looping, since a cycle in the links would otherwise hang a request.
+`[OPEN]` — where the epoch lives (a header field, which makes it on-disk format under `rules.md` §5, versus a core-local table keyed by page id), and its width and wraparound handling.
 
-### 3.2 Page layout (carried over from existing implementation)
+### 3.1b Chain growth by tail append
 
-- Slot directory grows downward from the heap area offset; tuple data grows upward from the top; free space is the gap (`upper - lower`).
-- The page tail permanently reserves `sizeof(page_id)` bytes for a `next_page_id` chain link, excluded from free-space accounting.
-- Per-tuple MVCC header `[CONFIRMED, amended 2026-07-29]`: **`trx_id` (48-bit writer, zero-extended to 8 bytes) + `undo_ptr` + `data_len` + flags — 20 bytes, no `xmax`** (`docs/wal.md` §5.1, §14-1). A version's death is the next version's birth: walking the undo chain already names the overwriting transaction, so recording that boundary a second time in the older version is redundant. `trx_id` is whichever transaction last stamped the version — insert, overwrite, or delete-mark. The lock-slot role `xmax` plays in Postgres belongs to the Keystone lock byte here (§4).
-- **DELETE is a delete-mark** `[CONFIRMED 2026-07-29]`: slot flag `DELETED` plus the deleter's `trx_id` in the writer field, tuple bytes left in place for snapshots that predate it. Physical reclamation is slot retirement (`DEAD`), a separate operation for a purge pass — hence two distinct WAL records, `HEAP_DELETE_MARK` and `SLOT_RETIRE`.
-- Slot entries carry their own `flags` (`DEAD`, `DELETED`) and `length`; retirement marks the slot dead rather than compacting eagerly.
+A relation is a **chain of heap pages** linked through the `next_page_id` tail reservation (§3.2), rooted at `sys.tables.desc_page_id` (`include/kds/storage/heap/heap_chain.hpp`).
 
-## 4. Keystone Column — 64-bit Tuple Header Word `[CONFIRMED, amended 2026-07-28]`
+- **Growth is tail append, never a split.** Every insert goes to the last page. When it has no room, a new page is allocated, the tuple is written into it, and only then is the page linked on — the link is what makes a page reachable, so publishing it first would expose an empty tail.
+- **A new page's `min_key` is the id of the tuple that caused the growth**, the smallest id it can ever hold, since ids only increase (§4). No existing page's `min_key` is touched, so §3.1's immutability holds by construction.
+- **Each page's ids lie entirely below the next page's `min_key`.** The chain is key-ordered page by page while tuples within a page stay unordered — "semi-sorted" holds across pages as well as within one. Two consequences are relied on in code: a duplicate incoming id can only be in the tail page, so the check is O(1) pages rather than O(chain); and an id below the tail's `min_key` has nowhere legal to go and is refused as a backwards sequence.
+- **No free-space reuse.** A page that fills and then has rows deleted is never revisited; the chain only grows at the tail. A delete-heavy relation grows monotonically.
+- Walks are bounded by `kMaxChainPages` (2^20 pages, 8 GiB per relation). Exceeding it is `Corruption` rather than a loop, since a cycle in the links would otherwise hang a request.
 
-Every tuple's **first column is mandatory**: a single 64-bit word (the "Keystone column" / "Keystone word"). This is a self-imposed constraint of KDS.
+`[OPEN]` — the **heap page split policy**: dividing a full page's contents and choosing the new boundary. Tail append deliberately does not decide it, because it never moves a tuple off a page or assigns a `min_key` to a page that already holds tuples. Page compaction and free-space reuse are open with it, and both need the transaction manager to answer "does any snapshot still need these bytes" — which it cannot today, because readers are deliberately not registered (`txn.md` §4.1). Reader registration is the prerequisite.
 
-Bit layout (one `u64`):
+### 3.2 Page layout
+
+- The slot directory grows downward from the heap area offset; tuple data grows upward from the top; free space is the gap (`upper - lower`).
+- The page tail permanently reserves `sizeof(PageId)` bytes for the `next_page_id` chain link, excluded from free-space accounting.
+- The per-tuple MVCC header is **`trx_id` (48-bit writer, zero-extended to 8 bytes) + `undo_ptr` + `data_len` + flags — 20 bytes, with no `xmax`**. A version's death is the next version's birth: walking the undo chain already names the overwriting transaction, so storing that boundary a second time in the older version would be recording one fact twice. `trx_id` is whichever transaction last stamped the version — insert, overwrite, or delete-mark. The lock-slot role `xmax` plays in PostgreSQL belongs to the Keystone flags byte here (§4).
+- Under the fixed-length rule (§3.3), a relation's row size is a schema constant, so a slot's `length` and the header's `data_len` carry no new information; they are retained for format stability and treated as **checked redundancy** — a value disagreeing with the schema constant is `Corruption`, never interpreted.
+- **DELETE is a delete-mark**: the slot's `DELETED` flag plus the deleter's `trx_id`, with the tuple bytes left in place for snapshots that predate it. Physical reclamation is slot retirement (`DEAD`), a separate operation for a purge pass — hence two WAL records, `HEAP_DELETE_MARK` and `SLOT_RETIRE`.
+- Slot entries carry their own `flags` (`DEAD`, `DELETED`) and `length`. Retirement marks a slot dead rather than compacting eagerly.
+
+### 3.3 Fixed-length tuples & the tagged cell
+
+**Every tuple is fixed-length.** A relation's tuple layout is a sequence of fixed-size cells at offsets computable from the schema alone; row size is a per-relation constant, asserted in the row codec rather than policed by convention. Fixed-width types occupy their natural widths. Every variable-width type (`TEXT`, future blobs) occupies exactly **one tagged cell** of `kds.inline_cell_width` bytes, regardless of the value stored.
+
+The rule exists for tuple mobility. An UPDATE that grows a row is what forces tuples to move in conventional engines (broken HOT chains, row migration) — and here it would additionally burn Waystone trail entries through epoch churn. With fixed cells **an UPDATE can never migrate a tuple**; combined with the immutable `min_key`, a tuple's address is stable for life until relayout moves it on purpose. Secondary gains: relayout is cell-`memcpy` with exact fill-factor math, in-page addressing is arithmetic, and the row codec reads static offsets. The accepted cost is stated plainly: variable-length management is *relocated* into the var-heap (§3.4), not eliminated, and fixed cells spend padding on short values.
+
+Tagged cell layout, width `W = kds.inline_cell_width` (memcpy codec, `static_assert`ed, LE — `rules.md` §§2, 5):
+
+| Tag (`u8` at offset 0) | Layout after tag | Meaning |
+|---|---|---|
+| `kNull` | zeros | SQL NULL; maps 1:1 to the wire NULL convention |
+| `kInline` | `len u16`, then `len` bytes, zero padding | value fits: `len ≤ W − 3` |
+| `kSpilled` | `len u32`, `varheap_ptr u64` (`page_id u32 · slot u16 · reserved u16`) | bytes live in the var-heap (§3.4) |
+
+- The spill decision is a pure function of value length; an UPDATE crossing the boundary changes the cell's *tag*, never the tuple's size. A tag byte (rather than sentinels) is what lets NULL, empty, and spilled be distinguished without touching the var-heap, and is where future cell kinds land without a format bump.
+- **`kds.inline_cell_width` is configuration-referenced but instance-pinned**: read once at bootstrap, written into the superblock, validated at every startup — a disagreement refuses to start, naming both values. On-disk layout depends on it, so it cannot be hot-changed; rewriting existing data for a new width is `Unsupported`. A global constant was chosen over per-column declared widths deliberately: one number instead of a schema decision users can get wrong, one codec path, and no `VARCHAR(n)`/`ALTER WIDEN` surface at all. The recorded cost is uniform padding where a per-column width would have been tighter.
+- Default **64 bytes** `[OPEN: value]` — sized so common OLTP strings never spill; to be settled against measured string-length distributions of target schemas. The semantics above hold regardless of the number.
+
+### 3.4 Var-heap
+
+The out-of-line store for spilled values. Its design goal is to be **boring**: the mobility problem was removed from the heap and must not reappear here.
+
+- **Immutable per version.** Writing a spilled value appends `{len, bytes}` to a `kVarHeap` page and returns its pointer; values are never rewritten and never moved. Consequences, which are the rationale: an old-version reader follows the old pointer to bytes that cannot have changed, so MVCC correctness is free; pointers need no epoch, no validation, no forwarding; the var-heap is **relayout-exempt by construction**; and reclamation is a rider on purge — when a version dies, its values die with it. The accepted cost: churn-heavy string updates consume space until purge catches up, making purge cadence a sizing input.
+- **Logged, headered, checksummed** — an ordinary authoritative page class, `wal.md`'s `VARHEAP_APPEND` record. Stated explicitly because the recent reflex runs the other way: waystone/trail pages are advisory, but a var-heap value is committed data — losing one loses a value, not a hint. Advisory rules do not apply here.
+- Update ordering: `VARHEAP_APPEND` (new value) → cell overwrite (`HEAP_OVERWRITE`, old cell image into undo), in one transaction, replayed by ordinary winner/loser recovery. A crash between them leaves an unreferenced value for purge's sweep. No var-heap-specific recovery logic may exist.
+- Storage is invisible on the wire: `TEXT` is length-prefixed bytes to clients regardless of inline or spilled, and must stay so.
+
+## 4. Keystone Column
+
+Every tuple's **first column is mandatory**: one 64-bit word, the *Keystone word*. This is a self-imposed constraint of KDS and the tuple's identity lives in it.
 
 | Field | Width | Purpose |
 |---|---|---|
-| `id` | 40 bits | Tuple primary key. Per-relation capacity ≈ 1.1 × 10^12 issued IDs. |
-| `flags` | 8 bits | Transaction/status byte (Oracle lock-byte style; may reference a per-page transaction slot). Tuple-level status such as DEAD stays in the slot directory, not here. |
-| `reserved` | 16 bits | **Amendment 2026-07-28:** the former `meta_handle` field. Waystone (`docs/waystone-concpets.md` §4) addresses its per-tuple entries directly by `id`, not by a handle stored here, so this field has no current addressing purpose. Writers must set it to 0; readers must ignore it. Repurposing (e.g. a hot-tier accelerator handle) is `[OPEN]` — see spec §11. |
+| `id` | 40 bits | Primary key. Per-relation capacity ≈ 1.1 × 10^12 issued ids. |
+| `flags` | 8 bits | Transaction/status byte, Oracle lock-byte style; may reference a per-page transaction slot. Tuple status such as `DEAD` lives in the slot directory, not here. |
+| `reserved` | 16 bits | Writers set 0, readers ignore. Repurposing is `[OPEN]`. |
 
-**Every relation** requires **system-generated, autoincrement `id` values** — callers must not supply their own `id`/pk on insert. Rationale: Waystone addressing is `entry_index = pk` (spec §4) directly off the issued id sequence; a user-supplied, non-monotonic, or reused pk would defeat the directory's dense/sparse-but-ordered growth assumption (spec §6) and could collide with an existing live entry.
+**Every relation requires system-generated, autoincrement `id` values.** A caller-supplied pk on insert is a defect, not a feature. The id is the tuple's *identity*, and an identity the client chooses is one the client can duplicate, reuse, or run backwards.
 
-**Amendment 2026-07-29 — scope widened from Waystone-enabled relations to all of them.** The rule previously bound only relations with `waystone_enabled` set, leaving a plain heap table free to keep any pk-assignment policy. That split is retired: `waystone_enabled` is a flag that can be turned *on* later, and a relation that spent its early life accepting caller-supplied pks cannot then be given a dense id-addressed structure without rewriting every key. Making the sequence universal costs a plain heap table nothing and keeps every relation eligible.
-
-Consequences, as implemented:
-
-- The id sequence is **persistent, not derived**: `sys.tables.next_id` (`include/kds/catalog/rows.hpp`), issued by `Catalog::AllocateRowId()`. Deriving it as `max(id) + 1` would reissue an id after the highest tuple is deleted, and a reissued id silently aliases a retired one in any structure that addresses by id. First id issued is 1; 0 stays reserved for "unset".
-- Ids are unique and monotonic by construction, **not gapless** — an insert that fails after allocating burns one. Gaplessness is not a property anything depends on.
-- The pk is carried **only** by the Keystone word, never also as a body column: `EncodeRow()` writes `[Keystone word][columns 1..n-1]` and `INSERT` supplies values for columns 1..n-1 only. Storing the key twice is how the two copies come to disagree.
-- The pk **cannot be updated**: it is the tuple's identity, not a field of it.
-- A relation's first column must be declared with an **integer type** (`catalog::CheckKeystoneColumn`), checked at `CREATE TABLE`. Its declared width is display metadata only — the id lives in the 40-bit Keystone field regardless, so a narrow declared type does not cap the sequence.
-- Id-reuse / low-range reclamation remains `[OPEN]`; sequence exhaustion is reported (`OutOfRange`), never wrapped.
+- The sequence is **persistent, not derived**: `sys.tables.next_id`, issued by `Catalog::AllocateRowId()`. Deriving it as `max(id) + 1` would reissue an id after the highest tuple is deleted, handing a new tuple the identity of a retired one. The first id issued is 1; 0 stays reserved for "unset".
+- Ids are unique and monotonic by construction, **not gapless** — an insert that fails after allocating burns one. Nothing depends on gaplessness.
+- The pk is carried **only** by the Keystone word, never also as a body column: `EncodeRow()` writes `[Keystone word][columns 1..n-1]`, and `INSERT` supplies values for columns 1..n-1 only. Storing a key twice is how the two copies come to disagree.
+- The pk **cannot be updated**. It is the tuple's identity, not a field of it.
+- A relation's first column must be declared with an **integer type** (`catalog::CheckKeystoneColumn`), checked at `CREATE TABLE`. Its declared width is display metadata: the id lives in the 40-bit Keystone field regardless, so a narrow declared type does not cap the sequence.
 
 Implementation rules:
 
-- Encode/decode with **explicit shift/mask** helpers only. **Never use C/C++ bitfields** for on-disk format (layout is implementation-defined; KDS must be portable across architectures).
-- The whole word is updated with **atomic u64 operations (CAS)** under concurrency; fields must never be torn across writes.
-- External structures (B-tree keys, `min_key`, hint index entries, metadata back-references) store the id as a **zero-extended `u64`**. Invariant: upper 24 bits are 0. Do not 5-byte-pack ids.
+- Encode and decode with **explicit shift/mask helpers only**. **Never use C/C++ bitfields** for an on-disk format — their layout is implementation-defined and KDS must be portable across architectures.
+- The whole word is updated with **atomic `uint64_t` operations (CAS)**. Fields must never tear across writes.
+- External structures — B+ tree keys, `min_key`, Waystone entries — store the id as a **zero-extended `uint64_t`** with the upper 24 bits zero. Ids are never 5-byte-packed.
 
-## 5. Per-Relation Metadata Pool — **superseded 2026-07-28**
+`[OPEN]` — id-reuse and low-range reclamation policy. Sequence exhaustion is reported as `OutOfRange`, never wrapped.
 
-> **Superseded by Waystone.** This bounded-pool design (65,536-entry cap, 16-bit `meta_handle` addressing, eviction management) is replaced in full by **Waystone**'s full-coverage, pk-direct model — see `docs/waystone-concpets.md`, decision recorded 2026-07-28. The `meta_handle` field is retired (§4). Kept below for history only; do not implement against this section.
+## 5. Indexing
 
-Purpose (historical): metadata for **physical relayout and statistics only** — never on the normal read path. Normal reads go through the B+ tree (Section 6).
+- A relation is stored either as a **heap chain** (§3.1b) or as a **clustered B+ tree** on the Keystone pk, chosen at `CREATE TABLE`. On a btree relation the tree *is* the storage, and a descent is authoritative: a miss means the row does not exist, and no scan follows. A heap relation has no pk index at all, so a point lookup scans the chain.
+- A btree **leaf is a heap page** — same slot directory, same tuple format, same MVCC header, same `min_key` and `next_page_id`. A clustered-btree relation is therefore not a second storage engine; it is the heap with a directory over it.
+- **Waystone** (`waystone-concpets.md`) is the engine's other access structure: `(pattern_id, arg_hash)` → the Keystones a previous execution of that pattern instance found, across relations. It is advisory and validated on use, and it may replace a *lookup* but never a *search*.
 
-- Each relation owns a metadata pool tracking **up to 65,536 tuples** (addressed by the 16-bit `meta_handle`).
-- Pool entries are **fixed-length records** stored in standard **8 KB pages**, so a handle resolves to its entry with **O(1) arithmetic** (`page = handle >> k`, `slot = handle & mask`). Choose entries-per-page as a **power of two**; accept per-page slack rather than splitting entries across page boundaries.
-- The pool is subject to **eviction**: only the current/hot subset of tuples has live metadata at any time. Entries record where a tuple is located (`page_id`), how it is referenced, and when.
-- Metadata content is **transient and rebuildable**; it must never be required for correctness of query results.
+## 6. Page-Latch Consistency
 
-## 6. Indexing `[CONFIRMED]`
+There is no single canonical in-memory tuple and no hash table enforcing that an identical tuple exists at most once in program memory. Consistency is kept at the **page** level.
 
-- A **B+ tree** is the upper layer over heap pages and is the authoritative access path for normal reads.
-- **Hint index** (new structure): key = `(query_pattern_id, argument values)` → the set of tuple locations previously read by that pattern, **across tables** (e.g., pattern A with `a=1` maps to tuple x in `table0` and tuple y in `table1`).
-  - `query_pattern_id` identifies *identical queries*, not only stored procedures: queries are fingerprinted by normalized structure (FROM clause, join pattern, constants parameterized).
-  - End goal: KDS **automatically creates and manages hint indexes** from observed query patterns. Zero user administration.
-  - Hint entries are advisory: a consumer must validate the target tuple (PK identity + MVCC visibility) and fall back to the B+ tree on mismatch. Hints may be stale; they may never cause wrong results.
+- A page frame is **pinned** for the duration of any access and **latched** — shared for reads, exclusive for structural mutation (slot directory changes, compaction, relayout). Tuple bytes are read and written directly within the pinned, latched frame; there is no tuple-identity cache to keep coherent with the page.
+- Latching is **core-local**, consistent with thread-per-core/shared-nothing (`rules.md` §3): a page is owned by exactly one core, and its latch serializes cooperative tasks on that core across suspension points. It is not a cross-core lock — cross-core access goes through server-side forwarding (`protocol.md`), never shared-memory locking.
+- Executors may copy tuple bytes into private working buffers. These are ephemeral projections; they compete with no canonical copy, because there isn't one.
+- The Keystone word's atomic-CAS requirement (§4) is independent of latching: even under a latch, the word is read and written as a `std::atomic<uint64_t>` so fields never tear.
 
-## 7. Page-Latch Consistency Model `[CONFIRMED, supersedes former "In-Memory Single-Copy Rule", 2026-07-28]`
+`[OPEN]` — buffer-pool page-frame reclamation policy (pin refcount versus epoch-based eviction) under this model.
 
-- **The single canonical in-memory tuple concept is retired.** There is no hash-table-based convergence enforcing that an identical tuple exists at most once in program memory.
-- Consistency is instead kept at the **page** level: a page frame is **pinned** for the duration of any access and **latched** — shared latch for reads, exclusive latch for structural mutation (slot directory changes, compaction, relayout). Tuple bytes are read/written directly within the pinned, latched frame; there is no separate tuple-identity cache to keep coherent with the page.
-- Latching is **core-local**, consistent with the thread-per-core/shared-nothing rule (`docs/rules.md` §3): a page is owned by exactly one core, and its latch serializes cooperative tasks on that core across suspension points. It is not a cross-core lock — cross-core tuple access continues to go through forwarding (`docs/protocol.md`), not shared-memory locking.
-- Query executors may still copy tuple bytes into private working buffers for processing (row buffers, projections, etc.). These are ephemeral and do not need to converge on, or compete with, any canonical copy — there isn't one.
-- The Keystone word's atomic-CAS requirement (§4) is unaffected and applies independent of latching: even under a page latch, the 64-bit word is read/written via `std::atomic<uint64_t>` so fields never tear.
+## 7. Statistics-Driven Physical Relayout
 
-## 8. Statistics-Driven Physical Relayout `[CONFIRMED — direction]`
+KDS collects access statistics and uses them to **physically optimize tuple placement**, starting with heap pages.
 
-- KDS collects access statistics (via the metadata pool) and uses them to **physically optimize tuple placement**, starting with heap pages and expanding later.
-- Relayout must respect: the `min_key` insertion invariant (3.1), index consistency (B+ tree entries updated or lazily repaired for moved tuples), and the advisory nature of hint entries (6).
-- Rationale accepted during design: key-boundary re-partitioning mainly benefits range locality; for single-PK point lookups the hint index (6) is the primary latency weapon. Both mechanisms coexist.
+Relayout must respect the `min_key` insertion rule (§3.1), keep the B+ tree consistent (entries updated or lazily repaired for moved tuples), and bump the page epoch (§3.1a) so every recorded location on that page becomes untrusted at once. Under the fixed-length rule (§3.3) a relayout is a copy of fixed cells — exact fill-factor math, no per-tuple size negotiation — and `kVarHeap` pages are outside its jurisdiction entirely (§3.4).
 
-## 9. Open Items `[OPEN — do not assume]`
+Key-boundary re-partitioning mainly benefits range locality; for single-pk point lookups the acceleration comes from Waystone instead. The two coexist and address different shapes.
 
-- **Implementation language:** C vs C++ (userspace). Undecided.
-- **Persistence class of metadata pages** (WAL-logged vs unlogged/no-checkpoint) — now framed as Waystone page persistence; see `docs/waystone-concpets.md` §11.
-- Heap **page split policy** when a page is full (how new `min_key` boundaries are chosen).
-- Hint index **admission/eviction policy** and safety classification per query template (trusted for unique lookups vs prefetch-only).
-- MVCC version identity semantics (identity per version vs per tuple) — independent of the retired single-copy rule (§7).
-- Buffer-pool page-frame reclamation policy (pin refcount vs epoch-based eviction) under the page-latch model (§7).
-- Relations exceeding practical id issuance (per-relation u64 opt-in or history-table policy) — now sharpened by Waystone's id-reuse/low-range reclamation open item, spec §11.
-- Per-page epoch counter storage location and width/wraparound (`docs/waystone-concpets.md` §3, §11 — new as of the 2026-07-28 amendment).
-- Repurposing of the freed 16 Keystone `reserved` bits (§4, new as of the 2026-07-28 amendment).
+*Nothing here is implemented — there is no physical optimizer, and consequently nothing bumps a page epoch.*
 
-*(The former "metadata pool eviction policy" and "eviction-vs-validation invalidation" open items are removed: full-coverage Waystone has no admission/eviction to decide — see §5's supersession banner.)*
+## 8. Invariants
 
-## 10. Invariant Summary (for implementers)
+Never violated, never "temporarily" bypassed.
 
-1. Page size is 8192 bytes; page IDs are unsigned 32-bit; `0xFFFFFFFF` reserved as invalid.
+1. Page size is 8192 bytes; page ids are `uint32_t`; `0xFFFFFFFF` is reserved as invalid.
 2. A heap page's `min_key` is immutable after creation.
-3. No tuple with `id < min_key(page)` is ever placed in that page — including by relayout.
+3. No tuple with `id < min_key(page)` is ever placed in that page, including by relayout.
 4. Tuples within a heap page are unordered.
-5. Every tuple begins with the 64-bit Keystone column: `id:40 | flags:8 | reserved:16` (amended 2026-07-28; the field was `meta_handle:16`, now retired — see §4).
-6. The super-column word is read/written atomically as a `u64`; on-disk encoding uses explicit shift/mask, never compiler bitfields.
-7. Ids are stored externally as zero-extended `u64` (upper 24 bits = 0).
-8. Waystone and the hint index are advisory: losing either entirely must not affect query correctness — only performance.
-9. **(Amended 2026-07-30 — `docs/waystone-concpets.md` §3.1)** The B+ tree is the authoritative read path (the heap chain scan stands in until it exists). Waystone is never authoritative, but a pk point lookup **may** probe it: this previously read "Waystone pages are never on the read path", and the probe now owes a validate-and-fall-back contract instead — treat a missing/dead entry or an epoch mismatch as a miss, check the Keystone id of the tuple actually found at the reported location, apply MVCC visibility as the authoritative path would, and fall through on any mismatch. Invariant 8 above is what did not change.
-10. **(Revised 2026-07-28)** No single canonical in-memory tuple is enforced; consistency comes from page pin + latch discipline (§7) — shared latch for reads, exclusive latch for structural mutation.
-11. **(New 2026-07-28)** A relation with `waystone_enabled` set requires system-generated, autoincrement `id` values; callers must not supply their own pk on insert into such a relation (see §4).
-12. **(New 2026-07-29)** The tuple MVCC header is exactly `trx_id:48 (zero-extended to 64) | undo_ptr | data_len | flags` = 20 bytes. There is no `xmax`; a version's validity interval is reconstructed from the undo chain, and DELETE is the slot's `DELETED` mark plus the deleter's `trx_id`.
+5. The Keystone column is exactly `id:40 | flags:8 | reserved:16`.
+6. The Keystone word is read and written atomically as a `uint64_t`; on-disk encoding uses explicit shift/mask, never compiler bitfields.
+7. Ids stored outside the tuple header are zero-extended `uint64_t` with the upper 24 bits zero.
+8. Waystone is advisory: deleting it wholesale may cost performance and must never change a query result.
+9. Waystone is never **authoritative**. A reader may consult it for *where to look*, provided it treats a missing or stale entry as a miss, checks the Keystone id of the tuple actually found at the reported location, applies MVCC visibility exactly as the authoritative path would, and falls through to that path — a btree descent on a btree relation, a chain scan on a heap one — on any mismatch. It chooses where to look, never what is visible.
+10. No single canonical in-memory tuple is enforced; consistency comes from page pin and latch discipline (§6).
+11. Every relation requires system-generated, autoincrement `id` values; a caller-supplied pk on insert is a defect (§4).
+12. The tuple MVCC header is exactly `trx_id:48 (zero-extended to 64) | undo_ptr | data_len | flags` = 20 bytes. There is no `xmax`; a version's validity interval is reconstructed from the undo chain, and DELETE is the slot's `DELETED` mark plus the deleter's `trx_id`.
+13. **Every tuple is fixed-length.** A relation's row size is a schema constant; variable-width values occupy tagged cells of exactly `kds.inline_cell_width` bytes (§3.3), and that width is instance-pinned in the superblock. No code path produces a tuple whose size differs from its relation's constant.
+14. **Var-heap values are immutable per version** and `kVarHeap` pages are never relocated; the class is logged, headered, and checksummed — authoritative data, not advisory (§3.4).
 
----
+## 9. Open Decisions
 
-*Maintenance note: when a `[OPEN]` item is decided, move it into the appropriate `[CONFIRMED]` section and record the date.*
+Collected from the sections above, plus those owned by companion specs.
+
+- Per-page epoch storage location, width, and wraparound (§3.1a).
+- Heap page split policy; free-space reuse and page compaction, both gated on reader registration (§3.1b).
+- `kds.inline_cell_width` default value (§3.3) — settle against measured target-schema string-length distributions.
+- Spilled-value size cap; prefix-inline revisit trigger (adopt only if string-equality steps become a measured cost) (§§3.3–3.4).
+- Purge-cadence sizing metric for var-heap headroom (§3.4).
+- Repurposing of the 16 reserved Keystone bits (§4).
+- Id-reuse / low-range reclamation for high-churn relations (§4).
+- Buffer-pool page-frame reclamation policy (§6).
+- I/O backend abstraction: plain `O_DIRECT` versus `io_uring` versus pluggable.
+- Waystone's own open items — retention and eviction, recording policy, page persistence class, `arg_hash` collision handling, and whether invariant 9 is ever amended to permit trusting a cached result set as complete (`waystone-concpets.md` §9).
+- Undo retention and `SnapshotTooOld` surfacing; 48-bit `trx_id` wraparound; cross-core commit protocol (`txn.md`, `wal.md`).

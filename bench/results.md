@@ -5,9 +5,19 @@ on the same host, same row shape, same phases, same harness
 (`tools/bench_common.py`). Raw output is in `bench/results/*.json`; every number
 below comes from those files or from the two servers' own statement logs.
 
-**Read the caveats before quoting anything.** ckdbs has no index and appends
-nothing to its WAL yet, so two of the four phases are not measuring the same
-work on both sides. That is stated per phase rather than averaged away.
+> **SUPERSEDED IN PART, 2026-07-30.** Two of this file's premises no longer
+> hold: ckdbs now WAL-logs `INSERT` (`docs/wal.md` §11a) and a
+> Waystone-enabled relation has an O(1) pk lookup on `SELECT` and `UPDATE`
+> (`docs/waystone-concpets.md` §3.1). Its point-select and insert numbers, and
+> the index-parity reasoning built on them, are stale. See
+> **`bench/results-waystone-vs-pg.md`** for the re-run against PostgreSQL's
+> primary key. The full-scan phase and the environment section below are still
+> accurate.
+
+**Read the caveats before quoting anything.** At the time of this run ckdbs had
+no index and appended nothing to its WAL, so two of the four phases were not
+measuring the same work on both sides. That is stated per phase rather than
+averaged away.
 
 Not related to `bench/bench_main.cpp`: that binary measures WAL/page internals
 in-process with no server, no parser and no socket. There is no PostgreSQL

@@ -1,10 +1,12 @@
 #include "kds/catalog/catalog.hpp"
 
+#include "kds/parser/fingerprint.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
 
-#include "kds/stats/waystone_dir.hpp"
+#include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 
@@ -14,8 +16,7 @@ namespace {
 
 // Scans every live row of type RowT out of the heap page at `page_id`.
 // Dead slots (RowT::Decode's caller never sees them - ReadTuple() itself
-// reports NotFound for a dead slot) are skipped, mirroring the legacy
-// engine's "r == -ENOENT -> continue" scan idiom throughout catalog.c.
+// reports NotFound for a dead slot) are skipped.
 template <typename RowT>
 StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId page_id) {
     auto bytes = store.Get(page_id);
@@ -105,12 +106,17 @@ Status Catalog::Bootstrap() {
         std::string_view name;
         PageId page_id;
     };
-    static constexpr std::array<SysTableBootstrap, 5> kSysTables{{
+    static constexpr std::array<SysTableBootstrap, 6> kSysTables{{
         {kSysTypesTable, "types", kCatalogPageTypes},
         {kSysObjectsTable, "objects", kCatalogPageObjects},
         {kSysColumnsTable, "columns", kCatalogPageColumns},
         {kSysTablesTable, "tables", kCatalogPageTables},
         {kSysIndexesTable, "indexes", kCatalogPageIndexes},
+        // sys.patterns gets no sys.columns rows, exactly like the five
+        // above: the catalog relations are read through their typed row
+        // codecs (rows.hpp), never through a schema, so a column list for
+        // them would describe nothing anyone reads.
+        {kSysPatternsTable, "patterns", kCatalogPagePatterns},
     }};
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -153,9 +159,8 @@ Status Catalog::Bootstrap() {
 
     // Phase 4: sys.types rows for the well-known scalar types. type_val
     // below (well_known.hpp's kTypeVal* constants) is a placeholder tag:
-    // the legacy engine pulled these from its types.c registry (not yet
-    // ported to this project - see storage/). It is no longer numbering
-    // trivia though - src/exec/row_codec.cpp switches on these values to
+    // there is no type registry to source them from yet. They are not
+    // numbering trivia - src/exec/row_codec.cpp switches on these values to
     // pick an on-disk encoding, and Catalog::ResolveTypeByName() below
     // resolves a parsed CREATE TABLE column's type_name to one of these
     // rows by name. Replace with real registry-sourced values later; the
@@ -227,12 +232,6 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.desc_page_id = desc_page_id;
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
-    // Waystone is opt-in and off at creation (spec section 7). Turning it
-    // on is a separate DDL step (SetWaystoneDirectory), which keeps
-    // CREATE TABLE's cost identical to what it was.
-    row.waystone_state = WaystoneState::kDisabled;
-    row.waystone_dir_root = kInvalidPageId;
-    row.waystone_dir_depth = 0;
     Status s = InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
@@ -285,11 +284,6 @@ Status Catalog::InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_p
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                     ClusteredType clustered_type) {
-    if (clustered_type != ClusteredType::kHeap) {
-        // ClusteredType::kBtree needs the not-yet-ported btree code
-        // (kernel/kds/btree.c) - rejected rather than half-implemented.
-        return Status::InvalidArgument("btree clustered tables are not implemented yet");
-    }
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
@@ -299,8 +293,24 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     if (!created.ok()) return created.status();
     auto [root_id, root_bytes] = created.value();
 
-    auto root_page = heap::PageView::CreateEmpty(root_bytes, 0);
-    if (!root_page.ok()) return root_page.status();
+    // Both clustered types root at `desc_page_id` and both start as one
+    // page - a heap page for kHeap, a B+ tree leaf for kBtree (btree.hpp).
+    // A btree relation grows its first internal level only when that leaf
+    // splits, so a small table costs exactly what it did before, and the
+    // choice is invisible to every layer above until the relation is big
+    // enough for it to matter.
+    Status formatted = Status::OK();
+    switch (clustered_type) {
+        case ClusteredType::kHeap: {
+            auto root_page = heap::PageView::CreateEmpty(root_bytes, 0);
+            if (!root_page.ok()) formatted = root_page.status();
+            break;
+        }
+        case ClusteredType::kBtree:
+            formatted = btree::FormatRoot(root_bytes);
+            break;
+    }
+    if (!formatted.ok()) return formatted;
 
     Oid new_oid = GenerateUserOid();
 
@@ -470,9 +480,6 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.schema = std::move(schema.value());
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
-    access.waystone_state = table_row.value().waystone_state;
-    access.waystone_dir_root = table_row.value().waystone_dir_root;
-    access.waystone_dir_depth = table_row.value().waystone_dir_depth;
     return cache_.PutTableAccess(std::move(access));
 }
 
@@ -506,9 +513,9 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         const std::uint64_t id = row.value().next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
-            // bottom would alias ids that Waystone addresses directly.
-            // Id-reuse / low-range reclamation is an open decision
-            // (CLAUDE.md), so this refuses rather than picking one.
+            // bottom would hand out an id that is still some tuple's
+            // identity. Id-reuse / low-range reclamation is an open
+            // decision (CLAUDE.md), so this refuses rather than picking one.
             return Status::OutOfRange("relation has exhausted the Keystone id space");
         }
 
@@ -574,28 +581,128 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
     return Status::NotFound("no sys.tables row for this oid");
 }
 
-Status Catalog::SetWaystoneDirectory(Oid table_oid, WaystoneState state, PageId dir_root,
-                                     std::uint8_t dir_depth) {
-    // Checked before the page is touched: a half-written triple is the one
-    // outcome that would leave the relation unwalkable.
-    if (state == WaystoneState::kDisabled) {
-        if (dir_root != kInvalidPageId || dir_depth != 0) {
+// ---- sys.patterns ----------------------------------------------------
+
+namespace {
+
+// The identity + location half of a pattern row - everything DDL alone can
+// change. Heat is dropped on the floor here on purpose; see schema.hpp.
+PatternAccess AccessOf(const SysPatternRow& row) noexcept {
+    PatternAccess access{};
+    access.oid = row.oid;
+    access.pattern_id = row.pattern_id;
+    access.fingerprint_version = row.fingerprint_version;
+    access.waystone_root = row.waystone_root;
+    access.stmt_class = row.stmt_class;
+    access.dir_depth = row.dir_depth;
+    return access;
+}
+
+// Whether a stored root/depth pair may be written. Checked before the page
+// is touched, because a half-written pair is the one outcome that leaves a
+// pattern's waystones unreachable.
+Status CheckWaystonePair(PageId root, std::uint8_t depth) {
+    if (depth == 0) {
+        if (root != kInvalidPageId) {
             return Status::InvalidArgument(
-                "catalog: a disabled Waystone must carry no directory root and depth 0");
+                "catalog: a pattern with no waystone directory must carry no root");
         }
-    } else {
-        if (dir_root == kInvalidPageId) {
-            return Status::InvalidArgument(
-                "catalog: an enabled Waystone needs a directory root page");
-        }
-        if (dir_depth < 1 || dir_depth > stats::kMaxDirDepth) {
-            return Status::InvalidArgument(
-                "catalog: Waystone directory depth " + std::to_string(dir_depth) +
-                " is outside 1.." + std::to_string(stats::kMaxDirDepth));
-        }
+        return Status::OK();
+    }
+    if (root == kInvalidPageId) {
+        return Status::InvalidArgument("catalog: a waystone directory needs a root page");
+    }
+    if (depth > kMaxPatternDirDepth) {
+        return Status::InvalidArgument("catalog: waystone directory depth " +
+                                       std::to_string(depth) + " exceeds " +
+                                       std::to_string(kMaxPatternDirDepth));
+    }
+    return Status::OK();
+}
+
+}  // namespace
+
+StatusOr<std::vector<SysPatternRow>> Catalog::ListPatterns() {
+    return ScanAll<SysPatternRow>(store_, kCatalogPagePatterns);
+}
+
+StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t pattern_id) {
+    auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns);
+    if (!rows.ok()) return rows.status();
+
+    for (const auto& row : rows.value()) {
+        if (row.pattern_id != pattern_id) continue;
+        // Rows from another fingerprint revision are invisible here, and
+        // this is the only place that decision is made. Putting the filter
+        // in the row lookup rather than in each caller is what stops a
+        // stale row from shadowing a current one when both are on the page
+        // - which is the state a version bump leaves behind, since nothing
+        // rewrites the old rows.
+        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) continue;
+        return row;
+    }
+    return Status::NotFound("no current sys.patterns row for this pattern_id");
+}
+
+StatusOr<const PatternAccess*> Catalog::FindPattern(std::uint64_t pattern_id) {
+    if (const PatternAccess* cached = cache_.FindPattern(pattern_id); cached != nullptr) {
+        return cached;
     }
 
-    auto bytes = store_.Get(kCatalogPageTables);
+    // Version filtering lives in GetSysPatternRow(), so a row from another
+    // revision arrives here as NotFound and never reaches the cache. That
+    // ordering is the point: the cache holds current-version entries only,
+    // by construction rather than by a check every reader has to remember.
+    auto row = GetSysPatternRow(pattern_id);
+    if (!row.ok()) return row.status();
+
+    return cache_.PutPattern(AccessOf(row.value()));
+}
+
+StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id,
+                                                         std::uint8_t stmt_class) {
+    // Read the page, not the cache: absences are never cached, so a cache
+    // miss says nothing about whether the row exists. A row left behind by
+    // an older revision does not count as existing - GetSysPatternRow()
+    // does not return one - so a version bump leaves every shape
+    // re-learnable rather than permanently blocked. The stale row stays
+    // where it is; reclaiming it is retention's job (P15), and rewriting it
+    // here would be an overwrite of a live tuple for no gain.
+    if (GetSysPatternRow(pattern_id).ok()) {
+        return Status::AlreadyExists("catalog: this pattern is already registered");
+    }
+
+    auto oid = AllocateRowId(kSysPatternsTable);
+    if (!oid.ok()) return oid.status();
+
+    SysPatternRow row{};
+    row.oid = oid.value();
+    row.pattern_id = pattern_id;
+    row.last_seen = 0;
+    row.fingerprint_version = parser::kFingerprintVersion;
+    row.waystone_root = kInvalidPageId;
+    row.use_count = 0;
+    row.stmt_class = stmt_class;
+    row.dir_depth = 0;  // no directory until the first trail is recorded
+
+    if (Status s = InsertRow(store_, kCatalogPagePatterns, row, kBootstrapXid); !s.ok()) {
+        return s;
+    }
+    // No BumpVersion(): nothing cached can go stale from a pattern
+    // appearing (catalog.hpp states the argument, and the statement path
+    // depends on it).
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("catalog", "registered pattern " + std::to_string(pattern_id) + " as oid " +
+                                   std::to_string(row.oid));
+    }
+    return cache_.PutPattern(AccessOf(row));
+}
+
+Status Catalog::SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root,
+                                        std::uint8_t depth) {
+    if (Status s = CheckWaystonePair(root, depth); !s.ok()) return s;
+
+    auto bytes = store_.Get(kCatalogPagePatterns);
     if (!bytes.ok()) return bytes.status();
 
     heap::PageView page(bytes.value());
@@ -607,33 +714,28 @@ Status Catalog::SetWaystoneDirectory(Oid table_oid, WaystoneState state, PageId 
             return tuple.status();
         }
 
-        auto row = SysTableRow::Decode(tuple.value().payload);
+        auto row = SysPatternRow::Decode(tuple.value().payload);
         if (!row.ok()) return row.status();
-        if (row.value().oid != table_oid) continue;
+        if (row.value().pattern_id != pattern_id) continue;
+        if (!parser::IsCurrentFingerprintVersion(row.value().fingerprint_version)) continue;
 
-        row.value().waystone_state = state;
-        row.value().waystone_dir_root = dir_root;
-        row.value().waystone_dir_depth = dir_depth;
+        row.value().waystone_root = root;
+        row.value().dir_depth = depth;
         auto encoded = row.value().Encode();
         Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
-        // All three are TableAccess fields, so a cached entry is stale the
-        // moment they change. Bumped only on success: a failed overwrite
-        // changed nothing and invalidating would just cost a re-scan.
-        if (s.ok()) BumpVersion("waystone directory change");
-        if (s.ok() && log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-            // Info, alongside the other DDL: enabling Waystone changes the
-            // relation's storage form and its per-insert cost, which is
-            // the kind of thing an operator wants in a default log.
-            log_->Info("catalog", "table oid " + std::to_string(table_oid) +
-                                      " waystone state=" +
-                                      std::to_string(static_cast<int>(state)) + " root=" +
-                                      std::to_string(dir_root) + " depth=" +
-                                      std::to_string(dir_depth));
+        // Updated in place rather than invalidated, and only on success: a
+        // failed overwrite moved nothing, and publishing the new pair into
+        // the cache would make it disagree with the page.
+        if (s.ok()) cache_.UpdatePatternWaystone(pattern_id, root, depth);
+        if (s.ok() && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("catalog", "pattern " + std::to_string(pattern_id) +
+                                       " waystone root=" + std::to_string(root) +
+                                       " depth=" + std::to_string(depth));
         }
         return s;
     }
 
-    return Status::NotFound("no sys.tables row for this oid");
+    return Status::NotFound("no sys.patterns row for this pattern_id");
 }
 
 StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {

@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "engine": "ckdbs",
+    "host": "127.0.0.1",
+    "port": 15670,
+    "table": "bench_1785396883_25867",
+    "columns": 5,
+    "rows": 50000,
+    "seed": 1,
+    "durability": "relaxed",
+    "waystone": "probe_hits=2000 probe_misses=0 state=2 dir_root=129 dir_depth=1"
+  },
+  "phases": [
+    {
+      "phase": "insert",
+      "detail": "4 body columns per row, one varchar of 16 chars",
+      "ops": 50000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 9.837274,
+      "qps": 5082.7,
+      "mean_us": 173.5,
+      "p50_us": 125.0,
+      "p95_us": 197.3,
+      "p99_us": 2236.4,
+      "max_us": 12543.2
+    },
+    {
+      "phase": "point-select",
+      "detail": "WHERE id = <random 1..50000>, waystone probe",
+      "ops": 2000,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.229848,
+      "qps": 8701.4,
+      "mean_us": 106.9,
+      "p50_us": 98.7,
+      "p95_us": 154.2,
+      "p99_us": 220.1,
+      "max_us": 2665.4
+    },
+    {
+      "phase": "full-scan",
+      "detail": "50000 rows per reply, 401,690 rows/s",
+      "ops": 2,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.248948,
+      "qps": 8.0,
+      "mean_us": 124462.9,
+      "p50_us": 123902.3,
+      "p95_us": 125023.5,
+      "p99_us": 125023.5,
+      "max_us": 125023.5
+    },
+    {
+      "phase": "update",
+      "detail": "fixed-width column only (in-place overwrite)",
+      "ops": 20,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.553443,
+      "qps": 36.1,
+      "mean_us": 27649.2,
+      "p50_us": 27398.1,
+      "p95_us": 31428.2,
+      "p99_us": 31480.4,
+      "max_us": 31480.4
+    }
+  ]
+}

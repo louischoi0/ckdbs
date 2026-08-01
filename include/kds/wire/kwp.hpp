@@ -10,7 +10,7 @@
 
 #include "kds/base/status.hpp"
 
-// KWP/1 - KDS Wire Protocol, confirmed 2026-07-28 (docs/protocol.md).
+// KWP/1 - the KDS wire protocol (docs/protocol.md).
 // This header holds the frame format, frame catalog, capability bits,
 // durability levels, and the wire error-code taxonomy, plus the
 // FrameHeader codec and FrameDecoder declarations whose bodies live in
@@ -123,7 +123,7 @@ enum class Capability : std::uint64_t {
 // ---- Durability (docs/protocol.md §9) --------------------------------------
 // Per-transaction protocol field. Numbering is meant to mirror
 // docs/wal.md §1's D1/D2/D3 durability classes, but that document does
-// not exist in the repo yet (as of 2026-07-28) - treat this enum as the
+// not exist yet - treat this enum as the
 // authoritative numbering until docs/wal.md lands and either confirms or
 // amends it.
 enum class DurabilityLevel : std::uint8_t {
@@ -136,14 +136,20 @@ enum class DurabilityLevel : std::uint8_t {
 // ---- Error taxonomy (docs/protocol.md §11) ---------------------------------
 // Wire-level error categories: deliberately a superset of
 // kds::StatusCode (kds/base/status.hpp). kInternal/kProtocol/
-// kUnsupported/kTxnConflict/kCancelled have no engine-level Status
-// equivalent today - they are wire/session-only categories that can
-// occur before or outside any engine call (e.g. a malformed frame is
-// kProtocol, not any kind of Status). The Status -> ErrorCategory mapping
-// table for the categories that DO overlap is not part of this header;
-// it lands with the error registry (docs/protocol-wp.md P12,
-// src/wire/error_registry.cpp), including its append-only golden-list
-// guard.
+// kUnsupported/kCancelled have no engine-level Status equivalent - they
+// are wire/session-only categories that can occur before or outside any
+// engine call (e.g. a malformed frame is kProtocol, not any kind of
+// Status). The Status -> ErrorCategory mapping table for the categories
+// that DO overlap is not part of this header; it lands with the error
+// registry (docs/protocol-wp.md P12, src/wire/error_registry.cpp),
+// including its append-only golden-list guard.
+//
+// kTxnConflict has an engine-level equivalent:
+// StatusCode::kTxnConflict maps here with **retryable = 1**, which
+// docs/protocol.md §11 makes part of the compatibility surface. It is the
+// only retryable category (kds::IsRetryable is the engine-side spelling of
+// the same fact), so P12's registry must not derive the bit per category by
+// hand - it should ask IsRetryable for the codes that map from a Status.
 enum class ErrorCategory : std::uint16_t {
     kInvalidArgument = 0,
     kNotFound,

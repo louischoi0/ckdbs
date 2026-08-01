@@ -12,26 +12,21 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/storage/page_store.hpp"
 
-// SQL catalog (sys.objects/sys.tables/sys.columns/sys.types/sys.indexes),
-// ported from the legacy kernel engine's catalog.c/kds_catalog.h, itself a
-// C port of a Python POC's catalog.py.
+// SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
+// sys.indexes, sys.patterns. Four things to know before touching it:
 //
-// Differences from the legacy kernel version, and why:
-//   - Depends on kds::storage::PageStore (an abstract seam) instead of
-//     the buffer pool (kds_buf_lookup_or_load()/kds_buf_alloc_new()),
-//     which doesn't exist in this project yet - see page_store.hpp.
-//     Swap in a real buffer-pool-backed PageStore later without touching
-//     this file.
-//   - CreateTable() only supports ClusteredType::kHeap for now:
-//     ClusteredType::kBtree needs the not-yet-ported btree code
-//     (kernel/kds/btree.c) and is rejected with InvalidArgument rather
-//     than half-implemented.
-//   - No transaction manager exists yet, so every row this file writes
-//     is stamped with kBootstrapXid, same as the legacy engine's
-//     approach before its transaction manager existed.
+//   - It depends on kds::storage::PageStore, an abstract seam, rather than
+//     on a buffer pool - so a real buffer-pool-backed store can be swapped
+//     in later without touching this file.
+//   - CreateTable() supports both ClusteredType values. Either way the
+//     relation is one page at creation - a heap page or a B+ tree leaf -
+//     rooted at `desc_page_id`; what differs is what grows out of it
+//     (heap_chain.hpp vs btree.hpp).
+//   - No transaction manager exists yet, so every row written here is
+//     stamped kBootstrapXid, which is visible to every read view.
 //   - Object oid generation (GenerateUserOid()) is in-memory only and
-//     resets on restart - same KNOWN GAP the legacy engine had (see
-//     kUserOidStart's comment in well_known.hpp).
+//     resets on restart - a KNOWN GAP; see kUserOidStart in
+//     well_known.hpp. sys.patterns rows do not use it, for that reason.
 //
 // Logging (component tag "catalog"): catalog pages are the pages whose
 // contents explain every other page, so the writes are logged at Info
@@ -76,9 +71,9 @@ public:
     // persisted across restarts.
     Oid GenerateUserOid() noexcept;
 
-    // Creates a new table: allocates its storage root page and inserts
-    // the corresponding sys.objects/sys.tables/sys.columns rows. Only
-    // ClusteredType::kHeap is implemented today (see file comment).
+    // Creates a new table: allocates its storage root page, formats it for
+    // the requested clustered type, and inserts the corresponding
+    // sys.objects/sys.tables/sys.columns rows.
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                ClusteredType clustered_type);
 
@@ -91,7 +86,7 @@ public:
 
     // Lists every table registered in sys.objects (type_oid == kTypeTable),
     // including the catalog's own bootstrap tables - not just user-created
-    // ones. Not part of the legacy engine's catalog.c; added for the
+    // ones. Added for the
     // server's command dispatcher (src/server), which needs "what tables
     // exist" without the caller already knowing a name to look up.
     StatusOr<std::vector<SysObjectRow>> ListTables();
@@ -142,38 +137,111 @@ public:
     // rather than wrapped.
     StatusOr<std::uint64_t> AllocateRowId(Oid table_oid);
 
+    // ---- sys.patterns (docs/waystone-concpets.md section 4) --------------
+
+    // The pattern `pattern_id` names, served from the cache after the first
+    // lookup. The pointer is reference-stable and stays valid until the
+    // next Invalidate() - same contract as InitTableAccess().
+    //
+    // Fails with NotFound when the pattern has never been registered **and
+    // when the only row for it came from another fingerprint revision**.
+    // Those two are deliberately one outcome: a row recorded under
+    // different fingerprinting rules names a shape that is not the one it
+    // claims, so the only safe reading of it is that this pattern has not
+    // been seen. The caller registers it afresh and the stale row becomes
+    // garbage for retention to reclaim (P15). A version mismatch is never
+    // an error - nothing about it should fail a statement.
+    StatusOr<const PatternAccess*> FindPattern(std::uint64_t pattern_id);
+
+    // Records a newly observed pattern and returns its cached access, so a
+    // caller that just registered does not look it back up.
+    //
+    // **The version is stamped here, not passed in.** No caller has any
+    // business recording a pattern under a revision other than the one
+    // that computed its `pattern_id`, so a version parameter could only
+    // ever be passed wrong - and passing it wrong writes a row no build
+    // will resolve. Removing the parameter is what makes "the cache holds
+    // current-version entries only" true by construction.
+    //
+    // Registration bumps **no** catalog version, and that is worth stating
+    // because the deleted per-relation Waystone got it wrong in exactly
+    // this spot. Nothing cached can go stale from a pattern appearing:
+    // absences are never cached (catalog_cache.hpp), so no entry claims
+    // this pattern is missing, and no other cached fact mentions it. The
+    // consequence matters on the statement path - registering a pattern
+    // mid-statement cannot dangle the `const TableAccess*` that statement
+    // is holding, which is the hazard `waystone-concpets.md` section 4
+    // flagged for this task.
+    //
+    // The pattern's `oid` comes from AllocateRowId(kSysPatternsTable) - the
+    // persistent sequence in sys.patterns' own sys.tables row. That is a
+    // repurposing worth naming: catalog rows carry no Keystone word, so
+    // this is the sequence used as an oid source rather than as a tuple id.
+    // The alternative, GenerateUserOid(), is in-memory and restarts at
+    // kUserOidStart every boot (well_known.hpp), which for a *persisted*
+    // row means two patterns sharing an oid across a restart.
+    //
+    // Fails with AlreadyExists if `pattern_id` is already registered at
+    // the current version. A row left by an older revision does not count
+    // as registered, so a version bump leaves every shape re-learnable
+    // rather than permanently blocked.
+    StatusOr<const PatternAccess*> RegisterPattern(std::uint64_t pattern_id,
+                                                    std::uint8_t stmt_class);
+
+    // Points a pattern at its waystone directory, writing root and depth as
+    // one unit.
+    //
+    // The two are one fact and there is deliberately no setter for either
+    // alone: a root without its depth is unwalkable, and a depth that
+    // disagrees with the root sends every walk to the wrong leaf. Validated
+    // before the page is touched - depth 0 requires kInvalidPageId, and any
+    // other depth requires a real root and a depth within
+    // kMaxPatternDirDepth - so every reader downstream may trust the pair
+    // without re-checking it.
+    //
+    // Updates the cached PatternAccess in place rather than invalidating
+    // (catalog_cache.hpp explains why that is the exception it is), so a
+    // caller holding a `const PatternAccess*` keeps a valid pointer and
+    // sees the new directory.
+    //
+    // Fails with NotFound if no sys.patterns row carries `pattern_id`, and
+    // with InvalidArgument for an incoherent pair. Page lifetime of the old
+    // directory is the caller's business: this writes the row.
+    Status SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root, std::uint8_t depth);
+
+    // Every sys.patterns row, in page order.
+    //
+    // **Unfiltered, unlike GetSysPatternRow()** - rows from another
+    // fingerprint revision are included. That is not a hole in the version
+    // rule: the rule protects *lookup by pattern_id*, so a stale row can
+    // never resolve as the pattern it names. This is an inspection surface,
+    // and the stale rows are exactly what an operator wants to see - they
+    // are the garbage a version bump left behind, waiting on retention.
+    // A caller that wants the version rule applied asks for a pattern by
+    // id; a caller that wants to look at the relation reads this.
+    StatusOr<std::vector<SysPatternRow>> ListPatterns();
+
+    // The pattern's row straight off the page, never from the cache.
+    //
+    // The counterpart of GetSysTableRow(): it exists for the fields
+    // PatternAccess deliberately omits - `use_count` and `last_seen` -
+    // which change on every execution and so are not cacheable facts
+    // (schema.hpp). A caller that wants heat calls this; a caller that
+    // wants identity or location calls FindPattern().
+    //
+    // **Rows from another fingerprint revision are invisible here**, and
+    // this is the single place that filter lives. A version bump leaves
+    // the old rows on the page - nothing rewrites them - so a lookup that
+    // did not filter would let a stale row shadow the current one. Putting
+    // the filter in the row lookup rather than in each caller is what
+    // makes that impossible rather than merely unlikely.
+    StatusOr<SysPatternRow> GetSysPatternRow(std::uint64_t pattern_id);
+
     // Updates the desc_page_id field of table_oid's sys.tables row in
     // place - for a future btree root split/collapse to repoint at a new
     // root page. Uses an in-place overwrite (row size is unchanged), not
-    // delete+insert, mirroring the legacy kds_catalog_update_relation_desc_page().
+    // delete+insert, since the row size is unchanged.
     Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id);
-
-    // Sets the relation's Waystone fields as one unit (spec section 7):
-    // enabling with a provisioned directory root, recording a deepened
-    // directory, promoting kBackfilling to kCovered, or disabling.
-    //
-    // The three are written together because they are one fact. A root
-    // without its depth is unwalkable, and a depth that disagrees with the
-    // root sends every lookup to the wrong leaf - so there is deliberately
-    // no setter for one of them.
-    //
-    // Validated: kDisabled requires kInvalidPageId and depth 0, and any
-    // other state requires a real root and a depth in 1..kMaxDirDepth.
-    // Refusing an inconsistent pair here is what lets every reader treat
-    // the triple as trustworthy without re-checking it.
-    //
-    // Bumps the catalog version on success, because TableAccess caches all
-    // three. **A caller holding a `const TableAccess*` must re-acquire it
-    // afterwards** - the bump clears the cache and the old pointer dangles.
-    // That matters most for directory growth, which happens in the middle
-    // of an insert that is already holding one.
-    //
-    // Fails with NotFound if no sys.tables row names `table_oid`, and with
-    // InvalidArgument for an inconsistent triple. Dropping the old
-    // directory's pages on disable is the caller's business: this writes
-    // the row, it does not own page lifetime.
-    Status SetWaystoneDirectory(Oid table_oid, WaystoneState state, PageId dir_root,
-                                std::uint8_t dir_depth);
 
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,

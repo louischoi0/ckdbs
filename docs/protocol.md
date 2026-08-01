@@ -1,8 +1,10 @@
-# KDS Wire Protocol — Technical Specification (KWP/1)
+# KDS Wire Protocol (KWP/1)
 
-**Status:** **Official specification**, decisions confirmed 2026-07-28. This file's own path is `docs/protocol.md`; the companion workplan is `docs/protocol-wp.md`. Supersedes the newline text protocol documented in `docs/client-manual.md` (retained as a loopback debug surface only, §12). Markers: `[CONFIRMED]` — decided; `[PROPOSED]` — this document's default within a confirmed decision, adopt or amend before implementing the affected part; `[OPEN]` — do not assume. Consistent with `docs/rules.md`, `docs/sched.md`, `docs/waystone-concpets.md`. Cross-references `docs/wal.md`, which does not exist in the repo yet as of this writing (§9, §15-5) — treat those as forward references, not resolved links.
+The protocol KDS speaks: length-prefixed binary frames, a version and capability handshake, and an extended PARSE/BIND/EXECUTE statement model over server-side statement and portal handles. Replaces the newline text protocol in `docs/client-manual.md`, which survives as an off-by-default loopback debug surface (§12). Companion workplan: `docs/protocol-wp.md`. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Consistent with `docs/rules.md`, `docs/sched.md`, `docs/wal.md`, `docs/waystone-concpets.md`.
 
-## 0. Decision Record `[CONFIRMED 2026-07-28]`
+**Status:** only the frame codec exists (`include/kds/wire/kwp.hpp`, `src/wire/frame_codec.cpp`) and nothing calls it. The server speaks the newline text protocol today.
+
+## 0. Decision Record
 
 | # | Decision | Choice |
 |---|---|---|
@@ -21,9 +23,9 @@
 
 - TCP; one KWP session per connection. Default port 15432 (unchanged).
 - TLS `[OPEN: activation phase]`: the handshake carries a `TLS_REQUIRED` capability bit so TLS can be introduced (direct-TLS or STARTTLS-style upgrade — pick when activated) without a protocol version bump.
-- The legacy newline protocol remains available only on a loopback debug port behind a server flag (§12); it is not part of KWP.
+- The newline text protocol remains available only on a loopback debug port behind a server flag (§12); it is not part of KWP.
 
-## 2. Framing `[CONFIRMED]`
+## 2. Framing
 
 Every message in both directions is one frame:
 
@@ -39,7 +41,7 @@ Codec rules follow rules.md §2/§5: field-wise memcpy helpers, `static_assert`e
 
 Variable-length payload fields use `{u32 len, bytes}`; strings are UTF-8, not NUL-terminated.
 
-## 3. Handshake & Versioning `[CONFIRMED]`
+## 3. Handshake & Versioning
 
 First frames on a connection, before anything else:
 
@@ -49,7 +51,7 @@ First frames on a connection, before anything else:
 
 Version negotiation failure ⇒ `ERROR(UNSUPPORTED_VERSION)` + close. Capability bits gate optional behavior so features land without version breaks; version bumps are reserved for frame-format changes.
 
-## 4. Frame Catalog `[CONFIRMED types; payloads PROPOSED]`
+## 4. Frame Catalog
 
 Client → server: `C_HELLO`, `C_PARSE`, `C_BIND`, `C_EXECUTE`, `C_CONTINUE`, `C_DESCRIBE`, `C_CLOSE`, `C_SYNC`, `C_TXN_BEGIN`, `C_TXN_COMMIT`, `C_TXN_ABORT`, `C_PING`, `C_CANCEL` (cancel connections only, §10), `C_TERMINATE`.
 
@@ -57,7 +59,7 @@ Server → client: `S_HELLO`, `S_READY`, `S_PARSE_OK`, `S_BIND_OK`, `S_ROW_DESC`
 
 Unknown frame types: server responds `ERROR(PROTOCOL)`; clients must treat unknown *server* frame types as fatal unless a negotiated capability declared them.
 
-## 5. Extended Statement Model `[CONFIRMED]`
+## 5. Extended Statement Model
 
 PG-shaped phases, KDS semantics:
 
@@ -67,42 +69,42 @@ PG-shaped phases, KDS semantics:
 - **`C_EXECUTE`** `{portal_name str, max_rows u32}` — results per §7; `max_rows = 0` means unlimited.
 - **`C_SYNC`** — pipeline barrier. Clients may pipeline PARSE/BIND/EXECUTE without waiting; after any `S_ERROR`, the server **discards frames until the next `C_SYNC`**, then answers `S_READY(failed-txn or idle)`. This skip-to-sync rule is the whole pipelining error contract.
 
-## 6. Data Encoding `[CONFIRMED binary LE; type table PROPOSED]`
+## 6. Data Encoding
 
 - `S_ROW_DESC`: `{field_count u16, fields: [{name str, type_oid u32, type_len i16 (-1=varlen), flags u16}]}`. Field 0 of every user relation is the Keystone-derived `id` (u64).
 - Row values: `{i32 len | -1 = NULL, bytes}` per field — one NULL convention everywhere (params and rows).
 - v1 type wire formats: `INT8/16/32/64` (LE two's complement), `UINT64` (Keystone ids), `FLOAT64` (IEEE 754 LE), `BOOL` (1 byte), `TEXT` (UTF-8), `BYTES`, `DECIMAL` `[OPEN: encoding — financial domain will need it; scaled-int128 vs string, decide with the type system]`, `TIMESTAMP` (i64 micros since epoch, UTC `[PROPOSED]`).
 - No text result mode exists. Human-readable rendering is a client concern (the CLI renders).
 
-## 7. Result Streaming `[CONFIRMED]`
+## 7. Result Streaming
 
 - `C_EXECUTE` produces `S_ROW_DESC` (unless suppressed by flags after a DESCRIBE) then a sequence of **`S_ROW_BATCH`** frames: `{row_count u16, rows…}`, batch size server-chosen (default target ≤ 64 KiB per frame `[OPEN: default]`).
 - If `max_rows > 0` and the portal has more rows when the quota is reached, the server sends **`S_PORTAL_SUSPENDED`**; the client resumes with `C_CONTINUE {portal_name, max_rows}`. This is the flow-control mechanism — explicit, deterministic, and testable, in place of TCP-buffer guesswork. Credit/window schemes stay `[OPEN]` behind a capability bit if ever needed.
 - Completion: `S_COMPLETE {tag str, rows_affected u64}`.
 - Reactor note: a suspended portal is a suspended foreground task holding pins; portal-idle timeout (§10) bounds how long a slow client can hold engine resources.
 
-## 8. Cross-Core Execution — Server-Side Forwarding `[CONFIRMED]`
+## 8. Cross-Core Execution — Server-Side Forwarding
 
 - A connection is owned by the core that accepted it; its session state (statements, portals, txn) lives on that core (rules.md §3).
 - When a statement targets data owned by another core, the owning-core work is dispatched over the cross-core message interface and results return to the session core, which frames them to the client. **Clients never see topology**; no routing hints exist in KWP v1.
 - This choice keeps clients simple at the cost of a forwarding hop; a future smart-routing extension (topology frame + session migration) is `[OPEN]` and must arrive as a capability bit, not a version break.
 - While the engine runs single-core (current state), forwarding is trivially absent; the protocol is unaffected.
 
-## 9. Transactions & Durability `[CONFIRMED]`
+## 9. Transactions & Durability
 
 - Autocommit by default: a lone EXECUTE is its own transaction.
 - `C_TXN_BEGIN {durability u8}` / `C_TXN_COMMIT` / `C_TXN_ABORT` → `S_TXN_OK`. `durability` ∈ {0 = session default, 1 = D1 strict, 2 = D2 group, 3 = D3 relaxed} per `docs/wal.md` §1. The session default is set via a session-settable statement `[PROPOSED: SET DURABILITY]`.
 - `S_TXN_OK` for COMMIT is sent only after the WAL ack point of the chosen class (wal.md §8-2). For D3 the reply carries `flags.RELAXED=1` so audit logs can distinguish ack semantics.
 - Failed-txn state: after an in-txn error, only ABORT (and SYNC) are accepted until rollback — mirrored in `S_READY.txn_state`.
 
-## 10. Session, Cancel & Ops `[CONFIRMED model; details PROPOSED]`
+## 10. Session, Cancel & Ops
 
 - Session state: named statements, portals, txn, durability default. All dropped on disconnect; server may cap statement/portal counts (`ERROR(LIMIT)` beyond).
 - **Cancel:** out-of-band — a new connection sends `C_CANCEL {session_id, cancel_key}` and closes. The server sets a cancel flag the target task observes at its cooperative yield points (the reactor has no preemption — cancellation is best-effort-fast, guaranteed-eventually). Cancel keys are random per session; a wrong key is silently ignored.
 - Keepalive `C_PING`/`S_PONG`; server idle-session timeout and portal-idle timeout `[OPEN: defaults]`.
 - **Admin over the same protocol:** `SHOW META`, `LIST TABLES`, Waystone/WAL observability queries are ordinary statements returning ordinary result sets — one surface, one auth story. `STOP` becomes an admin statement requiring a capability bit `[PROPOSED]` instead of today's unauthenticated line command.
 
-## 11. Error Model `[CONFIRMED]`
+## 11. Error Model
 
 `S_ERROR` payload: `{code u32, retryable u8, severity u8, message str, detail str?, position u32?}`.
 

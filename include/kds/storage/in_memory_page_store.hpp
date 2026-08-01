@@ -29,9 +29,8 @@ public:
 
     // Pages created so far. Nothing evicts, so this is both the resident
     // count and the allocated one. Exposed because "how many pages did
-    // that touch" is the assertion sparse-allocation tests are made of -
-    // Waystone's directory is meant to cost what it touches and no more
-    // (waystone-concpets.md section 6), and only a page count can show it.
+    // that touch" is the assertion sparse-allocation tests are made of,
+    // and only a page count can show it.
     std::size_t page_count() const noexcept { return pages_.size(); }
 
 private:

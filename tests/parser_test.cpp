@@ -145,6 +145,16 @@ TEST(ParserTest, EmptyStatementIsError) {
     EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument);
 }
 
+TEST(ParserTest, BindParameterIsRejected) {
+    // `?` lexes (token.hpp kParam) so that fingerprinting can see the
+    // placeholder, but no production accepts it: this protocol has no BIND
+    // stage to supply a value. Giving it a token type must not have made
+    // it executable by accident.
+    auto stmt = Parse("SELECT * FROM t WHERE id = ?");
+    EXPECT_FALSE(stmt.ok());
+    EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument);
+}
+
 TEST(ParserTest, UnknownKeywordIsError) {
     auto stmt = Parse("DROP TABLE t");
     EXPECT_FALSE(stmt.ok());

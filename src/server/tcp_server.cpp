@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -149,6 +150,17 @@ void TcpServer::OnListenerReadable() {
         return;
     }
 
+    // TCP_NODELAY, unconditionally. Without it Nagle holds a small reply
+    // until the previous one is ACKed, and a client that has several
+    // requests in flight is not sending anything to carry that ACK - so it
+    // waits out the peer's delayed-ACK timer, ~40ms, once per batch. That
+    // turned pipelining from the fastest way to talk to this server into
+    // 30x slower than one-request-at-a-time. Replies are small and
+    // request/response is the whole protocol; there is nothing here for
+    // Nagle to coalesce that the outbox does not already coalesce better.
+    int nodelay = 1;
+    ::setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
     clients_.emplace(client_fd, Connection{});
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "accepted fd=" + std::to_string(client_fd) +
@@ -156,11 +168,24 @@ void TcpServer::OnListenerReadable() {
     }
     Status s = scheduler_->RegisterIoHandler(
         client_fd, sched::IoInterest::kReadable,
-        [this, client_fd](const sched::IoEvent&) { OnClientReadable(client_fd); });
+        [this, client_fd](const sched::IoEvent& event) { OnClientEvent(client_fd, event); });
     if (!s.ok()) {
         clients_.erase(client_fd);
         ::close(client_fd);
     }
+}
+
+void TcpServer::OnClientEvent(int client_fd, const sched::IoEvent& event) {
+    // Writable first: draining the backlog is what frees the outbox for
+    // whatever this read is about to produce, and a connection with a
+    // reply tail pending has already been told to expect this event.
+    if (event.writable) {
+        auto it = clients_.find(client_fd);
+        if (it == clients_.end()) return;
+        if (!FlushOutbox(client_fd, it->second)) return;  // closed
+        SyncWriteInterest(client_fd, it->second);
+    }
+    if (event.readable) OnClientReadable(client_fd);
 }
 
 void TcpServer::OnClientReadable(int client_fd) {
@@ -180,7 +205,43 @@ void TcpServer::OnClientReadable(int client_fd) {
     }
 
     it->second.inbox.append(chunk, static_cast<std::size_t>(n));
-    DrainCommands(client_fd, it->second);
+    if (!DrainCommands(client_fd, it->second)) return;  // closed or server stopping
+    if (!FlushOutbox(client_fd, it->second)) return;
+    SyncWriteInterest(client_fd, it->second);
+}
+
+bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
+    std::size_t sent = 0;
+    while (sent < conn.outbox.size()) {
+        ssize_t n = ::write(client_fd, conn.outbox.data() + sent, conn.outbox.size() - sent);
+        if (n > 0) {
+            sent += static_cast<std::size_t>(n);
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            break;  // send buffer full; the rest waits for a writable event
+        }
+        if (n < 0 && errno == EINTR) continue;
+        conn.outbox.clear();
+        CloseClient(client_fd);
+        return false;
+    }
+    conn.outbox.erase(0, sent);
+    return true;
+}
+
+void TcpServer::SyncWriteInterest(int client_fd, Connection& conn) {
+    const bool want = !conn.outbox.empty();
+    if (want == conn.want_writable) return;  // epoll already says the right thing
+    if (scheduler_ == nullptr) return;
+
+    auto interest = want ? static_cast<sched::IoInterest>(
+                               static_cast<std::uint8_t>(sched::IoInterest::kReadable) |
+                               static_cast<std::uint8_t>(sched::IoInterest::kWritable))
+                         : sched::IoInterest::kReadable;
+    if (scheduler_->ModifyIoHandler(client_fd, interest).ok()) {
+        conn.want_writable = want;
+    }
 }
 
 bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
@@ -201,12 +262,21 @@ bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
         }
 
         DispatchOutcome outcome = dispatcher_->Dispatch(line);
-        std::string reply = outcome.response + "\n";
-        ::write(client_fd, reply.data(), reply.size());
+        // Appended, not written: one readable event can carry a whole batch
+        // of pipelined commands, and a write() per command is a syscall per
+        // command plus a separate small segment per command on the wire.
+        // The batch leaves in one write() below.
+        conn.outbox.append(outcome.response);
+        conn.outbox.push_back('\n');
 
         conn.inbox.erase(0, nl + 1);
 
         if (outcome.should_stop) {
+            // Best effort, exactly as the per-command write() it replaces
+            // was: the socket is non-blocking, so a full send buffer loses
+            // the goodbye. Nothing downstream depends on the client seeing
+            // it, and the alternative is blocking the reactor on shutdown.
+            (void)FlushOutbox(client_fd, conn);
             if (logging(LogLevel::kInfo)) {
                 log_->Info("client", "STOP from fd=" + std::to_string(client_fd) +
                                          "; shutting the server down");

@@ -166,13 +166,14 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
                              /*linked_from=*/tail_id.value()};
 }
 
-Status ChainVisit(storage::PageStore& store, PageId head,
+Status ChainVisit(storage::PageStore& store, PageId head, storage::PageAccess access,
                   const std::function<Status(PageId, PageView&, std::uint16_t)>& fn) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = CheckHopBudget(steps, head); !s.ok()) return s;
 
-        auto bytes = store.Get(current);
+        auto bytes = access == storage::PageAccess::kWrite ? store.Get(current)
+                                                           : store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         PageView page(bytes.value());
 

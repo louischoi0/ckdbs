@@ -68,23 +68,36 @@ public:
     std::size_t open_connections() const noexcept { return clients_.size(); }
 
 private:
-    // One client's in-flight read buffer. Commands are newline-framed and
-    // a read can stop mid-line, so the remainder has to survive until the
+    // One client's in-flight buffers. Commands are newline-framed and a
+    // read can stop mid-line, so the remainder has to survive until the
     // next readable event - which is the whole reason a connection needs
-    // state at all.
+    // state at all. The outbox is the same story on the way out: a
+    // non-blocking socket can accept a partial reply, and the tail has to
+    // survive until the fd is writable again. It is also what makes one
+    // write() serve a whole batch of pipelined commands - see
+    // DrainCommands.
     struct Connection {
         std::string inbox;
+        std::string outbox;
+        bool want_writable = false;
     };
 
     explicit TcpServer(int fd) noexcept : listen_fd_(fd) {}
     void CloseIfOpen() noexcept;
 
     void OnListenerReadable();
+    void OnClientEvent(int client_fd, const sched::IoEvent& event);
     void OnClientReadable(int client_fd);
     // Returns false if the connection was closed and must not be touched
     // again - either the client hung up or a dispatched command stopped
     // the server.
     bool DrainCommands(int client_fd, Connection& conn);
+    // Writes as much of conn.outbox as the socket will take and drops what
+    // went out. Returns false if the connection was closed (write error).
+    bool FlushOutbox(int client_fd, Connection& conn);
+    // Keeps the fd's epoll interest in step with whether there is a reply
+    // tail still waiting to go out.
+    void SyncWriteInterest(int client_fd, Connection& conn);
     void CloseClient(int client_fd);
 
     bool logging(LogLevel level) const noexcept {

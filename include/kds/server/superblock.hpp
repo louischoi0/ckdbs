@@ -12,22 +12,18 @@
 // metadata - identity (magic/version/create time), the mount stamp, and the
 // per-core WAL anchors recovery starts from.
 //
-// What it deliberately does *not* hold is allocation state. The legacy
-// kernel engine's kds_superblock_t (kds_meta.h) carried a page-id counter,
-// total/free page counts, and a pre-allocation range; that half was ported
-// and then never wired to anything, because which page ids exist is
-// answered by DevicePageStore's free-map page instead - the one structure
-// that actually has to agree with the device. Two records of the same fact
-// is one record too many, so this one is gone rather than kept in sync.
+// What it deliberately does *not* hold is allocation state - no page-id
+// counter, no total/free page counts, no pre-allocation range. Which page
+// ids exist is answered by DevicePageStore's free-map page, the one
+// structure that has to agree with the device. Two records of the same
+// fact is one record too many.
 //
-// Ownership / concurrency: unlike the legacy kernel build (multiple
-// kthreads incrementing shared atomic64_t counters), this SuperBlock is
-// owned exclusively by the single DB master server process/thread
-// (src/server). Per rules.md #3 (thread-per-core, shared-nothing;
-// cross-core communication uses explicit message/queue interfaces), other
-// cores never touch a SuperBlock instance directly. That single-writer
-// property is what lets every method below be a plain (non-atomic)
-// read/write instead of the legacy code's atomic64_t fields.
+// Ownership / concurrency: this SuperBlock is owned exclusively by the
+// single master server thread (src/server). Per rules.md #3
+// (thread-per-core, shared-nothing; cross-core communication uses explicit
+// message/queue interfaces), other cores never touch an instance directly.
+// That single-writer property is what lets every method below be a plain
+// non-atomic read or write.
 //
 // Persistence: this file only does in-memory state plus encode/decode to
 // a raw kPageSize buffer (same field-wise memcpy, no reinterpret_cast,
@@ -40,7 +36,7 @@ namespace kds::server {
 
 // Page ids below this are reserved for fixed-position system structures
 // (the superblock's own page, the free map, catalog pages) - ported from
-// the legacy engine's KDS_SYS_RESERVED_PAGES. It is where DevicePageStore
+// It is where DevicePageStore
 // starts handing out ids, not something the superblock itself tracks.
 inline constexpr PageId kFirstUserPageId = 128;
 
@@ -144,7 +140,7 @@ inline constexpr std::size_t kWalAnchorTableSize = kMaxWalCores * kWalAnchorEntr
 
 // Bytes actually read/written; the rest of the page (up to kPageSize) is
 // reserved for future fields and always encoded as zero, same intent as
-// the legacy struct's explicit reserved2[8104] tail.
+// an explicit reserved tail.
 inline constexpr std::size_t kSuperBlockUsedSize = kWalAnchorTableOffset + kWalAnchorTableSize;
 
 static_assert(kSuperBlockBodyOffset + kSuperBlockUsedSize <= kPageSize);
@@ -166,7 +162,7 @@ public:
     // Reads a superblock image out of a raw page buffer (e.g. just loaded
     // off disk). Fails with Corruption if the magic doesn't match
     // kSuperBlockMagic - callers should treat that as "no database here
-    // yet" and call CreateFresh() instead, mirroring the legacy engine's
+    // yet" and call CreateFresh() instead, following the
     // fresh-init detection (kds_meta_is_fresh_init()).
     static StatusOr<SuperBlock> Decode(std::span<const std::byte, kPageSize> page);
 

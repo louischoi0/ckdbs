@@ -22,6 +22,15 @@
 
 namespace kds::storage {
 
+// Which of PageStore::Get()/GetForRead() a page walk should fetch through.
+// Named rather than a bool because it appears at call sites far from the
+// declaration, and because picking the wrong one on a mutating walk loses
+// the write silently - see GetForRead() below.
+enum class PageAccess {
+    kRead,   // the visitor will not write through the page
+    kWrite,  // the visitor may modify tuples in place
+};
+
 class PageStore {
 public:
     virtual ~PageStore() = default;
@@ -41,6 +50,43 @@ public:
     // Fetches an already-created page's bytes for reading or in-place
     // mutation. Fails with NotFound if page_id was never created.
     virtual StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) = 0;
+
+    // Get() for a caller that will not write through the returned span.
+    // A store that tracks dirty frames may use this to leave the frame
+    // clean; one that does not is already correct doing nothing, which is
+    // why the default is plain Get().
+    //
+    // The span is still mutable, and the promise is by contract rather
+    // than by type: the type-safe shape is a const page view, which is a
+    // mechanical refactor across every page layer (heap, btree)
+    // and is deliberately not attempted here. Writing through this span is
+    // a defect - the write lands in the frame and may never reach the
+    // device.
+    //
+    // The opt-in direction is the safe one. A caller that forgets to use
+    // this pays an unnecessary write-back; the inverse design - a Get()
+    // that leaves frames clean plus an explicit MarkDirty() - loses data
+    // the first time someone forgets the call.
+    virtual StatusOr<std::span<std::byte, kPageSize>> GetForRead(PageId page_id) {
+        return Get(page_id);
+    }
+
+    // CreateNew() for a page that carries no common page header - the
+    // whole 8 KiB belongs to the caller. For a payload that tiles the page
+    // exactly: a power-of-two entry array a header would cost an entry of,
+    // breaking the shift/mask addressing that is the point of it. Its one
+    // caller is the waystone directory's interior pages
+    // (stats/waystone_dir.hpp) - see DevicePageStore's header for what
+    // giving up the header costs.
+    //
+    // The default is plain CreateNew(), which is correct for any store
+    // that neither stamps nor verifies a page checksum - there is nothing
+    // to opt out of. A store that does (DevicePageStore) overrides it to
+    // record the fact durably, because getting this wrong writes a
+    // checksum over live data at byte 4.
+    virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderless() {
+        return CreateNew();
+    }
 
     // Records that the WAL record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn, which is what a store's write-back path

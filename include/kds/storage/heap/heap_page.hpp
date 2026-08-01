@@ -8,7 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
 
-// Semi-sorted heap page (KDS-DESIGN.md section 3). Layout within one
+// Semi-sorted heap page (docs/heap-and-tuple.md section 3). Layout within one
 // kPageSize buffer:
 //
 //   [ common page header    ]  <- offset 0, 32 bytes: page_type, checksum,
@@ -34,10 +34,9 @@
 // location (wal.md section 9) and the load path needs the checksum there
 // (page.md section 10); a heap page is one of the headered page classes.
 // The page is full when upper - lower is smaller than the next slot +
-// tuple need. This mirrors the legacy kernel heap.c's slotted-page design
-// (PostgreSQL-style): slots are stable references, and physical compaction
-// of dead slots is a separate, not-yet-implemented operation (same as the
-// legacy code - no VACUUM-equivalent exists yet).
+// tuple need. A PostgreSQL-style slotted page: slots are stable
+// references, and physical compaction of dead slots is a separate
+// operation that does not exist yet - there is no VACUUM equivalent.
 //
 // Concurrency: PageView has no internal synchronization. It is a thin view
 // over caller-owned bytes; the caller (eventually a buffer-pool frame) is
@@ -49,8 +48,7 @@
 // This first cut covers: page init, insert, read, delete-mark,
 // retire-slot, in-place overwrite, free-space accounting, and the
 // next-page link. This file stores trx_id/undo_ptr but does not interpret
-// them - visibility is the reader's job once snapshots exist, same
-// division of responsibility as the legacy heap.c.
+// them - visibility is the reader's job once snapshots exist.
 
 namespace kds::heap {
 
@@ -122,7 +120,7 @@ inline constexpr std::uint8_t kSlotFlagDeleted = 0x2;
 
 // ---- Tuple (MVCC) header ------------------------------------------------
 //
-// `trx_id` + `undo_ptr`, no xmax (wal.md 5.1, CONFIRMED 2026-07-28): a
+// `trx_id` + `undo_ptr`, no xmax (wal.md 5.1): a
 // version's death is the next version's birth, so walking the undo chain
 // already tells a reader which transaction overwrote a version. Storing
 // that boundary a second time in the older version would be redundant, and
@@ -182,9 +180,24 @@ public:
     // Formats `page` as a brand-new, empty heap page whose min_key is
     // fixed for the rest of the page's lifetime - no method below ever
     // writes header.min_key again. Fails only if `min_key` does not fit
-    // the Keystone column's 40-bit id space (KDS-DESIGN.md invariant 7).
+    // the Keystone column's 40-bit id space (docs/heap-and-tuple.md invariant 7).
     static StatusOr<PageView> CreateEmpty(std::span<std::byte, kPageSize> page,
                                            std::uint64_t min_key);
+
+    // CreateEmpty() for a page that stamps a different `page_type` in the
+    // common header while keeping this exact body layout. The one caller
+    // is the B+ tree, whose **leaves are heap pages** (btree.hpp): a leaf
+    // holds tuples in the same slot directory, with the same MVCC tuple
+    // header, and is walked by the same next_page_id link - the only
+    // differences are the header byte that says so and what `min_key` and
+    // the link *mean* (the leaf's low key, and its right sibling).
+    //
+    // Reusing the layout rather than defining a second slotted page is the
+    // point: InsertTuple/ReadTuple/OverwriteTuple/DeleteMark, the row
+    // codec and HEAP_INSERT redo all work on a leaf unchanged. `type` must be kHeap or kBtreeLeaf;
+    // anything else is InvalidArgument, because nothing else has this body.
+    static StatusOr<PageView> CreateEmptyAs(std::span<std::byte, kPageSize> page,
+                                             std::uint64_t min_key, PageType type);
 
     std::uint64_t min_key() const;
     std::uint16_t slot_count() const;
@@ -219,6 +232,28 @@ public:
     // NotFound only if `slot` is out of range or physically retired.
     StatusOr<Tuple> ReadTuple(std::uint16_t slot) const;
 
+    // Just the payload bytes of the tuple at `slot` - ReadTuple() without
+    // the MVCC header decode, and without re-reading the page header.
+    // `nr_slots` is the caller's already-read slot_count(): a key search
+    // over a page reads the header once and passes it in, where ReadTuple()
+    // re-reads all five header fields on every single call. That is the
+    // point of this method - a search probe touches the slot directory and
+    // the payload, nothing else.
+    //
+    // Deliberately returns bytes, not a decoded key: what the leading bytes
+    // of a payload *mean* is the row encoding's business, and this layer
+    // does not know that the Keystone column exists (see the layering note
+    // at the top of heap_page.cpp). Callers searching by primary key pair
+    // this with KeystoneIdOfPayload() from storage/keystone.hpp.
+    //
+    // Fails with NotFound on exactly the slots ReadTuple() does (out of
+    // range, or physically retired), so a search can treat NotFound as "no
+    // key here" and keep going. A delete-marked slot still has its bytes
+    // and still returns them, for the same reason ReadTuple() still returns
+    // the tuple: visibility is not this layer's decision.
+    StatusOr<std::span<const std::byte>> PayloadAt(std::uint16_t slot,
+                                                    std::uint16_t nr_slots) const;
+
     // Returns the payload capacity (slot.length - kTupleHeaderOnDiskSize)
     // reserved for the tuple at `slot` - the largest new payload
     // OverwriteTuple() could write there without relocating. Fails with
@@ -246,9 +281,8 @@ public:
     Status DeleteMark(std::uint16_t slot, std::uint64_t trx_id);
 
     // Marks `slot` dead; its bytes are not reclaimed (no page compaction -
-    // an open item, matches the legacy implementation's stance until a
-    // transaction manager can determine no snapshot still needs the
-    // space). Fails with NotFound if `slot` is already out of range/dead.
+    // an open item until a transaction manager can determine that no
+    // snapshot still needs the space). Fails with NotFound if `slot` is already out of range/dead.
     Status RetireSlot(std::uint16_t slot);
 
     // Raw slot-directory contents for `slot_idx`, dead or alive - unlike

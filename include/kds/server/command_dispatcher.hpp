@@ -1,14 +1,19 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/parser/ast.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/manager.hpp"
@@ -22,25 +27,24 @@
 // (TcpServer, tcp_server.hpp) - Dispatch() can be unit-tested directly,
 // with no socket or thread involved.
 //
-// Command set was originally a small, fixed vocabulary because nothing
-// called into src/parser: there was no query executor, and column types
-// in its grammar couldn't be resolved to on-disk type_val/len without a
-// type registry. That gap is now closed for a narrow scope - see
-// src/exec/row_codec.hpp's file comment for exactly what's supported
-// (no NULLs, no float/decimal columns, fixed-width ints + varchar only) -
-// by using Catalog::ResolveTypeByName() (sys.types, populated by
-// Bootstrap()) as the type registry stand-in. UPDATE is still not wired
-// in. CREATE TABLE keeps its original bare-name form (no parens - always
-// a zero-column ClusteredType::kHeap table) alongside the new SQL form,
-// disambiguated by whether a '(' follows the table name, so existing
-// callers of the bare form are unaffected.
+// The SQL statements (CREATE TABLE, INSERT, SELECT, UPDATE) are parsed by
+// src/parser and executed here. Column types are resolved through
+// Catalog::ResolveTypeByName() against sys.types, which stands in for the
+// type registry that does not exist yet; src/exec/row_codec.hpp names
+// exactly what that covers - no NULLs, no float or decimal columns,
+// fixed-width ints and varchar only.
+//
+// CREATE TABLE also keeps a bare-name form with no parens, which asks for
+// a zero-column table and therefore always errors now that every relation
+// needs a Keystone pk column. The two forms are disambiguated by whether a
+// '(' follows the table name.
 //
 // Protocol: one command per line, case-insensitive keyword, arguments
 // space-separated. A response is always exactly one line back (never
 // containing embedded newlines) - the platform-layer listener appends the
 // line terminator itself.
 //
-// ---- WAL (2026-07-30): INSERT is logged, nothing else is ----------------
+// ---- WAL: INSERT is logged, nothing else is -----------------------------
 //
 // Given a WalManager, INSERT appends the records that describe it and does
 // not answer the client until they are durable to the configured class
@@ -68,6 +72,29 @@
 // paid once per 8 KB of tuples, never per tuple. A HEAP_CHAIN_LINK record
 // type would remove it; that is a format decision, not this file's.
 //
+// ---- Clustered type: one dispatcher, two storages ----------------------
+//
+// A relation is either a chain of heap pages (`ClusteredType::kHeap`,
+// heap_chain.hpp) or a clustered B+ tree (`kBtree`, btree.hpp), and every
+// statement handler below branches on `TableAccess::clustered_type` in
+// exactly one place - `InsertIntoRelation`, `VisitRelation`, `LocateByPk`.
+// Everything else in this file is storage-agnostic, which is possible
+// because a btree **leaf is a heap page**: the row codec, `PageView`
+// reads/overwrites, `HEAP_INSERT` and the `SHOW PAGE` dump all work on
+// either without knowing which they hold.
+//
+// The observable differences are narrow and worth stating:
+//
+//   - `SELECT`/`UPDATE ... WHERE id = <n>` on a btree relation descends
+//     the tree, which is **authoritative** - a miss means the row does not
+//     exist, and no scan follows. The same statement on a heap relation
+//     scans the chain, because a heap relation has no pk index at all.
+//   - `INSERT` may split a leaf and grow the tree a level, in which case
+//     the relation's `desc_page_id` is repointed at the new root before
+//     the client is answered.
+//   - A full scan of either is a left-to-right walk of the same
+//     `next_page_id` links, so `SELECT *` returns rows in the same order.
+//
 // ---- Ordering: the records are appended after the page is mutated -------
 //
 // ChainInsert() writes the tuple into the page frame, and only then are
@@ -88,6 +115,19 @@ struct DispatchOutcome {
     bool should_stop = false;
 };
 
+// Where a tuple lives, as a point lookup reports it. Local to the
+// dispatcher because it is the shape of an answer to "skip the scan and
+// look here", not a storage-layer concept.
+struct TupleLocation {
+    PageId page_id = kInvalidPageId;
+    std::uint16_t slot = 0;
+    // The page's bytes, when whoever produced this location already had
+    // them - a btree descent does. Empty means "fetch page_id yourself";
+    // a reader must handle both. Dynamic extent because it has to have an
+    // unset state (btree.hpp Location::leaf).
+    std::span<std::byte> page{};
+};
+
 class CommandDispatcher {
 public:
     // `log` and `clock` are optional and independently so: a null logger
@@ -100,7 +140,7 @@ public:
     // query took needs a monotonic reading, and taking one directly would
     // be the std::chrono call rules.md section 4 forbids.
     // `wal` is optional too, and null means INSERT mutates pages without
-    // logging them - the pre-2026-07-30 behaviour, which the socket-free
+    // logging them - the unlogged path, which the socket-free
     // unit tests and the catalog-level tests still run on.
     CommandDispatcher(SuperBlock& superblock, catalog::Catalog& catalog,
                        storage::PageStore& page_store, Logger* log = nullptr,
@@ -129,8 +169,18 @@ public:
     //                            process dying.
     //   SHOW META             -> superblock stats, one line
     //   SHOW TABLES           -> space-separated table names
+    //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
+    //                            section per sys.patterns row. An
+    //                            inspection surface: it lists rows from
+    //                            older fingerprint revisions too, marked
+    //                            `stale=v<n>`, because those are the dead
+    //                            weight a version bump leaves behind and
+    //                            seeing them is the point.
     //   SHOW PAGE <page_id> [VALUES]
-    //                         -> heap page header + slot directory dump.
+    //                         -> page dump: header + slot directory for a
+    //                            heap page or a B+ tree leaf, or level +
+    //                            separator array for a B+ tree internal
+    //                            node.
     //                            Still exactly one wire line (never a raw
     //                            newline byte), but sections are joined
     //                            with the literal two-character escape
@@ -147,7 +197,8 @@ public:
     //   DESCRIBE <name>       -> a summary line
     //                            "oid=<n> root_page_id=<n>
     //                             clustered_type=<HEAP|BTREE> next_id=<n>
-    //                             columns=<n>", then one "\n"-escaped
+    //                             columns=<n>" (plus height=<n> leaves=<n>
+    //                             for a BTREE relation), then one "\n"-escaped
     //                            (see SHOW PAGE above) section per column:
     //                            "pos=<n> name=<s> type=<s> len=<n>
     //                             notnull=<yes|no> pk=<yes|no>
@@ -167,9 +218,10 @@ public:
     //                         -> same CREATED/EXISTS response as above,
     //                            but with real columns: parsed via
     //                            src/parser, types resolved through
-    //                            Catalog::ResolveTypeByName(). BTREE is
-    //                            parsed but rejected (not implemented -
-    //                            see catalog.cpp). See
+    //                            Catalog::ResolveTypeByName(). The trailing
+    //                            keyword picks the storage: HEAP (default)
+    //                            is a chain of heap pages, BTREE is a
+    //                            clustered B+ tree on the Keystone pk. See
     //                            src/exec/row_codec.hpp for the supported
     //                            column type set.
     //   INSERT INTO <name> VALUES (<val> [, ...])
@@ -184,8 +236,10 @@ public:
     //                            value list is an error naming the pk
     //                            column (CLAUDE.md invariant 10).
     //   SELECT * FROM <name> [WHERE <cond> [AND <cond>]*]
-    //                         -> a full heap-page scan (root page only -
-    //                            no multi-page chains yet), WHERE-filtered.
+    //                         -> a full ordered scan of the relation,
+    //                            WHERE-filtered; a bare `WHERE <pk> = <n>`
+    //                            instead takes the point path (a tree
+    //                            descent, on a btree relation).
     //                            One wire line: "col1,col2,..." then one
     //                            "\n"-escaped (see SHOW PAGE above) section
     //                            per matching row, comma-joined values.
@@ -204,12 +258,30 @@ private:
     DispatchOutcome HandleListTables();
     DispatchOutcome HandleDescribe(std::string_view args);
     DispatchOutcome HandleShowPage(std::string_view args);
+    DispatchOutcome HandleShowPatterns();
     DispatchOutcome HandleCreateTable(std::string_view args);
     DispatchOutcome HandleCreateTableSql(std::string_view line);
     DispatchOutcome HandleInsert(std::string_view line);
     DispatchOutcome HandleSelect(std::string_view line);
     DispatchOutcome HandleUpdate(std::string_view line);
     DispatchOutcome HandleSync();
+
+    // Runs the insert against whichever storage the relation uses, and
+    // reports the result in the vocabulary both share
+    // (storage/insert_placement.hpp).
+    StatusOr<storage::InsertPlacement> InsertIntoRelation(const catalog::TableAccess& access,
+                                                          std::uint64_t id,
+                                                          std::span<const std::byte> payload,
+                                                          std::uint64_t trx_id);
+
+    // A full ordered scan of the relation, whichever storage it uses. Both
+    // walk sibling/next links left to right, so the row order is identical.
+    //
+    // `page_access` must be kWrite whenever `fn` modifies a tuple - UPDATE
+    // and DELETE scan through here - and kRead otherwise, which is what
+    // keeps a SELECT from dirtying every page it reads (page_store.hpp).
+    Status VisitRelation(const catalog::TableAccess& access, storage::PageAccess page_access,
+                         const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn);
 
     // Appends the record set above for one placed tuple, stamps page_lsn
     // on every page it touched, and applies the durability class. A no-op
@@ -223,8 +295,50 @@ private:
     // holds, because an unstamped page carries page_lsn 0 and a page whose
     // records failed to append is indistinguishable from one nothing
     // logged; closing that needs the abort path a transaction layer owns.
-    Status LogInsert(const heap::ChainInsertResult& placed, std::uint64_t id,
+    // `leaf_type` is the page type a PAGE_INIT record names for a new tuple
+    // page: kHeap for a chain, kBtreeLeaf for a tree.
+    Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id);
+
+    // What a `WHERE id = <const>` statement should do instead of scanning.
+    // The three cases are distinct because the *authority* of the answer
+    // differs:
+    //
+    //   kScan    no shortcut. Scan; the scan is the authoritative path and
+    //            produces the same answer. Every heap relation lands here,
+    //            having no pk index to descend.
+    //   kAt      look at this (page, slot) - a btree descent, which is
+    //            authoritative.
+    //   kAbsent  **no such row**, on authority. Only a btree descent can
+    //            say this, so a heap relation never produces it.
+    struct PkLookup {
+        enum class Kind { kScan, kAt, kAbsent };
+        Kind kind = Kind::kScan;
+        TupleLocation at;
+    };
+    PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
+
+    // The bytes of the page a located tuple sits on, for a reader. Reuses
+    // the span the locator carried out when it has one, and fetches
+    // read-only when it does not.
+    //
+    // Read paths only. A writer must go through page_store_.Get() even
+    // when TupleLocation::page is populated: the span is the same frame
+    // either way, but only Get() marks it dirty, and a write to a frame
+    // nothing will write back is a write that never happened.
+    StatusOr<std::span<std::byte, kPageSize>> PageForRead(const TupleLocation& at);
+
+    // The pk value a WHERE clause is a *bare* equality against, or nullopt
+    // if it is anything else - no WHERE, more than one condition, a non-pk
+    // column, a non-equality operator, or a non-integer or negative
+    // literal.
+    //
+    // Shared by SELECT and UPDATE so the two cannot disagree about which
+    // predicates take the point path. Duplicating this check is how one
+    // path ends up descending for a query the other correctly scans.
+    std::optional<std::uint64_t> PkEqualityTarget(
+        const catalog::TableAccess& access,
+        const std::vector<parser::Condition>& where) const;
 
     // Diagnostics. Levels are chosen so the default (info) is quiet under
     // load: DDL and SYNC are Info because they are rare and consequential,

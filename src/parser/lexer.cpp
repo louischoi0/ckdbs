@@ -49,8 +49,8 @@ Token Lexer::ReadToken() {
 
     char c = src_[pos_];
 
-    // String literal: 'value'. No escaping - matches the legacy engine's
-    // deliberate limitation (KDS-SQL string literals can't contain '\'').
+    // String literal: 'value'. No escaping, deliberately - a string
+    // literal cannot contain a quote.
     if (c == '\'') {
         ++pos_;
         std::size_t start = pos_;
@@ -123,6 +123,7 @@ Token Lexer::ReadToken() {
         case '=': tok.type = TokenType::kEq; break;
         case '<': tok.type = TokenType::kLt; break;
         case '>': tok.type = TokenType::kGt; break;
+        case '?': tok.type = TokenType::kParam; break;
         default: tok.type = TokenType::kError; break;
     }
     return tok;

@@ -61,14 +61,22 @@ void PageView::WriteSlot(std::uint16_t idx, const HeapSlotFields& s) {
 
 StatusOr<PageView> PageView::CreateEmpty(std::span<std::byte, kPageSize> page,
                                           std::uint64_t min_key) {
+    return CreateEmptyAs(page, min_key, PageType::kHeap);
+}
+
+StatusOr<PageView> PageView::CreateEmptyAs(std::span<std::byte, kPageSize> page,
+                                            std::uint64_t min_key, PageType type) {
+    if (type != PageType::kHeap && type != PageType::kBtreeLeaf) {
+        return Status::InvalidArgument("only kHeap and kBtreeLeaf pages carry a heap page body");
+    }
     if (min_key > kMaxTupleId) {
         return Status::InvalidArgument("min_key exceeds 40-bit tuple id range");
     }
 
-    // Zeroes the page and writes the common header (page_type kHeap,
-    // page_lsn 0, checksum 0 - the checksum is stamped at flush time,
-    // page.md section 8). Everything this file writes lives above it.
-    storage::FormatPage(page, PageType::kHeap);
+    // Zeroes the page and writes the common header (the requested page
+    // type, page_lsn 0, checksum 0 - the checksum is stamped at flush
+    // time, page.md section 8). Everything this file writes lives above it.
+    storage::FormatPage(page, type);
 
     PageView view(page);
 
@@ -82,10 +90,9 @@ StatusOr<PageView> PageView::CreateEmpty(std::span<std::byte, kPageSize> page,
     h.min_key = min_key;
     view.WriteHeader(h);
 
-    // kInvalidPageId (not 0) marks "no next page": unlike the legacy
-    // kernel code, this design reserves 0xFFFFFFFF rather than 0 as the
-    // invalid page id sentinel (common.hpp), so that's the "no next page"
-    // value here too.
+    // kInvalidPageId, not 0, marks "no next page": 0xFFFFFFFF is the
+    // engine-wide invalid page id (common.hpp), and 0 is a real page - the
+    // superblock.
     view.set_next_page_id(kInvalidPageId);
 
     return view;
@@ -194,6 +201,28 @@ StatusOr<PageView::Tuple> PageView::ReadTuple(std::uint16_t slot_idx) const {
 
     t.payload = std::span<const std::byte>(tuple_base + kTupleHeaderOnDiskSize, data_len);
     return t;
+}
+
+StatusOr<std::span<const std::byte>> PageView::PayloadAt(std::uint16_t slot_idx,
+                                                          std::uint16_t nr_slots) const {
+    if (slot_idx >= nr_slots) {
+        return Status::NotFound("slot index out of range");
+    }
+
+    HeapSlotFields slot = ReadSlot(slot_idx);
+    if ((slot.flags & kSlotFlagDead) != 0 || slot.length == 0) {
+        return Status::NotFound("slot is dead");
+    }
+
+    // data_len rather than slot.length: the slot's length is the *reserved*
+    // span (header + payload capacity, see SlotCapacity) and a tuple may
+    // occupy less of it, so data_len is what ReadTuple() hands out and what
+    // this has to agree with.
+    const std::byte* tuple_base = page_.data() + slot.offset;
+    std::uint16_t data_len;
+    std::memcpy(&data_len, tuple_base + kTupleDataLenOffset, sizeof(data_len));
+
+    return std::span<const std::byte>(tuple_base + kTupleHeaderOnDiskSize, data_len);
 }
 
 StatusOr<std::uint16_t> PageView::SlotCapacity(std::uint16_t slot_idx) const {

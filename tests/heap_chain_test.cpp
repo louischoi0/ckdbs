@@ -126,7 +126,7 @@ TEST(HeapChainTest, EveryTupleIsReadableBackInIdOrder) {
     FillChain(store, head, 40, /*filler=*/1016);
 
     std::vector<std::uint64_t> seen;
-    Status s = ChainVisit(store, head,
+    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
                           [&](PageId, PageView& page, std::uint16_t slot) -> Status {
                               auto tuple = page.ReadTuple(slot);
                               if (!tuple.ok()) return Status::OK();
@@ -156,7 +156,7 @@ TEST(HeapChainTest, EachPagesIdsAreBelowTheNextPagesMinKey) {
     std::vector<std::uint64_t> min_keys;
     std::vector<std::vector<std::uint64_t>> ids_per_page;
 
-    Status s = ChainVisit(store, head,
+    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
                           [&](PageId page_id, PageView& page, std::uint16_t slot) -> Status {
                               if (pages.empty() || pages.back() != page_id) {
                                   pages.push_back(page_id);
@@ -291,7 +291,8 @@ TEST(HeapChainTest, AVisitorsErrorStopsTheWalk) {
     FillChain(store, head, 10, /*filler=*/56);
 
     int visits = 0;
-    Status s = ChainVisit(store, head, [&](PageId, PageView&, std::uint16_t) -> Status {
+    Status s = ChainVisit(store, head, storage::PageAccess::kRead,
+                          [&](PageId, PageView&, std::uint16_t) -> Status {
         ++visits;
         if (visits == 3) return Status::InvalidArgument("stop here");
         return Status::OK();

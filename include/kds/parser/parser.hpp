@@ -6,12 +6,10 @@
 #include "kds/parser/ast.hpp"
 #include "kds/parser/lexer.hpp"
 
-// Recursive-descent parser for the KDS SQL subset (ast.hpp documents the
-// supported grammar), ported from the legacy kernel engine's kds_parse()
-// (parser.c). Every Parse*() method follows the same contract as the
-// legacy parse_*() functions: returns/propagates a non-ok Status on the
-// first syntax error and stops (no error recovery/backtracking - once a
-// production fails, the whole parse fails).
+// Recursive-descent parser for the KDS SQL subset; ast.hpp documents the
+// grammar. Every Parse*() method follows one contract: return or propagate
+// a non-ok Status on the first syntax error and stop. There is no error
+// recovery and no backtracking - once a production fails, the parse fails.
 //
 // rules.md #1: `throw` is forbidden, so every fallible step here returns
 // Status/StatusOr rather than throwing - this is pure, syscall-free
@@ -28,7 +26,7 @@ public:
     // Fails with InvalidArgument (message describes the syntax error) if
     // the input is empty, uses an unsupported keyword, or is otherwise
     // malformed - including trailing garbage after an otherwise-valid
-    // statement (mirrors the legacy engine's "only EOF may follow" check).
+    // statement: only EOF may follow one.
     StatusOr<Statement> Parse();
 
 private:
