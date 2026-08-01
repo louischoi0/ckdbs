@@ -229,6 +229,49 @@ TEST(FingerprintTest, AForeignVersionIsAMissNotAnError) {
     EXPECT_TRUE(FingerprintOf("SELECT * FROM t WHERE id = 1").has_value());
 }
 
+// ---- V04: reserving a word must not move a hash ---------------------------
+
+TEST(FingerprintTest, AReservedWordHashesExactlyAsAnIdentifierDoes) {
+    // The invariant V04 is graded on, stated where it can fail loudly.
+    // Before V04 the lexer had no keyword token type, so `IN` and
+    // `BETWEEN` reached this code as kIdent. If reserving them changed
+    // their shape tag - or dropped their text - every pattern_id for a
+    // statement containing one would move, and pattern_id is the key to
+    // every stored waystone. That is a format break, and it would be
+    // caused by a change that alters no statement's meaning.
+    //
+    // These two hashes were recorded from a build in which `IN` and
+    // `BETWEEN` did not exist as keywords - they came off the lexer as
+    // plain identifiers. Pinning the literal values is the only assertion
+    // that actually witnesses the invariant: a relative comparison between
+    // two post-V04 hashes moves in lockstep when the tag changes and
+    // notices nothing.
+    EXPECT_EQ(Must("SELECT * FROM t WHERE id IN (1, 2)").pattern_id, 0xb87254b3cae4a5b8ull);
+    EXPECT_EQ(Must("SELECT * FROM t WHERE id BETWEEN 1 AND 5").pattern_id, 0xaf3f6ac336bb68d8ull);
+    EXPECT_EQ(Must("SELECT * FROM t AS a").pattern_id, 0xa91c9b42e1642b7cull);
+
+    // And the text still distinguishes one reserved word from another,
+    // case-folded exactly as an identifier is - so reserving a word costs
+    // no shape resolution either.
+    EXPECT_NE(Must("SELECT * FROM t WHERE a in b").pattern_id,
+              Must("SELECT * FROM t WHERE a between b").pattern_id);
+    EXPECT_EQ(Must("SELECT * FROM t WHERE a IN b").pattern_id,
+              Must("SELECT * FROM t WHERE a in b").pattern_id);
+}
+
+TEST(FingerprintTest, AQualifiedNameIsFingerprintableAndTheDotIsShape) {
+    // A '.' lexed as kError before V04, and kError means nullopt - so
+    // these statements had no fingerprint at all. Gaining one is the
+    // transition fingerprint.hpp's bump rule permits without a version
+    // bump: nothing already stored changes meaning.
+    const auto qualified = FingerprintOf("SELECT * FROM t WHERE t.id = 1");
+    ASSERT_TRUE(qualified.has_value());
+
+    // The dot is shape, not an argument: it says where a column lives.
+    EXPECT_EQ(qualified->literal_count, 1u);
+    EXPECT_NE(qualified->pattern_id, Must("SELECT * FROM t WHERE t id = 1").pattern_id);
+}
+
 TEST(FingerprintTest, AnEmptyArgumentStreamHasAFixedHash) {
     // The FNV offset basis, unmodified: a statement with no inline
     // literals still has a well-defined instance key.

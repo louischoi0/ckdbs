@@ -1,0 +1,148 @@
+
+--- setup --------------------------------------------------------------
+
+# two relations to join, and three rows
+  CREATE TABLE demo_acct (id int64, name varchar, tier varchar)
+  -> EXISTS oid=4000
+  CREATE TABLE demo_trade (id int64, acct_id int64, sym varchar)
+  -> EXISTS oid=4004
+  INSERT INTO demo_acct VALUES ('alice', 'gold')
+  -> INSERTED oid=4000 id=3 page=128 slot=2
+  INSERT INTO demo_acct VALUES ('bob', 'silver')
+  -> INSERTED oid=4000 id=4 page=128 slot=3
+  INSERT INTO demo_trade VALUES (1, 'AAPL')
+  -> INSERTED oid=4004 id=2 page=129 slot=1
+
+--- V04  the lexer: keywords, the dot token, byte offsets --------------
+
+# the baseline: one relation, no qualifier
+  SELECT * FROM demo_acct
+  -> id   name    tier
+  -> --  -----  ------
+  ->  1  alice    gold
+  ->  2    bob  silver
+  ->  3  alice    gold
+  ->  4    bob  silver
+
+# `a.x` now tokenizes at all - before V04 the '.' was a lexing error
+  SELECT * FROM demo_acct WHERE demo_acct.tier = 'gold'
+  -> id   name  tier
+  -> --  -----  ----
+  ->  1  alice  gold
+  ->  3  alice  gold
+
+# a qualifier that names no relation is caught rather than ignored
+  SELECT * FROM demo_acct WHERE nosuch.tier = 'gold'
+  -> ERR 'nosuch.tier' names no relation in scope at byte 30
+
+# only 11 words are reserved, so `tier`, `note`, `values` are still column names
+  SELECT * FROM demo_acct WHERE tier = 'silver'
+  -> id  name    tier
+  -> --  ----  ------
+  ->  2   bob  silver
+  ->  4   bob  silver
+
+--- V05  joins and aliases ---------------------------------------------
+
+# an alias renames the relation for predicates, not for the catalog
+  SELECT * FROM demo_acct AS a WHERE a.id = 1
+  -> id   name  tier
+  -> --  -----  ----
+  ->  1  alice  gold
+
+# a join executes: rows are paired through a pk probe on the second relation
+  SELECT demo_acct.name, demo_trade.sym FROM demo_acct JOIN demo_trade ON demo_acct.id = demo_trade.acct_id
+  -> demo_acct.name  demo_trade.sym
+  -> --------------  --------------
+  ->          alice            AAPL
+  ->          alice            AAPL
+
+# outer joins are reserved before they are implementable, so the error is truthful
+  SELECT demo_acct.id FROM demo_acct LEFT JOIN demo_trade ON demo_acct.id = demo_trade.acct_id
+  -> ERR outer joins are not supported: 'LEFT' at byte 35; only inner equi-joins (JOIN ... ON) are available
+
+# one relation twice with no way to tell the occurrences apart
+  SELECT demo_acct.id FROM demo_acct JOIN demo_acct ON demo_acct.id = demo_acct.id
+  -> ERR relation 'demo_acct' at byte 40 is named twice in the FROM list; give each occurrence a distinct alias (`AS a`, `AS b`) so a predicate can say which one it means
+
+# ...and the same statement is fine once each occurrence has its own alias
+  SELECT a.id, b.id FROM demo_acct AS a JOIN demo_acct AS b ON a.id = b.id
+  -> a.id  b.id
+  -> ----  ----
+  ->    1     1
+  ->    2     2
+  ->    3     3
+  ->    4     4
+
+--- V06  projection and qualified names --------------------------------
+
+# an explicit select list emits exactly those columns, resolved to indices at compile
+  SELECT name FROM demo_acct
+  ->  name
+  -> -----
+  -> alice
+  ->   bob
+  -> alice
+  ->   bob
+
+# `SELECT *` has no answer across two relations - which columns, in what order?
+  SELECT * FROM demo_acct JOIN demo_trade ON demo_acct.id = demo_trade.acct_id
+  -> ERR SELECT * is ambiguous across 2 relations (byte 7); name the columns you want, qualified (`a.x, b.y`)
+
+# one relation is never ambiguous, so `SELECT *` still works, alias and all
+  SELECT * FROM demo_acct AS a WHERE a.tier = 'gold'
+  -> id   name  tier
+  -> --  -----  ----
+  ->  1  alice  gold
+  ->  3  alice  gold
+
+--- V07  predicate-position subqueries ---------------------------------
+
+# EXISTS: uncorrelated, so evaluated once before the outer relation is opened
+  SELECT * FROM demo_acct WHERE EXISTS (SELECT * FROM demo_trade)
+  -> id   name    tier
+  -> --  -----  ------
+  ->  1  alice    gold
+  ->  2    bob  silver
+  ->  3  alice    gold
+  ->  4    bob  silver
+
+# NOT IN is its own predicate, not !IN - a NULL in the result makes it UNKNOWN
+  SELECT * FROM demo_acct WHERE id NOT IN (SELECT acct_id FROM demo_trade)
+  -> id   name    tier
+  -> --  -----  ------
+  ->  2    bob  silver
+  ->  3  alice    gold
+  ->  4    bob  silver
+
+# a scalar subquery: more than one row is a runtime error, not a parse error
+  SELECT * FROM demo_acct WHERE id = (SELECT acct_id FROM demo_trade)
+  -> ERR a scalar subquery returned more than one row; parse time cannot prove cardinality, so this is checked per execution
+
+# an UPDATE takes the same predicate through the same evaluator
+  UPDATE demo_acct SET tier = 'x' WHERE id IN (SELECT acct_id FROM demo_trade)
+  -> UPDATED 1
+
+# a derived table: the relation-reference production must not reach the statement one
+  SELECT * FROM (SELECT * FROM demo_trade)
+  -> ERR a subquery cannot appear in FROM (byte 14); derived tables and CTEs are not supported, only predicate-position subqueries
+
+# a CTE is declined by name, so a client learns WITH is refused and not unknown
+  WITH x AS (SELECT * FROM demo_trade) SELECT * FROM x
+  -> ERR common table expressions (WITH) are not supported (byte 0); subqueries are allowed in predicate position only
+
+# the depth cap is 4; the parser recurses per level, so an uncapped nest is a crash
+  SELECT * FROM demo_acct WHERE EXISTS (SELECT * FROM demo_acct WHERE EXISTS (SELECT * FROM demo_acct WHERE EXISTS (SELECT * FROM demo_acct WHERE EXISTS (SELECT * FROM demo_acct WHERE EXISTS (SELECT * FROM demo_acct)))))
+  -> ERR subquery nesting deeper than 4 is not supported (byte 189)
+
+--- still open ---------------------------------------------------------
+
+# I14 undecided: an aggregate gives a bare syntax error, not a positioned refusal
+  SELECT * FROM demo_acct WHERE id = (SELECT COUNT(*) FROM demo_trade)
+  -> ERR expected 'FROM', got '('
+
+========================================================================
+16 statements ran, 9 were refused.
+The refusals that remain are forms the language declines outright.
+Each names what it declined and where, instead of quietly answering a
+question the engine cannot answer.

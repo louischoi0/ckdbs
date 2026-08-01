@@ -63,6 +63,13 @@ enum class ShapeTag : std::uint8_t {
     kLte = 11,
     kGt = 12,
     kGte = 13,
+    // Appended by V04 with the `.` token. Appending is free: no statement
+    // that hashes today contains a dot, because a dot was a kError and
+    // kError returns nullopt. Statements with qualified names go from
+    // "no fingerprint" to "a fingerprint", which the bump rule in
+    // fingerprint.hpp names explicitly as the case that does *not* need a
+    // version bump - nothing already stored changes meaning.
+    kDot = 14,
 };
 
 // Tags for the argument stream, distinguishing the literal's type. The
@@ -94,6 +101,15 @@ bool IsPatternableLeadingWord(std::string_view folded) noexcept {
 
 bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
     switch (type) {
+        // A reserved word hashes as an identifier, tag and all. This is
+        // not a convenience: before V04 reserved these seven words they
+        // *were* identifiers to this lexer, so any other tag would move
+        // the pattern_id of every statement containing `IN`, `EXISTS`,
+        // `AS`, `NOT`, `BETWEEN`, `JOIN` or `ON` - a format break retiring
+        // every waystone stored under one, for a lexer change that altered
+        // no statement's meaning. The same holds for every keyword
+        // reserved after this one, which is why they share a token type.
+        case TokenType::kKeyword:
         case TokenType::kIdent: out = ShapeTag::kIdent; return true;
         // The convergence point: an int literal, a string literal and a
         // `?` all emit the same marker, which is what makes
@@ -106,6 +122,7 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         case TokenType::kRParen: out = ShapeTag::kRParen; return true;
         case TokenType::kComma: out = ShapeTag::kComma; return true;
         case TokenType::kStar: out = ShapeTag::kStar; return true;
+        case TokenType::kDot: out = ShapeTag::kDot; return true;
         case TokenType::kEq: out = ShapeTag::kEq; return true;
         case TokenType::kNeq: out = ShapeTag::kNeq; return true;
         case TokenType::kLt: out = ShapeTag::kLt; return true;
@@ -131,6 +148,11 @@ std::optional<Fingerprint> FingerprintOf(std::string_view sql) {
 
     // The leading word decides patternability, and it is the first thing
     // hashed, so two statement kinds can never share a shape prefix.
+    //
+    // kIdent only: the three patternable words are unreserved, so a
+    // statement opening with a reserved word (`NOT …`) is not patternable
+    // - which is the same answer it got when that word lexed as an
+    // identifier and failed the allow-list below.
     Token first = lexer.Next();
     if (first.type != TokenType::kIdent) return std::nullopt;
 
@@ -157,6 +179,11 @@ std::optional<Fingerprint> FingerprintOf(std::string_view sql) {
         shape.Byte(static_cast<std::uint8_t>(tag));
 
         switch (tok.type) {
+            // Both hash their folded text after the shared kIdent tag -
+            // see ShapeTagOf(). A keyword falling through to `default`
+            // here would drop its text and collapse `WHERE id IN (…)` and
+            // `WHERE id AS (…)` onto one shape, as well as moving both.
+            case TokenType::kKeyword:
             case TokenType::kIdent: {
                 folded.clear();
                 for (char c : tok.text) folded.push_back(FoldAscii(c));

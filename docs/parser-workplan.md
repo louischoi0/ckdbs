@@ -1,5 +1,9 @@
 # KDS Parser — Workplan
 
+> **SUPERSEDED 2026-08-01 by `docs/parser-v2-workplan.md`. Kept as history; do not build from this file.**
+>
+> No PR task here was ever started. The v2 workplan absorbs twelve of them unchanged, amends twelve, adds twelve new ones (chiefly the executor phase this file had one task for), and retires exactly one clause — PR16's requirement that no nested SELECT ever parse. The task-by-task disposition table is at the end of `docs/parser-v2-workplan.md`; cite `V*` ids, not `PR*`.
+
 Work instructions, companion to `docs/parser.md` (the blueprint). The blueprint's items are built as stated; its `[PROPOSED]` class list (I2) is built as the default; its `[OPEN]` item (I14, aggregates) is **not** touched by any task here.
 
 Baseline being replaced: a recursive-descent parser with a `std::string`/`std::vector` AST, a copying lexer, no class tag, and no catalog binding. The grammar today is `CREATE TABLE` / `INSERT` / `SELECT *` / `UPDATE` with AND-only `col op val` filters. Fingerprinting already exists (`include/kds/parser/fingerprint.hpp`) as a separate pass over the same lexer; the work below folds it into the single pass rather than rebuilding it.

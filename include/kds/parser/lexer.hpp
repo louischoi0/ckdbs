@@ -23,7 +23,11 @@ public:
     Token Next();
 
 private:
+    // ReadToken() skips to the token, calls ScanToken() for it, and stamps
+    // the byte range it covered. ScanToken() never sets a position: doing
+    // it in one place is what guarantees every token has one.
     Token ReadToken();
+    Token ScanToken();
     void SkipWhitespaceAndComments();
 
     std::string_view src_;

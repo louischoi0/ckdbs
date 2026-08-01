@@ -65,6 +65,35 @@ durability = group
 # next checkpoint or shutdown.
 wal_drain_interval_us = 1000
 
+# ---- Query limits ----------------------------------------------------------
+
+# Ceiling on the tuples a single statement may decode before it is refused
+# with `ResourceExhausted`. 0 means unlimited.
+#
+# This is not a performance knob, it is a availability one. Nothing
+# suspends mid-statement: the engine is thread-per-core and cooperative
+# (docs/rules.md §3), so a statement runs to completion on the core it
+# started on and every other client on that core waits for it. A statement
+# that reads an unbounded number of rows therefore does not run slowly, it
+# takes a core out of service.
+#
+# The easy way to write one is a correlated subquery or a join on a non-pk
+# column: both read the inner relation once per outer row, so two relations
+# of n rows is n² decodes from a statement that fits on one line and looks
+# entirely reasonable. Failing after a bounded amount of work is the kinder
+# answer than a connection that never replies - the client can rewrite the
+# statement, where it cannot diagnose a hang.
+#
+# The default is `[PROPOSED]`, set where it can only catch accidents: a
+# full scan of a relation filling a 64 MB buffer pool is on the order of
+# 10⁶ tuples, so 10⁸ leaves two orders of magnitude of headroom above
+# anything deliberate. The right number comes from measuring the workloads
+# this engine is actually pointed at.
+#
+# Set it to 0 for one honest purpose: measuring the cost of the very
+# statement the budget would refuse.
+max_rows_touched = 100000000
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

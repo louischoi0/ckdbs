@@ -388,8 +388,10 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
                             std::to_string(leaf_id));
 }
 
-Status BtreeVisit(storage::PageStore& store, PageId root, storage::PageAccess access,
-                  const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn) {
+Status BtreeVisit(
+    storage::PageStore& store, PageId root, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn) {
     auto first = LeftmostLeaf(store, root);
     if (!first.ok()) return first.status();
 
@@ -416,7 +418,11 @@ Status BtreeVisit(storage::PageStore& store, PageId root, storage::PageAccess ac
         for (std::uint16_t i = 0; i < n; ++i) {
             // Liveness is re-tested by the callback through ReadTuple();
             // skipping here as well would mean two reads of every slot.
-            if (Status s = fn(current, leaf, i); !s.ok()) return s;
+            auto outcome = storage::ResolveVisit(fn(current, leaf, i), "BtreeVisit");
+            if (!outcome.ok()) return outcome.status();
+            // Successful early exit, as in ChainVisit: the leaves to the
+            // right of this one are never fetched.
+            if (outcome.value() == storage::VisitControl::kStop) return Status::OK();
         }
 
         const PageId next = leaf.next_page_id();

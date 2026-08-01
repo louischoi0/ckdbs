@@ -622,6 +622,8 @@ Status CheckWaystonePair(PageId root, std::uint8_t depth) {
 
 }  // namespace
 
+StatusOr<const std::vector<SysTypeRow>*> Catalog::ListTypes() { return EnsureTypes(); }
+
 StatusOr<std::vector<SysPatternRow>> Catalog::ListPatterns() {
     return ScanAll<SysPatternRow>(store_, kCatalogPagePatterns);
 }

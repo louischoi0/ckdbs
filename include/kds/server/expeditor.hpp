@@ -98,6 +98,16 @@ public:
         // for not waiting at all.
         wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
 
+        // Ceiling on the tuples one statement may decode before it is
+        // refused with ResourceExhausted (exec/budget.hpp). 0 is
+        // unlimited.
+        //
+        // It exists because nothing suspends mid-statement on a
+        // cooperative core: an unbounded statement holds that core against
+        // every other client on it, so a bounded failure is the kinder
+        // answer than a connection that never replies.
+        std::uint64_t max_rows_touched = exec::kDefaultRowTouchBudget;
+
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
         // kGroup batch nobody is waiting on; a drain with nothing pending

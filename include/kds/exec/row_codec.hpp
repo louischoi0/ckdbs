@@ -83,17 +83,37 @@ StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload);
 StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
                                                    std::span<const std::byte> payload);
 
+// The same decode, writing into storage the caller already owns (V16).
+//
+// `out` must have exactly one slot per schema column; the values are
+// written in place. This is what makes a chain scan allocate O(1) rather
+// than O(rows): a chain frame sizes its buffer once when the statement
+// opens and every row decodes into the same slots, where DecodeRow()
+// returns a fresh vector - one allocation per row per step, on the hot
+// path of every join.
+//
+// DecodeRow() above is now a thin wrapper over this, so there is one
+// decoder and no possibility of the two drifting.
+Status DecodeRowInto(const catalog::Schema& schema, std::span<const std::byte> payload,
+                     std::span<parser::AstValue> out);
+
 // Renders one decoded value for display in a SELECT response line.
 // Prefers AstValue::raw_int_text when set (exact literal/uint64 text),
 // falling back to int_val otherwise.
 std::string FormatValue(const parser::AstValue& value);
 
-// Evaluates an AND-combined WHERE clause (empty = always matches) against
-// one decoded row. A condition naming an unknown column, or comparing
-// across incompatible value kinds (e.g. a string literal against an int
-// column), never matches - same "no match" outcome SQL's NULL-comparison
-// semantics would give here in the absence of real NULL support.
-bool MatchesWhere(const catalog::Schema& schema, const std::vector<parser::AstValue>& row,
-                   const std::vector<parser::Condition>& where);
+// Compares two decoded values under one operator, with `type_val` saying
+// how to read them - uint64 columns compare through their digit text,
+// since int_val cannot represent the upper half of the range.
+//
+// A type mismatch is a non-match rather than an error, which is what SQL's
+// NULL-comparison semantics would give here in the absence of real NULLs.
+//
+// This is the comparison the *whole engine* uses. It used to be reachable
+// only through MatchesWhere(), which resolved columns by name against one
+// schema; V16 deleted that evaluator (see chain_frame.hpp for why) and
+// kept the comparison, which was never the problem.
+bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
+                   const parser::AstValue& rhs, parser::CompareOp op);
 
 }  // namespace kds::exec

@@ -16,13 +16,37 @@ phase. Read that tool's docstring before quoting a comparison: index
 parity and per-statement WAL fsync are the two places the engines are not
 doing the same work.
 
-Four phases, each timed separately and reported as queries/sec plus a
-latency distribution:
+Phases, each timed separately and reported as queries/sec plus a latency
+distribution:
 
     insert        INSERT INTO <t> VALUES (...)         write path
     point-select  SELECT * FROM <t> WHERE id = <n>     read path, 1 row out
     full-scan     SELECT * FROM <t>                    read path, all rows out
     update        UPDATE <t> SET c_int = <n> WHERE id = <n>   write path
+    join-probe    <child> JOIN <t> ON child.parent_id = t.id
+    join-scan     <child> JOIN <t> ON child.match_val = t.c_small
+    join-semi     <child> WHERE EXISTS (SELECT ... WHERE t.id = child.parent_id)
+
+The three join phases exist to price **one decision**: the step compiler
+marks a join step `Probe` when its equality binds the relation's primary
+key and `Scan` otherwise (docs/parser-v2.md section 1). Same statement
+shape, same driving relation, same number of output rows - and the second
+one walks the whole inner relation per outer row. The gap between
+join-probe and join-scan is what that access kind is worth, and it is the
+same line Waystone draws between what a trail may replace and what it may
+only prefetch for, so it is worth knowing in numbers rather than in
+principle.
+
+    join-scan is **quadratic**: --join-rows x --rows tuple decodes per
+    query. It has its own smaller op count (--join-scan-ops) for that
+    reason, and the report prints the implied comparison count so a
+    surprising number can be checked against the work it implies.
+
+`join-probe` is only a descent when the inner relation is a B+ tree. On a
+heap relation there is no pk index, so the probe step falls through to the
+same chain walk a Scan does (step_vm.cpp's RunPointStep) - which means
+under the default --clustered heap, join-probe and join-scan measure
+nearly the same thing. Run with --clustered btree to see them separate.
 
 Two properties of today's engine shape the numbers, and quoting them
 without both is misleading:
@@ -80,6 +104,23 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # on purpose: an int-only row would not exercise row_codec's varchar path,
 # which is the one with a variable payload length.
 COLUMNS = "id int64, c_int int64, c_small int32, c_flag bool, c_text varchar"
+
+# The join phases' driving relation. Deliberately NOT the same shape as
+# COLUMNS: this table is scanned end to end by every join query, so it is
+# kept narrow, and it is always heap-clustered because nothing ever probes
+# into it - it is always step 0.
+#
+#   parent_id   references a real id of the benchmark table, so the pk
+#               equi-join finds exactly one row per child row.
+#   match_val   drawn from the same range as the parent's c_small, so the
+#               NON-pk join has real matches rather than measuring the
+#               cost of finding nothing.
+CHILD_COLUMNS = "id int64, parent_id int64, match_val int64, c_int int64"
+
+# The upper bound both the parent's c_small and the child's match_val are
+# drawn from. Shared so the non-pk join's selectivity is a property of
+# this constant rather than an accident of two separate literals.
+SMALL_RANGE = 30000
 
 # UPDATE is an in-place (HOT-style) overwrite with no relocation fallback:
 # a new value that outgrows the row's original slot reservation is an ERR
@@ -154,8 +195,37 @@ def insert_commands(table, rows, rng):
         # The bool column takes 0/1: this grammar has no boolean literal
         # (row_codec.cpp's "expects 0 or 1" check).
         yield (f"INSERT INTO {table} VALUES "
-               f"({rng.randint(0, 1_000_000)}, {rng.randint(0, 30000)}, "
+               f"({rng.randint(0, 1_000_000)}, {rng.randint(0, SMALL_RANGE)}, "
                f"{rng.randint(0, 1)}, '{text}')")
+
+
+def child_insert_commands(child, rows, parent_rows, parent_smalls, rng):
+    """Rows for the join phases' driving relation.
+
+    Two columns, two jobs:
+
+    `parent_id` names a real parent row, so the pk equi-join pairs
+    one-to-one: `join-probe` returns exactly `rows` rows, which is what
+    makes it comparable with `join-scan` at all - and what lets the
+    pre-flight check notice a join that has quietly stopped matching.
+
+    `match_val` is drawn from the parent's **actual** c_small values for
+    half the rows, and randomly for the other half. Drawing it from the
+    same *range* is not enough: c_small is uniform over 30,000 values, so
+    at a few hundred rows the two sets almost never intersect and the
+    non-pk join ends up timing the cost of finding nothing. The walk is
+    the same either way - every outer row still reads the whole inner
+    relation - but a phase that reports "0 rows per reply" reads like a
+    broken join rather than a deliberate one.
+    """
+    for i in range(rows):
+        if parent_smalls and i % 2 == 0:
+            match = rng.choice(parent_smalls)
+        else:
+            match = rng.randint(0, SMALL_RANGE)
+        yield (f"INSERT INTO {child} VALUES "
+               f"({rng.randint(1, max(1, parent_rows))}, "
+               f"{match}, {rng.randint(0, 1_000_000)})")
 
 
 CLUSTERED_LINE = re.compile(r"clustered_type=(\w+)")
@@ -185,13 +255,110 @@ def access_path(clustered):
     return "btree descent" if clustered == "btree" else "full chain scan"
 
 
+def reply_rows(text):
+    """Data rows in a SELECT reply: a header line plus one line per row,
+    joined with the literal `\\n` escape."""
+    return max(0, len([line for line in text.split("\n") if line != ""]) - 1)
+
+
 def count_rows(conn, table):
-    """Rows currently visible to a full scan - the reply is a header line
-    plus one line per row, joined with the literal `\\n` escape."""
+    """Rows currently visible to a full scan."""
     text = format_reply(conn.send_command(f"SELECT * FROM {table}"))
     if text.startswith("ERR"):
         fail("could not scan the benchmark table", text)
-    return max(0, len([line for line in text.split("\n") if line != ""]) - 1)
+    return reply_rows(text)
+
+
+# Field index of c_small in COLUMNS: id, c_int, c_small, c_flag, c_text.
+C_SMALL_FIELD = 2
+
+
+def parent_small_values(conn, table, limit=512):
+    """A sample of the benchmark table's real `c_small` values.
+
+    Read back rather than reproduced from the RNG: the generator has moved
+    on by the time the child table is built, and re-deriving the same
+    sequence would couple the two in a way that breaks silently the first
+    time a phase draws one extra number.
+    """
+    text = format_reply(conn.send_command(f"SELECT * FROM {table}"))
+    if text.startswith("ERR"):
+        return []
+    values = []
+    for line in text.split("\n")[1:]:
+        fields = line.split(",")
+        if len(fields) <= C_SMALL_FIELD:
+            continue
+        try:
+            values.append(int(fields[C_SMALL_FIELD]))
+        except ValueError:
+            continue
+        if len(values) >= limit:
+            break
+    return values
+
+
+# ---- the join phases -----------------------------------------------------
+#
+# Three statements over the same two relations. What differs is only which
+# column the equality binds, which is exactly what the step compiler reads
+# to choose an access kind - so the statements are written out here side by
+# side rather than built from a template, because the difference between
+# them is the whole measurement.
+
+def join_probe_sql(child, parent):
+    """Equality on the inner relation's **primary key** -> a `Probe` step.
+
+    On a btree parent this is an O(depth) descent per outer row. On a heap
+    parent there is no pk index and it degrades to the same walk join_scan
+    does, which is why --clustered changes what this phase means."""
+    return (f"SELECT c.c_int, p.c_text FROM {child} AS c "
+            f"JOIN {parent} AS p ON c.parent_id = p.id")
+
+
+def join_scan_sql(child, parent):
+    """Equality on a **non-pk** column -> a `Scan` step: the whole inner
+    relation is walked once per outer row. Quadratic, and the point of
+    comparison."""
+    return (f"SELECT c.c_int, p.c_text FROM {child} AS c "
+            f"JOIN {parent} AS p ON c.match_val = p.c_small")
+
+
+def join_semi_sql(child, parent):
+    """A correlated `EXISTS` - a semi-join. Same pk probe as join_probe,
+    but it stops at the first qualifying row instead of pairing, so it
+    prices the short-circuit rather than the pairing."""
+    return (f"SELECT c.c_int FROM {child} AS c "
+            f"WHERE EXISTS (SELECT p.id FROM {parent} AS p WHERE p.id = c.parent_id)")
+
+
+def preflight_joins(conn, child, parent, child_rows):
+    """Runs each join once, untimed, and checks it returned what it should.
+
+    Worth the round trips: a join that has quietly stopped matching returns
+    zero rows *very* fast, and a benchmark reports that as a spectacular
+    qps. Every child row references a real parent, so the pk join and the
+    semi-join must both return exactly `child_rows`.
+    """
+    for name, sql, expected in (
+            ("join-probe", join_probe_sql(child, parent), child_rows),
+            ("join-semi", join_semi_sql(child, parent), child_rows)):
+        text = format_reply(conn.send_command(sql))
+        if text.startswith("ERR"):
+            fail(f"the {name} statement does not run", text)
+        got = reply_rows(text)
+        if got != expected:
+            fail(f"{name} returned {got} rows, expected {expected} - every child row "
+                 f"references a real parent, so a different count means the join is "
+                 f"not pairing correctly and its timing would be meaningless")
+
+    text = format_reply(conn.send_command(join_scan_sql(child, parent)))
+    if text.startswith("ERR"):
+        fail("the join-scan statement does not run", text)
+    # The non-pk join's row count is a property of the data, not a
+    # requirement - but zero would mean it is timing the cost of finding
+    # nothing, which is a different measurement and should be visible.
+    return reply_rows(text)
 
 
 # ---- server-side timings -------------------------------------------------
@@ -268,6 +435,16 @@ def main():
                         help="full-table SELECTs (default: 20); each returns every row")
     parser.add_argument("--update-ops", type=int, default=1000,
                         help="UPDATEs in the write phase (default: 1000)")
+    parser.add_argument("--join-rows", type=int, default=200,
+                        help="rows in the join phases' driving relation (default: 200); "
+                             "0 skips the join phases entirely. Each join query reads all "
+                             "of them, so this is the outer loop's trip count")
+    parser.add_argument("--join-ops", type=int, default=20,
+                        help="join-probe and join-semi queries (default: 20)")
+    parser.add_argument("--join-scan-ops", type=int, default=5,
+                        help="join-scan queries (default: 5). Lower than --join-ops "
+                             "because this phase is quadratic: --join-rows x --rows tuple "
+                             "decodes per query, which at the defaults is 400,000")
     parser.add_argument("--warmup", type=int, default=50,
                         help="untimed PINGs before the first phase (default: 50)")
     parser.add_argument("--seed", type=int, default=1,
@@ -350,6 +527,65 @@ def main():
             detail="fixed-width column only (in-place overwrite), " +
                    access_path(args.clustered))))
 
+        # ---- joins -------------------------------------------------------
+        #
+        # The driving relation is created and filled *after* the phases
+        # above, so it cannot change what they measured: `resident` is
+        # already taken, and the child table is a separate relation the
+        # scan phase never saw.
+        if args.join_rows > 0:
+            child = f"{table}_child"
+            child_reply = format_reply(
+                conn.send_command(f"CREATE TABLE {child} ({CHILD_COLUMNS})"))
+            if child_reply.startswith("ERR"):
+                fail("could not create the join phases' driving relation", child_reply)
+
+            # Untimed: this is fixture, not measurement.
+            smalls = parent_small_values(conn, table)
+            for command in child_insert_commands(child, args.join_rows, resident, smalls, rng):
+                reply = execute(command)
+                if reply.startswith("ERR"):
+                    fail("could not populate the join phases' driving relation", reply)
+
+            scan_matches = preflight_joins(conn, child, table, args.join_rows)
+
+            probe = run_phase(execute, "join-probe",
+                              (join_probe_sql(child, table) for _ in range(args.join_ops)),
+                              detail=f"{args.join_rows} outer rows, pk equality -> Probe "
+                                     f"({access_path(args.clustered)} per outer row), "
+                                     f"{args.join_rows} rows per reply")
+            if probe.elapsed > 0:
+                probe.detail += f", {args.join_rows * probe.ops / probe.elapsed:,.0f} rows/s"
+            phases.append(check_phase(probe))
+
+            phases.append(check_phase(run_phase(
+                execute, "join-semi",
+                (join_semi_sql(child, table) for _ in range(args.join_ops)),
+                detail=f"correlated EXISTS over the same pk equality; stops at the first "
+                       f"qualifying row instead of pairing, {args.join_rows} rows per reply")))
+
+            if args.join_scan_ops:
+                comparisons = args.join_rows * max(1, resident)
+                scan_join = run_phase(
+                    execute, "join-scan",
+                    (join_scan_sql(child, table) for _ in range(args.join_scan_ops)),
+                    detail=f"non-pk equality -> Scan: the whole inner relation walked once "
+                           f"per outer row, {comparisons:,} tuple decodes per query, "
+                           f"{scan_matches} rows per reply")
+                if scan_join.elapsed > 0:
+                    scan_join.detail += (
+                        f", {comparisons * scan_join.ops / scan_join.elapsed:,.0f} "
+                        "comparisons/s")
+                if scan_matches == 0:
+                    # The walk is identical whether or not anything
+                    # matches, so the timing still means what it says -
+                    # but the reader should not have to wonder.
+                    scan_join.detail += (
+                        " (nothing matched: the inner relation is still walked in full "
+                        "per outer row, so this times the same work, minus the reply "
+                        "formatting)")
+                phases.append(check_phase(scan_join))
+
         if args.sync:
             phases.append(check_phase(run_phase(
                 execute, "sync", ["SYNC"],
@@ -375,6 +611,7 @@ def main():
         "seed": args.seed,
         "durability": durability,
         "clustered": args.clustered,
+        "join_rows": args.join_rows,
     }
 
     if args.clustered == "btree":
@@ -388,6 +625,23 @@ def main():
         access_note = ("point-select and update are both full page-chain scans (no "
                        f"index): their qps is a function of the {resident} resident rows.")
 
+    if args.join_rows <= 0:
+        join_note = None
+    elif args.clustered == "btree":
+        join_note = ("join-probe vs join-scan is the price of one compile-time decision: "
+                     "the step compiler marks a join step Probe when its equality binds "
+                     "the inner relation's pk and Scan otherwise. Here the Probe descends "
+                     "the tree per outer row while the Scan walks the whole relation, so "
+                     "the ratio between them is roughly the relation's size. That same "
+                     "line is Waystone's: a Probe may be served from a recorded trail, a "
+                     "Scan may only be prefetched for.")
+    else:
+        join_note = ("join-probe and join-scan will look alike on this run, and that is "
+                     "the finding rather than a flaw: a heap relation has no pk index, so "
+                     "the Probe step falls through to the same chain walk the Scan does "
+                     "(step_vm.cpp's RunPointStep). Re-run with --clustered btree to "
+                     "price the access kind - that is where the two separate.")
+
     report(phases, meta, footer=[
         access_note,
         f"INSERT is WAL-logged{durability_note}: under strict/group the reply "
@@ -397,7 +651,7 @@ def main():
         "CREATE TABLE are still unlogged. Do not measure this on tmpfs, where "
         "fsync is free and all three classes look identical.",
         "latencies include the Python client's own socket cost.",
-    ] + ([] if args.clustered == "btree" else
+    ] + ([join_note] if join_note else []) + ([] if args.clustered == "btree" else
          ["no index on this table: a point-select is a full chain scan. Re-run with "
           "--clustered btree (the relation stored as a clustered index) to compare."]))
 

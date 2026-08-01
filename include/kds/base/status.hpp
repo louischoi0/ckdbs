@@ -32,6 +32,29 @@ enum class StatusCode {
     // that bit. Every other code here means "this will fail the same way
     // again".
     kTxnConflict,
+    // A form the language reserves but cannot execute (docs/parser-v2.md J2,
+    // I18): table-position nesting, outer joins, over-depth sub-chains,
+    // non-pk ORDER BY. Distinct from kInvalidArgument on purpose - the
+    // statement is well-formed and the position it carries points at what
+    // the engine will not do, not at a typo. A client that sees it should
+    // rewrite the statement, never retry it.
+    kUnsupported,
+    // A scalar subquery returned more than one row (docs/parser-v2.md §2).
+    // Parse time cannot prove cardinality in general, so this is per
+    // execution; zero rows is NULL and not an error. Picking a first row
+    // instead would make the answer depend on physical order.
+    kCardinalityViolation,
+    // A statement spent its per-statement work budget (exec/budget.hpp).
+    // Distinct from kOutOfSpace, which is about storage: nothing is full
+    // here, the statement was simply going to read more than it is allowed
+    // to. Not retryable - re-running it does the same work and stops at
+    // the same place; the fix is a different statement.
+    //
+    // It exists because nothing suspends mid-statement on a cooperative
+    // core, so an unbounded statement holds that core against every other
+    // client on it. Failing after a bounded amount of work is the kinder
+    // answer than a connection that never replies.
+    kResourceExhausted,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -66,6 +89,15 @@ public:
     static Status TxnConflict(std::string msg) {
         return Status(StatusCode::kTxnConflict, std::move(msg));
     }
+    static Status Unsupported(std::string msg) {
+        return Status(StatusCode::kUnsupported, std::move(msg));
+    }
+    static Status CardinalityViolation(std::string msg) {
+        return Status(StatusCode::kCardinalityViolation, std::move(msg));
+    }
+    static Status ResourceExhausted(std::string msg) {
+        return Status(StatusCode::kResourceExhausted, std::move(msg));
+    }
 
     bool ok() const noexcept { return code_ == StatusCode::kOk; }
     StatusCode code() const noexcept { return code_; }
@@ -95,6 +127,21 @@ public:
 
     bool ok() const noexcept { return status_.ok(); }
     const Status& status() const noexcept { return status_; }
+
+    // Whether a T is actually held. This agrees with ok() for every
+    // StatusOr built as the two constructors document, and disagrees in
+    // exactly one case: one built from Status::OK(), which the Status
+    // constructor forbids in a comment and nothing enforces. value() would
+    // dereference an empty optional there.
+    //
+    // It exists because of the relation walks
+    // (storage/heap/heap_chain.hpp): they hand out a caller-written
+    // callback returning StatusOr<VisitControl>, and `return
+    // Status::OK();` is the natural thing to write in one - it is what
+    // every visitor said before the walks became stoppable. Checking here
+    // turns that mistake into a reported error rather than undefined
+    // behaviour inside a scan.
+    bool has_value() const noexcept { return value_.has_value(); }
 
     T& value() { return *value_; }
     const T& value() const { return *value_; }

@@ -74,7 +74,10 @@ TEST(ParserTest, SelectStarNoWhere) {
 
     auto* sel = std::get_if<SelectStmt>(&stmt.value());
     ASSERT_NE(sel, nullptr);
-    EXPECT_EQ(sel->table_name, "accounts");
+    EXPECT_EQ(sel->from.table_name, "accounts");
+    EXPECT_TRUE(sel->from.alias.empty());
+    EXPECT_TRUE(sel->joins.empty());
+    EXPECT_EQ(sel->relation_count(), 1u);
     EXPECT_TRUE(sel->where.empty());
 }
 
@@ -85,7 +88,7 @@ TEST(ParserTest, SelectWithSingleWhereCondition) {
     auto* sel = std::get_if<SelectStmt>(&stmt.value());
     ASSERT_NE(sel, nullptr);
     ASSERT_EQ(sel->where.size(), 1u);
-    EXPECT_EQ(sel->where[0].col_name, "id");
+    EXPECT_EQ(sel->where[0].col.name, "id");
     EXPECT_EQ(sel->where[0].op, CompareOp::kEq);
     EXPECT_EQ(sel->where[0].val.int_val, 5);
 }
@@ -103,9 +106,18 @@ TEST(ParserTest, SelectWithMultipleAndConditions) {
     EXPECT_EQ(sel->where[2].op, CompareOp::kGte);
 }
 
-TEST(ParserTest, SelectRejectsProjection) {
+TEST(ParserTest, SelectAcceptsAnExplicitProjection) {
+    // Reversed by V06: this was "only SELECT * is supported". The list
+    // parses now; executing it is V17's, and the dispatcher says so
+    // rather than emitting every column.
     auto stmt = Parse("SELECT id FROM t");
-    EXPECT_FALSE(stmt.ok());
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+
+    auto* sel = std::get_if<SelectStmt>(&stmt.value());
+    ASSERT_NE(sel, nullptr);
+    ASSERT_EQ(sel->projection.size(), 1u);
+    EXPECT_EQ(sel->projection[0].name, "id");
+    EXPECT_FALSE(sel->star());
 }
 
 TEST(ParserTest, UpdateSingleAssignmentNoWhere) {
@@ -131,7 +143,7 @@ TEST(ParserTest, UpdateMultipleAssignmentsWithWhere) {
     EXPECT_EQ(upd->assignments[0].col_name, "a");
     EXPECT_EQ(upd->assignments[1].col_name, "b");
     ASSERT_EQ(upd->where.size(), 1u);
-    EXPECT_EQ(upd->where[0].col_name, "id");
+    EXPECT_EQ(upd->where[0].col.name, "id");
 }
 
 TEST(ParserTest, TrailingSemicolonIsOptional) {

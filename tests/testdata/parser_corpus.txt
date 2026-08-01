@@ -1,0 +1,308 @@
+# V01 golden corpus — what the parser does today.
+#
+# Format:  verdict  pattern_id  arg_hash  sql
+#   verdict     "ok", or the StatusCode name the parse was rejected with.
+#   pattern_id  16 hex digits, or "-" when FingerprintOf() returns nothing
+#   arg_hash    (leading word not SELECT/INSERT/UPDATE, or the text does
+#               not lex). Both columns are "-" together or neither is.
+#   sql         rest of the line, verbatim. `\n` is an escape for a real
+#               newline; nothing else is escaped.
+#
+# Which columns may move, and when:
+#
+#   verdict     may move, *deliberately*, when a task makes a reserved form
+#               supported or gives it its own code. The lines marked
+#               "[V05]", "[V07]" and so on are the ones expected to flip,
+#               and each names the task that owns the flip. A verdict that
+#               moves without its task is a regression.
+#
+#   pattern_id  must not move from one hash to another, ever: the v2
+#   arg_hash    language is additive shape, and a moved hash retires every
+#               stored waystone. The one permitted transition is "-" to a
+#               hash, when a statement that could not be lexed becomes
+#               lexable (V04's dot token) — nothing already stored changes
+#               meaning, since a shape that hashed to X still hashes to X.
+#
+# Verdicts here were derived by reading src/parser/parser.cpp; hashes were
+# recorded from the build. See tests/parser_golden_test.cpp for why those
+# two are treated differently.
+
+# ---- CREATE TABLE — accepted -----------------------------------------------
+# CREATE is not a patternable leading word, so every line here is "-".
+ok	-	-	CREATE TABLE t (id int)
+ok	-	-	CREATE TABLE t (id int, name varchar)
+ok	-	-	CREATE TABLE t (id bigint, a int, b varchar, c uint64)
+ok	-	-	CREATE TABLE t (id int) HEAP
+ok	-	-	CREATE TABLE t (id int) BTREE
+ok	-	-	CREATE TABLE t (id int) heap
+ok	-	-	CREATE TABLE t (id int);
+ok	-	-	create table t (id int)
+
+# ---- CREATE TABLE — rejected -----------------------------------------------
+InvalidArgument	-	-	CREATE t (id int)
+InvalidArgument	-	-	CREATE TABLE (id int)
+InvalidArgument	-	-	CREATE TABLE 42 (id int)
+InvalidArgument	-	-	CREATE TABLE t id int
+InvalidArgument	-	-	CREATE TABLE t ()
+InvalidArgument	-	-	CREATE TABLE t (42 int)
+InvalidArgument	-	-	CREATE TABLE t (id)
+InvalidArgument	-	-	CREATE TABLE t (id int
+InvalidArgument	-	-	CREATE TABLE t (id int,)
+InvalidArgument	-	-	CREATE TABLE t (id int) FOO
+InvalidArgument	-	-	CREATE TABLE
+# [V11] gains WITH (k = v); today the option list is trailing garbage.
+InvalidArgument	-	-	CREATE TABLE t (id int) WITH (PHYSICAL_OPTIMIZER = ON)
+
+# ---- INSERT — accepted -----------------------------------------------------
+ok	a2266ff85c0a8df6	b5d414774c8002cc	INSERT INTO t VALUES (1)
+ok	d7eca698ca357b93	84884be60bc4fe0f	INSERT INTO t VALUES (1, 'abc', NULL)
+ok	a2266ff85c0a8df6	184a15bf54848454	INSERT INTO t VALUES (-5)
+ok	a2266ff85c0a8df6	67b70b73c6120ee9	INSERT INTO t VALUES (18446744073709551615)
+ok	a2266ff85c0a8df6	7a677b8bea1e608e	INSERT INTO t VALUES ('it is fine')
+ok	a2266ff85c0a8df6	b5d414774c8002cc	insert into t values (1);
+
+# ---- INSERT — rejected -----------------------------------------------------
+InvalidArgument	d6f585f4851f24f1	b5d414774c8002cc	INSERT t VALUES (1)
+InvalidArgument	a263b37257e147cb	b5d414774c8002cc	INSERT INTO t (1)
+InvalidArgument	98134bd285a35b74	b5d414774c8002cc	INSERT INTO VALUES (1)
+InvalidArgument	9c8c6c77485aab09	b5d414774c8002cc	INSERT INTO t VALUES 1
+InvalidArgument	5d4e1eaff2165e1e	cbf29ce484222325	INSERT INTO t VALUES ()
+InvalidArgument	a438de526814732c	cbf29ce484222325	INSERT INTO t VALUES (x)
+InvalidArgument	5d4e21aff2166337	b5d414774c8002cc	INSERT INTO t VALUES (1
+InvalidArgument	91dad60465ec5af2	b5d414774c8002cc	INSERT INTO t VALUES (1,)
+InvalidArgument	a2266ff85c0a8df6	cbf29ce484222325	INSERT INTO t VALUES (?)
+InvalidArgument	d3decf486f2d0136	b5d414774c8002cc	INSERT INTO t VALUES (1) extra
+InvalidArgument	1b8e1c12b44c207a	78f79099c419719c	INSERT INTO t (a, b) VALUES (1, 2)
+
+# ---- SELECT — accepted -----------------------------------------------------
+ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t
+ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t;
+ok	0455e27e7d802f0c	cbf29ce484222325	select * from t
+ok	0212b03badb413ad	b5d414774c8002cc	SELECT  *  FROM  t   WHERE  id  =  1
+ok	0212b03badb413ad	b5d414774c8002cc	SELECT * FROM t WHERE id = 1
+ok	020f463badb129b8	b5d414774c8002cc	SELECT * FROM t WHERE id != 1
+ok	020be03badae468f	b5d414774c8002cc	SELECT * FROM t WHERE id < 1
+ok	02087e3badab6a32	b5d414774c8002cc	SELECT * FROM t WHERE id <= 1
+ok	0205183bada88709	b5d414774c8002cc	SELECT * FROM t WHERE id > 1
+ok	0201ae3bada59d14	b5d414774c8002cc	SELECT * FROM t WHERE id >= 1
+ok	0212b03badb413ad	184a11bf54847d88	SELECT * FROM t WHERE id = -1
+ok	9f810de53a88593d	84710b9045511414	SELECT * FROM t WHERE name = 'x'
+ok	9f810ce53a88578a	cbf29ce484222325	SELECT * FROM t WHERE name = NULL
+ok	6e9ef19e09622392	2a44fca2241ecfc1	SELECT * FROM t WHERE id = 1 AND name = 'x'
+ok	bb3802e5c6f244c4	90e95572007153ff	SELECT * FROM t WHERE id = 1 AND a = 2 AND b = 3
+ok	efb110aaf70ee5ab	78f79099c419719c	SELECT * FROM t WHERE id = 1 and a = 2
+# The lexer runs an unterminated string to end-of-input and returns it as a
+# string literal rather than an error. Pinned because it is surprising, not
+# because it is right.
+ok	fcb5dfe6a19d91c8	19709035c6b7ceaf	SELECT * FROM t WHERE s = 'unterminated
+ok	0455e27e7d802f0c	cbf29ce484222325	-- leading comment\nSELECT * FROM t
+ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t -- trailing comment
+
+# ---- SELECT — rejected -----------------------------------------------------
+# [V06 — done] an explicit select list parses now; this line was the
+# "only SELECT * is supported" refusal. It stays in the rejected block
+# because everything around it belongs here.
+ok	8559eaf40c115b0f	cbf29ce484222325	SELECT id FROM t
+InvalidArgument	06bf2f0ae0a17f05	cbf29ce484222325	SELECT * t
+InvalidArgument	5cd76da52108998a	cbf29ce484222325	SELECT * FROM
+InvalidArgument	caa8d797219ce218	182b9abf546ab5c4	SELECT * FROM 42
+InvalidArgument	8c4916d9f99529c9	cbf29ce484222325	SELECT * FROM t WHERE
+InvalidArgument	3ae8d6f27ff6b5e7	cbf29ce484222325	SELECT * FROM t WHERE id
+InvalidArgument	105b2d0f7037251d	cbf29ce484222325	SELECT * FROM t WHERE id =
+InvalidArgument	b5cb30768ad3df28	b5d414774c8002cc	SELECT * FROM t WHERE id = 1 AND
+InvalidArgument	39b3246828e08bf7	b5d414774c8002cc	SELECT * FROM t WHERE id == 1
+InvalidArgument	0212b03badb413ad	cbf29ce484222325	SELECT * FROM t WHERE id = ?
+InvalidArgument	2da70c29d3092a81	182b9abf546ab5c4	SELECT * FROM t WHERE 42 = id
+# [V15 — done] a column on the right of a comparison. Spec I10 describes
+# the filter surface as `col op {slot}`, but §2's *correlated* subquery is
+# written `WHERE inner.col = outer.col` and cannot be spelled without
+# this - a feature J1 put in scope cannot be unreachable from the grammar,
+# so the two are reconciled in favour of §2. Executing one still needs the
+# step chain; the dispatcher refuses it until V17 rather than comparing
+# against an unset value.
+ok	6c0be26239157118	cbf29ce484222325	SELECT * FROM t WHERE a = b
+InvalidArgument	46749465e53887c0	cbf29ce484222325	SELECT * FROM t extra
+InvalidArgument	92e35026b1321260	cbf29ce484222325	SELECT * FROM t; SELECT * FROM u
+# [V04 — done] the dot token. These three lines are the whole permitted
+# "-" -> hash transition: before V04 a '.' lexed as kError, so no statement
+# containing one had a fingerprint at all. Nothing already stored changed
+# meaning and kFingerprintVersion stayed at 1. Every other line on this
+# page kept its hash across V04, including the ones carrying the seven
+# newly reserved words - which is the evidence that reserving a word is a
+# grammar change and not a fingerprint change.
+InvalidArgument	b825796128f262f6	cbf29ce484222325	SELECT * FROM t WHERE a . b
+# [V06 — done] a qualified column in a select list.
+ok	62bd6d094d21d3db	cbf29ce484222325	SELECT t.id FROM t
+# A comma FROM list is a cross join, which this grammar does not have.
+# Not reached by V05 and not planned: joins are written JOIN ... ON.
+InvalidArgument	2e2a3c1453705f3b	cbf29ce484222325	SELECT * FROM t, u
+# [V05 — done] joins and aliases parse. These two flipped
+# InvalidArgument -> ok, and no hash moved with them: reserving LEFT,
+# RIGHT, FULL and OUTER alongside changed no pattern_id, which is the
+# second demonstration of V04's keyword design.
+#
+# [V06 — done] and the JOIN line flipped the second time, as predicted:
+# ok -> Unsupported. `SELECT *` is ambiguous across relations, so an
+# explicit list became mandatory as soon as there was one to write. Two
+# deliberate flips, two tasks; no hash moved in either.
+Unsupported	e9242b44747c5e35	cbf29ce484222325	SELECT * FROM t JOIN u ON t.id = u.id
+ok	a91c9b42e1642b7c	cbf29ce484222325	SELECT * FROM t AS a
+# [V07] predicate-position subqueries.
+ok	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u)
+ok	5b6a4489f043e0d7	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u)
+ok	d9e6d16ebc7df09d	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT id FROM u)
+# [V08] IN-list and BETWEEN, and the forms that stay Unsupported.
+InvalidArgument	b87254b3cae4a5b8	78f79099c419719c	SELECT * FROM t WHERE id IN (1, 2)
+InvalidArgument	af3f6ac336bb68d8	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 AND 5
+InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 OR id = 2
+# [V09] pagination.
+InvalidArgument	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
+InvalidArgument	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
+# Aggregates are I14, [OPEN] — this must keep failing until that decision.
+InvalidArgument	1dbdfb79bafd459e	cbf29ce484222325	SELECT COUNT(*) FROM t
+
+# ---- UPDATE — accepted -----------------------------------------------------
+ok	e11a9ee11c2d4d2e	b5d414774c8002cc	UPDATE t SET a = 1
+ok	dc85af0987beef36	2a44fca2241ecfc1	UPDATE t SET a = 1, b = 'x'
+ok	e11a9fe11c2d4ee1	cbf29ce484222325	UPDATE t SET a = NULL
+ok	18c7c047dc0f76f3	78f79099c419719c	UPDATE t SET a = 1 WHERE id = 2
+ok	587874169a79f78c	90e95572007153ff	UPDATE t SET a = 1 WHERE id = 2 AND b = 3
+ok	e11a9ee11c2d4d2e	b5d414774c8002cc	update t set a = 1;
+
+# ---- UPDATE — rejected -----------------------------------------------------
+InvalidArgument	efb58b4ca7e55ff4	b5d414774c8002cc	UPDATE SET a = 1
+InvalidArgument	d23b14459421e096	b5d414774c8002cc	UPDATE t a = 1
+InvalidArgument	2d4efb7b83e3d0e6	b5d414774c8002cc	UPDATE t SET a 1
+InvalidArgument	e11e00e11c30298b	b5d414774c8002cc	UPDATE t SET a != 1
+InvalidArgument	26cbf75fc63b2736	cbf29ce484222325	UPDATE t SET a = x
+InvalidArgument	4bfaf50ff154c09b	307dfbacf8ce886d	UPDATE t SET 42 = 1
+InvalidArgument	ad892082e0fa1af8	b5d414774c8002cc	UPDATE t SET a = 1,
+InvalidArgument	8af46ce9765f5fa1	cbf29ce484222325	UPDATE t
+InvalidArgument	914fcad80f252e1e	b5d414774c8002cc	UPDATE t SET a = 1 extra
+
+# ---- Joins and aliases (V05) ------------------------------------------------
+# New forms, recorded here the moment they became reachable. Placeholder
+# hashes were never written for these: they were added after V04 and their
+# values came off the build, like every other row on this page.
+#
+# Accepted. Written with explicit select lists since [V06 — done]: these
+# said `SELECT *` when V05 added them, and all five flipped to Unsupported
+# when the star rule landed. Rewritten rather than left flipped, so this
+# section keeps testing what it is named for - that a join parses. The
+# star-over-a-join refusal has its own lines in the V06 section below.
+ok	e4edb2c8b4eb5d3c	cbf29ce484222325	SELECT t.id FROM t JOIN u ON t.id = u.id JOIN v ON u.id = v.id
+ok	5b47556ce9244d2e	cbf29ce484222325	SELECT a.id FROM t AS a JOIN u AS b ON a.id = b.id
+# The self-join. It is expressible only because the duplicate-binding rule
+# below refuses the version without aliases.
+ok	a9c615e6411952e5	cbf29ce484222325	SELECT a.id, b.id FROM t AS a JOIN t AS b ON a.id = b.id
+ok	ee7a5fe23cf0e3b8	cbf29ce484222325	select t.id from t join u on t.id = u.id
+ok	09203711bb6e1327	b5d414774c8002cc	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE t.id = 1
+#
+# Unsupported — a well-formed statement this engine declines, each with the
+# byte position of what it declined. Distinct from InvalidArgument, which
+# means "look for a typo".
+Unsupported	3597f4484605402f	cbf29ce484222325	SELECT * FROM t LEFT JOIN u ON t.id = u.id
+Unsupported	8aec5874566e99c1	cbf29ce484222325	SELECT * FROM t RIGHT JOIN u ON t.id = u.id
+Unsupported	f6e1013d24de0aa0	cbf29ce484222325	SELECT * FROM t FULL OUTER JOIN u ON t.id = u.id
+# One relation named twice with no way to tell the occurrences apart.
+Unsupported	a297f62980ae08d9	cbf29ce484222325	SELECT * FROM t JOIN t ON t.id = t.id
+Unsupported	ec10eded05cdb080	cbf29ce484222325	SELECT * FROM t AS a JOIN u AS a ON a.id = a.id
+# An unqualified ON column names no relation; V14 owns resolution.
+Unsupported	f0039522b21c1cd9	cbf29ce484222325	SELECT * FROM t JOIN u ON id = u.id
+#
+# Rejected outright — malformed, not merely undoable.
+InvalidArgument	a1bf63b73d194ba6	cbf29ce484222325	SELECT * FROM t JOIN u
+InvalidArgument	bbaee1ae8ff21642	cbf29ce484222325	SELECT * FROM t JOIN u ON t.id
+InvalidArgument	08439a09b1f071b0	cbf29ce484222325	SELECT * FROM t JOIN ON t.id = u.id
+InvalidArgument	7c7f9c7acd451965	cbf29ce484222325	SELECT * FROM t AS
+InvalidArgument	d1f04baacc6a2a05	182b9abf546ab5c4	SELECT * FROM t AS 42
+# INNER is not a reserved word and no production consumes it, so this is
+# trailing garbage rather than an accepted synonym. Spec I9 names only the
+# outer keywords as reserved.
+InvalidArgument	59b0f0f81477e5ef	cbf29ce484222325	SELECT * FROM t INNER JOIN u ON t.id = u.id
+
+# ---- Projection and qualified names (V06) -----------------------------------
+# Accepted: an explicit select list, qualified or bare, and a WHERE column
+# that may now carry a qualifier.
+ok	e6d0ffbb18c65a07	cbf29ce484222325	SELECT a.x, b.y FROM t AS a JOIN u AS b ON a.id = b.id
+ok	7a7a7d26ac247ff9	cbf29ce484222325	SELECT t.id, u.note FROM t JOIN u ON t.id = u.t_id
+ok	655d6a159b20eaab	cbf29ce484222325	SELECT c, a, b FROM t
+ok	be8942f1a024546b	cbf29ce484222325	SELECT a.x, y, b.z FROM t AS a JOIN u AS b ON a.id = b.id
+ok	fca9c395f4a2af53	b5d414774c8002cc	SELECT * FROM t WHERE t.id = 1
+ok	c91e56fa7a992cb3	3ce015249a7377f5	SELECT t.id FROM t JOIN u ON t.id = u.id WHERE u.status = 'open'
+ok	e1d213b42ea6b631	78f79099c419719c	UPDATE t SET a = 1 WHERE t.id = 2
+#
+# Unsupported — `SELECT *` has no answer once there is more than one
+# relation for it to span, and written order being the client's to choose
+# is exactly what makes it unanswerable.
+Unsupported	7bfb6efe6f64c69c	cbf29ce484222325	SELECT * FROM t AS a JOIN u AS b ON a.id = b.id
+#
+# Rejected — malformed select lists. `SELECT *, a` and `SELECT a, *` are
+# here because star is a whole select list, never a list element.
+InvalidArgument	d591805ceb2c9c23	cbf29ce484222325	SELECT FROM t
+InvalidArgument	65a9a93fb6b45224	cbf29ce484222325	SELECT a, FROM t
+InvalidArgument	a41e0c3299fb216c	cbf29ce484222325	SELECT a b FROM t
+InvalidArgument	4518328abb44759c	cbf29ce484222325	SELECT a., b FROM t
+InvalidArgument	ca77cd098eb35051	182b9abf546ab5c4	SELECT 42 FROM t
+InvalidArgument	d4d7ff16193af251	cbf29ce484222325	SELECT a, * FROM t
+InvalidArgument	5efeb056abe3ea93	cbf29ce484222325	SELECT *, a FROM t
+# A SET target names a column of the one relation UPDATE reads, so a
+# qualifier on it says nothing the statement does not already say.
+InvalidArgument	86430a5c1793ac6c	b5d414774c8002cc	UPDATE t SET t.a = 1
+
+# ---- Predicate-position subqueries (V07) ------------------------------------
+# The four accepted forms, plus correlation and nesting.
+ok	17da6791a10fc738	cbf29ce484222325	SELECT * FROM t WHERE id != (SELECT id FROM u)
+ok	01f584b45df39b0d	cbf29ce484222325	SELECT * FROM t WHERE id NOT IN (SELECT t_id FROM u)
+ok	d93248f61bcdef44	cbf29ce484222325	SELECT * FROM t WHERE NOT EXISTS (SELECT * FROM u)
+ok	cf8afe3c02d3ddbc	b5d414774c8002cc	SELECT * FROM t WHERE EXISTS (SELECT * FROM u WHERE u.t_id = 1)
+ok	9bb9650d93cef8b5	2a44fca2241ecfc1	SELECT * FROM t WHERE id = 1 AND EXISTS (SELECT * FROM u) AND name = 'x'
+ok	c4aef8669030844b	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u) AND EXISTS (SELECT * FROM v)
+ok	efbc8ed4f64badef	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT a.id FROM u AS a JOIN v AS b ON a.id = b.id)
+ok	5094fc7111efa6ee	b5d414774c8002cc	UPDATE t SET a = 1 WHERE id IN (SELECT t_id FROM u)
+ok	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u);
+# At the depth cap (4 nested blocks) and one past it.
+ok	372af9a2b308c984	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t))))
+Unsupported	a6d47bc00b1c1048	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE EXISTS (SELECT * FROM t)))))
+#
+# Nesting outside predicate position. Each is Unsupported with a position,
+# never a bare syntax error: the relation-reference production must not
+# reach the statement production, and WITH must not lex as a statement
+# head. A derived table's result would have to become a relation with a
+# schema, probed by something other than a pk - which is the execution
+# model, not an unimplemented feature.
+Unsupported	8395ef7c84c6184e	b5d414774c8002cc	SELECT * FROM t WHERE NOT id = 1
+Unsupported	6a572ac142c50425	cbf29ce484222325	SELECT * FROM t JOIN (SELECT * FROM u) ON t.id = u.id
+Unsupported	ea325ba2b616a269	cbf29ce484222325	SELECT * FROM (SELECT * FROM u)
+Unsupported	-	-	WITH x AS (SELECT * FROM u) SELECT * FROM x
+#
+# Malformed. `IN (1, 2)` is [V08]'s value list and stays rejected here.
+InvalidArgument	d7a6bdcced6fcc02	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u
+InvalidArgument	b1ee15b5a9bc7449	cbf29ce484222325	SELECT * FROM t WHERE EXISTS ()
+InvalidArgument	9660f26161090c96	cbf29ce484222325	SELECT * FROM t WHERE EXISTS
+InvalidArgument	ae06d22736a3755c	cbf29ce484222325	SELECT * FROM t WHERE id IN ()
+InvalidArgument	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u;)
+InvalidArgument	d91afc534d177df6	cbf29ce484222325	INSERT INTO t VALUES ((SELECT id FROM u))
+InvalidArgument	9964d7fce0f74496	cbf29ce484222325	UPDATE t SET a = (SELECT id FROM u)
+#
+# [I14 — OPEN] Aggregates. V07's done-condition asks for Unsupported with
+# a position on a subquery containing one; these give a bare syntax error
+# instead, and deliberately so: I14 has not decided whether aggregates are
+# excluded from the grammar or reserved-and-rejected, and either answer
+# here would pick one. Revisit with I14, not before.
+InvalidArgument	009742650befee6a	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)
+InvalidArgument	dd4d901ce6b336cc	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)
+
+# ---- Top level — rejected --------------------------------------------------
+InvalidArgument	-	-	\n
+InvalidArgument	-	-	-- comment only
+InvalidArgument	-	-	42
+InvalidArgument	-	-	*
+InvalidArgument	-	-	?
+InvalidArgument	-	-	(SELECT * FROM t)
+InvalidArgument	-	-	DROP TABLE t
+InvalidArgument	-	-	SELECTX * FROM t
+# [V10] DELETE, [V12] session and admin statements.
+InvalidArgument	-	-	DELETE FROM t WHERE id = 1
+InvalidArgument	-	-	SET DURABILITY STRICT
+InvalidArgument	-	-	SHOW TABLES

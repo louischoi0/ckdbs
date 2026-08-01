@@ -166,9 +166,12 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
     }
 }
 
-StatusOr<std::size_t> DecodeOneValue(const catalog::SysColumnRow& col,
-                                      std::span<const std::byte> payload, std::size_t offset,
-                                      std::vector<parser::AstValue>& out) {
+// Decodes one column into a slot the caller already owns. Assigning
+// rather than appending is what lets a chain frame reuse its buffer for
+// every row instead of allocating one per row per step (V16).
+StatusOr<std::size_t> DecodeOneValueInto(const catalog::SysColumnRow& col,
+                                          std::span<const std::byte> payload, std::size_t offset,
+                                          parser::AstValue& out) {
     std::string col_name(catalog::NameView(col.name));
     auto need = [&](std::size_t n) -> Status {
         if (offset + n > payload.size()) {
@@ -189,7 +192,7 @@ StatusOr<std::size_t> DecodeOneValue(const catalog::SysColumnRow& col,
             av.type = parser::ValueType::kInt;
             av.int_val = v;
             av.raw_int_text = std::to_string(v);
-            out.push_back(std::move(av));
+            out = std::move(av);
             return offset + static_cast<std::size_t>(width);
         }
         case kTypeValUint64: {
@@ -199,7 +202,7 @@ StatusOr<std::size_t> DecodeOneValue(const catalog::SysColumnRow& col,
             av.type = parser::ValueType::kInt;
             av.int_val = static_cast<std::int64_t>(v);
             av.raw_int_text = std::to_string(v);
-            out.push_back(std::move(av));
+            out = std::move(av);
             return offset + 8;
         }
         case kTypeValBool: {
@@ -209,7 +212,7 @@ StatusOr<std::size_t> DecodeOneValue(const catalog::SysColumnRow& col,
             av.type = parser::ValueType::kInt;
             av.int_val = static_cast<std::int64_t>(v);
             av.raw_int_text = std::to_string(v);
-            out.push_back(std::move(av));
+            out = std::move(av);
             return offset + 1;
         }
         case kTypeValChar: {
@@ -223,7 +226,7 @@ StatusOr<std::size_t> DecodeOneValue(const catalog::SysColumnRow& col,
             parser::AstValue av;
             av.type = parser::ValueType::kStr;
             av.str_val = std::move(s);
-            out.push_back(std::move(av));
+            out = std::move(av);
             return offset + col.len;
         }
         case kTypeValVarchar: {
@@ -238,7 +241,7 @@ StatusOr<std::size_t> DecodeOneValue(const catalog::SysColumnRow& col,
             parser::AstValue av;
             av.type = parser::ValueType::kStr;
             av.str_val = std::move(s);
-            out.push_back(std::move(av));
+            out = std::move(av);
             return offset + len;
         }
         case kTypeValFloat:
@@ -288,34 +291,6 @@ bool CompareStr(std::string_view a, std::string_view b, parser::CompareOp op) {
     return false;
 }
 
-bool ConditionMatches(const catalog::Schema& schema, const std::vector<parser::AstValue>& row,
-                       const parser::Condition& cond) {
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        if (catalog::NameView(schema.columns[i].name) != cond.col_name) continue;
-
-        const parser::AstValue& lhs = row[i];
-        const parser::AstValue& rhs = cond.val;
-        if (lhs.type == parser::ValueType::kNull || rhs.type == parser::ValueType::kNull) {
-            return false;  // no NULL support; NULL never matches (see file comment)
-        }
-
-        if (schema.columns[i].type_val == kTypeValUint64) {
-            auto a = ParseUint64Text(lhs.raw_int_text);
-            auto b = ParseUint64Text(rhs.raw_int_text);
-            if (!a.ok() || !b.ok()) return false;
-            return CompareUint(a.value(), b.value(), cond.op);
-        }
-        if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
-            return CompareInt(lhs.int_val, rhs.int_val, cond.op);
-        }
-        if (lhs.type == parser::ValueType::kStr && rhs.type == parser::ValueType::kStr) {
-            return CompareStr(lhs.str_val, rhs.str_val, cond.op);
-        }
-        return false;  // incompatible value kinds
-    }
-    return false;  // unknown column name
-}
-
 }  // namespace
 
 StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema, std::uint64_t id,
@@ -352,28 +327,42 @@ StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload) {
     return Keystone::Decode(LoadLe64(payload.data())).id;
 }
 
-StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
-                                                   std::span<const std::byte> payload) {
+Status DecodeRowInto(const catalog::Schema& schema, std::span<const std::byte> payload,
+                     std::span<parser::AstValue> out) {
     if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (out.size() != schema.columns.size()) {
+        return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
+                                        " slot(s) for a schema of " +
+                                        std::to_string(schema.columns.size()) + " column(s)");
+    }
 
     auto id = RowKeystoneId(payload);
     if (!id.ok()) return id.status();
 
-    std::vector<parser::AstValue> out;
-    out.reserve(schema.columns.size());
-
-    parser::AstValue pk{};
-    pk.type = parser::ValueType::kInt;
-    pk.int_val = static_cast<std::int64_t>(id.value());
-    pk.raw_int_text = std::to_string(id.value());
-    out.push_back(std::move(pk));
+    // The pk is not in the body: it lives in the Keystone word, which is
+    // why the loop below starts at column 1.
+    out[0].type = parser::ValueType::kInt;
+    out[0].int_val = static_cast<std::int64_t>(id.value());
+    out[0].raw_int_text = std::to_string(id.value());
+    out[0].str_val.clear();
 
     std::size_t offset = kKeystoneWordSize;
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        auto next = DecodeOneValue(schema.columns[i], payload, offset, out);
+        auto next = DecodeOneValueInto(schema.columns[i], payload, offset, out[i]);
         if (!next.ok()) return next.status();
         offset = next.value();
     }
+    return Status::OK();
+}
+
+StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
+                                                   std::span<const std::byte> payload) {
+    // A wrapper over DecodeRowInto, so there is exactly one decoder. Kept
+    // because several callers want an owned row and allocate once anyway
+    // (DESCRIBE, a point lookup, the tests); the chain executor is the one
+    // that cannot afford it per row.
+    std::vector<parser::AstValue> out(schema.columns.size());
+    if (Status s = DecodeRowInto(schema, payload, out); !s.ok()) return s;
     return out;
 }
 
@@ -389,12 +378,27 @@ std::string FormatValue(const parser::AstValue& value) {
     }
 }
 
-bool MatchesWhere(const catalog::Schema& schema, const std::vector<parser::AstValue>& row,
-                   const std::vector<parser::Condition>& where) {
-    for (const auto& cond : where) {
-        if (!ConditionMatches(schema, row, cond)) return false;
+bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
+                   const parser::AstValue& rhs, parser::CompareOp op) {
+    if (lhs.type == parser::ValueType::kNull || rhs.type == parser::ValueType::kNull) {
+        return false;  // no NULL support; NULL never matches (see file comment)
     }
-    return true;
+    if (type_val == kTypeValUint64) {
+        // Through the digit text: int_val is signed and cannot represent
+        // the upper half of the unsigned range, so comparing it would
+        // order large ids below small ones.
+        auto a = ParseUint64Text(lhs.raw_int_text);
+        auto b = ParseUint64Text(rhs.raw_int_text);
+        if (!a.ok() || !b.ok()) return false;
+        return CompareUint(a.value(), b.value(), op);
+    }
+    if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
+        return CompareInt(lhs.int_val, rhs.int_val, op);
+    }
+    if (lhs.type == parser::ValueType::kStr && rhs.type == parser::ValueType::kStr) {
+        return CompareStr(lhs.str_val, rhs.str_val, op);
+    }
+    return false;  // incompatible value kinds
 }
 
 }  // namespace kds::exec

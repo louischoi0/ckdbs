@@ -1,6 +1,10 @@
 # KDS Step Chains — Workplan
 
-Work instructions, companion to `docs/step-chain.md`. Task ids `SC##` (no collision with P/PR series). Execution rules as everywhere: numeric order unless "needs" says otherwise; tests ship in the same change; `bash test.sh` green is part of "done"; touching a spec `[OPEN]` means stop and flag. The advisory-contract test family is regression-mandatory from SC08 onward.
+> **MERGED INTO `docs/parser-v2-workplan.md` 2026-08-01. Kept as history; do not build from this file.**
+>
+> All ten tasks were absorbed, re-sequenced behind three prerequisites neither source spec named (`kUnsupported`/`CardinalityViolation`, stoppable walks, the golden corpus) and amended in three places: SC03 gained `AS` aliases, SC05 gained explicit column resolution, and SC09 gained **rule 0** — the probe-key re-derivation without which trail replay emits the wrong row. The SC→V map is at the end of the new file. J4's bolt-on vehicle is unchanged.
+
+Work instructions, companion to `docs/step-chains.md` (note: the reference below to `docs/step-chain.md`, singular, names a file that never existed). Task ids `SC##` (no collision with P/PR series). Execution rules as everywhere: numeric order unless "needs" says otherwise; tests ship in the same change; `bash test.sh` green is part of "done"; touching a spec `[OPEN]` means stop and flag. The advisory-contract test family is regression-mandatory from SC08 onward.
 
 Vehicle note (J4): SC02–SC04 extend the **current** recursive-descent parser. The blueprint parser (`docs/parser-workplan.md`) replaces the implementation later but must emit identical `StepChain`s — SC05's compile contract and SC10's corpus are what make that a checkable statement, not a hope.
 

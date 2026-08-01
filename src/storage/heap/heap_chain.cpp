@@ -166,8 +166,9 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
                              /*linked_from=*/tail_id.value()};
 }
 
-Status ChainVisit(storage::PageStore& store, PageId head, storage::PageAccess access,
-                  const std::function<Status(PageId, PageView&, std::uint16_t)>& fn) {
+Status ChainVisit(
+    storage::PageStore& store, PageId head, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = CheckHopBudget(steps, head); !s.ok()) return s;
@@ -181,7 +182,12 @@ Status ChainVisit(storage::PageStore& store, PageId head, storage::PageAccess ac
         for (std::uint16_t i = 0; i < n; ++i) {
             // Liveness is re-tested by the callback through ReadTuple();
             // skipping here as well would mean two reads of every slot.
-            if (Status s = fn(current, page, i); !s.ok()) return s;
+            auto outcome = storage::ResolveVisit(fn(current, page, i), "ChainVisit");
+            if (!outcome.ok()) return outcome.status();
+            // A successful early exit: the caller has what it came for, and
+            // the rest of the chain is not fetched. Distinct from an error
+            // precisely so the caller need not tell them apart.
+            if (outcome.value() == storage::VisitControl::kStop) return Status::OK();
         }
 
         const PageId next = page.next_page_id();

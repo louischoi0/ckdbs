@@ -10,6 +10,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/insert_placement.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/storage/visit.hpp"
 
 // The clustered B+ tree: a relation whose `sys.tables.clustered_type` is
 // `kBtree` stores its tuples in this tree's leaves, rooted at the same
@@ -142,10 +143,14 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
 // Calls `fn` once per slot of every leaf, left to right - which is pk
 // order page by page, tuples within a leaf staying unordered exactly as in
 // a heap page. Signature matches heap::ChainVisit deliberately, so a
-// caller can hand the same lambda to either - `access` included, with the
-// same meaning and the same consequence for getting it wrong.
-Status BtreeVisit(storage::PageStore& store, PageId root, storage::PageAccess access,
-                  const std::function<Status(PageId, heap::PageView&, std::uint16_t)>& fn);
+// caller can hand the same lambda to either - `access` and the
+// VisitControl contract included, with the same meaning and the same
+// consequence for getting either wrong. kStop ends the walk with
+// Status::OK() and leaves the remaining leaves unread.
+Status BtreeVisit(
+    storage::PageStore& store, PageId root, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn);
 
 // Levels from root to leaf inclusive: 1 while the root is still a leaf.
 // For DESCRIBE/SHOW and tests, not a hot path.

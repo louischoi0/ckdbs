@@ -56,6 +56,11 @@ add_library(kds
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp
     src/exec/row_codec.cpp
+    src/exec/step_compiler.cpp
+    src/exec/chain_frame.cpp
+    src/exec/step_vm.cpp
+    src/exec/budget.cpp
+    src/exec/catalog_view.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/epoll_io_backend.cpp

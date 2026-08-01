@@ -435,6 +435,201 @@ TEST_F(CommandDispatcherTest, UpdatingThePrimaryKeyIsRefused) {
     EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("1,alice"), std::string::npos);
 }
 
+TEST_F(CommandDispatcherTest, AJoinExecutesAndReturnsOnlyMatchingPairs) {
+    // V05 taught the grammar joins and refused to run them; V17 runs them.
+    // The property that survives the whole way through is the one the
+    // refusal existed to protect: a join must never answer with one
+    // relation's rows. Now that it executes, that shows up as the
+    // non-matching row being absent rather than as an error.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE trade (id int32, acct_id int32, sym varchar)")
+                  .response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8), "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('bob')").response.substr(0, 8), "INSERTED");
+    // Two trades, both belonging to alice (id 1). bob has none.
+    ASSERT_EQ(d.Dispatch("INSERT INTO trade VALUES (1, 'AAPL')").response.substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO trade VALUES (1, 'MSFT')").response.substr(0, 8),
+              "INSERTED");
+
+    auto out = d.Dispatch(
+        "SELECT acct.name, trade.sym FROM trade JOIN acct ON trade.acct_id = acct.id");
+    ASSERT_NE(out.response.substr(0, 4), "ERR ") << out.response;
+    EXPECT_NE(out.response.find("alice,AAPL"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("alice,MSFT"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("bob"), std::string::npos)
+        << "bob has no trade, so no row may carry him: " << out.response;
+    EXPECT_EQ(out.response.find("acct.name,trade.sym"), 0u) << "the header names the projection";
+}
+
+TEST_F(CommandDispatcherTest, AnExplicitProjectionEmitsOnlyTheNamedColumns) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar, tier varchar)")
+                  .response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice', 'gold')").response.substr(0, 8),
+              "INSERTED");
+
+    auto out = d.Dispatch("SELECT name FROM acct");
+    ASSERT_NE(out.response.substr(0, 4), "ERR ") << out.response;
+    EXPECT_NE(out.response.find("alice"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("gold"), std::string::npos)
+        << "a column the client did not name must not appear: " << out.response;
+}
+
+TEST_F(CommandDispatcherTest, SubqueryPredicatesExecuteAndActuallyFilter) {
+    // This test began life as a refusal, added because the old
+    // name-matching evaluator answered a subquery predicate *wrongly*:
+    // EXISTS has no column, the lookup found nothing, the row was
+    // reported "no match", and every row was dropped - an empty result
+    // set that reads as "nothing matched" rather than "never evaluated".
+    //
+    // V18 executes them, so the same statements are checked for the right
+    // answer instead of the right error. `trade` is empty, which makes
+    // the two negations true and the two positives false - and gets both
+    // directions from one fixture.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE trade (id int32, acct_id int32)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8), "INSERTED");
+
+    for (const char* sql : {"SELECT * FROM acct WHERE EXISTS (SELECT trade.id FROM trade)",
+                            "SELECT * FROM acct WHERE id IN (SELECT acct_id FROM trade)"}) {
+        auto out = d.Dispatch(sql);
+        ASSERT_NE(out.response.substr(0, 4), "ERR ") << sql << " -> " << out.response;
+        EXPECT_EQ(out.response.find("alice"), std::string::npos)
+            << sql << " must exclude every row over an empty relation: " << out.response;
+    }
+    for (const char* sql : {"SELECT * FROM acct WHERE NOT EXISTS (SELECT trade.id FROM trade)",
+                            "SELECT * FROM acct WHERE id NOT IN (SELECT acct_id FROM trade)"}) {
+        auto out = d.Dispatch(sql);
+        ASSERT_NE(out.response.substr(0, 4), "ERR ") << sql << " -> " << out.response;
+        EXPECT_NE(out.response.find("alice"), std::string::npos)
+            << sql << " must admit every row over an empty relation: " << out.response;
+    }
+
+    // UPDATE had the same hole and reported "UPDATED 0". Now the
+    // predicate is real: no trade points at alice, so still zero - but
+    // for the right reason, and the row is untouched.
+    auto upd = d.Dispatch("UPDATE acct SET name = 'x' WHERE id IN (SELECT acct_id FROM trade)");
+    EXPECT_EQ(upd.response, "UPDATED 0") << upd.response;
+    EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("alice"), std::string::npos);
+}
+
+TEST_F(CommandDispatcherTest, WithIsDeclinedByNameRatherThanAsAnUnknownCommand) {
+    // Also found by the live-server script. Dispatch() routes on the
+    // first word, so WITH fell through to "unknown command" and the
+    // parser's truthful "CTEs are not supported, subqueries are allowed
+    // in predicate position only" was unreachable from a client - even
+    // though the parser test for it passed, because that test calls
+    // parser::Parse() directly.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto out = d.Dispatch("WITH x AS (SELECT * FROM t) SELECT * FROM x");
+    EXPECT_EQ(out.response.substr(0, 4), "ERR ") << out.response;
+    EXPECT_NE(out.response.find("common table expressions"), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("unknown command"), std::string::npos) << out.response;
+}
+
+// ---- Catalog views (sys.*) ------------------------------------------------
+
+TEST_F(CommandDispatcherTest, CatalogViewsAreSelectable) {
+    // The catalog's own rows are not row-codec tuples - fixed offsets, no
+    // Keystone word - so they are read through the typed readers and
+    // handed out as a materialized view (exec/catalog_view.hpp). What that
+    // buys is checked here: real column names, real rows, and a user table
+    // showing up in them.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, name varchar)").response.substr(0, 7),
+              "CREATED");
+
+    auto tables = d.Dispatch("SELECT * FROM sys.tables");
+    ASSERT_NE(tables.response.substr(0, 4), "ERR ") << tables.response;
+    EXPECT_NE(tables.response.find("oid,namespace_oid,name"), std::string::npos)
+        << tables.response;
+    EXPECT_NE(tables.response.find("acct"), std::string::npos) << tables.response;
+    // The catalog's own relations are in there too - they are tables.
+    EXPECT_NE(tables.response.find("patterns"), std::string::npos) << tables.response;
+
+    // sys.columns joins the relation's name in itself, because a column
+    // list keyed only by oid is unreadable and joining is what a view
+    // cannot do.
+    auto columns = d.Dispatch("SELECT * FROM sys.columns");
+    ASSERT_NE(columns.response.substr(0, 4), "ERR ") << columns.response;
+    EXPECT_NE(columns.response.find("acct"), std::string::npos) << columns.response;
+
+    for (const char* sql : {"SELECT * FROM sys.objects", "SELECT * FROM sys.types",
+                            "SELECT * FROM sys.patterns"}) {
+        EXPECT_NE(d.Dispatch(sql).response.substr(0, 4), "ERR ") << sql;
+    }
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewTakesAProjectionAndAWhereClause) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, name varchar)").response.substr(0, 7),
+              "CREATED");
+
+    auto filtered = d.Dispatch("SELECT name, desc_page_id FROM sys.tables WHERE name = 'acct'");
+    ASSERT_NE(filtered.response.substr(0, 4), "ERR ") << filtered.response;
+    EXPECT_EQ(filtered.response.find("name,desc_page_id"), 0u) << filtered.response;
+    EXPECT_NE(filtered.response.find("acct"), std::string::npos) << filtered.response;
+    // The WHERE really filtered: no other table's name came through.
+    EXPECT_EQ(filtered.response.find("patterns"), std::string::npos) << filtered.response;
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewRefusesWhatItCannotDoAndSaysWhich) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, name varchar)").response.substr(0, 7),
+              "CREATED");
+
+    // A view is materialized, so there is no relation for a join step to
+    // walk. Refused by name rather than producing nothing.
+    auto joined = d.Dispatch("SELECT t.name FROM sys.tables AS t JOIN acct ON t.oid = acct.id");
+    EXPECT_EQ(joined.response.substr(0, 4), "ERR ") << joined.response;
+    EXPECT_NE(joined.response.find("cannot be joined"), std::string::npos) << joined.response;
+
+    // A known schema with an unknown view is a different mistake from an
+    // unknown schema, and gets a different message - reporting the second
+    // for the first sends the reader looking in the wrong place.
+    auto bad_view = d.Dispatch("SELECT * FROM sys.nosuch");
+    EXPECT_NE(bad_view.response.find("no catalog view named"), std::string::npos)
+        << bad_view.response;
+    auto bad_schema = d.Dispatch("SELECT * FROM public.acct");
+    EXPECT_NE(bad_schema.response.find("unknown schema"), std::string::npos)
+        << bad_schema.response;
+
+    auto bad_column = d.Dispatch("SELECT * FROM sys.tables WHERE nosuchcol = 1");
+    EXPECT_NE(bad_column.response.find("has no column"), std::string::npos) << bad_column.response;
+}
+
+TEST_F(CommandDispatcherTest, AUserTableNamedLikeAViewIsUnaffected) {
+    // The views live under `sys` and nowhere else: an unqualified name
+    // always means a user relation, so a table called `tables` is still
+    // reachable and is not shadowed by sys.tables.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto created = d.Dispatch("CREATE TABLE t (id int64, name varchar)");
+    ASSERT_EQ(created.response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('mine')").response.substr(0, 8), "INSERTED");
+
+    auto user = d.Dispatch("SELECT * FROM t");
+    EXPECT_NE(user.response.find("mine"), std::string::npos) << user.response;
+}
+
+TEST_F(CommandDispatcherTest, AnAliasedSingleRelationSelectStillResolvesItsTable) {
+    // The catalog is looked up by table_name, never by the binding - an
+    // alias renames the relation for predicates, not for the catalog.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8), "INSERTED");
+
+    EXPECT_NE(d.Dispatch("SELECT * FROM acct AS a").response.find("1,alice"), std::string::npos);
+}
+
 TEST_F(CommandDispatcherTest, UpdatingANonKeyColumnPreservesTheKey) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),

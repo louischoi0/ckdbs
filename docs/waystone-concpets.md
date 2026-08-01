@@ -32,7 +32,7 @@ So the normative rule, which every consumer is bound by:
 
 > **A waystone may replace a lookup. It may never replace a search.**
 
-A pattern *step* whose authoritative work is a keyed lookup — a pk equality, or a nested-loop join probing the next relation by pk (`docs/parser.md` I12: the query is the plan) — may be served from the trail, because completeness for that step follows from pk uniqueness, not from the trail. A step that must *search* — a non-pk predicate, a range, a scan — runs authoritatively no matter what the trail says; the trail may only prefetch for it.
+A pattern *step* whose authoritative work is a keyed lookup — a pk equality, or a chain step probing the next relation by pk (`docs/parser-v2.md` I12: the statement is the chain) — may be served from the trail, because completeness for that step follows from pk uniqueness, not from the trail. A step that must *search* — a non-pk predicate, a range, a scan — runs authoritatively no matter what the trail says; the trail may only prefetch for it.
 
 Replay contract, normative, per entry:
 
@@ -45,12 +45,12 @@ Trusting a set as complete would require amending invariant 9 and a completeness
 
 ## 3. Pattern identity
 
-`pattern_id` is a fingerprint of the statement's *shape*, computed **at parse time** and never per execution (`docs/parser.md` I1). Literals are parameterized as they are lexed: the shape stream hashes to `pattern_id`, and the ordered literal values hash to `arg_hash`. `WHERE id = 42` and `WHERE id = ?` therefore converge on one `pattern_id`, which is the property that makes the whole structure work — a client that inlines literals and one that binds parameters share a waystone.
+`pattern_id` is a fingerprint of the statement's *shape*, computed **at parse time** and never per execution (`docs/parser-v2.md` I1). Literals are parameterized as they are lexed: the shape stream hashes to `pattern_id`, and the ordered literal values hash to `arg_hash`. `WHERE id = 42` and `WHERE id = ?` therefore converge on one `pattern_id`, which is the property that makes the whole structure work — a client that inlines literals and one that binds parameters share a waystone.
 
 Two obligations follow:
 
 - **Stability.** `pattern_id` is persisted in `sys.patterns` and is the key to stored waystones, so it must not depend on pointer values, hash-map iteration order, or anything else that varies between runs of the same binary.
-- **Versioning.** The parser is being replaced wholesale (`docs/parser.md`), and the replacement will not produce identical fingerprints. Every pattern row carries a `fingerprint_version`; a row whose version does not match the running build is ignored, and its waystones with it. This is the cheap alternative to a migration that would have to re-parse stored SQL the engine no longer keeps.
+- **Versioning.** Every pattern row carries a `fingerprint_version`; a row whose version does not match the running build is ignored, and its waystones with it. This is the cheap alternative to a migration that would have to re-parse stored SQL the engine no longer keeps. **Amended 2026-08-01:** the parser replacement is now planned to be *hash-preserving* — the joins-and-subqueries language is additive shape, and folding the fingerprint into the parse pass must not change one hash (`docs/parser-v2-workplan.md` V01 pins every pre-existing `pattern_id`, V29 must not move them). So the version constant stays the seam, but no bump is expected from that work; it is there for the day the algorithm itself changes.
 
 ## 4. Catalog — `sys.patterns`
 
@@ -61,7 +61,7 @@ Patterns are catalog objects, in a relation named `patterns` in the `sys` namesp
 | `oid` | `Oid` | the pattern object's oid |
 | `pattern_id` | `uint64` | the parse-time fingerprint; the lookup key |
 | `fingerprint_version` | `uint32` | §3; a mismatch retires the row's waystones |
-| `stmt_class` | `uint8` | the parser's execution-class tag (`docs/parser.md` I2) |
+| `stmt_class` | `uint8` | the parser's execution-class tag (`docs/parser-v2.md` I2; every step-chain statement carries `kJoinSelect`, per J3) |
 | `waystone_root` | `PageId` | root of this pattern's `arg_hash` directory, `kInvalidPageId` when none |
 | `dir_depth` | `uint8` | levels the directory walk traverses; persisted, never derived |
 | `use_count` | `uint32` | executions observed; best-effort, drives retention |
@@ -147,7 +147,7 @@ The bar to clear, measured on this engine: a validated point lookup ran 8,417 qp
 ## 9. Open decisions — do not assume
 
 - **Retention and eviction per pattern.** Instances per pattern are unbounded; the catalog bounds patterns, nothing yet bounds instances. Admission/eviction returns here, confined to one directory.
-- **Recording policy.** Every execution, sampled, or only after a pattern has been seen *n* times? Recording on first sight pays the write for one-shot queries; waiting misses short-lived hot instances.
+- ~~**Recording policy.**~~ **Decided 2026-08-01 — `n = 2`** (`docs/parser-v2.md` J5, which owns it now). The first execution of an instance only counts; the second records. Recording on first sight pays the write for one-shot queries, and waiting longer misses short-lived hot instances; two is the smallest *n* that excludes the one-shot case. Sightings live in a bounded core-local in-memory table, and eviction from it merely restarts the count — a performance event, never a correctness one. Still open: that table's size, and the per-instance trail cap when a correlated `Probe` step fans out past one page.
 - **Persistence class** of waystone pages (WAL-logged vs unlogged). Unlogged loss costs replays, never results.
 - **Completeness / set caching**, and with it whether invariant 8 is ever amended. Needs a per-relation change stamp bumped at *commit*, not at write — a row inserted-then-committed by another transaction would otherwise slip past a stamp taken between the two.
 - **`arg_hash` collision handling** beyond the header check (§5): chain, displace, or drop.
