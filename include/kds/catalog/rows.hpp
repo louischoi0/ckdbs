@@ -69,6 +69,16 @@ struct SysTableRow {
     // keeping 0 free as "unset".
     std::uint64_t next_id;
 
+    // Root of this relation's var-heap chain (storage/varheap.hpp), or
+    // kInvalidPageId for a relation that has no spillable column.
+    //
+    // Allocated once, at CREATE TABLE, and never changed: the chain grows
+    // by tail append through the pages' own links, so the *root* is fixed
+    // by DDL. That is deliberate rather than incidental - a root that moved
+    // would be a fact changing without DDL, which catalog_cache.hpp's rule
+    // says may not be cached, and this one is cached on every TableAccess.
+    PageId varheap_page_id;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kNameOffset = 16;
@@ -77,7 +87,8 @@ struct SysTableRow {
     // uint64 rather than 8-byte-aligned: catalog rows are packed byte
     // streams read through memcpy, never overlaid on the buffer.
     static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
-    static constexpr std::size_t kOnDiskSize = kNextIdOffset + sizeof(std::uint64_t);
+    static constexpr std::size_t kVarHeapPageIdOffset = kNextIdOffset + sizeof(std::uint64_t);
+    static constexpr std::size_t kOnDiskSize = kVarHeapPageIdOffset + sizeof(PageId);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);

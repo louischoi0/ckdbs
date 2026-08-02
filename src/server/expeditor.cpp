@@ -16,9 +16,9 @@ std::string Expeditor::Config::LogPath() const {
 }
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
-    return {"data_file", "port",      "wal_dir",   "checkpoint_interval_ms", "durability",
-            "wal_drain_interval_us", "log_dir",   "log_file",               "log_level",
-            "max_rows_touched"};
+    return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
+            "wal_drain_interval_us", "log_dir",  "log_file",               "log_level",
+            "max_rows_touched",      "inline_cell_width"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -81,6 +81,22 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // about is well under a millisecond, so ms would round it away.
         wal_drain_interval_ns = v.value() * 1'000ULL;
     }
+    if (file.Has("inline_cell_width")) {
+        auto v = file.GetUint("inline_cell_width");
+        if (!v.ok()) return v.status();
+        // Range-checked through the same function the superblock validates
+        // with, so a config file and a data file can never disagree about
+        // what a legal width is.
+        if (v.value() > std::numeric_limits<std::uint32_t>::max()) {
+            return Status::InvalidArgument(file.origin() + ": inline_cell_width " +
+                                            std::to_string(v.value()) + " is not a u32");
+        }
+        auto width = static_cast<std::uint32_t>(v.value());
+        if (Status s = storage::CheckInlineCellWidth(width); !s.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + s.message());
+        }
+        inline_cell_width = width;
+    }
     if (file.Has("log_dir")) {
         auto v = file.GetString("log_dir");
         if (!v.ok()) return v.status();
@@ -139,7 +155,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->store_->SetLogger(&*expeditor->logger_);
 
     auto database =
-        bootstrap::BootstrapDatabase(*expeditor->store_, now_unix_seconds, &*expeditor->logger_);
+        bootstrap::BootstrapDatabase(*expeditor->store_, now_unix_seconds,
+                                     config.inline_cell_width, &*expeditor->logger_);
     if (!database.ok()) return database.status();
     expeditor->database_.emplace(std::move(database.value()));
     // The Catalog was moved out of the BootstrapResult; its logger came

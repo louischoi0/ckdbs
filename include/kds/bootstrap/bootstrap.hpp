@@ -7,6 +7,7 @@
 #include "kds/catalog/catalog.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/storage/tagged_cell.hpp"
 
 // Whole-database bring-up: given a PageStore, load an existing database or
 // create a fresh one - and bootstrap the catalog **only if fresh**.
@@ -40,16 +41,26 @@ struct BootstrapResult {
 //     persists a brand-new SuperBlock, then runs Catalog::Bootstrap() to
 //     allocate the fixed catalog pages and populate their bootstrap rows.
 //
-// Fails if `store` reports an unexpected error at any step, or if
-// Catalog::Bootstrap() fails on the fresh path.
+// `inline_cell_width` is the running configuration's kds.inline_cell_width
+// (storage/tagged_cell.hpp). On the fresh path it is **pinned** into the
+// new superblock; on the existing path it is **validated** against the
+// pinned one and a disagreement refuses the mount with InvalidArgument,
+// naming both values (docs/rule-fixed-length-tuple.md section 4). The check
+// is not pedantry: on-disk tuple layout is computed from the width, so a
+// database opened under a different one decodes every row at the wrong
+// offsets rather than failing.
+//
+// Fails if `store` reports an unexpected error at any step, if
+// `inline_cell_width` is outside the legal range or disagrees with the
+// pinned one, or if Catalog::Bootstrap() fails on the fresh path.
 //
 // `log` (optional, component tag "bootstrap") receives the one fact this
 // function decides and nothing else can recover afterwards: whether this
 // was a fresh database or an existing one. The returned Catalog carries
 // the same logger, so catalog writes are reported from here on. It must
 // outlive both the call and the returned result.
-StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
-                                             std::uint64_t now_unix_seconds,
-                                             Logger* log = nullptr);
+StatusOr<BootstrapResult> BootstrapDatabase(
+    storage::PageStore& store, std::uint64_t now_unix_seconds,
+    std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth, Logger* log = nullptr);
 
 }  // namespace kds::bootstrap

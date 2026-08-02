@@ -9,6 +9,7 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/storage/varheap.hpp"
 
 namespace kds::catalog {
 
@@ -150,8 +151,11 @@ Status Catalog::Bootstrap() {
 
     // Phase 3: sys.tables rows.
     for (const auto& t : kSysTables) {
+        // kInvalidPageId: the bootstrap catalog tables encode their rows
+        // through SysXxxRow::Encode(), never the schema-driven row codec,
+        // so nothing of theirs can ever spill.
         if (Status s = InsertRelationRow(t.oid, kNamespaceSys, t.name, t.page_id,
-                                          ClusteredType::kHeap);
+                                          ClusteredType::kHeap, kInvalidPageId);
             !s.ok()) {
             return s;
         }
@@ -224,7 +228,8 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
 }
 
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
-                                   PageId desc_page_id, ClusteredType clustered_type) {
+                                   PageId desc_page_id, ClusteredType clustered_type,
+                                   PageId varheap_page_id) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -232,6 +237,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.desc_page_id = desc_page_id;
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
+    row.varheap_page_id = varheap_page_id;
     Status s = InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
@@ -289,6 +295,15 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // ever be written to (heap-and-tuple.md section 4).
     if (Status s = CheckKeystoneColumn(schema); !s.ok()) return s;
 
+    // Same argument, extended by the fixed-length rule: the relation's row
+    // size is a schema constant, so if it cannot be computed - a column
+    // with no decided on-disk width, or a row wider than a page - there is
+    // no row this table could hold either. Computing it here also means
+    // the layout every later InitTableAccess() builds is known to succeed.
+    if (auto layout = RowLayout::Build(schema, inline_cell_width_); !layout.ok()) {
+        return layout.status();
+    }
+
     auto created = store_.CreateNew();
     if (!created.ok()) return created.status();
     auto [root_id, root_bytes] = created.value();
@@ -312,12 +327,28 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     }
     if (!formatted.ok()) return formatted;
 
+    // The var-heap root, allocated here or not at all. Eager rather than
+    // on-first-spill, and the reason is the catalog cache's rule
+    // (catalog_cache.hpp): a root allocated lazily would be a fact that
+    // changes without DDL, and this one is cached on every TableAccess.
+    // Allocating at CREATE TABLE keeps it DDL-immutable. The cost is one
+    // page per relation that *could* spill, whether or not it ever does -
+    // which is why relations that cannot spill get kInvalidPageId and no
+    // page at all.
+    PageId varheap_root = kInvalidPageId;
+    if (SchemaCanSpill(schema)) {
+        auto created_varheap = varheap::CreateChain(store_);
+        if (!created_varheap.ok()) return created_varheap.status();
+        varheap_root = created_varheap.value();
+    }
+
     Oid new_oid = GenerateUserOid();
 
     if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name); !s.ok()) {
         return s;
     }
-    if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type);
+    if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
+                                      varheap_root);
         !s.ok()) {
         return s;
     }
@@ -480,6 +511,16 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.schema = std::move(schema.value());
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
+    access.varheap_page_id = table_row.value().varheap_page_id;
+
+    // The row-size constant, computed once here and carried for the life of
+    // the entry (invariant 13). This is the only place it is derived: a
+    // second computation on an execute path is a second chance to disagree
+    // with the bytes already on disk.
+    auto layout = RowLayout::Build(access.schema, inline_cell_width_);
+    if (!layout.ok()) return layout.status();
+    access.layout = std::move(layout.value());
+
     return cache_.PutTableAccess(std::move(access));
 }
 

@@ -116,6 +116,21 @@ public:
         // next checkpoint or shutdown.
         sched::MonoTimeNs wal_drain_interval_ns = 1'000'000;  // 1 ms
 
+        // How many bytes every variable-width value occupies inside a
+        // tuple (docs/heap-and-tuple.md section 3.3). It is read from
+        // configuration exactly once - at the bootstrap of a *new*
+        // database, which pins it into the superblock; every mount after
+        // that validates this value against the pinned one and refuses to
+        // start on a disagreement, because on-disk tuple layout is computed
+        // from it.
+        //
+        // The default is **[PROPOSED], not settled** (CLAUDE.md's open
+        // decisions): 64 is sized so common OLTP strings never spill, and
+        // the number is to be measured against real target-schema string
+        // lengths. Nothing may depend on it - it is a configured value
+        // threaded into catalog::RowLayout, never a compiled-in constant.
+        std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth;
+
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to
         // wherever the process runs"; the two are joined into one path, so
         // an absolute `log_file` is honoured on its own.

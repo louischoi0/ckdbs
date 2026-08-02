@@ -62,6 +62,12 @@ enum class RecordType : std::uint8_t {
     kPad = 13,             // segment tail filler; carries no payload meaning
     kUndoWrite = 14,       // undo-page append: before-image + the chain link
     kFree = 15,            // SpaceManager release, the counterpart of kAlloc
+    // var-heap append: a spilled value's bytes and the slot they landed in
+    // (docs/rule-fixed-length-tuple.md section 5). Logged because a
+    // var-heap value is *authoritative data* - losing one loses a committed
+    // value, not a hint - which is what separates this page class from the
+    // advisory waystone family.
+    kVarHeapAppend = 16,
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
     // there is no B+ tree page format to describe, and a number reserved
     // for a payload nobody can encode is a number that gets used wrong.
@@ -69,7 +75,7 @@ enum class RecordType : std::uint8_t {
     // for.
 };
 
-inline constexpr std::uint8_t kMaxAssignedRecordType = 15;
+inline constexpr std::uint8_t kMaxAssignedRecordType = 16;
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

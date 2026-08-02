@@ -22,6 +22,30 @@ data_file = kds.db
 # Defaults to "<data_file>.wal" when unset.
 # wal_dir = kds.db.wal
 
+# How many bytes every variable-width value (a `varchar`) occupies inside a
+# tuple (docs/heap-and-tuple.md §3.3). Every tuple is fixed-length: a
+# relation's row size is a schema constant, and a varchar gets exactly this
+# many bytes whatever it holds — which is what makes an UPDATE unable to
+# move a row.
+#
+# This key is read exactly once, when a *new* database is bootstrapped, and
+# the value is pinned into the superblock. Every later mount compares this
+# setting against the pinned one and refuses to start if they differ,
+# naming both: on-disk tuple layout is computed from the width, so running
+# with a different one would not fail, it would decode every row at the
+# wrong offsets. Changing it for an existing database is a rebuild, and
+# there is no migration path.
+#
+# The usable inline capacity is width − 3 (a tag byte and a u16 length); a
+# longer value belongs in the var-heap, which is specified but not yet
+# implemented, so it is refused today. Legal range 16..4096.
+#
+# 64 is [PROPOSED], not settled — sized so common OLTP strings (codes,
+# names, references) never spill, and to be measured against the real
+# string-length distributions of target schemas. The counter-cost is 64
+# bytes per string column per row, paid whether or not the value is short.
+inline_cell_width = 64
+
 # ---- Network ---------------------------------------------------------------
 
 # TCP port, loopback only. 1..65535.

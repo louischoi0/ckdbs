@@ -111,6 +111,52 @@ StatusOr<std::size_t> EncodeHeapWrite(std::span<std::byte> out, const HeapWriteP
                                       std::span<const std::byte> tuple);
 StatusOr<DecodedHeapWrite> DecodeHeapWrite(std::span<const std::byte> in);
 
+// ---- VARHEAP_APPEND ------------------------------------------------------
+//
+// One spilled value landing in a var-heap page (docs/rule-fixed-length-
+// tuple.md section 5). The target page is the envelope's `page_id`.
+//
+// Redo is an append at a *named* slot rather than "append wherever": the
+// slot is recorded so replay reproduces the exact pointer the tuple's cell
+// already carries. A pointer that resolved to a different slot after
+// recovery would be a value silently swapped for another.
+//
+// Write ordering, which is the whole of the var-heap's recovery story:
+// VARHEAP_APPEND precedes the HEAP_INSERT/HEAP_OVERWRITE whose cell points
+// at it, in the same transaction, replayed by the ordinary winner/loser
+// machinery. A crash between the two leaves an unreferenced value for
+// purge's sweep to collect. **There is deliberately no var-heap-specific
+// recovery logic**, and none may be added.
+
+struct VarHeapAppendPayload {
+    std::uint16_t slot;
+    std::uint16_t reserved;   // 0
+    std::uint32_t value_len;  // bytes of value that follow
+};
+
+inline constexpr std::size_t kVarHeapAppendSlotOffset = 0;
+inline constexpr std::size_t kVarHeapAppendReservedOffset = 2;
+inline constexpr std::size_t kVarHeapAppendValueLenOffset = 4;
+// 2+2+4 = 8; value bytes begin here.
+inline constexpr std::size_t kVarHeapAppendFixedSize = 8;
+
+static_assert(offsetof(VarHeapAppendPayload, slot) == kVarHeapAppendSlotOffset);
+static_assert(offsetof(VarHeapAppendPayload, reserved) == kVarHeapAppendReservedOffset);
+static_assert(offsetof(VarHeapAppendPayload, value_len) == kVarHeapAppendValueLenOffset);
+static_assert(sizeof(VarHeapAppendPayload) == kVarHeapAppendFixedSize);
+
+struct DecodedVarHeapAppend {
+    VarHeapAppendPayload fields;
+    std::span<const std::byte> value;  // view into the caller's buffer
+};
+
+// `fields.value_len` is ignored on encode - it is set from `value.size()`,
+// so the two can never disagree on disk.
+StatusOr<std::size_t> EncodeVarHeapAppend(std::span<std::byte> out,
+                                           const VarHeapAppendPayload& fields,
+                                           std::span<const std::byte> value);
+StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in);
+
 // ---- HEAP_DELETE_MARK ----------------------------------------------------
 //
 // The whole of DELETE in the no-xmax model (wal.md section 5.1): a slot flag

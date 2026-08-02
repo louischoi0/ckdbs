@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 // RocksDB-Status-style explicit error type. rules.md #1: `throw` is
@@ -97,6 +98,18 @@ public:
     }
     static Status ResourceExhausted(std::string msg) {
         return Status(StatusCode::kResourceExhausted, std::move(msg));
+    }
+
+    // The same failure, said with more context: "<prefix>: <message>",
+    // keeping the code. For a layer that knows *which* column or relation a
+    // lower layer's failure was about and would otherwise have to choose
+    // between losing that fact and hard-coding the code it re-wraps with -
+    // and re-wrapping with the wrong code is how a retryable failure stops
+    // being retryable. Returns OK unchanged; there is nothing to say about
+    // a success.
+    Status WithContext(std::string_view prefix) const {
+        if (ok()) return *this;
+        return Status(code_, std::string(prefix) + ": " + message_);
     }
 
     bool ok() const noexcept { return code_ == StatusCode::kOk; }

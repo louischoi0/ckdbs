@@ -151,6 +151,50 @@ StatusOr<DecodedHeapWrite> DecodeHeapWrite(std::span<const std::byte> in) {
     return decoded;
 }
 
+// ---- VARHEAP_APPEND ------------------------------------------------------
+
+StatusOr<std::size_t> EncodeVarHeapAppend(std::span<std::byte> out,
+                                           const VarHeapAppendPayload& fields,
+                                           std::span<const std::byte> value) {
+    if (value.size() > 0xFFFFFFFFull) {
+        return Status::InvalidArgument("wal payload: var-heap value longer than a uint32 length");
+    }
+    const std::size_t total = kVarHeapAppendFixedSize + value.size();
+    if (Status s = CheckOutputSize(out, total, "VARHEAP_APPEND"); !s.ok()) {
+        return s;
+    }
+
+    Store<std::uint16_t>(out, kVarHeapAppendSlotOffset, fields.slot);
+    Store<std::uint16_t>(out, kVarHeapAppendReservedOffset, 0);
+    // From the span, never the caller's field, so the length on disk and
+    // the bytes on disk cannot disagree.
+    Store<std::uint32_t>(out, kVarHeapAppendValueLenOffset,
+                         static_cast<std::uint32_t>(value.size()));
+    if (!value.empty()) {
+        std::memcpy(out.data() + kVarHeapAppendFixedSize, value.data(), value.size());
+    }
+    return total;
+}
+
+StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kVarHeapAppendFixedSize, "VARHEAP_APPEND"); !s.ok()) {
+        return s;
+    }
+
+    DecodedVarHeapAppend decoded{};
+    decoded.fields.slot = Load<std::uint16_t>(in, kVarHeapAppendSlotOffset);
+    decoded.fields.reserved = Load<std::uint16_t>(in, kVarHeapAppendReservedOffset);
+    decoded.fields.value_len = Load<std::uint32_t>(in, kVarHeapAppendValueLenOffset);
+
+    // Trailing bytes are allowed - the envelope pads to 8 - but a length
+    // claiming more than was written is not.
+    if (in.size() - kVarHeapAppendFixedSize < decoded.fields.value_len) {
+        return Status::Corruption("wal payload: VARHEAP_APPEND value_len runs past the payload");
+    }
+    decoded.value = in.subspan(kVarHeapAppendFixedSize, decoded.fields.value_len);
+    return decoded;
+}
+
 // ---- HEAP_DELETE_MARK ----------------------------------------------------
 
 StatusOr<std::size_t> EncodeHeapDeleteMark(std::span<std::byte> out,

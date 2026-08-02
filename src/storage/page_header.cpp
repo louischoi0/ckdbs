@@ -35,6 +35,7 @@ std::uint8_t MaxSupportedFormatVersion(PageType type) noexcept {
         case PageType::kFreeMap:
         case PageType::kHeaderlessMap:
         case PageType::kWaystone:
+        case PageType::kVarHeap:
             return 1;
         case PageType::kInvalid:
             break;

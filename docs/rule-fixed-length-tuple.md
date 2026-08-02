@@ -90,9 +90,97 @@ The out-of-line value store. Its design goal is to be **boring**: the mobility p
 6. **Invisibility:** wire-level golden sessions produce byte-identical results for inline vs spilled storage of the same logical value.
 7. **Advisory family unaffected:** the standing Waystone-off/dropped-trails equivalence suite passes over spilled-value workloads.
 
+## 8a. Implementation status — phase 1 landed 2026-08-01
+
+**Phase 1 is the rule without the var-heap.** Invariant 13 holds in code: a
+relation's row size is a schema constant, tuple addresses are stable across
+UPDATE, and the width is instance-pinned. What phase 1 does *not* do is
+spill — a value too long to inline is refused with `Unsupported` naming the
+var-heap, where before the rule it would have been stored (up to 65535
+bytes) as a variable-length field.
+
+Landed:
+
+| Gate item | Where |
+|---|---|
+| §7.1 `heap-and-tuple.md` | already written; §3.4 now marks spilling as specified-not-implemented |
+| §7.4 superblock pin + startup validation | `include/kds/server/superblock.hpp` (`inline_cell_width` at body offset 36, replacing `reserved2`; format version 3 → 4), `src/bootstrap/bootstrap.cpp` |
+| §7.5 row codec | `include/kds/storage/tagged_cell.hpp` (the cell format), `catalog::RowLayout` in `include/kds/catalog/schema.hpp` (the constant), `src/exec/row_codec.cpp` (static offsets) |
+| §7.6 client manual | done, including the explicit "there is no `VARCHAR(n)`" |
+| §7.7 `CLAUDE.md` | done |
+| §8.1, §8.2, §8.5, §8.6 tests | `tests/tagged_cell_test.cpp`, `tests/row_layout_test.cpp`, `tests/fixed_length_tuple_test.cpp`, `tests/bootstrap_test.cpp` |
+
+## 8b. Implementation status — phase 2 (the var-heap) landed 2026-08-01
+
+The remaining gate items are done. A value too long to inline now **spills**
+rather than being refused, and storage is invisible above the codec.
+
+| Gate item | Where |
+|---|---|
+| §7.2 `VARHEAP_APPEND` in the WAL record catalog | `RecordType::kVarHeapAppend = 16`, `include/kds/wal/payload.hpp`, `docs/wal.md` §5.2 |
+| §7.3 `kVarHeap` in the page-class enum | `PageType::kVarHeap = 10`, `include/kds/storage/varheap.hpp`, `docs/page.md` §5a |
+| The spill path | `storage::EncodeSpilledCell` + `varheap::ChainAppend`, driven from `EncodeRow`'s `VarHeapSink` |
+| The fetch path | `varheap::Fetch` via `exec::ResolveSpills` |
+| §8.3 tests, as far as reachable | `tests/varheap_test.cpp`, `tests/fixed_length_tuple_test.cpp` |
+
+Four design points worth having in one place:
+
+- **Per-relation chain, root fixed at `CREATE TABLE`.** `sys.tables` gained
+  `varheap_page_id`, allocated eagerly for any schema that can spill and
+  `kInvalidPageId` otherwise, so a relation of plain integers costs no
+  var-heap page. Eager rather than on-first-spill because a lazily
+  allocated root would be a fact changing *without DDL*, and
+  `catalog_cache.hpp`'s rule says such a fact may not be cached — while
+  this one is cached on every `TableAccess`. Chain growth edits the tail's
+  link, never the root, so the root stays DDL-immutable.
+- **Decode does not resolve; it reports.** `DecodeRowInto` records a
+  spilled cell as a *pending* spill and the caller fetches afterwards
+  through `ResolveSpills`. This is `parser-v2.md` I15's rule R1 — no
+  page-frame span live across a nested fetch — and resolving inline would
+  have put a var-heap fetch under exactly the span the step VM's
+  `PageSpanGuard` exists to catch. A row with nothing spilled pays nothing
+  for the split.
+- **`VARHEAP_APPEND` precedes the `HEAP_INSERT` that points at it.** That
+  direction is the recovery story: a replay must never reach a cell whose
+  pointer resolves to nothing, whereas a value with no tuple is an
+  unreferenced value purge collects. No var-heap-specific recovery logic
+  exists, per §5.
+- **Max value is one page, 8144 bytes.** This is *not* the §9 cap being
+  decided — a larger value needs a multi-page representation, and inventing
+  one to answer an open question is what §9 forbids. Refused with
+  `Unsupported`; a future cap can be lower (policy above the layer) or
+  higher (chaining behind the same `Append`/`Fetch` pair).
+
+Still owed, and both blocked on machinery that does not exist:
+
+- **Nothing reclaims.** Reclamation rides on purge (§5) and there is no
+  purge, so a superseded value's bytes stay until there is. An UPDATE that
+  shortens a spilled value abandons the old one.
+- §8.4 (the crash matrix) and §8.7 (Waystone equivalence over spilled
+  workloads) need recovery and trail replay respectively, neither of which
+  is implemented.
+
+Two decisions this pass forced, recorded because neither is in §0:
+
+- **`float`/`decimal` columns are now refused at `CREATE TABLE`**
+  (`catalog::RowLayout::Build`). A fixed row size has to reserve a width for
+  every column, and neither type has a decided on-disk encoding; reserving
+  one would be half of settling it. Before the rule they could be declared
+  and never populated, which cost nothing because a row's size did not
+  depend on them.
+- **Var-heap layout, for phase 2 `[CONFIRMED 2026-08-01]`:** a
+  **per-relation chain** rooted at a new `varheap_page_id` field in
+  `sys.tables`, grown by tail append exactly as `heap_chain.cpp` grows a
+  heap. Chosen over one instance-wide chain for per-relation locality and
+  because `DROP TABLE`, when it exists, then reclaims one chain rather than
+  sweeping a shared one. The cost is a catalog row format change.
+
+Every existing data file stops mounting at superblock version 4. That is
+V5 working as intended: there is no migration path while the format moves.
+
 ## 9. Open Items — do not assume
 
 - **`kds.inline_cell_width` default value** (64 `[PROPOSED]`): settle against measured string-length distributions of target schemas; this is the number that decides whether common strings ever spill.
-- Spilled-value size cap (uncapped blobs are not obviously an OLTP feature).
+- Spilled-value size cap (uncapped blobs are not obviously an OLTP feature). **Unsettled, and the implementation does not settle it**: `varheap::ChainAppend` refuses anything larger than one page (8144 bytes) with `Unsupported`, because a bigger value needs a multi-page representation and inventing one would answer this question by accident. A future cap can be lower (a policy check above the layer) or higher (chaining behind the same `Append`/`Fetch` pair).
 - V4 revisit trigger: adopt prefix-inline only if string-equality steps ever become a measured cost — recorded so the "no" has an exit condition.
 - Purge-cadence sizing metric for var-heap headroom (ties into the observability set).

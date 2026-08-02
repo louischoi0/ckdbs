@@ -268,13 +268,14 @@ TEST(SubsystemLoggingTest, BootstrapDistinguishesFreshFromExisting) {
 
     CapturedLog fresh_log(LogLevel::kInfo);
     auto fresh = bootstrap::BootstrapDatabase(store, /*now_unix_seconds=*/1'700'000'000,
-                                              fresh_log.get());
+                                              storage::kDefaultInlineCellWidth, fresh_log.get());
     ASSERT_TRUE(fresh.ok()) << fresh.status().message();
     EXPECT_TRUE(fresh_log.Has("bootstrap", {"fresh database"}));
     EXPECT_TRUE(fresh_log.Has("catalog", {"bootstrapped"}));
 
     CapturedLog reopen_log(LogLevel::kInfo);
     auto reopened = bootstrap::BootstrapDatabase(store, /*now_unix_seconds=*/1'700'000'100,
+                                                 storage::kDefaultInlineCellWidth,
                                                  reopen_log.get());
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
     // The distinction that matters: an existing database must not be

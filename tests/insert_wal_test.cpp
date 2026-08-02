@@ -16,6 +16,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/page_header.hpp"
+#include "kds/storage/varheap.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
@@ -182,16 +183,41 @@ TEST_F(InsertWalTest, NoWalManagerMeansNoRecordsAndTheInsertStillWorks) {
 
 // ---- Chain growth logs both pages it touched ----------------------------
 
+// A row wide enough that a page fills in a countable number of inserts.
+//
+// Under the fixed-length rule (invariant 13) a row's width comes from its
+// *schema*, never from the values in it: every varchar occupies one tagged
+// cell of kds.inline_cell_width bytes whatever it holds. So a wide row is a
+// row with many columns. These tests used to insert one 500-byte varchar,
+// which is now refused - a value that long belongs in the var-heap, which
+// is specified but not built (docs/rule-fixed-length-tuple.md section 5).
+//
+// 20 cells of the default 64 bytes plus the Keystone word is a 1288-byte
+// row, so roughly six fit a page and growth happens well inside the loops
+// below.
+constexpr int kWideColumns = 20;
+
+std::string WideCreateTable() {
+    std::string sql = "CREATE TABLE t (id int64";
+    for (int i = 0; i < kWideColumns; ++i) sql += ", v" + std::to_string(i) + " varchar";
+    return sql + ")";
+}
+
+std::string WideInsert() {
+    std::string sql = "INSERT INTO t VALUES (";
+    for (int i = 0; i < kWideColumns; ++i) sql += (i == 0 ? "'x'" : ", 'x'");
+    return sql + ")";
+}
+
 TEST_F(InsertWalTest, ChainGrowthLogsTheNewPageAndTheLinkThatReachesIt) {
     CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
-    // A wide varchar so the page fills in a countable number of rows
-    // rather than thousands.
-    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v varchar)").response.substr(0, 7), "CREATED");
+    // A wide row so the page fills in a countable number of inserts rather
+    // than thousands - see WideCreateTable().
+    ASSERT_EQ(d.Dispatch(WideCreateTable()).response.substr(0, 7), "CREATED");
 
-    const std::string wide(500, 'x');
     PageId grew_into = kInvalidPageId;
     for (int i = 0; i < 40 && grew_into == kInvalidPageId; ++i) {
-        const std::string reply = d.Dispatch("INSERT INTO t VALUES ('" + wide + "')").response;
+        const std::string reply = d.Dispatch(WideInsert()).response;
         ASSERT_EQ(reply.substr(0, 8), "INSERTED") << reply;
 
         std::vector<wal::RecordType> types = RecordTypes();
@@ -209,12 +235,10 @@ TEST_F(InsertWalTest, ChainGrowthLogsTheNewPageAndTheLinkThatReachesIt) {
 
 TEST_F(InsertWalTest, ThePageInitRecordCarriesTheNewPagesMinKey) {
     CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
-    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, v varchar)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch(WideCreateTable()).response.substr(0, 7), "CREATED");
 
-    const std::string wide(500, 'x');
     for (int i = 0; i < 40; ++i) {
-        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('" + wide + "')").response.substr(0, 8),
-                  "INSERTED");
+        ASSERT_EQ(d.Dispatch(WideInsert()).response.substr(0, 8), "INSERTED");
     }
 
     std::vector<std::vector<std::byte>> storage;
@@ -234,6 +258,76 @@ TEST_F(InsertWalTest, ThePageInitRecordCarriesTheNewPagesMinKey) {
     auto page = store_->Get(init->header.page_id);
     ASSERT_TRUE(page.ok()) << page.status().message();
     EXPECT_EQ(decoded.value().min_key, heap::PageView(page.value()).min_key());
+}
+
+// ---- A spilled value is logged, and logged first -------------------------
+
+TEST_F(InsertWalTest, ASpilledValueIsLoggedBeforeTheTupleThatPointsAtIt) {
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
+
+    // Long enough to spill: the cell holds a pointer, the bytes go to the
+    // var-heap (docs/rule-fixed-length-tuple.md section 5).
+    const std::string spilled(500, 's');
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('" + spilled + "')").response.substr(0, 8),
+              "INSERTED");
+
+    std::vector<wal::RecordType> types = RecordTypes();
+    auto index_of = [&](wal::RecordType type) -> std::size_t {
+        for (std::size_t i = 0; i < types.size(); ++i) {
+            if (types[i] == type) return i;
+        }
+        return types.size();
+    };
+
+    const std::size_t vh = index_of(wal::RecordType::kVarHeapAppend);
+    const std::size_t insert = index_of(wal::RecordType::kHeapInsert);
+    ASSERT_LT(vh, types.size()) << "the value spilled but no VARHEAP_APPEND was logged";
+    ASSERT_LT(insert, types.size());
+
+    // The ordering *is* the recovery story: a replay must never reach a
+    // cell whose pointer resolves to nothing. The reverse - a value with no
+    // tuple - is an unreferenced value purge collects, which is why this
+    // direction is the one that is asserted.
+    EXPECT_LT(vh, insert) << "VARHEAP_APPEND must precede the HEAP_INSERT pointing at it";
+}
+
+TEST_F(InsertWalTest, AnInlineValueLogsNoVarHeapRecord) {
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('short')").response.substr(0, 8), "INSERTED");
+
+    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kVarHeapAppend), 0u);
+}
+
+TEST_F(InsertWalTest, TheLoggedVarHeapValueIsByteIdenticalToTheStoredOne) {
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
+
+    const std::string spilled(700, 'w');
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('" + spilled + "')").response.substr(0, 8),
+              "INSERTED");
+
+    std::vector<std::vector<std::byte>> storage;
+    const wal::DecodedRecord* found = nullptr;
+    std::vector<wal::DecodedRecord> records = DeviceRecords(storage);
+    for (const wal::DecodedRecord& record : records) {
+        if (record.type() == wal::RecordType::kVarHeapAppend) found = &record;
+    }
+    ASSERT_NE(found, nullptr);
+
+    auto decoded = wal::DecodeVarHeapAppend(found->payload);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    ASSERT_EQ(decoded.value().value.size(), spilled.size());
+
+    // A record set that does not carry the same bytes the page holds is
+    // worse than no log at all.
+    auto page = store_->Get(found->header.page_id);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    auto stored = varheap::PageRead(page.value(), decoded.value().fields.slot);
+    ASSERT_TRUE(stored.ok()) << stored.status().message();
+    EXPECT_TRUE(std::equal(stored.value().begin(), stored.value().end(),
+                           decoded.value().value.begin()));
 }
 
 // ---- 2. The page is ordered behind the records --------------------------

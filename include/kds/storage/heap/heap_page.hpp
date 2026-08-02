@@ -165,6 +165,24 @@ inline constexpr std::uint64_t kMaxTrxId = (std::uint64_t{1} << 48) - 1;
 
 inline constexpr std::size_t kNextPageIdOffset = kPageSize - sizeof(PageId);
 
+// ---- Page capacity -------------------------------------------------------
+
+// The largest payload a *freshly created* page can take: everything between
+// an empty page's lower (the first slot's own offset) and its upper (the
+// next_page_id reservation), less the one slot and one tuple header that
+// payload would need. Derived rather than written down, so it moves with
+// the layout constants above instead of drifting from them.
+//
+// It exists because invariant 13 makes a row's size a schema constant: a
+// relation whose constant exceeds this is one no page can ever hold a row
+// of, which catalog::RowLayout::Build() refuses at CREATE TABLE rather than
+// letting the first INSERT discover.
+inline constexpr std::size_t kMaxTuplePayloadSize =
+    kNextPageIdOffset - (kHeapHeaderOffset + kHeaderSize) - kSlotOnDiskSize -
+    kTupleHeaderOnDiskSize;
+
+static_assert(kMaxTuplePayloadSize == 8115);
+
 // ---- PageView ------------------------------------------------------------
 
 class PageView {

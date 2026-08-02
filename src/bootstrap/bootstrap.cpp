@@ -1,9 +1,20 @@
 #include "kds/bootstrap/bootstrap.hpp"
 
+#include "kds/storage/tagged_cell.hpp"
+
 namespace kds::bootstrap {
 
 StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
-                                             std::uint64_t now_unix_seconds, Logger* log) {
+                                             std::uint64_t now_unix_seconds,
+                                             std::uint32_t inline_cell_width, Logger* log) {
+    // Checked before anything is read or created: an illegal width must not
+    // be the reason a fresh database gets pinned to a number no build can
+    // use, and it must not be reported as a *mismatch* below when it is
+    // really a bad setting.
+    if (Status s = storage::CheckInlineCellWidth(inline_cell_width); !s.ok()) {
+        return s;
+    }
+
     auto existing = store.Get(server::kSuperBlockPageId);
 
     if (existing.ok()) {
@@ -25,11 +36,31 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
         }
 
         server::SuperBlock sb = decoded.value();
+
+        // The pinned-width check (docs/rule-fixed-length-tuple.md section
+        // 4). On-disk tuple layout depends on the width, so running with a
+        // different one would not fail - it would decode every row at the
+        // wrong offsets. Both numbers are named because the operator's next
+        // question is always "which one is the database's?".
+        if (sb.inline_cell_width() != inline_cell_width) {
+            Status mismatch = Status::InvalidArgument(
+                "inline_cell_width " + std::to_string(inline_cell_width) +
+                " does not match the " + std::to_string(sb.inline_cell_width()) +
+                " this database was created with; the width is pinned at bootstrap because "
+                "tuple layout depends on it, and rewriting existing data for a new width is "
+                "unsupported");
+            if (log != nullptr && log->enabled(LogLevel::kError)) {
+                log->Error("bootstrap", mismatch.message());
+            }
+            return mismatch;
+        }
+
         sb.MarkMounted(now_unix_seconds);
         sb.Encode(existing.value());
         if (log != nullptr && log->enabled(LogLevel::kInfo)) {
             log->Info("bootstrap", "mounted existing database, superblock version " +
-                                       std::to_string(sb.version()) +
+                                       std::to_string(sb.version()) + ", inline_cell_width " +
+                                       std::to_string(sb.inline_cell_width()) +
                                        "; catalog bootstrap skipped");
         }
 
@@ -37,7 +68,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
         // already be there. Catalog::Bootstrap() is deliberately NOT
         // called here - see the file-level comment on why running it
         // again would be destructive.
-        catalog::Catalog catalog(store);
+        catalog::Catalog catalog(store, sb.inline_cell_width());
         catalog.SetLogger(log);
         return BootstrapResult{sb, std::move(catalog)};
     }
@@ -47,18 +78,21 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     }
 
     // Fresh database: create and persist a brand-new SuperBlock, then
-    // bootstrap the catalog's fixed pages on top of the same store.
+    // bootstrap the catalog's fixed pages on top of the same store. This is
+    // the one moment the cell width is chosen; every mount after this one
+    // validates against it.
     auto created = store.CreateAt(server::kSuperBlockPageId);
     if (!created.ok()) return created.status();
 
-    server::SuperBlock sb = server::SuperBlock::CreateFresh(now_unix_seconds);
+    server::SuperBlock sb = server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width);
     sb.Encode(created.value());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +
-                                   std::to_string(sb.version()) + ")");
+                                   std::to_string(sb.version()) + ", inline_cell_width " +
+                                   std::to_string(inline_cell_width) + ")");
     }
 
-    catalog::Catalog catalog(store);
+    catalog::Catalog catalog(store, inline_cell_width);
     catalog.SetLogger(log);
     if (Status s = catalog.Bootstrap(); !s.ok()) {
         return s;

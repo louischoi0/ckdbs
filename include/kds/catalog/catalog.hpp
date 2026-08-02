@@ -11,6 +11,7 @@
 #include "kds/catalog/sys_object_registry.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/storage/tagged_cell.hpp"
 
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
@@ -48,7 +49,18 @@ namespace kds::catalog {
 
 class Catalog {
 public:
-    explicit Catalog(storage::PageStore& store) noexcept : store_(store) {}
+    // `inline_cell_width` is the instance-pinned kds.inline_cell_width
+    // (storage/tagged_cell.hpp): every RowLayout this catalog builds is
+    // built for it, so a relation's row size is the same number for the
+    // life of the database. It is a constructor parameter rather than a
+    // setter because a catalog that has already handed out a TableAccess
+    // must not be able to start answering with a different width. Bootstrap
+    // supplies the value the superblock pinned; the default is only for
+    // callers that never store a varchar (the bootstrap catalog itself,
+    // and tests).
+    explicit Catalog(storage::PageStore& store,
+                     std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth) noexcept
+        : store_(store), inline_cell_width_(inline_cell_width) {}
 
     // Diagnostic log, null (discard) by default. `log` must outlive the
     // catalog. Set rather than constructed with, because bootstrap builds
@@ -255,7 +267,8 @@ public:
 
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
-                              PageId desc_page_id, ClusteredType clustered_type);
+                              PageId desc_page_id, ClusteredType clustered_type,
+                              PageId varheap_page_id);
 
     Status InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_pos,
                            std::uint32_t col_type, std::uint8_t flags);
@@ -302,6 +315,11 @@ private:
     void BumpVersion(std::string_view what);
 
     storage::PageStore& store_;
+
+    // Instance-pinned, never mutated after construction - see the
+    // constructor. Every RowLayout in the cache was built for this value.
+    std::uint32_t inline_cell_width_ = storage::kDefaultInlineCellWidth;
+
     Logger* log_ = nullptr;
     Oid next_user_oid_ = kUserOidStart;
     SysObjectRegistry sys_objects_;

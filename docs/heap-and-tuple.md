@@ -83,6 +83,8 @@ The out-of-line store for spilled values. Its design goal is to be **boring**: t
 - Update ordering: `VARHEAP_APPEND` (new value) → cell overwrite (`HEAP_OVERWRITE`, old cell image into undo), in one transaction, replayed by ordinary winner/loser recovery. A crash between them leaves an unreferenced value for purge's sweep. No var-heap-specific recovery logic may exist.
 - Storage is invisible on the wire: `TEXT` is length-prefixed bytes to clients regardless of inline or spilled, and must stay so.
 
+*In code.* The `kVarHeap` page class, the per-relation chain rooted at `sys.tables.varheap_page_id`, the `VARHEAP_APPEND` record and the spill/fetch path all exist (`include/kds/storage/varheap.hpp`, `rule-fixed-length-tuple.md` §8a). Two limits remain: a value larger than one page (8144 bytes) is `Unsupported` rather than chained across pages, and **nothing reclaims** — purge does not exist, so a superseded value's bytes stay until it does.
+
 ## 4. Keystone Column
 
 Every tuple's **first column is mandatory**: one 64-bit word, the *Keystone word*. This is a self-imposed constraint of KDS and the tuple's identity lives in it.

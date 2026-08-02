@@ -7,6 +7,7 @@
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 #include "kds/storage/page_header.hpp"
+#include "kds/storage/tagged_cell.hpp"
 
 // The SuperBlock: one fixed logical page (kPageSize) holding whole-database
 // metadata - identity (magic/version/create time), the mount stamp, and the
@@ -51,7 +52,7 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // no compatibility window while the format is still moving: Decode() refuses
 // anything but this exact number, so a stale data file fails loudly at mount
 // instead of being misparsed. Bump it with every layout change.
-inline constexpr std::uint32_t kSuperBlockVersion = 3;
+inline constexpr std::uint32_t kSuperBlockVersion = 4;
 
 // ---- On-disk field layout ----------------------------------------------
 
@@ -66,7 +67,27 @@ struct SuperBlockFields {
     std::uint64_t create_time;       // unix seconds
     std::uint64_t last_mount_time;
     std::uint32_t wal_anchor_count;  // anchor slots ever published into
-    std::uint32_t reserved2;         // keeps the anchor table 8-byte-aligned
+
+    // ---- The pinned tuple-cell width (heap-and-tuple.md section 3.3) ----
+    //
+    // `kds.inline_cell_width`: the number of bytes every variable-width
+    // value occupies in a tuple. It lives here, not only in the config
+    // file, because **on-disk tuple layout depends on it** - a relation's
+    // row size is a schema constant computed from it, so the same database
+    // read under a different width would decode every row at the wrong
+    // offsets. Configuration proposes the value once, at bootstrap; the
+    // superblock is what pins it.
+    //
+    // Every later mount validates the running configuration against this
+    // and refuses to start on a disagreement, naming both numbers
+    // (bootstrap.cpp). Changing it for existing data is a rebuild, which is
+    // Unsupported (docs/rule-fixed-length-tuple.md V5).
+    //
+    // It occupies what was `reserved2` through version 3 - a u32 in exactly
+    // this position, which is why the anchor table below did not move. The
+    // version bump is what makes that repurposing safe: a version-3 image
+    // is refused outright rather than read with a zero here.
+    std::uint32_t inline_cell_width;
 };
 
 inline constexpr std::size_t kMagicOffset = 0;
@@ -75,7 +96,7 @@ inline constexpr std::size_t kReserved1Offset = 12;
 inline constexpr std::size_t kCreateTimeOffset = 16;
 inline constexpr std::size_t kLastMountTimeOffset = 24;
 inline constexpr std::size_t kWalAnchorCountOffset = 32;
-inline constexpr std::size_t kReserved2Offset = 36;
+inline constexpr std::size_t kInlineCellWidthOffset = 36;
 
 static_assert(offsetof(SuperBlockFields, magic) == kMagicOffset);
 static_assert(offsetof(SuperBlockFields, version) == kVersionOffset);
@@ -83,7 +104,7 @@ static_assert(offsetof(SuperBlockFields, reserved1) == kReserved1Offset);
 static_assert(offsetof(SuperBlockFields, create_time) == kCreateTimeOffset);
 static_assert(offsetof(SuperBlockFields, last_mount_time) == kLastMountTimeOffset);
 static_assert(offsetof(SuperBlockFields, wal_anchor_count) == kWalAnchorCountOffset);
-static_assert(offsetof(SuperBlockFields, reserved2) == kReserved2Offset);
+static_assert(offsetof(SuperBlockFields, inline_cell_width) == kInlineCellWidthOffset);
 
 // ---- Per-core WAL anchors (wal.md section 14-3) --------------------------
 //
@@ -156,8 +177,19 @@ public:
 
     // Formats a brand-new superblock for an empty database: sets magic/
     // version, stamps create_time/last_mount_time to `now_unix_seconds`,
-    // and leaves every WAL anchor zeroed (no core has checkpointed yet).
-    static SuperBlock CreateFresh(std::uint64_t now_unix_seconds) noexcept;
+    // pins `inline_cell_width`, and leaves every WAL anchor zeroed (no core
+    // has checkpointed yet).
+    //
+    // This is the *only* moment the cell width is chosen. It is not
+    // validated here - a constructor must not fail (rules.md #1), and the
+    // caller has already checked it (storage::CheckInlineCellWidth) before
+    // deciding to create a database at all.
+    // The default exists for callers that are not testing the width
+    // (anchor tests, tooling); BootstrapDatabase(), the only production
+    // caller, always passes the configured value explicitly.
+    static SuperBlock CreateFresh(
+        std::uint64_t now_unix_seconds,
+        std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth) noexcept;
 
     // Reads a superblock image out of a raw page buffer (e.g. just loaded
     // off disk). Fails with Corruption if the magic doesn't match
@@ -173,6 +205,10 @@ public:
     std::uint32_t version() const noexcept { return fields_.version; }
     std::uint64_t create_time() const noexcept { return fields_.create_time; }
     std::uint64_t last_mount_time() const noexcept { return fields_.last_mount_time; }
+
+    // The pinned kds.inline_cell_width (see SuperBlockFields). Every
+    // relation's row size in this database was computed from it.
+    std::uint32_t inline_cell_width() const noexcept { return fields_.inline_cell_width; }
 
     // ---- Per-core WAL anchors (wal.md section 14-3) ---------------------
 

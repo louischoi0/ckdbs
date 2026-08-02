@@ -11,6 +11,7 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/row_codec.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
@@ -312,8 +313,15 @@ private:
     // logged; closing that needs the abort path a transaction layer owns.
     // `leaf_type` is the page type a PAGE_INIT record names for a new tuple
     // page: kHeap for a chain, kBtreeLeaf for a tree.
+    // `spills` are the var-heap values this tuple's cells point at. They
+    // are logged *first*, before the HEAP_INSERT, which is the ordering
+    // docs/rule-fixed-length-tuple.md section 5 requires: a replay must
+    // never reach a tuple whose pointer resolves to nothing. A crash
+    // between the two leaves an unreferenced value for purge, which is the
+    // harmless direction.
     Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
-                     std::span<const std::byte> tuple, std::uint64_t trx_id);
+                     std::span<const std::byte> tuple, std::uint64_t trx_id,
+                     const std::vector<exec::AppendedSpill>& spills = {});
 
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer

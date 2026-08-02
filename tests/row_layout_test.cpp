@@ -1,0 +1,167 @@
+#include <cstdint>
+#include <string>
+
+#include <gtest/gtest.h>
+
+#include "kds/catalog/schema.hpp"
+#include "kds/catalog/well_known.hpp"
+#include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/keystone.hpp"
+#include "kds/storage/tagged_cell.hpp"
+
+// catalog::RowLayout - invariant 13 made computable. A relation's row size
+// is a schema constant, and these are the cases where "computable from the
+// schema alone" has to be defended: a column whose width nobody has decided
+// (float/decimal), and a schema whose row could never fit a page.
+//
+// Both refusals happen at CREATE TABLE rather than at the first INSERT,
+// which is the same argument CheckKeystoneColumn() already makes: a
+// relation no row can be written to is not a relation worth creating.
+
+namespace kds::catalog {
+namespace {
+
+constexpr std::uint32_t kW = storage::kDefaultInlineCellWidth;
+
+SysColumnRow Col(std::uint32_t pos, std::string_view name, std::uint32_t type_val,
+                 std::uint32_t len = 0) {
+    SysColumnRow col{};
+    col.pos = pos;
+    SetName(col.name, name);
+    col.type_val = type_val;
+    col.len = len;
+    col.notnull = true;
+    return col;
+}
+
+Schema SchemaOf(std::initializer_list<SysColumnRow> columns) {
+    Schema schema;
+    for (const SysColumnRow& col : columns) schema.columns.push_back(col);
+    return schema;
+}
+
+// ---- The constant --------------------------------------------------------
+
+TEST(RowLayoutTest, RowSizeIsTheSumOfFixedColumnWidths) {
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "n", kTypeValInt32),
+                              Col(2, "b", kTypeValBool), Col(3, "s", kTypeValVarchar)});
+
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok()) << layout.status().message();
+
+    // Keystone word + int32 + bool + one tagged cell.
+    EXPECT_EQ(layout.value().row_size, kKeystoneWordSize + 4 + 1 + kW);
+    EXPECT_EQ(layout.value().inline_cell_width, kW);
+}
+
+TEST(RowLayoutTest, OffsetsStartAtTheKeystoneWordAndRunInColumnOrder) {
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "a", kTypeValInt16),
+                              Col(2, "b", kTypeValVarchar), Col(3, "c", kTypeValInt8)});
+
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok());
+    ASSERT_EQ(layout.value().offsets.size(), 4u);
+
+    // The pk lives *only* in the Keystone word, so column 0 is that word
+    // and the body starts after it (invariant 11).
+    EXPECT_EQ(layout.value().offsets[0], 0u);
+    EXPECT_EQ(layout.value().offsets[1], kKeystoneWordSize);
+    EXPECT_EQ(layout.value().offsets[2], kKeystoneWordSize + 2);
+    EXPECT_EQ(layout.value().offsets[3], kKeystoneWordSize + 2 + kW);
+    EXPECT_EQ(layout.value().row_size, kKeystoneWordSize + 2 + kW + 1);
+}
+
+TEST(RowLayoutTest, AVarcharCostsTheSameWhateverTheWidthIsSetTo) {
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "s", kTypeValVarchar)});
+
+    for (std::uint32_t width : {storage::kMinInlineCellWidth, 32u, kW, 256u}) {
+        auto layout = RowLayout::Build(schema, width);
+        ASSERT_TRUE(layout.ok()) << "width " << width;
+        EXPECT_EQ(layout.value().row_size, kKeystoneWordSize + width) << "width " << width;
+    }
+}
+
+TEST(RowLayoutTest, ACharColumnKeepsItsDeclaredWidth) {
+    // `char` was already fixed-width by declaration - the one variable
+    // type that never needed a tagged cell.
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "c", kTypeValChar, 12)});
+
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok());
+    EXPECT_EQ(layout.value().row_size, kKeystoneWordSize + 12);
+}
+
+// ---- Refusals ------------------------------------------------------------
+
+TEST(RowLayoutTest, AFloatOrDecimalColumnIsUnsupported) {
+    for (std::uint32_t type_val : {kTypeValFloat, kTypeValDecimal}) {
+        Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "x", type_val)});
+        auto layout = RowLayout::Build(schema, kW);
+
+        ASSERT_FALSE(layout.ok()) << "type_val " << type_val;
+        // Unsupported, not InvalidArgument: the schema is not malformed,
+        // the *encoding* is an open decision and reserving a width for it
+        // would be half of settling it.
+        EXPECT_EQ(layout.status().code(), StatusCode::kUnsupported);
+        EXPECT_NE(layout.status().message().find("float/decimal"), std::string::npos)
+            << layout.status().message();
+    }
+}
+
+TEST(RowLayoutTest, ARowTooWideForAPageIsUnsupported) {
+    // Enough tagged cells to overrun a page. Refused here rather than at
+    // the first INSERT, which would otherwise be the only place anyone
+    // found out.
+    Schema schema;
+    schema.columns.push_back(Col(0, "id", kTypeValInt64));
+    const std::uint32_t columns = (heap::kMaxTuplePayloadSize / kW) + 2;
+    for (std::uint32_t i = 0; i < columns; ++i) {
+        schema.columns.push_back(Col(i + 1, "c" + std::to_string(i), kTypeValVarchar));
+    }
+
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_FALSE(layout.ok());
+    EXPECT_EQ(layout.status().code(), StatusCode::kUnsupported);
+}
+
+TEST(RowLayoutTest, TheWidestRowThatStillFitsAPageIsAccepted) {
+    // The other side of the boundary, so the check is a limit rather than
+    // a taste.
+    Schema schema;
+    schema.columns.push_back(Col(0, "id", kTypeValInt64));
+    const std::uint32_t body = heap::kMaxTuplePayloadSize - kKeystoneWordSize;
+    schema.columns.push_back(Col(1, "c", kTypeValChar, body));
+
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok()) << layout.status().message();
+    EXPECT_EQ(layout.value().row_size, heap::kMaxTuplePayloadSize);
+
+    schema.columns[1].len = body + 1;
+    EXPECT_FALSE(RowLayout::Build(schema, kW).ok());
+}
+
+TEST(RowLayoutTest, AZeroWidthColumnIsRefused) {
+    // Two columns at one offset is an ambiguous layout, not merely a
+    // useless one. `char` with len 0 is the only way to spell it.
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "c", kTypeValChar, 0)});
+    auto layout = RowLayout::Build(schema, kW);
+
+    ASSERT_FALSE(layout.ok());
+    EXPECT_EQ(layout.status().code(), StatusCode::kInvalidArgument);
+}
+
+TEST(RowLayoutTest, ASchemaWithNoKeystoneColumnIsRefused) {
+    EXPECT_FALSE(RowLayout::Build(Schema{}, kW).ok());
+    EXPECT_FALSE(RowLayout::Build(SchemaOf({Col(0, "s", kTypeValVarchar)}), kW).ok());
+}
+
+TEST(RowLayoutTest, AnOutOfRangeCellWidthIsRefused) {
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "s", kTypeValVarchar)});
+
+    EXPECT_FALSE(RowLayout::Build(schema, 0).ok());
+    EXPECT_FALSE(RowLayout::Build(schema, storage::kMinInlineCellWidth - 1).ok());
+    EXPECT_FALSE(RowLayout::Build(schema, storage::kMaxInlineCellWidth + 1).ok());
+}
+
+}  // namespace
+}  // namespace kds::catalog

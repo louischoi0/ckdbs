@@ -505,7 +505,8 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
 }
 
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
-                                    std::span<const std::byte> tuple, std::uint64_t trx_id) {
+                                    std::span<const std::byte> tuple, std::uint64_t trx_id,
+                                    const std::vector<exec::AppendedSpill>& spills) {
     if (wal_ == nullptr) return Status::OK();
 
     const std::uint64_t txn_id = next_txn_id_++;
@@ -552,6 +553,26 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
             wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, change.page_id}, image);
         if (!fpi.ok()) return fpi.status();
         if (Status s = page_store_.StampPageLsn(change.page_id, fpi.value()); !s.ok()) return s;
+    }
+
+    // The var-heap values this tuple points at, before the tuple itself.
+    // That order is the whole of the var-heap's recovery story (spec
+    // section 5): a replay must never reach a cell whose pointer resolves
+    // to nothing, and the reverse failure - a value with no tuple - is an
+    // unreferenced value purge collects.
+    for (const exec::AppendedSpill& spill : spills) {
+        std::vector<std::byte> vh(wal::kVarHeapAppendFixedSize + spill.value.size());
+        const wal::VarHeapAppendPayload vh_fields{
+            spill.ptr.slot, 0, static_cast<std::uint32_t>(spill.value.size())};
+        if (auto n = wal::EncodeVarHeapAppend(vh, vh_fields, spill.value); !n.ok()) {
+            return n.status();
+        }
+        auto rec = wal_->Append(
+            wal::RecordSpec{wal::RecordType::kVarHeapAppend, txn_id, spill.ptr.page_id}, vh);
+        if (!rec.ok()) return rec.status();
+        if (Status s = page_store_.StampPageLsn(spill.ptr.page_id, rec.value()); !s.ok()) {
+            return s;
+        }
     }
 
     // undo_ptr 0: an insert supersedes no version, so its undo chain ends
@@ -622,7 +643,10 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
         return {"ERR " + id.status().message(), false};
     }
 
-    auto encoded = exec::EncodeRow(ta.schema, id.value(), stmt.values);
+    std::vector<exec::AppendedSpill> spills;
+    auto encoded = exec::EncodeRow(
+        ta.schema, ta.layout, id.value(), stmt.values,
+        exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills});
     if (!encoded.ok()) {
         return {"ERR " + encoded.status().message(), false};
     }
@@ -648,7 +672,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
     // here and what would break it.
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded.value(),
-                             /*trx_id=*/catalog::kBootstrapXid);
+                             /*trx_id=*/catalog::kBootstrapXid, spills);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("wal", "logging the insert of id " + std::to_string(id.value()) +
@@ -1122,13 +1146,32 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         auto tuple = page.ReadTuple(slot);
         if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
 
-        auto row = exec::DecodeRow(ta.schema, tuple.value().payload);
+        std::vector<exec::PendingSpill> spills;
+        auto row = exec::DecodeRow(ta.schema, ta.layout, tuple.value().payload, &spills);
         if (!row.ok()) return row.status();
 
         // Decoded a second time into the frame so the predicates read it
         // by index. UPDATE rewrites the row afterwards, which is why it
         // keeps an owned copy as well - the frame is for evaluation only.
-        if (Status s = exec::DecodeRowInto(ta.schema, tuple.value().payload, frame.SlotsFor(0));
+        std::vector<exec::PendingSpill> frame_spills;
+        if (Status s = exec::DecodeRowInto(ta.schema, ta.layout, tuple.value().payload,
+                                            frame.SlotsFor(0), &frame_spills);
+            !s.ok()) {
+            return s;
+        }
+
+        // The pk is read here, while the payload span is still in hand, so
+        // nothing below needs it (row_codec.hpp's R1 split).
+        auto id = exec::RowKeystoneId(tuple.value().payload);
+        if (!id.ok()) return id.status();
+        const std::uint64_t trx_id = tuple.value().trx_id;
+        const std::uint64_t undo_ptr = tuple.value().undo_ptr;
+
+        // Spilled values are fetched only now, after everything that needed
+        // the tuple's own bytes is done with them: resolving mid-decode
+        // would put a var-heap fetch under a live page span.
+        if (Status s = exec::ResolveSpills(page_store_, spills, row.value()); !s.ok()) return s;
+        if (Status s = exec::ResolveSpills(page_store_, frame_spills, frame.SlotsFor(0));
             !s.ok()) {
             return s;
         }
@@ -1146,27 +1189,37 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
             }
         }
 
-        // The pk is unchanged by construction (rejected above), so it is
-        // carried straight from the tuple's own Keystone word rather than
-        // round-tripped through the decoded row.
-        auto id = exec::RowKeystoneId(tuple.value().payload);
-        if (!id.ok()) return id.status();
+        // The pk is unchanged by construction (rejected above), so it was
+        // carried straight from the tuple's own Keystone word above rather
+        // than round-tripped through the decoded row.
         const std::vector<parser::AstValue> body(row.value().begin() + 1, row.value().end());
 
-        auto encoded = exec::EncodeRow(ta.schema, id.value(), body);
+        auto encoded = exec::EncodeRow(ta.schema, ta.layout, id.value(), body,
+                                        exec::VarHeapSink{&page_store_, ta.varheap_page_id});
         if (!encoded.ok()) return encoded.status();
 
         // HOT-style in-place overwrite - see PageView::OverwriteTuple's
-        // comment. No fallback to retire+reinsert if the new payload no
-        // longer fits the slot's original capacity (e.g. a grown varchar);
-        // that fails with OutOfSpace here, surfaced as ERR.
+        // comment. There is no retire+reinsert fallback because there is
+        // nothing to fall back *from*: under the fixed-length rule the new
+        // payload is exactly the same size as the old one, since a row's
+        // size is a schema constant and not a function of its values
+        // (invariant 13). This used to be able to fail with OutOfSpace when
+        // a varchar grew past its slot's reservation.
         //
-        // Note this keeps the row on its own page even across a chain: an
-        // update never moves a tuple, so no page's min_key can be
-        // invalidated by one.
-        if (Status s = page.OverwriteTuple(slot, encoded.value(), tuple.value().trx_id,
-                                            tuple.value().undo_ptr);
-            !s.ok()) {
+        // That is the property the whole fixed-length rule exists for. An
+        // UPDATE can never migrate a tuple, so combined with the immutable
+        // min_key a row's (page_id, slot) is stable for life until relayout
+        // moves it on purpose - which is what stops an UPDATE from burning
+        // Waystone trail entries through epoch churn, and why no page's
+        // min_key can be invalidated by one.
+        // Re-fetched rather than written through `page`: encoding may have
+        // appended to the var-heap, and a store is free to move its frames
+        // when it hands out a new page (the same reason heap_chain.cpp
+        // re-fetches its tail after CreateNew()).
+        auto page_again = page_store_.Get(page_id);
+        if (!page_again.ok()) return page_again.status();
+        heap::PageView fresh(page_again.value());
+        if (Status s = fresh.OverwriteTuple(slot, encoded.value(), trx_id, undo_ptr); !s.ok()) {
             return s;
         }
         ++updated;

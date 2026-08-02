@@ -64,10 +64,23 @@ enum class PageType : std::uint8_t {
     // does not have to tile the page and the page keeps its checksum and
     // page_lsn.
     kWaystone = 9,
+
+    // The var-heap: the out-of-line store for values too long to fit in a
+    // tuple's fixed-width tagged cell (docs/heap-and-tuple.md section 3.4).
+    //
+    // Headered, and the reason is worth stating because the recent reflex
+    // runs the other way: waystone and trail pages are *advisory*, but a
+    // var-heap value is committed data. Losing one loses a value, not a
+    // hint, so this class is checksummed, carries a page_lsn and is fully
+    // WAL-logged - an ordinary authoritative page class.
+    //
+    // Also relayout-exempt by construction: its values are immutable per
+    // version, so the physical optimizer never has a reason to move one.
+    kVarHeap = 10,
 };
 
 // Highest value currently assigned above; anything greater read off disk
 // was written by a newer build. Bump when appending to the enum.
-inline constexpr std::uint8_t kMaxAssignedPageType = 9;
+inline constexpr std::uint8_t kMaxAssignedPageType = 10;
 
 }  // namespace kds

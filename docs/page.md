@@ -67,6 +67,17 @@ Owns "which page_ids exist / are free" inside the disk-backed store, behind the 
 - **Durability:** allocation changes emit the reserved `ALLOC`/`FREE` WAL records (wal.md §5); the free map is a headered, logged page class replayed like any other. Crash between extent growth and first use is benign (§14). Reserved-page reclamation rule `[OPEN]`, shared with wal.md.
 - High-water mark and free-map root live in the superblock.
 
+## 5a. The var-heap page class
+
+`kVarHeap` (`page_type = 10`, `include/kds/storage/varheap.hpp`): the out-of-line store for values too long for a tuple's fixed-width tagged cell (`docs/heap-and-tuple.md` §3.4).
+
+- **Headered, checksummed, logged** — an ordinary authoritative page class, with a `page_lsn` and a `VARHEAP_APPEND` record (`wal.md` §5.2). Stated explicitly because the recent additions around it (waystone pages, the trail directory) are *advisory*, and those rules must not be pattern-matched onto this one: losing a var-heap value loses a committed value, not a hint.
+- **Layout:** the same slotted shape as a heap page — common header, an 8-byte page header (`flags`, `nr_slots`, `lower`, `upper`), a slot directory of `{offset u16, length u16}` growing down, values growing up from the tail `next_page_id` reservation. What it is *not* is a heap page: no MVCC tuple header, no delete-mark, no slot retirement, because a value has no lifetime of its own — it lives and dies with the version pointing at it.
+- **Chain:** one per relation, rooted at `sys.tables.varheap_page_id` and allocated at `CREATE TABLE` for any schema that can spill, grown by tail append. The root never moves, which is what keeps it a cacheable fact (`catalog_cache.hpp`'s rule). No `min_key` and no ordering: values are reached only through the pointers in the tuples that own them, so a walk is never a search.
+- **Relayout-exempt by construction.** Values are immutable per version, so the physical optimizer has no reason to touch a `kVarHeap` page and must not.
+- **Max value = 8144 bytes**, one page's worth. The spilled-value size cap is an `[OPEN]` decision (`rule-fixed-length-tuple.md` §9) and this is not it: a larger value would need a multi-page representation, so it is refused with `Unsupported` rather than answered by inventing one. A future cap can be lower (a policy check above the layer) or higher (a chained representation behind the same `Append`/`Fetch` pair).
+- **Reclamation rides on purge**, which does not exist — so nothing is reclaimed yet, and churn-heavy string updates consume space until it does.
+
 ## 6. Per-Core Buffer Pools
 
 - One `BufferPool` instance per core, caching only pages that core owns. Pin counts and frame state stay plain non-atomic fields — the current single-core implementation *is* the per-core implementation; multi-core adds instances, not synchronization.

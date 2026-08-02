@@ -53,6 +53,7 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     auto ct = static_cast<std::uint8_t>(clustered_type);
     std::memcpy(base + kClusteredTypeOffset, &ct, sizeof(ct));
     std::memcpy(base + kNextIdOffset, &next_id, sizeof(next_id));
+    std::memcpy(base + kVarHeapPageIdOffset, &varheap_page_id, sizeof(varheap_page_id));
     return buf;
 }
 
@@ -69,6 +70,7 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(&ct, base + kClusteredTypeOffset, sizeof(ct));
     row.clustered_type = static_cast<ClusteredType>(ct);
     std::memcpy(&row.next_id, base + kNextIdOffset, sizeof(row.next_id));
+    std::memcpy(&row.varheap_page_id, base + kVarHeapPageIdOffset, sizeof(row.varheap_page_id));
     return row;
 }
 

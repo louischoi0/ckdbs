@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/tagged_cell.hpp"
 
 namespace kds::bootstrap {
 namespace {
@@ -72,6 +73,80 @@ TEST(BootstrapTest, FailsIfSuperBlockPageHoldsUndecodableData) {
     auto result = BootstrapDatabase(store, 1000);
     EXPECT_FALSE(result.ok());
     EXPECT_EQ(result.status().code(), StatusCode::kCorruption);
+}
+
+
+// ---- The pinned inline_cell_width (rule-fixed-length-tuple.md section 4) --
+//
+// The width decides on-disk tuple layout, so a database opened under a
+// different one would not fail - it would decode every row at the wrong
+// offsets. That is why the mismatch is caught at mount and not left to
+// produce wrong answers later.
+
+TEST(BootstrapTest, AFreshDatabasePinsTheConfiguredCellWidth) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+
+    auto result = BootstrapDatabase(store, 1000, /*inline_cell_width=*/128);
+    ASSERT_TRUE(result.ok()) << result.status().message();
+    EXPECT_EQ(result.value().superblock.inline_cell_width(), 128u);
+
+    // And the catalog builds its row layouts for that width, not the
+    // default - the pin is worthless if nothing downstream honours it.
+    catalog::Schema schema;
+    catalog::SysColumnRow id{};
+    id.pos = 0;
+    catalog::SetName(id.name, "id");
+    id.type_val = catalog::kTypeValInt64;
+    catalog::SysColumnRow s{};
+    s.pos = 1;
+    catalog::SetName(s.name, "s");
+    s.type_val = catalog::kTypeValVarchar;
+    schema.columns = {id, s};
+
+    auto oid = result.value().catalog.CreateTable(catalog::kNamespacePublic, "t", schema,
+                                                  catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto access = result.value().catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_EQ(access.value()->layout.inline_cell_width, 128u);
+    EXPECT_EQ(access.value()->layout.row_size, 8u + 128u);
+}
+
+TEST(BootstrapTest, RemountingWithADifferentCellWidthIsRefusedNamingBoth) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+    ASSERT_TRUE(BootstrapDatabase(store, 1000, /*inline_cell_width=*/64).ok());
+
+    auto second = BootstrapDatabase(store, 2000, /*inline_cell_width=*/128);
+    ASSERT_FALSE(second.ok());
+    EXPECT_EQ(second.status().code(), StatusCode::kInvalidArgument);
+
+    // Both numbers, because the operator's next question is always "which
+    // one is the database's?".
+    EXPECT_NE(second.status().message().find("64"), std::string::npos)
+        << second.status().message();
+    EXPECT_NE(second.status().message().find("128"), std::string::npos)
+        << second.status().message();
+}
+
+TEST(BootstrapTest, RemountingWithTheSameCellWidthIsFine) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+    ASSERT_TRUE(BootstrapDatabase(store, 1000, /*inline_cell_width=*/128).ok());
+
+    auto second = BootstrapDatabase(store, 2000, /*inline_cell_width=*/128);
+    ASSERT_TRUE(second.ok()) << second.status().message();
+    EXPECT_EQ(second.value().superblock.inline_cell_width(), 128u);
+}
+
+TEST(BootstrapTest, AnIllegalCellWidthIsRefusedBeforeAnythingIsCreated) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+
+    auto result = BootstrapDatabase(store, 1000, /*inline_cell_width=*/3);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.status().code(), StatusCode::kInvalidArgument);
+
+    // Nothing was written: a bad setting must not leave a half-made
+    // database behind for the next run to inherit.
+    EXPECT_FALSE(store.Get(server::kSuperBlockPageId).ok());
 }
 
 }  // namespace

@@ -80,7 +80,7 @@ protected:
         auto id = boot_->catalog.AllocateRowId(oid.value());
         ASSERT_TRUE(id.ok()) << id.status().message();
 
-        auto payload = EncodeRow(access.value()->schema, id.value(), body);
+        auto payload = EncodeRow(access.value()->schema, access.value()->layout, id.value(), body);
         ASSERT_TRUE(payload.ok()) << payload.status().message();
         if (access.value()->clustered_type == catalog::ClusteredType::kBtree) {
             auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),

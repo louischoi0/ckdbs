@@ -19,6 +19,8 @@ add_library(kds
     src/storage/file_page_device.cpp
     src/storage/memory_page_device.cpp
     src/storage/keystone.cpp
+    src/storage/tagged_cell.cpp
+    src/storage/varheap.cpp
     src/storage/heap/heap_page.cpp
     src/storage/heap/heap_chain.cpp
     src/storage/btree/btree_page.cpp
@@ -32,6 +34,7 @@ add_library(kds
     src/catalog/oid.cpp
     src/catalog/rows.cpp
     src/catalog/schema.cpp
+    src/catalog/row_layout.cpp
     src/catalog/sys_object_registry.cpp
     src/stats/waystone_page.cpp
     src/stats/waystone_dir.cpp

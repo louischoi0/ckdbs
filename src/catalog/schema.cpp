@@ -26,6 +26,16 @@ bool IsIntegerTypeVal(std::uint32_t type_val) noexcept {
     }
 }
 
+bool SchemaCanSpill(const Schema& schema) noexcept {
+    for (const auto& col : schema.columns) {
+        // varchar is the only tagged-cell type today. `char` is fixed by
+        // declaration and every numeric type by its width, so neither can
+        // ever exceed its cell.
+        if (col.type_val == kTypeValVarchar) return true;
+    }
+    return false;
+}
+
 Status CheckKeystoneColumn(const Schema& schema) {
     if (schema.columns.empty()) {
         return Status::InvalidArgument(

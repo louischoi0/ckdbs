@@ -409,12 +409,19 @@ private:
                          const catalog::TableAccess& access, heap::PageView& page,
                          std::uint16_t slot) {
         bool decoded = false;
+        // Filled by the decode, drained after the span is released. A
+        // spilled value lives in the var-heap and fetching it is a page
+        // fetch, so it is exactly the thing that must not happen while the
+        // span below is live (row_codec.hpp). Reused across rows so a scan
+        // that never spills allocates nothing extra.
+        spills_.clear();
         {
             PageSpanGuard span;
             auto tuple = page.ReadTuple(slot);
             if (tuple.ok()) {
-                Status s = DecodeRowInto(access.schema, tuple.value().payload,
-                                         frame_.SlotsFor(static_cast<std::uint16_t>(index)));
+                Status s = DecodeRowInto(access.schema, access.layout, tuple.value().payload,
+                                         frame_.SlotsFor(static_cast<std::uint16_t>(index)),
+                                         &spills_);
                 if (!s.ok()) {
                     span.Release();
                     return s;
@@ -426,6 +433,15 @@ private:
             span.Release();
         }
         if (!decoded) return Status::OK();  // dead or out-of-range slot
+
+        // Now that nothing is live, the spilled values can be resolved.
+        if (!spills_.empty()) {
+            if (Status s = ResolveSpills(store_, spills_,
+                                          frame_.SlotsFor(static_cast<std::uint16_t>(index)));
+                !s.ok()) {
+                return s;
+            }
+        }
 
         ++stats_.rows_examined;
         // Charged where the tuple was actually decoded, which is the unit
@@ -452,6 +468,10 @@ private:
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
+
+    // Scratch for AcceptTupleAt()'s decode, reused across rows so a scan
+    // that spills nothing allocates nothing for the possibility.
+    std::vector<PendingSpill> spills_;
     const RowSink& sink_;
     std::uint32_t depth_;
     const ChainFrame* parent_;

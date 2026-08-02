@@ -30,12 +30,95 @@ bool IsIntegerTypeVal(std::uint32_t type_val) noexcept;
 // itself, checked at CREATE TABLE rather than at the first INSERT.
 Status CheckKeystoneColumn(const Schema& schema);
 
+// ---- RowLayout -----------------------------------------------------------
+//
+// The per-relation row-size constant and its column offsets - invariant 13
+// made computable (docs/heap-and-tuple.md section 3.3,
+// docs/rule-fixed-length-tuple.md section 2).
+//
+// **Every tuple is fixed-length.** A relation's tuple layout is a sequence
+// of fixed-size cells at offsets computable from the schema *alone*, so the
+// row size is a property of the relation, never of the values in a row. A
+// RowLayout is that property, computed once when the relation is opened and
+// carried on its TableAccess.
+//
+// It lives here, beside CheckKeystoneColumn(), because it is derived from
+// the schema and nothing else. The row codec consumes it; it does not own
+// it. That is also what keeps a second, disagreeing copy of "how wide is
+// this row" from being computed on an execute path.
+//
+// Two of Build()'s refusals are new, and both make the same argument: a
+// relation whose rows can never be written is refused at CREATE TABLE
+// rather than at the first INSERT.
+//
+//   - **float/decimal columns.** Under a fixed row size the layout has to
+//     reserve a width for every column, and neither type has an on-disk
+//     encoding yet - CLAUDE.md carries it as an open decision (the KWP
+//     `DECIMAL` item, which extends to storage). Reserving a width is half
+//     of picking the encoding, so this refuses instead. Before the
+//     fixed-length rule they could be declared and simply never populated,
+//     which cost nothing because a row's size did not depend on them.
+//   - **A row wider than a heap page can hold**
+//     (heap::kMaxTuplePayloadSize).
+//
+// Concurrency: a plain value, built on the catalog path under whatever
+// discipline the caller already has, then read-only for the life of the
+// TableAccess holding it.
+struct RowLayout {
+    // The schema constant. Every payload this relation's codec produces is
+    // exactly this many bytes, and a stored tuple whose length disagrees is
+    // Corruption, never interpreted (invariant 13's "checked redundancy").
+    std::uint32_t row_size = 0;
+
+    // Byte offset of each column within the payload, one per schema column
+    // and positionally aligned with Schema::columns. offsets[0] is always 0:
+    // the Keystone word leads every tuple.
+    std::vector<std::uint32_t> offsets;
+
+    // The instance-pinned kds.inline_cell_width this layout was built for.
+    // Carried so the codec never has to be told twice.
+    std::uint32_t inline_cell_width = 0;
+
+    // Computes the layout for `schema` under `inline_cell_width`.
+    //
+    // Fails with InvalidArgument for whatever CheckKeystoneColumn() rejects
+    // or an out-of-range width, and with Unsupported for a float/decimal
+    // column or a row wider than a heap page (see above).
+    static StatusOr<RowLayout> Build(const Schema& schema, std::uint32_t inline_cell_width);
+
+    // Width of one column's cell under `inline_cell_width`. Fails with
+    // Unsupported for float/decimal. Exposed because the row codec checks
+    // against it per column, which is what keeps a codec change from
+    // silently disagreeing with the layout it is writing into.
+    static StatusOr<std::uint32_t> ColumnWidth(const SysColumnRow& col,
+                                                std::uint32_t inline_cell_width);
+};
+
+// True if any column of `schema` can produce a spilled value - i.e. any
+// column occupies a tagged cell. Decides whether CREATE TABLE allocates the
+// relation a var-heap chain at all, so a relation of plain integers costs
+// no var-heap page.
+bool SchemaCanSpill(const Schema& schema) noexcept;
+
 struct TableAccess {
     Oid namespace_oid;
     Oid oid;
     Schema schema;
     PageId desc_page_id;
     ClusteredType clustered_type;
+
+    // Root of this relation's var-heap chain, or kInvalidPageId when the
+    // schema has nothing that could spill. Cacheable for the reason
+    // rows.hpp gives: it is fixed at CREATE TABLE and the chain grows
+    // through the pages' own links, never by moving the root.
+    PageId varheap_page_id = kInvalidPageId;
+
+    // The relation's fixed row size and column offsets (row_layout.hpp),
+    // computed once when the entry is filled. It belongs here for the same
+    // reason the schema does and by the same test the rest of this struct
+    // passes: it is a function of the schema and the instance-pinned
+    // inline_cell_width, neither of which can change without DDL.
+    RowLayout layout;
 };
 
 // A pattern as the cache holds it (docs/waystone-concpets.md section 4):

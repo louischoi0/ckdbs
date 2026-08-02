@@ -403,17 +403,71 @@ TEST(WalPayloadTest, CheckpointEndRoundTrips) {
 
 TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     // The enum is frozen and append-only: UNDO_WRITE and FREE were appended
-    // after PAD, so PAD must still be 13.
+    // after PAD, so PAD must still be 13, and VARHEAP_APPEND went after
+    // both rather than filling any gap.
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPad), 13);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kUndoWrite), 14);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kFree), 15);
-    EXPECT_EQ(kMaxAssignedRecordType, 15);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kVarHeapAppend), 16);
+    EXPECT_EQ(kMaxAssignedRecordType, 16);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kVarHeapAppend)));
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
     EXPECT_STREQ(RecordTypeName(RecordType::kUndoWrite), "UNDO_WRITE");
     EXPECT_STREQ(RecordTypeName(RecordType::kFree), "FREE");
+    EXPECT_STREQ(RecordTypeName(RecordType::kVarHeapAppend), "VARHEAP_APPEND");
+}
+
+// ---- VARHEAP_APPEND ------------------------------------------------------
+
+TEST(WalPayloadTest, VarHeapAppendRoundTrips) {
+    const std::string text(4000, 'v');
+    auto value = std::as_bytes(std::span<const char>(text));
+
+    std::vector<std::byte> buf(kVarHeapAppendFixedSize + value.size());
+    const VarHeapAppendPayload fields{/*slot=*/7, /*reserved=*/0, /*value_len=*/0};
+    auto n = EncodeVarHeapAppend(buf, fields, value);
+    ASSERT_TRUE(n.ok()) << n.status().message();
+    EXPECT_EQ(n.value(), buf.size());
+
+    auto decoded = DecodeVarHeapAppend(buf);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().fields.slot, 7);
+    EXPECT_EQ(decoded.value().fields.value_len, value.size());
+    EXPECT_TRUE(std::equal(decoded.value().value.begin(), decoded.value().value.end(),
+                           value.begin()));
+}
+
+TEST(WalPayloadTest, VarHeapAppendLengthComesFromTheSpanNotTheField) {
+    // The two records of one fact cannot be allowed to disagree on disk, so
+    // the caller's value_len is ignored rather than trusted.
+    const std::string text("abc");
+    auto value = std::as_bytes(std::span<const char>(text));
+
+    std::vector<std::byte> buf(kVarHeapAppendFixedSize + value.size());
+    const VarHeapAppendPayload lying{/*slot=*/0, /*reserved=*/0, /*value_len=*/999};
+    ASSERT_TRUE(EncodeVarHeapAppend(buf, lying, value).ok());
+
+    auto decoded = DecodeVarHeapAppend(buf);
+    ASSERT_TRUE(decoded.ok());
+    EXPECT_EQ(decoded.value().fields.value_len, 3u);
+}
+
+TEST(WalPayloadTest, VarHeapAppendLengthPastThePayloadIsCorruption) {
+    std::vector<std::byte> buf(kVarHeapAppendFixedSize + 4);
+    const std::string text("abcd");
+    ASSERT_TRUE(
+        EncodeVarHeapAppend(buf, VarHeapAppendPayload{}, std::as_bytes(std::span<const char>(text)))
+            .ok());
+    // Claim more bytes than the record carries - intact bytes that are
+    // wrong, which is a hard recovery error and never something to skip.
+    buf[kVarHeapAppendValueLenOffset] = std::byte{0xFF};
+
+    auto decoded = DecodeVarHeapAppend(buf);
+    ASSERT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
 }  // namespace

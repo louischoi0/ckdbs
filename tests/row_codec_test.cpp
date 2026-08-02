@@ -8,6 +8,7 @@
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/storage/tagged_cell.hpp"
 
 // The row codec's contract after the Keystone change: a tuple payload is
 // `[Keystone word][columns 1..n-1]`, the first schema column is the primary
@@ -35,6 +36,16 @@ catalog::Schema TwoColumnSchema() {
     return schema;
 }
 
+// The layout every test below encodes against. Built rather than written
+// down: the row size is a function of the schema and the instance-pinned
+// cell width, and a test that hard-coded it would stop testing the codec
+// the moment the default width moved.
+catalog::RowLayout LayoutFor(const catalog::Schema& schema) {
+    auto layout = catalog::RowLayout::Build(schema, storage::kDefaultInlineCellWidth);
+    EXPECT_TRUE(layout.ok()) << layout.status().message();
+    return layout.ok() ? layout.value() : catalog::RowLayout{};
+}
+
 parser::AstValue Str(std::string s) {
     parser::AstValue v{};
     v.type = parser::ValueType::kStr;
@@ -51,12 +62,14 @@ parser::AstValue Int(std::int64_t n) {
 }
 
 TEST(RowCodecKeystoneTest, PayloadStartsWithTheKeystoneWord) {
-    auto encoded = EncodeRow(TwoColumnSchema(), /*id=*/7, {Str("alice")});
+    auto encoded = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), /*id=*/7, {Str("alice")});
     ASSERT_TRUE(encoded.ok()) << encoded.status().message();
 
-    // 8-byte word + 2-byte varchar length prefix + 5 bytes of text. The pk
-    // is NOT also encoded into the body.
-    EXPECT_EQ(encoded.value().size(), kKeystoneWordSize + 2 + 5);
+    // 8-byte word + one tagged cell of the pinned width, whatever the
+    // value's length: the row size is a schema constant (invariant 13). The
+    // pk is NOT also encoded into the body.
+    EXPECT_EQ(encoded.value().size(), kKeystoneWordSize + storage::kDefaultInlineCellWidth);
+    EXPECT_EQ(encoded.value().size(), LayoutFor(TwoColumnSchema()).row_size);
 
     auto id = RowKeystoneId(encoded.value());
     ASSERT_TRUE(id.ok());
@@ -64,10 +77,10 @@ TEST(RowCodecKeystoneTest, PayloadStartsWithTheKeystoneWord) {
 }
 
 TEST(RowCodecKeystoneTest, RoundTripsWithThePrimaryKeyFirst) {
-    auto encoded = EncodeRow(TwoColumnSchema(), /*id=*/42, {Str("bob")});
+    auto encoded = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), /*id=*/42, {Str("bob")});
     ASSERT_TRUE(encoded.ok());
 
-    auto row = DecodeRow(TwoColumnSchema(), encoded.value());
+    auto row = DecodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), encoded.value());
     ASSERT_TRUE(row.ok()) << row.status().message();
     ASSERT_EQ(row.value().size(), 2u);
     EXPECT_EQ(FormatValue(row.value()[0]), "42");
@@ -76,27 +89,27 @@ TEST(RowCodecKeystoneTest, RoundTripsWithThePrimaryKeyFirst) {
 
 TEST(RowCodecKeystoneTest, ValueListCoversEveryColumnButThePrimaryKey) {
     // One value too many - the arity a caller supplying the pk would send.
-    auto extra = EncodeRow(TwoColumnSchema(), 1, {Int(1), Str("alice")});
+    auto extra = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), 1, {Int(1), Str("alice")});
     EXPECT_FALSE(extra.ok());
     EXPECT_EQ(extra.status().code(), StatusCode::kInvalidArgument);
 
-    auto missing = EncodeRow(TwoColumnSchema(), 1, {});
+    auto missing = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), 1, {});
     EXPECT_FALSE(missing.ok());
     EXPECT_EQ(missing.status().code(), StatusCode::kInvalidArgument);
 }
 
 TEST(RowCodecKeystoneTest, AnIdBeyondFortyBitsIsRefused) {
-    auto out = EncodeRow(TwoColumnSchema(), kMaxKeystoneId + 1, {Str("x")});
+    auto out = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), kMaxKeystoneId + 1, {Str("x")});
     EXPECT_FALSE(out.ok());
     EXPECT_EQ(out.status().code(), StatusCode::kInvalidArgument);
 
     // The boundary itself is fine.
-    EXPECT_TRUE(EncodeRow(TwoColumnSchema(), kMaxKeystoneId, {Str("x")}).ok());
+    EXPECT_TRUE(EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), kMaxKeystoneId, {Str("x")}).ok());
 }
 
 TEST(RowCodecKeystoneTest, DistinctIdsProduceDistinctPayloads) {
-    auto a = EncodeRow(TwoColumnSchema(), 1, {Str("alice")});
-    auto b = EncodeRow(TwoColumnSchema(), 2, {Str("alice")});
+    auto a = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), 1, {Str("alice")});
+    auto b = EncodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), 2, {Str("alice")});
     ASSERT_TRUE(a.ok());
     ASSERT_TRUE(b.ok());
     // Same row values, different key: the payloads must not be identical,
@@ -116,8 +129,8 @@ TEST(RowCodecKeystoneTest, APayloadTooShortForTheWordIsCorruption) {
 TEST(RowCodecKeystoneTest, ASchemaWithNoColumnsIsRefused) {
     catalog::Schema empty;
     EXPECT_FALSE(catalog::CheckKeystoneColumn(empty).ok());
-    EXPECT_FALSE(EncodeRow(empty, 1, {}).ok());
-    EXPECT_FALSE(DecodeRow(empty, {}).ok());
+    EXPECT_FALSE(EncodeRow(empty, catalog::RowLayout{}, 1, {}).ok());
+    EXPECT_FALSE(DecodeRow(empty, catalog::RowLayout{}, {}).ok());
 }
 
 TEST(RowCodecKeystoneTest, ANonIntegerFirstColumnIsRefused) {
@@ -148,10 +161,10 @@ TEST(RowCodecKeystoneTest, ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth) {
     schema.columns.push_back(Col(0, "id", catalog::kTypeValInt8, 1));
     schema.columns.push_back(Col(1, "name", catalog::kTypeValVarchar, 0));
 
-    auto encoded = EncodeRow(schema, /*id=*/100000, {Str("x")});
+    auto encoded = EncodeRow(schema, LayoutFor(schema), /*id=*/100000, {Str("x")});
     ASSERT_TRUE(encoded.ok()) << encoded.status().message();
 
-    auto row = DecodeRow(schema, encoded.value());
+    auto row = DecodeRow(schema, LayoutFor(schema), encoded.value());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(FormatValue(row.value()[0]), "100000");
 }
