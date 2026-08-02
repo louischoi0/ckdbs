@@ -28,6 +28,23 @@ Usage:
     ckdbs_cli.py "SELECT * FROM accounts WHERE id = 1"
     ckdbs_cli.py "UPDATE accounts SET balance = 150 WHERE id = 1"
 
+    # Run a local .sql file, results on stdout (so it pipes and redirects):
+    ckdbs_cli.py -f schema.sql
+    ckdbs_cli.py -f schema.sql -f load.sql -f report.sql > out.txt
+    ckdbs_cli.py -f queries.sql --echo         also print each statement
+    cat report.sql | ckdbs_cli.py -f -         read the script from stdin
+
+Script files. Statements are separated by `;`, and one may span several
+lines - it is flattened to a single line before it goes out, because the
+wire protocol is one line in / one line out. A file containing no `;` at
+all is read as **one statement per line** instead, which is the convention
+adhoc/*.sql already follows. `--` starts a comment to end of line, except
+inside a quoted string. Only replies are printed; the exit status is 1 if
+any statement came back `ERR`.
+
+For a script with inline *expectations* - "this query must return 3 rows" -
+use tools/run_sql.py instead. This runs a script; that one checks one.
+
 REPL-only local commands (never sent to the server):
     help / ?     list known server commands
     exit / quit  close the connection and exit (does NOT stop the server -
@@ -232,6 +249,110 @@ def run_one_shot(conn, command):
     _print_response(command, conn.send_command(command))
 
 
+# ---- Running a local .sql file --------------------------------------------
+#
+# The point of this path is that its stdout is *only* replies: no banners,
+# no per-statement decoration unless asked for, so `-f report.sql > out.txt`
+# gives a file worth diffing and `| grep` works. Anything about the run
+# itself (a missing file, how many statements failed) goes to stderr, which
+# is what keeps the two streams separable.
+
+def split_sql_statements(text):
+    """Splits script text into statements ready to put on the wire.
+
+    Statements are separated by `;` and may span lines - each is flattened
+    to one line, since the protocol frames on newlines (see the module
+    docstring). `--` begins a comment to end of line, and a `;` or `--`
+    inside a single-quoted string is neither a separator nor a comment;
+    SQL's doubled `''` escape is honoured.
+
+    A script with no `;` anywhere falls back to one statement per line.
+    That is not a guess about intent: it is the format adhoc/*.sql and
+    tools/run_sql.py already use, and reading such a file as a single
+    enormous statement would fail in a way that explains nothing.
+    """
+    out = []
+    current = []
+    in_string = False
+    saw_separator = False
+    i = 0
+
+    while i < len(text):
+        ch = text[i]
+
+        if in_string:
+            current.append(ch)
+            if ch == "'":
+                # A doubled quote is an escaped quote, not the end.
+                if i + 1 < len(text) and text[i + 1] == "'":
+                    current.append("'")
+                    i += 2
+                    continue
+                in_string = False
+            i += 1
+            continue
+
+        if ch == "'":
+            in_string = True
+            current.append(ch)
+            i += 1
+            continue
+
+        if ch == "-" and text.startswith("--", i):
+            end = text.find("\n", i)
+            i = len(text) if end == -1 else end
+            continue
+
+        if ch == ";":
+            saw_separator = True
+            out.append("".join(current))
+            current = []
+            i += 1
+            continue
+
+        current.append(ch)
+        i += 1
+
+    out.append("".join(current))
+
+    if not saw_separator:
+        # One statement per line, comments already stripped above.
+        lines = []
+        for chunk in out:
+            lines.extend(chunk.splitlines())
+        return [line.strip() for line in lines if line.strip()]
+
+    return [" ".join(chunk.split()) for chunk in out if chunk.strip()]
+
+
+def _read_script(path):
+    if path == "-":
+        return sys.stdin.read()
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def run_script(conn, path, echo=False):
+    """Runs every statement in `path`, printing replies to stdout.
+
+    Returns the number of statements that replied `ERR`. A failing
+    statement does not stop the run - a script is usually a sequence whose
+    later statements are still worth seeing, and stopping would hide them.
+    """
+    statements = split_sql_statements(_read_script(path))
+    failures = 0
+
+    for statement in statements:
+        if echo:
+            print(f"-- {statement}")
+        reply = conn.send_command(statement)
+        if reply.startswith("ERR"):
+            failures += 1
+        _print_response(statement, reply)
+
+    return failures
+
+
 def _init_history():
     """Loads the saved history and arranges for it to be saved on exit.
 
@@ -327,10 +448,20 @@ def main():
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"default: {DEFAULT_HOST}")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"default: {DEFAULT_PORT}")
+    parser.add_argument("-f", "--file", action="append", default=[], metavar="PATH",
+                         help="run a local .sql file and print replies to stdout; "
+                              "repeatable, files run in the order given; '-' reads stdin")
+    parser.add_argument("--echo", action="store_true",
+                         help="with -f, also print each statement before its reply")
     parser.add_argument("command", nargs="*",
                          help="command to send (e.g. PING, DESCRIBE accounts); "
                               "omit for an interactive REPL")
     args = parser.parse_args()
+
+    if args.file and args.command:
+        parser.error("give either -f/--file or a command, not both")
+    if args.echo and not args.file:
+        parser.error("--echo only applies with -f/--file")
 
     try:
         conn = ServerConnection(args.host, args.port)
@@ -338,13 +469,27 @@ def main():
         print(f"could not connect to {args.host}:{args.port}: {e}", file=sys.stderr)
         sys.exit(1)
 
+    failures = 0
     try:
-        if args.command:
+        if args.file:
+            for path in args.file:
+                try:
+                    failures += run_script(conn, path, args.echo)
+                except OSError as e:
+                    # stderr, not stdout: a missing file is not a result,
+                    # and a redirected stdout must not collect it.
+                    print(f"could not read {path}: {e}", file=sys.stderr)
+                    sys.exit(1)
+        elif args.command:
             run_one_shot(conn, " ".join(args.command))
         else:
             run_repl(conn)
     finally:
         conn.close()
+
+    if failures:
+        print(f"{failures} statement(s) replied ERR", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
