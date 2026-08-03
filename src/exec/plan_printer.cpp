@@ -30,6 +30,28 @@ bool HasReplayableStep(const StepChain& chain) noexcept {
     return false;
 }
 
+std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
+    switch (kind) {
+        case AccessKind::kLookup: return 1;
+        case AccessKind::kProbe: return 2;
+        case AccessKind::kRange: return 3;
+        case AccessKind::kFilterScan: return 4;
+        case AccessKind::kScan: return 5;
+    }
+    return catalog::kAccessKindUnset;
+}
+
+std::optional<AccessKind> AccessKindOfStored(std::uint8_t stored) noexcept {
+    switch (stored) {
+        case 1: return AccessKind::kLookup;
+        case 2: return AccessKind::kProbe;
+        case 3: return AccessKind::kRange;
+        case 4: return AccessKind::kFilterScan;
+        case 5: return AccessKind::kScan;
+        default: return std::nullopt;
+    }
+}
+
 std::uint8_t StoredStatementClass(StatementClass klass) noexcept {
     switch (klass) {
         case StatementClass::kPointSelect: return 1;
@@ -91,6 +113,9 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     os << Indent(depth) << "step " << step.step_id << ' ' << AccessKindName(step.kind) << ' '
        << (step.rel_name.empty() ? "oid=" + std::to_string(step.rel_oid) : step.rel_name);
     if (step.key.has_value()) os << " key=" << FormatOperand(*step.key);
+    if (step.range.has_value()) {
+        os << " range=[" << step.range->low << ", " << step.range->high << ']';
+    }
     os << '\n';
 
     for (const StepPredicate& pred : step.residual) {
@@ -128,6 +153,7 @@ const char* AccessKindName(AccessKind kind) noexcept {
         case AccessKind::kLookup: return "Lookup";
         case AccessKind::kProbe: return "Probe";
         case AccessKind::kRange: return "Range";
+        case AccessKind::kFilterScan: return "FilterScan";
         case AccessKind::kScan: return "Scan";
     }
     return "?";
@@ -227,7 +253,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         // question, and a row of zeros buries the answer.
         if (counters.relation_opens == 0 && counters.rows_examined == 0 &&
             counters.sub_chain_runs == 0 && counters.trail_replays == 0 &&
-            counters.trail_misses == 0) {
+            counters.trail_misses == 0 && counters.range_pages_pruned == 0) {
             continue;
         }
 
@@ -258,6 +284,7 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         // exactly why the number is here to be looked at.
         if (counters.trail_replays > 0) os << " replays=" << counters.trail_replays;
         if (counters.trail_misses > 0) os << " trail_misses=" << counters.trail_misses;
+        if (counters.range_pages_pruned > 0) os << " range_stopped_early=1";
     }
     return os.str();
 }

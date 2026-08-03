@@ -131,6 +131,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         if (IEquals(sub, "TABLES")) return HandleListTables();
         if (IEquals(sub, "PAGE")) return HandleShowPage(sub_rest);
         if (IEquals(sub, "PATTERNS")) return HandleShowPatterns();
+        if (IEquals(sub, "ACCESS")) return HandleShowAccess();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -298,6 +299,64 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) {
             os << " stale=v" << row.fingerprint_version;
         }
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowAccess() {
+    auto rows = catalog_.ListAccessStats();
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    // Relation and column *names*, resolved here rather than stored: the
+    // statistics row holds oids and a bitmap, which is what keeps it fixed
+    // width, and this is an inspection surface that can afford a lookup.
+    std::ostringstream os;
+    os << "access_shapes=" << rows.value().size();
+
+    for (const catalog::SysAccessStatRow& row : rows.value()) {
+        os << "\\n";
+
+        auto kind = exec::AccessKindOfStored(row.kind);
+        os << "kind=" << (kind.has_value() ? exec::AccessKindName(*kind) : "?");
+
+        auto access = catalog_.InitTableAccess(row.rel_id);
+        os << " rel=";
+        if (access.ok()) {
+            auto name = catalog_.ListTables();
+            bool named = false;
+            if (name.ok()) {
+                for (const catalog::SysObjectRow& obj : name.value()) {
+                    if (obj.oid != row.rel_id) continue;
+                    os << catalog::NameView(obj.name);
+                    named = true;
+                    break;
+                }
+            }
+            if (!named) os << "oid=" << row.rel_id;
+        } else {
+            // The relation is gone or unreadable. The statistic outlives it
+            // - nothing removes these rows - so say so rather than fail the
+            // listing.
+            os << "oid=" << row.rel_id;
+        }
+
+        os << " columns=[";
+        bool first = true;
+        for (std::uint16_t col = 0; col < 64; ++col) {
+            if ((row.column_mask & (std::uint64_t{1} << col)) == 0) continue;
+            if (!first) os << ',';
+            first = false;
+            if (access.ok() && col < access.value()->schema.columns.size()) {
+                os << catalog::NameView(access.value()->schema.columns[col].name);
+            } else {
+                os << col;
+            }
+        }
+        os << ']';
+
+        os << " uses=" << row.use_count << " last_seen=" << row.last_seen;
     }
     return {os.str(), false};
 }
@@ -1120,6 +1179,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         return {"ERR " + ran.message(), false};
     }
     RecordTrail(instance, trail, chain);
+    RecordAccessShapes(chain);
 
     const exec::StepStats total = stats.Total();
     std::ostringstream os;
@@ -1352,6 +1412,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, bool anal
     }
 
     RecordTrail(instance, trail, compiled);
+    RecordAccessShapes(compiled);
 
     if (logging(LogLevel::kTrace)) {
         log_->Trace("query", "chain of " + std::to_string(compiled.steps.size()) +
@@ -1359,6 +1420,16 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, bool anal
                                  std::to_string(static_cast<int>(compiled.klass)));
     }
     return {os.str(), false};
+}
+
+void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
+    // Unconditional on a successful SELECT, and independent of Waystone:
+    // this is the physical optimizer's input (docs/heap-and-tuple.md §7),
+    // not a trail, and it is collected whether or not anything is recording
+    // or replaying one.
+    if (!access_stats_enabled_) return;
+    stats::RecordChainAccess(catalog_, chain, static_cast<std::uint64_t>(NowNs()),
+                             &access_counters_);
 }
 
 void CommandDispatcher::RecordTrail(const std::optional<stats::InstanceKey>& instance,

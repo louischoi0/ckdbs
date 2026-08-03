@@ -152,6 +152,29 @@ waystone_recording = on
 # for byte to keep it true.
 waystone_replay = on
 
+# ---- Access statistics -----------------------------------------------------
+
+# Whether a successful SELECT records what each of its steps actually did:
+# one row per access *shape* in `sys.access_stats`, readable with
+# `SHOW ACCESS` (docs/heap-and-tuple.md section 7).
+#
+# A shape is `(kind, relation, columns)` - `Lookup`, `Probe`, `Range`,
+# `FilterScan` or `Scan`, the relation, and the columns the access was keyed
+# or filtered on. **Never the values**: `WHERE flag = 1` and `WHERE flag = 2`
+# are one shape with two uses. That is what bounds the relation by the schema
+# instead of by the data, so it needs no eviction and no cap beyond a
+# backstop.
+#
+# What it is for: the physical optimizer that section 7 describes and that
+# does not exist yet. "This relation was filter-scanned on `flag` 40,000
+# times" is the signal that would justify clustering or indexing it. Nothing
+# consumes this yet - it is being collected now so the history exists when
+# something does.
+#
+# Measured cost: +1-2% on a point lookup, unmeasurable on anything slower.
+# Independent of the Waystone switches above.
+access_statistics = on
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

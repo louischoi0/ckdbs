@@ -19,7 +19,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
             "wal_drain_interval_us", "log_dir",  "log_file",               "log_level",
             "max_rows_touched",      "inline_cell_width",      "waystone_recording",
-            "waystone_replay"};
+            "waystone_replay",
+            "access_statistics"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -75,6 +76,11 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("waystone_replay");
         if (!v.ok()) return v.status();
         waystone_replay = v.value();
+    }
+    if (file.Has("access_statistics")) {
+        auto v = file.GetBool("access_statistics");
+        if (!v.ok()) return v.status();
+        access_statistics = v.value();
     }
     if (file.Has("max_rows_touched")) {
         auto v = file.GetUint("max_rows_touched");
@@ -201,7 +207,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         &*expeditor->logger_, &expeditor->clock_, &*expeditor->wal_,
         expeditor->config_.durability, exec::Budget(expeditor->config_.max_rows_touched),
         expeditor->trail_recorder_ ? &*expeditor->trail_recorder_ : nullptr,
-        expeditor->config_.waystone_replay);
+        expeditor->config_.waystone_replay, expeditor->config_.access_statistics);
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
                                  wal::DurabilityClassName(expeditor->config_.durability));

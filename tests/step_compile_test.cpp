@@ -98,16 +98,80 @@ TEST_F(StepCompileTest, PkEqualityAgainstALiteralCompilesToLookup) {
     EXPECT_TRUE(IsTrailReplayable(chain.steps[0].kind));
 }
 
-TEST_F(StepCompileTest, EqualityOnANonPkColumnIsAScanHoweverSelective) {
+TEST_F(StepCompileTest, EqualityOnANonPkColumnIsAFilterScanHoweverSelective) {
     // `name` may be unique in practice; it is not the pk, and only the pk
-    // can be addressed by a descent (invariant 11). A scan is a search,
-    // and a search is never trail-replayable - so guessing here would be
-    // a correctness bug in Waystone, not a missed optimization.
+    // can be addressed by a descent (invariant 11).
+    //
+    // It is a **kFilterScan** rather than a bare kScan - a walk that exists
+    // to evaluate a filter, which is the shape a physical optimizer wants
+    // to hear about. That is a statistics distinction and nothing more:
+    // the step still walks the whole relation, and the assertion that
+    // matters is the last one. A filter scan is a *search*, and a search is
+    // never trail-replayable, so promoting it would be a correctness bug in
+    // Waystone rather than a missed optimization.
     const StepChain chain = MustCompile("SELECT * FROM acct WHERE name = 'alice'");
     ASSERT_EQ(chain.steps.size(), 1u);
-    EXPECT_EQ(chain.steps[0].kind, AccessKind::kScan);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kFilterScan);
     EXPECT_FALSE(chain.steps[0].key.has_value());
     EXPECT_FALSE(IsTrailReplayable(chain.steps[0].kind));
+
+    // And the column it was classified for is recorded, which is what the
+    // access statistics key on.
+    ASSERT_EQ(chain.steps[0].access_columns.size(), 1u);
+    EXPECT_NE(chain.steps[0].access_columns[0], 0) << "the pk is not a filter column";
+}
+
+TEST_F(StepCompileTest, ABareSelectIsAPlainScanWithNoAccessColumns) {
+    // The other half of the split: nothing steered this walk, so it is a
+    // kScan and its access shape is empty.
+    const StepChain chain = MustCompile("SELECT * FROM acct");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kScan);
+    EXPECT_TRUE(chain.steps[0].access_columns.empty());
+}
+
+TEST_F(StepCompileTest, BetweenOnThePkCompilesToARangeWithItsBoundsKept) {
+    const StepChain chain = MustCompile("SELECT * FROM acct WHERE id BETWEEN 10 AND 20");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kRange);
+    ASSERT_TRUE(chain.steps[0].range.has_value());
+    EXPECT_EQ(chain.steps[0].range->low, 10u);
+    EXPECT_EQ(chain.steps[0].range->high, 20u);
+
+    // **The bounds are also still conjuncts.** The range is a hint on top
+    // of the residual, never a replacement for it - which is what keeps
+    // "downgrading any step to a plain scan cannot change the result"
+    // true, and that property is what invariant 9's fall-through rests on.
+    EXPECT_EQ(chain.steps[0].residual.size(), 2u);
+    EXPECT_FALSE(IsTrailReplayable(chain.steps[0].kind)) << "a range is a search";
+
+    // Spelling it out by hand is the same statement, so it gets the same
+    // range. An optimizer that rewarded phrasing would be a worse one.
+    const StepChain spelled = MustCompile("SELECT * FROM acct WHERE id >= 10 AND id <= 20");
+    EXPECT_EQ(spelled.steps[0].kind, AccessKind::kRange);
+    ASSERT_TRUE(spelled.steps[0].range.has_value());
+    EXPECT_EQ(spelled.steps[0].range->low, 10u);
+    EXPECT_EQ(spelled.steps[0].range->high, 20u);
+}
+
+TEST_F(StepCompileTest, BetweenOnANonPkColumnIsNotARange) {
+    // There is no structure to exploit: the relation is ordered by pk, so
+    // a range over any other column is a search that has to look at every
+    // row. Calling it a Range would be a promise the storage cannot keep.
+    const StepChain chain = MustCompile("SELECT * FROM acct WHERE tier BETWEEN 'a' AND 'z'");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_NE(chain.steps[0].kind, AccessKind::kRange);
+    EXPECT_FALSE(chain.steps[0].range.has_value());
+    EXPECT_EQ(chain.steps[0].residual.size(), 2u);
+}
+
+TEST_F(StepCompileTest, AnInvertedRangeStaysAPlainScan) {
+    // `BETWEEN 20 AND 10` matches nothing and is legal to write. The
+    // residual already returns the correct empty answer, so there is
+    // nothing for a range walk to do but special-case it.
+    const StepChain chain = MustCompile("SELECT * FROM acct WHERE id BETWEEN 20 AND 10");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_FALSE(chain.steps[0].range.has_value());
 }
 
 TEST_F(StepCompileTest, AJoinOntoAPkCompilesToProbe) {

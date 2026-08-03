@@ -105,6 +105,16 @@ struct StepStats {
     std::uint64_t trail_replays = 0;
     std::uint64_t trail_misses = 0;
 
+    // A kRange walk that stopped early because a page's `min_key` proved
+    // the rest of the relation is past the high bound. 0 or 1 per
+    // execution - it counts the *stop*, not the pages skipped, because the
+    // pages after it are never fetched and so were never counted.
+    //
+    // The honest reading: non-zero means the range ended before the
+    // relation did. Zero means either the range reached the end or nothing
+    // was pruned, and `rows_examined` is what tells those apart.
+    std::uint64_t range_pages_pruned = 0;
+
     StepStats& operator+=(const StepStats& other) noexcept;
 };
 

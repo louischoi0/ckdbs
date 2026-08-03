@@ -134,6 +134,18 @@ enum class PredicateKind : std::uint8_t {
     kNotInSubquery,    // col NOT IN (SELECT ...)
     kExists,           // EXISTS (SELECT ...) - no column
     kNotExists,        // NOT EXISTS (SELECT ...) - no column
+
+    // col BETWEEN <low> AND <high>, inclusive at both ends. Carries two
+    // literals rather than a subquery: `val` is the low bound and
+    // `val_high` the high one.
+    //
+    // **It always lowers to two ordinary conjuncts** (`col >= low` and
+    // `col <= high`) in the compiled chain, and the range it may *also*
+    // put on the step is a hint on top of them - the same relationship
+    // `Step::key` has to a lookup's repeated equality. That is what keeps
+    // "downgrading any step to a plain scan cannot change the result"
+    // true, which is the property invariant 9's fall-through rests on.
+    kBetween,
 };
 
 // What sits on the right of a comparison.
@@ -153,7 +165,8 @@ struct Condition {
     CompareOp op = CompareOp::kEq;   // kCompareValue and kCompareSubquery
 
     RhsKind rhs_kind = RhsKind::kLiteral;
-    AstValue val;       // rhs_kind == kLiteral
+    AstValue val;       // rhs_kind == kLiteral; the low bound for kBetween
+    AstValue val_high;  // kBetween only: the high bound
     ColumnName rhs_col; // rhs_kind == kColumn
 
     // The nested query block, for every kind but kCompareValue.

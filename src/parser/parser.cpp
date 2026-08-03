@@ -221,6 +221,35 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         return cond;
     }
 
+    // `col BETWEEN <low> AND <high>`. Half of workplan V08; the `IN (list)`
+    // half is still open and still reports through ParseSubquery above.
+    //
+    // Costs the fingerprint nothing: `BETWEEN` has been a reserved keyword
+    // since V04 and a keyword hashes exactly as the identifier it used to
+    // be, so every pattern_id for a statement containing one is unchanged
+    // by this becoming parseable. The corpus pins that.
+    if (after_col.type == TokenType::kKeyword && after_col.kw == Keyword::kBetween) {
+        lexer_.Next();
+        cond.kind = PredicateKind::kBetween;
+
+        auto low = ParseValue();
+        if (!low.ok()) return low.status();
+        cond.val = std::move(low.value());
+
+        const Token& and_tok = lexer_.Peek();
+        if (and_tok.type != TokenType::kIdent || !IEquals(and_tok.text, "AND")) {
+            return Status::InvalidArgument("expected AND after the low bound of BETWEEN, got '" +
+                                            std::string(Describe(and_tok)) + "' (byte " +
+                                            std::to_string(and_tok.byte_offset) + ")");
+        }
+        lexer_.Next();
+
+        auto high = ParseValue();
+        if (!high.ok()) return high.status();
+        cond.val_high = std::move(high.value());
+        return cond;
+    }
+
     auto op = ParseCompareOp();
     if (!op.ok()) return op.status();
     cond.op = op.value();

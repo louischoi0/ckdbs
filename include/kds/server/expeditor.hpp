@@ -125,6 +125,15 @@ public:
         // compares it against every other configuration byte for byte.
         bool waystone_replay = true;
 
+        // Whether a successful SELECT records its access shapes into
+        // `sys.access_stats` (`access_statistics`, default on).
+        //
+        // Independent of Waystone: this is the physical optimizer's input
+        // (docs/heap-and-tuple.md §7), not a trail. Default on because a
+        // history that starts when someone remembers to enable it is a
+        // history that does not exist when the optimizer arrives.
+        bool access_statistics = true;
+
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
         // kGroup batch nobody is waiting on; a drain with nothing pending

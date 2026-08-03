@@ -41,6 +41,7 @@ add_library(kds
     src/stats/pattern_defs.cpp
     src/stats/trail_store.cpp
     src/stats/trail_recorder.cpp
+    src/stats/access_stats.cpp
     src/catalog/catalog_cache.cpp
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp

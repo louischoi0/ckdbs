@@ -65,7 +65,12 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // because the missing relation is not a size mismatch anyone would recognize
 // - the first CREATE PATTERN would simply fail to find a table that every
 // build after this one creates at bootstrap.
-inline constexpr std::uint32_t kSuperBlockVersion = 6;
+// 6 -> 7: bootstrap gained `sys.access_stats` on a fixed page id a
+// pre-existing file does not have. Same shape of breakage as 5 -> 6's
+// sys.pattern_defs: the file would mount and then fail on the first access
+// the statistics path tried to record, naming a table that every build
+// after this one creates at bootstrap.
+inline constexpr std::uint32_t kSuperBlockVersion = 7;
 
 // ---- On-disk field layout ----------------------------------------------
 

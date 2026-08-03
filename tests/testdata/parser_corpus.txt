@@ -151,9 +151,22 @@ ok	a91c9b42e1642b7c	cbf29ce484222325	SELECT * FROM t AS a
 ok	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (SELECT * FROM u)
 ok	5b6a4489f043e0d7	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u)
 ok	d9e6d16ebc7df09d	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT id FROM u)
-# [V08] IN-list and BETWEEN, and the forms that stay Unsupported.
+# [V08 — BETWEEN half done] The IN-list half is still open and still fails.
+#
+# **The hashes did not move when BETWEEN became parseable**, and that is the
+# whole reason this line stayed pinned while its verdict flipped: BETWEEN has
+# lexed as a reserved keyword since V04, and a keyword hashes exactly as the
+# identifier it used to be. Becoming *parseable* changes no shape stream.
 InvalidArgument	b87254b3cae4a5b8	78f79099c419719c	SELECT * FROM t WHERE id IN (1, 2)
-InvalidArgument	af3f6ac336bb68d8	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 AND 5
+ok	af3f6ac336bb68d8	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 AND 5
+ok	e55ef6c0ffc6290e	78f78f99c4196fe9	SELECT * FROM t WHERE v BETWEEN 1 AND 5
+ok	ba36feab6d6a3125	2435274fd957b578	SELECT * FROM t WHERE id BETWEEN 1 AND 5 AND name = 'x'
+ok	4aa155c62d488ef9	78f78f99c4196fe9	SELECT * FROM t AS a WHERE a.id BETWEEN 1 AND 5
+# BETWEEN with a missing AND, or a missing bound, is a syntax error naming
+# the position - not a silent one-sided range. Both still *lex*, so both
+# still have a fingerprint: refusing to parse is not refusing to hash.
+InvalidArgument	5be869c8076bff1f	b5d414774c8002cc	SELECT * FROM t WHERE id BETWEEN 1
+InvalidArgument	97eadbe49c827e47	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 5
 InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 OR id = 2
 # [V09] pagination.
 InvalidArgument	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id

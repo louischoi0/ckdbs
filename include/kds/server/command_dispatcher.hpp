@@ -15,6 +15,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/pattern_ddl.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/stats/access_stats.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/sched/clock.hpp"
@@ -154,7 +155,8 @@ public:
                        wal::DurabilityClass durability = wal::DurabilityClass::kGroup,
                        exec::Budget budget = exec::Budget(),
                        stats::TrailRecorder* recorder = nullptr,
-                       bool replay_enabled = false) noexcept
+                       bool replay_enabled = false,
+                       bool access_statistics = true) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -164,7 +166,8 @@ public:
           durability_(durability),
           budget_(budget),
           recorder_(recorder),
-          replay_enabled_(replay_enabled) {}
+          replay_enabled_(replay_enabled),
+          access_stats_enabled_(access_statistics) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -192,6 +195,17 @@ public:
     //                            `stale=v<n>`, because those are the dead
     //                            weight a version bump leaves behind and
     //                            seeing them is the point.
+    //   SHOW ACCESS           -> "access_shapes=<n>", then one "\n"-escaped
+    //                            section per recorded access shape:
+    //                            "kind=<Lookup|Probe|Range|FilterScan|Scan>
+    //                             rel=<s> columns=[<s>,...] uses=<n>
+    //                             last_seen=<n>". The physical optimizer's
+    //                            input (docs/heap-and-tuple.md §7), keyed
+    //                            by *columns* and never by values - so
+    //                            `WHERE flag = 1` and `WHERE flag = 2` are
+    //                            one shape, which is what keeps the list
+    //                            bounded by the schema rather than by the
+    //                            data.
     //   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
     //       OF <select>
     //                         -> "CREATED PATTERN name=<s>
@@ -296,6 +310,7 @@ private:
     DispatchOutcome HandleDescribe(std::string_view args);
     DispatchOutcome HandleShowPage(std::string_view args);
     DispatchOutcome HandleShowPatterns();
+    DispatchOutcome HandleShowAccess();
     DispatchOutcome HandleCreateTable(std::string_view args);
     DispatchOutcome HandleCreateTableSql(std::string_view line);
 
@@ -344,6 +359,12 @@ private:
     // about when a trail is written.
     void RecordTrail(const std::optional<stats::InstanceKey>& instance,
                      exec::TrailCollector* trail, const exec::StepChain& chain);
+
+    // Counts one execution of every step's access shape. Shared by the
+    // row-returning path and ANALYZE, for the reason RecordTrail is: two
+    // call sites that could disagree about when a statistic is written
+    // would make the statistic mean two things.
+    void RecordAccessShapes(const exec::StepChain& chain);
     DispatchOutcome HandleUpdate(std::string_view line);
     DispatchOutcome HandleSync();
 
@@ -494,6 +515,14 @@ private:
 
     // The replay index, reused across statements for the same reason.
     exec::TrailReplay replay_scratch_;
+
+    // Whether a successful SELECT records its access shapes
+    // (`access_statistics`). Defaults **on**: unlike Waystone this collects
+    // input for a decision nobody has made yet, and a physical optimizer
+    // that arrives to an empty history is a physical optimizer that has to
+    // wait for one.
+    bool access_stats_enabled_;
+    stats::AccessStatsCounters access_counters_;
 
     // Implicit-transaction ids for the statements this dispatcher logs.
     // Process-local and restarting from 1 every boot, which is wrong the
