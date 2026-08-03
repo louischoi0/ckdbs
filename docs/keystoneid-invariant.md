@@ -1,6 +1,11 @@
 # Keystone id — issue-once invariant (concept + workplan)
 
-Status: **DECIDED** (K1–K5 below). Milestones K-M1..K-M6 not started.
+Status: **DECIDED** (K1–K5 below). **K-M1 done 2026-08-03** —
+`docs/keystoneid-k0-findings.md` is what it found, and §7 there proposes
+four amendments to this document that are **not yet applied**: K3's wording,
+§1's min_key aside, §5's milestone order, and §1.2's oid claim. Read that
+document before starting K-M2; three of its findings change what K-M2 is.
+K-M2..K-M6 not started.
 Depends on: Keystone super-column contract (40-bit id + 8-bit flags +
 16-bit meta id), per-relation catalog metadata, WAL, core-ownership
 dispatch.
@@ -142,13 +147,21 @@ boundary conditions so nothing else accidentally forecloses it:
 
 ## 5. Workplan
 
-**K-M1 — Audit current issuance paths.**
+**K-M1 — Audit current issuance paths. DONE 2026-08-03.**
 Read every path that produces a Keystone id (insert executors,
 bootstrap, any recovery path) and every path that could re-issue one
 (free-list, crash restart, catalog rebuild). Deliverable: a short
 findings note + failing tests that *demonstrate* any reuse that exists
 today. Acceptance: reuse behavior of the current engine is documented
 fact, not assumption.
+
+Delivered as `docs/keystoneid-k0-findings.md`, `tests/keystone_id_test.cpp`
+and `bench/results-keystone-alloc.md`. Headline: **K1 does not hold across a
+crash**, because the durable log names ids that the unlogged `next_id` has
+forgotten — a durability problem, not an allocator one, which K-M2 cannot
+close alone. The demonstrating tests are green rather than red on purpose;
+each names the condition under which it must be inverted, on the grounds
+that a permanently-red test is one that gets ignored.
 
 **K-M2 — HWM + bump-ahead allocator.**
 Implement §2: persisted per-relation HWM, chunked bump-ahead, recovery
@@ -157,6 +170,19 @@ between chunk persist and issuance (sim-crash via IoBackend seam)
 must never re-issue; gaps appear and are harmless. Acceptance: K1
 holds across simulated crash/restart cycles; insert hot path shows no
 added durability wait.
+
+**Blocked, and the acceptance criterion is not reachable as written.** §2
+persists the ceiling through "the normal logged catalog write path"; there
+is no logged catalog write path, and recovery does not exist, so no chunk
+size makes K1 hold across a crash. Real order:
+**logged catalog writes → recovery → K-M2.** Measured inputs from K-M1
+(`bench/results-keystone-alloc.md`): the allocator is 4.3–4.9% of an
+unlogged INSERT, so this is a correctness change and not a performance one;
+crash-safe bump-ahead costs **1.24×** today's allocator at N=4096 and **43×**
+at N=64 (a 3× INSERT regression), which settles `N` at 4096 by measurement
+rather than by proposal; and forcing durability *per id* instead costs
+**2629×**, capping INSERT at ~949/s. The `[PROPOSED]` on N should become a
+floor, not a default.
 
 **K-M3 — Enforce K2 (immutability).**
 Compiler/executor: an UPDATE whose SET list touches the super column
@@ -184,6 +210,14 @@ its inputs.
 Suggested order: K-M1 → K-M2 → K-M3 (independent of M2, can parallel)
 → K-M4 → K-M5. M1 first is non-negotiable: everything else assumes we
 know, rather than believe, what the engine does today.
+
+Revised after M1: **K-M3 first**, since it is genuinely independent and
+unblocked, while K-M2 now sits behind logged catalog writes and recovery.
+Two items M1 surfaced that belong to other documents but block claims made
+here: object oids are re-issued on every boot (`well_known.hpp`'s
+`kUserOidStart`), which falsifies the oid half of §1.2 with no crash
+involved; and the catalog cannot hold more than ~62 columns across all user
+relations, because its fixed pages do not chain.
 
 ## 6. Out of scope
 

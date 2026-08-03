@@ -93,6 +93,13 @@ option(KDS_BUILD_BENCH "Build ckdbs microbenchmarks" ON)
 if(KDS_BUILD_BENCH)
     add_executable(kds_bench bench/bench_main.cpp)
     target_link_libraries(kds_bench PRIVATE kds)
+
+    # Separate binary rather than a section of kds_bench: this one asks a
+    # question about one subsystem (keystoneid-invariant.md K0) and carries
+    # a prototype allocator that is not a candidate for merging. Keeping it
+    # apart is what keeps that distinction visible.
+    add_executable(kds_keystone_alloc_bench bench/keystone_alloc_bench.cpp)
+    target_link_libraries(kds_keystone_alloc_bench PRIVATE kds)
 endif()
 
 option(KDS_BUILD_TESTS "Build ckdbs unit tests" ON)

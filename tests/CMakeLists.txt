@@ -8,6 +8,7 @@ add_executable(kds_tests
     file_page_device_test.cpp
     memory_page_device_test.cpp
     keystone_test.cpp
+    keystone_id_test.cpp
     heap_page_test.cpp
     heap_chain_test.cpp
     btree_test.cpp
