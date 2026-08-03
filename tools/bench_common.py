@@ -108,11 +108,18 @@ def report(phases, meta, footer=()):
     relation uses (heap chain vs clustered B+ tree). Printed on the header
     line when present because it changes what the point-select and update
     phases do, so a table without it beside them is unreadable.
+
+    `meta['connections']` is optional and defaults to 1, which is what the
+    two single-connection drivers want. stress_business.py drives several
+    processes at once, and a header claiming one connection over an
+    aggregate throughput number would misread by exactly that factor.
     """
     print()
     storage = f", {meta['clustered']}-clustered" if meta.get("clustered") else ""
+    connections = meta.get("connections", 1)
     print(f"{meta['engine']} benchmark - {meta['columns']} columns, "
-          f"{meta['rows']} rows resident{storage}, 1 connection")
+          f"{meta['rows']} rows resident{storage}, "
+          f"{connections} connection{'' if connections == 1 else 's'}")
     print(f"server {meta['host']}:{meta['port']}  table {meta['table']}")
     print()
     header = (f"{'phase':<{NAME_WIDTH}}{'ops':>8}{'qps':>12}{'mean us':>10}"

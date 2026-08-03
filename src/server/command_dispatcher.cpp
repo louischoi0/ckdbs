@@ -135,6 +135,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         if (IEquals(sub, "PATTERNS")) return HandleShowPatterns();
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
         if (IEquals(sub, "BUDGET")) return HandleShowBudget();
+        if (IEquals(sub, "CABINS")) return HandleShowCabins();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -144,6 +145,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "PATTERN")) {
             return HandleCreatePattern(Trim(line));
+        }
+        if (IEquals(sub, "CABIN")) {
+            return HandleCabin(Trim(line));
         }
         if (IEquals(sub, "TABLE")) {
             // Disambiguate the bare-name form ("CREATE TABLE foo")
@@ -161,14 +165,17 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
     }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
-        // Only patterns can be dropped - there is no DROP TABLE, and the
-        // catalog is append-only apart from this one path. Routed by name so
-        // `DROP TABLE t` gets the parser's truthful refusal with a position
-        // rather than "unknown DROP target".
+        // Patterns and cabins can be dropped - there is still no DROP TABLE,
+        // and the catalog is append-only apart from these two paths. Routed
+        // by name so `DROP TABLE t` gets the parser's truthful refusal with a
+        // position rather than "unknown DROP target".
         if (IEquals(sub, "PATTERN")) {
             return HandleDropPattern(Trim(line));
         }
-        return {"ERR only DROP PATTERN is supported", false};
+        if (IEquals(sub, "CABIN")) {
+            return HandleCabin(Trim(line));
+        }
+        return {"ERR only DROP PATTERN and DROP CABIN are supported", false};
     }
     if (IEquals(cmd, "INSERT")) {
         return HandleInsert(Trim(line));
@@ -716,6 +723,99 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
        << pattern_id.value() << std::dec;
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "dropped pattern '" + stmt.name + "'");
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::CabinStmt>(parsed.value())) {
+        return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
+    }
+    const auto& stmt = std::get<parser::CabinStmt>(parsed.value());
+
+    // One handler for both, because the two statements share a parse and a
+    // reply shape and differ only in which catalog call they reach - the same
+    // reason CabinStmt is one struct (ast.hpp).
+    if (stmt.drop) {
+        auto cabin_id = exec::DropCabin(catalog_, stmt);
+        if (!cabin_id.ok()) {
+            return {"ERR " + cabin_id.status().message(), false};
+        }
+        std::ostringstream os;
+        os << "DROPPED CABIN on=" << stmt.table_name << '.' << stmt.column_name
+           << " cabin_id=" << cabin_id.value();
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped cabin on " + stmt.table_name + "." + stmt.column_name);
+        }
+        return {os.str(), false};
+    }
+
+    auto result = exec::CreateCabin(catalog_, stmt);
+    if (!result.ok()) {
+        return {"ERR " + result.status().message(), false};
+    }
+
+    std::ostringstream os;
+    // `observed=0` is printed rather than left out, because it is the thing
+    // most likely to be misunderstood: creating a Cabin observes nothing and
+    // accelerates nothing until traffic fills it (spec §4's miss path).
+    os << "CREATED CABIN on=" << stmt.table_name << '.' << stmt.column_name
+       << " cabin_id=" << result.value().cabin_id << " column=" << result.value().col_pos
+       << " observed=0";
+    for (const std::string& warning : result.value().warnings) {
+        os << "\\n" << "WARN " << warning;
+    }
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "created cabin on " + stmt.table_name + "." + stmt.column_name);
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowCabins() {
+    auto rows = catalog_.ListCabins();
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    std::ostringstream os;
+    os << "cabins=" << rows.value().size();
+
+    for (const catalog::SysCabinRow& row : rows.value()) {
+        os << "\\n";
+        os << "cabin_id=" << row.cabin_id;
+
+        // Names resolved here rather than stored, exactly as SHOW ACCESS
+        // does: the row holds oids so it stays fixed width, and an
+        // inspection surface can afford the lookup.
+        auto access = catalog_.InitTableAccess(row.rel_oid);
+        os << " rel=";
+        bool named = false;
+        if (auto tables = catalog_.ListTables(); tables.ok()) {
+            for (const catalog::SysObjectRow& obj : tables.value()) {
+                if (obj.oid != row.rel_oid) continue;
+                os << catalog::NameView(obj.name);
+                named = true;
+                break;
+            }
+        }
+        if (!named) os << "oid=" << row.rel_oid;
+
+        os << " column=";
+        if (access.ok() && row.column_no < access.value()->schema.columns.size()) {
+            os << catalog::NameView(access.value()->schema.columns[row.column_no].name);
+        } else {
+            os << row.column_no;
+        }
+
+        os << " origin=" << (row.origin == catalog::kCabinOriginUser ? "user" : "auto");
+        os << " status="
+           << (row.status == catalog::kCabinStatusActive
+                   ? "active"
+                   : (row.status == catalog::kCabinStatusBuilding ? "building" : "demoted"));
     }
     return {os.str(), false};
 }

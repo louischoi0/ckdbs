@@ -12,6 +12,9 @@ const char* StatementTypeName(const Statement& stmt) {
             if constexpr (std::is_same_v<T, UpdateStmt>) return "UPDATE";
             if constexpr (std::is_same_v<T, CreatePatternStmt>) return "CREATE PATTERN";
             if constexpr (std::is_same_v<T, DropPatternStmt>) return "DROP PATTERN";
+            if constexpr (std::is_same_v<T, CabinStmt>) {
+                return s.drop ? "DROP CABIN" : "CREATE CABIN";
+            }
         },
         stmt);
 }

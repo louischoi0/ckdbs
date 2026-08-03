@@ -119,6 +119,41 @@ struct TableAccess {
     // passes: it is a function of the schema and the instance-pinned
     // inline_cell_width, neither of which can change without DDL.
     RowLayout layout;
+
+    // ---- Cabins on this relation (docs/feat-cabin.md) -------------------
+    //
+    // Which columns carry a Cabin, and which Cabin each is. Both are DDL
+    // facts - `CREATE CABIN` and `DROP CABIN` bump the catalog version -
+    // so they pass this struct's admission test, and they are here rather
+    // than probed per step because the compiler asks "is this column
+    // cabined" once per equality per compile and the answer is one bit.
+    //
+    // It is deliberately a **positive** fact. Asking the catalog per step
+    // would mean caching an *absence* for the common case, which
+    // catalog_cache.hpp forbids outright; a mask says which columns do
+    // have one and says nothing about the rest.
+    //
+    // `cabin_mask` holds a bit per `col_pos`. Bit 0 is always clear: the
+    // pk's Cabin is the clustered tree itself (spec section 2), so
+    // CreateCabin() refuses column 0. A relation wider than 64 columns
+    // folds its high columns into no bit - which loses the *acceleration*
+    // for those columns and can never lose a row, since an unnoticed
+    // Cabin simply means the step compiles to the scan it would have
+    // compiled to anyway. Stated here rather than left to be discovered.
+    std::uint64_t cabin_mask = 0;
+
+    // `cabin_id` per cabined column, positionally aligned with
+    // `schema.columns`; 0 - never a real cabin_id - for a column with no
+    // Cabin. Parallel to the mask rather than folded into it because the
+    // read path needs the id to find the Cabin's entry sets, and the
+    // compiler needs only the bit.
+    std::vector<std::uint64_t> cabin_ids;
+
+    // The Cabin on `col_pos`, or 0. One test, so no caller re-derives the
+    // relationship between the mask and the vector.
+    std::uint64_t CabinOn(std::uint16_t col_pos) const noexcept {
+        return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : 0;
+    }
 };
 
 // A pattern as the cache holds it (docs/waystone-concpets.md section 4):

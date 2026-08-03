@@ -201,14 +201,18 @@ TEST_F(CommandDispatcherTest, UnknownCommandIsErrorNotCrash) {
     EXPECT_FALSE(out.should_stop);
 }
 
-TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithExactlyOneTarget) {
+TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // `DROP` became a statement head with CREATE PATTERN, so it no longer
-    // falls into "unknown command" - and it should not. There is no
+    // falls into "unknown command" - and it should not. There is still no
     // DROP TABLE, and naming what DROP does take beats a generic refusal
-    // that leaves a client unsure whether the word was recognized.
+    // that leaves a client unsure whether the word was recognized. The list
+    // in the message is the whole of what exists, so it grows with the
+    // targets: CABIN joined it with the Cabin feature (docs/feat-cabin.md).
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response, "ERR only DROP PATTERN is supported");
-    EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR only DROP PATTERN is supported");
+    EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
+              "ERR only DROP PATTERN and DROP CABIN are supported");
+    EXPECT_EQ(d.Dispatch("DROP TABLE t").response,
+              "ERR only DROP PATTERN and DROP CABIN are supported");
 }
 
 TEST_F(CommandDispatcherTest, EmptyLineIsError) {

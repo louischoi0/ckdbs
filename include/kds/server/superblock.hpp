@@ -70,7 +70,14 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // sys.pattern_defs: the file would mount and then fail on the first access
 // the statistics path tried to record, naming a table that every build
 // after this one creates at bootstrap.
-inline constexpr std::uint32_t kSuperBlockVersion = 7;
+// 7 -> 8: bootstrap gained `sys.cabins` (docs/feat-cabin.md §10) on a fixed
+// page id a pre-existing file does not have - the third repeat of the
+// 5 -> 6 shape. Worth stating once for all three: a *new bootstrap
+// relation* is as breaking as a row layout change and less obvious about
+// it, because the file mounts cleanly and then fails on the first
+// statement that reaches for a table which does not exist. The refusal at
+// the door is the whole point.
+inline constexpr std::uint32_t kSuperBlockVersion = 8;
 
 // ---- On-disk field layout ----------------------------------------------
 

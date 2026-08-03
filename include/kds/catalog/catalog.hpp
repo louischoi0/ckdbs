@@ -357,6 +357,51 @@ public:
     // `SHOW ACCESS`.
     StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
 
+    // ---- sys.cabins (docs/feat-cabin.md §10) -----------------------------
+
+    // Declares a Cabin on one non-pk column and returns its `cabin_id`.
+    //
+    // What this writes is that the Cabin **exists**. Nothing is observed by
+    // creating one: the read path's miss branch is what fills it (spec §4),
+    // so a fresh Cabin costs a catalog row and changes no answer until
+    // traffic teaches it something.
+    //
+    // Fails with InvalidArgument for column 0 - the pk's Cabin is the
+    // clustered tree itself (§2), which is not a refusal a caller can talk
+    // its way out of - and for a `col_pos` past the relation's schema;
+    // NotFound for an unknown relation; AlreadyExists for a second Cabin on
+    // the same column.
+    //
+    // **Bumps the catalog version**, unlike RegisterPattern(): the mask on
+    // TableAccess is derived from these rows, so a Cabin appearing stales
+    // every cached relation entry. That makes this a DDL-shaped call and it
+    // must not be made from a statement path holding a `const TableAccess*`.
+    StatusOr<std::uint64_t> CreateCabin(Oid rel_oid, std::uint16_t col_pos,
+                                        std::uint8_t origin = kCabinOriginUser);
+
+    // Removes a Cabin's row. Retires the slot rather than delete-marking it,
+    // for the reason RetirePattern() records: catalog reads have no snapshot
+    // to filter a mark against, so a marked row would still be found by
+    // every lookup here.
+    //
+    // The observed sets are **not** this function's to drop - they live in a
+    // core-local runtime store that the catalog cannot see. The caller drops
+    // them, and dropping them late costs memory and never an answer, because
+    // a set nothing consults is inert. Bumps the catalog version.
+    //
+    // Fails with NotFound when no row carries `cabin_id`.
+    Status DropCabin(std::uint64_t cabin_id);
+
+    // Every sys.cabins row, in page order. The inspection surface behind
+    // `SHOW CABINS`.
+    StatusOr<std::vector<SysCabinRow>> ListCabins();
+
+    // The Cabin on `(rel_oid, col_pos)`. NotFound is the ordinary answer -
+    // most columns have no Cabin - and is never cached, which is exactly
+    // why the *compiler* asks `TableAccess::cabin_mask` instead of calling
+    // this per step (catalog_cache.hpp's absence rule).
+    StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
+
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,

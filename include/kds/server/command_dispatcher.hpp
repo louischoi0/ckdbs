@@ -14,6 +14,7 @@
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/pattern_ddl.hpp"
+#include "kds/exec/cabin_ddl.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/stats/access_stats.hpp"
 #include "kds/stats/trail_recorder.hpp"
@@ -328,6 +329,20 @@ private:
     // verbatim, so the parser has to see exactly what the client sent.
     DispatchOutcome HandleCreatePattern(std::string_view line);
     DispatchOutcome HandleDropPattern(std::string_view line);
+
+    // `CREATE CABIN` / `DROP CABIN` (docs/feat-cabin.md §10). One handler
+    // for both: they share a parse and a reply shape, and differ only in
+    // which catalog call they reach. Takes the whole statement line, like
+    // the pattern handlers, because the parser is what resolves the two
+    // identifiers.
+    DispatchOutcome HandleCabin(std::string_view line);
+
+    // `SHOW CABINS` - every declared Cabin, from the catalog. What it can
+    // report today is the *declaration*: which relation and column, who
+    // declared it, whether it is serving. The observed-value and entry
+    // counts are runtime state living in the core-local store, and are
+    // added to this line when that store is wired in (workplan CB09).
+    DispatchOutcome HandleShowCabins();
     DispatchOutcome HandleInsert(std::string_view line);
     // `analyze` switches the reply from rows to the compiled plan plus
     // the per-step counters the run produced. Everything before that -

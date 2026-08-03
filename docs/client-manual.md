@@ -333,6 +333,77 @@ This is the whole-request counterpart to `bench/bench_main.cpp`, which
 times WAL/page internals in-process with no server, parser or socket; the
 two sets of numbers are not comparable.
 
+`tools/stress_business.py` measures the same server under a **business
+scenario** instead of one statement kind at a time, and reports the number
+an OLTP system is operated on: **committed transactions per second**. It
+builds five relations - `users`, `accounts` (many per user), `assets`,
+`trades` (append-only history), `user_periodic_profit` - and the measured
+transaction is one executed trade, exactly four statements:
+
+```
+INSERT INTO trades ...    the buy leg  (side=0, buyer's account)
+INSERT INTO trades ...    the sell leg (side=1, seller's account)
+UPDATE accounts SET ...   buyer:  balance down, asset_qty up
+UPDATE accounts SET ...   seller: balance up,   asset_qty down
+```
+
+Concurrently, a **separate process** plays the periodic reporting job:
+every wake-up it checks whether a simulated reporting period has passed
+and, if so, reads each sampled user's accounts with `SELECT * FROM
+accounts WHERE user_id = <n>` - a non-pk equality, so a `FilterScan` - and
+appends one `user_periodic_profit` row per user. That is the contention
+the scenario exists to create, and `--no-profit` prices what it costs.
+
+```sh
+python3 tools/stress_business.py --port 15599              # 10K users, 10K assets, 180 days
+python3 tools/stress_business.py --seconds 120 --traders 4 --json out.json
+python3 tools/stress_business.py --no-profit               # traders alone, for the delta
+```
+
+`--days` (default 180) is a **business** span compressed into the
+`--seconds` the run actually takes: a trade's `trade_day` and the reporting
+job's period boundaries both derive from wall-clock progress. Nothing
+sleeps to make that true.
+
+Three properties of today's engine shape everything it prints, and are
+stated in its own footer rather than left for the reader to remember:
+
+- **The four statements are not atomic.** There is no transaction manager
+  and no `BEGIN`/`COMMIT` (`docs/txn.md` is specification, not code), so a
+  failure between them leaves a trade recorded against balances that never
+  moved. Those are counted and reported as `torn`.
+- **Balances are computed client-side**, because `UPDATE ... SET col =
+  <val>` takes a literal and not an expression. Each trader process owns a
+  *disjoint* partition of accounts, which is what makes that safe without
+  locks; `--verify` reads a sample back and compares stored against
+  expected.
+- **Money is `int64` minor units.** `float`/`decimal` columns are refused
+  at `CREATE TABLE`.
+
+Storage is chosen per relation and the choice is part of the measurement:
+`accounts`/`users`/`assets` are `BTREE` because every access is `WHERE id =
+<n>`, and on a heap relation that would be a full chain scan - the update
+number would then be a function of `--users` rather than of the engine.
+`trades` and `user_periodic_profit` are `HEAP`: insert-only, never probed
+by pk, so a tail append is exactly right.
+
+One operational limit worth knowing before the second run: the catalog's
+column page does not chain, so the whole instance holds roughly 62 user
+columns (`docs/keystoneid-invariant.md`), and these five relations spend 27
+of them. A data file survives two runs and refuses the third - the tool
+says so by name rather than passing on the `ERR heap page has no room`
+underneath. There is no `DROP TABLE`; use a scratch data file.
+
+**Put the data file on a real disk.** The tool's footer says so and it is
+not a formality: the same 4-trader configuration measures **1,731 TPS on
+tmpfs and 167 TPS on an xfs root volume** — 10× — because `INSERT` is the
+one logged statement and `fsync` on tmpfs is free. A tmpfs number here is
+not a fast result, it is a different measurement.
+
+Measured numbers and what they mean are in
+`bench/results-business-stress.md`, with the raw JSON under
+`bench/results/`.
+
 Exit code is 0 regardless of whether the server replied `OK`/`PONG` or
 `ERR ...` - the CLI does not interpret the reply, it only fails (exit 1)
 if it cannot connect at all.

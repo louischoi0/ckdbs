@@ -80,6 +80,17 @@ inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
 // reasons apply.
 inline constexpr Oid kSysAccessStatsTable = 130;
 
+// sys.cabins (docs/feat-cabin.md §10): one row per Cabin - a
+// `(relation, non-pk column)` store authoritative for observed values.
+// Fixed-offset typed rows like every catalog relation except
+// sys.pattern_defs, since nothing in the row is variable-width.
+//
+// The Cabin is a catalog object for the reason sys.patterns is: its
+// *existence* is DDL and has to survive a restart. Its observed set does
+// not, and deliberately is not stored here - §9 makes a crash unobserve
+// every Cabin, which is invariant-preserving by C1's own terms.
+inline constexpr Oid kSysCabinsTable = 131;
+
 // Starting point for user-created object oids. **KNOWN GAP:** this counter
 // is in-memory only and resets on every process restart, so two objects
 // created in different runs can share an oid. Persisting it means adding a
@@ -108,6 +119,7 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // cacheable (rows.hpp's note on varheap_page_id).
 inline constexpr PageId kCatalogPagePatternDefs = 10;
 inline constexpr PageId kCatalogPageAccessStats = 11;
+inline constexpr PageId kCatalogPageCabins = 12;
 
 // Transaction id stamped on every bootstrap-time tuple - mirrors
 // PostgreSQL's FrozenTransactionId: bootstrap rows are inserted before a

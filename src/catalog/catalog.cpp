@@ -108,7 +108,7 @@ Status Catalog::Bootstrap() {
         std::string_view name;
         PageId page_id;
     };
-    static constexpr std::array<SysTableBootstrap, 7> kSysTables{{
+    static constexpr std::array<SysTableBootstrap, 8> kSysTables{{
         {kSysTypesTable, "types", kCatalogPageTypes},
         {kSysObjectsTable, "objects", kCatalogPageObjects},
         {kSysColumnsTable, "columns", kCatalogPageColumns},
@@ -124,6 +124,11 @@ Status Catalog::Bootstrap() {
         // unlike sys.pattern_defs, which stores text and therefore had to
         // become a real row-codec relation in phase 5.
         {kSysAccessStatsTable, "access_stats", kCatalogPageAccessStats},
+        // sys.cabins, same shape again: a page and its two catalog rows.
+        // It issues Keystone ids (a Cabin's `cabin_id` comes from this
+        // relation's own `next_id`, like sys.patterns' oid), which is why
+        // it needs the sys.tables row and not just the page.
+        {kSysCabinsTable, "cabins", kCatalogPageCabins},
     }};
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -632,6 +637,29 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     if (!layout.ok()) return layout.status();
     access.layout = std::move(layout.value());
 
+    // The relation's cabins, in **one** sys.cabins scan rather than one per
+    // column. A DDL fact, so it belongs on this entry and dies with it
+    // (schema.hpp says why it is a mask rather than a per-step probe).
+    //
+    // A failure here is not fatal to opening the relation: a Cabin the
+    // compiler cannot see costs the acceleration and never a row, since the
+    // step compiles to the scan it would have compiled to anyway. But an
+    // unreadable catalog page is not something to swallow either, so it is
+    // reported - the relation is opened by the same call that would then
+    // fail on its first read.
+    auto cabins = ListCabins();
+    if (!cabins.ok()) return cabins.status();
+    access.cabin_ids.assign(access.schema.columns.size(), 0);
+    for (const SysCabinRow& cabin : cabins.value()) {
+        if (cabin.rel_oid != oid) continue;
+        if (!IsCabinServing(cabin)) continue;
+        if (cabin.column_no == 0 || cabin.column_no >= access.cabin_ids.size()) continue;
+        access.cabin_ids[cabin.column_no] = cabin.cabin_id;
+        if (cabin.column_no < 64) {
+            access.cabin_mask |= (std::uint64_t{1} << cabin.column_no);
+        }
+    }
+
     return cache_.PutTableAccess(std::move(access));
 }
 
@@ -1053,6 +1081,111 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
     // statistic appearing cannot stale a cached relation, and this runs on
     // the statement path where a cache drop would dangle a held pointer.
     return InsertRow(store_, kCatalogPageAccessStats, row, kBootstrapXid);
+}
+
+StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
+                                              std::uint8_t origin) {
+    if (origin != kCabinOriginAuto && origin != kCabinOriginUser) {
+        return Status::InvalidArgument("catalog: unknown cabin origin");
+    }
+    if (col_pos == 0) {
+        // Not a policy choice and not a limitation: the pk column's Cabin
+        // is the clustered tree, which is already authoritative for every
+        // value rather than for the observed ones (spec section 2).
+        return Status::InvalidArgument(
+            "catalog: the primary-key column needs no cabin - the clustered tree is its cabin");
+    }
+
+    // Through InitTableAccess() rather than the sys.columns scan, because
+    // the column count has to come from the same schema the compiler will
+    // see. A cabin on a column that relation does not have would compile to
+    // nothing and be invisible until someone read the catalog by hand.
+    auto access = InitTableAccess(rel_oid);
+    if (!access.ok()) return access.status();
+    if (col_pos >= access.value()->schema.columns.size()) {
+        return Status::InvalidArgument("catalog: relation oid " + std::to_string(rel_oid) +
+                                       " has no column at position " + std::to_string(col_pos));
+    }
+
+    if (FindCabinOnColumn(rel_oid, col_pos).ok()) {
+        return Status::AlreadyExists("catalog: this column already has a cabin");
+    }
+
+    auto cabin_id = AllocateRowId(kSysCabinsTable);
+    if (!cabin_id.ok()) return cabin_id.status();
+
+    SysCabinRow row{};
+    row.cabin_id = cabin_id.value();
+    row.rel_oid = rel_oid;
+    // Nothing is observed by creating a Cabin: the read path's miss branch
+    // fills it (spec section 4). A count written here would be a claim about
+    // runtime state made by DDL.
+    row.observed_ct = 0;
+    row.column_no = col_pos;
+    row.origin = origin;
+    // Active immediately. kCabinStatusBuilding exists for a phase-2
+    // background build and has no writer while the only way to fill a Cabin
+    // is a statement that was going to scan anyway.
+    row.status = kCabinStatusActive;
+
+    if (Status s = InsertRow(store_, kCatalogPageCabins, row, kBootstrapXid); !s.ok()) {
+        return s;
+    }
+
+    // **Bumped, unlike RegisterPattern().** A pattern appearing stales
+    // nothing cached; a Cabin appearing stales `TableAccess::cabin_mask` on
+    // every held entry for this relation, which is a fact the compiler
+    // reads. That is what makes this DDL and not a statement-path write.
+    BumpVersion("sys.cabins create");
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("catalog", "created cabin " + std::to_string(row.cabin_id) + " on relation oid " +
+                                  std::to_string(rel_oid) + " column " + std::to_string(col_pos));
+    }
+    return row.cabin_id;
+}
+
+Status Catalog::DropCabin(std::uint64_t cabin_id) {
+    auto bytes = store_.Get(kCatalogPageCabins);
+    if (!bytes.ok()) return bytes.status();
+
+    heap::PageView page(bytes.value());
+    const std::uint16_t n = page.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto tuple = page.ReadTuple(i);
+        if (!tuple.ok()) {
+            if (tuple.status().code() == StatusCode::kNotFound) continue;
+            return tuple.status();
+        }
+        auto row = SysCabinRow::Decode(tuple.value().payload);
+        if (!row.ok()) return row.status();
+        if (row.value().cabin_id != cabin_id) continue;
+
+        // Retired, not delete-marked - RetirePattern() states the argument,
+        // and it is the same one: a catalog read has no snapshot to filter a
+        // mark against, so a marked row would still be found by every lookup
+        // and a re-created Cabin would collide with a row nobody can see.
+        if (Status s = page.RetireSlot(i); !s.ok()) return s;
+
+        BumpVersion("sys.cabins drop");
+        if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+            log_->Info("catalog", "dropped cabin " + std::to_string(cabin_id));
+        }
+        return Status::OK();
+    }
+    return Status::NotFound("no sys.cabins row for this cabin_id");
+}
+
+StatusOr<std::vector<SysCabinRow>> Catalog::ListCabins() {
+    return ScanAll<SysCabinRow>(store_, kCatalogPageCabins);
+}
+
+StatusOr<SysCabinRow> Catalog::FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos) {
+    auto rows = ListCabins();
+    if (!rows.ok()) return rows.status();
+    for (const SysCabinRow& row : rows.value()) {
+        if (row.rel_oid == rel_oid && row.column_no == col_pos) return row;
+    }
+    return Status::NotFound("no cabin on this column");
 }
 
 StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {

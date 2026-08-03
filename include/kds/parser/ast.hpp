@@ -360,8 +360,28 @@ struct DropPatternStmt {
     std::uint32_t byte_offset = 0;
 };
 
+// `CREATE CABIN ON <table>(<column>)` / `DROP CABIN ON <table>(<column>)`
+// (docs/feat-cabin.md §10).
+//
+// A Cabin is named by what it is on, never by a name of its own - unlike a
+// pattern, which needs one because its shape is not something a client can
+// point at. `(relation, column)` already identifies a Cabin uniquely (C3
+// keeps v1 to single columns), so a name would be a second identity to keep
+// in step with the first.
+//
+// One struct for both statements: they take the same two identifiers and
+// differ only in which catalog call they reach, so a second struct would be
+// two copies of one grammar.
+struct CabinStmt {
+    std::string table_name;
+    std::string column_name;
+    std::uint32_t byte_offset = 0;         // of the table name
+    std::uint32_t column_byte_offset = 0;  // of the column name
+    bool drop = false;
+};
+
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
-                               CreatePatternStmt, DropPatternStmt>;
+                               CreatePatternStmt, DropPatternStmt, CabinStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

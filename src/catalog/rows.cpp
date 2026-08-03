@@ -231,4 +231,34 @@ StatusOr<SysAccessStatRow> SysAccessStatRow::Decode(std::span<const std::byte> b
     return row;
 }
 
+std::array<std::byte, SysCabinRow::kOnDiskSize> SysCabinRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kCabinIdOffset, &cabin_id, sizeof(cabin_id));
+    std::memcpy(base + kRelOidOffset, &rel_oid, sizeof(rel_oid));
+    std::memcpy(base + kObservedCtOffset, &observed_ct, sizeof(observed_ct));
+    std::memcpy(base + kColumnNoOffset, &column_no, sizeof(column_no));
+    std::memcpy(base + kOriginOffset, &origin, sizeof(origin));
+    std::memcpy(base + kStatusOffset, &status, sizeof(status));
+    return buf;
+}
+
+StatusOr<SysCabinRow> SysCabinRow::Decode(std::span<const std::byte> bytes) {
+    if (Status s = CheckSize(bytes, kOnDiskSize); !s.ok()) return s;
+
+    SysCabinRow row{};
+    const std::byte* base = bytes.data();
+    std::memcpy(&row.cabin_id, base + kCabinIdOffset, sizeof(row.cabin_id));
+    std::memcpy(&row.rel_oid, base + kRelOidOffset, sizeof(row.rel_oid));
+    std::memcpy(&row.observed_ct, base + kObservedCtOffset, sizeof(row.observed_ct));
+    std::memcpy(&row.column_no, base + kColumnNoOffset, sizeof(row.column_no));
+    std::memcpy(&row.origin, base + kOriginOffset, sizeof(row.origin));
+    std::memcpy(&row.status, base + kStatusOffset, sizeof(row.status));
+    // Pure, like its neighbours: whether `origin` and `status` name real
+    // values is the acting layer's question, and `column_no == 0` - a row
+    // claiming a Cabin on the pk - is CreateCabin()'s to refuse, not this
+    // function's to reinterpret.
+    return row;
+}
+
 }  // namespace kds::catalog

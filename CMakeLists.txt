@@ -72,6 +72,7 @@ add_library(kds
     src/exec/catalog_view.cpp
     src/exec/trail_replay.cpp
     src/exec/pattern_ddl.cpp
+    src/exec/cabin_ddl.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/epoll_io_backend.cpp

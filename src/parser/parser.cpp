@@ -546,6 +546,53 @@ StatusOr<DropPatternStmt> Parser::ParseDropPattern() {
     return stmt;
 }
 
+StatusOr<CabinStmt> Parser::ParseCabin(bool drop) {
+    CabinStmt stmt;
+    stmt.drop = drop;
+
+    // `ON` is a reserved keyword (it joins), so it does not arrive as an
+    // identifier and ExpectKeyword cannot be used for it.
+    const Token& on = lexer_.Peek();
+    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) {
+        return Status::InvalidArgument(
+            std::string(drop ? "DROP" : "CREATE") +
+            " CABIN names the column it is on: `... CABIN ON <table>(<column>)` (byte " +
+            std::to_string(on.byte_offset) + ")");
+    }
+    lexer_.Next();
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto table = ParseIdent();
+    if (!table.ok()) return table.status();
+    stmt.table_name = std::move(table.value());
+
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' before the cabin's column"); !s.ok()) {
+        return s;
+    }
+
+    stmt.column_byte_offset = lexer_.Peek().byte_offset;
+    auto column = ParseIdent();
+    if (!column.ok()) return column.status();
+    stmt.column_name = std::move(column.value());
+
+    // **One column, and the refusal is here rather than at the catalog.**
+    // C3 keeps multi-column keys out of v1, and a comma is exactly what an
+    // operator writes when they expect a composite - so it gets an answer
+    // that says which decision it is waiting on, not "expected ')'".
+    if (lexer_.Peek().type == TokenType::kComma) {
+        return Status::Unsupported("a cabin covers one column in v1 (byte " +
+                                    std::to_string(lexer_.Peek().byte_offset) +
+                                    "); multi-column keys are out of scope by C3");
+    }
+
+    if (Status s = ExpectToken(TokenType::kRParen, "')' after the cabin's column"); !s.ok()) {
+        return s;
+    }
+
+    ConsumeOptionalSemicolon();
+    return stmt;
+}
+
 StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ExpectKeyword("INTO"); !s.ok()) return s;
 
@@ -884,23 +931,35 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseCreatePattern();
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "CABIN")) {
+            lexer_.Next();
+            auto s = ParseCabin(/*drop=*/false);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else {
             auto s = ParseCreateTable();
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
         }
     } else if (IEquals(tok.text, "DROP")) {
-        // Only patterns can be dropped. There is no DROP TABLE, and saying
-        // so here beats a syntax error that points at the table name.
+        // Patterns and cabins can be dropped. There is still no DROP TABLE,
+        // and saying so here beats a syntax error that points at the table
+        // name - the list in the message is the whole of what exists.
         const Token& what = lexer_.Peek();
-        if (what.type != TokenType::kIdent || !IEquals(what.text, "PATTERN")) {
-            return Status::Unsupported("only DROP PATTERN is supported (byte " +
+        if (what.type == TokenType::kIdent && IEquals(what.text, "CABIN")) {
+            lexer_.Next();
+            auto s = ParseCabin(/*drop=*/true);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "PATTERN")) {
+            lexer_.Next();
+            auto s = ParseDropPattern();
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        } else {
+            return Status::Unsupported("only DROP PATTERN and DROP CABIN are supported (byte " +
                                         std::to_string(what.byte_offset) + ")");
         }
-        lexer_.Next();
-        auto s = ParseDropPattern();
-        if (!s.ok()) return s.status();
-        stmt = std::move(s.value());
     } else if (IEquals(tok.text, "INSERT")) {
         auto s = ParseInsert();
         if (!s.ok()) return s.status();

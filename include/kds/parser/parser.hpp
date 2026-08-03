@@ -63,6 +63,11 @@ private:
     StatusOr<CreatePatternStmt> ParseCreatePattern();
     StatusOr<DropPatternStmt> ParseDropPattern();
 
+    // `{CREATE | DROP} CABIN ON <table>(<column>)`, with the leading two
+    // words already consumed. One production for both, since they differ
+    // only in `drop` - see CabinStmt (ast.hpp).
+    StatusOr<CabinStmt> ParseCabin(bool drop);
+
     // The two bracketed lists of a declaration, split out only because
     // ParseCreatePattern is otherwise three loops in a row.
     Status ParsePatternParams(CreatePatternStmt& stmt);

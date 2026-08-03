@@ -419,6 +419,105 @@ inline constexpr std::size_t kMaxAccessShapes = 4096;
 // meant "unclassified" or "the first class in some list".
 inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 
+// ---- sys.cabins -------------------------------------------------------
+//
+// One row per Cabin: a per-`(relation, non-pk column)` store that is
+// **authoritative for the values queries have observed** and for nothing
+// else (`docs/feat-cabin.md` §10, C1).
+//
+// What is *in* this row is the whole of what survives a restart, and that
+// is deliberate. §9 makes Cabin pages unlogged-authoritative: the
+// completeness promise holds only while the write hook is live, so a crash
+// declares every Cabin fully unobserved and traffic rebuilds it. So the
+// catalog stores the Cabin's **existence** - which is DDL, and durable -
+// and never its observed set, which is neither.
+//
+// `observed_ct` is the one field that describes runtime state, and it is
+// therefore **best-effort**, in the same sense sys.patterns' `use_count`
+// is: nothing reads it back to make a decision, and a stale value costs an
+// inaccurate `SHOW CABINS` line and never an answer. v1 does not write it
+// at all - the runtime store owns the live count - and it is present so
+// that persisting the sets (phase 2) does not need a row format change,
+// which by the rule above is a format-version event.
+//
+// Field order by descending alignment, so the on-disk offsets and the
+// struct's coincide and every field carries an offsetof assert.
+struct SysCabinRow {
+    // From AllocateRowId(kSysCabinsTable) - the persistent sequence in
+    // sys.cabins' own sys.tables row, for the reason RegisterPattern()
+    // records: GenerateUserOid() restarts at kUserOidStart every boot, and
+    // this row is persisted.
+    std::uint64_t cabin_id;
+
+    Oid rel_oid;
+
+    // Live values, best-effort. See the note above.
+    std::uint64_t observed_ct;
+
+    // The key column's schema position. **Never 0**: the pk's Cabin is the
+    // clustered tree itself (§2), so a 0 here is a row no writer produces.
+    std::uint16_t column_no;
+
+    // kCabinOriginAuto / kCabinOriginUser. Mirrors sys.patterns' origin
+    // axis, and for the same reason: an operator-declared Cabin and one a
+    // future promotion pipeline created have different lifecycle rights.
+    std::uint8_t origin;
+
+    // kCabinStatusActive / kCabinStatusBuilding / kCabinStatusDemoted.
+    std::uint8_t status;
+
+    static constexpr std::size_t kCabinIdOffset = 0;
+    static constexpr std::size_t kRelOidOffset = 8;
+    static constexpr std::size_t kObservedCtOffset = 16;
+    static constexpr std::size_t kColumnNoOffset = 24;
+    static constexpr std::size_t kOriginOffset = 26;
+    static constexpr std::size_t kStatusOffset = 27;
+    static constexpr std::size_t kOnDiskSize = kStatusOffset + sizeof(std::uint8_t);
+
+    std::array<std::byte, kOnDiskSize> Encode() const;
+    static StatusOr<SysCabinRow> Decode(std::span<const std::byte> bytes);
+};
+
+static_assert(offsetof(SysCabinRow, cabin_id) == SysCabinRow::kCabinIdOffset);
+static_assert(offsetof(SysCabinRow, rel_oid) == SysCabinRow::kRelOidOffset);
+static_assert(offsetof(SysCabinRow, observed_ct) == SysCabinRow::kObservedCtOffset);
+static_assert(offsetof(SysCabinRow, column_no) == SysCabinRow::kColumnNoOffset);
+static_assert(offsetof(SysCabinRow, origin) == SysCabinRow::kOriginOffset);
+static_assert(offsetof(SysCabinRow, status) == SysCabinRow::kStatusOffset);
+static_assert(SysCabinRow::kOnDiskSize == 28);
+
+// `origin` and `status`, with **0 reserved for "unset"** in both.
+//
+// The same collision `StoredStatementClass` and `StoredAccessKind` were
+// each taught to avoid: a zeroed or never-written row decodes to 0, so a
+// 0 that also named a real value would make every absent row read as a
+// real one. Here that would be an active user-declared Cabin conjured out
+// of empty page bytes.
+inline constexpr std::uint8_t kCabinOriginUnset = 0;
+inline constexpr std::uint8_t kCabinOriginAuto = 1;
+inline constexpr std::uint8_t kCabinOriginUser = 2;
+
+inline constexpr std::uint8_t kCabinStatusUnset = 0;
+inline constexpr std::uint8_t kCabinStatusActive = 1;
+// Declared but not yet serving: the catalog row exists and the read path
+// must not consult it. No writer produces it in v1 - a Cabin is active the
+// moment it is created, because creating one observes nothing (§4's miss
+// path is what fills it) - and it is named so that a phase-2 background
+// build has a status to occupy rather than inventing one.
+inline constexpr std::uint8_t kCabinStatusBuilding = 2;
+// Kept in the catalog, not served: the §8 budget's answer to a write-hot
+// Cabin whose sets churn faster than they pay. Un-observing is always
+// legal (§1), so demotion is a performance decision and never a
+// correctness one - which is what lets it be a status rather than a drop.
+inline constexpr std::uint8_t kCabinStatusDemoted = 3;
+
+// Whether the read path may serve from this Cabin at all. One test, here,
+// so a status value added later cannot mean "servable" in one caller and
+// "not" in another.
+constexpr bool IsCabinServing(const SysCabinRow& row) noexcept {
+    return row.status == kCabinStatusActive;
+}
+
 // Deepest directory a pattern's waystones can need, and therefore the
 // largest value `dir_depth` may hold.
 //
