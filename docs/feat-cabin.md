@@ -19,6 +19,10 @@ Decisions fixed by this spec:
 - **C5** — observation may extend to **every value of the column**;
   full coverage is permitted, at which point a Cabin converges to a
   lazily built secondary index.
+- **C6** — entries carry a **location hint** (page, epoch, slot)
+  alongside the pk: advisory, reader-verified under the same rules as
+  waystone entries, falling back to pk descent and healed in place on
+  failure. Entry size 24 B.
 
 ---
 
@@ -76,15 +80,22 @@ Two corollaries fall out:
 ```
 Cabin            := (rel_oid, column_no)            — catalog object
 observed set     := { value → entry-set ref }        — the directory
-entry set (v)    := list of Keystone ids             — C2
+entry set (v)    := list of CabinEntry               — C2 + C6
+
+CabinEntry (24 B):
+  pk           u64   — Keystone id            (authoritative tier)
+  page_id      u32   — last-seen heap page    (advisory tier)
+  page_epoch   u32   — heap epoch at write
+  slot         u16
+  flags        u16   — bit 0: kHintValid
+  reserved     u32
 ```
 
-**C2 — pk, not location.** Entries are 40-bit Keystone ids (stored as
-u64 slots `[PROPOSED]`), resolved through the clustered tree at read
-time. Under the adopted issue-once invariant (K1/K2) a stored id is a
+**C2 — authority lives in the pk, never the location.** The pk is
+resolved through the clustered tree when the hint fails; under the
+adopted issue-once invariant (K1/K2) a stored id is a
 **forever-unique, immutable name**: it can dangle, but it can never
-mis-attribute. This buys four things at the cost of one descent per
-served tuple:
+mis-attribute. This buys four things:
 
 1. **Relocation invariance** — the physical optimizer moves pages
    without ever touching a Cabin, exactly as decided for secondary
@@ -98,14 +109,22 @@ served tuple:
    tree (aborted insert, fully purged row) can never resurface under a
    new tuple, so a dangling entry is dead forever and is droppable on
    sight (§5).
-4. **Compactness** — 8 B per tuple makes C5's full-coverage limit
-   affordable: a fully observed Cabin weighs what a secondary index
-   leaf level weighs, not what a data copy weighs.
+4. **Compactness** — 24 B per tuple keeps C5's full-coverage limit
+   affordable (§8).
 
-Speed lost to the extra descent is recovered *advisorily*: waystone-style
-location hints may ride alongside entries `[PROPOSED]`, self-healing
-through the pk when stale. Authority and speed live in different tiers
-on purpose (§7).
+**C6 — the advisory tier on top.** The location hint is waystone-class
+advice riding on cabin-class truth: verified by the reader under the
+**same rules as waystone entries** (shared validation code, not a
+parallel implementation — two verifiers would be where the bugs live):
+fetch hinted page → epoch match → Keystone id at slot equals entry pk →
+then the mandatory MVCC + key re-check of §4. Any failure falls back
+to pk descent — results never change — and the hint is **healed in
+place** after a successful fallback (cheap under core-local
+serialization, and WAL-free in the unlogged class of §9). Hints cost
+nothing to produce: the recording scan and the insert hook both hold
+the location in hand when they write the entry. They also enable a
+serve-time optimization: sorting a value's entries by page_id batches
+same-page tuples into one fetch under the no-pin R1 regime.
 
 ## 4. Read path
 
@@ -117,9 +136,11 @@ fallback**; nothing about the *data* influences the plan.
 At execution, for key value `v`:
 
 1. Probe the observed set (core-local hash over the directory).
-2. **Hit** → serve the entry set authoritatively: resolve each pk via
-   the clustered tree and **verify** — MVCC visibility for this
-   snapshot, plus re-check of the key-column equality — then apply
+2. **Hit** → serve the entry set authoritatively. Per entry: try the
+   location hint first (C6 verification — epoch, then id-at-slot);
+   on hint failure resolve the pk via the clustered tree and heal the
+   hint. Either way, then **verify** — MVCC visibility for this
+   snapshot, plus re-check of the key-column equality — and apply
    remaining residuals. Verification is not an optimization choice: it
    is what licenses the append-only maintenance model of §5 (entry
    sets are supersets; the read does the subtraction). A pk absent
@@ -204,7 +225,7 @@ Distinct trust classes, cooperative operation; none replaces another:
   `…FROM account JOIN trade ON trade.account_id = account.id WHERE
   trade.sym = $sym`, the sym step is served by the Cabin
   (authoritative), the pk join step by probe/trail replay (advisory),
-  and location hints on cabin entries (§3) are waystone-class advice
+  and location hints on cabin entries (C6) are waystone-class advice
   riding on cabin-class truth. Each layer degrades independently:
   hints go stale → pk descent; value evicted → scan; trail evicted →
   descent. Correctness never depends on any of them.
@@ -220,9 +241,9 @@ aggregated summary, and dense verdicts suppress futile recording
 attempts (level-5 columns never materialize per-value sets).
 
 **C5 changes the ceiling, not the policy.** Full observation of a
-column is *permitted*: since entries are pks (C2), a fully observed
-Cabin costs what a secondary index costs — and that is exactly what it
-has become, built lazily, paid for value by value, each increment
+column is *permitted*: with 24 B entries (C6), a fully observed Cabin
+weighs roughly three times a secondary index's leaf level — still far
+from a data copy — and that is functionally what it has become, built lazily, paid for value by value, each increment
 individually evictable. The traditional index is thus the limit case
 of a Cabin, not a competing feature. What C5 does **not** do is make
 full coverage a goal: materialization remains demand-driven, and the
@@ -266,4 +287,6 @@ promotion pipeline (§7). Details deferred to a workplan.
   scheduling belongs to the background-group policy).
 - Promotion thresholds (use_count × cardinality) — belongs to the
   retention/policy spec alongside tracking levels.
-- Entry-set page layout and directory persistence format — workplan.
+- Entry-set page layout details and directory persistence format —
+  workplan (the 24 B CabinEntry of §3 is fixed; its packing into
+  pages is not).
