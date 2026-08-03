@@ -14,6 +14,9 @@
 //   INSERT INTO  <name> VALUES (<val> [, ...]);
 //   SELECT *     FROM   <rel> [<join>]* [WHERE <cond> [AND <cond>]*];
 //   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*];
+//   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
+//       OF <select>;
+//   DROP PATTERN <name>;
 //
 //   <rel>   ::= <name> [AS <alias>]
 //   <join>  ::= JOIN <rel> ON <qcol> = <qcol>
@@ -43,12 +46,36 @@
 
 namespace kds::parser {
 
-enum class ValueType { kInt, kStr, kNull };
+// What sits in a value position.
+//
+// `kParam` is a declared pattern's `$name`
+// (docs/spec-create-pattern-user-defined-patterns-v1.md). It is a value
+// **position** with no value in it: a declaration is not an execution, and
+// nothing ever binds one - a chain compiled from a pattern body exists to be
+// type-checked and fingerprinted, never run. Every path that would consume a
+// value refuses it explicitly (exec/row_codec.cpp, exec/step_vm.cpp) rather
+// than treating it as a missing string.
+enum class ValueType { kInt, kStr, kNull, kParam };
 
 struct AstValue {
     ValueType type = ValueType::kNull;
+
+    // Where the value sits in the statement text. Set for kParam, where an
+    // error message has to be able to point at the offending `$x`; other
+    // kinds may leave it 0.
+    std::uint32_t byte_offset = 0;
+
     std::int64_t int_val = 0;  // valid when type == kInt
-    std::string str_val;       // valid when type == kStr
+
+    // kStr: the string value. **kParam: the parameter's name**, without the
+    // sigil and as written.
+    //
+    // Sharing the field rather than adding one is deliberate. A kParam
+    // carries no string value, so nothing is being overloaded away; and an
+    // AstValue is what a chain frame holds one of per column per relation,
+    // so a field used by one value kind on a path that never executes would
+    // be paid for on every scanned row.
+    std::string str_val;
 
     // For kInt only: the literal's original digit text, preserved
     // alongside int_val. int_val is signed and cannot represent the upper
@@ -56,6 +83,10 @@ struct AstValue {
     // encoding a uint64 column from this raw text rather than from
     // int_val is how that full range survives.
     std::string raw_int_text;
+
+    // The parameter name a kParam value names. Spelled out so no call site
+    // has to know which field it borrows.
+    const std::string& param_name() const noexcept { return str_val; }
 };
 
 // A column as the statement names it: `x` or `a.x`. Deliberately not
@@ -231,7 +262,93 @@ struct UpdateStmt {
     std::vector<Condition> where;         // empty = no WHERE clause; AND-combined
 };
 
-using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt>;
+// ---- CREATE PATTERN / DROP PATTERN ---------------------------------------
+//
+//   CREATE PATTERN <name> ( $p <type> [, ...] ) [WITH (<k> = <v> [, ...])]
+//       OF <select>
+//   DROP PATTERN <name>
+//
+// The clause order is not a style choice. `WITH` comes *before* `OF` and the
+// body comes last, so the body runs to end of statement and the parser never
+// has to find where a SELECT ends - the same trick the ANALYZE prefix uses,
+// wrapping an intact statement rather than reaching inside one.
+
+// One declared parameter: `$flag bool`.
+//
+// The type annotation is **mandatory**. Inferring it from first use was
+// considered and rejected: it would make the declared contract depend on the
+// order predicates are written in, and would leave the CREATE-time type
+// check with nothing stable to check against.
+//
+// `type_name` stays unresolved here, exactly as ColumnDef::type_name does
+// and for the reason this file's header gives - the parser is a syntax
+// layer, and sys.types is the catalog's business.
+struct PatternParam {
+    std::string name;  // without the sigil, as written
+    std::string type_name;
+    std::uint32_t byte_offset = 0;  // of the `$`
+};
+
+// One `WITH` option: `pinned = on`. Both sides stay text; which keys exist
+// and what values they take is validated against the catalog, not here.
+struct PatternOption {
+    std::string key;
+    std::string value;
+    std::uint32_t byte_offset = 0;  // of the key
+};
+
+// One occurrence of a `$param` inside the body, in written order.
+//
+// Recorded separately from the AST the values landed in because the two
+// CREATE-time checks that need them ask set questions - "is every use
+// declared?" and "is every declaration used?" - and answering those by
+// re-walking a compiled chain would miss any occurrence the compiler folded
+// away.
+struct ParamUse {
+    std::string name;
+    std::uint32_t byte_offset = 0;
+};
+
+struct CreatePatternStmt {
+    std::string name;
+    std::uint32_t byte_offset = 0;  // of the pattern name
+
+    std::vector<PatternParam> params;  // may be empty: `()` is legal
+    std::vector<PatternOption> options;
+
+    // The declared body. shared_ptr for the reason Condition::subquery
+    // gives: Statement is copied by value, and unique_ptr would make the
+    // whole AST move-only.
+    std::shared_ptr<SelectStmt> body;
+
+    // **The whole declaration, verbatim** - `CREATE PATTERN` through the
+    // last token of the body - sliced from the input rather than rebuilt
+    // from the AST.
+    //
+    // This is the canon stored in `sys.pattern_defs`. The whole statement
+    // and not just the body, because a fingerprint version bump re-registers
+    // a declared pattern at boot (spec section 7) and that has to restore
+    // the declared types and the `WITH` options too - neither of which is
+    // recoverable from the body alone. It is also why there is no separate
+    // relation for the parameters: this text already carries them.
+    std::string source_text;
+
+    // The body alone, verbatim, sigils included. **This is what gets
+    // fingerprinted** - the declaration's leading clauses are not part of
+    // the shape any live statement has, so hashing them would guarantee the
+    // pattern matched nothing (spec section 3.2).
+    std::string body_text;
+
+    std::vector<ParamUse> param_uses;
+};
+
+struct DropPatternStmt {
+    std::string name;
+    std::uint32_t byte_offset = 0;
+};
+
+using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
+                               CreatePatternStmt, DropPatternStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

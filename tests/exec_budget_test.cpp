@@ -194,7 +194,7 @@ TEST_F(ExecBudgetTest, ARunawayCorrelatedScanFailsInsteadOfRunningToCompletion) 
     auto full = TryRun(sql, Budget(kUnlimitedRowTouchBudget), &unbounded);
     ASSERT_TRUE(full.ok()) << full.status().message();
     EXPECT_EQ(full.value().size(), 40u);
-    EXPECT_EQ(unbounded.correlated_scans, 40u)
+    EXPECT_EQ(unbounded.Total().correlated_scans, 40u)
         << "one inner walk per outer row - the counter that names the shape";
 
     // 860, and the exact number is worth pinning because it is not the
@@ -204,7 +204,7 @@ TEST_F(ExecBudgetTest, ARunawayCorrelatedScanFailsInsteadOfRunningToCompletion) 
     // work here even while the shape stays quadratic in the worst case -
     // which is exactly why the budget bounds the shape rather than
     // trusting the average.
-    EXPECT_EQ(unbounded.rows_examined, 860u);
+    EXPECT_EQ(unbounded.Total().rows_examined, 860u);
 
     // Bounded well below that, it is refused rather than run.
     ExecStats bounded;
@@ -213,8 +213,8 @@ TEST_F(ExecBudgetTest, ARunawayCorrelatedScanFailsInsteadOfRunningToCompletion) 
     EXPECT_EQ(capped.status().code(), StatusCode::kResourceExhausted);
     // And it stopped near the ceiling rather than after doing the work: a
     // budget checked only at the end would bound nothing.
-    EXPECT_LE(bounded.rows_examined, 110u)
-        << "the statement kept reading past its budget: " << bounded.rows_examined;
+    EXPECT_LE(bounded.Total().rows_examined, 110u)
+        << "the statement kept reading past its budget: " << bounded.Total().rows_examined;
 }
 
 TEST_F(ExecBudgetTest, TheBudgetIsPerStatementNotPerChain) {
@@ -303,9 +303,9 @@ TEST_F(ExecBudgetTest, ResultsAreIdenticalWithTheMemoHittingAndMissing) {
     ASSERT_TRUE(alternating.ok()) << alternating.status().message();
 
     // The memo did its job on one and not the other...
-    EXPECT_GT(clustered_stats.probe_memo_hits, 0u)
+    EXPECT_GT(clustered_stats.Total().probe_memo_hits, 0u)
         << "consecutive repeated keys should hit the memo";
-    EXPECT_EQ(alternating_stats.probe_memo_hits, 0u)
+    EXPECT_EQ(alternating_stats.Total().probe_memo_hits, 0u)
         << "a key that changes every row cannot hit a one-entry memo";
 
     // ...and the answers are the same multiset either way. Sorted, because
@@ -319,6 +319,41 @@ TEST_F(ExecBudgetTest, ResultsAreIdenticalWithTheMemoHittingAndMissing) {
     std::sort(a.begin(), a.end());
     std::sort(b.begin(), b.end());
     EXPECT_EQ(a, b) << "the memo changed the answer";
+}
+
+TEST_F(ExecBudgetTest, TheMemoIsPerStepAndNeverServesOneRelationsLocationToAnother) {
+    // A regression, and the bug it pins was a silent wrong-row one.
+    //
+    // A ChainRunner owns *one* memo but runs every step of its chain
+    // through it. Keyed on the probe key alone, a chain with two
+    // pk-descending steps whose keys coincide served the second step the
+    // first relation's cached (page, slot) - and the row was then decoded
+    // with the wrong relation's schema. Different row widths gave a
+    // Corruption error; **equal widths returned a row from the wrong
+    // table with no error at all**, which is the case this test is shaped
+    // to catch.
+    //
+    // Both relations below are deliberately the same width - two int64
+    // columns - so a leaked location decodes cleanly into a plausible,
+    // wrong answer.
+    Create("CREATE TABLE lhs (id int64, other_id int64) BTREE");
+    Create("CREATE TABLE rhs (id int64, marker int64) BTREE");
+
+    // rhs.id 1..4 with markers 1000+i, so a row from rhs is unmistakable.
+    for (int i = 1; i <= 4; ++i) Insert("rhs", {Int(1000 + i)});
+    // lhs row 2 points at rhs row 2: the step-0 lookup key and the step-1
+    // probe key are then *both* 2, which is exactly the coincidence.
+    for (int i = 1; i <= 4; ++i) Insert("lhs", {Int(i)});
+
+    auto rows = TryRun("SELECT r.marker FROM lhs AS l JOIN rhs AS r ON l.other_id = r.id "
+                       "WHERE l.id = 2",
+                       Budget());
+    ASSERT_TRUE(rows.ok()) << rows.status().message();
+    ASSERT_EQ(rows.value().size(), 1u);
+    // 1002 is rhs row 2's marker. Before the fix this read lhs row 2 - the
+    // memo's cached location - and projected its second column, 2.
+    EXPECT_EQ(rows.value()[0], "1002")
+        << "the probe returned a row from the driving relation, not the probed one";
 }
 
 TEST_F(ExecBudgetTest, AMemoHitReturnsTheSameRowAFreshDescentWould) {
@@ -343,7 +378,7 @@ TEST_F(ExecBudgetTest, AMemoHitReturnsTheSameRowAFreshDescentWould) {
     EXPECT_EQ(first.value().size(), 4u);
     // Every child row carries the same key, so all but the first descent
     // is a memo hit.
-    EXPECT_EQ(stats.probe_memo_hits, 3u);
+    EXPECT_EQ(stats.Total().probe_memo_hits, 3u);
     for (const std::string& row : first.value()) {
         EXPECT_NE(row.find("label1"), std::string::npos)
             << "id 2 is the second row inserted, whose label is label1: " << row;
@@ -365,7 +400,7 @@ TEST_F(ExecBudgetTest, TheMemoDoesNotFireOnAHeapRelation) {
                        Budget(), &stats);
     ASSERT_TRUE(rows.ok()) << rows.status().message();
     EXPECT_EQ(rows.value().size(), 4u);
-    EXPECT_EQ(stats.probe_memo_hits, 0u);
+    EXPECT_EQ(stats.Total().probe_memo_hits, 0u);
 }
 
 // ---- The meters -----------------------------------------------------------
@@ -384,7 +419,7 @@ TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
                        "(SELECT i2.id FROM i2 WHERE i2.tag = o2.tag)",
                        Budget(), &scanning)
                     .ok());
-    EXPECT_EQ(scanning.correlated_scans, 5u);
+    EXPECT_EQ(scanning.Total().correlated_scans, 5u);
 
     // Correlated on the pk: the inner step is a Probe, so it is not a
     // correlated *scan* and is not counted. That distinction is the point
@@ -394,7 +429,7 @@ TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
                        "(SELECT i2.id FROM i2 WHERE i2.id = o2.tag)",
                        Budget(), &probing)
                     .ok());
-    EXPECT_EQ(probing.correlated_scans, 0u);
+    EXPECT_EQ(probing.Total().correlated_scans, 0u);
 }
 
 }  // namespace

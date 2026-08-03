@@ -285,9 +285,9 @@ TEST_F(ExecSubqueryTest, AFalseUncorrelatedExistsOpensZeroPagesOfTheOuterRelatio
 
     // One open: the sub-chain's own relation. The outer relation is never
     // reached, so no row of it is ever examined.
-    EXPECT_EQ(stats.sub_chain_runs, 1u);
-    EXPECT_EQ(stats.relation_opens, 1u) << "the outer relation must not have been opened";
-    EXPECT_EQ(stats.rows_examined, 2u) << "only the sub-chain's own rows";
+    EXPECT_EQ(stats.Total().sub_chain_runs, 1u);
+    EXPECT_EQ(stats.Total().relation_opens, 1u) << "the outer relation must not have been opened";
+    EXPECT_EQ(stats.Total().rows_examined, 2u) << "only the sub-chain's own rows";
 }
 
 TEST_F(ExecSubqueryTest, AnUncorrelatedExistsRunsOnceNotOncePerOuterRow) {
@@ -297,7 +297,7 @@ TEST_F(ExecSubqueryTest, AnUncorrelatedExistsRunsOnceNotOncePerOuterRow) {
     EXPECT_EQ(Run("SELECT acct.name FROM acct WHERE EXISTS (SELECT trade.id FROM trade)", &stats)
                   .size(),
               3u);
-    EXPECT_EQ(stats.sub_chain_runs, 1u);
+    EXPECT_EQ(stats.Total().sub_chain_runs, 1u);
 }
 
 TEST_F(ExecSubqueryTest, ACorrelatedExistsRunsOncePerSurvivingOuterRow) {
@@ -305,7 +305,7 @@ TEST_F(ExecSubqueryTest, ACorrelatedExistsRunsOncePerSurvivingOuterRow) {
     Run("SELECT acct.name FROM acct WHERE EXISTS "
         "(SELECT trade.id FROM trade WHERE trade.acct_id = acct.id)",
         &stats);
-    EXPECT_EQ(stats.sub_chain_runs, 3u) << "one per outer row, which is what correlation costs";
+    EXPECT_EQ(stats.Total().sub_chain_runs, 3u) << "one per outer row, which is what correlation costs";
 }
 
 TEST_F(ExecSubqueryTest, ACheapPredicateRejectsBeforeTheSubqueryIsPaidFor) {
@@ -317,7 +317,7 @@ TEST_F(ExecSubqueryTest, ACheapPredicateRejectsBeforeTheSubqueryIsPaidFor) {
                   "(SELECT trade.id FROM trade WHERE trade.acct_id = acct.id)",
                   &stats),
               (std::vector<std::string>{}));
-    EXPECT_EQ(stats.sub_chain_runs, 1u) << "only bob survived `tier = silver`";
+    EXPECT_EQ(stats.Total().sub_chain_runs, 1u) << "only bob survived `tier = silver`";
 }
 
 TEST_F(ExecSubqueryTest, ExistsShortCircuitsAtTheFirstQualifyingRow) {
@@ -332,7 +332,7 @@ TEST_F(ExecSubqueryTest, ExistsShortCircuitsAtTheFirstQualifyingRow) {
                   .size(),
               3u);
     // 1 from the sub-chain (it stopped) + 3 outer rows.
-    EXPECT_EQ(stats.rows_examined, 4u)
+    EXPECT_EQ(stats.Total().rows_examined, 4u)
         << "EXISTS read more than one row of a relation where the first already qualified";
 }
 

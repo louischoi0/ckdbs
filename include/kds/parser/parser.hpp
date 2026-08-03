@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "kds/base/status.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/parser/lexer.hpp"
 
 // Recursive-descent parser for the KDS SQL subset; ast.hpp documents the
@@ -22,7 +24,7 @@ namespace kds::parser {
 
 class Parser {
 public:
-    explicit Parser(std::string_view sql) noexcept : lexer_(sql) {}
+    explicit Parser(std::string_view sql) noexcept : sql_(sql), lexer_(sql) {}
 
     // Parses exactly one statement from the input given at construction.
     // Fails with InvalidArgument (message describes the syntax error) if
@@ -31,10 +33,40 @@ public:
     // statement: only EOF may follow one.
     StatusOr<Statement> Parse();
 
+    // The statement's fingerprint, computed **during** the parse rather than
+    // by a second pass over the text (lexer.hpp).
+    //
+    // **Valid exactly when the lexer reached end of input**, which a
+    // successful `Parse()` always does - it checks that only EOF follows a
+    // complete statement - and a failed one sometimes does, when it failed
+    // *because* the input ran out. Both of those are honest: the accumulator
+    // saw the whole token stream, so its hash is the whole statement's.
+    //
+    // A parse that stopped in the middle - trailing garbage, an unexpected
+    // token with more text behind it - saw a prefix, and a hash of a prefix
+    // is not a prefix of a hash. That answers nullopt rather than something
+    // plausible. A caller that needs a fingerprint for text like that wants
+    // `FingerprintOf()`, which lexes it independently to the end.
+    //
+    // nullopt is also the ordinary answer for a statement that simply has
+    // no pattern - `CREATE TABLE`, `SHOW`, anything whose leading word is
+    // not SELECT/INSERT/UPDATE - which is not an error and never was.
+    std::optional<Fingerprint> fingerprint() const noexcept { return lexer_.fingerprint(); }
+
 private:
     StatusOr<CreateTableStmt> ParseCreateTable();
     StatusOr<InsertStmt> ParseInsert();
     StatusOr<UpdateStmt> ParseUpdate();
+
+    // `CREATE PATTERN <name> (<params>) [WITH (...)] OF <select>`. The
+    // leading `CREATE PATTERN` is already consumed.
+    StatusOr<CreatePatternStmt> ParseCreatePattern();
+    StatusOr<DropPatternStmt> ParseDropPattern();
+
+    // The two bracketed lists of a declaration, split out only because
+    // ParseCreatePattern is otherwise three loops in a row.
+    Status ParsePatternParams(CreatePatternStmt& stmt);
+    Status ParsePatternOptions(CreatePatternStmt& stmt);
 
     // `depth` is how many query blocks enclose this one: 0 at the top
     // level, +1 per predicate-position subquery. Carried as a parameter
@@ -73,7 +105,22 @@ private:
     Status ExpectToken(TokenType type, std::string_view desc);
     void ConsumeOptionalSemicolon();
 
+    // The statement text as handed in, kept so a declaration's body can be
+    // sliced out of it verbatim (ast.hpp explains why verbatim matters).
+    // Non-owning: a Parser does not outlive the string it was given.
+    std::string_view sql_;
+
     Lexer lexer_;
+
+    // Where a `$param` is legal, and where its occurrences are recorded.
+    //
+    // Non-null for exactly the span of a CREATE PATTERN body and null
+    // everywhere else, which is how spec section 3.1 is enforced: the token
+    // exists and fingerprints, but no other production accepts it. A
+    // pointer rather than a bool because the two facts are one - a `$x` is
+    // legal precisely where there is a declaration to record it against -
+    // and splitting them is how they come to disagree.
+    std::vector<ParamUse>* param_uses_ = nullptr;
 };
 
 // Convenience free function: Parser(sql).Parse().

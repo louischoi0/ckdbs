@@ -136,6 +136,14 @@ public:
     void UpdatePatternWaystone(std::uint64_t pattern_id, PageId root,
                                std::uint8_t depth) noexcept;
 
+    // The same in-place update for a pattern's lifecycle policy, when
+    // CREATE PATTERN adopts an auto-registered row. Identical argument, and
+    // the same no-op on a miss: origin and pinning belong to one pattern
+    // and are read by nothing else, so a global drop would dangle every
+    // other held pointer for nothing.
+    void UpdatePatternOrigin(std::uint64_t pattern_id, std::uint8_t origin,
+                             std::uint16_t flags) noexcept;
+
     // ---- sys.types (bootstrap-immutable) --------------------------------
 
     // nullptr means "not loaded yet, scan the page"; a non-null empty

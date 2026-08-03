@@ -15,3 +15,4 @@ kds.conf
 # Editor and interpreter droppings.
 *.sw[po]
 __pycache__/
+kds_server

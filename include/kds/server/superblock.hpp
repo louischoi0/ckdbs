@@ -52,7 +52,20 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // no compatibility window while the format is still moving: Decode() refuses
 // anything but this exact number, so a stale data file fails loudly at mount
 // instead of being misparsed. Bump it with every layout change.
-inline constexpr std::uint32_t kSuperBlockVersion = 4;
+// 4 -> 5: the var-heap added `varheap_page_id` to SysTableRow, which grew
+// that row's on-disk size. Nothing in the *superblock* changed, but a
+// catalog row format change is exactly as breaking, and without a bump a
+// pre-var-heap database mounted happily and then failed on its first
+// catalog read with an opaque size mismatch. A format version is what
+// makes that a refusal at the door instead.
+// 5 -> 6: CREATE PATTERN, twice over. `SysPatternRow` grew `flags` and
+// `origin` (38 -> 41 bytes), and bootstrap gained a seventh system relation,
+// `sys.pattern_defs`, on a fixed page id a pre-existing file does not have.
+// Either alone is the same breakage as the 4 -> 5 case; the second is worse,
+// because the missing relation is not a size mismatch anyone would recognize
+// - the first CREATE PATTERN would simply fail to find a table that every
+// build after this one creates at bootstrap.
+inline constexpr std::uint32_t kSuperBlockVersion = 6;
 
 // ---- On-disk field layout ----------------------------------------------
 

@@ -324,6 +324,14 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     for (std::size_t i = 0; i < scope.relations.size(); ++i) {
         chain.steps[i].step_id = next_step_id++;
         chain.steps[i].rel_oid = scope.relations[i].access->oid;
+        // Display only - see Step::rel_name. The written table name, plus
+        // the alias when one was given, because a plan naming only the
+        // alias cannot be matched back to a table and one naming only the
+        // table cannot be matched back to the ON clause.
+        chain.steps[i].rel_name = refs[i]->table_name;
+        if (scope.relations[i].binding != refs[i]->table_name) {
+            chain.steps[i].rel_name += " AS " + scope.relations[i].binding;
+        }
         chain.steps[i].kind = AccessKind::kScan;  // upgraded below, never down
     }
 
@@ -493,13 +501,22 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             }
 
             if (candidate->kind == OperandKind::kLiteral) {
+                // A declared pattern's `$param` is pk-eligible, and it has
+                // to be. The access kind *is* Waystone's trust model
+                // (step_chain.hpp), so a `WHERE id = $x` body that compiled
+                // to kScan would be reported as un-replayable at CREATE
+                // PATTERN - a warning about precisely the shape declaring a
+                // pattern exists to make replayable. A param stands for an
+                // integer the traffic will supply, so it is treated as one
+                // here; the chain still never executes.
+                const bool param = candidate->literal.type == parser::ValueType::kParam;
                 // A negative literal cannot be a pk: ids are zero-extended
                 // 40-bit values (invariant 7), so this equality can never
                 // hold. Left as a scan with the residual intact, which
                 // returns the correct empty answer rather than probing an
                 // enormous unsigned key.
-                if (candidate->literal.type != parser::ValueType::kInt ||
-                    candidate->literal.int_val < 0) {
+                if (!param && (candidate->literal.type != parser::ValueType::kInt ||
+                               candidate->literal.int_val < 0)) {
                     continue;
                 }
                 step.kind = AccessKind::kLookup;

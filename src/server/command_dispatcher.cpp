@@ -1,5 +1,8 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include "kds/stats/pattern_defs.hpp"
+#include "kds/stats/trail_store.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -135,6 +138,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
     }
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
+        if (IEquals(sub, "PATTERN")) {
+            return HandleCreatePattern(Trim(line));
+        }
         if (IEquals(sub, "TABLE")) {
             // Disambiguate the bare-name form ("CREATE TABLE foo")
             // from the SQL form ("CREATE TABLE foo (col type, ...)"): the
@@ -149,11 +155,36 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         }
         return {"ERR unknown CREATE target", false};
     }
+    if (IEquals(cmd, "DROP")) {
+        auto [sub, sub_rest] = SplitFirstToken(rest);
+        // Only patterns can be dropped - there is no DROP TABLE, and the
+        // catalog is append-only apart from this one path. Routed by name so
+        // `DROP TABLE t` gets the parser's truthful refusal with a position
+        // rather than "unknown DROP target".
+        if (IEquals(sub, "PATTERN")) {
+            return HandleDropPattern(Trim(line));
+        }
+        return {"ERR only DROP PATTERN is supported", false};
+    }
     if (IEquals(cmd, "INSERT")) {
         return HandleInsert(Trim(line));
     }
     if (IEquals(cmd, "SELECT")) {
         return HandleSelect(Trim(line));
+    }
+    // ANALYZE is a dispatcher prefix, not a parser keyword: it is stripped
+    // here and the remainder goes down the ordinary SELECT path with stats
+    // collection on. Two consequences are the reason it is done this way.
+    // The run being described is the run that actually happened - same
+    // parse, same compile, same executor - and the statement text every
+    // layer below sees is the *stripped* text, so a fingerprint (and the
+    // sys.patterns row and Waystone trail keyed on it) is identical
+    // whether or not a client typed ANALYZE.
+    if (IEquals(cmd, "ANALYZE")) {
+        if (rest.empty()) {
+            return {"ERR ANALYZE needs a statement to analyze", false};
+        }
+        return HandleSelect(rest, /*analyze=*/true);
     }
     if (IEquals(cmd, "UPDATE")) {
         return HandleUpdate(Trim(line));
@@ -212,6 +243,19 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         return {"ERR " + rows.status().message(), false};
     }
 
+    // The declarations, joined in by pattern_id so a declared pattern
+    // prints its name instead of a bare hash. Read once for the whole
+    // listing rather than probed per row: the join is over tens of rows on
+    // an inspection path, and a probe per pattern would rescan the relation
+    // once per pattern.
+    //
+    // An auto-registered pattern has no definition and keeps printing as
+    // hex - deliberately, since it has no name to print.
+    auto defs = stats::ListPatternDefs(catalog_, page_store_);
+    if (!defs.ok()) {
+        return {"ERR " + defs.status().message(), false};
+    }
+
     // Same one-line-per-response contract as DESCRIBE and SHOW PAGE: a
     // count line, then one "\n"-escaped section per pattern, never a raw
     // newline byte.
@@ -223,7 +267,19 @@ DispatchOutcome CommandDispatcher::HandleShowPatterns() {
         // 64-bit fingerprint is 20 unreadable digits, and the thing an
         // operator does with this value is compare it to another one.
         os << "\\n" << "pattern_id=0x" << std::hex << row.pattern_id << std::dec
-           << " oid=" << row.oid
+           << " oid=" << row.oid;
+
+        for (const stats::PatternDef& def : defs.value()) {
+            if (def.pattern_id != row.pattern_id) continue;
+            os << " name=" << def.name << " params=" << def.param_count;
+            break;
+        }
+
+        // Origin and pinning are separate fields and are printed separately:
+        // an auto pattern can be pinned and a declared one can be unpinned,
+        // and collapsing them into one word would make both unreadable.
+        os << " origin=" << (row.origin == catalog::kOriginUser ? "user" : "auto")
+           << " pinned=" << ((row.flags & catalog::kPatternPinned) != 0 ? "yes" : "no")
            << " class=" << static_cast<int>(row.stmt_class)
            << " uses=" << row.use_count
            << " last_seen=" << row.last_seen
@@ -447,6 +503,69 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
            << " autoincrement=" << (is_pk ? "yes" : "no");
     }
 
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleCreatePattern(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::CreatePatternStmt>(parsed.value())) {
+        return {"ERR expected a CREATE PATTERN statement", false};
+    }
+    const auto& stmt = std::get<parser::CreatePatternStmt>(parsed.value());
+
+    auto result = exec::CreatePattern(catalog_, page_store_, stmt);
+    if (!result.ok()) {
+        return {"ERR " + result.status().message(), false};
+    }
+
+    std::ostringstream os;
+    // The pattern_id in hex, because that is what ANALYZE prints for a
+    // matching statement - which makes "I declared it, why doesn't traffic
+    // match" answerable by comparing two numbers rather than by guessing.
+    os << (result.value().adopted ? "ADOPTED PATTERN" : "CREATED PATTERN")
+       << " name=" << stmt.name << " pattern_id=0x" << std::hex << result.value().pattern_id
+       << std::dec << " dir_depth=" << static_cast<int>(result.value().dir_depth)
+       << " params=" << result.value().param_count;
+
+    // Warnings ride the success response as "\n"-escaped sections, the same
+    // one-line-per-reply contract every other multi-part response here uses:
+    // the declaration succeeded, and a one-line protocol has no side channel
+    // to put a caveat in.
+    for (const std::string& warning : result.value().warnings) {
+        os << "\\n" << "WARN " << warning;
+    }
+
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "declared pattern '" + stmt.name + "'" +
+                              (result.value().adopted ? " (adopted an auto row)" : ""));
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::DropPatternStmt>(parsed.value())) {
+        return {"ERR expected a DROP PATTERN statement", false};
+    }
+    const auto& stmt = std::get<parser::DropPatternStmt>(parsed.value());
+
+    auto pattern_id = exec::DropPattern(catalog_, page_store_, stmt.name);
+    if (!pattern_id.ok()) {
+        return {"ERR " + pattern_id.status().message(), false};
+    }
+
+    std::ostringstream os;
+    os << "DROPPED PATTERN name=" << stmt.name << " pattern_id=0x" << std::hex
+       << pattern_id.value() << std::dec;
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "dropped pattern '" + stmt.name + "'");
+    }
     return {os.str(), false};
 }
 
@@ -956,8 +1075,90 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
-    auto parsed = parser::Parse(line);
+namespace {
+
+// Re-emits multi-line text under the dispatcher's one-line wire contract:
+// sections are joined with the literal two-character "\n" escape, never a
+// raw newline byte (docs/client-manual.md section 2). The plan printer
+// produces ordinary newlines because the same text goes to a test's
+// assertion unescaped; the escaping belongs here, at the wire.
+void AppendEscaped(std::ostringstream& os, const std::string& text) {
+    for (char c : text) {
+        if (c == '\n') {
+            os << "\\n";
+        } else {
+            os << c;
+        }
+    }
+}
+
+}  // namespace
+
+// Executes `chain` for its counters rather than its rows, and reports the
+// plan beside them.
+//
+// The sink accepts every row and formats none: the *executor* does exactly
+// what a real run does - same steps, same descents, same decodes - and only
+// the dispatcher's own row formatting is skipped, because the reply is the
+// plan. Anything more clever here (stopping early, skipping the sink) would
+// make ANALYZE describe a run that never happened.
+DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
+                                              exec::TrailCollector* trail,
+                                              const exec::TrailReplay* replay,
+                                              const std::optional<stats::InstanceKey>& instance) {
+    exec::ExecStats stats;
+    std::uint64_t rows = 0;
+
+    Status ran = exec::Execute(
+        catalog_, page_store_, chain,
+        [&](const exec::ChainFrame&) -> StatusOr<storage::VisitControl> {
+            ++rows;
+            return storage::VisitControl::kContinue;
+        },
+        &stats, budget_, trail, replay);
+    if (!ran.ok()) {
+        return {"ERR " + ran.message(), false};
+    }
+    RecordTrail(instance, trail, chain);
+
+    const exec::StepStats total = stats.Total();
+    std::ostringstream os;
+    os << "analyze rows=" << rows << " class=" << exec::StatementClassName(chain.klass)
+       << " steps=" << chain.steps.size() << " examined=" << total.rows_examined
+       << " opens=" << total.relation_opens;
+
+    // The statement's own pattern_id, in the same hex CREATE PATTERN
+    // returns. This is what closes the "I declared it, why doesn't traffic
+    // match" loop: an operator compares the number here against the one the
+    // declaration printed, and equality *is* the answer - no trail recorder
+    // has to exist for that comparison to be meaningful.
+    //
+    // Taken from the instance the caller already identified - which came
+    // from the parse, not from a second lex of `sql`.
+    if (instance.has_value()) {
+        os << " pattern_id=0x" << std::hex << instance->pattern_id << std::dec;
+    }
+
+    os << "\\n";
+    AppendEscaped(os, exec::FormatPlan(chain));
+
+    const std::string per_step = exec::FormatStepStats(chain, stats);
+    if (!per_step.empty()) {
+        os << "\\n";
+        AppendEscaped(os, per_step);
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, bool analyze) {
+    // An explicit Parser rather than the free `Parse()`, so the statement's
+    // fingerprint can be taken **from the parse itself** (parser.hpp). It
+    // used to come from `FingerprintOf`, which lexed the text a second time -
+    // measured at ~13% of a point join's latency, three times what the
+    // recording it was for actually cost, and the whole of replay's B+ tree
+    // regression (bench/results-waystone-v2.md).
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
     }
@@ -989,6 +1190,12 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
             if (!join.relation.schema.empty()) any_join_is_view = true;
         }
         if (from_is_view || any_join_is_view) {
+            if (analyze) {
+                return {"ERR a catalog view has no plan to analyze: sys.* rows are produced by "
+                        "the catalog's readers rather than read from pages, so nothing compiles "
+                        "to a step chain",
+                        false};
+            }
             if (!stmt.joins.empty()) {
                 return {"ERR a catalog view cannot be joined: sys.* rows are produced by the "
                         "catalog's readers rather than read from pages, so there is no "
@@ -1045,6 +1252,73 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
     // the grammar admits only for a single relation (V06).
     const exec::StepChain& compiled = chain.value();
 
+    // ---- Waystone: the instance, taken from the parse -------------------
+    //
+    // Free now: the lexer accumulated it while the parser walked the tokens
+    // (lexer.hpp), so identifying the statement costs nothing beyond the
+    // parse that had to happen anyway.
+    //
+    // **The guard is the chain's own shape.** A chain with no lookup/probe
+    // step can neither record nor replay - invariant 9 forbids a trail
+    // replacing a search - so a scan-only statement skips the catalog
+    // lookup and the trail read entirely.
+    const bool waystone_usable =
+        (recorder_ != nullptr || replay_enabled_) && exec::HasReplayableStep(compiled);
+
+    std::optional<stats::InstanceKey> instance;
+    if (waystone_usable) {
+        if (auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
+            instance = stats::InstanceKey{fingerprint->pattern_id, fingerprint->arg_hash};
+        }
+    }
+
+    // The trail a previous execution of this instance recorded. Read once,
+    // indexed once, consulted per keyed step.
+    //
+    // The index is a dispatcher member, reused rather than rebuilt: it is
+    // the only allocation on the replay path, and one malloc per SELECT for
+    // what is usually one or two entries is the same cost the collector
+    // already had to be hoisted to avoid.
+    replay_scratch_.Clear();
+    const exec::TrailReplay* replay_ptr = nullptr;
+    if (replay_enabled_ && instance.has_value()) {
+        // Served from the catalog cache, so a pattern nobody has recorded
+        // costs a hash lookup and stops here. `has_waystone_directory()` is
+        // the authority on whether there is anything to walk (rows.hpp).
+        if (auto pattern = catalog_.FindPattern(instance->pattern_id);
+            pattern.ok() && pattern.value()->has_waystone_directory()) {
+            auto entries = stats::ReadTrail(page_store_, pattern.value()->waystone_root,
+                                            pattern.value()->dir_depth, *instance);
+            // A trail that cannot be read is a trail that does not exist:
+            // the statement descends, exactly as it did before there were
+            // trails at all (invariant 8).
+            if (entries.ok() && !entries.value().empty()) {
+                replay_scratch_.Build(compiled, entries.value());
+                if (!replay_scratch_.empty()) replay_ptr = &replay_scratch_;
+            }
+        }
+    }
+
+    // The trail this execution leaves, if anything is recording.
+    //
+    // **Reused, not constructed per statement.** A collector reserves room
+    // for a whole trail (253 x 32 bytes), so building one per SELECT is an
+    // 8 KB malloc on the read path - which measured as most of an 18%
+    // regression on a point join before this was hoisted onto the
+    // dispatcher. Clear() keeps the reservation.
+    exec::TrailCollector* trail = nullptr;
+    if (recorder_ != nullptr && instance.has_value()) {
+        trail_scratch_.Clear();
+        trail = &trail_scratch_;
+    }
+
+    // ANALYZE runs everything above, deliberately. Its whole contract is
+    // that the run it describes is the run that actually happened - same
+    // parse, same compile, same executor - and a diagnostic that skipped
+    // replay would report descents a real execution does not perform, which
+    // is the one thing it must not do.
+    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance);
+
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -1068,10 +1342,16 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
             }
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_);
+        /*stats=*/nullptr, budget_, trail, replay_ptr);
     if (!ran.ok()) {
+        // **No trail on the failure path.** A statement that errored part
+        // way through touched some tuples and then stopped; a trail
+        // describing that is a trail describing a state no reader should
+        // ever be pointed at (workplan P10).
         return {"ERR " + ran.message(), false};
     }
+
+    RecordTrail(instance, trail, compiled);
 
     if (logging(LogLevel::kTrace)) {
         log_->Trace("query", "chain of " + std::to_string(compiled.steps.size()) +
@@ -1079,6 +1359,18 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line) {
                                  std::to_string(static_cast<int>(compiled.klass)));
     }
     return {os.str(), false};
+}
+
+void CommandDispatcher::RecordTrail(const std::optional<stats::InstanceKey>& instance,
+                                     exec::TrailCollector* trail,
+                                     const exec::StepChain& chain) {
+    // Never on the failure path - both callers reach here only after the
+    // execution succeeded - and only when something was actually located: a
+    // collector that gathered nothing describes no trail, and writing an
+    // empty one would replace a populated trail with nothing.
+    if (recorder_ == nullptr || trail == nullptr || trail->empty()) return;
+    if (!instance.has_value()) return;
+    recorder_->OnPatternResult(*instance, *trail, exec::StoredStatementClass(chain.klass));
 }
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {

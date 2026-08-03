@@ -46,7 +46,7 @@ StatusOr<PageId> CreateDirPage(storage::PageStore& store) {
 }
 
 StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int depth,
-                                    std::uint64_t arg_hash) {
+                                    const InstanceKey& key) {
     if (Status s = CheckDepth(depth); !s.ok()) return s;
 
     // No range check on the key, unlike the pk directory this replaces: a
@@ -57,7 +57,7 @@ StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int 
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
 
-        const PageId child = LoadChild(bytes.value(), DirIndexAt(arg_hash, depth, level));
+        const PageId child = LoadChild(bytes.value(), DirIndexAt(key.arg_hash, depth, level));
         if (child == kEmptyDirSlot) {
             // Never populated. The ordinary answer on the replay path, not
             // an error: most instances of a pattern have no trail.
@@ -69,12 +69,12 @@ StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int 
 }
 
 StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId root, int depth,
-                                            std::uint64_t arg_hash) {
+                                            const InstanceKey& key) {
     if (Status s = CheckDepth(depth); !s.ok()) return s;
 
     PageId current = root;
     for (int level = 0; level < depth; ++level) {
-        const std::size_t index = DirIndexAt(arg_hash, depth, level);
+        const std::size_t index = DirIndexAt(key.arg_hash, depth, level);
 
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();

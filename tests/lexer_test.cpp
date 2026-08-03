@@ -8,6 +8,11 @@
 namespace kds::parser {
 namespace {
 
+// Collects every token of `sql`.
+//
+// **`sql` must outlive the returned tokens**: a Token's `text` is a view
+// into it (token.hpp). Every caller here passes a string literal, which has
+// static storage duration, so the views stay valid for the whole program.
 std::vector<Token> LexAll(std::string_view sql) {
     Lexer lex(sql);
     std::vector<Token> out;
@@ -214,6 +219,69 @@ TEST(LexerTest, DigitsSurviveAnIntegerThatOverflowsTheSignedDecode) {
     ASSERT_EQ(toks[0].type, TokenType::kIntLit);
     EXPECT_EQ(toks[0].digits(), "18446744073709551615");
     EXPECT_EQ(toks[0].int_val, -1) << "documenting the wrap, not endorsing it";
+}
+
+TEST(LexerTest, ANamedParameterKeepsItsNameAndDropsItsSigil) {
+    auto toks = LexAll("$flag $Name_2");
+    ASSERT_EQ(toks[0].type, TokenType::kNamedParam);
+    // The name is kept as written, like an identifier's: folding is the
+    // consumer's job, so an error message can quote what was typed.
+    EXPECT_EQ(toks[0].text, "flag");
+    EXPECT_EQ(toks[1].type, TokenType::kNamedParam);
+    EXPECT_EQ(toks[1].text, "Name_2");
+
+    // The extent covers the sigil, so a reported position points at the
+    // `$` a client wrote rather than at the letter after it.
+    EXPECT_EQ(toks[0].byte_offset, 0u);
+    EXPECT_EQ(toks[0].length, 5u);
+    EXPECT_EQ(toks[1].byte_offset, 6u);
+    EXPECT_EQ(toks[1].length, 7u);
+}
+
+TEST(LexerTest, ANamedParameterIsNotTheBindPlaceholder) {
+    // Two token types, deliberately: they agree about the fingerprint
+    // (both are ShapeTag::kValue) and disagree about the grammar - `?` is
+    // refused everywhere, `$x` is accepted in a declared pattern body.
+    auto toks = LexAll("? $x");
+    EXPECT_EQ(toks[0].type, TokenType::kParam);
+    EXPECT_EQ(toks[1].type, TokenType::kNamedParam);
+}
+
+TEST(LexerTest, ABareSigilIsStillALexingError) {
+    // There is no anonymous named parameter. Reporting the bad character
+    // is more use than inventing a parameter with an empty name.
+    auto toks = LexAll("$ $1");
+    EXPECT_EQ(toks[0].type, TokenType::kError);
+    EXPECT_EQ(toks[1].type, TokenType::kError) << "a digit cannot start an identifier";
+}
+
+TEST(LexerTest, TokenTextViewsTheSourceRatherThanCopyingIt) {
+    // The zero-copy property, pinned by address rather than by value:
+    // comparing text to a string would pass just as well if the lexer went
+    // back to allocating a copy of it, which is the regression this guards.
+    //
+    // Lexing allocates nothing now, and that matters most for exactly the
+    // tokens that used to allocate - identifiers past the small-string
+    // limit, which is what a schema with real relation names is made of.
+    static constexpr std::string_view kSql =
+        "SELECT long_column_name_past_sso FROM a_relation_with_a_long_name WHERE x = 'y'";
+    auto toks = LexAll(kSql);
+
+    const char* begin = kSql.data();
+    const char* end = begin + kSql.size();
+    int checked = 0;
+    for (const Token& t : toks) {
+        if (t.type == TokenType::kEof) continue;
+        ASSERT_FALSE(t.text.empty()) << "every non-EOF token has text";
+        EXPECT_GE(t.text.data(), begin) << "token text must point into the source";
+        EXPECT_LE(t.text.data() + t.text.size(), end);
+        ++checked;
+    }
+    EXPECT_GT(checked, 5);
+
+    // And the view really is the source's own bytes, not a copy that
+    // happens to live nearby.
+    EXPECT_EQ(toks[1].text.data(), begin + toks[1].byte_offset);
 }
 
 TEST(LexerTest, PeekDoesNotConsume) {

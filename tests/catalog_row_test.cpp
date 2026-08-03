@@ -116,16 +116,48 @@ TEST(SysPatternRowTest, OnDiskLayoutIsPinned) {
     // A new relation with no existing files to be compatible with - so this
     // is not protecting existing data, it is fixing the layout *now* so
     // that a later accidental reorder is caught before there is data to
-    // lose. Little-endian, packed, 38 bytes.
+    // lose. Little-endian, packed, 41 bytes since CREATE PATTERN appended
+    // `flags` and `origin` (the superblock version moved with it, which is
+    // what stops an older file from mounting and then misreading this row).
     SysPatternRow row{};
     row.pattern_id = 0x1122334455667788ull;
     row.dir_depth = 0x2A;
+    row.flags = 0xBEEF;
+    row.origin = kOriginUser;
     const auto bytes = row.Encode();
 
-    ASSERT_EQ(bytes.size(), 38u);
+    ASSERT_EQ(bytes.size(), 41u);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kPatternIdOffset]), 0x88);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kPatternIdOffset + 7]), 0x11);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kDirDepthOffset]), 0x2A);
+
+    // The two appended fields, including the byte order of the u16 - the
+    // field whose placement (before `origin`, not after) is what keeps
+    // every offsetof assert in rows.hpp holding.
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFlagsOffset]), 0xEF);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFlagsOffset + 1]), 0xBE);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kOriginOffset]), kOriginUser);
+}
+
+TEST(SysPatternRowTest, OriginAndPinningRoundTripIndependently) {
+    // They are separate fields on purpose: an operator may pin an
+    // auto-registered pattern without re-declaring it, and a declared
+    // pattern may be created unpinned. Both of those are unspellable if
+    // pinning is folded into origin, so both are pinned here.
+    SysPatternRow row = SampleRow();
+    row.origin = kOriginAuto;
+    row.flags = kPatternPinned;
+    auto pinned_auto = SysPatternRow::Decode(row.Encode());
+    ASSERT_TRUE(pinned_auto.ok());
+    EXPECT_EQ(pinned_auto.value().origin, kOriginAuto);
+    EXPECT_EQ(pinned_auto.value().flags & kPatternPinned, kPatternPinned);
+
+    row.origin = kOriginUser;
+    row.flags = 0;
+    auto unpinned_user = SysPatternRow::Decode(row.Encode());
+    ASSERT_TRUE(unpinned_user.ok());
+    EXPECT_EQ(unpinned_user.value().origin, kOriginUser);
+    EXPECT_EQ(unpinned_user.value().flags & kPatternPinned, 0);
 }
 
 TEST(SysPatternRowTest, DecodeRefusesAnythingButTheExactSize) {

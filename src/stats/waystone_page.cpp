@@ -28,15 +28,15 @@ void Store(std::span<std::byte, kPageSize> page, std::size_t offset, const T& v)
 
 }  // namespace
 
-void FormatWaystonePage(std::span<std::byte, kPageSize> page, std::uint64_t pattern_id,
-                        std::uint64_t arg_hash, std::uint64_t recorded_ts) {
+void FormatWaystonePage(std::span<std::byte, kPageSize> page, const InstanceKey& key,
+                        std::uint64_t recorded_ts) {
     // Zeroes the whole page and writes the common header for this build's
     // current format version; the body is left zeroed for us.
     storage::FormatPage(page, PageType::kWaystone);
 
     WaystoneHeader header{};
-    header.pattern_id = pattern_id;
-    header.arg_hash = arg_hash;
+    header.pattern_id = key.pattern_id;
+    header.arg_hash = key.arg_hash;
     header.recorded_ts = recorded_ts;
     header.next_page_id = kInvalidPageId;
     header.use_count = 0;
@@ -120,8 +120,8 @@ Status WriteWaystoneEntry(std::span<std::byte, kPageSize> page, std::size_t inde
     return Status::OK();
 }
 
-bool WaystonePageHolds(std::span<const std::byte, kPageSize> page, std::uint64_t pattern_id,
-                       std::uint64_t arg_hash) noexcept {
+bool WaystonePageHolds(std::span<const std::byte, kPageSize> page,
+                       const InstanceKey& key) noexcept {
     // Type and version first: an unformatted page reads as page_type 0,
     // and a page written by a newer build must be refused rather than
     // misparsed. Both come back from here as "not this instance", which is
@@ -129,7 +129,7 @@ bool WaystonePageHolds(std::span<const std::byte, kPageSize> page, std::uint64_t
     if (!storage::ValidatePageHeader(page, PageType::kWaystone).ok()) return false;
 
     const WaystoneHeader h = ReadWaystoneHeader(page);
-    return h.pattern_id == pattern_id && h.arg_hash == arg_hash;
+    return InstanceKey{h.pattern_id, h.arg_hash} == key;
 }
 
 }  // namespace kds::stats

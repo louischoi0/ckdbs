@@ -108,6 +108,23 @@ public:
         // answer than a connection that never replies.
         std::uint64_t max_rows_touched = exec::kDefaultRowTouchBudget;
 
+        // Whether a successful SELECT records a Waystone trail
+        // (`waystone_recording`, default on).
+        //
+        // Off is a valid production setting, not a debug switch: recording
+        // costs a page write per newly-hot instance and buys nothing until
+        // replay exists (workplan P11). It is also the switch that makes
+        // "results are identical either way" a thing an operator can check
+        // on their own data rather than take on trust.
+        bool waystone_recording = true;
+
+        // Whether a SELECT may be served from a trail a previous execution
+        // recorded (`waystone_replay`, default on). This is the half that
+        // *repays* recording - and the first Waystone code that can be
+        // asked to produce a row, which is why the advisory-contract suite
+        // compares it against every other configuration byte for byte.
+        bool waystone_replay = true;
+
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
         // kGroup batch nobody is waiting on; a drain with nothing pending
@@ -227,6 +244,9 @@ private:
     std::unique_ptr<storage::PageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> database_;
+    // Declared before the dispatcher, which holds a pointer to it: the
+    // recorder has to outlive every statement that reports to it.
+    std::optional<stats::TrailRecorder> trail_recorder_;
     std::optional<CommandDispatcher> dispatcher_;
 
     std::unique_ptr<wal::FileLogDevice> log_device_;

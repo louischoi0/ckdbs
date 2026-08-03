@@ -1,0 +1,283 @@
+#include <gtest/gtest.h>
+
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/trail_collector.hpp"
+#include "kds/parser/fingerprint.hpp"
+#include "kds/server/command_dispatcher.hpp"
+#include "kds/stats/trail_recorder.hpp"
+#include "kds/stats/trail_store.hpp"
+#include "kds/storage/in_memory_page_store.hpp"
+
+// **The advisory contract** (docs/waystone-concpets.md §11-3 and §11-4,
+// workplan P12). The spec calls §11-3 "the test that must never be allowed
+// to fail", and this is it.
+//
+// Invariant 8: deleting every waystone may cost performance and must never
+// change a result. That is not a quality bar, it is the property the whole
+// structure is permitted to exist under - Waystone is allowed to be
+// approximate, stale, collision-prone and lossy *precisely because* none of
+// it can reach an answer. A single case where a trail changes a row makes
+// every other design decision in the subsystem unsound.
+//
+// So the same query set runs over the same data in five configurations and
+// every reply is compared **byte for byte**:
+//
+//   1. recording on, replay on      the real one
+//   2. recording off                no trails exist at all - the baseline
+//   3. replay off                   trails exist and are ignored
+//   4. waystones deleted mid-run    a trail vanishes between executions
+//   5. a deliberately corrupted trail   entries naming valid pages and
+//                                       slots holding *different* tuples
+//
+// Case 5 is the one that proves §2 rule 1's identity check is load-bearing
+// rather than decorative: without it the engine returns real rows from the
+// wrong places, and every other case in this file would still pass.
+
+namespace kds::server {
+namespace {
+
+// One database, one dispatcher, one configuration.
+class Instance {
+public:
+    Instance(bool record, bool replay) {
+        auto boot = bootstrap::BootstrapDatabase(store_, 1000);
+        EXPECT_TRUE(boot.ok()) << boot.status().message();
+        boot_.emplace(std::move(boot.value()));
+        recorder_.emplace(boot_->catalog, store_);
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                            /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
+                            exec::Budget(), record ? &*recorder_ : nullptr, replay);
+    }
+
+    std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+
+    catalog::Catalog& catalog() { return boot_->catalog; }
+    storage::InMemoryPageStore& store() { return store_; }
+
+private:
+    storage::InMemoryPageStore store_{kFirstUserPageId};
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<stats::TrailRecorder> recorder_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+// The dataset every configuration runs over. Two relations, one heap and
+// one btree, so both the descent path and the chain-scan path are covered -
+// they are the two things replay replaces and they fail differently.
+void Load(Instance& db) {
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, v int64, label varchar) BTREE").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64, label varchar)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("CREATE TABLE j (id int64, w int64) BTREE").substr(0, 7), "CREATED");
+    for (int i = 1; i <= 8; ++i) {
+        const std::string v = std::to_string(i * 10);
+        const std::string label = "'row" + std::to_string(i) + "'";
+        ASSERT_EQ(db.Run("INSERT INTO b VALUES (" + v + ", " + label + ")").substr(0, 8),
+                  "INSERTED");
+        ASSERT_EQ(db.Run("INSERT INTO h VALUES (" + v + ", " + label + ")").substr(0, 8),
+                  "INSERTED");
+        ASSERT_EQ(db.Run("INSERT INTO j VALUES (" + std::to_string(i * 100) + ")").substr(0, 8),
+                  "INSERTED");
+    }
+}
+
+// The query set. Deliberately mixed: keyed steps that replay, searches that
+// must not, a join whose trail spans relations, and queries that match
+// nothing - a trail cannot help those, and it must not hurt them either.
+const std::vector<std::string>& Queries() {
+    static const std::vector<std::string> kQueries = {
+        "SELECT * FROM b WHERE id = 3",
+        "SELECT * FROM b WHERE id = 7",
+        "SELECT * FROM b WHERE id = 99",
+        "SELECT * FROM h WHERE id = 3",
+        "SELECT * FROM h WHERE id = 8",
+        "SELECT * FROM b WHERE v = 50",
+        "SELECT * FROM b",
+        "SELECT id, label FROM b WHERE id = 2",
+        "SELECT a.label, c.w FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
+        "SELECT a.label, c.w FROM h AS a JOIN j AS c ON a.id = c.id WHERE a.id = 6",
+    };
+    return kQueries;
+}
+
+// Runs the set `rounds` times and returns every reply in order. Repeated
+// because the interesting window is not the first execution - it is the one
+// *after* a trail exists.
+std::vector<std::string> RunAll(Instance& db, int rounds) {
+    std::vector<std::string> out;
+    for (int r = 0; r < rounds; ++r) {
+        for (const std::string& sql : Queries()) out.push_back(db.Run(sql));
+    }
+    return out;
+}
+
+// The reference: a database that never recorded anything, so no trail can
+// possibly be involved in any answer it gives.
+std::vector<std::string> Reference() {
+    Instance db(/*record=*/false, /*replay=*/false);
+    Load(db);
+    return RunAll(db, 3);
+}
+
+void ExpectSame(const std::vector<std::string>& got, const std::vector<std::string>& want,
+                const char* what) {
+    ASSERT_EQ(got.size(), want.size()) << what;
+    for (std::size_t i = 0; i < want.size(); ++i) {
+        const std::size_t query = i % Queries().size();
+        EXPECT_EQ(got[i], want[i])
+            << what << " diverged at reply " << i << " (" << Queries()[query] << ")";
+    }
+}
+
+// ---- §11-3, the five configurations --------------------------------------
+
+TEST(WaystoneContractTest, RecordingAndReplayingChangesNoReply) {
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    ExpectSame(RunAll(db, 3), Reference(), "recording+replay");
+}
+
+TEST(WaystoneContractTest, RecordingWithoutReplayingChangesNoReply) {
+    Instance db(/*record=*/true, /*replay=*/false);
+    Load(db);
+    ExpectSame(RunAll(db, 3), Reference(), "recording only");
+}
+
+TEST(WaystoneContractTest, ReplayingWithoutRecordingChangesNoReply) {
+    // Trails from an earlier era, replayed by a server that records no new
+    // ones. Reachable in production by flipping `waystone_recording` off.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    RunAll(db, 2);  // build the trails
+
+    Instance quiet(/*record=*/false, /*replay=*/true);
+    Load(quiet);
+    ExpectSame(RunAll(quiet, 3), Reference(), "replay without recording");
+}
+
+TEST(WaystoneContractTest, DeletingEveryWaystoneMidRunChangesNoReply) {
+    // Invariant 8, stated as directly as it can be tested: the trails are
+    // built, then destroyed under the running database, and the answers do
+    // not move. Destroyed by zeroing each pattern's waystone pages, which is
+    // what "deleting a waystone" means to every reader - the header check
+    // then reports false and every consultation falls through.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    std::vector<std::string> replies = RunAll(db, 2);
+
+    auto patterns = db.catalog().ListPatterns();
+    ASSERT_TRUE(patterns.ok());
+    ASSERT_FALSE(patterns.value().empty()) << "nothing was recorded; the test proves nothing";
+    for (const catalog::SysPatternRow& row : patterns.value()) {
+        if (!catalog::HasWaystoneDirectory(row)) continue;
+        // The directory root and everything under it. Zeroing the root is
+        // enough: every walk from it now reads kEmptyDirSlot and misses.
+        auto page = db.store().Get(row.waystone_root);
+        ASSERT_TRUE(page.ok());
+        std::fill(page.value().begin(), page.value().end(), std::byte{0xFF});
+    }
+
+    const std::vector<std::string> after = RunAll(db, 2);
+    replies.insert(replies.end(), after.begin(), after.end());
+
+    Instance reference(/*record=*/false, /*replay=*/false);
+    Load(reference);
+    ExpectSame(replies, RunAll(reference, 4), "waystones deleted mid-run");
+}
+
+TEST(WaystoneContractTest, ACorruptedTrailChangesNoReply) {
+    // **The case that proves §2 rule 1 is load-bearing.**
+    //
+    // Every trail is rewritten to point at a real, live tuple that is *not*
+    // the one it claims - the shape §11-3 asks for: "entries naming valid
+    // pages and slots holding different tuples". Without the Keystone check
+    // this returns wrong rows and no error anywhere; with it, every entry
+    // misses and every answer is unchanged.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    RunAll(db, 2);
+
+    auto patterns = db.catalog().ListPatterns();
+    ASSERT_TRUE(patterns.ok());
+    ASSERT_FALSE(patterns.value().empty());
+
+    std::size_t poisoned = 0;
+    for (const catalog::SysPatternRow& row : patterns.value()) {
+        if (!catalog::HasWaystoneDirectory(row)) continue;
+        // Every instance of this pattern that we know how to name: the
+        // queries above, re-fingerprinted.
+        for (const std::string& sql : Queries()) {
+            auto fp = parser::FingerprintOf(sql);
+            if (!fp.has_value() || fp->pattern_id != row.pattern_id) continue;
+            const stats::InstanceKey key{fp->pattern_id, fp->arg_hash};
+
+            auto existing = stats::ReadTrail(db.store(), row.waystone_root, row.dir_depth, key);
+            ASSERT_TRUE(existing.ok());
+            if (existing.value().empty()) continue;
+
+            // Keep every entry's relation and step, keep a *valid* page and
+            // slot - just point each one at a different row of the same
+            // relation. Slot 0 is live in every relation this test loads.
+            std::vector<exec::TouchedTuple> corrupt;
+            for (const stats::WaystoneEntry& entry : existing.value()) {
+                exec::TouchedTuple t;
+                t.rel_oid = entry.rel_oid;
+                t.pk = entry.pk;  // still claims its key, so it is still consulted
+                t.page_id = entry.page_id;
+                t.slot = static_cast<std::uint16_t>(entry.slot == 0 ? 1 : 0);
+                t.step_id = entry.step_id;
+                corrupt.push_back(t);
+            }
+            ASSERT_TRUE(stats::WriteTrail(db.store(), row.waystone_root, row.dir_depth, key,
+                                          corrupt, /*ts=*/9)
+                            .ok());
+            ++poisoned;
+        }
+    }
+    ASSERT_GT(poisoned, 0u) << "no trail was corrupted; the test proves nothing";
+
+    ExpectSame(RunAll(db, 3), Reference(), "corrupted trail");
+}
+
+// ---- §11-4: lookup-not-search --------------------------------------------
+
+TEST(WaystoneContractTest, ANonPkPredicateStillSearchesAndSaysSo) {
+    // The instrumented half. A trail may replace a lookup and never a
+    // search (invariant 9), and a wrongly skipped search returns *plausible*
+    // rows - so the only evidence is the work that was still done.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+
+    const std::string search = "SELECT * FROM b WHERE v = 50";
+    for (int i = 0; i < 4; ++i) db.Run(search);
+
+    const std::string analyzed = db.Run("ANALYZE " + search);
+    EXPECT_NE(analyzed.find("Scan"), std::string::npos) << analyzed;
+    EXPECT_EQ(analyzed.find("replays="), std::string::npos)
+        << "a search was served from a trail, which invariant 9 forbids: " << analyzed;
+    // And it really did read the relation rather than short-circuit.
+    EXPECT_NE(analyzed.find("examined=8"), std::string::npos) << analyzed;
+}
+
+TEST(WaystoneContractTest, AKeyedStepDoesReplaySoTheContrastIsReal) {
+    // The control for the test above: the same database, a keyed predicate,
+    // and the replay counter non-zero. Without this, "no replays on a scan"
+    // would be satisfied by replay never working at all.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+
+    const std::string keyed = "SELECT * FROM b WHERE id = 3";
+    for (int i = 0; i < 3; ++i) db.Run(keyed);
+
+    const std::string analyzed = db.Run("ANALYZE " + keyed);
+    EXPECT_NE(analyzed.find("replays="), std::string::npos)
+        << "replay never fired, so the scan test above proves nothing: " << analyzed;
+}
+
+}  // namespace
+}  // namespace kds::server

@@ -133,12 +133,16 @@ struct TableAccess {
 // cacheable fact. A caller that wants heat reads the row from the page
 // through Catalog::GetSysPatternRow().
 //
-// What is here divides in two. The identity - `oid`, `pattern_id`,
+// What is here divides in three. The identity - `oid`, `pattern_id`,
 // `fingerprint_version`, `stmt_class` - is written once at registration
 // and never changes. The location - `waystone_root`, `dir_depth` - changes
 // only when the directory deepens, through the single writer
 // Catalog::SetPatternWaystoneRoot(), which updates this entry in place so
-// the cache stays coherent without a global invalidation.
+// the cache stays coherent without a global invalidation. The lifecycle
+// policy - `origin`, `flags` - changes only when an operator declares or
+// adopts a pattern, through the one other in-place writer
+// Catalog::SetPatternOrigin(). All three pass this header's test: nothing
+// here moves without an explicit DDL-shaped call.
 struct PatternAccess {
     Oid oid = 0;
     std::uint64_t pattern_id = 0;
@@ -146,6 +150,18 @@ struct PatternAccess {
     PageId waystone_root = kInvalidPageId;
     std::uint8_t stmt_class = 0;
     std::uint8_t dir_depth = 0;
+
+    // Who created the row (kOriginAuto / kOriginUser) and its policy bits
+    // (kPatternPinned), both in rows.hpp. Cached because the trail recorder
+    // reads origin on the statement path to decide whether this pattern
+    // records from its first execution or waits for n=2, and re-reading the
+    // catalog page per execution to answer that would cost more than the
+    // recording does.
+    std::uint8_t origin = kOriginAuto;
+    std::uint16_t flags = 0;
+
+    bool pinned() const noexcept { return (flags & kPatternPinned) != 0; }
+    bool user_declared() const noexcept { return origin == kOriginUser; }
 
     // Same rule as SysPatternRow's: depth is the authority, never the
     // root. Restated rather than shared because a caller holding a

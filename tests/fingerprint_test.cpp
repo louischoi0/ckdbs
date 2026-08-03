@@ -281,5 +281,69 @@ TEST(FingerprintTest, AnEmptyArgumentStreamHasAFixedHash) {
     EXPECT_EQ(fp.arg_hash, 14695981039346656037ull);
 }
 
+// ---- CREATE PATTERN: the $param fold (spec section 3.2) -------------------
+
+// The done-condition of step 1 of the spec's implementation order, and the
+// single property the whole feature rests on. A declaration's body never
+// executes; live traffic does, and it carries no declaration. If a declared
+// `$param` hashed as anything but the marker a literal and a `?` share, a
+// declared pattern would match nothing that ever runs - and it would fail
+// *silently*, since there is no error to report when two hashes simply
+// differ.
+TEST(FingerprintTest, ADeclaredParamHashesAsAValueSoAllThreeFormsAreOnePattern) {
+    const Fingerprint declared =
+        Must("SELECT id FROM account AS a WHERE a.flag = $flag AND a.name = $name");
+    const Fingerprint inlined =
+        Must("SELECT id FROM account AS a WHERE a.flag = 42 AND a.name = 'x'");
+    const Fingerprint bound =
+        Must("SELECT id FROM account AS a WHERE a.flag = ? AND a.name = ?");
+
+    EXPECT_EQ(declared.pattern_id, inlined.pattern_id);
+    EXPECT_EQ(declared.pattern_id, bound.pattern_id);
+
+    // A `$param` carries no value - a declaration is not an execution, so
+    // instances still arise only from traffic (spec section 3.3). It
+    // therefore counts as a parameter, never as a literal, and shares the
+    // empty argument stream a fully bound statement has.
+    EXPECT_EQ(declared.literal_count, 0u);
+    EXPECT_EQ(declared.param_count, 2u);
+    EXPECT_EQ(declared.arg_hash, bound.arg_hash);
+    EXPECT_NE(declared.arg_hash, inlined.arg_hash);
+}
+
+TEST(FingerprintTest, AParamsNameContributesNothingToTheShape) {
+    // Names exist for the declaration's readability and for future named
+    // binds. Live traffic has no name to contribute, so anything the name
+    // added to pattern_id would break the convergence above.
+    EXPECT_EQ(Must("SELECT * FROM t WHERE id = $a").pattern_id,
+              Must("SELECT * FROM t WHERE id = $b").pattern_id);
+    EXPECT_EQ(Must("SELECT * FROM t WHERE id = $a").pattern_id,
+              Must("SELECT * FROM t WHERE id = $A").pattern_id);
+
+    // And a parameter is not its name spelled without the sigil: `$a` is a
+    // value, a bare `a` is a column. That distinction is the sigil's whole
+    // job (spec section 2).
+    EXPECT_NE(Must("SELECT * FROM t WHERE id = $a").pattern_id,
+              Must("SELECT * FROM t WHERE id = a").pattern_id);
+}
+
+TEST(FingerprintTest, TheParamTokenNeededNoFingerprintVersionBump) {
+    // `$` lexed as kError before this feature, and kError means nullopt -
+    // so a statement containing one had no fingerprint at all. Gaining one
+    // is exactly the transition fingerprint.hpp's bump rule names as *not*
+    // requiring a version bump: nothing already stored changes meaning.
+    //
+    // The golden hashes above are the witness, and this is the reminder of
+    // what they are witnessing. If a future change to the shape stream does
+    // move them, the version has to move with it.
+    EXPECT_EQ(kFingerprintVersion, 1u);
+    EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
+
+    // A bare `$` is still a lexing failure, and a statement that will not
+    // lex has no shape worth storing.
+    EXPECT_FALSE(FingerprintOf("SELECT * FROM t WHERE id = $").has_value());
+    EXPECT_FALSE(FingerprintOf("SELECT * FROM t WHERE id = $ 1").has_value());
+}
+
 }  // namespace
 }  // namespace kds::parser

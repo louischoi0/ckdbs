@@ -171,6 +171,8 @@ std::array<std::byte, SysPatternRow::kOnDiskSize> SysPatternRow::Encode() const 
     std::memcpy(base + kUseCountOffset, &use_count, sizeof(use_count));
     std::memcpy(base + kStmtClassOffset, &stmt_class, sizeof(stmt_class));
     std::memcpy(base + kDirDepthOffset, &dir_depth, sizeof(dir_depth));
+    std::memcpy(base + kFlagsOffset, &flags, sizeof(flags));
+    std::memcpy(base + kOriginOffset, &origin, sizeof(origin));
     return buf;
 }
 
@@ -188,6 +190,8 @@ StatusOr<SysPatternRow> SysPatternRow::Decode(std::span<const std::byte> bytes) 
     std::memcpy(&row.use_count, base + kUseCountOffset, sizeof(row.use_count));
     std::memcpy(&row.stmt_class, base + kStmtClassOffset, sizeof(row.stmt_class));
     std::memcpy(&row.dir_depth, base + kDirDepthOffset, sizeof(row.dir_depth));
+    std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
+    std::memcpy(&row.origin, base + kOriginOffset, sizeof(row.origin));
     // Deliberately no validation of the decoded values - not of
     // fingerprint_version, not of the root/depth pair. This is a pure
     // decode, like every Decode() above it: the size check is the only

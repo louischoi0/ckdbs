@@ -199,7 +199,7 @@ Also open:
 8. **Execution equivalence:** every case runs heap×heap, heap×btree and btree×btree with identical rows in identical order; `Probe` and `Scan` strategies agree row-for-row; execution order matches written order for both orderings of one query.
 9. **Nested access:** the R1 guard trips when deliberately violated; a stopping visitor touches no page past the stop; a false uncorrelated `EXISTS` opens zero pages of the outer relation; a correlated `EXISTS` short-circuits, proven by page-touch count.
 10. **Grammar:** golden parse trees for every production; byte- and token-level fuzzing — never crashes, always returns `Status`; a corpus of nesting attempts outside predicate position contains no accepted parse.
-11. **Zero-alloc/zero-copy** (phase V-6): instrumented lexer and warm parse; interleaved conjunct emission; escaped views caught in debug builds.
+11. **Zero-alloc/zero-copy** (phase V-6): instrumented lexer and warm parse; interleaved conjunct emission; escaped views caught in debug builds. **Partly done 2026-08-03**: token text is a view into the statement and lexing allocates nothing (`include/kds/parser/token.hpp`), and the fingerprint is accumulated during the parse rather than by a second lex. Still open here: the arena, the flat AST, and the debug-build check for escaped views — today the "a token must not outlive its SQL" rule is documented and structurally respected (tokens never leave a parse), not enforced.
 
 ## 10. Required amendments (gate)
 

@@ -58,7 +58,7 @@ TEST(WaystoneLayoutTest, EntriesPerPageFollowFromTheHeaderSizes) {
 // ---- Format ---------------------------------------------------------------
 
 TEST_F(WaystonePageTest, FormatWritesAHeaderedWaystonePage) {
-    FormatWaystonePage(page(), 0xAAAA, 0xBBBB, 1234);
+    FormatWaystonePage(page(), {0xAAAA, 0xBBBB}, 1234);
 
     // It is a real headered page: the store will checksum it and the WAL
     // can stamp it, neither of which was possible for the headerless
@@ -78,7 +78,7 @@ TEST_F(WaystonePageTest, FormatWritesAHeaderedWaystonePage) {
 }
 
 TEST_F(WaystonePageTest, AFreshPageHasNoValidEntries) {
-    FormatWaystonePage(page(), 1, 2, 0);
+    FormatWaystonePage(page(), {1, 2}, 0);
 
     // A never-written entry decodes to pk 0 and page_id 0, both of which
     // look like real values. Only the flag says whether it means anything.
@@ -91,7 +91,7 @@ TEST_F(WaystonePageTest, AFreshPageHasNoValidEntries) {
 // ---- Header codec ---------------------------------------------------------
 
 TEST_F(WaystonePageTest, HeaderRoundTripsEveryField) {
-    FormatWaystonePage(page(), 0, 0, 0);
+    FormatWaystonePage(page(), {0, 0}, 0);
 
     WaystoneHeader in{};
     in.pattern_id = 0x1122334455667788ull;
@@ -115,7 +115,7 @@ TEST_F(WaystonePageTest, HeaderRoundTripsEveryField) {
 }
 
 TEST_F(WaystonePageTest, HeaderWriteDoesNotDisturbTheCommonHeader) {
-    FormatWaystonePage(page(), 1, 2, 3);
+    FormatWaystonePage(page(), {1, 2}, 3);
 
     WaystoneHeader h = ReadWaystoneHeader(const_page());
     h.entry_count = 3;
@@ -127,7 +127,7 @@ TEST_F(WaystonePageTest, HeaderWriteDoesNotDisturbTheCommonHeader) {
 }
 
 TEST_F(WaystonePageTest, AnEntryCountThePageCannotHoldIsRefused) {
-    FormatWaystonePage(page(), 1, 2, 3);
+    FormatWaystonePage(page(), {1, 2}, 3);
 
     WaystoneHeader h = ReadWaystoneHeader(const_page());
     h.entry_count = static_cast<std::uint16_t>(kEntriesPerWaystonePage + 1);
@@ -143,7 +143,7 @@ TEST_F(WaystonePageTest, AnEntryCountThePageCannotHoldIsRefused) {
 // ---- Entry codec ----------------------------------------------------------
 
 TEST_F(WaystonePageTest, EntryRoundTripsEveryField) {
-    FormatWaystonePage(page(), 1, 2, 3);
+    FormatWaystonePage(page(), {1, 2}, 3);
     const WaystoneEntry in = SampleEntry();
     ASSERT_TRUE(WriteWaystoneEntry(page(), 5, in).ok());
 
@@ -162,7 +162,7 @@ TEST_F(WaystonePageTest, AFullWidthRelOidSurvives) {
     // The field is a catalog::Oid, which is 64-bit. A 32-bit field here
     // would truncate two distinct relations onto one value, which is an
     // aliasing bug rather than a lost byte.
-    FormatWaystonePage(page(), 1, 2, 3);
+    FormatWaystonePage(page(), {1, 2}, 3);
     WaystoneEntry in = SampleEntry();
     in.rel_oid = 0xFFFFFFFFFFFFFFFFull;
     ASSERT_TRUE(WriteWaystoneEntry(page(), 0, in).ok());
@@ -175,7 +175,7 @@ TEST_F(WaystonePageTest, AFullWidthRelOidSurvives) {
 TEST_F(WaystonePageTest, AdjacentEntriesDoNotOverlap) {
     // The bug a single round-trip cannot catch: an off-by-one in the entry
     // stride, which only shows up when two entries are live at once.
-    FormatWaystonePage(page(), 1, 2, 3);
+    FormatWaystonePage(page(), {1, 2}, 3);
 
     for (std::size_t i = 0; i < kEntriesPerWaystonePage; ++i) {
         WaystoneEntry e{};
@@ -195,7 +195,7 @@ TEST_F(WaystonePageTest, AdjacentEntriesDoNotOverlap) {
 }
 
 TEST_F(WaystonePageTest, TheLastEntryStaysInsideThePage) {
-    FormatWaystonePage(page(), 1, 2, 3);
+    FormatWaystonePage(page(), {1, 2}, 3);
 
     // Writing the highest legal index must not touch the 24 bytes of tail
     // slack, and one past it must be refused rather than run off the end.
@@ -216,7 +216,7 @@ TEST_F(WaystonePageTest, TheLastEntryStaysInsideThePage) {
 }
 
 TEST_F(WaystonePageTest, WritingAnEntryDoesNotDisturbTheHeader) {
-    FormatWaystonePage(page(), 0xAAAA, 0xBBBB, 77);
+    FormatWaystonePage(page(), {0xAAAA, 0xBBBB}, 77);
     ASSERT_TRUE(WriteWaystoneEntry(page(), 0, SampleEntry()).ok());
 
     const WaystoneHeader h = ReadWaystoneHeader(const_page());
@@ -228,21 +228,21 @@ TEST_F(WaystonePageTest, WritingAnEntryDoesNotDisturbTheHeader) {
 // ---- Identity: the check that makes a hash collision survivable ----------
 
 TEST_F(WaystonePageTest, APageHoldsOnlyTheInstanceItRecorded) {
-    FormatWaystonePage(page(), 0xAAAA, 0xBBBB, 0);
+    FormatWaystonePage(page(), {0xAAAA, 0xBBBB}, 0);
 
-    EXPECT_TRUE(WaystonePageHolds(const_page(), 0xAAAA, 0xBBBB));
+    EXPECT_TRUE(WaystonePageHolds(const_page(), {0xAAAA, 0xBBBB}));
 
     // The directory is keyed by a hash, so a collision leads a reader to a
     // real, valid, *wrong* trail. This is what turns that into a miss
     // instead of somebody else's rows.
-    EXPECT_FALSE(WaystonePageHolds(const_page(), 0xAAAA, 0xCCCC));
-    EXPECT_FALSE(WaystonePageHolds(const_page(), 0xDDDD, 0xBBBB));
-    EXPECT_FALSE(WaystonePageHolds(const_page(), 0xDDDD, 0xCCCC));
+    EXPECT_FALSE(WaystonePageHolds(const_page(), {0xAAAA, 0xCCCC}));
+    EXPECT_FALSE(WaystonePageHolds(const_page(), {0xDDDD, 0xBBBB}));
+    EXPECT_FALSE(WaystonePageHolds(const_page(), {0xDDDD, 0xCCCC}));
 }
 
 TEST_F(WaystonePageTest, AnUnformattedPageHoldsNothing) {
     // All-zero, which is what a sparse never-written page reads back as.
-    EXPECT_FALSE(WaystonePageHolds(const_page(), 0, 0));
+    EXPECT_FALSE(WaystonePageHolds(const_page(), {0, 0}));
 }
 
 TEST_F(WaystonePageTest, APageOfAnotherTypeHoldsNothing) {
@@ -253,11 +253,11 @@ TEST_F(WaystonePageTest, APageOfAnotherTypeHoldsNothing) {
     h.arg_hash = 0xBBBB;
     ASSERT_TRUE(WriteWaystoneHeader(page(), h).ok());
 
-    EXPECT_FALSE(WaystonePageHolds(const_page(), 0xAAAA, 0xBBBB));
+    EXPECT_FALSE(WaystonePageHolds(const_page(), {0xAAAA, 0xBBBB}));
 }
 
 TEST_F(WaystonePageTest, APageFromANewerBuildHoldsNothing) {
-    FormatWaystonePage(page(), 0xAAAA, 0xBBBB, 0);
+    FormatWaystonePage(page(), {0xAAAA, 0xBBBB}, 0);
 
     storage::PageHeaderFields common = storage::ReadPageHeader(const_page());
     common.format_version = static_cast<std::uint8_t>(common.format_version + 1);
@@ -265,7 +265,7 @@ TEST_F(WaystonePageTest, APageFromANewerBuildHoldsNothing) {
 
     // Refused rather than misparsed: a layout this build does not know is
     // not a trail it can replay.
-    EXPECT_FALSE(WaystonePageHolds(const_page(), 0xAAAA, 0xBBBB));
+    EXPECT_FALSE(WaystonePageHolds(const_page(), {0xAAAA, 0xBBBB}));
 }
 
 }  // namespace

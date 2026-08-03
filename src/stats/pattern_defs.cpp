@@ -1,0 +1,258 @@
+#include "kds/stats/pattern_defs.hpp"
+
+#include <utility>
+
+#include "kds/exec/row_codec.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/varheap.hpp"
+
+namespace kds::stats {
+
+namespace {
+
+// Schema positions. Named rather than spelled as literals at each use: the
+// relation's shape is fixed by Catalog::BootstrapPatternDefs() and these are
+// the one place this file states its dependence on it.
+inline constexpr std::size_t kColId = 0;
+inline constexpr std::size_t kColPatternId = 1;
+inline constexpr std::size_t kColParamCount = 2;
+inline constexpr std::size_t kColName = 3;
+inline constexpr std::size_t kColSourceText = 4;
+inline constexpr std::size_t kColumnCount = 5;
+
+// ASCII-only fold, matching the lexer's and the fingerprint's. Not
+// std::tolower: it consults the locale, and which pattern a name resolves to
+// must not depend on the locale the server booted in.
+char FoldAscii(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+bool IEquals(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (FoldAscii(a[i]) != FoldAscii(b[i])) return false;
+    }
+    return true;
+}
+
+StatusOr<const catalog::TableAccess*> OpenPatternDefs(catalog::Catalog& catalog) {
+    auto access = catalog.InitTableAccess(catalog::kSysPatternDefsTable);
+    if (!access.ok()) {
+        return access.status().WithContext(
+            "sys.pattern_defs is missing - the database was bootstrapped by an older build");
+    }
+    if (access.value()->schema.columns.size() != kColumnCount) {
+        return Status::Corruption("sys.pattern_defs has the wrong column count");
+    }
+    return access.value();
+}
+
+// One row as the walk collected it: decoded, but with its spilled cells
+// still unfetched. Kept as a struct because the pending spills index into
+// `values`, so the two have to move together.
+struct StagedRow {
+    std::vector<parser::AstValue> values;
+    std::vector<exec::PendingSpill> spills;
+};
+
+PatternDef ToPatternDef(const std::vector<parser::AstValue>& values) {
+    PatternDef def{};
+    // The pk arrives as a plain signed decode; ids are 40-bit, so it cannot
+    // be negative and the cast is total.
+    def.id = static_cast<std::uint64_t>(values[kColId].int_val);
+    // pattern_id is a uint64 column, so its exact value lives in the digit
+    // text - int_val cannot represent the upper half of the range
+    // (row_codec.hpp). Parsing the text back is the only lossless read.
+    const std::string& digits = values[kColPatternId].raw_int_text;
+    std::uint64_t id = 0;
+    for (char c : digits) {
+        if (c < '0' || c > '9') break;
+        id = id * 10 + static_cast<std::uint64_t>(c - '0');
+    }
+    def.pattern_id = id;
+    def.param_count = static_cast<std::uint32_t>(values[kColParamCount].int_val);
+    def.name = values[kColName].str_val;
+    def.source_text = values[kColSourceText].str_val;
+    return def;
+}
+
+}  // namespace
+
+StatusOr<std::vector<PatternDef>> ListPatternDefs(catalog::Catalog& catalog,
+                                                  storage::PageStore& store) {
+    auto access = OpenPatternDefs(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    // Staged first, resolved second. The decode inside the walk touches no
+    // page but the one the walk is already holding; every var-heap fetch
+    // happens below, after ChainVisit has returned and released its spans.
+    // That ordering is I15's R1, and it is the whole reason this cannot
+    // short-circuit on a match.
+    std::vector<StagedRow> staged;
+    Status walked = heap::ChainVisit(
+        store, rel.desc_page_id, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            // A retired slot reads as NotFound and is not an error: it is
+            // what DeletePatternDef leaves behind. ChainVisit deliberately
+            // re-tests liveness through the callback rather than filtering
+            // for it, so this skip belongs here.
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                return tuple.status();
+            }
+            if (tuple.value().deleted) return storage::VisitControl::kContinue;
+
+            StagedRow row;
+            row.values.resize(kColumnCount);
+            if (Status s = exec::DecodeRowInto(rel.schema, rel.layout, tuple.value().payload,
+                                                row.values, &row.spills);
+                !s.ok()) {
+                return s;
+            }
+            staged.push_back(std::move(row));
+            return storage::VisitControl::kContinue;
+        });
+    if (!walked.ok()) return walked;
+
+    std::vector<PatternDef> out;
+    out.reserve(staged.size());
+    for (StagedRow& row : staged) {
+        if (Status s = exec::ResolveSpills(store, row.spills, row.values); !s.ok()) return s;
+        out.push_back(ToPatternDef(row.values));
+    }
+    return out;
+}
+
+StatusOr<std::optional<PatternDef>> FindPatternDefByName(catalog::Catalog& catalog,
+                                                         storage::PageStore& store,
+                                                         std::string_view name) {
+    auto defs = ListPatternDefs(catalog, store);
+    if (!defs.ok()) return defs.status();
+    for (PatternDef& def : defs.value()) {
+        if (IEquals(def.name, name)) return std::optional<PatternDef>(std::move(def));
+    }
+    return std::optional<PatternDef>();
+}
+
+StatusOr<std::optional<PatternDef>> FindPatternDefByPatternId(catalog::Catalog& catalog,
+                                                              storage::PageStore& store,
+                                                              std::uint64_t pattern_id) {
+    auto defs = ListPatternDefs(catalog, store);
+    if (!defs.ok()) return defs.status();
+    for (PatternDef& def : defs.value()) {
+        if (def.pattern_id == pattern_id) return std::optional<PatternDef>(std::move(def));
+    }
+    return std::optional<PatternDef>();
+}
+
+Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
+                        std::uint64_t pattern_id, std::string_view name,
+                        std::string_view source_text, std::uint32_t param_count) {
+    // Refused here, naming the limit, rather than let EncodeRow report it as
+    // an anonymous over-long varchar: the caller is a client who wrote a
+    // statement, and the number that matters to them is how long a body may
+    // be.
+    if (source_text.size() > varheap::kMaxValueSize) {
+        return Status::Unsupported("pattern declaration of " +
+                                   std::to_string(source_text.size()) +
+                                   " bytes exceeds the " +
+                                   std::to_string(varheap::kMaxValueSize) +
+                                   "-byte limit on a single stored value");
+    }
+
+    auto access = OpenPatternDefs(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    auto id = catalog.AllocateRowId(catalog::kSysPatternDefsTable);
+    if (!id.ok()) return id.status();
+
+    // The pk is not among these: it is carried by the Keystone word and
+    // never also as a body column (invariant 11), so EncodeRow takes the
+    // columns *after* it.
+    std::vector<parser::AstValue> values(kColumnCount - 1);
+    values[kColPatternId - 1].type = parser::ValueType::kInt;
+    values[kColPatternId - 1].raw_int_text = std::to_string(pattern_id);
+    values[kColParamCount - 1].type = parser::ValueType::kInt;
+    values[kColParamCount - 1].int_val = static_cast<std::int64_t>(param_count);
+    values[kColName - 1].type = parser::ValueType::kStr;
+    values[kColName - 1].str_val = std::string(name);
+    values[kColSourceText - 1].type = parser::ValueType::kStr;
+    values[kColSourceText - 1].str_val = std::string(source_text);
+
+    exec::VarHeapSink sink;
+    sink.store = &store;
+    sink.root = rel.varheap_page_id;
+
+    auto payload = exec::EncodeRow(rel.schema, rel.layout, id.value(), values, sink);
+    if (!payload.ok()) return payload.status();
+
+    // Unlogged, like every other catalog write (command_dispatcher.hpp:
+    // INSERT is the one logged statement). A declaration therefore survives
+    // a crash only as far as the next SYNC, which is the same guarantee
+    // CREATE TABLE gives and is not made worse here.
+    auto placed = heap::ChainInsert(store, rel.desc_page_id, id.value(), payload.value(),
+                                    catalog::kBootstrapXid);
+    if (!placed.ok()) return placed.status();
+    return Status::OK();
+}
+
+Status DeletePatternDef(catalog::Catalog& catalog, storage::PageStore& store,
+                        std::uint64_t pattern_id) {
+    auto access = OpenPatternDefs(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    bool found = false;
+    // This walk *can* stop early, unlike the reader above, and for a reason
+    // worth naming: `pattern_id` is a fixed-width column, so it is never
+    // spilled and the match is decidable without leaving the page. The
+    // spills list is passed only so a spilled `name`/`source_text` cell does
+    // not turn the decode into an error; nothing here reads them.
+    std::vector<parser::AstValue> values(kColumnCount);
+    std::vector<exec::PendingSpill> spills;
+    Status walked = heap::ChainVisit(
+        store, rel.desc_page_id, storage::PageAccess::kWrite,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            // A retired slot reads as NotFound and is not an error: it is
+            // what DeletePatternDef leaves behind. ChainVisit deliberately
+            // re-tests liveness through the callback rather than filtering
+            // for it, so this skip belongs here.
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                return tuple.status();
+            }
+            if (tuple.value().deleted) return storage::VisitControl::kContinue;
+
+            if (Status s = exec::DecodeRowInto(rel.schema, rel.layout, tuple.value().payload,
+                                                values, &spills);
+                !s.ok()) {
+                return s;
+            }
+            if (ToPatternDef(values).pattern_id != pattern_id) {
+                return storage::VisitControl::kContinue;
+            }
+
+            // Retired, not delete-marked. Catalog reads have no snapshot to
+            // filter a delete-mark against, so a marked row would still be
+            // found by name and a DROP followed by a CREATE of the same name
+            // would collide with a row nobody can see.
+            if (Status s = page.RetireSlot(slot); !s.ok()) return s;
+            found = true;
+            return storage::VisitControl::kStop;
+        });
+    if (!walked.ok()) return walked;
+    if (!found) return Status::NotFound("no sys.pattern_defs row for this pattern_id");
+    return Status::OK();
+}
+
+}  // namespace kds::stats

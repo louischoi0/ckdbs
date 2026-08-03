@@ -167,6 +167,88 @@ Actual Observe(const std::string& sql) {
     return a;
 }
 
+// **The fingerprint is computed twice, two different ways, and must agree.**
+//
+// `FingerprintOf()` lexes the text on its own; `Parser::fingerprint()` rides
+// along with the parse and never lexes anything twice. Folding the second
+// pass away is only safe if the two produce *the same number* - a divergence
+// would not fail, it would quietly give one statement two pattern_ids
+// depending on which path computed it, retiring stored waystones at random.
+//
+// Checked over the whole corpus, which is the only collection of statements
+// anyone maintains: every shape the grammar accepts, plus the ones it
+// refuses. Compared only where the parse succeeded, because a failed parse
+// stops mid-stream by design and hashes a prefix - see Parser::fingerprint().
+TEST(ParserGoldenTest, TheParseTimeFingerprintMatchesTheStandaloneOne) {
+    const std::vector<std::string> lines = ReadLines();
+    ASSERT_FALSE(lines.empty());
+
+    int compared = 0;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (IsSkippable(lines[i])) continue;
+        Entry e;
+        ASSERT_TRUE(SplitLine(lines[i], e));
+        const std::string& sql = e.sql;
+
+        Parser parser(sql);
+        auto parsed = parser.Parse();
+        if (!parsed.ok()) continue;
+
+        const std::optional<Fingerprint> during = parser.fingerprint();
+        const std::optional<Fingerprint> standalone = FingerprintOf(sql);
+
+        ASSERT_EQ(during.has_value(), standalone.has_value())
+            << CorpusPath() << ":" << (i + 1) << ": one path found a pattern and the other did"
+            << " not, for: " << e.sql_raw;
+        if (!during.has_value()) continue;
+
+        EXPECT_EQ(during->pattern_id, standalone->pattern_id)
+            << CorpusPath() << ":" << (i + 1) << ": pattern_id differs between the parse-time"
+            << " and standalone fingerprints, for: " << e.sql_raw;
+        EXPECT_EQ(during->arg_hash, standalone->arg_hash)
+            << CorpusPath() << ":" << (i + 1) << ": arg_hash differs, for: " << e.sql_raw;
+        EXPECT_EQ(during->literal_count, standalone->literal_count) << e.sql_raw;
+        EXPECT_EQ(during->param_count, standalone->param_count) << e.sql_raw;
+        ++compared;
+    }
+    EXPECT_GT(compared, 20) << "too few statements compared; the corpus or the filter is wrong";
+}
+
+TEST(ParserGoldenTest, TheParseTimeFingerprintNeedsTheWholeTokenStream) {
+    // The accumulator's rule is "did the lexer reach end of input", not "did
+    // the parse succeed", and the difference is worth pinning because it
+    // cuts both ways.
+    //
+    // A parse that stopped **in the middle** saw a prefix. A hash of a
+    // prefix is not a prefix of a hash, so there is no honest number to
+    // report and it reports none.
+    {
+        Parser parser("SELECT * FROM t extra");
+        EXPECT_FALSE(parser.Parse().ok());
+        EXPECT_FALSE(parser.fingerprint().has_value())
+            << "a prefix of the stream must not produce a plausible-looking hash";
+        // The standalone entry point lexes to the end regardless, so it
+        // still has one. That asymmetry is why both exist.
+        EXPECT_TRUE(FingerprintOf("SELECT * FROM t extra").has_value());
+    }
+
+    // A parse that failed **because the input ran out** still lexed the
+    // whole statement, so its fingerprint is the whole statement's - and
+    // equal to the standalone one. Reporting nullopt here would be
+    // needlessly conservative.
+    {
+        const std::string sql = "SELECT * FROM t WHERE id =";
+        Parser parser(sql);
+        EXPECT_FALSE(parser.Parse().ok());
+        const auto during = parser.fingerprint();
+        const auto standalone = FingerprintOf(sql);
+        ASSERT_TRUE(during.has_value());
+        ASSERT_TRUE(standalone.has_value());
+        EXPECT_EQ(during->pattern_id, standalone->pattern_id);
+        EXPECT_EQ(during->arg_hash, standalone->arg_hash);
+    }
+}
+
 TEST(ParserGoldenTest, CorpusIsWellFormed) {
     const std::vector<std::string> lines = ReadLines();
     ASSERT_FALSE(lines.empty()) << "corpus is empty: " << CorpusPath();

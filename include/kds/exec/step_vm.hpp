@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "kds/base/status.hpp"
@@ -8,6 +9,8 @@
 #include "kds/exec/budget.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/exec/trail_collector.hpp"
+#include "kds/exec/trail_replay.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
 
@@ -50,15 +53,25 @@ namespace kds::exec {
 // and a top-level `EXISTS` will use, and which V03 made expressible.
 using RowSink = std::function<StatusOr<storage::VisitControl>(const ChainFrame&)>;
 
-// What an execution did, for tests and for V19's meters.
+// What one step did.
 //
-// `relation_opens` counts the times a step began reading its relation - a
-// walk started or a descent made. It is how "a false uncorrelated EXISTS
-// opens zero pages" is checkable: the claim is about work not done, and
-// work not done leaves no other trace.
-struct ExecStats {
+// `relation_opens` counts the times the step began reading its relation -
+// a walk started, a descent made, or a trail replayed, since all three read
+// a page. It is how "a false uncorrelated EXISTS opens zero pages" is
+// checkable: the claim is about work not done, and work not done leaves no
+// other trace. Pair it with `trail_replays` to tell a replay from a
+// descent; `relation_opens` alone cannot, and deliberately does not try -
+// it answers "did this step touch its relation at all".
+//
+// `rows_examined` and `rows_matched` are the pair that makes **selectivity
+// visible**: how many tuples the step decoded, and how many of those
+// survived its residual list. A statement that is slow because a step
+// reads a hundred rows to keep one says so here, and nowhere else - the
+// totals alone cannot, because they cannot say *which* step.
+struct StepStats {
     std::uint64_t relation_opens = 0;
     std::uint64_t rows_examined = 0;   // tuples decoded and filtered
+    std::uint64_t rows_matched = 0;    // of those, the ones passing the residual
     std::uint64_t sub_chain_runs = 0;  // sub-chain evaluations, hoisted or per row
 
     // V19's meters.
@@ -70,6 +83,50 @@ struct ExecStats {
     // refused for its budget.
     std::uint64_t probe_memo_hits = 0;
     std::uint64_t correlated_scans = 0;
+
+    // Var-heap values fetched to complete a row (row_codec.hpp's
+    // ResolveSpills). Counted per step because it is a property of the
+    // *relation* a step reads - a wide-string table pays it and a numeric
+    // one never does - and because it is the one page fetch on the decode
+    // path that a row count does not imply.
+    std::uint64_t spill_fetches = 0;
+
+    // Waystone replay (workplan P11). `trail_replays` counts descents this
+    // step skipped because a recorded location validated; `trail_misses`
+    // counts consultations that found an entry and fell through anyway -
+    // the page gone, the slot retired, or a different tuple at the target.
+    //
+    // **`trail_replays` is how spec §11-4 is checked rather than asserted.**
+    // A trail may replace a lookup and never a search (invariant 9), so a
+    // step whose predicate is not a pk equality must report zero here
+    // forever. That is a property nothing else makes visible: a search that
+    // was wrongly skipped returns *plausible* rows, so the only evidence is
+    // the work not done.
+    std::uint64_t trail_replays = 0;
+    std::uint64_t trail_misses = 0;
+
+    StepStats& operator+=(const StepStats& other) noexcept;
+};
+
+// What an execution did, per step.
+//
+// Indexed by `Step::step_id`, which is global across the whole statement:
+// the outer chain and every sub-chain share one counter (step_chain.hpp),
+// so a step_id identifies a step without any parent linkage and this
+// vector needs none either.
+//
+// The statement-wide totals that used to be these fields are still
+// available through Total(), which is what the existing callers want; what
+// they could not answer before is *which* step spent the work.
+struct ExecStats {
+    std::vector<StepStats> steps;
+
+    // The step's counters, growing the vector as needed. Called on the hot
+    // path, so it does not check anything a compiled chain guarantees.
+    StepStats& For(std::uint32_t step_id);
+
+    // Summed across every step - the old statement-wide view.
+    StepStats Total() const noexcept;
 };
 
 // Runs `chain` and calls `sink` for each row that satisfies it.
@@ -83,9 +140,30 @@ struct ExecStats {
 // than one row - a runtime verdict, since parse time cannot prove
 // cardinality in general (spec §2) - and with `ResourceExhausted` when the
 // statement spends `budget` (exec/budget.hpp).
+//
+// `trail`, when given, collects the tuples that trail-replayable steps
+// accepted, in execution order (exec/trail_collector.hpp, workplan P09).
+// Null means nothing is recording, which is a valid production
+// configuration and costs one null check per accepted row.
+//
+// **Passing a collector cannot change what this returns.** It is written
+// to and never read here; no branch below depends on its contents, and a
+// full one drops silently rather than failing the statement. That is what
+// makes "results are identical with recording on and off" a property of
+// the structure rather than of the test data.
+//
+// `replay`, when given, is the trail a previous execution of this instance
+// recorded (exec/trail_replay.hpp, workplan P11/P13). **Passing it cannot
+// change what this returns either**, and for a sharper reason than the
+// collector's: a trail supplies only a *location*, which is then read and
+// filtered by the same code a descent's location would have been. Every
+// entry is validated first, and any failure falls through to the descent
+// for that step alone. Deleting every trail in the database changes
+// latency and nothing else (invariant 8).
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats = nullptr,
-               const Budget& budget = Budget());
+               const Budget& budget = Budget(), TrailCollector* trail = nullptr,
+               const TrailReplay* replay = nullptr);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

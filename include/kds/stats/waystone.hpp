@@ -6,6 +6,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/stats/instance_key.hpp"
 #include "kds/storage/page_header.hpp"
 
 // The waystone page: the recorded trail of one pattern instance
@@ -210,11 +211,15 @@ static_assert(kWaystoneBodyOffset + kEntriesPerWaystonePage * kWaystoneEntrySize
 // Field-wise memcpy through the named offsets above (rules.md §§2, 5):
 // never a reinterpret_cast onto page bytes, never a compiler bitfield.
 
-// Formats a brand-new waystone page for `(pattern_id, arg_hash)`: zeroes
-// the page, writes the common header for PageType::kWaystone, and writes a
-// waystone header with no entries and no continuation.
-void FormatWaystonePage(std::span<std::byte, kPageSize> page, std::uint64_t pattern_id,
-                        std::uint64_t arg_hash, std::uint64_t recorded_ts);
+// Formats a brand-new waystone page for `key`: zeroes the page, writes the
+// common header for PageType::kWaystone, and writes a waystone header with
+// no entries and no continuation.
+//
+// The instance arrives as one value rather than two `uint64_t`s for the
+// reason instance_key.hpp gives: swapping them used to compile, and the
+// resulting bug is a silent permanent trail miss.
+void FormatWaystonePage(std::span<std::byte, kPageSize> page, const InstanceKey& key,
+                        std::uint64_t recorded_ts);
 
 // Decodes the waystone header verbatim, with no validation - a pure
 // decode, like storage::ReadPageHeader. A caller inspecting a page that
@@ -239,8 +244,7 @@ StatusOr<WaystoneEntry> ReadWaystoneEntry(std::span<const std::byte, kPageSize> 
 Status WriteWaystoneEntry(std::span<std::byte, kPageSize> page, std::size_t index,
                           const WaystoneEntry& entry);
 
-// Whether `page` is a formatted waystone page recording exactly the
-// instance `(pattern_id, arg_hash)`.
+// Whether `page` is a formatted waystone page recording exactly `key`.
 //
 // **Every reason to answer false is folded into one bool**, deliberately:
 // an unformatted page, a page of another type, a format version this build
@@ -252,7 +256,7 @@ Status WriteWaystoneEntry(std::span<std::byte, kPageSize> page, std::size_t inde
 // The last of the four is the load-bearing one. The directory is keyed by
 // a hash, so a collision leads a reader to a real, valid, wrong trail;
 // this check is what makes that a miss rather than someone else's rows.
-bool WaystonePageHolds(std::span<const std::byte, kPageSize> page, std::uint64_t pattern_id,
-                       std::uint64_t arg_hash) noexcept;
+bool WaystonePageHolds(std::span<const std::byte, kPageSize> page,
+                       const InstanceKey& key) noexcept;
 
 }  // namespace kds::stats

@@ -31,7 +31,7 @@ Decisions worth carrying forward:
 - **Fields are length-prefixed** in the hash stream, so `FROM ab WHERE c` and `FROM a WHERE bc` cannot flatten to the same bytes. Tested directly.
 - **Collisions are survivable by construction, not by hash strength.** FNV-1a/64 is not cryptographic, but a colliding pattern's trail names tuples that fail the replay validation in spec §2, so it degrades to a miss. A collision can cost performance; it cannot produce a row.
 - **The golden-value tests were cross-checked against an independent implementation** of the same byte stream rather than recording whatever the C++ emitted. They pin a value persisted in `sys.patterns`; changing the algorithm is a format change and is P02's business.
-- Known cost of the bolt-on: this lexes the statement a second time, separately from `Parser`. The contract — text in, two integers out — is what survives the blueprint parser, which fuses the passes.
+- ~~Known cost of the bolt-on: this lexes the statement a second time, separately from `Parser`.~~ **Fixed 2026-08-03**: the lexer feeds a `FingerprintAccumulator` as it produces tokens, so a parse yields the fingerprint with no second pass, and `FingerprintOf()` — still there for callers with a string and no parse — is implemented on the same accumulator. `kFingerprintVersion` did not move; the golden corpus pins that, and a differential test compares both paths over every statement in it. The second lex had measured ~13% of a point join's latency and was the whole of replay's B+ tree regression (`bench/results-waystone-v2.md`). The contract — text in, two integers out — is what survives the blueprint parser regardless.
 
 **P02 — Fingerprint versioning.** — **done.**
 Files: same header.
@@ -127,50 +127,67 @@ Decisions worth carrying forward:
 - **Lookup reads through `GetForRead()`**, create through `Get()`. A replay walks the directory on the statement path and must not dirty every interior page it touches; the walk that allocates is writing anyway.
 - **A dangling child id is reported, not followed.** Interior pages carry no checksum, so damage surfaces as the store's `NotFound` rather than as a walk into a page that was never created. That is an error for this layer, and a miss for the replay path above it (P11) — the distinction is deliberate: this function cannot tell damage from a store failure, and the layer that falls through can afford not to care.
 
-**P08 — Trail write and read.**
-Files: `src/stats/waystone_store.cpp`, `tests/waystone_store_test.cpp`.
-`WriteTrail(pattern, arg_hash, span<TrailEntry>)` and `ReadTrail(pattern, arg_hash)`, including continuation onto `next_page_id` for a trail longer than one page. Overwrite semantics: re-recording an instance replaces its trail wholesale rather than merging — a merge would accumulate rows that no longer qualify, and nothing here can tell that from a row that still does.
-Tests: round-trip incl. multi-page; overwrite replaces; a trail for an unregistered pattern is a miss, not an error.
-Needs: P07.
+**P08 — Trail write and read. DONE 2026-08-02.**
+Files: `include/kds/stats/trail_store.hpp`, `src/stats/trail_store.cpp`, `tests/trail_store_test.cpp` (named `trail_store`, not `waystone_store`, to match the thing it stores).
+`WriteTrail` / `ReadTrail`, keyed on `stats::InstanceKey`. Overwrite is wholesale as specified.
+
+**No continuation was built, and the cap decision is why.** Spec §9's open per-instance cap was settled at one page, so `next_page_id` is always `kInvalidPageId` and a trail that would exceed 253 entries is refused with `OutOfSpace` and **not recorded at all** — a truncated trail is indistinguishable from a complete one to every reader, which is the one failure mode a replayer cannot defend against. The field stays reserved for the day a larger cap is wanted.
+
+Two more things the implementation settled that the task did not name. Re-recording **compares before writing** and skips an unchanged trail: nothing moves a tuple today, so the steady state is rewriting byte-identical entries, and a comparison through `GetForRead()` avoids dirtying the page. And the `[OPEN]` collision policy had to be chosen to write anything at all — `TrailDisplacesOnCollision()` is `[PROPOSED]` **displace**, isolated in one function so drop and chain stay one-line changes.
+Tests: round-trip with every field; overwrite replaces rather than merges; a 254-entry trail is refused whole and leaves the previous one intact; a colliding `arg_hash` reads as a miss via the header check and never as a foreign trail; an absent trail is empty, not an error.
 
 ## Phase D — recording
 
-**P09 — The executor seam.**
-Files: `include/kds/stats/pattern_observer.hpp`, `tests/pattern_observer_test.cpp`.
-`PatternObserver::OnPatternResult(pattern_id, arg_hash, span<const TrailEntry>) noexcept` — the executor's only knowledge of Waystone, wait-free, droppable, with a `NullPatternObserver` that is a valid production configuration. The executor collects `(rel_oid, pk, page_id, slot, epoch, step_id)` as it goes; it must not re-derive them afterwards, since re-deriving is the search the trail exists to avoid.
-Tests: drop under saturation without blocking; drops counted and visible; null observer costs nothing (instrumented).
-Needs: P06.
+**P09 — The executor seam. DONE 2026-08-02.**
+Files: `include/kds/exec/trail_collector.hpp`, `src/exec/step_vm.cpp`.
+Split differently from the task, and the reason is the dependency arrow: `stats/` already depends on `exec/`, so an executor that included a Waystone header would close a cycle. The executor therefore writes `exec::TouchedTuple` — five integers, no page format, no mention of a trail — into a bounded droppable `TrailCollector`, and `stats::TrailRecorder` is the observer that turns those into entries. Spec §1's "Waystone lives outside the executor" is structural rather than a convention.
 
-**P10 — Recording wired into the dispatcher.**
-Files: `src/server/command_dispatcher.cpp`, `tests/waystone_record_test.cpp`.
-Compute `(pattern_id, arg_hash)` at parse, register the pattern if new, collect the trail during execution, write it after the statement succeeds. Never on the failure path — a trail from a statement that errored describes a state no reader should be pointed at.
-Recording policy is `[OPEN]` (spec §9): implement behind a `RecordingPolicy` seam whose default is `[PROPOSED]` record-every-execution, so sampling and after-*n*-sightings both stay viable without a format change.
-Tests: a repeated statement produces one pattern row and one trail; a failing statement produces no trail; results unchanged with recording off.
-Needs: P04, P08, P09.
+`epoch` is **not** collected: none exists (see §9). The `PageId` was the one thing the executor had and threw away — `RunWalkStep`'s visitor took it as an unnamed parameter — so threading it into `AcceptTupleAt` is the whole structural change.
+Tests: covered through `trail_recorder_test.cpp`; the null configuration is the default everywhere, which is what keeps every pre-existing test recorder-free.
+
+**P10 — Recording wired into the dispatcher. DONE 2026-08-02.**
+Files: `include/kds/stats/trail_recorder.hpp`, `src/stats/trail_recorder.cpp`, `src/server/command_dispatcher.cpp`, `tests/trail_recorder_test.cpp`.
+Policy is not the `[PROPOSED]` record-every-execution this task named — §9 decided `n = 2` after it was written, and `WouldRecord()` is the one function that holds it (n=1 for a declared pattern). Auto-registration happens **at the moment recording is decided**, not on first sight, so a database of one-shot queries accumulates no `sys.patterns` rows at all. `waystone_recording` (config, default on) is the off switch.
+Tests: n=2 for observed and n=1 for declared; two instances of one pattern count separately; a failed statement records nothing; a scan-only statement records nothing; a join records one entry per replayable step in `step_id` order; the sighting table clearing only restarts counting; **replies are byte-identical with recording on and off**.
+
+**Measured cost** (`tools/join_benchmark.py`, 2000 rows): +19% p50 on a 333 µs point join, of which ~13pp is `FingerprintOf` lexing the statement a *second* time — the bolt-on cost `fingerprint.hpp` already names — and only ~4pp is the recording itself. On an 11 ms join it is +1%. A statement that collects nothing skips the fingerprint entirely. **Both planned parser changes have since landed (2026-08-03)** — the fingerprint is accumulated during the parse, and `Token::text` views the statement instead of copying it — which took the recording overhead down with them; see P14.
 
 ## Phase E — replay
 
-**P11 — Point replay.**
-Files: `src/server/command_dispatcher.cpp`, `tests/waystone_replay_test.cpp`.
+**P11 — Point replay. DONE 2026-08-02.**
+Files: `include/kds/exec/trail_replay.hpp`, `src/exec/trail_replay.cpp`, `src/exec/step_vm.cpp`, `src/server/command_dispatcher.cpp`, `tests/waystone_replay_test.cpp`.
+
+Landed in the **step VM**, not the dispatcher, per I17: replay is driven by the bound step list, so `Lookup` and `Probe` are one mechanism and P13 came with it. The validation lives in one function, `ChainRunner::TryReplay()`, and rule 0 is the *lookup key* rather than a check - the index is keyed on `(step_id, pk)`, so an entry is only found by matching the freshly derived probe key.
+
+The fingerprint had to move ahead of execution (replay needs the instance before the run), so one `FingerprintOf` now serves replay and recording. A chain with no replayable step skips it entirely.
+Tests: hit path equals the descent's answer *and* is shown by `replays=1` to have actually replayed; each miss cause falls through and still returns the right row - no trail, wrong Keystone at the target, page gone, slot past the end, an entry recorded against another relation, an entry for a different key.
 For `kPointSelect`-shaped statements: look the instance up, replay the single entry through the spec §2 validation chain, fall through to `LocateByPk` on any miss. The validation must live in **one** function shared by point and join replay — a second copy is how one path forgets the `rel_oid` check.
 Tests: hit path returns the same row as the scan/descent; each of the four miss causes (no trail, invalid entry, epoch mismatch, wrong Keystone at the target) falls through and still returns the right row.
 Needs: P10.
 
-**P12 — The advisory-contract test.** *(Do not defer this behind P13.)*
+**P12 — The advisory-contract test. DONE 2026-08-02.**
 Files: `tests/waystone_contract_test.cpp`.
+
+All five configurations compared byte for byte, plus §11-4's instrumented half (a `Scan` step reports zero replays, with a keyed step reporting non-zero as the control - without which "no replays on a scan" would be satisfied by replay never working). **Verified by removing rule 1 and watching it fail**: a poisoned trail then makes `WHERE id = 3` return *no rows*, because the engine follows the bad pointer to a different tuple which fails the residual. That is the silent-wrong-answer mode invariant 8 exists to forbid.
 Spec §11-3 and §11-4 in full: byte-identical results across recording-on, recording-off, replay-off, waystones-deleted-mid-run, and corrupted-trail; plus the instrumented proof that a pattern with a non-pk predicate still performs its search. Regression-mandatory from here on.
 Needs: P11.
 
-**P13 — Join replay.**
-Files: executor/dispatcher, `tests/waystone_join_replay_test.cpp`.
+**P13 — Join replay. DONE 2026-08-02**, folded into P11.
+Files: `src/exec/step_vm.cpp`, `tests/waystone_replay_test.cpp`.
+
+No separate mechanism and no fixture executor: the join path exists (V28) and a `Probe` is just a step, so step-list-driven replay covered it for free. Rule 0 shipped with it, as the amendment below requires.
 Replay a cross-relation trail in `step_id` order for the written-order nested-loop join. This is the case the design exists for (spec §7) and the first one whose measurement is worth quoting.
 Blocked on the executor having a join path at all — that lands in `docs/parser-v2-workplan.md` phase V-4 (V28), with the bound step list this task replays from in V36 and the mandatory probe-key check in V37. Until then this task's deliverable is a fixture executor replaying scripted multi-relation trails, which is also what P12's cross-relation cases run against.
 
 **Amended 2026-08-01 by `docs/parser-v2.md` I17, and it is a correctness amendment, not a scheduling one.** Replay must be driven by the bound plan's **step list**, never by `stmt_class` — a statement whose root is `kPointSelect` and whose subquery is a join would otherwise have a trail nobody replays. And §2's validation chain is **not sufficient for a join step**: every rule in it validates the trail against storage and none looks at the query, so if the driving row's join column is updated between recording and replay, an entry for the old key passes `rel_oid`, Keystone id, epoch and visibility, and the join emits the wrong row. Rule 0 — re-derive the probe key from the current outer row and require it to equal the entry's `pk` — is mandatory before any join replay ships. V37 lands it together with the §2 and §11 amendments.
 Needs: P11, P12.
 
-**P14 — Measure.**
-Files: `bench/bench_main.cpp`, `tools/benchmark.py`, `bench/results-waystone-v2.md`.
+**P14 — Measure. DONE 2026-08-02.**
+Files: `bench/results-waystone-v2.md`, `tools/join_benchmark.py`.
+
+**The finding, recorded rather than tuned away as this task requires.** First measurement: replay 22-31x faster on a relation with no pk index, 13-15% *slower* on a B+ tree one — against §7's bar, cleared on heap and **failed on btree joins**.
+
+The diagnosis was that the btree loss belonged to the parser, not to replay, and **fixing it confirmed that**: folding the fingerprint into the parse and then making tokens zero-copy took the btree join from +15.2% to +2.8% and the point lookup from +13.1% to +6.7%, while the heap cases were unchanged at 26-34x. The parser changes also made every statement 3-8% faster on their own, which is a wider win than this task was scoped to find. What remains of the btree overhead is replay's own — a trail page read, an index build, and the recorder's write-side work.
 Point replay vs. btree descent vs. heap chain scan, and join replay vs. descent chain, at several row counts. Quote against the bar in spec §7 (8,417 qps / 11 µs for a validated point lookup vs. 311 qps / 2,582 µs for a chain scan at 5,000 rows). If join replay does not beat a descent chain, that is a finding and it goes in the file.
 Needs: P13.
 

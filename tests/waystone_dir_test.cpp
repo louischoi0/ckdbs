@@ -26,6 +26,16 @@ using storage::InMemoryPageStore;
 
 constexpr std::uint64_t kPatternId = 0xA1A2A3A4B1B2B3B4ull;
 
+// One pattern's directory, so every walk below is for one pattern and only
+// the `arg_hash` varies - which is what a directory is: the second level of
+// addressing, under a pattern_id the caller already resolved.
+//
+// The walk consumes only `arg_hash`; the pattern travels with it because
+// the page id it returns is not usable without one (instance_key.hpp).
+constexpr InstanceKey Key(std::uint64_t arg_hash) noexcept {
+    return InstanceKey{kPatternId, arg_hash};
+}
+
 // The digit an independent formulation says a walk should take: base-2048
 // numeral, most significant digit first. Division and modulo rather than
 // the implementation's shift and mask, so the two can disagree.
@@ -48,13 +58,13 @@ PageId ChildOf(storage::PageStore& store, PageId dir_page, std::size_t index) {
 void FormatAs(storage::PageStore& store, PageId page_id, std::uint64_t arg_hash) {
     auto bytes = store.Get(page_id);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    FormatWaystonePage(bytes.value(), kPatternId, arg_hash, /*recorded_ts=*/7);
+    FormatWaystonePage(bytes.value(), {kPatternId, arg_hash}, /*recorded_ts=*/7);
 }
 
 bool PageHolds(storage::PageStore& store, PageId page_id, std::uint64_t arg_hash) {
     auto bytes = store.Get(page_id);
     EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-    return WaystonePageHolds(bytes.value(), kPatternId, arg_hash);
+    return WaystonePageHolds(bytes.value(), {kPatternId, arg_hash});
 }
 
 // ---- Derived constants ----------------------------------------------------
@@ -133,7 +143,7 @@ TEST_F(WaystoneDirTest, AFreshRootIsEmptyAtEverySlot) {
 TEST_F(WaystoneDirTest, AnUnpopulatedRangeIsAMissNotAnError) {
     const PageId root = MakeRoot();
     for (int depth = 1; depth <= kMaxPatternDirDepth; ++depth) {
-        auto found = LookupWaystonePage(store_, root, depth, 0xDEADBEEFCAFEull);
+        auto found = LookupWaystonePage(store_, root, depth, Key(0xDEADBEEFCAFEull));
         ASSERT_TRUE(found.ok()) << found.status().message();
         EXPECT_EQ(found.value(), kInvalidPageId) << "depth " << depth;
     }
@@ -147,11 +157,11 @@ TEST_F(WaystoneDirTest, CreateThenLookupResolvesToTheSamePageAtEveryDepth) {
         auto root = CreateDirPage(store);
         ASSERT_TRUE(root.ok()) << root.status().message();
 
-        auto created = LookupOrCreateWaystonePage(store, root.value(), depth, kArgHash);
+        auto created = LookupOrCreateWaystonePage(store, root.value(), depth, Key(kArgHash));
         ASSERT_TRUE(created.ok()) << created.status().message();
         ASSERT_NE(created.value(), kInvalidPageId);
 
-        auto found = LookupWaystonePage(store, root.value(), depth, kArgHash);
+        auto found = LookupWaystonePage(store, root.value(), depth, Key(kArgHash));
         ASSERT_TRUE(found.ok()) << found.status().message();
         EXPECT_EQ(found.value(), created.value()) << "depth " << depth;
     }
@@ -161,11 +171,11 @@ TEST_F(WaystoneDirTest, CreatingTwiceReturnsTheSamePageAndAllocatesNothing) {
     const PageId root = MakeRoot();
     constexpr std::uint64_t kArgHash = 0x00A0B0C0D0E0F001ull;
 
-    auto first = LookupOrCreateWaystonePage(store_, root, 3, kArgHash);
+    auto first = LookupOrCreateWaystonePage(store_, root, 3, Key(kArgHash));
     ASSERT_TRUE(first.ok()) << first.status().message();
     const std::size_t after_first = store_.page_count();
 
-    auto second = LookupOrCreateWaystonePage(store_, root, 3, kArgHash);
+    auto second = LookupOrCreateWaystonePage(store_, root, 3, Key(kArgHash));
     ASSERT_TRUE(second.ok()) << second.status().message();
 
     EXPECT_EQ(second.value(), first.value());
@@ -177,7 +187,7 @@ TEST_F(WaystoneDirTest, DistinctInstancesGetDistinctPages) {
 
     std::set<PageId> pages;
     for (std::uint64_t i = 0; i < 16; ++i) {
-        auto created = LookupOrCreateWaystonePage(store_, root, 2, (i << 20) | (i * 37 + 1));
+        auto created = LookupOrCreateWaystonePage(store_, root, 2, Key((i << 20) | (i * 37 + 1)));
         ASSERT_TRUE(created.ok()) << created.status().message();
         pages.insert(created.value());
     }
@@ -191,17 +201,17 @@ TEST_F(WaystoneDirTest, AllocationIsSparseAndCostsOnlyThePathItTouches) {
     // Depth 3 over a 2048^3-slot space: one instance costs two interior
     // pages plus the waystone itself, not the 2048^2 pages a dense
     // directory would.
-    auto first = LookupOrCreateWaystonePage(store_, root, 3, 0);
+    auto first = LookupOrCreateWaystonePage(store_, root, 3, Key(0));
     ASSERT_TRUE(first.ok()) << first.status().message();
     EXPECT_EQ(store_.page_count(), 4u);
 
     // A key differing only in the last digit reuses both interior pages.
-    auto sibling = LookupOrCreateWaystonePage(store_, root, 3, 1);
+    auto sibling = LookupOrCreateWaystonePage(store_, root, 3, Key(1));
     ASSERT_TRUE(sibling.ok()) << sibling.status().message();
     EXPECT_EQ(store_.page_count(), 5u);
 
     // A key differing in the top digit shares nothing below the root.
-    auto far = LookupOrCreateWaystonePage(store_, root, 3, 1ull << 22);
+    auto far = LookupOrCreateWaystonePage(store_, root, 3, Key(1ull << 22));
     ASSERT_TRUE(far.ok()) << far.status().message();
     EXPECT_EQ(store_.page_count(), 8u);
 }
@@ -210,7 +220,7 @@ TEST_F(WaystoneDirTest, ANewlyCreatedTargetIsUnformattedAndReadsAsAMiss) {
     const PageId root = MakeRoot();
     constexpr std::uint64_t kArgHash = 0x5151515151515151ull;
 
-    auto created = LookupOrCreateWaystonePage(store_, root, 2, kArgHash);
+    auto created = LookupOrCreateWaystonePage(store_, root, 2, Key(kArgHash));
     ASSERT_TRUE(created.ok()) << created.status().message();
 
     // The directory resolves an address; it does not record a trail. Until
@@ -234,14 +244,14 @@ TEST_F(WaystoneDirTest, ACollidingInstanceResolvesToAMissNeverToAForeignTrail) {
     constexpr std::uint64_t kColliding = (44ull << kDirFanoutBits) | 512ull;
     ASSERT_EQ(DirIndexAt(kRecorded, 1, 0), DirIndexAt(kColliding, 1, 0));
 
-    auto created = LookupOrCreateWaystonePage(store_, root, 1, kRecorded);
+    auto created = LookupOrCreateWaystonePage(store_, root, 1, Key(kRecorded));
     ASSERT_TRUE(created.ok()) << created.status().message();
     FormatAs(store_, created.value(), kRecorded);
 
     // The walk hands the colliding instance the same address - it has no
     // way not to - and the waystone's own header is what stops that from
     // becoming somebody else's rows.
-    auto found = LookupWaystonePage(store_, root, 1, kColliding);
+    auto found = LookupWaystonePage(store_, root, 1, Key(kColliding));
     ASSERT_TRUE(found.ok()) << found.status().message();
     EXPECT_EQ(found.value(), created.value());
     EXPECT_FALSE(PageHolds(store_, found.value(), kColliding));
@@ -252,13 +262,13 @@ TEST_F(WaystoneDirTest, APatternIdMismatchIsAMissToo) {
     const PageId root = MakeRoot();
     constexpr std::uint64_t kArgHash = 0x2222333344445555ull;
 
-    auto created = LookupOrCreateWaystonePage(store_, root, 2, kArgHash);
+    auto created = LookupOrCreateWaystonePage(store_, root, 2, Key(kArgHash));
     ASSERT_TRUE(created.ok()) << created.status().message();
     FormatAs(store_, created.value(), kArgHash);
 
     auto bytes = store_.Get(created.value());
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    EXPECT_FALSE(WaystonePageHolds(bytes.value(), kPatternId + 1, kArgHash));
+    EXPECT_FALSE(WaystonePageHolds(bytes.value(), {kPatternId + 1, kArgHash}));
 }
 
 // ---- Growth ---------------------------------------------------------------
@@ -284,14 +294,14 @@ TEST_F(WaystoneDirTest, GrowthPreservesTheMappingsWhoseNewTopDigitIsZero) {
     constexpr std::uint64_t kSurvives = 300ull;
     ASSERT_EQ(DirIndexAt(kSurvives, 2, 0), 0u);
 
-    auto created = LookupOrCreateWaystonePage(store_, root, 1, kSurvives);
+    auto created = LookupOrCreateWaystonePage(store_, root, 1, Key(kSurvives));
     ASSERT_TRUE(created.ok()) << created.status().message();
     FormatAs(store_, created.value(), kSurvives);
 
     auto grown = GrowPatternDirectory(store_, root, 1);
     ASSERT_TRUE(grown.ok()) << grown.status().message();
 
-    auto found = LookupWaystonePage(store_, grown.value(), 2, kSurvives);
+    auto found = LookupWaystonePage(store_, grown.value(), 2, Key(kSurvives));
     ASSERT_TRUE(found.ok()) << found.status().message();
     EXPECT_EQ(found.value(), created.value());
     EXPECT_TRUE(PageHolds(store_, found.value(), kSurvives));
@@ -308,14 +318,14 @@ TEST_F(WaystoneDirTest, GrowthCoolsEveryOtherInstanceWithoutCorruptingOne) {
     constexpr std::uint64_t kCooled = (5ull << kDirFanoutBits) | 300ull;
     ASSERT_NE(DirIndexAt(kCooled, 2, 0), 0u);
 
-    auto created = LookupOrCreateWaystonePage(store_, root, 1, kCooled);
+    auto created = LookupOrCreateWaystonePage(store_, root, 1, Key(kCooled));
     ASSERT_TRUE(created.ok()) << created.status().message();
     FormatAs(store_, created.value(), kCooled);
 
     auto grown = GrowPatternDirectory(store_, root, 1);
     ASSERT_TRUE(grown.ok()) << grown.status().message();
 
-    auto found = LookupWaystonePage(store_, grown.value(), 2, kCooled);
+    auto found = LookupWaystonePage(store_, grown.value(), 2, Key(kCooled));
     ASSERT_TRUE(found.ok()) << found.status().message();
     EXPECT_EQ(found.value(), kInvalidPageId);
 
@@ -323,7 +333,7 @@ TEST_F(WaystoneDirTest, GrowthCoolsEveryOtherInstanceWithoutCorruptingOne) {
     // page is reachable by whichever key now addresses it - and that key
     // gets a header mismatch, the same miss a collision gets.
     constexpr std::uint64_t kNowAddressesIt = 300ull;
-    auto other = LookupWaystonePage(store_, grown.value(), 2, kNowAddressesIt);
+    auto other = LookupWaystonePage(store_, grown.value(), 2, Key(kNowAddressesIt));
     ASSERT_TRUE(other.ok()) << other.status().message();
     EXPECT_EQ(other.value(), created.value());
     EXPECT_FALSE(PageHolds(store_, other.value(), kNowAddressesIt));
@@ -343,11 +353,11 @@ TEST_F(WaystoneDirTest, ADepthOutsideTheLegalRangeIsRefusedByEveryEntryPoint) {
     const PageId root = MakeRoot();
 
     for (int depth : {0, -1, kMaxPatternDirDepth + 1}) {
-        auto looked = LookupWaystonePage(store_, root, depth, 1);
+        auto looked = LookupWaystonePage(store_, root, depth, Key(1));
         EXPECT_FALSE(looked.ok()) << "depth " << depth;
         EXPECT_EQ(looked.status().code(), StatusCode::kInvalidArgument);
 
-        auto created = LookupOrCreateWaystonePage(store_, root, depth, 1);
+        auto created = LookupOrCreateWaystonePage(store_, root, depth, Key(1));
         EXPECT_FALSE(created.ok()) << "depth " << depth;
         EXPECT_EQ(created.status().code(), StatusCode::kInvalidArgument);
 
@@ -369,7 +379,7 @@ TEST_F(WaystoneDirTest, ADanglingChildIdIsReportedRatherThanFollowed) {
     std::memcpy(bytes.value().data() + DirIndexAt(7, 2, 0) * sizeof(PageId), &bogus,
                 sizeof(PageId));
 
-    auto found = LookupWaystonePage(store_, root, 2, 7);
+    auto found = LookupWaystonePage(store_, root, 2, Key(7));
     EXPECT_FALSE(found.ok());
     EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
 }
@@ -392,7 +402,7 @@ TEST(WaystoneDirDeviceTest, InteriorPagesAreHeaderlessAndSurviveAFlushIntact) {
     // pages are allocated headerless is that the stamp would eat it.
     constexpr std::uint64_t kArgHash = 1;
     ASSERT_EQ(DirIndexAt(kArgHash, 1, 0), 1u);
-    auto created = LookupOrCreateWaystonePage(store, root.value(), 1, kArgHash);
+    auto created = LookupOrCreateWaystonePage(store, root.value(), 1, Key(kArgHash));
     ASSERT_TRUE(created.ok()) << created.status().message();
 
     EXPECT_TRUE(store.IsHeaderless(root.value()));
@@ -408,7 +418,7 @@ TEST(WaystoneDirDeviceTest, InteriorPagesAreHeaderlessAndSurviveAFlushIntact) {
     auto reopened = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/128);
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
 
-    auto found = LookupWaystonePage(*reopened.value(), root.value(), 1, kArgHash);
+    auto found = LookupWaystonePage(*reopened.value(), root.value(), 1, Key(kArgHash));
     ASSERT_TRUE(found.ok()) << found.status().message();
     EXPECT_EQ(found.value(), created.value());
 }

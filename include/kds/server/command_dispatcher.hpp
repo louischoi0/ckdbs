@@ -11,8 +11,12 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/exec/pattern_ddl.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/stats/trail_recorder.hpp"
+#include "kds/stats/trail_store.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -148,7 +152,9 @@ public:
                        storage::PageStore& page_store, Logger* log = nullptr,
                        const sched::Clock* clock = nullptr, wal::WalManager* wal = nullptr,
                        wal::DurabilityClass durability = wal::DurabilityClass::kGroup,
-                       exec::Budget budget = exec::Budget()) noexcept
+                       exec::Budget budget = exec::Budget(),
+                       stats::TrailRecorder* recorder = nullptr,
+                       bool replay_enabled = false) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -156,7 +162,9 @@ public:
           clock_(clock),
           wal_(wal),
           durability_(durability),
-          budget_(budget) {}
+          budget_(budget),
+          recorder_(recorder),
+          replay_enabled_(replay_enabled) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -174,12 +182,37 @@ public:
     //   SHOW META             -> superblock stats, one line
     //   SHOW TABLES           -> space-separated table names
     //   SHOW PATTERNS         -> "patterns=<n>", then one "\n"-escaped
-    //                            section per sys.patterns row. An
-    //                            inspection surface: it lists rows from
+    //                            section per sys.patterns row, carrying
+    //                            `origin=user|auto` and `pinned=yes|no`
+    //                            plus `name=` and `params=` for the ones
+    //                            that were declared (auto patterns have no
+    //                            sys.pattern_defs row and stay bare hex).
+    //                            An inspection surface: it lists rows from
     //                            older fingerprint revisions too, marked
     //                            `stale=v<n>`, because those are the dead
     //                            weight a version bump leaves behind and
     //                            seeing them is the point.
+    //   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
+    //       OF <select>
+    //                         -> "CREATED PATTERN name=<s>
+    //                            pattern_id=0x<hex> dir_depth=<n>
+    //                            params=<n>", or "ADOPTED PATTERN ..." when
+    //                            an auto-registered row for the same shape
+    //                            already existed and was upgraded in place
+    //                            (keeping its recorded trails). Checks that
+    //                            pass with something to say append
+    //                            "\n"-escaped "WARN ..." sections - an
+    //                            implicit conversion, or a body whose trail
+    //                            can never replay. See
+    //                            src/exec/pattern_ddl.hpp for the full
+    //                            validation chain and where the error /
+    //                            warning line falls.
+    //   DROP PATTERN <name>   -> "DROPPED PATTERN name=<s>
+    //                            pattern_id=0x<hex>". Removes the
+    //                            declaration, not the shape: the waystones
+    //                            are left for retention, and auto
+    //                            registration may re-learn the shape later
+    //                            as a nameless row.
     //   SHOW PAGE <page_id> [VALUES]
     //                         -> page dump: header + slot directory for a
     //                            heap page or a B+ tree leaf, or level +
@@ -265,8 +298,52 @@ private:
     DispatchOutcome HandleShowPatterns();
     DispatchOutcome HandleCreateTable(std::string_view args);
     DispatchOutcome HandleCreateTableSql(std::string_view line);
+
+    // `CREATE PATTERN` / `DROP PATTERN`. Both take the whole statement
+    // line, not a suffix: a declaration's stored canon is its own text
+    // verbatim, so the parser has to see exactly what the client sent.
+    DispatchOutcome HandleCreatePattern(std::string_view line);
+    DispatchOutcome HandleDropPattern(std::string_view line);
     DispatchOutcome HandleInsert(std::string_view line);
-    DispatchOutcome HandleSelect(std::string_view line);
+    // `analyze` switches the reply from rows to the compiled plan plus
+    // the per-step counters the run produced. Everything before that -
+    // parse, compile, execute - is the same code on the same statement
+    // text, which is the point: an ANALYZE that took a different path
+    // would describe a run nobody performed.
+    //
+    // `line` is always the *stripped* statement, never the ANALYZE-
+    // prefixed text. Dispatch() strips the keyword before anything sees
+    // the line, so a fingerprint taken anywhere below here is the same
+    // one the unprefixed statement would produce - which is what keeps
+    // `sys.patterns` and a Waystone trail from splitting in two over a
+    // diagnostic prefix.
+    DispatchOutcome HandleSelect(std::string_view line, bool analyze = false);
+
+    // The ANALYZE reply: run the chain for its counters, print the plan
+    // beside them. Split out so HandleSelect's row-formatting path and
+    // this one visibly share everything above the sink.
+    //
+    // `sql` is the stripped statement, taken so the reply can report the
+    // statement's `pattern_id` - the number a `CREATE PATTERN` declaration
+    // printed, which is how an operator checks that traffic actually
+    // matches what they declared.
+    // `trail` and `replay` are the same two halves an ordinary execution
+    // gets. ANALYZE takes them because its contract is that the run it
+    // describes is the run that actually happened: a diagnostic that
+    // skipped replay would report descents no real execution performs.
+    //
+    // It takes no statement text: the `pattern_id` it prints comes from
+    // `instance`, which the caller got from the parse. It used to re-lex
+    // `sql` to recompute a number it had already been handed.
+    DispatchOutcome RunAnalyze(const exec::StepChain& chain, exec::TrailCollector* trail,
+                               const exec::TrailReplay* replay,
+                               const std::optional<stats::InstanceKey>& instance);
+
+    // Hands a successful execution's trail to the recorder. Shared by the
+    // row-returning path and ANALYZE so the two cannot come to disagree
+    // about when a trail is written.
+    void RecordTrail(const std::optional<stats::InstanceKey>& instance,
+                     exec::TrailCollector* trail, const exec::StepChain& chain);
     DispatchOutcome HandleUpdate(std::string_view line);
     DispatchOutcome HandleSync();
 
@@ -389,6 +466,34 @@ private:
     // value and handed to each execution, which takes its own copy - so
     // one statement's spend never carries into the next.
     exec::Budget budget_;
+
+    // Where a successful SELECT reports the tuples it found, or null when
+    // nothing is recording - which is a valid production configuration
+    // (`waystone_recording = off`) and the default here, so every
+    // socket-free unit test stays recorder-free too.
+    //
+    stats::TrailRecorder* recorder_ = nullptr;
+
+    // Whether a SELECT may be served from a previously recorded trail
+    // (`waystone_replay`). Independent of `recorder_`: replaying trails
+    // while recording no new ones is a legitimate configuration, and it is
+    // one of the five the advisory-contract suite compares.
+    //
+    // **Turning this on cannot change a reply.** A trail supplies only a
+    // location, which is then read and filtered by the same code a
+    // descent's location would have been, and every entry is validated
+    // first. Defaults off here so a dispatcher built without one - which
+    // is every pre-existing test - behaves exactly as it always did.
+    bool replay_enabled_ = false;
+
+    // Reused across statements so recording costs no allocation on the read
+    // path - a collector reserves a whole trail's worth of room, and doing
+    // that per SELECT is an 8 KB malloc per query. Cleared at the start of
+    // each execution, never read between them.
+    exec::TrailCollector trail_scratch_{stats::kMaxTrailEntries};
+
+    // The replay index, reused across statements for the same reason.
+    exec::TrailReplay replay_scratch_;
 
     // Implicit-transaction ids for the statements this dispatcher logs.
     // Process-local and restarting from 1 every boot, which is wrong the

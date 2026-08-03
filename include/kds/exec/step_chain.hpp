@@ -155,6 +155,18 @@ struct Step {
     std::uint32_t step_id = 0;
 
     catalog::Oid rel_oid = 0;
+
+    // The relation's name, for display only.
+    //
+    // Filled at compile time for the same reason `column_names` is: a
+    // compiled chain otherwise carries no identifiers at all (spec I11 -
+    // "no identifier survives onto an execute path"), and a plan a person
+    // reads has to say which relation a step reads. **Nothing on an
+    // execute path may read this**, and nothing does - resolving a name
+    // during execution is exactly what the rule forbids, so it is
+    // resolved once, here, where the catalog lookup already happened.
+    std::string rel_name;
+
     AccessKind kind = AccessKind::kScan;
 
     // The pk key, for kLookup (a literal) and kProbe (a column produced
@@ -199,6 +211,15 @@ enum class StatementClass : std::uint8_t {
     kUnclassified,
 };
 
+// The value `SysPatternRow::stmt_class` stores for a class.
+//
+// **Not a cast.** That row reserves 0 for "unclassified" (catalog/rows.hpp)
+// and `kPointSelect` is also 0, so a straight cast writes every point-lookup
+// pattern to disk as unclassified - a collision that reads as a mystery
+// later. Mapping it explicitly also means this enum can be reordered without
+// silently changing what stored rows mean.
+std::uint8_t StoredStatementClass(StatementClass klass) noexcept;
+
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
 
@@ -226,5 +247,15 @@ struct StepChain {
 
     bool star() const noexcept { return projection.empty(); }
 };
+// Whether any step anywhere in `chain` - sub-chains included - is one a
+// Waystone trail may replace.
+//
+// Two callers, asking the same question for opposite reasons. `CREATE
+// PATTERN` warns when the answer is false, because such a pattern's trail
+// could never replay. The dispatcher skips the whole Waystone path when it
+// is false, because a chain with no keyed step can neither record nor
+// replay - and asking costs a fingerprint, which is the most expensive
+// thing on that path.
+bool HasReplayableStep(const StepChain& chain) noexcept;
 
 }  // namespace kds::exec

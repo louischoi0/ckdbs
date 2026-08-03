@@ -1,5 +1,7 @@
 #include <cstdint>
 #include <fstream>
+#include <optional>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -219,11 +221,9 @@ TEST(ParserFuzzTest, LongInputIsBoundedByItsOwnLengthNotByAMultiplier) {
 }
 
 TEST(ParserFuzzTest, FingerprintAgreesWithTheParserAboutWhatLexes) {
-    // Two passes over one lexer (fingerprint.cpp lexes separately from
-    // Parser until V29), so they can disagree - and a disagreement is a
-    // real defect: a statement the parser accepts but the fingerprint
-    // refuses to hash executes with no pattern, silently opting out of
-    // Waystone forever.
+    // A statement the parser accepts but `FingerprintOf` refuses to hash
+    // would execute with no pattern, silently opting out of Waystone
+    // forever - so the two must agree about what lexes.
     Rng rng(0x5EED);
 
     for (int i = 0; i < 10000; ++i) {
@@ -243,6 +243,67 @@ TEST(ParserFuzzTest, FingerprintAgreesWithTheParserAboutWhatLexes) {
             << "the parser accepted a patternable statement the fingerprint would not hash: "
             << input;
     }
+}
+
+TEST(ParserFuzzTest, TheParseTimeAndStandaloneFingerprintsNeverDisagree) {
+    // The fingerprint is computed two ways: accumulated by the lexer during
+    // a parse, and by `FingerprintOf` lexing the text on its own. They must
+    // produce the same number, over anything.
+    //
+    // A divergence would not fail anything - it would give one statement two
+    // `pattern_id`s depending on which path computed it, so a trail recorded
+    // under one would never be found by the other, and the only symptom is
+    // Waystone quietly never hitting. Fuzzed rather than left to the corpus
+    // because the corpus is the shapes someone thought of.
+    Rng rng(0xC0FFEE11);
+
+    int compared = 0;
+    for (int i = 0; i < 10000; ++i) {
+        const std::string input = Mutate(Seeds()[rng.Below(Seeds().size())], rng);
+
+        Parser parser(input);
+        auto parsed = parser.Parse();
+        if (!parsed.ok()) continue;
+
+        const auto during = parser.fingerprint();
+        const auto standalone = FingerprintOf(input);
+        ASSERT_EQ(during.has_value(), standalone.has_value())
+            << "one path found a pattern and the other did not: " << input;
+        if (!during.has_value()) continue;
+
+        ASSERT_EQ(during->pattern_id, standalone->pattern_id) << input;
+        ASSERT_EQ(during->arg_hash, standalone->arg_hash) << input;
+        ASSERT_EQ(during->literal_count, standalone->literal_count) << input;
+        ASSERT_EQ(during->param_count, standalone->param_count) << input;
+        ++compared;
+    }
+    EXPECT_GT(compared, 100) << "too few inputs parsed; the mutator or the filter is wrong";
+}
+
+TEST(ParserFuzzTest, AStatementOutlivesTheTextItWasParsedFrom) {
+    // Token text is a view into the SQL (token.hpp), so the AST's
+    // copy-at-the-boundary rule is what stops a `Statement` from dangling.
+    // Parsed from a buffer that is then destroyed and overwritten: if any
+    // AST field were still viewing it, the names below would be garbage.
+    std::optional<Statement> stmt;
+    {
+        std::string sql = "SELECT a_long_column_name_past_sso FROM a_long_relation_name_past_sso "
+                          "WHERE another_long_column_name = 'a string value past sso'";
+        auto parsed = Parse(sql);
+        ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+        stmt = std::move(parsed.value());
+        // Scribble over the source before it dies, so a surviving view sees
+        // changed bytes rather than merely freed ones.
+        std::fill(sql.begin(), sql.end(), 'Z');
+    }
+
+    const auto& select = std::get<SelectStmt>(*stmt);
+    EXPECT_EQ(select.from.table_name, "a_long_relation_name_past_sso");
+    ASSERT_EQ(select.projection.size(), 1u);
+    EXPECT_EQ(select.projection[0].name, "a_long_column_name_past_sso");
+    ASSERT_EQ(select.where.size(), 1u);
+    EXPECT_EQ(select.where[0].col.name, "another_long_column_name");
+    EXPECT_EQ(select.where[0].val.str_val, "a string value past sso");
 }
 
 TEST(ParserFuzzTest, FingerprintingIsAPureFunctionOfTheText) {

@@ -196,9 +196,19 @@ TEST_F(CommandDispatcherTest, DescribeUnknownNameIsError) {
 
 TEST_F(CommandDispatcherTest, UnknownCommandIsErrorNotCrash) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-    auto out = d.Dispatch("DROP EVERYTHING");
+    auto out = d.Dispatch("FLIBBERTIGIBBET EVERYTHING");
     EXPECT_EQ(out.response, "ERR unknown command");
     EXPECT_FALSE(out.should_stop);
+}
+
+TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithExactlyOneTarget) {
+    // `DROP` became a statement head with CREATE PATTERN, so it no longer
+    // falls into "unknown command" - and it should not. There is no
+    // DROP TABLE, and naming what DROP does take beats a generic refusal
+    // that leaves a client unsure whether the word was recognized.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response, "ERR only DROP PATTERN is supported");
+    EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR only DROP PATTERN is supported");
 }
 
 TEST_F(CommandDispatcherTest, EmptyLineIsError) {

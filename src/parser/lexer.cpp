@@ -92,6 +92,11 @@ Token Lexer::ReadToken() {
     Token tok = ScanToken();
     tok.byte_offset = static_cast<std::uint32_t>(start);
     tok.length = static_cast<std::uint32_t>(pos_ - start);
+    // Every token, exactly once, in order - which is the whole contract the
+    // fingerprint is defined over (fingerprint.hpp). This is the only place
+    // a token comes into existence, so it is the only place that contract
+    // can be kept without the caller's cooperation.
+    fingerprint_.Feed(tok);
     return tok;
 }
 
@@ -111,7 +116,7 @@ Token Lexer::ScanToken() {
         ++pos_;
         std::size_t start = pos_;
         while (pos_ < src_.size() && src_[pos_] != '\'') ++pos_;
-        tok.text = std::string(src_.substr(start, pos_ - start));
+        tok.text = src_.substr(start, pos_ - start);
         tok.type = TokenType::kStrLit;
         if (pos_ < src_.size() && src_[pos_] == '\'') ++pos_;  // consume closing quote
         return tok;
@@ -126,7 +131,7 @@ Token Lexer::ScanToken() {
         while (pos_ < src_.size() && std::isdigit(static_cast<unsigned char>(src_[pos_]))) {
             ++pos_;
         }
-        tok.text = std::string(src_.substr(start, pos_ - start));
+        tok.text = src_.substr(start, pos_ - start);
         tok.type = TokenType::kIntLit;
 
         tok.negative = !tok.text.empty() && tok.text[0] == '-';
@@ -145,7 +150,7 @@ Token Lexer::ScanToken() {
     if (IsIdentStart(c)) {
         std::size_t start = pos_;
         while (pos_ < src_.size() && IsIdentCont(src_[pos_])) ++pos_;
-        tok.text = std::string(src_.substr(start, pos_ - start));
+        tok.text = src_.substr(start, pos_ - start);
         if (IEquals(tok.text, "NULL")) {
             tok.type = TokenType::kNullLit;
         } else if (LookupKeyword(tok.text, tok.kw)) {
@@ -160,28 +165,48 @@ Token Lexer::ScanToken() {
         return tok;
     }
 
+    // Named parameter: `$flag`. The sigil is consumed and the name is kept
+    // as written, so `Token::text` reads exactly like an identifier's -
+    // which is what lets the parser compare declared against used with the
+    // same case-insensitive fold it uses everywhere else.
+    //
+    // A `$` with no identifier after it falls through to the switch below
+    // and lexes as kError, the same answer it gave before this token
+    // existed. There is no such thing as an anonymous named parameter, and
+    // reporting the bad character is more use than inventing an empty name.
+    if (c == '$' && pos_ + 1 < src_.size() && IsIdentStart(src_[pos_ + 1])) {
+        ++pos_;  // the sigil
+        std::size_t start = pos_;
+        while (pos_ < src_.size() && IsIdentCont(src_[pos_])) ++pos_;
+        tok.text = src_.substr(start, pos_ - start);
+        tok.type = TokenType::kNamedParam;
+        return tok;
+    }
+
     // Two-character operators.
     if (c == '!' && pos_ + 1 < src_.size() && src_[pos_ + 1] == '=') {
         tok.type = TokenType::kNeq;
-        tok.text = "!=";
+        tok.text = src_.substr(pos_, 2);
         pos_ += 2;
         return tok;
     }
     if (c == '<' && pos_ + 1 < src_.size() && src_[pos_ + 1] == '=') {
         tok.type = TokenType::kLte;
-        tok.text = "<=";
+        tok.text = src_.substr(pos_, 2);
         pos_ += 2;
         return tok;
     }
     if (c == '>' && pos_ + 1 < src_.size() && src_[pos_ + 1] == '=') {
         tok.type = TokenType::kGte;
-        tok.text = ">=";
+        tok.text = src_.substr(pos_, 2);
         pos_ += 2;
         return tok;
     }
 
-    // Single-character tokens.
-    tok.text = std::string(1, c);
+    // Single-character tokens. Sliced before `pos_` advances, so this is a
+    // view into the source like every other token's text - no exception to
+    // reason about later.
+    tok.text = src_.substr(pos_, 1);
     ++pos_;
     switch (c) {
         case '(': tok.type = TokenType::kLParen; break;

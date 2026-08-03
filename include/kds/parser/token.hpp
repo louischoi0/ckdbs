@@ -1,12 +1,26 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <string_view>
 
-// Lexer token types. Token text is a std::string rather than a
-// fixed-capacity buffer, so there is no arbitrary length cap to size
-// wrong.
+// Lexer token types.
+//
+// ---- A token owns nothing: `text` is a view into the SQL ----------------
+//
+// `Token::text` is a `std::string_view` **into the statement the lexer was
+// given**, not a copy of it. A `Token` is therefore trivially copyable and
+// costs nothing to move around, and lexing a statement allocates nothing at
+// all - where it used to allocate one `std::string` per identifier or
+// literal longer than the small-string limit, which on a statement with
+// real relation names is most of them.
+//
+// **The rule that makes this safe: a token must not outlive the SQL it was
+// lexed from.** In practice tokens never escape a parse - the AST copies
+// every name and value it keeps into its own `std::string` (docs/parser.md
+// I4's copy-at-the-boundary rule), so a `Statement` is self-contained and
+// the source can go away the moment `Parse()` returns. Anything that
+// collects `Token`s into a container and outlives the source is a
+// use-after-free, and there is nothing here that can catch it for you.
 
 namespace kds::parser {
 
@@ -81,6 +95,34 @@ enum class TokenType {
     // the only way to tell a placeholder from a lexing failure.
     kParam,
 
+    // A named parameter: `$flag`. `Token::text` carries the name with the
+    // sigil stripped, **as written** - like an identifier, and for the same
+    // reason: folding is the consumer's job, so an error message can quote
+    // what the client actually typed while a comparison stays case
+    // insensitive.
+    //
+    // Accepted by exactly one production - the body of `CREATE PATTERN`
+    // (docs/spec-create-pattern-user-defined-patterns-v1.md section 3.1).
+    // Everywhere else the parser refuses it with a position; the token is
+    // *reserved* for the extended protocol's named binds (D4), and nothing
+    // wires that yet.
+    //
+    // A separate type from kParam rather than a spelling of it, because the
+    // two differ in what the parser does with them (`?` is refused
+    // everywhere, `$x` is accepted in a declared body) while agreeing in
+    // what the fingerprint does with them (both are ShapeTag::kValue). One
+    // type for both would collapse a grammar distinction to buy a hash
+    // distinction that does not exist.
+    //
+    // **The sigil is what makes the feature possible at all.** Identifiers
+    // are case-folded, so a parameter named `a` and an alias written
+    // `AS a` would collide, and "value position" cannot disambiguate them
+    // because a join predicate puts columns in value position too
+    // (`ON t.id = a.id`). Removing the ambiguity at the token level is what
+    // means no collision check against aliases or column names is needed
+    // anywhere above.
+    kNamedParam,
+
     // punctuation
     kLParen,
     kRParen,
@@ -106,7 +148,12 @@ enum class TokenType {
 
 struct Token {
     TokenType type = TokenType::kEof;
-    std::string text;          // raw token text, as written
+
+    // The token as written, viewing the source. For a string literal this
+    // is the value with the quotes stripped; for a named parameter, the
+    // name without its sigil. Empty at end of input. See the lifetime rule
+    // in this file's header before storing one.
+    std::string_view text;
     std::int64_t int_val = 0;  // valid when type == kIntLit; see digits()
     Keyword kw = Keyword::kJoin;  // valid when type == kKeyword
 
@@ -137,10 +184,10 @@ struct Token {
     // both is cheaper than deciding here which one every future caller
     // wanted.
     //
-    // A view into this token's own `text`, valid as long as the token is.
+    // A view into this token's own `text`, and so into the source behind
+    // it - valid exactly as long as that is.
     std::string_view digits() const noexcept {
-        std::string_view all(text);
-        return negative && !all.empty() ? all.substr(1) : all;
+        return negative && !text.empty() ? text.substr(1) : text;
     }
 };
 

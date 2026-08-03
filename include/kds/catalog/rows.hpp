@@ -266,6 +266,27 @@ struct SysPatternRow {
     // relinked, and every walk in that window lands on the wrong leaf.
     std::uint8_t dir_depth;
 
+    // Policy bits. Today only kPatternPinned, which says what retention may
+    // do to this pattern's waystones
+    // (docs/spec-create-pattern-user-defined-patterns-v1.md section 4.1).
+    std::uint16_t flags;
+
+    // Who created this row: kOriginAuto or kOriginUser.
+    //
+    // **Separate from `flags` on purpose.** Origin is provenance and
+    // pinning is policy, and they move independently: an operator may pin
+    // an auto-registered pattern without re-declaring it, and a declared
+    // pattern may be created unpinned. Folding pinning into origin would
+    // make both of those unspellable.
+    //
+    // The field order below is not cosmetic. `flags` (u16) sits before
+    // `origin` (u8) because `dir_depth` ends the row at 37: a u16 next pads
+    // the struct to 38 and the u8 after it lands at 40, so both keep the
+    // offsetof static_assert this file's layout rule depends on. Reversing
+    // them puts the u16 at struct offset 40 against an on-disk 39 and the
+    // assert stops holding.
+    std::uint8_t origin;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kPatternIdOffset = 8;
     static constexpr std::size_t kLastSeenOffset = 16;
@@ -274,7 +295,9 @@ struct SysPatternRow {
     static constexpr std::size_t kUseCountOffset = 32;
     static constexpr std::size_t kStmtClassOffset = 36;
     static constexpr std::size_t kDirDepthOffset = 37;
-    static constexpr std::size_t kOnDiskSize = kDirDepthOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kFlagsOffset = 38;
+    static constexpr std::size_t kOriginOffset = 40;
+    static constexpr std::size_t kOnDiskSize = kOriginOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysPatternRow> Decode(std::span<const std::byte> bytes);
@@ -289,7 +312,28 @@ static_assert(offsetof(SysPatternRow, waystone_root) == SysPatternRow::kWaystone
 static_assert(offsetof(SysPatternRow, use_count) == SysPatternRow::kUseCountOffset);
 static_assert(offsetof(SysPatternRow, stmt_class) == SysPatternRow::kStmtClassOffset);
 static_assert(offsetof(SysPatternRow, dir_depth) == SysPatternRow::kDirDepthOffset);
-static_assert(SysPatternRow::kOnDiskSize == 38);
+static_assert(offsetof(SysPatternRow, flags) == SysPatternRow::kFlagsOffset);
+static_assert(offsetof(SysPatternRow, origin) == SysPatternRow::kOriginOffset);
+static_assert(SysPatternRow::kOnDiskSize == 41);
+
+// Who wrote a sys.patterns row. Persisted, so the numbers are frozen.
+//
+// The distinction is lifecycle policy, never the trust model: a replayed
+// entry is validated identically whatever its origin, for the same reason
+// the engine keeps one evaluator and one step-kind table. What origin
+// decides is recording probation (a declaration *is* the evidence n=2 waits
+// for, so a user pattern records from its first execution) and what a
+// fingerprint version bump does to the row - an auto row holds only a hash
+// and retires, a user row re-fingerprints from its stored source text.
+inline constexpr std::uint8_t kOriginAuto = 0;
+inline constexpr std::uint8_t kOriginUser = 1;
+
+// `flags` bit 0: retention may not evict this pattern's waystones.
+//
+// A policy promise, not a correctness requirement - invariant 8 still holds
+// for a pinned pattern, so a manual purge remains legal and costs
+// performance rather than answers.
+inline constexpr std::uint16_t kPatternPinned = 0x1;
 
 // The class value a row carries when nothing has classified the statement
 // - which is every row until the parser gains its class tags. Named so no

@@ -15,11 +15,18 @@ add_executable(kds_tests
     row_codec_test.cpp
     row_layout_test.cpp
     tagged_cell_test.cpp
+    analyze_test.cpp
     varheap_test.cpp
     fixed_length_tuple_test.cpp
     catalog_row_test.cpp
     waystone_page_test.cpp
     waystone_dir_test.cpp
+    pattern_defs_test.cpp
+    create_pattern_test.cpp
+    trail_store_test.cpp
+    trail_recorder_test.cpp
+    waystone_replay_test.cpp
+    waystone_contract_test.cpp
     scheduler_test.cpp
     log_test.cpp
     config_file_test.cpp

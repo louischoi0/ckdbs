@@ -38,6 +38,9 @@ add_library(kds
     src/catalog/sys_object_registry.cpp
     src/stats/waystone_page.cpp
     src/stats/waystone_dir.cpp
+    src/stats/pattern_defs.cpp
+    src/stats/trail_store.cpp
+    src/stats/trail_recorder.cpp
     src/catalog/catalog_cache.cpp
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp
@@ -59,11 +62,14 @@ add_library(kds
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp
     src/exec/row_codec.cpp
+    src/exec/plan_printer.cpp
     src/exec/step_compiler.cpp
     src/exec/chain_frame.cpp
     src/exec/step_vm.cpp
     src/exec/budget.cpp
     src/exec/catalog_view.cpp
+    src/exec/trail_replay.cpp
+    src/exec/pattern_ddl.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/epoll_io_backend.cpp

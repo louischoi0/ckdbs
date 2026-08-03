@@ -51,6 +51,24 @@ StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPr
 StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
                            const std::vector<StepPredicate>& predicates, const ChainFrame& frame) {
     for (const StepPredicate& pred : predicates) {
+        // A chain compiled from a declared pattern's body carries `$param`
+        // placeholders and must never be executed - nothing binds them, so
+        // any verdict here would answer a statement nobody wrote.
+        //
+        // Checked once, here, because every residual conjunct in the engine
+        // is evaluated through this loop; the other way a value reaches a
+        // comparison is a probe key, guarded at KeyFromOperand(). Corruption
+        // rather than a quiet false: this is reachable only through a
+        // defect - it sits beside the other malformed-chain checks here -
+        // and a false would turn that defect into a query that silently
+        // returns nothing.
+        if (pred.rhs.kind == OperandKind::kLiteral &&
+            pred.rhs.literal.type == parser::ValueType::kParam) {
+            return Status::Corruption(
+                "a declared pattern's chain reached execution: parameter '$" +
+                pred.rhs.literal.param_name() + "' has no bound value");
+        }
+
         const catalog::Schema* lhs_schema = SchemaFor(schemas, pred.lhs);
         if (lhs_schema == nullptr) {
             // An outward lhs. The value is bound and comparable, but this

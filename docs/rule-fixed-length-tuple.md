@@ -120,6 +120,7 @@ rather than being refused, and storage is invisible above the codec.
 | §7.2 `VARHEAP_APPEND` in the WAL record catalog | `RecordType::kVarHeapAppend = 16`, `include/kds/wal/payload.hpp`, `docs/wal.md` §5.2 |
 | §7.3 `kVarHeap` in the page-class enum | `PageType::kVarHeap = 10`, `include/kds/storage/varheap.hpp`, `docs/page.md` §5a |
 | The spill path | `storage::EncodeSpilledCell` + `varheap::ChainAppend`, driven from `EncodeRow`'s `VarHeapSink` |
+| Catalog row change | `sys.tables` gained `varheap_page_id`, growing `SysTableRow::kOnDiskSize` — so the superblock format version went **4 → 5**. The row is not part of the superblock, but a catalog row format change is just as breaking, and without the bump a phase-1 database mounted and then failed on its first catalog read with an opaque size mismatch. |
 | The fetch path | `varheap::Fetch` via `exec::ResolveSpills` |
 | §8.3 tests, as far as reachable | `tests/varheap_test.cpp`, `tests/fixed_length_tuple_test.cpp` |
 

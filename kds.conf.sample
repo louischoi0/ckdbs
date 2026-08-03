@@ -118,6 +118,40 @@ wal_drain_interval_us = 1000
 # statement the budget would refuse.
 max_rows_touched = 100000000
 
+# ---- Waystone --------------------------------------------------------------
+
+# Whether a successful SELECT records where it found its rows, so a repeated
+# query pattern can later look instead of search (docs/waystone-concpets.md).
+#
+# What it costs: one waystone page per pattern *instance* that executes twice
+# (once, for a pattern declared with CREATE PATTERN - a declaration is the
+# evidence the second execution would otherwise supply). Trails are unlogged,
+# so a crash loses whatever the last checkpoint did not carry, which costs
+# future replays and never results.
+#
+# What it buys: whatever `waystone_replay` below can then use. With replay
+# off this is pure write side and buys nothing, which is a reasonable way to
+# measure the recording cost on its own.
+#
+# Turning it on and off must never change a single reply. That equality is a
+# regression test, and it is also something you can check against your own
+# data.
+waystone_recording = on
+
+# Whether a SELECT may be served from a trail a previous execution recorded:
+# a validated location read directly, instead of a B+ tree descent or a heap
+# chain scan.
+#
+# This is the half that repays recording, and the only Waystone setting that
+# can be asked to produce a row. It still cannot change one: a trail supplies
+# a *location*, which is then read and filtered by exactly the code a
+# descent's location would have been, and every entry is validated against
+# the tuple actually there before anything is read from it. Deleting every
+# trail in the database changes latency and nothing else - that is invariant
+# 8, and tests/waystone_contract_test.cpp compares five configurations byte
+# for byte to keep it true.
+waystone_replay = on
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

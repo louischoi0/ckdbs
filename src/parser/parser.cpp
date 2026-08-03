@@ -17,7 +17,7 @@ bool IEquals(std::string_view a, std::string_view b) {
 
 std::string_view Describe(const Token& tok) {
     return tok.type == TokenType::kEof ? std::string_view("<end of input>")
-                                        : std::string_view(tok.text);
+                                        : tok.text;
 }
 
 }  // namespace
@@ -46,7 +46,10 @@ StatusOr<std::string> Parser::ParseIdent() {
         return Status::InvalidArgument("expected identifier, got '" +
                                         std::string(Describe(tok)) + "'");
     }
-    return tok.text;
+    // The AST owns its names: docs/parser.md I4's copy-at-the-boundary
+    // rule, and what lets a Statement outlive the SQL it came from now that
+    // a token is only a view into it.
+    return std::string(tok.text);
 }
 
 void Parser::ConsumeOptionalSemicolon() {
@@ -63,18 +66,38 @@ StatusOr<AstValue> Parser::ParseValue() {
             AstValue v;
             v.type = ValueType::kInt;
             v.int_val = tok.int_val;
-            v.raw_int_text = tok.text;  // preserves full-range digits; see ast.hpp
+            v.raw_int_text = std::string(tok.text);  // full-range digits; see ast.hpp
             return v;
         }
         case TokenType::kStrLit: {
             AstValue v;
             v.type = ValueType::kStr;
-            v.str_val = tok.text;
+            v.str_val = std::string(tok.text);
             return v;
         }
         case TokenType::kNullLit: {
             AstValue v;
             v.type = ValueType::kNull;
+            return v;
+        }
+        case TokenType::kNamedParam: {
+            // Legal in exactly one place: the body of a CREATE PATTERN
+            // (spec section 3.1). Outside one the token is *reserved* - for
+            // the extended protocol's named binds - and refusing it by name
+            // and position is what tells a client that, rather than leaving
+            // them to read "expected value" and guess the sigil was a typo.
+            if (param_uses_ == nullptr) {
+                return Status::Unsupported(
+                    "parameter '$" + std::string(tok.text) +
+                    "' is only allowed in a CREATE PATTERN body (byte " +
+                    std::to_string(tok.byte_offset) + ")");
+            }
+            param_uses_->push_back(ParamUse{std::string(tok.text), tok.byte_offset});
+
+            AstValue v;
+            v.type = ValueType::kParam;
+            v.str_val = std::string(tok.text);  // the name; see AstValue::param_name()
+            v.byte_offset = tok.byte_offset;
             return v;
         }
         default:
@@ -315,6 +338,185 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
     return stmt;
 }
 
+// ---- CREATE PATTERN / DROP PATTERN ---------------------------------------
+
+Status Parser::ParsePatternParams(CreatePatternStmt& stmt) {
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' before the parameter list"); !s.ok()) {
+        return s;
+    }
+
+    // `()` is legal and means a pattern with exactly one instance - the
+    // arg_hash of an empty argument stream. Checked before the loop so the
+    // loop never has to handle an empty list.
+    if (lexer_.Peek().type == TokenType::kRParen) {
+        lexer_.Next();
+        return Status::OK();
+    }
+
+    for (;;) {
+        Token tok = lexer_.Next();
+        if (tok.type != TokenType::kNamedParam) {
+            return Status::InvalidArgument(
+                "expected a $-sigiled parameter name, got '" + std::string(Describe(tok)) +
+                "' (byte " + std::to_string(tok.byte_offset) + ")");
+        }
+
+        PatternParam param;
+        param.name = std::string(tok.text);
+        param.byte_offset = tok.byte_offset;
+
+        // Mandatory, and the message says so rather than reporting a
+        // generic "expected identifier": an untyped parameter is the one
+        // mistake a client writing this grammar for the first time will
+        // make, and inference was rejected on purpose (ast.hpp).
+        const Token& next = lexer_.Peek();
+        if (next.type != TokenType::kIdent) {
+            return Status::InvalidArgument(
+                "parameter '$" + param.name +
+                "' needs a type (e.g. `$" + param.name + " int64`), got '" +
+                std::string(Describe(next)) + "' (byte " + std::to_string(next.byte_offset) +
+                ")");
+        }
+        auto type_name = ParseIdent();
+        if (!type_name.ok()) return type_name.status();
+        param.type_name = std::move(type_name.value());
+
+        stmt.params.push_back(std::move(param));
+
+        if (lexer_.Peek().type == TokenType::kComma) {
+            lexer_.Next();
+            continue;
+        }
+        break;
+    }
+
+    return ExpectToken(TokenType::kRParen, "')' after the parameter list");
+}
+
+Status Parser::ParsePatternOptions(CreatePatternStmt& stmt) {
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' after WITH"); !s.ok()) return s;
+
+    for (;;) {
+        const Token& key_tok = lexer_.Peek();
+        const std::uint32_t at = key_tok.byte_offset;
+        auto key = ParseIdent();
+        if (!key.ok()) return key.status();
+
+        if (Status s = ExpectToken(TokenType::kEq, "'=' after an option name"); !s.ok()) {
+            return s;
+        }
+
+        // The value side stays text whatever it looks like: `on`, `off` and
+        // `100000` are all just spellings until the validator says which
+        // keys take which. An integer is accepted here and range-checked
+        // there, where the key that constrains it is known.
+        //
+        // **kKeyword is in this list, and has to be.** `on` is a reserved
+        // word - it is the `ON` of `JOIN ... ON` - so `pinned = on`, the
+        // spelling the spec's own example uses, arrives here as a keyword
+        // token and not an identifier. An option value is a word in value
+        // position, where no reserved word means anything, so reading it by
+        // text is right rather than lenient.
+        Token val = lexer_.Next();
+        std::string value;
+        switch (val.type) {
+            case TokenType::kIdent:
+            case TokenType::kKeyword:
+            case TokenType::kIntLit:
+            case TokenType::kStrLit: value = std::string(val.text); break;
+            default:
+                return Status::InvalidArgument("expected a value for option '" + key.value() +
+                                                "', got '" + std::string(Describe(val)) +
+                                                "' (byte " + std::to_string(val.byte_offset) +
+                                                ")");
+        }
+
+        stmt.options.push_back(PatternOption{std::move(key.value()), std::move(value), at});
+
+        if (lexer_.Peek().type == TokenType::kComma) {
+            lexer_.Next();
+            continue;
+        }
+        break;
+    }
+
+    return ExpectToken(TokenType::kRParen, "')' after the option list");
+}
+
+StatusOr<CreatePatternStmt> Parser::ParseCreatePattern() {
+    CreatePatternStmt stmt;
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.name = std::move(name.value());
+
+    if (Status s = ParsePatternParams(stmt); !s.ok()) return s;
+
+    const Token& maybe_with = lexer_.Peek();
+    if (maybe_with.type == TokenType::kIdent && IEquals(maybe_with.text, "WITH")) {
+        lexer_.Next();
+        if (Status s = ParsePatternOptions(stmt); !s.ok()) return s;
+    }
+
+    if (Status s = ExpectKeyword("OF"); !s.ok()) {
+        return s.WithContext("a pattern declaration is `... [WITH (...)] OF <statement>`");
+    }
+
+    // The body starts here and runs to end of statement, so its text is a
+    // suffix of the input and slicing it needs no closing delimiter to find.
+    // That is the whole reason WITH precedes OF (ast.hpp).
+    const std::size_t body_start = lexer_.Peek().byte_offset;
+
+    if (Status s = ExpectKeyword("SELECT"); !s.ok()) {
+        return s.WithContext(
+            "only SELECT-class statements can be declared as patterns in v1");
+    }
+
+    // `$x` becomes legal exactly here and illegal again on the way out,
+    // including on the error paths - hence the restore before every return.
+    stmt.param_uses.clear();
+    param_uses_ = &stmt.param_uses;
+    auto body = ParseSelect(/*depth=*/0);
+    param_uses_ = nullptr;
+    if (!body.ok()) return body.status();
+    stmt.body = std::make_shared<SelectStmt>(std::move(body.value()));
+
+    // Both slices are verbatim, minus the trailing semicolon ParseSelect
+    // already consumed and any whitespace after it. The fingerprint skips a
+    // semicolon anyway, so trimming changes no hash; it keeps the stored
+    // text from ending in punctuation the operator did not think of as part
+    // of what they wrote.
+    //
+    // Two slices of one string, and they are not interchangeable: the whole
+    // declaration is the canon that goes to sys.pattern_defs, the body is
+    // what gets hashed. `Parse()` refuses trailing garbage, so the statement
+    // is exactly the input and needs no end offset to find.
+    auto trim_tail = [](std::string_view text) {
+        while (!text.empty() && (text.back() == ';' ||
+                                 std::isspace(static_cast<unsigned char>(text.back())) != 0)) {
+            text.remove_suffix(1);
+        }
+        return text;
+    };
+    stmt.source_text = std::string(trim_tail(sql_));
+    stmt.body_text = std::string(trim_tail(sql_.substr(body_start)));
+
+    return stmt;
+}
+
+StatusOr<DropPatternStmt> Parser::ParseDropPattern() {
+    DropPatternStmt stmt;
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.name = std::move(name.value());
+
+    ConsumeOptionalSemicolon();
+    return stmt;
+}
+
 StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ExpectKeyword("INTO"); !s.ok()) return s;
 
@@ -477,7 +679,8 @@ Status Parser::ParseJoins(SelectStmt& stmt) {
         // for a typo. The position is the keyword's own.
         if (peek.kw == Keyword::kLeft || peek.kw == Keyword::kRight ||
             peek.kw == Keyword::kFull || peek.kw == Keyword::kOuter) {
-            return Status::Unsupported("outer joins are not supported: '" + peek.text +
+            return Status::Unsupported("outer joins are not supported: '" +
+                                       std::string(peek.text) +
                                         "' at byte " + std::to_string(peek.byte_offset) +
                                         "; only inner equi-joins (JOIN ... ON) are available");
         }
@@ -636,13 +839,37 @@ StatusOr<Statement> Parser::Parse() {
         return Status::InvalidArgument("empty statement");
     }
     if (tok.type != TokenType::kIdent) {
-        return Status::InvalidArgument("expected SQL keyword, got '" + tok.text + "'");
+        return Status::InvalidArgument("expected SQL keyword, got '" + std::string(tok.text) +
+                                        "'");
     }
 
     Statement stmt;
 
     if (IEquals(tok.text, "CREATE")) {
-        auto s = ParseCreateTable();
+        // One token of lookahead picks the object. `TABLE` still goes
+        // through ParseCreateTable's own ExpectKeyword, so the error a
+        // client gets for `CREATE INDEX` is unchanged.
+        const Token& what = lexer_.Peek();
+        if (what.type == TokenType::kIdent && IEquals(what.text, "PATTERN")) {
+            lexer_.Next();
+            auto s = ParseCreatePattern();
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        } else {
+            auto s = ParseCreateTable();
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        }
+    } else if (IEquals(tok.text, "DROP")) {
+        // Only patterns can be dropped. There is no DROP TABLE, and saying
+        // so here beats a syntax error that points at the table name.
+        const Token& what = lexer_.Peek();
+        if (what.type != TokenType::kIdent || !IEquals(what.text, "PATTERN")) {
+            return Status::Unsupported("only DROP PATTERN is supported (byte " +
+                                        std::to_string(what.byte_offset) + ")");
+        }
+        lexer_.Next();
+        auto s = ParseDropPattern();
         if (!s.ok()) return s.status();
         stmt = std::move(s.value());
     } else if (IEquals(tok.text, "INSERT")) {
@@ -667,15 +894,15 @@ StatusOr<Statement> Parser::Parse() {
                                     std::to_string(tok.byte_offset) +
                                     "); subqueries are allowed in predicate position only");
     } else {
-        return Status::InvalidArgument("unknown SQL keyword '" + tok.text +
-                                        "' (supported: CREATE, INSERT, SELECT, UPDATE)");
+        return Status::InvalidArgument("unknown SQL keyword '" + std::string(tok.text) +
+                                        "' (supported: CREATE, DROP, INSERT, SELECT, UPDATE)");
     }
 
     // After a successful parse, only EOF may remain (a trailing semicolon
     // was already consumed by the statement parser itself).
     const Token& tail = lexer_.Peek();
     if (tail.type != TokenType::kEof) {
-        return Status::InvalidArgument("unexpected token '" + tail.text +
+        return Status::InvalidArgument("unexpected token '" + std::string(tail.text) +
                                         "' after end of statement");
     }
 

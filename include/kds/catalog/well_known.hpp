@@ -47,6 +47,32 @@ inline constexpr Oid kSysIndexesTable = 113;
 // pattern has to be rooted somewhere that survives a restart.
 inline constexpr Oid kSysPatternsTable = 114;
 
+// sys.pattern_defs (docs/spec-create-pattern-user-defined-patterns-v1.md
+// section 4.2): the name and source text of a *declared* pattern, joined to
+// sys.patterns by pattern_id. An auto-registered pattern has no row here and
+// keeps printing as a bare hex id.
+//
+// It is a sibling relation rather than two more fields on SysPatternRow
+// because that row is fixed-width and stays that way, and a pattern's source
+// text is neither fixed-width nor small.
+//
+// **This is the first catalog relation stored in ordinary user tuple
+// format** - a Keystone word, tagged cells, var-heap spill - where every
+// other one is a fixed-offset typed row codec (catalog/rows.hpp). That is
+// the deliberate consequence of storing text: the fixed-length rule already
+// answers "where do arbitrary-length values go", and inventing a second
+// answer for one catalog row would be inventing a second var-heap protocol.
+// It costs one thing worth naming: its rows cannot be read from
+// `catalog/`, because decoding them needs the row codec, which sits above
+// the catalog. The readers live in stats/pattern_defs.hpp.
+inline constexpr Oid kSysPatternDefsTable = 115;
+
+// Fixed oids for sys.pattern_defs' four sys.columns rows, one per schema
+// position. Fixed rather than from GenerateUserOid() for the reason
+// kUserOidStart records below: that counter is in-memory and restarts every
+// boot, and these rows are persisted.
+inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
+
 // Starting point for user-created object oids. **KNOWN GAP:** this counter
 // is in-memory only and resets on every process restart, so two objects
 // created in different runs can share an oid. Persisting it means adding a
@@ -66,6 +92,14 @@ inline constexpr PageId kCatalogPageObjects = 6;
 inline constexpr PageId kCatalogPageTables = 7;
 inline constexpr PageId kCatalogPageIndexes = 8;
 inline constexpr PageId kCatalogPagePatterns = 9;
+
+// Root heap page of sys.pattern_defs. Fixed like the six above, even though
+// the relation is an ordinary row-codec one: it has to be findable at
+// bootstrap without a catalog read, which is the same reason the others are.
+// Its *var-heap* root is not fixed - that one is allocated by CreateNew()
+// and recorded in sys.tables, where it is DDL-immutable and therefore
+// cacheable (rows.hpp's note on varheap_page_id).
+inline constexpr PageId kCatalogPagePatternDefs = 10;
 
 // Transaction id stamped on every bootstrap-time tuple - mirrors
 // PostgreSQL's FrozenTransactionId: bootstrap rows are inserted before a

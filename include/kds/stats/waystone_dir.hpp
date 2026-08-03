@@ -5,6 +5,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/stats/instance_key.hpp"
 #include "kds/storage/page_store.hpp"
 
 // The per-pattern waystone directory (docs/waystone-concpets.md §5): the
@@ -124,8 +125,15 @@ constexpr std::size_t DirIndexAt(std::uint64_t arg_hash, int depth, int level) n
 // the same shape serves at every level. Headerless, for the reason above.
 StatusOr<PageId> CreateDirPage(storage::PageStore& store);
 
-// Resolves `arg_hash` to the page that would hold its trail, walking
-// `depth` levels from `root`.
+// Resolves `key` to the page that would hold its trail, walking `depth`
+// levels from `root`.
+//
+// **Only `key.arg_hash` steers the walk** - the directory is a pattern's
+// own, so its `pattern_id` is already implied by `root`. The whole instance
+// travels anyway, because the returned page id is not usable without it:
+// every caller owes a WaystonePageHolds() check against the same pair, and
+// taking the pair here is what stops a caller from resolving with one
+// instance and validating with another (instance_key.hpp).
 //
 // Returns kInvalidPageId when any level holds kEmptyDirSlot: that range
 // was never populated, which is a normal answer and not an error - on the
@@ -140,7 +148,7 @@ StatusOr<PageId> CreateDirPage(storage::PageStore& store);
 // and with whatever the store reports for a child id that does not
 // resolve.
 StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int depth,
-                                    std::uint64_t arg_hash);
+                                    const InstanceKey& key);
 
 // The same walk, allocating the interior pages the path needs and linking
 // each into its parent, and allocating the target page if the leaf slot is
@@ -154,7 +162,7 @@ StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int 
 // another instance's page, which is the `[OPEN]` collision policy. This
 // function reports where; it never displaces.
 StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId root, int depth,
-                                            std::uint64_t arg_hash);
+                                            const InstanceKey& key);
 
 // Deepens a directory by one level: allocates a new root whose slot 0
 // points at `root`, and returns it. The caller raises its stored depth by

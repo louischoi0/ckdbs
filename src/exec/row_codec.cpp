@@ -104,6 +104,14 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
         return Status::InvalidArgument("column '" + col_name +
                                         "' is NULL - NULL values are not supported yet");
     }
+    // A declared pattern's `$param` has no value to encode, and never will:
+    // a declaration is not an execution. Refused by name rather than left to
+    // fall through to "expects an integer", which would send whoever hit it
+    // looking for a type error that is not there.
+    if (val.type == parser::ValueType::kParam) {
+        return Status::Corruption("column '" + col_name + "': parameter '$" +
+                                  val.param_name() + "' has no bound value to store");
+    }
 
     switch (col.type_val) {
         case kTypeValInt8:
@@ -521,6 +529,12 @@ std::string FormatValue(const parser::AstValue& value) {
             return !value.raw_int_text.empty() ? value.raw_int_text : std::to_string(value.int_val);
         case parser::ValueType::kStr:
             return value.str_val;
+        // Rendered as written, sigil restored. Only a plan printed from a
+        // declared pattern's body reaches this - no row ever holds one - and
+        // printing `$flag` is what makes such a plan readable back against
+        // the declaration it came from.
+        case parser::ValueType::kParam:
+            return "$" + value.param_name();
         case parser::ValueType::kNull:
         default:
             return "NULL";

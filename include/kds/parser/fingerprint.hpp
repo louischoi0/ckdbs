@@ -4,6 +4,8 @@
 #include <optional>
 #include <string_view>
 
+#include "kds/parser/token.hpp"
+
 // Query-template fingerprinting: the parse-time reduction of a statement
 // to its function form - `patternX(a, b)` - as a pair of integers
 // (docs/waystone-concpets.md sections 1 and 3, docs/parser.md I1). This is
@@ -103,13 +105,28 @@
 // A change to the algorithm is therefore a *format* change, and
 // `kFingerprintVersion` below is how it is survived without a migration.
 //
-// ---- What this is not, yet ----------------------------------------------
+// ---- Where the numbers come from ----------------------------------------
 //
-// This lexes the statement a second time, separately from `Parser`. That
-// is the cost of a bolt-on: the blueprint parser (docs/parser.md I1) folds
-// fingerprinting into its single pass and this file's *contract* - a
-// statement in, two integers out - is what survives that rewrite. Nothing
-// downstream should depend on how the numbers are produced.
+// **Folded into the parse (2026-08-03).** `FingerprintAccumulator` below is
+// fed by the lexer as it produces tokens, so a parse yields the fingerprint
+// with no second pass over the text. `FingerprintOf()` - which does lex
+// independently - is now for callers holding a string and no parse, and is
+// implemented on the same accumulator so there is one set of rules.
+//
+// This was the cost of being a bolt-on and it was not small: on the
+// statement path the second lex measured ~13% of a point join's latency,
+// three times what the Waystone recording it existed for actually cost, and
+// it was the whole of replay's B+ tree regression
+// (bench/results-waystone-v2.md). What survives the blueprint-parser rewrite
+// is this file's *contract* - a statement in, two integers out - not how the
+// numbers are produced. Nothing downstream should depend on the latter.
+//
+// **Lexing now allocates nothing at all** (2026-08-03): `Token::text` is a
+// view into the statement (token.hpp), and the fold below hashes case as it
+// goes rather than building a folded copy per identifier. Those were the two
+// remaining per-token allocations, and the second one mattered here
+// specifically - a fingerprint that built a `std::string` per token would
+// have undone zero-copy tokens for exactly the tokens that motivated them.
 //
 // arg_hash covers inline literals only. When a BIND stage exists it must
 // fold the bound values in on top, in parameter order, to reach the final
@@ -205,6 +222,72 @@ struct Fingerprint {
 // Never fails, never allocates beyond the lexer's own token strings, and
 // never touches the catalog: this is a pure function of its argument, and
 // the tests depend on it staying that way.
+//
+// **This lexes `sql` from scratch.** On the statement path that is a second
+// lex on top of the parser's own - see `FingerprintAccumulator` below, which
+// is how the parser avoids it. This entry point remains for callers with a
+// string and no parse: the golden corpus, which fingerprints statements that
+// deliberately do not parse, and `CREATE PATTERN`, which fingerprints a
+// *substring* of the statement it just parsed (its body) and is not on any
+// hot path.
 std::optional<Fingerprint> FingerprintOf(std::string_view sql);
+
+// ---- The same reduction, driven by someone else's token stream -----------
+//
+// Fed one token at a time, in the order the lexer produced them. This is
+// what lets the fingerprint ride along with the parse instead of costing a
+// second pass: `Lexer` owns one of these and feeds it from the single place
+// every token is produced, so the parser gets a fingerprint for free and
+// nothing lexes twice.
+//
+// **`FingerprintOf()` above is implemented on top of this**, and that is
+// load-bearing rather than tidy. Two implementations of a hash that is
+// persisted in `sys.patterns` and keys every stored waystone would be two
+// chances to disagree, and a disagreement would not fail - it would quietly
+// give the same statement two different pattern_ids depending on which path
+// computed it, retiring trails at random. There is one set of rules and both
+// entry points run it.
+//
+// The contract on feeding, which the lexer satisfies by construction:
+//
+//   - tokens arrive **in order** and **exactly once** each. `Lexer::Peek()`
+//     caches, so a peeked token is produced once and consumed later; that
+//     is why the hook is in `ReadToken()` and not in `Next()`.
+//   - the stream is **complete** only once `kEof` has been fed. A parse that
+//     stopped early has fed a prefix, and a prefix of a hash is not a hash
+//     of a prefix - `Result()` answers nullopt rather than something
+//     plausible.
+class FingerprintAccumulator {
+public:
+    // `tok` is the next token the lexer produced. Feeding `kEof` ends the
+    // stream; feeding anything after that is ignored.
+    void Feed(const Token& tok) noexcept;
+
+    // The fingerprint of everything fed so far, or nullopt when the stream
+    // is not a pattern: an unpatternable leading word, a token the lexer
+    // could not read, or a stream that never reached `kEof`.
+    std::optional<Fingerprint> Result() const noexcept;
+
+    // Whether `kEof` has been fed. Exposed because "did the parse consume
+    // the whole statement" is a question the parser can answer more cheaply
+    // this way than by re-examining its own state.
+    bool complete() const noexcept { return complete_; }
+
+    void Reset() noexcept;
+
+private:
+    // FNV-1a states, not a helper type: this is a header on the hot path and
+    // the algorithm is two integers and a loop. The loop lives in the .cpp
+    // with the tag constants it feeds, which are format and belong together.
+    std::uint64_t shape_ = 0;
+    std::uint64_t args_ = 0;
+
+    std::uint32_t literal_count_ = 0;
+    std::uint32_t param_count_ = 0;
+
+    bool started_ = false;   // the leading word has been seen
+    bool valid_ = false;     // ...and it was patternable, and nothing failed to lex
+    bool complete_ = false;  // kEof has been fed
+};
 
 }  // namespace kds::parser
