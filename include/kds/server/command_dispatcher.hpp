@@ -311,6 +311,15 @@ private:
     DispatchOutcome HandleShowPage(std::string_view args);
     DispatchOutcome HandleShowPatterns();
     DispatchOutcome HandleShowAccess();
+
+    // `SHOW BUDGET` - every relation's Keystone id consumption
+    // (`docs/keystoneid-invariant.md` K-M4). Listed for *every* relation
+    // including the catalog's own, because two of those - sys.patterns and
+    // sys.pattern_defs - genuinely issue ids, and a listing that hid them
+    // would hide the only relations whose consumption an operator does not
+    // control.
+    DispatchOutcome HandleShowBudget();
+
     DispatchOutcome HandleCreateTable(std::string_view args);
     DispatchOutcome HandleCreateTableSql(std::string_view line);
 

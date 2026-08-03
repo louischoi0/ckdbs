@@ -33,6 +33,7 @@ add_library(kds
     src/server/superblock_checkpoint_anchor.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
+    src/catalog/keystone_budget.cpp
     src/catalog/schema.cpp
     src/catalog/row_layout.cpp
     src/catalog/sys_object_registry.cpp

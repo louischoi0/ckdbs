@@ -258,12 +258,35 @@ Compiler/executor: an UPDATE whose SET list touches the super column
 returns Unsupported at compile time (J2 policy — no slow path).
 Acceptance: negative tests at parser, compiler, and wire levels.
 
-**K-M4 — Budget observability.**
+**K-M4 — Budget observability. DONE 2026-08-03.**
 Expose per-relation issued-count and remaining budget (derived from
 HWM) via the catalog view / SHOW path, with a health warning at a
 threshold `[PROPOSED: 90%]`. Acceptance: an operator can see budget
 consumption without arithmetic; crossing the threshold is visible in
 SHOW output.
+
+Two surfaces: **`SHOW BUDGET`** lists every relation with a summary line
+carrying `warning=<n>`/`exhausted=<n>`, so the second acceptance clause
+holds without reading every row; and **`DESCRIBE`** gains `ids_issued`,
+`ids_remaining` and `budget_used` beside the `next_id` they derive from,
+which is where someone already looks. `docs/client-manual.md` has both.
+
+The arithmetic is `catalog::BudgetOf()`
+(`include/kds/catalog/keystone_budget.hpp`), a pure function of one
+integer rather than a line of `<<` in the dispatcher — which is what makes
+this milestone survive K-M2: the *source* becomes a persisted HWM, and
+none of the arithmetic moves. Three things it settles that an inline
+subtraction gets wrong: **issued counts ids spent, not rows living** (a
+burned id is spent, and a renderer saying "rows" would be lying);
+capacity is `kMaxKeystoneId − kFirstRowId + 1`, one short of 2^40 because
+id 0 is reserved; and exhaustion is a flag rather than the tail of a
+rounded percentage, since `AllocateRowId` refuses rather than wrapping.
+
+The 90% threshold is **still `[PROPOSED]`** — nothing has argued for a
+number, and the honest input is how long a relation takes to cross the
+last 10% at its own insert rate (§3's table), which is per-deployment. It
+is a named constant, `kKeystoneBudgetWarnFraction`, so moving it is one
+edit.
 
 **K-M5 — Documentation promotion.**
 Add the invariant to the design-invariants list verbatim ("Keystone
@@ -278,12 +301,17 @@ its inputs.
 
 Order, revised after M1:
 
-> **K-M1 (done) → K-M3 → K-M2a → K-M2 → K-M4 → K-M5**
+> **K-M1 (done) → K-M4 (done) → K-M3 → K-M2a → K-M2 → K-M5**
+
+K-M4 moved ahead of K-M3 and was built on 2026-08-03. It was listed after
+K-M2 because it reads "the HWM", but it only ever needed *a* sequence
+position, and today's `next_id` is one — so it was the second unblocked
+milestone rather than the fifth.
 
 M1 first was non-negotiable and paid for itself: everything after it now
-assumes what the engine does rather than believing it. **K-M3 moves ahead
-of K-M2** because it is genuinely independent and unblocked, while K-M2 now
-sits behind K-M2a, which sits behind work in another document
+assumes what the engine does rather than believing it. **K-M3 and K-M4 move
+ahead of K-M2** because they are genuinely independent and unblocked, while
+K-M2 now sits behind K-M2a, which sits behind work in another document
 (`docs/wal.md`). Ordering K-M2 second would have meant building an allocator
 whose stated acceptance criterion it could not meet.
 

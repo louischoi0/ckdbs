@@ -7,11 +7,13 @@
 #include <cctype>
 #include <cstring>
 #include <charconv>
+#include <iomanip>
 #include <sstream>
 #include <variant>
 
 #include <vector>
 
+#include "kds/catalog/keystone_budget.hpp"
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -132,6 +134,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         if (IEquals(sub, "PAGE")) return HandleShowPage(sub_rest);
         if (IEquals(sub, "PATTERNS")) return HandleShowPatterns();
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
+        if (IEquals(sub, "BUDGET")) return HandleShowBudget();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -361,6 +364,77 @@ DispatchOutcome CommandDispatcher::HandleShowAccess() {
     return {os.str(), false};
 }
 
+namespace {
+
+// A budget fraction as a percentage, at a precision chosen for the one
+// question this field answers: *is this relation near the threshold?*
+// Three decimals put 90.000% and 0.000% on the same scale; the exact
+// consumption is `issued`, which is printed beside it and is a count
+// rather than a rounding.
+std::string PercentString(double fraction) {
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(3) << (fraction * 100.0);
+    return os.str();
+}
+
+}  // namespace
+
+DispatchOutcome CommandDispatcher::HandleShowBudget() {
+    auto tables = catalog_.ListTables();
+    if (!tables.ok()) {
+        return {"ERR " + tables.status().message(), false};
+    }
+
+    // Built in two passes so the summary line can carry the warning count.
+    // An operator scanning a long listing should not have to read every
+    // row to learn that none of them is in trouble - K-M4's acceptance is
+    // that crossing the threshold is *visible*, and a count at the top is
+    // what makes it visible without a search.
+    std::ostringstream rows;
+    std::size_t listed = 0;
+    std::size_t warning = 0;
+    std::size_t exhausted = 0;
+
+    for (const catalog::SysObjectRow& obj : tables.value()) {
+        auto table_row = catalog_.GetSysTableRow(obj.oid);
+        if (!table_row.ok()) {
+            // A sys.objects row of type table with no sys.tables row is a
+            // catalog inconsistency. Reported in place, for the reason
+            // DESCRIBE gives about a bad type_val: seeing *which* relation
+            // is broken is the point of an inspection command.
+            rows << "\\n"
+                 << "rel=" << catalog::NameView(obj.name) << " oid=" << obj.oid
+                 << " error=" << table_row.status().message();
+            ++listed;
+            continue;
+        }
+
+        const catalog::KeystoneBudget budget =
+            catalog::BudgetOf(table_row.value().next_id);
+        ++listed;
+        if (budget.warn) ++warning;
+        if (budget.exhausted) ++exhausted;
+
+        rows << "\\n"
+             << "rel=" << catalog::NameView(obj.name) << " issued=" << budget.issued
+             << " remaining=" << budget.remaining
+             << " used=" << PercentString(budget.used_fraction) << "%"
+             << " warn=" << (budget.warn ? "yes" : "no")
+             << " exhausted=" << (budget.exhausted ? "yes" : "no");
+    }
+
+    // `capacity` belongs to the summary rather than to every row: it is the
+    // same constant for every relation (K4's per-relation 2^40), and
+    // repeating it once per line would be the widest column in the listing
+    // carrying the least information.
+    std::ostringstream os;
+    os << "relations=" << listed << " warning=" << warning << " exhausted=" << exhausted
+       << " capacity=" << catalog::kKeystoneBudgetCapacity
+       << " warn_at=" << PercentString(catalog::kKeystoneBudgetWarnFraction) << "%";
+    os << rows.str();
+    return {os.str(), false};
+}
+
 DispatchOutcome CommandDispatcher::HandleListTables() {
     auto tables = catalog_.ListTables();
     if (!tables.ok()) {
@@ -528,6 +602,24 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
     os << "oid=" << oid.value() << " root_page_id=" << table_row.value().desc_page_id
        << " clustered_type=" << clustered << " next_id=" << table_row.value().next_id
        << " columns=" << schema.columns.size();
+
+    // K4's lifetime budget, beside the sequence it is derived from. Here as
+    // well as in SHOW BUDGET because this is where someone already looks
+    // after reading `next_id` and wondering what it means - and because
+    // "without arithmetic" (K-M4) is a claim about the place the number is
+    // read, not about one command.
+    //
+    // `ids_issued` is deliberately not `rows`: it counts ids spent, gaps
+    // included (keystone_budget.hpp).
+    const catalog::KeystoneBudget budget = catalog::BudgetOf(table_row.value().next_id);
+    os << " ids_issued=" << budget.issued << " ids_remaining=" << budget.remaining
+       << " budget_used=" << PercentString(budget.used_fraction) << "%";
+    if (budget.warn) {
+        os << " budget_warning=yes";
+    }
+    if (budget.exhausted) {
+        os << " budget_exhausted=yes";
+    }
 
     // The tree's shape, which is the thing you actually want to know about
     // a btree relation and cannot get from anywhere else. Reported
