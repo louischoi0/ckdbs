@@ -1,11 +1,10 @@
 # Keystone id — issue-once invariant (concept + workplan)
 
 Status: **DECIDED** (K1–K5 below). **K-M1 done 2026-08-03** —
-`docs/keystoneid-k0-findings.md` is what it found, and §7 there proposes
-four amendments to this document that are **not yet applied**: K3's wording,
-§1's min_key aside, §5's milestone order, and §1.2's oid claim. Read that
-document before starting K-M2; three of its findings change what K-M2 is.
-K-M2..K-M6 not started.
+`docs/keystoneid-k0-findings.md` is what it found, and its four proposed
+amendments are **applied here** (2026-08-03): K3's wording, §1's min_key
+aside, §5's milestone order, and §1.2's oid claim. Read the findings before
+starting K-M2; three of them change what K-M2 is. K-M2..K-M6 not started.
 Depends on: Keystone super-column contract (40-bit id + 8-bit flags +
 16-bit meta id), per-relation catalog metadata, WAL, core-ownership
 dispatch.
@@ -21,10 +20,13 @@ Decisions fixed here:
 - **K2 — Immutable.** A tuple's Keystone id never changes after
   insert. An UPDATE that targets the super column is **Unsupported**
   (V5-style hard rejection, no slow path).
-- **K3 — No ordering promise.** Issue-once does *not* imply
-  monotonicity or density. Gaps are legal and expected (bump-ahead
-  recovery, aborted inserts). Nothing in the engine may rely on ids
-  being sequential or contiguous.
+- **K3 — No density promise.** Gaps are legal and expected
+  (bump-ahead recovery, aborted inserts); nothing may rely on ids
+  being contiguous. Issue-once does not *by itself* promise ordering
+  — but the allocator (§2) never moves its cursor backward, and the
+  semi-sorted heap, the clustered btree and range pruning rely on
+  that. Removing monotonicity is a separate decision with its own
+  blast radius, not a consequence of this one.
 - **K4 — Lifetime budget is a documented product constraint.** 2^40
   ids per relation is the relation's lifetime insert budget, stated
   openly in product docs rather than engineered around.
@@ -48,11 +50,28 @@ What this buys, engine-wide:
    snapshot is entitled to. Issue-once deletes the hazard structurally
    instead of gating it behind a purge-horizon rule that every future
    feature would have to re-prove.
-2. **(oid, pk) becomes a forever-unique key.** Every structure keyed on
-   it — the statistics primitives, waystone trail entries, in-memory
-   canonical caches, any future replication or change feed — gets
-   identity for free: a stored (oid, pk) can dangle, but it can never
-   mis-attribute. "Dangling ⇒ skip" becomes a universally sound rule.
+2. **(oid, pk) becomes a forever-unique key — once the oid half holds.**
+   Every structure keyed on it — the statistics primitives, waystone
+   trail entries, in-memory canonical caches, any future replication or
+   change feed — would get identity for free: a stored (oid, pk) can
+   dangle, but it could never mis-attribute, making "dangling ⇒ skip" a
+   universally sound rule.
+
+   **This does not hold today, and not because of the pk.**
+   `Catalog::GenerateUserOid()` is an in-memory counter seeded at
+   `kUserOidStart` and never read back from the catalog, so **every boot
+   re-issues the same object oids** — no crash required, a clean restart
+   plus one `CREATE TABLE` collides, and the new relation's oid resolves
+   through `GetSysTableRow` to the *old* relation. The gap is documented
+   at `catalog.hpp`'s header and `well_known.hpp`'s `kUserOidStart`, and
+   `sys.patterns` rows take a persistent sequence specifically to dodge
+   it. Demonstrated by `ObjectOidsAreReissuedAcrossABootAndCollide`.
+
+   So this bullet states an *objective*, not a current property. K1 is
+   necessary for it and not sufficient: persisting the oid counter — seed
+   it from the catalog at load, or add a superblock field — belongs to the
+   catalog rather than to this document, but nothing keyed on (oid, pk)
+   may be called collision-free until it lands.
 3. **Audit posture.** For the finance-adjacent positioning: "a row's
    identifier never changes and is never reissued" is a compliance
    sentence, not just an implementation detail. Immutable, unique-for-
@@ -62,10 +81,28 @@ What this buys, engine-wide:
    would need epoch-style incarnation checks on ids reduces to
    existence + visibility checks.
 
-What it deliberately does **not** promise (K3): no monotonic order, no
-gap-freeness, no correlation between id order and insert order across
-crashes. The min_key semi-sorted heap keys off values, not issuance
-order, and remains unaffected.
+What it deliberately does **not** promise (K3): no gap-freeness, and no
+correlation between id order and insert order across crashes.
+
+It does not promise **ordering** either — but the engine has it anyway,
+from §2's allocator, and four things already depend on it. Worth naming,
+because the earlier wording here claimed the opposite:
+
+- the semi-sorted heap chain refuses an id below the tail page's
+  `min_key` (`heap_chain.hpp`), which is invariant 3 enforced at the one
+  place tuples enter — so it depends on *issuance* order, not only on
+  values;
+- the clustered btree **refuses a non-monotonic id outright**, with
+  `OutOfSpace` naming the open split-policy decision rather than guessing
+  (`btree.hpp`) — a hard failure, not a lost optimization, and the
+  strongest of the four;
+- `keystone.hpp` derives uniqueness *from* monotonicity ("unique and
+  monotonic by construction rather than by a uniqueness check");
+- `kRange`'s `min_key` tail pruning stops a walk on the strength of it
+  (`src/exec/step_vm.cpp`).
+
+None of that is a promise this document makes. All of it is a promise
+something would have to re-make before monotonicity could be dropped.
 
 ## 2. Allocator contract
 
@@ -81,12 +118,20 @@ Per relation, the allocator maintains a persisted **high-water mark**
   recovery resumes from the persisted ceiling; the skipped remainder
   of the chunk becomes a gap, which K3 makes legal. This keeps the
   hot path free of per-insert durability cost.
-- Chunk size `N` `[PROPOSED]`: fixed global constant (e.g. 4096),
-  frozen in the superblock like `kds.inline_cell_width`. Not
+- Chunk size `N` `[PROPOSED]`: fixed global constant, **4096, and that
+  is a floor rather than an example** — measured, not picked
+  (`bench/results-keystone-alloc.md`). At 4096 a crash-safe allocator
+  costs 1.24× today's; at 64 it costs 43×, which is a 3× INSERT
+  regression, because one fsync per 64 rows is still one fsync every 64
+  rows. Frozen in the superblock like `kds.inline_cell_width`. Not
   per-relation tunable in v1 — one less knob.
 - Persistence location `[PROPOSED]`: the relation's catalog metadata
-  row, updated through the normal logged catalog write path (the
-  bump-ahead cadence makes the log traffic negligible).
+  row, updated through the normal logged catalog write path — **which
+  does not exist**. Catalog rows are unlogged and reach the platter only
+  at a checkpoint, which is why K1 breaks across a crash today
+  (`keystoneid-k0-findings.md` §4) and what K-M2a is for. The reasoning
+  that made this location cheap still holds once it does exist: the
+  bump-ahead cadence makes the log traffic negligible.
 - Concurrency: the relation's owning core is the only issuer
   (core-ownership dispatch), so the allocator is single-writer by
   construction — no atomics, no cross-core coordination.
@@ -163,26 +208,50 @@ close alone. The demonstrating tests are green rather than red on purpose;
 each names the condition under which it must be inverted, on the grounds
 that a permanently-red test is one that gets ignored.
 
-**K-M2 — HWM + bump-ahead allocator.**
+**K-M2 — HWM + bump-ahead allocator. BLOCKED on K-M2a.**
 Implement §2: persisted per-relation HWM, chunked bump-ahead, recovery
 resume-from-ceiling, explicit-id gate. Deterministic tests: crash
 between chunk persist and issuance (sim-crash via IoBackend seam)
-must never re-issue; gaps appear and are harmless. Acceptance: K1
-holds across simulated crash/restart cycles; insert hot path shows no
-added durability wait.
+must never re-issue; gaps appear and are harmless.
 
-**Blocked, and the acceptance criterion is not reachable as written.** §2
-persists the ceiling through "the normal logged catalog write path"; there
-is no logged catalog write path, and recovery does not exist, so no chunk
-size makes K1 hold across a crash. Real order:
-**logged catalog writes → recovery → K-M2.** Measured inputs from K-M1
-(`bench/results-keystone-alloc.md`): the allocator is 4.3–4.9% of an
-unlogged INSERT, so this is a correctness change and not a performance one;
-crash-safe bump-ahead costs **1.24×** today's allocator at N=4096 and **43×**
-at N=64 (a 3× INSERT regression), which settles `N` at 4096 by measurement
-rather than by proposal; and forcing durability *per id* instead costs
-**2629×**, capping INSERT at ~949/s. The `[PROPOSED]` on N should become a
-floor, not a default.
+Acceptance, restated after K-M1 — the original wording claimed a crash
+property this milestone cannot deliver on its own, at any chunk size:
+
+- the allocator issues from an in-memory interval and touches the
+  catalog row once per chunk rather than once per id;
+- a restart resumes from the persisted ceiling, never below it, and the
+  skipped remainder appears as a gap;
+- an explicit id below the HWM is rejected and one at or above it
+  advances the HWM past it;
+- the insert hot path adds no per-id durability wait;
+- **K1 across a crash is K-M2a's criterion, not this one.** With the
+  ceiling written through today's unlogged catalog path, this milestone
+  can only promise "never re-issues *given* that the ceiling reached the
+  platter" — a conditional, and the condition is false today.
+
+**K-M2a — Make the ceiling durable.** §2 persists through "the normal
+logged catalog write path". There is no logged catalog write path:
+catalog rows are unlogged and reach the platter only at a checkpoint,
+which is exactly why K1 breaks across a crash (`keystoneid-k0-findings.md`
+§4). Closing it needs a `sys.tables` write that is logged, and recovery to
+read it back. Both belong to `docs/wal.md`; they are named here because
+without them K-M2 is a performance change wearing a correctness label.
+
+Real order: **logged catalog writes → recovery → K-M2**.
+
+Measured inputs from K-M1 (`bench/results-keystone-alloc.md`), which
+decide two things K-M2 would otherwise guess at:
+
+- The allocator is **4.3–4.9% of an unlogged INSERT**. That is the
+  ceiling on what this milestone can win, so it is a correctness change
+  and must not be sold as a performance one.
+- **`N` is settled at 4096 by measurement**, and the `[PROPOSED]` on it
+  becomes a **floor rather than a default**. Crash-safe bump-ahead costs
+  1.24× today's allocator at N=4096 and 43× at N=64 — a 3× INSERT
+  regression, because one fsync per 64 rows is still one fsync every 64
+  rows. Forcing durability *per id* instead costs 2629×, capping INSERT
+  at ~949/s: that is the shape a crash-safe implementation reaches for
+  when it skips bump-ahead, and it is the one outcome to design against.
 
 **K-M3 — Enforce K2 (immutability).**
 Compiler/executor: an UPDATE whose SET list touches the super column
@@ -207,17 +276,28 @@ README's constraint section references the budget honestly.
 Blocked until a concrete need appears; §4's boundary conditions are
 its inputs.
 
-Suggested order: K-M1 → K-M2 → K-M3 (independent of M2, can parallel)
-→ K-M4 → K-M5. M1 first is non-negotiable: everything else assumes we
-know, rather than believe, what the engine does today.
+Order, revised after M1:
 
-Revised after M1: **K-M3 first**, since it is genuinely independent and
-unblocked, while K-M2 now sits behind logged catalog writes and recovery.
-Two items M1 surfaced that belong to other documents but block claims made
-here: object oids are re-issued on every boot (`well_known.hpp`'s
-`kUserOidStart`), which falsifies the oid half of §1.2 with no crash
-involved; and the catalog cannot hold more than ~62 columns across all user
-relations, because its fixed pages do not chain.
+> **K-M1 (done) → K-M3 → K-M2a → K-M2 → K-M4 → K-M5**
+
+M1 first was non-negotiable and paid for itself: everything after it now
+assumes what the engine does rather than believing it. **K-M3 moves ahead
+of K-M2** because it is genuinely independent and unblocked, while K-M2 now
+sits behind K-M2a, which sits behind work in another document
+(`docs/wal.md`). Ordering K-M2 second would have meant building an allocator
+whose stated acceptance criterion it could not meet.
+
+Two things M1 surfaced that belong to other documents and block claims made
+in this one. Neither is this workplan's to fix; both are its to stop
+asserting:
+
+- **Object oids are re-issued on every boot** (`well_known.hpp`'s
+  `kUserOidStart`), which falsifies the oid half of §1.2 with no crash
+  involved. Owner: the catalog.
+- **The catalog holds ~62 columns across all user relations** — 31
+  two-column tables, measured — because its fixed pages do not chain.
+  Unrelated to id identity, more serious than anything here, and recorded
+  because K0 found it. Owner: the catalog.
 
 ## 6. Out of scope
 
@@ -225,4 +305,10 @@ relations, because its fixed pages do not chain.
   own specs cite this document.
 - Re-key implementation (K-M6).
 - Cross-relation or global id spaces; the id remains per-relation.
-- Any ordering/density guarantee (K3 forbids relying on one).
+- Any *density* guarantee: K3 forbids relying on gap-freeness. Ordering
+  is a different matter — this document does not promise it, but §1
+  lists four subsystems that already depend on it, so removing it is its
+  own decision rather than a licence K3 hands out.
+- Persisting the object-oid counter (§1.2), and the catalog's
+  single-page relation limit. Both surfaced in K-M1, both belong to the
+  catalog.

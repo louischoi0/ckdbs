@@ -179,9 +179,11 @@ It is also the cheapest thing in this document to fix: seed `next_user_oid_`
 from the catalog at load, or persist it in the superblock. Neither is K0's
 to do.
 
-## 7. Proposed amendments to `docs/keystoneid-invariant.md`
+## 7. Amendments to `docs/keystoneid-invariant.md`
 
-For approval; none applied.
+**Approved and applied 2026-08-03.** All four are in that document now; what
+follows is the record of what changed and why, so the reasoning does not
+have to be reconstructed from a diff.
 
 **K3 — wording.** As written, *"Nothing in the engine may rely on ids being
 sequential or contiguous"* is contradicted by four subsystems that rely on
@@ -200,24 +202,32 @@ ids being **ordered**:
 - `kRange`'s `min_key` pruning stops a walk on the strength of it
   (`src/exec/step_vm.cpp`).
 
-§2's own
-allocator never moves its cursor backward, so the *behaviour* is
-monotonic-with-gaps and only the wording is absolute. Proposed:
-
-> **K3 — No density promise.** Gaps are legal and expected (bump-ahead
-> recovery, aborted inserts); nothing may rely on ids being contiguous.
-> Issue-once does not *by itself* promise ordering — but the allocator (§2)
-> never moves its cursor backward, and the semi-sorted heap, the clustered
-> btree and range pruning rely on that. Removing monotonicity is a separate
-> decision with its own blast radius, not a consequence of this one.
+§2's own allocator never moves its cursor backward, so the *behaviour* was
+already monotonic-with-gaps and only the wording was absolute. K3 is now
+**"No density promise"**, forbidding reliance on contiguity and stating
+plainly that ordering is provided-but-not-promised, with removing it named
+as its own decision rather than something K3 licenses. §6's out-of-scope
+line was narrowed to match — it said "any ordering/density guarantee", which
+read as permission to break the four dependencies above.
 
 **§1's closing aside** — *"The min_key semi-sorted heap keys off values, not
-issuance order, and remains unaffected"* — should be struck. `ChainInsert`
-refuses an id below the tail's `min_key`, so it depends on issuance order
-directly.
+issuance order, and remains unaffected"* — is struck. `ChainInsert` refuses
+an id below the tail's `min_key`, so it depends on issuance order directly.
+The four dependencies replace it, so the correction is visible rather than
+merely deleted.
 
-**§5's ordering** should gain the dependency in §4 above, and K-M2's
-acceptance criterion should stop claiming a crash property that the
-milestone cannot deliver alone.
+**§1.2** now states an objective rather than a property, and names the oid
+gap, the tests that demonstrate it, and the fix that closes it — while
+recording that the fix belongs to the catalog, not here.
+
+**§5** gained **K-M2a ("make the ceiling durable")** as a milestone of its
+own, and K-M2's acceptance criterion was rewritten: it no longer claims K1
+holds across a crash, since with an unlogged catalog write it can only
+promise "never re-issues *given* that the ceiling reached the platter" — a
+conditional whose condition is false today. The order is now
+**K-M1 → K-M3 → K-M2a → K-M2 → K-M4 → K-M5**, moving K-M3 ahead because it
+is the only unblocked milestone left. The measured inputs (the 4.3–4.9%
+share, N=4096 as a floor, the 2629× per-id figure) are recorded against
+K-M2 so they are read at implementation time and not looked up.
 
 **§1.2** should either cite the oid gap or narrow its claim to the pk.
