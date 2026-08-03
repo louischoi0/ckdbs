@@ -83,12 +83,16 @@ Done when: every J2 form — FROM-position nesting, CTEs, aggregates inside, ove
 Tests: parse goldens per form; depth-cap boundary (at the cap parses, one deeper errors); a corpus of nesting attempts outside predicate position.
 Needs: V02, V05.
 
-**V08 — Predicate surface: `IN (list)`, `BETWEEN`.** *(= PR14)*
-Files: `src/parser/parser.cpp`, `tests/parser_predicate_test.cpp`.
+**V08 — Predicate surface: `IN (list)`, `BETWEEN`.** *(= PR14)* — **`BETWEEN` done 2026-08-03; `IN (list)` still open.**
+Files: `src/parser/parser.cpp`, `src/exec/step_compiler.cpp`, `tests/step_compile_test.cpp`, `tests/range_scan_test.cpp`.
 Flat conjunct list, no expression tree. `OR`, `NOT` outside the reserved negation forms, and parenthesized expressions answer `Unsupported` with a position.
+
+`col BETWEEN <low> AND <high>` parses as `PredicateKind::kBetween` and **lowers to its two ordinary conjuncts** in the compiled chain; the pk range it may also put on the step is a hint on top of them, never a replacement, which is what keeps "downgrading any step to a plain scan cannot change the result" true. **No `pattern_id` moved**: `BETWEEN` has lexed as a reserved keyword since V04, so becoming parseable changes no shape stream — the corpus line kept its hash while its verdict flipped, which is the whole reason V04 reserved it early.
+
+`IN (list)` is untouched and still reports through `ParseSubquery`.
 Needs: V02, V07.
 
-**V09 — `ORDER BY` pk + `LIMIT`/`OFFSET`.** *(= PR15)*
+**V09 — `ORDER BY` pk + `LIMIT`/`OFFSET`.** *(= PR15)* — note `kRange` no longer waits on this: V08's `BETWEEN` half made it emitted, and `VisitControl::kStop` (V03) got its first production caller from the range walk's `min_key` pruning.
 Files: `src/parser/parser.cpp`, `tests/parser_pagination_test.cpp`.
 Non-pk ordering is `Unsupported`. Parse lands here; execution needs V03 and arrives with V17.
 Needs: V08.

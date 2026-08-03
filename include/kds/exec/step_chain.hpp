@@ -75,19 +75,53 @@ enum class AccessKind : std::uint8_t {
     // pk equality against a value produced by an earlier step (or, once
     // sub-chains exist, by an outer row).
     kProbe,
-    // pk range through the leaf chain. Reserved: no production emits one
-    // until `ORDER BY`/`LIMIT` (V09) and range predicates arrive.
+    // pk range through the leaf chain, from `BETWEEN <low> AND <high>` on
+    // the relation's primary key. Emitted since the BETWEEN half of V08.
     kRange,
-    // Everything else: walk the relation and filter.
+    // A walk **driven by a filter**: at least one equality against a
+    // literal on a non-pk column with no index.
+    //
+    // Split out of kScan because the two are identical in cost today and
+    // completely different as a signal. A `kScan` is a statement that
+    // asked for everything; a `kFilterScan` is a statement that asked for
+    // a few rows and had to read all of them to find out which - which is
+    // exactly the shape a physical optimizer wants to hear about
+    // (`docs/heap-and-tuple.md` §7), and which an index or a clustering
+    // decision would fix.
+    //
+    // It is **not** a promise that anything is faster. Both walk the whole
+    // relation; only the statistics can tell them apart.
+    kFilterScan,
+    // Everything else: walk the relation, filtering by whatever residual
+    // it carries - or by nothing at all.
     kScan,
 };
 
 // True for the kinds a Waystone trail may replace outright. The one place
 // this line is drawn, so the executor and the recorder cannot disagree
 // about it.
+//
+// **Unchanged by kRange and kFilterScan**, deliberately. Both are searches:
+// a range's completeness comes from the walk, not from a stored set, and a
+// filter scan's from reading every row. Invariant 9 lets a trail replace a
+// lookup and never a search, so adding a search-class kind cannot move this
+// line - which is what made both safe to add without touching Waystone.
 constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
     return kind == AccessKind::kLookup || kind == AccessKind::kProbe;
 }
+
+// The inclusive pk bounds a kRange step walks between.
+//
+// A **hint on top of the residual**, never a replacement for it: the two
+// conjuncts a `BETWEEN` lowers to (`>= low`, `<= high`) stay in
+// `Step::residual` exactly as a lookup's equality does. That is what keeps
+// "downgrading any step to a plain kScan cannot change the result" true,
+// and it is the property invariant 9's fall-through and the
+// scan/probe equivalence tests both rest on.
+struct RangeBounds {
+    std::uint64_t low = 0;
+    std::uint64_t high = 0;
+};
 
 // The right-hand side of a compiled predicate: a value the statement
 // wrote, or another column.
@@ -170,8 +204,21 @@ struct Step {
     AccessKind kind = AccessKind::kScan;
 
     // The pk key, for kLookup (a literal) and kProbe (a column produced
-    // by an earlier step). Empty for kScan/kRange.
+    // by an earlier step). Empty for every other kind.
     std::optional<Operand> key;
+
+    // The pk bounds, for kRange. Empty for every other kind.
+    std::optional<RangeBounds> range;
+
+    // The columns this step's kind was assigned for, in schema order:
+    // the filtered columns for kFilterScan, the pk for kLookup/kProbe/
+    // kRange, empty for a bare kScan.
+    //
+    // Computed once here rather than re-derived per execution, because it
+    // is what the access statistics key on - and re-deriving it would mean
+    // walking the residual on every statement to answer a question the
+    // compiler already answered.
+    std::vector<std::uint16_t> access_columns;
 
     // Every conjunct that becomes evaluable at this step - that is, whose
     // references are all satisfied by this step or an earlier one. A
@@ -257,5 +304,18 @@ struct StepChain {
 // replay - and asking costs a fingerprint, which is the most expensive
 // thing on that path.
 bool HasReplayableStep(const StepChain& chain) noexcept;
+
+// The value `SysAccessStatRow::kind` stores for an access kind.
+//
+// **Not a cast**, for the reason `StoredStatementClass` already had to
+// learn: `kLookup` is 0 and so is a zeroed catalog row, so a straight cast
+// would make every never-written row read as a recorded pk lookup. Mapping
+// it explicitly also means this enum can gain a value or be reordered
+// without silently changing what stored statistics mean.
+std::uint8_t StoredAccessKind(AccessKind kind) noexcept;
+
+// The reverse, for rendering a stored row. Returns nullopt for a value no
+// build of this engine ever wrote - which a zeroed row decodes to.
+std::optional<AccessKind> AccessKindOfStored(std::uint8_t stored) noexcept;
 
 }  // namespace kds::exec

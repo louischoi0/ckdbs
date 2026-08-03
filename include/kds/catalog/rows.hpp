@@ -335,6 +335,84 @@ inline constexpr std::uint8_t kOriginUser = 1;
 // performance rather than answers.
 inline constexpr std::uint16_t kPatternPinned = 0x1;
 
+// ---- sys.access_stats -------------------------------------------------
+//
+// How often each **access shape** ran, and when it last ran
+// (`docs/heap-and-tuple.md` §7). One row per
+// `(kind, rel_id, column_mask)`: the physical optimizer's input, and the
+// first thing in this engine to collect the "access statistics" §7 has
+// described since it was written.
+//
+// **Keyed by columns, never by values.** `WHERE flag = 1` and
+// `WHERE flag = 2` are one row here. That is what makes the relation
+// bounded - by the schema rather than by the data - so it needs no
+// eviction policy and no directory. The *values* already identify
+// something: a Waystone pattern instance, through `arg_hash`. Two layers,
+// two questions: "which columns does this workload search on" belongs
+// here, "which arguments repeat" belongs there.
+//
+// Field order by descending alignment, so the on-disk offsets and the
+// struct's coincide and every field carries an offsetof assert.
+struct SysAccessStatRow {
+    Oid rel_id;
+
+    // Bit per `col_pos` the access was keyed or filtered on: bit 0 (the
+    // pk) for a lookup, probe or range; the filtered columns for a filter
+    // scan; 0 for a bare scan.
+    //
+    // A relation wider than 64 columns folds its high columns into no bit,
+    // which makes the shape *coarser* rather than wrong - two accesses
+    // differing only past column 63 merge into one row. Stated here rather
+    // than left to be discovered.
+    std::uint64_t column_mask;
+
+    // Executions observed. Saturating, never wrapping: a count that rolled
+    // over would make the hottest access in the database look like the
+    // coldest, which is the one reading an optimizer must never be handed.
+    std::uint64_t use_count;
+
+    // Truncated logical timestamp of the last execution. Best-effort, in
+    // the same sense sys.patterns' is: it ranks shapes, and nothing
+    // reports it.
+    std::uint64_t last_seen;
+
+    // The `exec::AccessKind`, mapped explicitly by
+    // `exec::StoredAccessKind()` - never a raw cast. The enum's first
+    // value is 0 and so is a zeroed page's, which is exactly the collision
+    // `stmt_class` already had to be taught to avoid.
+    std::uint8_t kind;
+
+    static constexpr std::size_t kRelIdOffset = 0;
+    static constexpr std::size_t kColumnMaskOffset = 8;
+    static constexpr std::size_t kUseCountOffset = 16;
+    static constexpr std::size_t kLastSeenOffset = 24;
+    static constexpr std::size_t kKindOffset = 32;
+    static constexpr std::size_t kOnDiskSize = kKindOffset + sizeof(std::uint8_t);
+
+    std::array<std::byte, kOnDiskSize> Encode() const;
+    static StatusOr<SysAccessStatRow> Decode(std::span<const std::byte> bytes);
+};
+
+static_assert(offsetof(SysAccessStatRow, rel_id) == SysAccessStatRow::kRelIdOffset);
+static_assert(offsetof(SysAccessStatRow, column_mask) == SysAccessStatRow::kColumnMaskOffset);
+static_assert(offsetof(SysAccessStatRow, use_count) == SysAccessStatRow::kUseCountOffset);
+static_assert(offsetof(SysAccessStatRow, last_seen) == SysAccessStatRow::kLastSeenOffset);
+static_assert(offsetof(SysAccessStatRow, kind) == SysAccessStatRow::kKindOffset);
+static_assert(SysAccessStatRow::kOnDiskSize == 33);
+
+// The stored `kind` a zeroed or never-written row decodes to, and therefore
+// the one value that never names a real access kind.
+inline constexpr std::uint8_t kAccessKindUnset = 0;
+
+// Distinct access shapes recorded before new ones stop being admitted.
+//
+// `[PROPOSED]`. The population is (kind x relation x column combination),
+// which in a real schema is dozens - a relation is searched on a handful of
+// columns, not on the power set. The cap exists because "in a real schema"
+// is an assumption, and an unbounded catalog relation on the statement path
+// is the kind of assumption that fails quietly.
+inline constexpr std::size_t kMaxAccessShapes = 4096;
+
 // The class value a row carries when nothing has classified the statement
 // - which is every row until the parser gains its class tags. Named so no
 // call site writes a bare 0 and leaves the next reader guessing whether it

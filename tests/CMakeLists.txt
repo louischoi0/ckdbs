@@ -23,6 +23,8 @@ add_executable(kds_tests
     waystone_dir_test.cpp
     pattern_defs_test.cpp
     create_pattern_test.cpp
+    range_scan_test.cpp
+    access_stats_test.cpp
     trail_store_test.cpp
     trail_recorder_test.cpp
     waystone_replay_test.cpp

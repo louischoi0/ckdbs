@@ -132,11 +132,17 @@ There is no single canonical in-memory tuple and no hash table enforcing that an
 
 KDS collects access statistics and uses them to **physically optimize tuple placement**, starting with heap pages.
 
+**Collection landed 2026-08-03; optimization has not.** `sys.access_stats` records one row per access *shape* — `(kind, rel_id, column_mask)` — with how often it ran and when it last ran, written for every access kind through one call with no per-kind branch (`include/kds/stats/access_stats.hpp`). `SHOW ACCESS` reads it.
+
+The shape is keyed by **columns, never values**: `WHERE flag = 1` and `WHERE flag = 2` are one row. That is what bounds the relation by the schema rather than by the data, so it needs no eviction policy and no directory — the unbounded axis, *which arguments repeat*, is Waystone's and stays there (`waystone-concpets.md` §5). The two layers answer different questions and are deliberately not merged.
+
+What makes the data worth having is the kind split that arrived with it: a walk driven by an equality on a non-pk unindexed column is now `kFilterScan` rather than an undifferentiated `kScan`. The two cost the same and mean entirely different things — one is a statement that asked for everything, the other is a statement that asked for a few rows and had to read all of them to find out which, which is exactly the case an index or a clustering decision would fix. Measured cost of collecting: +1-2% on a point lookup, unmeasurable on anything slower.
+
 Relayout must respect the `min_key` insertion rule (§3.1), keep the B+ tree consistent (entries updated or lazily repaired for moved tuples), and bump the page epoch (§3.1a) so every recorded location on that page becomes untrusted at once. Under the fixed-length rule (§3.3) a relayout is a copy of fixed cells — exact fill-factor math, no per-tuple size negotiation — and `kVarHeap` pages are outside its jurisdiction entirely (§3.4).
 
 Key-boundary re-partitioning mainly benefits range locality; for single-pk point lookups the acceleration comes from Waystone instead. The two coexist and address different shapes.
 
-*Nothing here is implemented — there is no physical optimizer, and consequently nothing bumps a page epoch.*
+*No physical optimizer is implemented, and consequently nothing bumps a page epoch.* The statistics above are its input, collected ahead of it so the history exists when it arrives; nothing reads them yet but `SHOW ACCESS`.
 
 ## 8. Invariants
 
@@ -161,7 +167,9 @@ Never violated, never "temporarily" bypassed.
 
 Collected from the sections above, plus those owned by companion specs.
 
-- Per-page epoch storage location, width, and wraparound (§3.1a).
+- Per-page epoch storage location, width, and wraparound (§3.1a). **Now load-bearing for Waystone replay** as well as relayout: replay's §2 rule 2 cannot be enforced without it, and is safe today only because a tuple's address is stable for life. The epoch must land with relayout, whichever comes first.
+- `kMaxAccessShapes` (`[PROPOSED]` 4096) — the cap on distinct rows in `sys.access_stats` (§7). The population is (kind × relation × column combination), which in a real schema is dozens; the cap exists because "in a real schema" is an assumption and an unbounded catalog relation written from the statement path is where that assumption would fail quietly.
+- Whether access statistics ever *drive* anything (§7). Collection is built; no policy consumes it, and choosing one is a separate decision with its own blast radius — relayout has to respect `min_key` (invariant 3), keep the btree consistent, and bump an epoch that does not exist.
 - Heap page split policy; free-space reuse and page compaction, both gated on reader registration (§3.1b).
 - `kds.inline_cell_width` default value (§3.3) — settle against measured target-schema string-length distributions.
 - Spilled-value size cap; prefix-inline revisit trigger (adopt only if string-equality steps become a measured cost) (§§3.3–3.4).

@@ -139,6 +139,99 @@ bool IsPrimaryKey(const ColumnRef& ref) {
     return ref.col_pos == 0;
 }
 
+// Whether `ref` names a column of the step at `slot` in this chain.
+bool IsOwnColumn(const ColumnRef& ref, std::uint16_t slot) {
+    return ref.up == 0 && ref.rel_slot == slot;
+}
+
+// A non-negative integer literal, as a pk bound. Anything else - a string,
+// a NULL, a declared `$param`, a negative number - is not a pk value
+// (invariant 7: ids are zero-extended 40-bit), so it cannot bound a range.
+std::optional<std::uint64_t> PkBound(const Operand& operand) {
+    if (operand.kind != OperandKind::kLiteral) return std::nullopt;
+    if (operand.literal.type != parser::ValueType::kInt) return std::nullopt;
+    if (operand.literal.int_val < 0) return std::nullopt;
+    return static_cast<std::uint64_t>(operand.literal.int_val);
+}
+
+// The pk bounds this step's residual implies, if any.
+//
+// Reads the *lowered* conjuncts rather than the AST's `BETWEEN`, which is
+// deliberate: it means a hand-written `id >= 1 AND id <= 5` gets the same
+// range as `id BETWEEN 1 AND 5`, because they are the same statement once
+// the parser is done with them. A range from one spelling and not the other
+// would be an optimizer that rewards phrasing.
+std::optional<RangeBounds> PkRangeOf(const Step& step, std::uint16_t slot) {
+    std::optional<std::uint64_t> low;
+    std::optional<std::uint64_t> high;
+    for (const StepPredicate& pred : step.residual) {
+        if (!IsOwnColumn(pred.lhs, slot) || !IsPrimaryKey(pred.lhs)) continue;
+        auto bound = PkBound(pred.rhs);
+        if (!bound.has_value()) continue;
+        // Only the inclusive forms, which is what BETWEEN lowers to. A
+        // strict `>` would need low+1 and an underflow check for nothing:
+        // the grammar has no way to write one against a pk that BETWEEN
+        // does not already cover.
+        if (pred.op == parser::CompareOp::kGte && (!low || *bound > *low)) low = bound;
+        if (pred.op == parser::CompareOp::kLte && (!high || *bound < *high)) high = bound;
+    }
+    if (!low.has_value() || !high.has_value()) return std::nullopt;
+    // An inverted range is legal to write and matches nothing. Left as a
+    // plain scan: the residual returns the correct empty answer, and a
+    // range walk would have to special-case it anyway.
+    if (*low > *high) return std::nullopt;
+    return RangeBounds{*low, *high};
+}
+
+// Whether this step has at least one equality against a literal on a
+// non-pk column that carries no index - the thing kFilterScan names.
+//
+// The index check is `Catalog::FindIndexOnColumn`, which until now had no
+// production reader at all. Nothing creates an index today, so the answer
+// is always "unindexed" - but asking makes the kind mean what it says, so
+// the day index scans land this stops classifying an indexed column as a
+// filter scan without anyone having to remember to come back.
+bool HasUnindexedEqualityFilter(catalog::Catalog& catalog, const Step& step,
+                                std::uint16_t slot) {
+    for (const StepPredicate& pred : step.residual) {
+        if (pred.op != parser::CompareOp::kEq) continue;
+        if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (!IsOwnColumn(pred.lhs, slot) || IsPrimaryKey(pred.lhs)) continue;
+        if (catalog.FindIndexOnColumn(step.rel_oid, pred.lhs.col_pos).ok()) continue;
+        return true;
+    }
+    return false;
+}
+
+// The columns a step's access is keyed or filtered on, ascending and
+// deduplicated. This is the statistics key (stats/access_stats.hpp).
+std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot) {
+    std::vector<std::uint16_t> out;
+    switch (step.kind) {
+        case AccessKind::kLookup:
+        case AccessKind::kProbe:
+        case AccessKind::kRange:
+            // All three address the relation by its pk and nothing else.
+            out.push_back(0);
+            return out;
+        case AccessKind::kFilterScan:
+            for (const StepPredicate& pred : step.residual) {
+                if (pred.op != parser::CompareOp::kEq) continue;
+                if (pred.rhs.kind != OperandKind::kLiteral) continue;
+                if (!IsOwnColumn(pred.lhs, slot) || IsPrimaryKey(pred.lhs)) continue;
+                out.push_back(pred.lhs.col_pos);
+            }
+            break;
+        case AccessKind::kScan:
+            // Nothing steered it. A bare walk is one shape however many
+            // non-equality conjuncts it happens to carry.
+            return out;
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 }  // namespace
 
 namespace {
@@ -271,6 +364,28 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 
         auto lhs = ResolveColumn(scope, cond.col);
         if (!lhs.ok()) return lhs.status();
+
+        // `BETWEEN` lowers to its two ordinary conjuncts and nothing else.
+        // The range that may later be put on the step is a hint *on top of*
+        // these (step_chain.hpp) - so a chain that ignored every range would
+        // still return the same rows, which is the property that makes the
+        // kind safe to add.
+        if (cond.kind == parser::PredicateKind::kBetween) {
+            StepPredicate low;
+            low.lhs = lhs.value();
+            low.op = parser::CompareOp::kGte;
+            low.rhs.kind = OperandKind::kLiteral;
+            low.rhs.literal = cond.val;
+            out.residual.push_back(low);
+
+            StepPredicate high;
+            high.lhs = lhs.value();
+            high.op = parser::CompareOp::kLte;
+            high.rhs.kind = OperandKind::kLiteral;
+            high.rhs.literal = cond.val_high;
+            out.residual.push_back(high);
+            continue;
+        }
 
         StepPredicate pred;
         pred.lhs = lhs.value();
@@ -408,6 +523,28 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         auto lhs = ResolveColumn(scope, cond.col);
         if (!lhs.ok()) return lhs.status();
 
+        // `BETWEEN` lowers to its two ordinary conjuncts and nothing else.
+        // The range that may later be put on the step is a hint *on top of*
+        // these (step_chain.hpp) - so a chain that ignored every range would
+        // still return the same rows, which is the property that makes the
+        // kind safe to add.
+        if (cond.kind == parser::PredicateKind::kBetween) {
+            StepPredicate low;
+            low.lhs = lhs.value();
+            low.op = parser::CompareOp::kGte;
+            low.rhs.kind = OperandKind::kLiteral;
+            low.rhs.literal = cond.val;
+            predicates.push_back(low);
+
+            StepPredicate high;
+            high.lhs = lhs.value();
+            high.op = parser::CompareOp::kLte;
+            high.rhs.kind = OperandKind::kLiteral;
+            high.rhs.literal = cond.val_high;
+            predicates.push_back(high);
+            continue;
+        }
+
         StepPredicate pred;
         pred.lhs = lhs.value();
         pred.op = cond.op;
@@ -533,6 +670,28 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 break;
             }
         }
+
+        // ---- Range and filter scans -------------------------------------
+        //
+        // Only reached when the step did not become a keyed descent: a
+        // relation with a pk equality is already served better than either
+        // of these could serve it.
+        if (step.kind == AccessKind::kScan) {
+            if (auto bounds = PkRangeOf(step, static_cast<std::uint16_t>(i));
+                bounds.has_value()) {
+                step.kind = AccessKind::kRange;
+                step.range = bounds;
+            } else if (HasUnindexedEqualityFilter(catalog, step,
+                                                   static_cast<std::uint16_t>(i))) {
+                step.kind = AccessKind::kFilterScan;
+            }
+        }
+
+        // The columns the kind was assigned for. Recorded here because the
+        // compiler is the only place that already knows them; the statistics
+        // layer would otherwise re-walk the residual per statement to answer
+        // a question that was settled at compile time.
+        step.access_columns = AccessColumnsOf(step, static_cast<std::uint16_t>(i));
     }
 
     // ---- 5. Projection ---------------------------------------------------

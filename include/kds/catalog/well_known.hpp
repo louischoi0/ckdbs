@@ -73,6 +73,13 @@ inline constexpr Oid kSysPatternDefsTable = 115;
 // boot, and these rows are persisted.
 inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
 
+// sys.access_stats (docs/heap-and-tuple.md §7): one row per access *shape*
+// - `(kind, rel_id, column_mask)` - with how often it ran and when it last
+// ran. A fixed-offset typed row like its neighbours, not a row-codec
+// relation: everything in it is fixed-width, so none of sys.pattern_defs'
+// reasons apply.
+inline constexpr Oid kSysAccessStatsTable = 130;
+
 // Starting point for user-created object oids. **KNOWN GAP:** this counter
 // is in-memory only and resets on every process restart, so two objects
 // created in different runs can share an oid. Persisting it means adding a
@@ -100,6 +107,7 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // and recorded in sys.tables, where it is DDL-immutable and therefore
 // cacheable (rows.hpp's note on varheap_page_id).
 inline constexpr PageId kCatalogPagePatternDefs = 10;
+inline constexpr PageId kCatalogPageAccessStats = 11;
 
 // Transaction id stamped on every bootstrap-time tuple - mirrors
 // PostgreSQL's FrozenTransactionId: bootstrap rows are inserted before a

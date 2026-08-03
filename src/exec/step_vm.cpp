@@ -340,6 +340,10 @@ private:
         if (step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe) {
             return RunPointStep(steps, index, step, access);
         }
+        // A kFilterScan walks exactly as a kScan does - the kind is a
+        // statistics distinction, not an execution one, and there is
+        // deliberately no branch for it here. If one ever appears, the
+        // "same rows either way" tests are what should stop it.
         return RunWalkStep(steps, index, step, access);
     }
 
@@ -493,6 +497,29 @@ private:
                        const catalog::TableAccess& access) {
         Status inner = Status::OK();
 
+        // ---- Range pruning (kRange) --------------------------------------
+        //
+        // Both storage forms are ordered **page-wise** by `min_key`: every
+        // id in a page is below the next page's min_key (heap_chain.hpp's
+        // ordering property, and the btree leaf chain by construction). So
+        // the first page whose min_key exceeds the high bound proves that
+        // nothing after it can qualify, and the walk can stop.
+        //
+        // **This prunes the tail, not the head.** A page whose min_key is
+        // below `low` may still hold qualifying rows, and nothing here can
+        // tell without looking - skipping leading pages needs a seek to the
+        // first qualifying leaf, which `BtreeLookup` is close to providing
+        // and the heap chain would need lookahead for. So a range near the
+        // start of a relation is cheap and one near the end is not, which
+        // is worth knowing before quoting a number.
+        //
+        // Rows below `low` are dropped by the residual, which still carries
+        // both bounds (step_chain.hpp) - so this is an accelerator that
+        // cannot change the answer even if the pruning were wrong.
+        const std::uint64_t range_high =
+            step.range.has_value() ? step.range->high : 0;
+        const bool pruning = step.range.has_value();
+
         // The PageId used to be discarded here. It is the tuple's address,
         // and a trail that has to re-derive an address is a trail that has
         // to search for it - which is the search the trail exists to avoid
@@ -500,6 +527,15 @@ private:
         auto visitor = [&](PageId page_id, heap::PageView& page,
                            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (stopped_) return storage::VisitControl::kStop;
+
+            // Checked per slot rather than per page because the walk has no
+            // per-page hook; it costs one compare against a header field
+            // already in cache, and it fires on the first slot of the first
+            // page past the range.
+            if (pruning && page.min_key() > range_high) {
+                ++stats_.For(step.step_id).range_pages_pruned;
+                return storage::VisitControl::kStop;
+            }
 
             auto accepted = AcceptTupleAt(steps, index, step, access, page_id, page, slot);
             if (!accepted.ok()) {
@@ -734,6 +770,7 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     spill_fetches += other.spill_fetches;
     trail_replays += other.trail_replays;
     trail_misses += other.trail_misses;
+    range_pages_pruned += other.range_pages_pruned;
     return *this;
 }
 

@@ -108,7 +108,7 @@ Status Catalog::Bootstrap() {
         std::string_view name;
         PageId page_id;
     };
-    static constexpr std::array<SysTableBootstrap, 6> kSysTables{{
+    static constexpr std::array<SysTableBootstrap, 7> kSysTables{{
         {kSysTypesTable, "types", kCatalogPageTypes},
         {kSysObjectsTable, "objects", kCatalogPageObjects},
         {kSysColumnsTable, "columns", kCatalogPageColumns},
@@ -119,6 +119,11 @@ Status Catalog::Bootstrap() {
         // codecs (rows.hpp), never through a schema, so a column list for
         // them would describe nothing anyone reads.
         {kSysPatternsTable, "patterns", kCatalogPagePatterns},
+        // sys.access_stats is a fixed-offset typed row like the six above,
+        // so it needs nothing beyond a page and its two catalog rows -
+        // unlike sys.pattern_defs, which stores text and therefore had to
+        // become a real row-codec relation in phase 5.
+        {kSysAccessStatsTable, "access_stats", kCatalogPageAccessStats},
     }};
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -989,6 +994,69 @@ Status Catalog::RetirePattern(std::uint64_t pattern_id) {
         return Status::OK();
     }
     return Status::NotFound("no sys.patterns row for this pattern_id");
+}
+
+Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
+                              std::uint64_t last_seen) {
+    if (kind == kAccessKindUnset) {
+        return Status::InvalidArgument("catalog: access kind 0 is reserved for an unset row");
+    }
+
+    auto bytes = store_.Get(kCatalogPageAccessStats);
+    if (!bytes.ok()) return bytes.status();
+
+    heap::PageView page(bytes.value());
+    const std::uint16_t n = page.slot_count();
+    std::size_t live = 0;
+    for (std::uint16_t i = 0; i < n; ++i) {
+        auto tuple = page.ReadTuple(i);
+        if (!tuple.ok()) {
+            if (tuple.status().code() == StatusCode::kNotFound) continue;
+            return tuple.status();
+        }
+        ++live;
+
+        auto row = SysAccessStatRow::Decode(tuple.value().payload);
+        if (!row.ok()) return row.status();
+        if (row.value().kind != kind || row.value().rel_id != rel_id ||
+            row.value().column_mask != column_mask) {
+            continue;
+        }
+
+        // Saturating for the reason rows.hpp gives: a wrapped count would
+        // invert the ranking this exists to produce.
+        if (row.value().use_count != std::numeric_limits<std::uint64_t>::max()) {
+            ++row.value().use_count;
+        }
+        row.value().last_seen = last_seen;
+        auto encoded = row.value().Encode();
+        // In place - the row size is fixed, so there is nothing to move.
+        return page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
+    }
+
+    // A shape nobody has recorded. Admitted only under the cap: an
+    // unbounded catalog relation written from the statement path is the
+    // failure this guards, and refusing a *new* shape while continuing to
+    // count every known one degrades the statistic rather than the server.
+    if (live >= kMaxAccessShapes) {
+        return Status::ResourceExhausted("catalog: sys.access_stats is at its shape cap");
+    }
+
+    SysAccessStatRow row{};
+    row.rel_id = rel_id;
+    row.column_mask = column_mask;
+    row.use_count = 1;
+    row.last_seen = last_seen;
+    row.kind = kind;
+    // No BumpVersion(): nothing cached is derived from these rows, and the
+    // argument is the one sys.patterns' registration already makes - a
+    // statistic appearing cannot stale a cached relation, and this runs on
+    // the statement path where a cache drop would dangle a held pointer.
+    return InsertRow(store_, kCatalogPageAccessStats, row, kBootstrapXid);
+}
+
+StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
+    return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats);
 }
 
 StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {

@@ -202,4 +202,33 @@ StatusOr<SysPatternRow> SysPatternRow::Decode(std::span<const std::byte> bytes) 
     return row;
 }
 
+// ---- sys.access_stats -------------------------------------------------
+
+std::array<std::byte, SysAccessStatRow::kOnDiskSize> SysAccessStatRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kRelIdOffset, &rel_id, sizeof(rel_id));
+    std::memcpy(base + kColumnMaskOffset, &column_mask, sizeof(column_mask));
+    std::memcpy(base + kUseCountOffset, &use_count, sizeof(use_count));
+    std::memcpy(base + kLastSeenOffset, &last_seen, sizeof(last_seen));
+    std::memcpy(base + kKindOffset, &kind, sizeof(kind));
+    return buf;
+}
+
+StatusOr<SysAccessStatRow> SysAccessStatRow::Decode(std::span<const std::byte> bytes) {
+    if (Status s = CheckSize(bytes, kOnDiskSize); !s.ok()) return s;
+
+    SysAccessStatRow row{};
+    const std::byte* base = bytes.data();
+    std::memcpy(&row.rel_id, base + kRelIdOffset, sizeof(row.rel_id));
+    std::memcpy(&row.column_mask, base + kColumnMaskOffset, sizeof(row.column_mask));
+    std::memcpy(&row.use_count, base + kUseCountOffset, sizeof(row.use_count));
+    std::memcpy(&row.last_seen, base + kLastSeenOffset, sizeof(row.last_seen));
+    std::memcpy(&row.kind, base + kKindOffset, sizeof(row.kind));
+    // A pure decode, like every other one here: the size check is the only
+    // corruption signal it owns. Whether `kind` names a real access kind is
+    // a question for the layer that acts on it.
+    return row;
+}
+
 }  // namespace kds::catalog

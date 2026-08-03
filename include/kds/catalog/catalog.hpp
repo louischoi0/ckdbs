@@ -331,6 +331,32 @@ public:
     // delete+insert, since the row size is unchanged.
     Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id);
 
+    // ---- sys.access_stats (docs/heap-and-tuple.md §7) --------------------
+
+    // Counts one execution of an access shape, creating its row the first
+    // time the shape is seen.
+    //
+    // `kind` is `exec::StoredAccessKind()`'s value, never a raw cast of the
+    // enum. `column_mask` is a bit per `col_pos` the access keyed or
+    // filtered on - **columns, never values**, which is what keeps this
+    // relation bounded by the schema (rows.hpp).
+    //
+    // Called from the statement path after a successful execution, and
+    // deliberately bumps no catalog version: a statistic appearing cannot
+    // stale a cached fact, and a cache drop here would dangle the
+    // `const TableAccess*` the running statement holds.
+    //
+    // Fails with ResourceExhausted once `kMaxAccessShapes` distinct shapes
+    // exist - which refuses a *new* shape and keeps counting every known
+    // one. Every caller is expected to drop the failure: a statistic that
+    // could fail a query would be a worse trade than no statistic.
+    Status RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
+                        std::uint64_t last_seen);
+
+    // Every access shape, in page order. The inspection surface behind
+    // `SHOW ACCESS`.
+    StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
+
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
