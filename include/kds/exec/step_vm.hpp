@@ -11,6 +11,7 @@
 #include "kds/exec/step_chain.hpp"
 #include "kds/exec/trail_collector.hpp"
 #include "kds/exec/trail_replay.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
 
@@ -115,6 +116,30 @@ struct StepStats {
     // was pruned, and `rows_examined` is what tells those apart.
     std::uint64_t range_pages_pruned = 0;
 
+    // Cabin (docs/feat-cabin.md §7's "ANALYZE narrates all three").
+    //
+    // `cabin_hits` counts probes served from an observed value's entry set -
+    // authoritatively, so the relation was **not** walked; `cabin_misses`
+    // counts probes for a value nothing has observed, which walked. Those
+    // two are the layer's whole story, and the pair is what makes "the
+    // second execution stops scanning" checkable rather than asserted:
+    // a hit with `rows_examined` still equal to the relation's size would
+    // mean the set was not actually serving.
+    //
+    // `cabin_hint_hits` / `cabin_hint_misses` split the C6 advisory tier out
+    // of that: how often an entry's location was still right, and how often
+    // it had to be resolved through the pk instead. A rising miss count is a
+    // relation whose tuples are moving, which today should be impossible.
+    //
+    // `cabin_recordings` counts values that *became* observed during this
+    // step - the miss path paying for the next execution's hit.
+    std::uint64_t cabin_hits = 0;
+    std::uint64_t cabin_misses = 0;
+    std::uint64_t cabin_entries_served = 0;
+    std::uint64_t cabin_hint_hits = 0;
+    std::uint64_t cabin_hint_misses = 0;
+    std::uint64_t cabin_recordings = 0;
+
     StepStats& operator+=(const StepStats& other) noexcept;
 };
 
@@ -170,10 +195,19 @@ struct ExecStats {
 // entry is validated first, and any failure falls through to the descent
 // for that step alone. Deleting every trail in the database changes
 // latency and nothing else (invariant 8).
+// `cabins`, when given, is the core-local Cabin store (stats/cabin_store.hpp,
+// docs/feat-cabin.md). **Passing it cannot change what this returns either**,
+// and the argument is a third variation on the same theme: a Cabin supplies a
+// set of *locations*, each of which is then read and filtered by the code a
+// walk would have fed - visibility, the residual (which still carries the
+// cabin's own equality), sub-chains, the next step. What it changes is which
+// rows are *looked at*: a served value reads its entries instead of the
+// relation. Deleting every Cabin in the database costs latency and nothing
+// else, one value at a time (spec §1's corollary).
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
-               const TrailReplay* replay = nullptr);
+               const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

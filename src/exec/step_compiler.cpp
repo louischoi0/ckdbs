@@ -203,6 +203,53 @@ bool HasUnindexedEqualityFilter(catalog::Catalog& catalog, const Step& step,
     return false;
 }
 
+// The Cabin this step can probe, or nullopt.
+//
+// The shape is exactly `HasUnindexedEqualityFilter`'s - an own-relation,
+// non-pk equality against a literal - and that is the point: a cabined
+// column's equality *is* the filter scan, and the Cabin is the reason it
+// need not be one.
+//
+// **Catalog state only.** `TableAccess::cabin_mask` is a DDL fact carried on
+// the relation's cache entry (schema.hpp), so this asks no question about
+// the data and the plan stays `f(shape, catalog)`. Whether the *value* has
+// been observed is runtime state and belongs to the executor's branch, not
+// to the kind.
+//
+// The **first** such equality wins when a statement filters two cabined
+// columns. Deterministic and written-order, like everything else here: it
+// is not an optimizer choosing the more selective one, because choosing
+// would need statistics the compiler does not consult and would make the
+// same statement compile differently as the data changed - which is exactly
+// what a recorded pattern must not do.
+std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const Step& step,
+                                       std::uint16_t slot) {
+    if (access.cabin_mask == 0) return std::nullopt;
+    for (const StepPredicate& pred : step.residual) {
+        if (pred.op != parser::CompareOp::kEq) continue;
+        if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (!IsOwnColumn(pred.lhs, slot) || IsPrimaryKey(pred.lhs)) continue;
+
+        const catalog::TableAccess::CabinRef cabin = access.CabinOn(pred.lhs.col_pos);
+        if (cabin.id == 0) continue;
+
+        // A `$param` never probes a Cabin. A declared pattern's body is
+        // compiled to be type-checked and fingerprinted, never run, so
+        // there is no value to key an entry set on - and unlike the pk case
+        // above, nothing is lost by declining: kCabinProbe is search-class,
+        // so the declaration's replayability verdict is the same either way.
+        if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
+
+        CabinProbe probe;
+        probe.cabin_id = cabin.id;
+        probe.col_pos = pred.lhs.col_pos;
+        probe.value = pred.rhs.literal;
+        probe.declared = cabin.origin == catalog::kCabinOriginUser;
+        return probe;
+    }
+    return std::nullopt;
+}
+
 // The columns a step's access is keyed or filtered on, ascending and
 // deduplicated. This is the statistics key (stats/access_stats.hpp).
 std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot) {
@@ -213,6 +260,14 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
         case AccessKind::kRange:
             // All three address the relation by its pk and nothing else.
             out.push_back(0);
+            return out;
+        case AccessKind::kCabinProbe:
+            // The cabined column alone, not every filtered column: the
+            // access was assigned *for* that one, and the rest are residual
+            // whatever the kind. Reporting them all would merge this shape
+            // with the filter scan below and lose the distinction the
+            // statistics exist to draw.
+            if (step.cabin.has_value()) out.push_back(step.cabin->col_pos);
             return out;
         case AccessKind::kFilterScan:
             for (const StepPredicate& pred : step.residual) {
@@ -681,6 +736,14 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 bounds.has_value()) {
                 step.kind = AccessKind::kRange;
                 step.range = bounds;
+            } else if (auto probe = CabinProbeOf(*scope.relations[i].access, step,
+                                                  static_cast<std::uint16_t>(i));
+                       probe.has_value()) {
+                // Ahead of kFilterScan, and only ahead of it: a cabined
+                // column's equality is exactly the shape a filter scan
+                // names, and the Cabin is the reason it need not be one.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(probe);
             } else if (HasUnindexedEqualityFilter(catalog, step,
                                                    static_cast<std::uint16_t>(i))) {
                 step.kind = AccessKind::kFilterScan;

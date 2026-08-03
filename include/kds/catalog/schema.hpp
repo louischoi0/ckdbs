@@ -142,17 +142,23 @@ struct TableAccess {
     // compiled to anyway. Stated here rather than left to be discovered.
     std::uint64_t cabin_mask = 0;
 
-    // `cabin_id` per cabined column, positionally aligned with
-    // `schema.columns`; 0 - never a real cabin_id - for a column with no
-    // Cabin. Parallel to the mask rather than folded into it because the
-    // read path needs the id to find the Cabin's entry sets, and the
-    // compiler needs only the bit.
-    std::vector<std::uint64_t> cabin_ids;
+    // One per schema column, positionally aligned with `schema.columns`;
+    // `id == 0` - never a real cabin_id - for a column with no Cabin.
+    // Parallel to the mask rather than folded into it because the compiler
+    // needs only the bit, while the executor needs the id (to find the
+    // entry sets) and the origin (to know whether the Cabin was *declared*,
+    // which is what decides n=1 versus n=2 - the same rule a declared
+    // pattern already gets from `PatternAccess::origin`).
+    struct CabinRef {
+        std::uint64_t id = 0;
+        std::uint8_t origin = kCabinOriginUnset;
+    };
+    std::vector<CabinRef> cabin_ids;
 
-    // The Cabin on `col_pos`, or 0. One test, so no caller re-derives the
-    // relationship between the mask and the vector.
-    std::uint64_t CabinOn(std::uint16_t col_pos) const noexcept {
-        return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : 0;
+    // The Cabin on `col_pos`, or a zeroed ref. One accessor, so no caller
+    // re-derives the relationship between the mask and the vector.
+    CabinRef CabinOn(std::uint16_t col_pos) const noexcept {
+        return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
     }
 };
 

@@ -134,6 +134,31 @@ public:
         // history that does not exist when the optimizer arrives.
         bool access_statistics = true;
 
+        // ---- Cabin (docs/feat-cabin.md) ---------------------------------
+
+        // Whether Cabins may be built and served (`cabins`, default on).
+        //
+        // On by default because it does **nothing** until a `CREATE CABIN`:
+        // no Cabin exists on a fresh database, so the cost of the switch
+        // being on is one `cabin_mask == 0` test per write and per compiled
+        // equality. Off is the configuration the contract suite compares
+        // against - "identical replies with cabins on and off" is the
+        // property the whole feature has to keep, and an operator has to be
+        // able to check it on their own data.
+        bool cabins = true;
+
+        // §8's budget, which the spec leaves `[OPEN]`. Both `[PROPOSED]`,
+        // both held here rather than compiled in so that every option the
+        // spec lists stays viable. Nothing may depend on either number; what
+        // the code depends on is the rule they enforce - a cap **refuses to
+        // observe** a value and never truncates its entry set, because a
+        // truncated set marked authoritative is a wrong answer.
+        //
+        // 0 is meaningful for the first: no value may be observed, which
+        // keeps the catalog objects while switching the behaviour off.
+        std::size_t cabin_max_values = 4096;
+        std::size_t cabin_max_entries_per_value = 4096;
+
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
         // kGroup batch nobody is waiting on; a drain with nothing pending
@@ -256,6 +281,13 @@ private:
     // Declared before the dispatcher, which holds a pointer to it: the
     // recorder has to outlive every statement that reports to it.
     std::optional<stats::TrailRecorder> trail_recorder_;
+
+    // The core-local Cabin store: one per core, holding every observed
+    // value's entry set. Empty when `cabins = off`. It outlives the
+    // dispatcher that borrows it, which is the whole of its lifetime
+    // contract - the sets are memory-resident by design (§9: a crash
+    // declares every Cabin unobserved and traffic rebuilds it).
+    std::optional<stats::CabinStore> cabin_store_;
     std::optional<CommandDispatcher> dispatcher_;
 
     std::unique_ptr<wal::FileLogDevice> log_device_;

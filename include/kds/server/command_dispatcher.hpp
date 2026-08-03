@@ -17,6 +17,7 @@
 #include "kds/exec/cabin_ddl.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/stats/access_stats.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/sched/clock.hpp"
@@ -157,7 +158,8 @@ public:
                        exec::Budget budget = exec::Budget(),
                        stats::TrailRecorder* recorder = nullptr,
                        bool replay_enabled = false,
-                       bool access_statistics = true) noexcept
+                       bool access_statistics = true,
+                       stats::CabinStore* cabins = nullptr) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -168,7 +170,8 @@ public:
           budget_(budget),
           recorder_(recorder),
           replay_enabled_(replay_enabled),
-          access_stats_enabled_(access_statistics) {}
+          access_stats_enabled_(access_statistics),
+          cabins_(cabins) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -337,11 +340,15 @@ private:
     // identifiers.
     DispatchOutcome HandleCabin(std::string_view line);
 
-    // `SHOW CABINS` - every declared Cabin, from the catalog. What it can
-    // report today is the *declaration*: which relation and column, who
-    // declared it, whether it is serving. The observed-value and entry
-    // counts are runtime state living in the core-local store, and are
-    // added to this line when that store is wired in (workplan CB09).
+    // `SHOW CABINS` - every declared Cabin, with what it has observed.
+    //
+    // The line joins two sources on purpose. The catalog says which
+    // relation and column, who declared it, and whether it is serving - the
+    // *declaration*, which is DDL and survives a restart. The core-local
+    // store says how many values are observed, how many entries they hold,
+    // and how the probes have gone - runtime state, which by §9 does not
+    // survive a restart at all. Reporting them together is what makes "this
+    // Cabin exists but has never been probed" visible.
     DispatchOutcome HandleShowCabins();
     DispatchOutcome HandleInsert(std::string_view line);
     // `analyze` switches the reply from rows to the compiled plan plus
@@ -389,6 +396,42 @@ private:
     // call sites that could disagree about when a statistic is written
     // would make the statistic mean two things.
     void RecordAccessShapes(const exec::StepChain& chain);
+
+    // ---- The Cabin write hook (docs/feat-cabin.md §5) --------------------
+    //
+    // **This is what "observed ⇒ complete" costs**, and the whole reason a
+    // Cabin can be authoritative where a Waystone trail cannot: absence has
+    // a witness, and this is the witness. One directory probe per cabined
+    // column per write - core-local, in-memory, O(1), and skipped entirely
+    // by the `cabin_mask == 0` test for a relation with no Cabin.
+    //
+    // Every mandatory action is an **append**. Nothing is ever removed here:
+    // an older snapshot may still be entitled to match a row through the
+    // undo chain, so eager removal is *incorrect* and not merely
+    // unnecessary. The surplus is subtracted at read time by verification.
+    //
+    // `values[i]` is the value of column `first_col_pos + i`, which lets
+    // INSERT pass the VALUES list (whose first entry is column 1, since the
+    // pk is engine-issued) and UPDATE pass the whole decoded row. `pk`,
+    // `page_id` and `slot` are the tuple's identity and its location - both
+    // already in hand at both call sites, which is why C6's hints cost
+    // nothing to produce.
+    //
+    // `previous`, when non-empty, is the row **before** the write, indexed
+    // the same way. It is what implements §5's third row - an UPDATE that
+    // did not touch the key column does nothing - and it is not an
+    // optimization: appending on every write is correct (the set stays a
+    // superset) but unbounded, so a relation updated often enough would
+    // grow one value's set until the cap un-observed it. INSERT passes
+    // nothing, having no previous row.
+    //
+    // Never fails: a Cabin that cannot witness a write un-observes the value
+    // instead, which returns it to the authoritative scan path (§1's
+    // corollary) and is always legal.
+    void NoteCabinWrite(const catalog::TableAccess& access,
+                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
+                        std::uint64_t pk, PageId page_id, std::uint16_t slot,
+                        std::span<const parser::AstValue> previous = {});
     DispatchOutcome HandleUpdate(std::string_view line);
     DispatchOutcome HandleSync();
 
@@ -547,6 +590,13 @@ private:
     // wait for one.
     bool access_stats_enabled_;
     stats::AccessStatsCounters access_counters_;
+
+    // The core-local Cabin store, or null when cabins are switched off
+    // (`cabins = off`). Null is the default here so a dispatcher built
+    // without one - which is every pre-existing test - behaves exactly as it
+    // always did, and so that "identical replies with cabins on and off" is
+    // a property of the structure rather than of the test data.
+    stats::CabinStore* cabins_ = nullptr;
 
     // Implicit-transaction ids for the statements this dispatcher logs.
     // Process-local and restarting from 1 every boot, which is wrong the

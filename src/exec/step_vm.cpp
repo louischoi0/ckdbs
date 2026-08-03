@@ -1,10 +1,12 @@
 #include "kds/exec/step_vm.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 
 #include <string>
 
 #include "kds/exec/row_codec.hpp"
+#include "kds/exec/tuple_verify.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -135,9 +137,9 @@ class ChainRunner {
 public:
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
-                TrailCollector* trail, const TrailReplay* replay)
+                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins)
         : catalog_(catalog), store_(store), sink_(sink), depth_(depth), parent_(parent),
-          stats_(stats), budget_(budget), trail_(trail), replay_(replay) {}
+          stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins) {}
 
     Status Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
@@ -265,7 +267,7 @@ public:
         // nested step's entries belong in the same trail and are already
         // distinguishable by their step_id.
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_);
+                          trail_, replay_, cabins_);
         Status ran = inner.Run(sub.steps);
         if (!ran.ok()) return ran;
 
@@ -339,6 +341,9 @@ private:
         ++stats_.For(step.step_id).relation_opens;
         if (step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe) {
             return RunPointStep(steps, index, step, access);
+        }
+        if (step.kind == AccessKind::kCabinProbe) {
+            return RunCabinStep(steps, index, step, access);
         }
         // A kFilterScan walks exactly as a kScan does - the kind is a
         // statistics distinction, not an execution one, and there is
@@ -456,29 +461,14 @@ private:
         StepStats& step_stats = stats_.For(step.step_id);
 
         NoteFetch();
-        auto bytes = store_.GetForRead(at->page_id);
-        if (!bytes.ok()) {
-            // The page is gone. A miss, not an error: the trail is advisory
-            // and this is exactly the fall-through it promises.
-            ++step_stats.trail_misses;
-            return Status::OK();
-        }
-
-        heap::PageView page(bytes.value());
-        auto tuple = page.ReadTuple(at->slot);
-        if (!tuple.ok()) {
-            // Retired or out of range - the slot no longer holds anything.
-            ++step_stats.trail_misses;
-            return Status::OK();
-        }
-
-        // Spec section 2 rule 1, the storage half: the tuple *actually
-        // there* must be the one the entry named. This is what makes a
-        // stale trail a miss rather than somebody else's row, and it is the
-        // check the corrupted-trail contract test exists to prove
-        // load-bearing.
-        auto found_pk = RowKeystoneId(tuple.value().payload);
-        if (!found_pk.ok() || found_pk.value() != key) {
+        // Spec section 2 rules 1-2, through the one verifier both this and
+        // Cabin's location hints go through (exec/tuple_verify.hpp). The
+        // page gone, the slot retired, and a different tuple at the target
+        // are all the same answer here - the caller descends - which is
+        // deliberate: a caller that could tell them apart would be tempted
+        // to treat one of them as authoritative.
+        VerifiedTuple verified = VerifyTupleAt(store_, at->page_id, at->slot, key);
+        if (!verified.ok()) {
             ++step_stats.trail_misses;
             return Status::OK();
         }
@@ -490,7 +480,216 @@ private:
         // inherited.
         ++step_stats.trail_replays;
         replayed_ = true;
-        return AcceptTupleAt(steps, index, step, access, at->page_id, page, at->slot);
+        return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
+    }
+
+    // ---- Cabin (docs/feat-cabin.md §4) -----------------------------------
+    //
+    // A non-pk equality on a cabined column: probe the Cabin's observed set,
+    // and fall back to the walk when the value has not been observed.
+    //
+    // **What makes this the third trust class** is the hit branch. A trail
+    // may only replace a *lookup*, because a stored set of locations has no
+    // witness for a row inserted since it was recorded. A Cabin has one -
+    // the write hook of §5 - so for an observed value its entry set is a
+    // superset of the qualifying pks, and serving from it is authoritative
+    // rather than advisory. The read subtracts the surplus by re-checking
+    // exactly what the authoritative path would: visibility, and the key
+    // equality, which is sitting in `step.residual` because the compiler
+    // deliberately left it there.
+    //
+    // Everything else about the step is unchanged: the value is a compile-
+    // time literal, the residual is the whole predicate, and downgrading
+    // this step to a plain kScan returns the same rows in the same order.
+    Status RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                        const catalog::TableAccess& access) {
+        // Nothing configured, or a value that must never be observed (NULL,
+        // an unbound `$param`). Both take the walk, which is what the step
+        // would have compiled to had the Cabin not existed.
+        std::optional<stats::CabinKey> key;
+        if (cabins_ != nullptr && step.cabin.has_value()) {
+            key = stats::MakeCabinKey(step.cabin->cabin_id, step.cabin->value);
+        }
+        if (!key.has_value()) return RunWalkStep(steps, index, step, access);
+
+        if (std::vector<stats::CabinEntry>* entries = cabins_->Find(*key); entries != nullptr) {
+            cabins_->NoteHit(step.cabin->cabin_id);
+            ++stats_.For(step.step_id).cabin_hits;
+            return ServeFromCabin(steps, index, step, access, *key, *entries);
+        }
+
+        cabins_->NoteMiss(step.cabin->cabin_id);
+        ++stats_.For(step.step_id).cabin_misses;
+
+        // The miss path is why the first query for a value costs nothing
+        // extra: it was going to walk anyway, and recording is a side
+        // effect of the walk (§4). `n = 2` - the first miss only counts.
+        const bool record =
+            cabins_->WouldRecord(cabins_->Observe(*key), step.cabin->declared);
+        if (!record) return RunWalkStep(steps, index, step, access);
+
+        Recording recording;
+        recording.step_id = step.step_id;
+        recording.rel_slot = static_cast<std::uint16_t>(index);
+        recording.col_pos = step.cabin->col_pos;
+        recording.value = &step.cabin->value;
+        recording_ = &recording;
+        Status walked = RunWalkStep(steps, index, step, access);
+        recording_ = nullptr;
+
+        if (!walked.ok()) return walked;
+        // **Only a completed walk may be committed.** A walk that a sink
+        // stopped, or that the budget ended, collected the rows it reached
+        // and not the rows it did not - and a set marked observed while
+        // missing qualifying pks is precisely the break C1 forbids. This is
+        // the one place that check can be made, because it is the only place
+        // that knows whether the walk finished.
+        if (stopped_) return Status::OK();
+
+        // Sorted here, once, rather than on every hit: entries served in
+        // page order batch same-page tuples into one fetch (§3), and a set
+        // is written far less often than it is read. Appends by the write
+        // hook land at the end and leave it *nearly* sorted, which costs a
+        // little locality and no correctness.
+        std::sort(recording.entries.begin(), recording.entries.end(),
+                  [](const stats::CabinEntry& a, const stats::CabinEntry& b) {
+                      return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
+                  });
+        if (cabins_->Commit(*key, std::move(recording.entries))) {
+            ++stats_.For(step.step_id).cabin_recordings;
+        }
+        return Status::OK();
+    }
+
+    // Serves an observed value's entry set.
+    //
+    // **Two phases, and the split is not an optimization.** Phase 1 resolves
+    // every entry to a verified location without emitting anything; phase 2
+    // emits. That ordering is what makes the heap fallback safe: on a heap
+    // relation a failed hint cannot be resolved per entry - there is no pk
+    // descent - so the step abandons the Cabin and walks instead, and it may
+    // only do that if it has not already emitted rows the walk would emit
+    // again. Resolving first means the abandon decision is always taken
+    // before the first row goes out.
+    Status ServeFromCabin(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                          const catalog::TableAccess& access, const stats::CabinKey& key,
+                          std::vector<stats::CabinEntry>& entries) {
+        const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
+        StepStats& step_stats = stats_.For(step.step_id);
+
+        serve_scratch_.clear();
+        seen_pks_.clear();
+
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            stats::CabinEntry& entry = entries[i];
+
+            // **Duplicates are expected, not damage.** A value round trip
+            // (v→v′→v) appends the same pk twice under append-only
+            // maintenance (§5), so the set is deduped as it is served and
+            // the duplicate is left for pruning to collapse.
+            if (!seen_pks_.insert(entry.pk).second) continue;
+
+            if (entry.hint_valid()) {
+                NoteFetch();
+                VerifiedTuple verified =
+                    VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk);
+                if (verified.ok()) {
+                    ++step_stats.cabin_hint_hits;
+                    serve_scratch_.push_back(Located{entry.page_id, entry.slot});
+                    continue;
+                }
+                ++step_stats.cabin_hint_misses;
+            }
+
+            if (!is_btree) {
+                // No descent to resolve the pk with. Abandon the Cabin for
+                // this step and take the authoritative path, re-recording
+                // the value's set from it - one bulk heal rather than a
+                // chain scan per entry. Nothing has been emitted yet, so
+                // this cannot duplicate a row.
+                return FallBackAndReRecord(steps, index, step, access, key);
+            }
+
+            NoteFetch();
+            auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.pk);
+            if (!found.ok()) {
+                if (found.status().code() == StatusCode::kNotFound) {
+                    // Dangling: the pk is in no clustered tree. By K1 it can
+                    // never resurface under a new tuple, so this entry is
+                    // dead forever - a **skip**, never an error (§5).
+                    continue;
+                }
+                return found.status();
+            }
+
+            // Healed in place. The hint was wrong and the pk was right,
+            // which is C6's whole shape: authority in the pk, speed in the
+            // location, and the location repaired from the authority.
+            entry.page_id = found.value().page_id;
+            entry.slot = found.value().slot;
+            entry.page_epoch = 0;
+            entry.flags |= stats::kCabinHintValid;
+            serve_scratch_.push_back(Located{entry.page_id, entry.slot});
+        }
+
+        // Phase 2. The page is fetched per entry rather than carried out of
+        // phase 1: `AcceptTupleAt` descends into the next step, and anything
+        // below it may fetch, so a page view held across entries is exactly
+        // the span R1 forbids.
+        for (const Located& at : serve_scratch_) {
+            if (stopped_) break;
+            NoteFetch();
+            auto bytes = store_.GetForRead(at.page_id);
+            if (!bytes.ok()) {
+                // The page went away between the two phases. Nothing evicts
+                // and nothing frees pages, so this is unreachable today -
+                // and it is a skip rather than an error because a Cabin
+                // entry pointing at nothing is a dead entry, which §5 says
+                // to drop on sight.
+                ++step_stats.cabin_hint_misses;
+                continue;
+            }
+            heap::PageView page(bytes.value());
+            if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
+                !s.ok()) {
+                return s;
+            }
+        }
+        step_stats.cabin_entries_served += serve_scratch_.size();
+        return Status::OK();
+    }
+
+    // The heap hint-failure path: un-observe, walk, and re-record.
+    //
+    // Un-observing first is what keeps this honest. The walk below is the
+    // authoritative path, so the rows are right either way - but the set
+    // that produced a bad hint has just been shown to disagree with storage,
+    // and §1's corollary makes dropping it always legal.
+    Status FallBackAndReRecord(const std::vector<Step>& steps, std::size_t index,
+                               const Step& step, const catalog::TableAccess& access,
+                               const stats::CabinKey& key) {
+        cabins_->Unobserve(key);
+
+        Recording recording;
+        recording.step_id = step.step_id;
+        recording.rel_slot = static_cast<std::uint16_t>(index);
+        recording.col_pos = step.cabin->col_pos;
+        recording.value = &step.cabin->value;
+        recording_ = &recording;
+        Status walked = RunWalkStep(steps, index, step, access);
+        recording_ = nullptr;
+
+        if (!walked.ok()) return walked;
+        if (stopped_) return Status::OK();  // a partial walk records nothing
+
+        std::sort(recording.entries.begin(), recording.entries.end(),
+                  [](const stats::CabinEntry& a, const stats::CabinEntry& b) {
+                      return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
+                  });
+        if (cabins_->Commit(key, std::move(recording.entries))) {
+            ++stats_.For(step.step_id).cabin_recordings;
+        }
+        return Status::OK();
     }
 
     Status RunWalkStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
@@ -606,6 +805,41 @@ private:
         // that tracks work: a page fetch amortizes over its tuples, but
         // every tuple is decoded and filtered on its own.
         if (Status s = budget_.ChargeRow(); !s.ok()) return s;
+
+        // ---- Cabin recording (docs/feat-cabin.md §4's miss path) ---------
+        //
+        // **Before the residual, and that is the whole subtlety.** The set
+        // being recorded is the set of rows whose *key column* equals the
+        // probed value - not the set of rows this statement wants. A
+        // statement is `WHERE sym = 'AAPL' AND qty > 5`; the Cabin's entry
+        // set for 'AAPL' must hold every row with that sym, or the next
+        // statement asking only `WHERE sym = 'AAPL'` would be served a set
+        // that is missing rows and told it is authoritative.
+        //
+        // So exactly one conjunct is evaluated here, the cabin's own, and
+        // the rest of the residual continues to decide what this statement
+        // emits - which happens below and changes nothing about what was
+        // recorded.
+        if (recording_ != nullptr && recording_->step_id == step.step_id) {
+            const ColumnRef ref{0, recording_->rel_slot, recording_->col_pos};
+            if (frame_.CanResolve(ref) &&
+                CompareValues(/*type_val=*/0, frame_.Get(ref), *recording_->value,
+                              parser::CompareOp::kEq)) {
+                // Column 0 is the Keystone pk, already decoded into the
+                // frame by this step - so the id costs a read, never a
+                // lookup. Same source the trail collector uses, deliberately.
+                const parser::AstValue& pk =
+                    frame_.Get(ColumnRef{0, static_cast<std::uint16_t>(index), 0});
+                stats::CabinEntry entry;
+                entry.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
+                entry.page_id = page_id;
+                // Written 0: there is no page epoch to read (cabin_store.hpp).
+                entry.page_epoch = 0;
+                entry.slot = slot;
+                entry.flags = stats::kCabinHintValid;
+                recording_->entries.push_back(entry);
+            }
+        }
 
         auto matched = EvaluateAll(schemas_, step.residual, frame_);
         if (!matched.ok()) return matched.status();
@@ -728,6 +962,41 @@ private:
     PageId memo_page_ = kInvalidPageId;
     std::uint16_t memo_slot_ = 0;
 
+    // ---- Cabin (docs/feat-cabin.md) --------------------------------------
+    //
+    // The core-local observed sets, or null when no Cabin is configured.
+    // Shared with every sub-chain for the reason the collector and the
+    // replay index are: a Cabin belongs to a relation, and a sub-chain reads
+    // relations too. Non-owning; the caller outlives the execution.
+    stats::CabinStore* cabins_ = nullptr;
+
+    // A recording in progress: which step is collecting, and into what.
+    //
+    // Non-null only for the duration of one recording walk, and checked
+    // against `step_id` at every accepted tuple - a chain may hold several
+    // cabin steps, and a nested one may run while an outer one is
+    // recording. Pointing at a stack local of RunCabinStep is safe for
+    // exactly the same reason the walk's own visitor lambda is: the walk
+    // cannot outlive the call that started it.
+    struct Recording {
+        std::uint32_t step_id = 0;
+        std::uint16_t rel_slot = 0;
+        std::uint16_t col_pos = 0;
+        const parser::AstValue* value = nullptr;
+        std::vector<stats::CabinEntry> entries;
+    };
+    Recording* recording_ = nullptr;
+
+    // Phase 1's output (see ServeFromCabin): the verified locations, held
+    // until every entry has been resolved so that the heap fallback can
+    // still abandon without having emitted a row.
+    struct Located {
+        PageId page_id = kInvalidPageId;
+        std::uint16_t slot = 0;
+    };
+    std::vector<Located> serve_scratch_;
+    std::unordered_set<std::uint64_t> seen_pks_;
+
     std::vector<Bound> bound_;
     std::vector<const catalog::Schema*> schemas_;
     ChainFrame frame_;
@@ -771,6 +1040,12 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     trail_replays += other.trail_replays;
     trail_misses += other.trail_misses;
     range_pages_pruned += other.range_pages_pruned;
+    cabin_hits += other.cabin_hits;
+    cabin_misses += other.cabin_misses;
+    cabin_entries_served += other.cabin_entries_served;
+    cabin_hint_hits += other.cabin_hint_hits;
+    cabin_hint_misses += other.cabin_hint_misses;
+    cabin_recordings += other.cabin_recordings;
     return *this;
 }
 
@@ -808,7 +1083,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     // conjuncts for UPDATE, which is not a chain execution and has no trail
     // of its own to contribute to.
     ChainRunner runner(catalog, store, kUnused, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       /*trail=*/nullptr, /*replay=*/nullptr);
+                       /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr);
 
     for (const SubChain& sub : step.sub_chains) {
         auto value = runner.EvaluateSubChain(sub, frame);
@@ -821,7 +1096,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
 
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
-               TrailCollector* trail, const TrailReplay* replay) {
+               TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins) {
     if (chain.steps.empty()) {
         return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -844,7 +1119,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     Budget spend(budget.limit());
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay);
+                       trail, replay, cabins);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by

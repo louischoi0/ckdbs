@@ -1,0 +1,296 @@
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "kds/base/common.hpp"
+#include "kds/parser/ast.hpp"
+
+// The Cabin runtime store: the observed sets, the sighting counter, and the
+// policy that decides when a value becomes observed
+// (docs/feat-cabin.md §§3-5, docs/cabin-workplan.md CB04).
+//
+// ---- What "observed" means, precisely -----------------------------------
+//
+// **Observed ⇒ complete, superset form, per snapshot.** For an observed
+// value `v`, this store's entry set is a *superset* of the pks of every
+// visible tuple whose key column equals `v`. Missing a qualifying pk
+// violates authority; a surplus entry never does, because the reader
+// subtracts it - MVCC visibility plus a re-check of the key equality, both
+// of which happen anyway on the authoritative path (spec §4).
+//
+// Three rules follow, and none of them is a preference:
+//
+//   1. **Maintenance is append-only.** INSERT appends if the new value is
+//      observed; DELETE does nothing; UPDATE v→v′ appends to v′ and leaves
+//      v's entry alone. Removing on the hot path is *incorrect*, not merely
+//      unnecessary: an older snapshot may still be entitled to match the
+//      row through the undo chain.
+//   2. **A cap refuses to observe; it never truncates a set.** A truncated
+//      set marked observed is precisely the "missing a qualifying pk" the
+//      invariant forbids - a wrong answer, not a smaller one.
+//   3. **Un-observing is always legal**, and is therefore the correct
+//      response to *any* failure here. Dropping a value returns queries for
+//      it to the authoritative scan: a performance event. This is what lets
+//      an authoritative structure be evictable at all (§1's corollary), and
+//      it is the value-granular analogue of Waystone's invariant 8.
+//
+// ---- Why this can live in memory ----------------------------------------
+//
+// §9 makes Cabin pages **unlogged authoritative**: the completeness promise
+// holds only while the system is up and the write hook is live, so recovery
+// declares every Cabin fully unobserved and traffic rebuilds them. v1 takes
+// that to its conclusion and keeps the sets in memory only. What persists is
+// the `sys.cabins` row - that a Cabin *exists*, which is DDL.
+//
+// ---- Why a scan can safely fill it --------------------------------------
+//
+// The classic build-by-observation hazard is a write slipping between the
+// recording scan and the mark. KDS deletes it structurally: statements for a
+// relation run to completion on its owning core (D3), so scan + record +
+// mark-observed is atomic against every other statement (§6). This whole
+// file is valid **only** under that model and under the Keystone issue-once
+// invariant (K1), which is what makes a stored pk a name that can dangle but
+// can never mis-attribute.
+//
+// Concurrency: core-local, no synchronization (rules.md #3). One store per
+// core; every table below is that core's own.
+//
+// It **never fails a statement**: every policy path returns void or a bool,
+// exactly as `TrailRecorder` does. A Cabin that cannot record is a Cabin
+// that stays unobserved, which is the state every value starts in.
+
+namespace kds::stats {
+
+// Bit 0 of `CabinEntry::flags`: the location hint is worth trying.
+//
+// Cleared - never the entry dropped - when a hint has been proven wrong and
+// there was nothing better to heal it with. The **pk is the authority**
+// (C2), so an entry with no usable hint is still a complete, correct entry;
+// it just costs a descent.
+inline constexpr std::uint16_t kCabinHintValid = 0x1;
+
+// One entry of one value's set: the authoritative half and the advisory
+// half, in 24 bytes (spec §3, C2 + C6).
+//
+// **Authority lives in the pk, never in the location.** Under K1 a stored
+// Keystone id is a forever-unique, immutable name: it can dangle - the row
+// may be gone - but it can never come to mean a different row. That buys
+// relocation invariance (the physical optimizer may move pages without ever
+// touching a Cabin), no incarnation protocol, and "dangling ⇒ dead forever,
+// droppable on sight".
+//
+// The location is waystone-class advice riding on cabin-class truth: it is
+// verified by the reader under the same rules and the *same code* as a
+// waystone entry (exec/tuple_verify.hpp), and any failure falls back to the
+// pk. Hints cost nothing to produce - the recording scan and the write hook
+// both hold the location in hand when they write the entry.
+struct CabinEntry {
+    std::uint64_t pk = 0;
+    PageId page_id = kInvalidPageId;
+
+    // The heap epoch at the time the entry was written.
+    //
+    // **Written 0 and checked trivially**, because this engine has no
+    // per-page epoch yet - the same gap `stats/trail_store.hpp` and
+    // `exec/trail_replay.hpp` document. The field is here rather than added
+    // later because C6 fixes the 24-byte layout, and because the day the
+    // epoch lands there must be nowhere for it *not* to be checked. Sound
+    // meanwhile only while a tuple's address is stable for life: invariant
+    // 13 stops an UPDATE migrating one, and nothing relayouts.
+    std::uint32_t page_epoch = 0;
+
+    std::uint16_t slot = 0;
+    std::uint16_t flags = 0;
+    std::uint32_t reserved = 0;
+
+    bool hint_valid() const noexcept {
+        return (flags & kCabinHintValid) != 0 && page_id != kInvalidPageId;
+    }
+};
+
+static_assert(sizeof(CabinEntry) == 24, "C6 fixes the entry at 24 bytes");
+
+// The identity of one entry set: a Cabin, and one value of its key column.
+//
+// The value is held **by value**, not hashed to an integer. A hash would
+// make two distinct values share a set, and a Cabin's set is authoritative -
+// so where Waystone's `arg_hash` can afford a collision (it costs a replay),
+// a collision here would serve one value's rows for another's. Cheap to say
+// and expensive to get wrong, so it is said in the type.
+struct CabinKey {
+    std::uint64_t cabin_id = 0;
+    parser::ValueType type = parser::ValueType::kNull;
+    std::int64_t int_val = 0;
+    std::string str_val;
+
+    bool operator==(const CabinKey&) const noexcept = default;
+};
+
+struct CabinKeyHash {
+    std::size_t operator()(const CabinKey& key) const noexcept;
+};
+
+// The key for `value` in `cabin_id`, or nullopt for a value that must never
+// be observed.
+//
+// Two kinds are refused, for one reason each. **kNull**: `WHERE c = NULL` is
+// not an equality any SQL evaluates to true, so a set keyed on NULL would
+// answer a predicate that never matches - and NULLs are not storable today
+// regardless. **kParam**: a declared pattern's `$x` is a value *position*
+// with no value in it, and nothing ever binds one on an execute path.
+std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstValue& value);
+
+// §8's budget is `[OPEN]` - per-cabin page budget, per-value set caps,
+// demotion of write-hot values - so the numbers live here, are `[PROPOSED]`,
+// and are configurable (`cabin_max_values`, `cabin_max_entries_per_value`).
+// Nothing may depend on either value; what the code depends on is rule 2
+// above, which holds whatever the numbers are.
+struct CabinLimits {
+    std::size_t max_values = 4096;
+    std::size_t max_entries_per_value = 4096;
+};
+
+class CabinStore {
+public:
+    // Sightings held before the table is cleared. `TrailRecorder`'s policy
+    // verbatim, including the crudest-possible eviction: overflow clears the
+    // whole table, which merely restarts counting - a value loses a sighting
+    // and needs one more execution to be observed. A performance event.
+    static constexpr std::size_t kMaxSightings = 4096;
+
+    // Executions of a value before its set is recorded.
+    //
+    // `n = 2` for a Cabin the engine created: the policy `docs/parser-v2.md`
+    // J5 settled for trails, reused rather than invented a second time. The
+    // first miss only counts, the second records. Two is the smallest n that
+    // excludes the one-shot query, and a Cabin's per-value cost - a
+    // directory probe on every write to the relation - is exactly what a
+    // one-shot value should not buy.
+    //
+    // `n = 1` for a **declared** Cabin - `CREATE CABIN`, or a `CABIN` clause
+    // on the column at CREATE TABLE. Same rule TrailRecorder applies to a
+    // declared pattern, same argument: the declaration *is* the evidence
+    // n=2 waits for, and an operator who wrote `CABIN` on a column has
+    // already said it is probed by value.
+    static constexpr std::uint8_t kAutoRecordThreshold = 2;
+    static constexpr std::uint8_t kDeclaredRecordThreshold = 1;
+
+    struct Stats {
+        std::uint64_t hits = 0;             // probes served from an observed set
+        std::uint64_t misses = 0;           // probes that fell through to a scan
+        std::uint64_t recordings = 0;       // values that became observed
+        std::uint64_t appends = 0;          // write-hook appends performed
+        std::uint64_t unobserved = 0;       // values dropped, for any reason
+        std::uint64_t cap_refusals = 0;     // values not observed, at a cap
+        std::uint64_t sighting_clears = 0;  // sighting table cleared wholesale
+    };
+
+    // What one Cabin holds and how it has been doing. Per cabin rather than
+    // global so `SHOW CABINS` can answer "is this Cabin earning its write
+    // hook" - which is the question §8's demotion policy will need, and
+    // which a global counter cannot answer for one Cabin among several.
+    struct CabinInfo {
+        std::size_t values = 0;
+        std::size_t entries = 0;
+        std::uint64_t hits = 0;
+        std::uint64_t misses = 0;
+        std::uint64_t recordings = 0;
+        std::uint64_t appends = 0;
+    };
+
+    explicit CabinStore(CabinLimits limits = CabinLimits()) noexcept : limits_(limits) {}
+
+    // ---- Read path ------------------------------------------------------
+
+    // The entry set for `key`, or **nullptr when the value is not
+    // observed**. Those two are entirely different answers: a non-null
+    // empty set is an authoritative "no rows", and nullptr means "scan, this
+    // Cabin knows nothing about that value".
+    //
+    // Non-const, and returning a mutable set, because the reader heals a
+    // stale hint in place (C6). The store is core-local, so there is no
+    // aliasing question - the caller is the only thing running.
+    std::vector<CabinEntry>* Find(const CabinKey& key);
+
+    // Counts a probe that was served / that fell through. Split from Find()
+    // so a caller may look without being counted (tests, inspection), and so
+    // the miss is counted once at the decision point rather than once per
+    // fallback path.
+    void NoteHit(std::uint64_t cabin_id);
+    void NoteMiss(std::uint64_t cabin_id);
+
+    // ---- Recording ------------------------------------------------------
+
+    // Bumps `key`'s sighting count and returns the new value, clearing the
+    // table wholesale if it is full. Saturates at 255 rather than wrapping:
+    // a wrapped count would send a hot value back below the threshold.
+    std::uint8_t Observe(const CabinKey& key);
+
+    // Whether a value with this many sightings should record now. The policy
+    // lives in one place and this is it.
+    bool WouldRecord(std::uint8_t sightings, bool declared) const noexcept {
+        return sightings >= (declared ? kDeclaredRecordThreshold : kAutoRecordThreshold);
+    }
+
+    // Marks `key` observed with `entries` as its set. Returns false when the
+    // value was **not** observed - a cap was in the way - which is a
+    // complete answer and never an error.
+    //
+    // The caller must only reach here from a walk that **completed**: a
+    // partial walk's matches are not a superset of anything, and a set
+    // recorded from one would be missing exactly the rows the walk did not
+    // reach. Not checkable from inside this class, which is why it is
+    // stated at both ends (see step_vm.cpp's recording branch).
+    bool Commit(const CabinKey& key, std::vector<CabinEntry> entries);
+
+    // Drops a value's set and its observed mark, returning queries for it to
+    // the authoritative scan path. Always legal, by §1's corollary - which
+    // is what makes it the right answer to a failed append, a cap, or any
+    // other surprise.
+    void Unobserve(const CabinKey& key);
+
+    // Drops everything belonging to one Cabin. `DROP CABIN`'s runtime half.
+    //
+    // Late is fine: the compiler stops emitting cabin probes the moment the
+    // catalog row is gone, so a set nobody can reach costs memory and never
+    // an answer.
+    void Forget(std::uint64_t cabin_id);
+
+    // ---- Write path -----------------------------------------------------
+
+    // The witness (§5). Appends `entry` to `key`'s set **if that value is
+    // observed**, and does nothing at all if it is not - which is the common
+    // case and the whole reason the hook is affordable.
+    //
+    // At the per-value cap it **un-observes** instead of appending, because
+    // the alternative - dropping the append and keeping the mark - is the
+    // one outcome that breaks completeness.
+    void NoteWrite(const CabinKey& key, const CabinEntry& entry);
+
+    // ---- Inspection -----------------------------------------------------
+
+    const Stats& stats() const noexcept { return stats_; }
+    CabinInfo InfoFor(std::uint64_t cabin_id) const;
+    std::size_t observed_value_count() const noexcept { return observed_.size(); }
+
+private:
+    // A whole entry set arriving or leaving, so `values` and `entries` are
+    // maintained in one place rather than at each of the four sites that can
+    // create or drop one. An *append* is not a set and does not go through
+    // here - it moves `entries` alone.
+    void AddSet(std::uint64_t cabin_id, std::size_t entries);
+    void RemoveSet(std::uint64_t cabin_id, std::size_t entries);
+
+    CabinLimits limits_;
+
+    std::unordered_map<CabinKey, std::vector<CabinEntry>, CabinKeyHash> observed_;
+    std::unordered_map<CabinKey, std::uint8_t, CabinKeyHash> sightings_;
+    std::unordered_map<std::uint64_t, CabinInfo> info_;
+    Stats stats_;
+};
+
+}  // namespace kds::stats

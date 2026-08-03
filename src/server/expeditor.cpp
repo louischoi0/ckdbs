@@ -20,7 +20,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "wal_drain_interval_us", "log_dir",  "log_file",               "log_level",
             "max_rows_touched",      "inline_cell_width",      "waystone_recording",
             "waystone_replay",
-            "access_statistics"};
+            "access_statistics",       "cabins",   "cabin_max_values",
+            "cabin_max_entries_per_value"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -81,6 +82,24 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("access_statistics");
         if (!v.ok()) return v.status();
         access_statistics = v.value();
+    }
+    if (file.Has("cabins")) {
+        auto v = file.GetBool("cabins");
+        if (!v.ok()) return v.status();
+        cabins = v.value();
+    }
+    if (file.Has("cabin_max_values")) {
+        auto v = file.GetUint("cabin_max_values");
+        if (!v.ok()) return v.status();
+        // No upper range check, and no zero check either: 0 means no value
+        // may be observed, which is a coherent way to keep the catalog
+        // objects while switching the behaviour off per instance.
+        cabin_max_values = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("cabin_max_entries_per_value")) {
+        auto v = file.GetUint("cabin_max_entries_per_value");
+        if (!v.ok()) return v.status();
+        cabin_max_entries_per_value = static_cast<std::size_t>(v.value());
     }
     if (file.Has("max_rows_touched")) {
         auto v = file.GetUint("max_rows_touched");
@@ -198,6 +217,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // the device ahead of the records describing it.
     expeditor->store_->SetWalGate(expeditor->wal_.get());
 
+    if (expeditor->config_.cabins) {
+        expeditor->cabin_store_.emplace(
+            stats::CabinLimits{expeditor->config_.cabin_max_values,
+                               expeditor->config_.cabin_max_entries_per_value});
+    }
     if (expeditor->config_.waystone_recording) {
         expeditor->trail_recorder_.emplace(expeditor->database_->catalog, *expeditor->store_,
                                            &expeditor->clock_);
@@ -207,7 +231,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         &*expeditor->logger_, &expeditor->clock_, &*expeditor->wal_,
         expeditor->config_.durability, exec::Budget(expeditor->config_.max_rows_touched),
         expeditor->trail_recorder_ ? &*expeditor->trail_recorder_ : nullptr,
-        expeditor->config_.waystone_replay, expeditor->config_.access_statistics);
+        expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
+        expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr);
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
                                  wal::DurabilityClassName(expeditor->config_.durability));

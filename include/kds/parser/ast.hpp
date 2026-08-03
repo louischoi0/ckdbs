@@ -184,6 +184,24 @@ struct Condition {
 struct ColumnDef {
     std::string name;
     std::string type_name;  // unresolved - see file comment
+
+    // The column's cabin policy (docs/feat-cabin.md), one of
+    // `catalog::kCabinPolicy*`. Written as an optional suffix on the column:
+    //
+    //     sym varchar CABIN            -- enabled: a cabin now, n=1
+    //     sym varchar CABIN AUTO       -- auto: the engine may decide (unbuilt)
+    //     sym varchar NO CABIN         -- disabled: never, by any route
+    //     sym varchar                  -- unset, which reads as auto
+    //
+    // Unset rather than defaulted here so the catalog stores the difference
+    // between "nothing was said" and "the engine may decide" - see
+    // EffectiveCabinPolicy (catalog/rows.hpp).
+    std::uint8_t cabin_policy = 0;  // catalog::kCabinPolicyUnset
+
+    // Where the policy keyword was written, for an error that can point at
+    // it - a cabin on the primary key is refused, and the refusal has to
+    // say where.
+    std::uint32_t cabin_byte_offset = 0;
 };
 
 struct CreateTableStmt {

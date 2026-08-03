@@ -659,6 +659,20 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
            << " len=" << col.len << " notnull=" << (col.notnull ? "yes" : "no")
            << " pk=" << (is_pk ? "yes" : "no")
            << " autoincrement=" << (is_pk ? "yes" : "no");
+
+        // The declared cabin policy (docs/feat-cabin.md), printed for every
+        // non-pk column. The *effective* value, so `auto` covers both "the
+        // engine may decide" and "nothing was said" - the difference is
+        // recorded on disk and matters only to whoever writes the promotion
+        // pipeline, where a listing that showed it would be noise. Whether a
+        // Cabin actually exists is `SHOW CABINS`; this is what the schema
+        // permits.
+        if (!is_pk) {
+            const std::uint8_t policy = catalog::EffectiveCabinPolicy(col.cabin_policy);
+            os << " cabin=" << (policy == catalog::kCabinPolicyDisabled  ? "no"
+                                : policy == catalog::kCabinPolicyEnabled ? "yes"
+                                                                         : "auto");
+        }
     }
 
     return {os.str(), false};
@@ -745,6 +759,11 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         if (!cabin_id.ok()) {
             return {"ERR " + cabin_id.status().message(), false};
         }
+        // The runtime half. The catalog cannot see the observed sets, and
+        // they are unreachable the moment its row is gone - the compiler
+        // stops emitting cabin probes for the column - so this frees memory
+        // rather than protecting an answer.
+        if (cabins_ != nullptr) cabins_->Forget(cabin_id.value());
         std::ostringstream os;
         os << "DROPPED CABIN on=" << stmt.table_name << '.' << stmt.column_name
            << " cabin_id=" << cabin_id.value();
@@ -816,6 +835,26 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
            << (row.status == catalog::kCabinStatusActive
                    ? "active"
                    : (row.status == catalog::kCabinStatusBuilding ? "building" : "demoted"));
+
+        // The runtime half, from the core-local store. These are the
+        // numbers that say whether a Cabin is earning its write hook -
+        // which is the question §8's demotion policy will need to answer,
+        // and the one the catalog cannot: it stores that a Cabin exists,
+        // never what it has observed.
+        //
+        // `observed=0 hits=0` on an old Cabin means the column is declared
+        // and never probed by equality. `observed>0 hits=0` means the
+        // values being probed are not the ones being observed.
+        if (cabins_ != nullptr) {
+            const stats::CabinStore::CabinInfo info = cabins_->InfoFor(row.cabin_id);
+            os << " observed=" << info.values << " entries=" << info.entries
+               << " hits=" << info.hits << " misses=" << info.misses;
+        } else {
+            // Not "0": the store is off, so every count is unknown rather
+            // than zero, and printing zeros would read as "nothing has
+            // happened" when the truth is "nothing is being recorded".
+            os << " observed=- entries=- hits=- misses=- (cabins = off)";
+        }
     }
     return {os.str(), false};
 }
@@ -850,12 +889,25 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
             return {"ERR " + type_row.status().message(), false};
         }
 
+        // A cabin policy on the primary key is refused rather than ignored.
+        // The pk's cabin is the clustered tree (spec §2), so any of the
+        // three answers would be a statement about something that cannot
+        // exist - and silently dropping the clause would leave an operator
+        // believing they had said something.
+        if (pos == 0 && col.cabin_policy != catalog::kCabinPolicyUnset) {
+            return {"ERR the primary-key column '" + col.name +
+                        "' takes no cabin policy - the clustered tree is its cabin (byte " +
+                        std::to_string(col.cabin_byte_offset) + ")",
+                    false};
+        }
+
         catalog::SysColumnRow row{};
         row.pos = pos++;
         catalog::SetName(row.name, col.name);
         row.type_val = type_row.value().type_val;
         row.len = type_row.value().len;
         row.notnull = true;  // no NULL support yet - see row_codec.hpp
+        row.cabin_policy = col.cabin_policy;
         schema.columns.push_back(row);
     }
 
@@ -864,6 +916,37 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
+
+    // ---- `CABIN` on a column creates one now (docs/feat-cabin.md) -------
+    //
+    // The policy is enforced at exactly two moments, and this is the first:
+    // an *enabled* column gets its Cabin as part of the CREATE TABLE that
+    // declared it. The second is `Catalog::CreateCabin`, which refuses a
+    // *disabled* column whoever asks.
+    //
+    // `kCabinPolicyAuto` does nothing here, by design: no code creates a
+    // Cabin on that policy, because the promotion pipeline that would judge
+    // it does not exist (§7). The value is stored so the decision has a name
+    // before the machinery that consumes it - not so that it quietly behaves
+    // like `enabled`.
+    //
+    // A failure here does not fail the CREATE TABLE. The relation exists and
+    // is correct; what is missing is an accelerator, and reporting it as a
+    // warning beats leaving a half-created table behind - there is no
+    // transaction to roll one back into.
+    std::vector<std::string> warnings;
+    for (const catalog::SysColumnRow& col : schema.columns) {
+        if (catalog::EffectiveCabinPolicy(col.cabin_policy) != catalog::kCabinPolicyEnabled) {
+            continue;
+        }
+        auto cabin = catalog_.CreateCabin(oid.value(), static_cast<std::uint16_t>(col.pos),
+                                           catalog::kCabinOriginUser);
+        if (!cabin.ok()) {
+            warnings.push_back("column '" + std::string(catalog::NameView(col.name)) +
+                               "' asked for a cabin and did not get one: " +
+                               cabin.status().message());
+        }
+    }
     // Info: DDL is rare and changes the shape of everything after it, so
     // it belongs in a default-level log even though ordinary writes do not.
     if (logging(LogLevel::kInfo)) {
@@ -871,7 +954,12 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
                               "' oid=" + std::to_string(oid.value()) +
                               " columns=" + std::to_string(schema.columns.size()));
     }
-    return {"CREATED oid=" + std::to_string(oid.value()), false};
+    std::ostringstream created;
+    created << "CREATED oid=" << oid.value();
+    for (const std::string& warning : warnings) {
+        created << "\\n" << "WARN " << warning;
+    }
+    return {created.str(), false};
 }
 
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
@@ -1036,6 +1124,19 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
         }
         return {"ERR " + placed.status().message(), false};
     }
+
+    // ---- The Cabin witness (docs/feat-cabin.md §5) ----------------------
+    //
+    // **Before the log, deliberately.** A WAL failure below reports an error
+    // and leaves the tuple in the page - that is a stated, accepted gap
+    // (LogInsert's comment) - and a row sitting in a page that no Cabin
+    // witnessed is exactly the completeness break C1 forbids. Witnessing
+    // first makes the failure cost a log record and never an authority.
+    //
+    // `ta` is still valid here: the only thing that invalidates it is the
+    // desc-page relink below, which happens after.
+    NoteCabinWrite(ta, stmt.values, /*first_col_pos=*/1, id.value(), placed.value().page_id,
+                   placed.value().slot);
 
     // Logged after the page is mutated and before the client is answered -
     // see the ordering note in this class's header for why that is safe
@@ -1366,7 +1467,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
             ++rows;
             return storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay);
+        &stats, budget_, trail, replay, cabins_);
     if (!ran.ok()) {
         return {"ERR " + ran.message(), false};
     }
@@ -1594,7 +1695,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, bool anal
             }
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay_ptr);
+        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -1622,6 +1723,52 @@ void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
     if (!access_stats_enabled_) return;
     stats::RecordChainAccess(catalog_, chain, static_cast<std::uint64_t>(NowNs()),
                              &access_counters_);
+}
+
+void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
+                                        std::span<const parser::AstValue> values,
+                                        std::uint16_t first_col_pos, std::uint64_t pk,
+                                        PageId page_id, std::uint16_t slot,
+                                        std::span<const parser::AstValue> previous) {
+    // The two tests a relation with no Cabin pays, and nothing else.
+    if (cabins_ == nullptr || access.cabin_mask == 0) return;
+
+    for (std::uint16_t col = 1; col < 64; ++col) {
+        if ((access.cabin_mask & (std::uint64_t{1} << col)) == 0) continue;
+        if (col < first_col_pos) continue;
+        const std::size_t at = static_cast<std::size_t>(col - first_col_pos);
+        if (at >= values.size()) continue;
+
+        // **§5's third row: an UPDATE that did not touch the key column does
+        // nothing.** Appending anyway would still be *correct* - the entry
+        // set stays a superset, and the read dedupes - but it is unbounded:
+        // a workload that updates a row's other columns repeatedly would
+        // grow that value's set by one entry per write forever, until the
+        // per-value cap un-observed it and the Cabin stopped serving the
+        // very relation it was declared for. Correct and useless is still a
+        // defect, so the comparison is made here rather than left to the
+        // cap.
+        if (at < previous.size() &&
+            exec::CompareValues(/*type_val=*/0, previous[at], values[at],
+                                parser::CompareOp::kEq)) {
+            continue;
+        }
+
+        auto key = stats::MakeCabinKey(access.CabinOn(col).id, values[at]);
+        // A value that can never be observed - NULL, an unbound param -
+        // cannot have a set to append to either, so there is nothing to
+        // witness. Silent, exactly as it is on the read path.
+        if (!key.has_value()) continue;
+
+        stats::CabinEntry entry;
+        entry.pk = pk;
+        entry.page_id = page_id;
+        // Written 0: there is no page epoch to read (cabin_store.hpp).
+        entry.page_epoch = 0;
+        entry.slot = slot;
+        entry.flags = stats::kCabinHintValid;
+        cabins_->NoteWrite(*key, entry);
+    }
 }
 
 void CommandDispatcher::RecordTrail(const std::optional<stats::InstanceKey>& instance,
@@ -1735,6 +1882,13 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
 
+        // The row as it stands *before* the SET list is applied, kept only
+        // when this relation has a Cabin - it is what tells the write hook
+        // whether a key column actually moved (§5's third row). A relation
+        // with no Cabin copies nothing.
+        std::vector<parser::AstValue> previous;
+        if (cabins_ != nullptr && ta.cabin_mask != 0) previous = row.value();
+
         for (const auto& assignment : stmt.assignments) {
             for (std::size_t c = 0; c < ta.schema.columns.size(); ++c) {
                 if (catalog::NameView(ta.schema.columns[c].name) == assignment.col_name) {
@@ -1777,6 +1931,21 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         if (Status s = fresh.OverwriteTuple(slot, encoded.value(), trx_id, undo_ptr); !s.ok()) {
             return s;
         }
+
+        // ---- The Cabin witness, UPDATE half (docs/feat-cabin.md §5) -----
+        //
+        // `row.value()` now holds the **new** values, so this appends the pk
+        // to v′'s set for every cabined column. The old value's set is
+        // deliberately left alone: a pre-update snapshot is still entitled
+        // to match through it, and for newer readers the stale entry is a
+        // surplus the read-time key re-check subtracts. Removal here would
+        // be incorrect, not an optimization forgone.
+        //
+        // The location is unchanged by construction - an UPDATE is an
+        // in-place overwrite under invariant 13 - so the appended hint is
+        // the row's real address.
+        NoteCabinWrite(ta, row.value(), /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+
         ++updated;
         if (page_id != last_page) {
             last_page = page_id;

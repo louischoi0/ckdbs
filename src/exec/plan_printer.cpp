@@ -37,6 +37,10 @@ std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
         case AccessKind::kRange: return 3;
         case AccessKind::kFilterScan: return 4;
         case AccessKind::kScan: return 5;
+        // 6, appended rather than inserted: these numbers are persisted in
+        // sys.access_stats, so a value here may never change meaning and a
+        // new kind takes the next free one however the enum is ordered.
+        case AccessKind::kCabinProbe: return 6;
     }
     return catalog::kAccessKindUnset;
 }
@@ -48,6 +52,7 @@ std::optional<AccessKind> AccessKindOfStored(std::uint8_t stored) noexcept {
         case 3: return AccessKind::kRange;
         case 4: return AccessKind::kFilterScan;
         case 5: return AccessKind::kScan;
+        case 6: return AccessKind::kCabinProbe;
         default: return std::nullopt;
     }
 }
@@ -116,6 +121,10 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     if (step.range.has_value()) {
         os << " range=[" << step.range->low << ", " << step.range->high << ']';
     }
+    if (step.cabin.has_value()) {
+        os << " cabin=" << step.cabin->cabin_id << " on=col" << step.cabin->col_pos
+           << " value=" << FormatValue(step.cabin->value);
+    }
     os << '\n';
 
     for (const StepPredicate& pred : step.residual) {
@@ -155,6 +164,7 @@ const char* AccessKindName(AccessKind kind) noexcept {
         case AccessKind::kRange: return "Range";
         case AccessKind::kFilterScan: return "FilterScan";
         case AccessKind::kScan: return "Scan";
+        case AccessKind::kCabinProbe: return "CabinProbe";
     }
     return "?";
 }
@@ -253,7 +263,8 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         // question, and a row of zeros buries the answer.
         if (counters.relation_opens == 0 && counters.rows_examined == 0 &&
             counters.sub_chain_runs == 0 && counters.trail_replays == 0 &&
-            counters.trail_misses == 0 && counters.range_pages_pruned == 0) {
+            counters.trail_misses == 0 && counters.range_pages_pruned == 0 &&
+            counters.cabin_hits == 0 && counters.cabin_misses == 0) {
             continue;
         }
 
@@ -285,6 +296,21 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.trail_replays > 0) os << " replays=" << counters.trail_replays;
         if (counters.trail_misses > 0) os << " trail_misses=" << counters.trail_misses;
         if (counters.range_pages_pruned > 0) os << " range_stopped_early=1";
+        // Cabin (docs/feat-cabin.md §7). A hit means the step served an
+        // observed value's entry set **authoritatively** and did not walk;
+        // the entries/hint pair below says how much of that was the C6
+        // location advice and how much needed a pk resolution.
+        //
+        // A hit beside an `examined` count the size of the relation is the
+        // shape to look for: it would mean the set was not actually serving.
+        if (counters.cabin_hits > 0) os << " cabin_hits=" << counters.cabin_hits;
+        if (counters.cabin_misses > 0) os << " cabin_misses=" << counters.cabin_misses;
+        if (counters.cabin_entries_served > 0) {
+            os << " cabin_entries=" << counters.cabin_entries_served;
+        }
+        if (counters.cabin_hint_hits > 0) os << " hint_hits=" << counters.cabin_hint_hits;
+        if (counters.cabin_hint_misses > 0) os << " hint_misses=" << counters.cabin_hint_misses;
+        if (counters.cabin_recordings > 0) os << " cabin_recorded=" << counters.cabin_recordings;
     }
     return os.str();
 }

@@ -114,6 +114,15 @@ struct SysColumnRow {
     std::uint32_t len;
     bool notnull;
 
+    // Whether this column may carry a Cabin, and on whose initiative
+    // (docs/feat-cabin.md). One of the kCabinPolicy* values below.
+    //
+    // **A schema property, not a Cabin's property.** A Cabin can be created
+    // and dropped; the policy says what is *permitted* for this column and
+    // outlives any particular Cabin on it - which is why it belongs here and
+    // not on the `sys.cabins` row.
+    std::uint8_t cabin_policy;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kRelIdOffset = 8;
     static constexpr std::size_t kPosOffset = 16;
@@ -121,7 +130,8 @@ struct SysColumnRow {
     static constexpr std::size_t kTypeValOffset = kNameOffset + kCatalogNameMax;
     static constexpr std::size_t kLenOffset = kTypeValOffset + sizeof(std::uint32_t);
     static constexpr std::size_t kNotNullOffset = kLenOffset + sizeof(std::uint32_t);
-    static constexpr std::size_t kOnDiskSize = kNotNullOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kCabinPolicyOffset = kNotNullOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kOnDiskSize = kCabinPolicyOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysColumnRow> Decode(std::span<const std::byte> bytes);
@@ -134,6 +144,69 @@ static_assert(offsetof(SysColumnRow, name) == SysColumnRow::kNameOffset);
 static_assert(offsetof(SysColumnRow, type_val) == SysColumnRow::kTypeValOffset);
 static_assert(offsetof(SysColumnRow, len) == SysColumnRow::kLenOffset);
 static_assert(offsetof(SysColumnRow, notnull) == SysColumnRow::kNotNullOffset);
+static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicyOffset);
+
+// ---- Per-column cabin policy (docs/feat-cabin.md §8) -------------------
+//
+// Declared at `CREATE TABLE`, per column, and fixed for the relation's life
+// (there is no `ALTER TABLE`). It answers one question: **who is allowed to
+// decide that this column carries a Cabin?**
+//
+// The three answers are deliberately not "on/off". A Cabin is a standing
+// cost - a directory probe on every write to the relation - paid against a
+// benefit that depends on the workload, so the useful axis is *who judges*:
+// the operator, the engine, or nobody.
+inline constexpr std::uint8_t kCabinPolicyUnset = 0;
+
+// **Disabled.** No Cabin on this column, ever, by any route: `CREATE CABIN`
+// is refused and auto-creation will never consider it. For a column an
+// operator knows is never filtered by equality, or one whose write rate
+// makes the hook a bad trade at any hit rate.
+inline constexpr std::uint8_t kCabinPolicyDisabled = 1;
+
+// **Auto.** The engine may create a Cabin on this column when its own
+// signals say the column has earned one - Waystone's per-instance
+// `use_count` and the recording scan's measured cardinality, the promotion
+// pipeline of §7: `cold → trail (advisory, free) → Cabin (authoritative,
+// earns its write hook)`.
+//
+// **Not implemented.** No code creates a Cabin on this policy, and the value
+// exists so that the decision has a name and a stored representation before
+// the pipeline that consumes it. A column declared auto today behaves
+// exactly as an undeclared one: no Cabin until someone writes
+// `CREATE CABIN`. The threshold itself is `[OPEN]` and belongs to the
+// retention/policy spec alongside tracking levels.
+inline constexpr std::uint8_t kCabinPolicyAuto = 2;
+
+// **Enabled.** A Cabin is created on this column at `CREATE TABLE`, and its
+// values are observed **on first selection** rather than on second.
+//
+// The n=1 half mirrors the rule `CREATE PATTERN` already settled
+// (`TrailRecorder`: n=1 for a declared pattern, n=2 for an auto-observed
+// one) and rests on the same argument: a declaration *is* the evidence that
+// waiting exists to gather. An operator who wrote `CABIN` on the column has
+// already said it is probed by value, and making them prove it with traffic
+// asks a question that was answered.
+inline constexpr std::uint8_t kCabinPolicyEnabled = 3;
+
+// The policy a column carries when nothing said otherwise - including every
+// row written before this field existed, which decodes to 0.
+//
+// `kCabinPolicyUnset` is treated as `kCabinPolicyAuto` by every reader, and
+// the mapping is here so no caller invents its own. The two are stored
+// distinctly because they are different statements - "nothing was said" and
+// "the engine may decide" - and the day auto-creation exists, an operator
+// will want to know which of the two a column carries.
+constexpr std::uint8_t EffectiveCabinPolicy(std::uint8_t stored) noexcept {
+    return stored == kCabinPolicyUnset ? kCabinPolicyAuto : stored;
+}
+
+// Whether a Cabin may be created on a column carrying this policy, by an
+// operator asking for one. The single test, so `CREATE CABIN` and any
+// future auto-creation cannot come to disagree about what disabled means.
+constexpr bool CabinPolicyPermitsCreation(std::uint8_t stored) noexcept {
+    return EffectiveCabinPolicy(stored) != kCabinPolicyDisabled;
+}
 
 // ---- sys.types --------------------------------------------------------
 

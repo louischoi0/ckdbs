@@ -87,6 +87,7 @@ std::array<std::byte, SysColumnRow::kOnDiskSize> SysColumnRow::Encode() const {
     std::memcpy(base + kLenOffset, &len, sizeof(len));
     auto nn = static_cast<std::uint8_t>(notnull ? 1 : 0);
     std::memcpy(base + kNotNullOffset, &nn, sizeof(nn));
+    std::memcpy(base + kCabinPolicyOffset, &cabin_policy, sizeof(cabin_policy));
     return buf;
 }
 
@@ -104,6 +105,12 @@ StatusOr<SysColumnRow> SysColumnRow::Decode(std::span<const std::byte> bytes) {
     std::uint8_t nn;
     std::memcpy(&nn, base + kNotNullOffset, sizeof(nn));
     row.notnull = (nn != 0);
+    std::memcpy(&row.cabin_policy, base + kCabinPolicyOffset, sizeof(row.cabin_policy));
+    // Pure, like its neighbours. `cabin_policy == kCabinPolicyUnset` is a
+    // legitimate stored value ("nothing was said"), and turning it into the
+    // effective policy is the reader's job through EffectiveCabinPolicy() -
+    // a decode that substituted would erase the distinction the two values
+    // exist to keep.
     return row;
 }
 

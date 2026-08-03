@@ -1,6 +1,6 @@
 # Cabin — value-observed authoritative metadata store (spec, v1)
 
-Status: **DECIDED** — C1–C5 fixed; items marked `[PROPOSED]` / `[OPEN]`
+Status: **DECIDED** — C1–C7 fixed; items marked `[PROPOSED]` / `[OPEN]`
 are not.
 Depends on: **keystone-id-invariant.md (K1–K5, adopted)**, Keystone pk
 contract (super column), B+tree pk facade (B1–B3), patterns +
@@ -23,6 +23,11 @@ Decisions fixed by this spec:
   alongside the pk: advisory, reader-verified under the same rules as
   waystone entries, falling back to pk descent and healed in place on
   failure. Entry size 24 B.
+- **C7** — a column declares at `CREATE TABLE` **who may decide** it
+  carries a Cabin: `NO CABIN` (never, by any route), `CABIN AUTO` (the
+  engine may, at a threshold — *specified, not built*), or `CABIN`
+  (created now, and its values observed on first selection rather than
+  second). See §8.1.
 
 ---
 
@@ -240,6 +245,58 @@ measured exactly by the recording scan, the column class is their
 aggregated summary, and dense verdicts suppress futile recording
 attempts (level-5 columns never materialize per-value sets).
 
+### 8.1 The per-column policy (C7) — decided 2026-08-03
+
+Above all of that sits one declaration, made per column at `CREATE TABLE`
+and fixed for the relation's life. It answers a question the density
+classification cannot, because it is not a measurement: **who is allowed
+to decide that this column carries a Cabin?**
+
+| written | policy | meaning |
+|---|---|---|
+| `col type NO CABIN` | disabled | No Cabin on this column, ever, by any route. `CREATE CABIN` is refused; auto-creation will never consider it. |
+| `col type CABIN AUTO` | auto | The engine may create one when its own signals say the column has earned it (§7's promotion pipeline). **Not implemented** — see below. |
+| `col type CABIN` | enabled | A Cabin is created at `CREATE TABLE`, and its values are observed on **first** selection. |
+| `col type` | unset | Read as *auto* by every reader, and stored distinctly so "nothing was said" stays distinguishable from "the engine may decide". |
+
+Three things this settles.
+
+**The axis is authority, not on/off.** A Cabin is a standing cost — a
+directory probe on every write to the relation — paid against a benefit
+that depends entirely on the workload. So the useful question is not
+"should this column have one" but "whose judgement decides", and the three
+answers are the operator's, the engine's, and nobody's.
+
+**`enabled` implies n=1, not just creation.** A declared Cabin observes a
+value on its first selection where an engine-created one waits for the
+second. This is the rule `CREATE PATTERN` already settled (spec
+`create-pattern` §7: n=1 for a declared pattern, n=2 for an auto-observed
+one) and it rests on the same argument — *a declaration is the evidence
+that waiting exists to gather*. An operator who wrote `CABIN` on a column
+has already said it is probed by value; asking traffic to prove it again
+asks a question that was answered.
+
+**`auto` is a name, not a behaviour.** No code creates a Cabin on that
+policy: the promotion pipeline that would judge it (§7 — Waystone's
+`use_count` and the recording scan's measured cardinality feeding
+`cold → trail → Cabin`) does not exist, and its threshold is `[OPEN]`,
+belonging to the retention/policy spec alongside tracking levels. A column
+declared `auto` today behaves exactly as an undeclared one: no Cabin until
+someone writes `CREATE CABIN`. The value is stored so the decision has a
+name and a durable representation *before* the machinery that consumes it —
+not so that it quietly behaves like `enabled`.
+
+A policy on the **primary-key column is refused**, not ignored: the pk's
+Cabin is the clustered tree (§2), so any of the three would be a statement
+about something that cannot exist, and silently dropping the clause would
+leave an operator believing they had said something.
+
+The policy is stored on the `sys.columns` row and enforced in exactly two
+places: `CREATE TABLE` creates the Cabin an *enabled* column asks for, and
+`Catalog::CreateCabin` refuses a *disabled* one whoever asks — the single
+door every Cabin comes through, so a future auto-creator cannot forget the
+check.
+
 **C5 changes the ceiling, not the policy.** Full observation of a
 column is *permitted*: with 24 B entries (C6), a fully observed Cabin
 weighs roughly three times a secondary index's leaf level — still far
@@ -281,6 +338,9 @@ promotion pipeline (§7). Details deferred to a workplan.
 ## 11. Out of scope / open
 
 - Expression / predicate-scoped cabins (C3 — revisit after v1).
+- The `CABIN AUTO` threshold (§8.1): what `use_count` × cardinality earns a
+  column a Cabin, and what un-earns it. The policy has a name and a stored
+  value; nothing consumes them.
 - Multi-column keys; range observation.
 - Budget, per-value caps, demotion of write-hot values (`[OPEN]`, §8).
 - Background pruning cadence and batching (§5 fixes the gates;

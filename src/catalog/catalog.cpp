@@ -360,7 +360,8 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
 }
 
 Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
-                                 std::uint32_t type_val, std::uint32_t len, bool notnull) {
+                                 std::uint32_t type_val, std::uint32_t len, bool notnull,
+                                 std::uint8_t cabin_policy) {
     SysColumnRow row{};
     row.oid = oid;
     row.rel_id = rel_id;
@@ -369,6 +370,7 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.type_val = type_val;
     row.len = len;
     row.notnull = notnull;
+    row.cabin_policy = cabin_policy;
     Status s = InsertRow(store_, kCatalogPageColumns, row, kBootstrapXid);
     // A new column row changes the schema half of a cached TableAccess.
     if (s.ok()) BumpVersion("sys.columns insert");
@@ -471,7 +473,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
 
     for (const auto& col : schema.columns) {
         Status s = InsertColumnRow(GenerateUserOid(), new_oid, col.pos, NameView(col.name),
-                                    col.type_val, col.len, col.notnull);
+                                    col.type_val, col.len, col.notnull, col.cabin_policy);
         if (!s.ok()) return s;
     }
 
@@ -649,12 +651,12 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // fail on its first read.
     auto cabins = ListCabins();
     if (!cabins.ok()) return cabins.status();
-    access.cabin_ids.assign(access.schema.columns.size(), 0);
+    access.cabin_ids.assign(access.schema.columns.size(), TableAccess::CabinRef{});
     for (const SysCabinRow& cabin : cabins.value()) {
         if (cabin.rel_oid != oid) continue;
         if (!IsCabinServing(cabin)) continue;
         if (cabin.column_no == 0 || cabin.column_no >= access.cabin_ids.size()) continue;
-        access.cabin_ids[cabin.column_no] = cabin.cabin_id;
+        access.cabin_ids[cabin.column_no] = TableAccess::CabinRef{cabin.cabin_id, cabin.origin};
         if (cabin.column_no < 64) {
             access.cabin_mask |= (std::uint64_t{1} << cabin.column_no);
         }
@@ -1105,6 +1107,19 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     if (col_pos >= access.value()->schema.columns.size()) {
         return Status::InvalidArgument("catalog: relation oid " + std::to_string(rel_oid) +
                                        " has no column at position " + std::to_string(col_pos));
+    }
+
+    // The column's declared policy, enforced here because this is the one
+    // door every Cabin comes through - an operator's `CREATE CABIN`, a
+    // `CABIN` clause at CREATE TABLE, and whatever auto-creation is built
+    // later. `NO CABIN` means never, by any route (rows.hpp), and a check
+    // that lived in the DDL layer instead would be a check the future
+    // promotion pipeline could forget.
+    const SysColumnRow& column = access.value()->schema.columns[col_pos];
+    if (!CabinPolicyPermitsCreation(column.cabin_policy)) {
+        return Status::InvalidArgument("catalog: column '" +
+                                       std::string(NameView(column.name)) +
+                                       "' was declared NO CABIN");
     }
 
     if (FindCabinOnColumn(rel_oid, col_pos).ok()) {

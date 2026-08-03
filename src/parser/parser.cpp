@@ -1,5 +1,7 @@
 #include "kds/parser/parser.hpp"
 
+#include "kds/catalog/rows.hpp"
+
 #include <algorithm>
 #include <cctype>
 
@@ -333,6 +335,33 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         auto type_name = ParseIdent();
         if (!type_name.ok()) return type_name.status();
         col.type_name = std::move(type_name.value());
+
+        // Optional cabin policy: `CABIN`, `CABIN AUTO`, or `NO CABIN`
+        // (docs/feat-cabin.md). Peeked rather than required, so every
+        // pre-existing CREATE TABLE parses unchanged and lands on
+        // kCabinPolicyUnset.
+        const Token& policy = lexer_.Peek();
+        if (policy.type == TokenType::kIdent && IEquals(policy.text, "CABIN")) {
+            col.cabin_byte_offset = policy.byte_offset;
+            lexer_.Next();
+            const Token& mode = lexer_.Peek();
+            if (mode.type == TokenType::kIdent && IEquals(mode.text, "AUTO")) {
+                lexer_.Next();
+                col.cabin_policy = catalog::kCabinPolicyAuto;
+            } else {
+                col.cabin_policy = catalog::kCabinPolicyEnabled;
+            }
+        } else if (policy.type == TokenType::kIdent && IEquals(policy.text, "NO")) {
+            col.cabin_byte_offset = policy.byte_offset;
+            lexer_.Next();
+            // `NO` is only ever the start of `NO CABIN` here. Saying so
+            // beats letting `no` fall through to the trailing-garbage check,
+            // which would point at the wrong token.
+            if (Status s = ExpectKeyword("CABIN"); !s.ok()) {
+                return s.WithContext("the only NO clause on a column is `NO CABIN`");
+            }
+            col.cabin_policy = catalog::kCabinPolicyDisabled;
+        }
 
         stmt.columns.push_back(std::move(col));
 

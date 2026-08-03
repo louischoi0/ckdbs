@@ -43,6 +43,7 @@ add_library(kds
     src/stats/trail_store.cpp
     src/stats/trail_recorder.cpp
     src/stats/access_stats.cpp
+    src/stats/cabin_store.cpp
     src/catalog/catalog_cache.cpp
     src/catalog/catalog.cpp
     src/bootstrap/bootstrap.cpp
@@ -71,6 +72,7 @@ add_library(kds
     src/exec/budget.cpp
     src/exec/catalog_view.cpp
     src/exec/trail_replay.cpp
+    src/exec/tuple_verify.cpp
     src/exec/pattern_ddl.cpp
     src/exec/cabin_ddl.cpp
     src/sched/clock.cpp

@@ -78,6 +78,23 @@ enum class AccessKind : std::uint8_t {
     // pk range through the leaf chain, from `BETWEEN <low> AND <high>` on
     // the relation's primary key. Emitted since the BETWEEN half of V08.
     kRange,
+    // An equality against a literal on a non-pk column that carries a
+    // **Cabin** (docs/feat-cabin.md): a probe of the Cabin's observed set,
+    // falling back to the walk below when the value has not been observed.
+    //
+    // The third trust class, and the only kind here that is neither a pk
+    // descent nor a walk. A Cabin is **authoritative for observed values**:
+    // its entry set for an observed value is a superset of the qualifying
+    // pks, and the read subtracts the surplus by re-checking visibility and
+    // the key equality. So an observed value's *empty* set is an
+    // authoritative "no rows" - which nothing else in this enum can say
+    // about a non-pk predicate.
+    //
+    // Whether a column has a Cabin is **catalog** state, so the plan stays
+    // `f(shape, catalog)` and nothing about the data influences it. Whether
+    // a *value* has been observed is runtime state, and it steers only the
+    // branch taken inside this kind, never the kind itself.
+    kCabinProbe,
     // A walk **driven by a filter**: at least one equality against a
     // literal on a non-pk column with no index.
     //
@@ -106,6 +123,18 @@ enum class AccessKind : std::uint8_t {
 // filter scan's from reading every row. Invariant 9 lets a trail replace a
 // lookup and never a search, so adding a search-class kind cannot move this
 // line - which is what made both safe to add without touching Waystone.
+//
+// **Unchanged by kCabinProbe too, and that one is worth stating.** A Cabin
+// *is* authoritative, so it is tempting to read this line as "authoritative
+// versus advisory" and let a trail replace a cabin probe. It is not: the
+// line invariant 9 draws is **lookup versus search**, and it is drawn there
+// because a trail's stored set has no witness for absence - a row inserted
+// since it was recorded is missing from it and nothing per-tuple can detect
+// that. A Cabin has such a witness (its write hook, spec section 5); a trail
+// does not, and does not acquire one by being pointed at a cabined column.
+// So a cabin probe stays search-class, and the fact that adding an
+// authoritative kind did not move this function is the check that the two
+// trust models stayed separate.
 constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
     return kind == AccessKind::kLookup || kind == AccessKind::kProbe;
 }
@@ -121,6 +150,41 @@ constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
 struct RangeBounds {
     std::uint64_t low = 0;
     std::uint64_t high = 0;
+};
+
+// What a kCabinProbe step probes: which Cabin, and with which value.
+//
+// A **hint on top of the residual**, exactly as RangeBounds is. The equality
+// this was derived from stays in `Step::residual`, so downgrading the step
+// to a plain kScan still cannot change the result - and here that property
+// is doing more work than it does for a range. It is what lets the read path
+// serve a *superset* entry set and subtract the surplus by re-filtering: the
+// key re-check spec section 4 requires is not extra code, it is the residual
+// the compiler already attached.
+struct CabinProbe {
+    // The `sys.cabins` row's `cabin_id`. Resolved at compile time, so no
+    // execute path ever asks the catalog which Cabin a column has.
+    std::uint64_t cabin_id = 0;
+
+    // The cabined column's schema position, for the access statistics and
+    // for re-deriving the probe value from a decoded row on the write path.
+    std::uint16_t col_pos = 0;
+
+    // The value being probed for. A literal today: the compiler only assigns
+    // this kind for an equality against one. A column operand would mean a
+    // per-outer-row probe, which is a shape v1 does not emit.
+    parser::AstValue value;
+
+    // Whether an operator declared this Cabin - `CREATE CABIN`, or a
+    // `CABIN` clause on the column at CREATE TABLE - as opposed to the
+    // engine having created it on its own judgement.
+    //
+    // It decides **when a value becomes observed**: n=1 for a declared
+    // Cabin, n=2 for an auto one. Exactly the rule `TrailRecorder` already
+    // applies to patterns, and the same argument - a declaration *is* the
+    // evidence that waiting exists to gather, so asking traffic to prove it
+    // again asks a question that was answered.
+    bool declared = false;
 };
 
 // The right-hand side of a compiled predicate: a value the statement
@@ -209,6 +273,9 @@ struct Step {
 
     // The pk bounds, for kRange. Empty for every other kind.
     std::optional<RangeBounds> range;
+
+    // The Cabin and the value, for kCabinProbe. Empty for every other kind.
+    std::optional<CabinProbe> cabin;
 
     // The columns this step's kind was assigned for, in schema order:
     // the filtered columns for kFilterScan, the pk for kLookup/kProbe/

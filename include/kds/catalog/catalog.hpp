@@ -438,8 +438,15 @@ private:
     // it into Bootstrap() would bury the reason it differs.
     Status BootstrapPatternDefs();
 
+    // `cabin_policy` is one of the `kCabinPolicy*` values (rows.hpp) and
+    // defaults to unset, which every reader treats as `auto`. It is a
+    // parameter rather than read off a struct because this function is the
+    // one place a sys.columns row is written, and a field it silently
+    // dropped would be a column policy an operator declared and never got -
+    // which is exactly what happened before it was threaded through here.
     Status InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
-                            std::uint32_t type_val, std::uint32_t len, bool notnull);
+                            std::uint32_t type_val, std::uint32_t len, bool notnull,
+                            std::uint8_t cabin_policy = kCabinPolicyUnset);
     Status InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type_val,
                           std::uint32_t len);
 

@@ -175,6 +175,50 @@ waystone_replay = on
 # Independent of the Waystone switches above.
 access_statistics = on
 
+# ---- Cabins ----------------------------------------------------------------
+
+# Whether Cabins may be built and served (docs/feat-cabin.md).
+#
+# A Cabin is a per-(relation, non-pk column) store that is **authoritative
+# for the values queries have actually observed** - the third trust class,
+# between the clustered pk tree (always authoritative) and a Waystone trail
+# (never authoritative). For an observed value it holds a superset of the
+# matching rows' primary keys, so `WHERE sym = 'AAPL'` reads those rows
+# instead of the relation, and an observed value with *no* matching rows
+# answers zero rows without opening the relation at all - which no advisory
+# structure can do.
+#
+# What it costs: one in-memory directory probe per cabined column per write
+# to that relation. That is the price of authority - absence needs a witness
+# - and it is why a Cabin is per column and opt-in rather than automatic.
+# A relation with no Cabin pays one integer test.
+#
+# On by default because it does **nothing** until a `CREATE CABIN ON t(col)`
+# or a `CABIN` clause on a column at `CREATE TABLE`. Off is what the contract
+# tests compare against: replies must be byte-identical either way, one value
+# at a time, because un-observing a value is always legal.
+#
+# The sets live in memory only and do not survive a restart - by design, not
+# omission: the completeness promise holds only while the write hook is live,
+# so a crash declares every Cabin unobserved and traffic rebuilds it.
+cabins = on
+
+# How much one Cabin may hold: distinct observed values, and entries per
+# value. `[PROPOSED]` - docs/feat-cabin.md section 8 leaves the budget open,
+# so these are configurable rather than compiled in, and nothing depends on
+# the numbers.
+#
+# What does depend on them is the rule they enforce: a cap **refuses to
+# observe** a value, and never truncates its entry set. A truncated set
+# marked authoritative would be missing rows a query is entitled to - a wrong
+# answer rather than a smaller one. So exceeding either limit returns that
+# value to the ordinary scan path, which is always legal.
+#
+# `cabin_max_values = 0` observes nothing, which switches the behaviour off
+# while keeping the catalog objects.
+cabin_max_values = 4096
+cabin_max_entries_per_value = 4096
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless
