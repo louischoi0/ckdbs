@@ -1,0 +1,53 @@
+loading: users=10,000 assets=10,000 accounts~20,000  (tables suffixed _1785744388_56318)
+  users      10,000 rows
+  assets     10,000 rows
+  accounts   20,012 rows   (load took 52.4s)
+running 120s: 4 trader process(es), 180 simulated days
+
+ckdbs benchmark - 27 columns, 20012 rows resident, 4 connections
+server 127.0.0.1:15630  table *_1785744388_56318
+
+phase                      ops         qps   mean us      p50      p95      p99       max   err
+-----------------------------------------------------------------------------------------------
+load-users               10000         750    1333.0   1069.1   2285.9   3104.9   11761.3     0
+load-assets              10000         765    1307.1   1064.2   2245.0   3109.5   11316.2     0
+load-accounts            20012         794    1259.1   1057.5   2204.2   2491.8   11612.9     0
+txn                      38607         322   12406.3  10489.8  25939.7  49085.0  151399.8     0
+trade-insert             77214         644    3810.1   3082.3   8002.8  17909.7  123442.1     0
+account-update           77214         644    2375.4   1998.2   5947.8  12010.1  110889.7     0
+
+  load-users: one row per customer
+  load-assets: instruments
+  load-accounts: 2+-1 per user
+  txn: one business transaction: 2 INSERT trades + 2 UPDATE accounts, latency measured across all four; qps here IS the TPS
+  trade-insert: heap chain tail append, WAL-logged
+  account-update: in-place overwrite after a clustered-btree descent, unlogged
+
+  the four statements are NOT atomic: there is no transaction manager and no BEGIN/COMMIT on this engine (docs/txn.md is specification, not code), so a failure between them leaves a trade recorded against balances that never moved. `torn` in the scenario block below counts those.
+  balances are computed client-side because UPDATE ... SET takes a literal, not an expression; each trader owns a disjoint account partition so no update can be lost between them, and --verify reads a sample back to confirm it.
+  money is int64 minor units - float/decimal columns are refused at CREATE TABLE under the fixed-length rule.
+  INSERT is the one logged statement (durability=group); UPDATE and CREATE TABLE are unlogged, so the balance moves survive only a SYNC or a clean shutdown. Do not measure this on tmpfs, where fsync is free and every durability class looks identical.
+  accounts/users/assets are BTREE and trades/user_periodic_profit are HEAP - a heap accounts relation would make every UPDATE a full chain scan, and the update number would then be a function of --users, not of the engine.
+
+business scenario
+------------------------------------------------------------------------
+  users 10,000   accounts 20,012   assets 10,000   simulated span 180 days in 120.0s wall
+  transaction = 2 INSERT trades + 2 UPDATE accounts, 4 trader process(es)
+
+  TPS                        321.7   committed transactions/sec
+  statements/sec           1,286.9   4 statements per transaction
+  committed                 38,607
+  torn                           0   partially applied; no rollback exists (docs/txn.md)
+  underfunded                   21   skipped before any statement was sent
+  per trader          #0:9,712  #1:9,547  #2:9,752  #3:9,596
+
+  reporting process   disabled (--no-profit): the TPS above has no concurrent reader
+
+  balance verify               200 accounts read back - all match
+
+  server-side, as measured by the server itself:
+    CREATE         5 stmts  p50      55 us  p95      96 us
+    INSERT   117,226 stmts  p50     965 us  p95    2277 us
+    SELECT       200 stmts  p50      27 us  p95      59 us
+    UPDATE    77,214 stmts  p50      21 us  p95      39 us
+  wrote /home/ec2-user/ckdbs/bench/results/business-stress-4t-noprofit.json
