@@ -85,12 +85,36 @@ std::string HexEncode(std::span<const std::byte> bytes) {
 
 }  // namespace
 
-DispatchOutcome CommandDispatcher::Dispatch(std::string_view line) {
+// ---- The error surface (docs/txn.md section 5, protocol.md section 11) ---
+//
+// A conflict is not an ordinary error: financial client libraries build
+// retry loops on the `retryable` bit, so its spelling is part of the
+// compatibility surface rather than a diagnostic. Every path that can
+// report one goes through here, so the shape cannot drift between them.
+//
+//     ERR TXN_CONFLICT retryable=1 row id=42 was written by transaction 118
+//
+// The `ERR ` prefix stays, because it is what drives the dispatcher's
+// Warn-vs-Debug logging one level up.
+std::string ErrorReply(const Status& status) {
+    if (status.code() == StatusCode::kTxnConflict) {
+        return "ERR TXN_CONFLICT retryable=1 " + status.message();
+    }
+    return "ERR " + status.message();
+}
+
+DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     // Read only when something might report it; a dispatcher with no
     // logger does no clock reads at all.
     const sched::MonoTimeNs started_ns = log_ == nullptr ? 0 : NowNs();
 
-    DispatchOutcome outcome = DispatchInner(line);
+    // A caller with no session of its own gets this dispatcher's, which is
+    // permanently in autocommit unless that caller opens a transaction on
+    // it. That is what makes `Dispatch(line)` mean exactly what it meant
+    // before transactions existed.
+    Session& active = session != nullptr ? *session : autocommit_session_;
+
+    DispatchOutcome outcome = DispatchInner(line, active);
     if (log_ == nullptr) return outcome;
 
     // A failed command reports at Warn and a successful one at Debug, so
@@ -115,11 +139,36 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line) {
     return outcome;
 }
 
-DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
+DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session& session) {
     auto [cmd, rest] = SplitFirstToken(line);
 
     if (cmd.empty()) {
         return {"ERR empty command", false};
+    }
+
+    // ---- The failed-txn gate (docs/txn.md section 10-8) -----------------
+    //
+    // A statement inside an explicit transaction failed, so the transaction
+    // can no longer be committed. Everything but the ways out is refused -
+    // a whitelist, so a statement added later is refused by default rather
+    // than admitted by omission.
+    if (session.failed() && !Session::AdmittedWhileFailed(cmd)) {
+        return {"ERR current transaction is aborted; commands are ignored until ROLLBACK",
+                false};
+    }
+
+    // ---- Transaction control --------------------------------------------
+    if (IEquals(cmd, "BEGIN") || IEquals(cmd, "START")) {
+        // `START TRANSACTION` is the SQL spelling; both reach one handler,
+        // which strips the noise word.
+        return HandleBegin(rest, session);
+    }
+    if (IEquals(cmd, "COMMIT")) return HandleCommit(session);
+    if (IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) return HandleRollback(session);
+    if (IEquals(cmd, "SET")) {
+        auto [sub, sub_rest] = SplitFirstToken(rest);
+        if (IEquals(sub, "ISOLATION")) return HandleSetIsolation(sub_rest, session);
+        return {"ERR unknown SET target; only SET ISOLATION LEVEL is supported", false};
     }
     if (IEquals(cmd, "PING")) {
         return {"PONG", false};
@@ -178,10 +227,10 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         return {"ERR only DROP PATTERN and DROP CABIN are supported", false};
     }
     if (IEquals(cmd, "INSERT")) {
-        return HandleInsert(Trim(line));
+        return HandleInsert(Trim(line), session);
     }
     if (IEquals(cmd, "SELECT")) {
-        return HandleSelect(Trim(line));
+        return HandleSelect(Trim(line), session);
     }
     // ANALYZE is a dispatcher prefix, not a parser keyword: it is stripped
     // here and the remainder goes down the ordinary SELECT path with stats
@@ -195,10 +244,13 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
         if (rest.empty()) {
             return {"ERR ANALYZE needs a statement to analyze", false};
         }
-        return HandleSelect(rest, /*analyze=*/true);
+        return HandleSelect(rest, session, /*analyze=*/true);
     }
     if (IEquals(cmd, "UPDATE")) {
-        return HandleUpdate(Trim(line));
+        return HandleUpdate(Trim(line), session);
+    }
+    if (IEquals(cmd, "DELETE")) {
+        return HandleDelete(Trim(line), session);
     }
     if (IEquals(cmd, "SYNC")) {
         return HandleSync();
@@ -210,7 +262,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line) {
     // word alone would hide that behind a generic refusal, and a client
     // would have no idea whether the word was unrecognized or declined.
     if (IEquals(cmd, "WITH")) {
-        return HandleSelect(Trim(line));
+        return HandleSelect(Trim(line), session);
     }
     return {"ERR unknown command", false};
 }
@@ -964,13 +1016,20 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
 
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
-                                    const std::vector<exec::AppendedSpill>& spills) {
+                                    const std::vector<exec::AppendedSpill>& spills,
+                                    bool own_txn) {
     if (wal_ == nullptr) return Status::OK();
 
-    const std::uint64_t txn_id = next_txn_id_++;
-    if (auto begun = wal_->Append(wal::RecordSpec{wal::RecordType::kTxnBegin, txn_id});
-        !begun.ok()) {
-        return begun.status();
+    // `own_txn` is false once a TransactionManager runs the transaction:
+    // it already appended TXN_BEGIN at Begin() and will append TXN_COMMIT
+    // at Commit(), so emitting a second pair here would describe two
+    // transactions where one happened - and recovery would believe it.
+    const std::uint64_t txn_id = own_txn ? next_txn_id_++ : trx_id;
+    if (own_txn) {
+        if (auto begun = wal_->Append(wal::RecordSpec{wal::RecordType::kTxnBegin, txn_id});
+            !begun.ok()) {
+            return begun.status();
+        }
     }
 
     // Every page the insert restructured, in the order the storage layer
@@ -1045,6 +1104,10 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     if (!rec.ok()) return rec.status();
     if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
 
+    // The commit and its wait belong to whoever owns the transaction. When
+    // a manager does, EndWrite() performs both.
+    if (!own_txn) return Status::OK();
+
     auto commit = wal_->Commit(txn_id, durability_);
     if (!commit.ok()) return commit.status();
 
@@ -1061,7 +1124,28 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     return Status::OK();
 }
 
-DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& session) {
+    // The write scope is opened before anything is parsed, so that a
+    // statement inside an explicit transaction re-mints its read view at
+    // the same boundary a SELECT does.
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return {"ERR " + opened.status().message(), false};
+    WriteScope scope = opened.value();
+
+    DispatchOutcome out = InsertInner(line, scope);
+
+    // The reply is the verdict, which is the same rule Dispatch() itself
+    // applies one level up. A statement that answered ERR did not happen as
+    // far as the client is concerned, so an autocommit scope unwinds it.
+    const bool failed = out.response.rfind("ERR ", 0) == 0;
+    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
+    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
+        return {ErrorReply(s), false};
+    }
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
@@ -1114,7 +1198,7 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
     // there, not here: they are storage invariants, not dispatcher policy.
     const bool is_btree = ta.clustered_type == catalog::ClusteredType::kBtree;
     auto placed = InsertIntoRelation(ta, id.value(), encoded.value(),
-                                     /*trx_id=*/catalog::kBootstrapXid);
+                                     /*trx_id=*/WriterId(scope));
     if (!placed.ok()) {
         if (logging(LogLevel::kWarn)) {
             log_->Warn(is_btree ? "btree" : "heap",
@@ -1138,12 +1222,24 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line) {
     NoteCabinWrite(ta, stmt.values, /*first_col_pos=*/1, id.value(), placed.value().page_id,
                    placed.value().slot);
 
+    // ---- The rollback trail (docs/txn.md section 3.6) -------------------
+    //
+    // An insert writes **no undo record**: a tuple with undo_ptr == 0 whose
+    // writer is invisible already means "no visible version", so the record
+    // would carry nothing. Rollback of an insert retires the slot, and this
+    // in-memory entry is what tells it which one.
+    if (scope.txn != nullptr) {
+        txn_->NoteInsert(*scope.txn, oid.value(), placed.value().page_id, placed.value().slot,
+                         id.value());
+    }
+
     // Logged after the page is mutated and before the client is answered -
     // see the ordering note in this class's header for why that is safe
     // here and what would break it.
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded.value(),
-                             /*trx_id=*/catalog::kBootstrapXid, spills);
+                             WriterId(scope), spills,
+                             /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("wal", "logging the insert of id " + std::to_string(id.value()) +
@@ -1457,7 +1553,8 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
                                               exec::TrailCollector* trail,
                                               const exec::TrailReplay* replay,
-                                              const std::optional<stats::InstanceKey>& instance) {
+                                              const std::optional<stats::InstanceKey>& instance,
+                                              const txn::Snapshot& snapshot) {
     exec::ExecStats stats;
     std::uint64_t rows = 0;
 
@@ -1467,7 +1564,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
             ++rows;
             return storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay, cabins_);
+        &stats, budget_, trail, replay, cabins_, &snapshot);
     if (!ran.ok()) {
         return {"ERR " + ran.message(), false};
     }
@@ -1503,7 +1600,14 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, bool analyze) {
+DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& session,
+                                                bool analyze) {
+    // The statement boundary. Under READ COMMITTED this is where a new read
+    // view is taken - so two SELECTs in one transaction can see different
+    // data, which is the level's entire definition.
+    auto snapshot = SnapshotFor(session);
+    if (!snapshot.ok()) return {"ERR " + snapshot.status().message(), false};
+
     // An explicit Parser rather than the free `Parse()`, so the statement's
     // fingerprint can be taken **from the parse itself** (parser.hpp). It
     // used to come from `FingerprintOf`, which lexed the text a second time -
@@ -1670,7 +1774,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, bool anal
     // parse, same compile, same executor - and a diagnostic that skipped
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
-    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance);
+    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value());
 
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
@@ -1695,7 +1799,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, bool anal
             }
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_);
+        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_, &snapshot.value());
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -1783,7 +1887,29 @@ void CommandDispatcher::RecordTrail(const std::optional<stats::InstanceKey>& ins
     recorder_->OnPatternResult(*instance, *trail, exec::StoredStatementClass(chain.klass));
 }
 
-DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return {"ERR " + opened.status().message(), false};
+    WriteScope scope = opened.value();
+
+    // The read view this UPDATE filters through. An UPDATE reads before it
+    // writes, and it must not see a row a SELECT in the same transaction
+    // would not - so it takes the snapshot the same way.
+    auto snapshot = SnapshotFor(session);
+    if (!snapshot.ok()) return {"ERR " + snapshot.status().message(), false};
+
+    DispatchOutcome out = UpdateInner(line, scope, snapshot.value());
+
+    const bool failed = out.response.rfind("ERR ", 0) == 0;
+    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
+    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
+        return {ErrorReply(s), false};
+    }
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope& scope,
+                                               const txn::Snapshot& snapshot) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
@@ -1848,6 +1974,23 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         auto tuple = page.ReadTuple(slot);
         if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
 
+        // ---- MVCC, the same predicate the step VM applies --------------
+        //
+        // UPDATE does not compile to a chain, so it is the one read path
+        // outside `AcceptTupleAt` (workplan A1). It filters here rather
+        // than reimplementing anything: Classify is the same function, and
+        // a row this reader cannot see is a row it must not write.
+        //
+        // **A version reached through the undo chain is not updatable.**
+        // Its bytes are not the bytes on the page, so an edit of it written
+        // back would lose whatever superseded it. kNeedsUndoWalk therefore
+        // falls through to the conflict check below rather than resolving -
+        // and that check is what rejects it, because a writer this view
+        // cannot see is either in flight or committed after it.
+        if (txn::Classify(snapshot.view, tuple.value()) == txn::Visibility::kNoVersion) {
+            return Status::OK();
+        }
+
         std::vector<exec::PendingSpill> spills;
         auto row = exec::DecodeRow(ta.schema, ta.layout, tuple.value().payload, &spills);
         if (!row.ok()) return row.status();
@@ -1878,9 +2021,21 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
             return s;
         }
         auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
-                                               frame, /*stats=*/nullptr, budget_);
+                                               frame, /*stats=*/nullptr, budget_, &snapshot);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
+
+        // ---- First-updater-wins (docs/txn.md section 5) ----------------
+        //
+        // Checked only once the row has qualified: a conflict is reported
+        // about a row this statement actually wanted, never about one it
+        // scanned past. No lock and no wait - the verdict is a pure
+        // function of the tuple's current writer and this view.
+        if (scope.txn != nullptr) {
+            if (Status s = txn_->CheckWriteConflict(*scope.txn, trx_id, id.value()); !s.ok()) {
+                return s;
+            }
+        }
 
         // The row as it stands *before* the SET list is applied, kept only
         // when this relation has a Cabin - it is what tells the write hook
@@ -1925,11 +2080,73 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
         // appended to the var-heap, and a store is free to move its frames
         // when it hands out a new page (the same reason heap_chain.cpp
         // re-fetches its tail after CreateNew()).
+        // ---- The before-image (docs/txn.md section 3.3) ----------------
+        //
+        // Written **before** the page is overwritten, and the tuple is
+        // stamped with the pointer it returns. A tuple carrying an
+        // undo_ptr whose record was never written is a version chain that
+        // dead-ends in garbage, so a failure here abandons the write.
+        std::uint64_t new_trx_id = trx_id;
+        std::uint64_t new_undo_ptr = undo_ptr;
+        if (scope.txn != nullptr) {
+            // The bytes as they stand, re-read rather than reconstructed:
+            // `row` has already had the SET list applied, and an image
+            // built from it would restore the *new* values.
+            auto live = page_store_.GetForRead(page_id);
+            if (!live.ok()) return live.status();
+            heap::PageView before_page(live.value());
+            auto before = before_page.ReadTuple(slot);
+            if (!before.ok()) return before.status();
+            const std::vector<std::byte> image(before.value().payload.begin(),
+                                               before.value().payload.end());
+
+            txn::UndoRecordFields rec{};
+            rec.prior_trx_id = trx_id;
+            rec.prior_undo_ptr = undo_ptr;
+            rec.target_page_id = page_id;
+            rec.target_slot = slot;
+            rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kOverwrite);
+
+            auto ptr = txn_->undo().Append(scope.txn->id(), rec, image);
+            if (!ptr.ok()) return ptr.status();
+            new_trx_id = scope.txn->id();
+            new_undo_ptr = ptr.value();
+
+            // What rollback compensates from. Recorded before the
+            // mutation, so an abort can undo a write a later failure
+            // interrupted.
+            txn_->NoteOverwrite(*scope.txn, ta.oid, page_id, slot, id.value(), trx_id, undo_ptr,
+                                image);
+        }
+
         auto page_again = page_store_.Get(page_id);
         if (!page_again.ok()) return page_again.status();
         heap::PageView fresh(page_again.value());
-        if (Status s = fresh.OverwriteTuple(slot, encoded.value(), trx_id, undo_ptr); !s.ok()) {
+        if (Status s = fresh.OverwriteTuple(slot, encoded.value(), new_trx_id, new_undo_ptr);
+            !s.ok()) {
             return s;
+        }
+
+        // ---- HEAP_OVERWRITE (wal.md section 5.2) -----------------------
+        //
+        // UPDATE was unlogged **entirely** before this: it mutated a page
+        // and told the log nothing, so a crash lost the change with no
+        // record that it had happened. Logged now, after the undo record
+        // it points at - the ordering the var-heap already uses, and for
+        // the same reason: a replay must never reach a tuple whose pointer
+        // resolves to nothing.
+        if (wal_ != nullptr && scope.txn != nullptr) {
+            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());
+            const wal::HeapWritePayload fields{
+                new_trx_id, new_undo_ptr, slot,
+                static_cast<std::uint16_t>(encoded.value().size())};
+            if (auto n = wal::EncodeHeapWrite(buf, fields, encoded.value()); !n.ok()) {
+                return n.status();
+            }
+            auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kHeapOverwrite, scope.txn->id(), page_id}, buf);
+            if (!rec.ok()) return rec.status();
+            if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
         }
 
         // ---- The Cabin witness, UPDATE half (docs/feat-cabin.md §5) -----
@@ -1973,7 +2190,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
             if (bytes.ok()) {
                 heap::PageView page(bytes.value());
                 if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
-                    return {"ERR " + s.message(), false};
+                    return {ErrorReply(s), false};
                 }
                 if (logging(LogLevel::kTrace)) {
                     log_->Trace("query", "pk " + std::to_string(*pk) + " updated at " +
@@ -1995,10 +2212,13 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
             return storage::VisitControl::kContinue;
         });
     if (!scan.ok()) {
-        // Partial by design: rows updated before the failure stay updated.
-        // There is no transaction to roll back into yet - the same
-        // exposure the single-page version had, now spread over a chain.
-        return {"ERR " + scan.message(), false};
+        // Partial **within the statement**, which is section 6's stated
+        // rule rather than an exposure now. In autocommit EndWrite() aborts
+        // this scope, so the rows already updated are compensated and the
+        // statement is atomic after all. Inside an explicit transaction
+        // they stay written and the session is poisoned - the client must
+        // ROLLBACK, which undoes all of them.
+        return {ErrorReply(scan), false};
     }
 
     if (updated > 0 && logging(LogLevel::kTrace)) {
@@ -2007,6 +2227,387 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line) {
                                 std::to_string(oid.value()));
     }
     return {"UPDATED " + std::to_string(updated), false};
+}
+
+// ---- Transaction control (docs/txn.md sections 1, 6) ---------------------
+
+DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& session) {
+    if (txn_ == nullptr) {
+        return {"ERR this server was built without a transaction manager", false};
+    }
+    if (session.in_explicit_txn()) {
+        // Not silently ignored, and not a nested transaction: there are no
+        // savepoints (section 9), so a second BEGIN has no meaning that is
+        // not a guess about which one a later COMMIT ends.
+        return {"ERR a transaction is already open; COMMIT or ROLLBACK first", false};
+    }
+
+    // `BEGIN [TRANSACTION] [ISOLATION LEVEL <name>]`. The level given here
+    // overrides the session's for this transaction only - the third rung of
+    // the same precedence chain `durability` uses.
+    txn::IsolationLevel level = session.isolation();
+    auto [word, rest] = SplitFirstToken(args);
+    if (IEquals(word, "TRANSACTION") || IEquals(word, "WORK")) {
+        std::tie(word, rest) = SplitFirstToken(rest);
+    }
+    if (!word.empty()) {
+        if (!IEquals(word, "ISOLATION")) {
+            return {"ERR expected ISOLATION LEVEL after BEGIN, got '" + std::string(word) + "'",
+                    false};
+        }
+        auto [level_word, name] = SplitFirstToken(rest);
+        if (!IEquals(level_word, "LEVEL")) {
+            return {"ERR expected LEVEL after ISOLATION", false};
+        }
+        auto parsed = txn::ParseIsolationLevel(Trim(name));
+        if (!parsed.ok()) return {"ERR " + parsed.status().message(), false};
+        level = parsed.value();
+    }
+
+    auto begun = txn_->Begin(level);
+    if (!begun.ok()) return {"ERR " + begun.status().message(), false};
+    session.Adopt(begun.value());
+
+    return {"BEGIN trx_id=" + std::to_string(begun.value()->id()) + " isolation=" +
+                txn::IsolationLevelName(level),
+            false};
+}
+
+DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
+    if (!session.in_explicit_txn()) {
+        return {"ERR no transaction is open", false};
+    }
+    if (session.failed()) {
+        // Reachable only through the gate's whitelist, which does not admit
+        // COMMIT - kept as a second line because "commit a failed
+        // transaction" must never quietly succeed.
+        return {"ERR current transaction is aborted; ROLLBACK", false};
+    }
+
+    txn::Transaction* txn = session.transaction();
+    const std::uint64_t id = txn->id();
+    auto committed = txn_->Commit(*txn, durability_);
+
+    // The session leaves the transaction either way: a commit that failed
+    // to log is not a transaction the client may keep writing into.
+    session.Finish();
+    if (!committed.ok()) {
+        txn_->Release(*txn);
+        return {"ERR " + committed.status().message(), false};
+    }
+
+    // The durability wait the client is owed, for the same reason
+    // LogInsert() takes it: kGroup staged the commit for the next drain,
+    // and the acknowledgement means "durable".
+    if (wal_ != nullptr && durability_ == wal::DurabilityClass::kGroup &&
+        !wal_->IsDurable(committed.value())) {
+        if (Status s = wal_->DrainOnce(); !s.ok()) {
+            txn_->Release(*txn);
+            return {"ERR " + s.message(), false};
+        }
+        if (Status s = wal_->EnsureDurable(committed.value()); !s.ok()) {
+            txn_->Release(*txn);
+            return {"ERR " + s.message(), false};
+        }
+    }
+    txn_->Release(*txn);
+    return {"COMMIT trx_id=" + std::to_string(id), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
+    if (!session.in_explicit_txn()) {
+        return {"ERR no transaction is open", false};
+    }
+    txn::Transaction* txn = session.transaction();
+    const std::uint64_t id = txn->id();
+
+    Status aborted = txn_->Abort(*txn);
+    session.Finish();
+    txn_->Release(*txn);
+    if (!aborted.ok()) return {"ERR " + aborted.message(), false};
+    return {"ROLLBACK trx_id=" + std::to_string(id), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Session& session) {
+    auto [level_word, name] = SplitFirstToken(args);
+    if (!IEquals(level_word, "LEVEL")) {
+        return {"ERR expected LEVEL after SET ISOLATION", false};
+    }
+    auto parsed = txn::ParseIsolationLevel(Trim(name));
+    if (!parsed.ok()) return {"ERR " + parsed.status().message(), false};
+
+    // Applies to the *next* transaction, never the open one: changing what
+    // a running transaction's read view means halfway through would make
+    // its earlier statements unexplainable.
+    if (session.in_explicit_txn()) {
+        return {"ERR cannot change the isolation level inside a transaction", false};
+    }
+    session.set_isolation(parsed.value());
+    return {std::string("SET isolation=") + txn::IsolationLevelName(parsed.value()), false};
+}
+
+// ---- Snapshots and the write scope ---------------------------------------
+
+StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
+    if (txn_ == nullptr) return txn::Snapshot{};  // sees everything, as before
+
+    if (session.in_explicit_txn()) {
+        txn::Transaction* txn = session.transaction();
+        // The statement boundary. Under READ COMMITTED this re-mints;
+        // under REPEATABLE READ it is a no-op, and that one branch is the
+        // whole difference between the levels.
+        if (Status s = txn_->StartStatement(*txn); !s.ok()) return s;
+        return txn_->SnapshotFor(*txn);
+    }
+
+    // Autocommit: a view over the committed state, owned by no transaction.
+    auto view = txn_->MintReadView(txn::kNoTrxId);
+    if (!view.ok()) return view.status();
+    txn::Snapshot snap;
+    snap.view = view.value();
+    snap.undo = &txn_->undo();
+    return snap;
+}
+
+StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& session) {
+    WriteScope scope;
+    if (txn_ == nullptr) return scope;  // no manager: kBootstrapXid, as before
+
+    if (session.in_explicit_txn()) {
+        scope.txn = session.transaction();
+        scope.owned = false;
+        if (Status s = txn_->StartStatement(*scope.txn); !s.ok()) return s;
+        return scope;
+    }
+
+    auto begun = txn_->Begin(session.isolation());
+    if (!begun.ok()) return begun.status();
+    scope.txn = begun.value();
+    scope.owned = true;
+    return scope;
+}
+
+Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const Status& result) {
+    if (scope.txn == nullptr) return Status::OK();
+
+    if (!scope.owned) {
+        // Inside an explicit transaction. A failure does **not** unwind:
+        // failure atomicity is per transaction, not per statement (section
+        // 6), so the rows already written stay and the client must
+        // ROLLBACK. That is the deviation from SQL savepoints would close.
+        if (!result.ok()) session.Poison();
+        return Status::OK();
+    }
+
+    // Autocommit: this statement is the whole transaction, so behaviour
+    // here *is* statement-atomic.
+    if (!result.ok()) {
+        Status aborted = txn_->Abort(*scope.txn);
+        txn_->Release(*scope.txn);
+        scope.txn = nullptr;
+        return aborted;
+    }
+
+    auto committed = txn_->Commit(*scope.txn, durability_);
+    if (!committed.ok()) {
+        txn_->Release(*scope.txn);
+        scope.txn = nullptr;
+        return committed.status();
+    }
+    if (wal_ != nullptr && durability_ == wal::DurabilityClass::kGroup &&
+        !wal_->IsDurable(committed.value())) {
+        if (Status s = wal_->DrainOnce(); !s.ok()) {
+            txn_->Release(*scope.txn);
+            scope.txn = nullptr;
+            return s;
+        }
+        if (Status s = wal_->EnsureDurable(committed.value()); !s.ok()) {
+            txn_->Release(*scope.txn);
+            scope.txn = nullptr;
+            return s;
+        }
+    }
+    txn_->Release(*scope.txn);
+    scope.txn = nullptr;
+    return Status::OK();
+}
+
+std::uint64_t CommandDispatcher::WriterId(const WriteScope& scope) {
+    // No manager means no transaction, and every row carries the
+    // always-visible id - which is exactly what the engine did before
+    // MVCC, and why a dispatcher without one behaves identically.
+    return scope.txn != nullptr ? scope.txn->id() : catalog::kBootstrapXid;
+}
+
+DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& session) {
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return {ErrorReply(opened.status()), false};
+    WriteScope scope = opened.value();
+
+    auto snapshot = SnapshotFor(session);
+    if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false};
+
+    DispatchOutcome out = DeleteInner(line, scope, snapshot.value());
+
+    const bool failed = out.response.rfind("ERR ", 0) == 0;
+    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
+    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
+        return {ErrorReply(s), false};
+    }
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope& scope,
+                                               const txn::Snapshot& snapshot) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) return {"ERR " + parsed.status().message(), false};
+    if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
+        return {"ERR expected a DELETE statement", false};
+    }
+    const auto& stmt = std::get<parser::DeleteStmt>(parsed.value());
+
+    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) return {"ERR " + oid.status().message(), false};
+    auto access = catalog_.InitTableAccess(oid.value());
+    if (!access.ok()) return {"ERR " + access.status().message(), false};
+    const catalog::TableAccess& ta = *access.value();
+
+    // The same WHERE compilation UPDATE uses, so a DELETE's predicate means
+    // exactly what the SELECT that found the rows meant.
+    auto predicates = exec::CompileWhere(catalog_, ta, stmt.table_name, stmt.where);
+    if (!predicates.ok()) return {"ERR " + predicates.status().message(), false};
+    const std::vector<const catalog::Schema*> schemas = {&ta.schema};
+    exec::ChainFrame frame;
+    frame.Open(schemas, /*parent=*/nullptr);
+
+    std::uint32_t deleted = 0;
+
+    auto mark = [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
+        auto tuple = page.ReadTuple(slot);
+        if (!tuple.ok()) return Status::OK();  // dead or out-of-range slot - skip
+
+        // Already delete-marked, or invisible to this reader: either way
+        // there is no version here to delete.
+        if (txn::Classify(snapshot.view, tuple.value()) == txn::Visibility::kNoVersion) {
+            return Status::OK();
+        }
+
+        std::vector<exec::PendingSpill> frame_spills;
+        if (Status s = exec::DecodeRowInto(ta.schema, ta.layout, tuple.value().payload,
+                                            frame.SlotsFor(0), &frame_spills);
+            !s.ok()) {
+            return s;
+        }
+        auto id = exec::RowKeystoneId(tuple.value().payload);
+        if (!id.ok()) return id.status();
+        const std::uint64_t trx_id = tuple.value().trx_id;
+        const std::uint64_t undo_ptr = tuple.value().undo_ptr;
+
+        // Resolved only now, after everything that needed the tuple's own
+        // bytes is done with them - the same R1 split every read path uses.
+        if (Status s = exec::ResolveSpills(page_store_, frame_spills, frame.SlotsFor(0));
+            !s.ok()) {
+            return s;
+        }
+        auto matched = exec::EvaluateConjuncts(catalog_, page_store_, schemas, predicates.value(),
+                                               frame, /*stats=*/nullptr, budget_, &snapshot);
+        if (!matched.ok()) return matched.status();
+        if (!matched.value()) return Status::OK();
+
+        if (scope.txn != nullptr) {
+            if (Status s = txn_->CheckWriteConflict(*scope.txn, trx_id, id.value()); !s.ok()) {
+                return s;
+            }
+        }
+
+        std::uint64_t new_trx_id = trx_id;
+        std::uint64_t new_undo_ptr = undo_ptr;
+        if (scope.txn != nullptr) {
+            // **An empty image.** A delete-mark changes no tuple bytes, so
+            // there are none to restore; stepping back over this record
+            // keeps whatever payload the reader already had (section 4.3).
+            txn::UndoRecordFields rec{};
+            rec.prior_trx_id = trx_id;
+            rec.prior_undo_ptr = undo_ptr;
+            rec.target_page_id = page_id;
+            rec.target_slot = slot;
+            rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kDeleteMark);
+
+            auto ptr = txn_->undo().Append(scope.txn->id(), rec, {});
+            if (!ptr.ok()) return ptr.status();
+            new_trx_id = scope.txn->id();
+            new_undo_ptr = ptr.value();
+
+            txn_->NoteDeleteMark(*scope.txn, ta.oid, page_id, slot, id.value(), trx_id, undo_ptr);
+        }
+
+        auto again = page_store_.Get(page_id);
+        if (!again.ok()) return again.status();
+        heap::PageView fresh(again.value());
+
+        // Two writes, and both are needed: the header carries the link back
+        // to the version this supersedes, and the slot flag is what makes
+        // the row gone for newer readers. DeleteMark re-stamps the writer,
+        // so the header write goes first.
+        auto reread = fresh.ReadTuple(slot);
+        if (!reread.ok()) return reread.status();
+        const std::vector<std::byte> same(reread.value().payload.begin(),
+                                          reread.value().payload.end());
+        if (Status s = fresh.OverwriteTuple(slot, same, new_trx_id, new_undo_ptr); !s.ok()) {
+            return s;
+        }
+        if (Status s = fresh.DeleteMark(slot, new_trx_id); !s.ok()) return s;
+
+        if (wal_ != nullptr && scope.txn != nullptr) {
+            std::array<std::byte, wal::kDeleteMarkPayloadSize> buf{};
+            const wal::HeapDeleteMarkPayload fields{new_trx_id, slot};
+            if (auto n = wal::EncodeHeapDeleteMark(buf, fields); !n.ok()) return n.status();
+            auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kHeapDeleteMark, scope.txn->id(), page_id}, buf);
+            if (!rec.ok()) return rec.status();
+            if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
+        }
+
+        // No Cabin write hook: removal is forbidden (feat-cabin.md section
+        // 5), because an older snapshot may still match this row through
+        // the undo chain. The entry stays and the read-time check subtracts
+        // it - which is now the visibility predicate as well as the key
+        // re-check.
+
+        ++deleted;
+        return Status::OK();
+    };
+
+    // The same point-lookup fast path SELECT and UPDATE take, and the same
+    // contract: the locator picks the slot to look at, never which rows
+    // match, so falling through to the scan produces the identical answer.
+    if (std::optional<std::uint64_t> pk = PkEqualityTarget(ta, stmt.where); pk.has_value()) {
+        const PkLookup found = LocateByPk(ta, *pk);
+        if (found.kind == PkLookup::Kind::kAbsent) {
+            return {"DELETED 0", false};
+        }
+        if (found.kind == PkLookup::Kind::kAt) {
+            auto bytes = page_store_.Get(found.at.page_id);
+            if (bytes.ok()) {
+                heap::PageView page(bytes.value());
+                if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
+                    return {ErrorReply(s), false};
+                }
+                return {"DELETED " + std::to_string(deleted), false};
+            }
+        }
+    }
+
+    Status scan = VisitRelation(
+        ta, storage::PageAccess::kWrite,
+        [&](PageId page_id, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            if (Status s = mark(page_id, page, slot); !s.ok()) return s;
+            return storage::VisitControl::kContinue;
+        });
+    if (!scan.ok()) return {ErrorReply(scan), false};
+
+    return {"DELETED " + std::to_string(deleted), false};
 }
 
 }  // namespace kds::server

@@ -26,6 +26,11 @@ add_library(kds
     src/storage/btree/btree_page.cpp
     src/storage/btree/btree.cpp
     src/storage/free_map.cpp
+    src/txn/undo_page.cpp
+    src/txn/undo_log.cpp
+    src/txn/visibility.cpp
+    src/txn/trx_id.cpp
+    src/txn/manager.cpp
     src/storage/in_memory_page_store.cpp
     src/storage/device_page_store.cpp
     src/storage/page_mgr/page_mgr.cpp

@@ -232,3 +232,19 @@ log_file = kdb.log
 # `debug` includes a line per checkpoint, which is the cheapest way to see
 # whether the cadence is actually running.
 log_level = info
+
+# The isolation level a session starts at, and therefore the level an
+# autocommit statement runs at (docs/txn.md section 1).
+#
+#   read committed    (default) a read view per statement
+#   repeatable read             a read view per transaction
+#
+# READ COMMITTED is the default for a reason specific to this engine rather
+# than convention: under first-updater-wins with no waiting, REPEATABLE READ
+# holds one read view for a whole transaction and so turns more concurrent
+# writes into retryable aborts. SERIALIZABLE is out of scope, not unset.
+#
+# This is the server rung of a three-level chain - a session may override it
+# with `SET ISOLATION LEVEL`, and one transaction with
+# `BEGIN ISOLATION LEVEL`.
+# isolation = read committed

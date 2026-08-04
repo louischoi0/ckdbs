@@ -80,6 +80,13 @@ private:
         std::string inbox;
         std::string outbox;
         bool want_writable = false;
+
+        // This connection's transaction state (session.hpp). Per
+        // connection and not per server: two clients on one dispatcher must
+        // not see each other's open transaction, which is exactly what
+        // docs/txn.md section 10-8 requires and what a shared dispatcher
+        // could not provide before.
+        Session session;
     };
 
     explicit TcpServer(int fd) noexcept : listen_fd_(fd) {}

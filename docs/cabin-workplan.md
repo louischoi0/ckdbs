@@ -49,7 +49,12 @@ epoch must land with relayout, whichever comes first. Cabin is now the
 **second** subsystem waiting on it.
 
 **There is no transaction manager.** "Per snapshot" degenerates to "the
-tuple exists and still matches". The append-only write rule is built for the
+tuple exists and still matches". **Superseded 2026-08-04**: `docs/txn.md`
+is built, and the read path now applies the visibility predicate at
+`ChainRunner::AcceptTupleAt` — which every Cabin resolve funnels through.
+"Per snapshot" is literal now, and §1's surplus is subtracted by MVCC as
+well as by the key re-check. The append-only write rule did not change,
+because it was built for the snapshot world from the start. The append-only write rule is built for the
 snapshot world anyway, because retrofitting removal-is-forbidden after the
 fact is how a structure ends up with a hot-path delete it cannot take back.
 

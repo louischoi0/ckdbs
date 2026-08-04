@@ -1,0 +1,344 @@
+#include "kds/txn/manager.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <string>
+
+#include "kds/storage/heap/heap_page.hpp"
+#include "kds/wal/payload.hpp"
+#include "kds/wal/record.hpp"
+
+namespace kds::txn {
+
+namespace {
+
+std::string Folded(std::string_view text) {
+    std::string out(text);
+    for (char& c : out) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (c == '-' || c == '_') c = ' ';
+    }
+    // Collapse runs of spaces, so "repeatable  read" parses like the
+    // one-space spelling. A config file is written by hand.
+    std::string collapsed;
+    bool in_space = false;
+    for (char c : out) {
+        if (c == ' ') {
+            if (!in_space && !collapsed.empty()) collapsed.push_back(' ');
+            in_space = true;
+            continue;
+        }
+        in_space = false;
+        collapsed.push_back(c);
+    }
+    while (!collapsed.empty() && collapsed.back() == ' ') collapsed.pop_back();
+    return collapsed;
+}
+
+}  // namespace
+
+const char* IsolationLevelName(IsolationLevel level) noexcept {
+    switch (level) {
+        case IsolationLevel::kReadCommitted:
+            return "read committed";
+        case IsolationLevel::kRepeatableRead:
+            return "repeatable read";
+    }
+    return "unknown";
+}
+
+StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
+    const std::string folded = Folded(text);
+    if (folded == "read committed" || folded == "rc") return IsolationLevel::kReadCommitted;
+    if (folded == "repeatable read" || folded == "rr") return IsolationLevel::kRepeatableRead;
+    if (folded == "serializable") {
+        // Out of scope and **not** [OPEN] (section 1): it needs predicate
+        // locking or SSI read-tracking, neither of which fits a design with
+        // no lock manager and no reader registration. Named explicitly so
+        // the refusal says why rather than "unknown level".
+        return Status::Unsupported(
+            "SERIALIZABLE is out of scope: it needs predicate locking or read-tracking, and "
+            "this engine has neither a lock manager nor reader registration");
+    }
+    return Status::InvalidArgument("unknown isolation level '" + std::string(text) +
+                                   "'; expected 'read committed' or 'repeatable read'");
+}
+
+StatusOr<ReadView> TransactionManager::MintReadView(std::uint64_t own_trx_id) {
+    ReadView view;
+    // Exclusive high-water mark over ids **already handed out**: an id the
+    // sequence has not issued cannot have written anything.
+    view.up_to_trx_id = ids_.peek();
+    view.own_trx_id = own_trx_id;
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (!t->active_) continue;
+        if (t->id_ == own_trx_id) continue;  // my own writes are always mine
+        if (Status s = view.AddInFlight(t->id_); !s.ok()) return s;
+    }
+    return view;
+}
+
+StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
+    if (ActiveCount() >= kMaxTrackedLiveTxns) {
+        return Status::OutOfSpace("more than " + std::to_string(kMaxTrackedLiveTxns) +
+                                  " live transactions; a read view cannot track them");
+    }
+    auto id = ids_.Next();
+    if (!id.ok()) return id.status();
+
+    auto txn = std::make_unique<Transaction>();
+    txn->id_ = id.value();
+    txn->isolation_ = isolation;
+    txn->active_ = true;
+
+    // Minted *after* the transaction is registered nowhere yet, so it does
+    // not appear in its own in-flight set - which it must not, because a
+    // transaction always sees its own writes.
+    auto view = MintReadView(id.value());
+    if (!view.ok()) return view.status();
+    txn->view_ = view.value();
+
+    if (wal_ != nullptr) {
+        if (auto begun = wal_->Append(wal::RecordSpec{wal::RecordType::kTxnBegin, id.value()});
+            !begun.ok()) {
+            return begun.status();
+        }
+    }
+
+    live_.push_back(std::move(txn));
+    return live_.back().get();
+}
+
+Status TransactionManager::StartStatement(Transaction& txn) {
+    if (!txn.active_) {
+        return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
+                                       " is no longer active");
+    }
+    // **The entire difference between the two levels**, in one branch:
+    // REPEATABLE READ holds the view it took at BEGIN, READ COMMITTED takes
+    // a fresh one so the statement sees everything committed before it
+    // began.
+    if (txn.isolation_ == IsolationLevel::kRepeatableRead) return Status::OK();
+
+    auto view = MintReadView(txn.id_);
+    if (!view.ok()) return view.status();
+    txn.view_ = view.value();
+    return Status::OK();
+}
+
+Status TransactionManager::CheckWriteConflict(const Transaction& txn, std::uint64_t cur,
+                                              std::uint64_t pk) const {
+    if (cur == kAlwaysVisibleTrxId) return Status::OK();
+    if (cur == txn.id_) {
+        // My own earlier write. The new undo record links to the old one,
+        // so a rollback unwinds both and lands on the original.
+        return Status::OK();
+    }
+    if (txn.view_.Visible(cur)) return Status::OK();
+
+    // Either still in flight, or committed after my read view. Under
+    // REPEATABLE READ this is exactly first-updater-wins; under READ
+    // COMMITTED the arm can still fire in the narrow window between a
+    // statement's snapshot and its write, and KDS aborts retryably rather
+    // than re-reading (section 5).
+    //
+    // The message is part of the wire contract, not a diagnostic.
+    return Status::TxnConflict("row id=" + std::to_string(pk) + " was written by transaction " +
+                               std::to_string(cur));
+}
+
+void TransactionManager::NoteInsert(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
+                                    std::uint16_t slot, std::uint64_t pk) {
+    TrailEntry entry;
+    entry.action = TrailAction::kInsert;
+    entry.rel_oid = rel_oid;
+    entry.page_id = page_id;
+    entry.slot = slot;
+    entry.pk = pk;
+    txn.trail_.push_back(std::move(entry));
+}
+
+void TransactionManager::NoteOverwrite(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
+                                       std::uint16_t slot, std::uint64_t pk,
+                                       std::uint64_t prior_trx_id, std::uint64_t prior_undo_ptr,
+                                       std::span<const std::byte> image) {
+    TrailEntry entry;
+    entry.action = TrailAction::kOverwrite;
+    entry.rel_oid = rel_oid;
+    entry.page_id = page_id;
+    entry.slot = slot;
+    entry.pk = pk;
+    entry.prior_trx_id = prior_trx_id;
+    entry.prior_undo_ptr = prior_undo_ptr;
+    entry.image.assign(image.begin(), image.end());
+    txn.trail_.push_back(std::move(entry));
+}
+
+void TransactionManager::NoteDeleteMark(Transaction& txn, std::uint32_t rel_oid, PageId page_id,
+                                        std::uint16_t slot, std::uint64_t pk,
+                                        std::uint64_t prior_trx_id,
+                                        std::uint64_t prior_undo_ptr) {
+    TrailEntry entry;
+    entry.action = TrailAction::kDeleteMark;
+    entry.rel_oid = rel_oid;
+    entry.page_id = page_id;
+    entry.slot = slot;
+    entry.pk = pk;
+    entry.prior_trx_id = prior_trx_id;
+    entry.prior_undo_ptr = prior_undo_ptr;
+    txn.trail_.push_back(std::move(entry));
+}
+
+StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
+                                              wal::DurabilityClass durability) {
+    if (!txn.active_) {
+        return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
+                                       " is no longer active");
+    }
+    wal::Lsn lsn = wal::kNoLsn;
+    if (wal_ != nullptr) {
+        auto committed = wal_->Commit(txn.id_, durability);
+        if (!committed.ok()) return committed.status();
+        lsn = committed.value();
+    }
+
+    // Dropped, not kept: a committed write needs no compensation, and the
+    // undo records stay behind for readers whose snapshots predate it.
+    txn.trail_.clear();
+    txn.active_ = false;
+    undo_.Forget(txn.id_);
+    return lsn;
+}
+
+Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx_id) {
+    auto bytes = store_.Get(entry.page_id);
+    if (!bytes.ok()) return bytes.status();
+    heap::PageView page(bytes.value());
+
+    switch (entry.action) {
+        case TrailAction::kInsert: {
+            if (Status s = page.RetireSlot(entry.slot); !s.ok()) return s;
+            if (wal_ == nullptr) return Status::OK();
+            std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
+            const wal::SlotRetirePayload fields{entry.slot};
+            if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
+            // **The aborting transaction's id, not kNoTxnId.** payload.hpp
+            // says no transaction owns a SLOT_RETIRE; that is true of a
+            // purge pass and false of a rollback compensation, and stamping
+            // kNoTxnId would hide the rollback from recovery's analysis
+            // phase (section 6's amendment).
+            auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kSlotRetire, trx_id, entry.page_id}, buf);
+            if (!rec.ok()) return rec.status();
+            return store_.StampPageLsn(entry.page_id, rec.value());
+        }
+
+        case TrailAction::kOverwrite: {
+            if (Status s = page.OverwriteTuple(entry.slot, entry.image, entry.prior_trx_id,
+                                                entry.prior_undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            if (wal_ == nullptr) return Status::OK();
+            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + entry.image.size());
+            const wal::HeapWritePayload fields{entry.prior_trx_id, entry.prior_undo_ptr,
+                                               entry.slot,
+                                               static_cast<std::uint16_t>(entry.image.size())};
+            if (auto n = wal::EncodeHeapWrite(buf, fields, entry.image); !n.ok()) {
+                return n.status();
+            }
+            auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kHeapOverwrite, trx_id, entry.page_id}, buf);
+            if (!rec.ok()) return rec.status();
+            return store_.StampPageLsn(entry.page_id, rec.value());
+        }
+
+        case TrailAction::kDeleteMark: {
+            if (Status s = page.ClearDeleteMark(entry.slot, entry.prior_trx_id,
+                                                 entry.prior_undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            if (wal_ == nullptr) return Status::OK();
+            std::array<std::byte, wal::kDeleteMarkPayloadSize> buf{};
+            const wal::HeapDeleteMarkPayload fields{entry.prior_trx_id, entry.slot};
+            if (auto n = wal::EncodeHeapDeleteMark(buf, fields); !n.ok()) return n.status();
+            auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kHeapDeleteMark, trx_id, entry.page_id}, buf);
+            if (!rec.ok()) return rec.status();
+            return store_.StampPageLsn(entry.page_id, rec.value());
+        }
+    }
+    return Status::Corruption("trail entry with an unknown action");
+}
+
+Status TransactionManager::Abort(Transaction& txn) {
+    if (!txn.active_) return Status::OK();  // aborting twice is not an error
+
+    // **In reverse**, and as ordinary logged page mutations - the shape
+    // wal.md section 12-3 asks for, so recovery-driven rollback later
+    // reuses this path verbatim.
+    Status first_failure = Status::OK();
+    for (std::size_t i = txn.trail_.size(); i > 0; --i) {
+        if (Status s = Compensate(txn.trail_[i - 1], txn.id_); !s.ok()) {
+            // Keep unwinding. A compensation that fails leaves one row
+            // wrong; stopping here would leave every earlier row wrong too,
+            // and there is nothing to retry into.
+            if (first_failure.ok()) first_failure = s;
+        }
+    }
+
+    if (wal_ != nullptr) {
+        // No durability wait: a transaction whose abort record did not
+        // survive is a transaction with no commit record, which recovery
+        // rolls back anyway. The record exists to save recovery the work,
+        // not to make the abort true.
+        if (auto aborted = wal_->Abort(txn.id_); !aborted.ok() && first_failure.ok()) {
+            first_failure = aborted.status();
+        }
+    }
+
+    txn.trail_.clear();
+    txn.active_ = false;
+    // Undo pages are **not** freed; purge is a non-goal (section 9).
+    undo_.Forget(txn.id_);
+    return first_failure;
+}
+
+std::vector<std::uint64_t> TransactionManager::Snapshot() const {
+    // Active only: a transaction that has ended but whose handle the caller
+    // has not dropped yet is not in flight, and listing it would make
+    // recovery roll back writes that were committed.
+    std::vector<std::uint64_t> ids;
+    ids.reserve(live_.size());
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (t->active_) ids.push_back(t->id_);
+    }
+    return ids;
+}
+
+void TransactionManager::Release(Transaction& txn) {
+    // Ending a transaction does **not** free it: the caller holds a
+    // pointer, and Commit/Abort deliberately leave the object standing so
+    // that reading its id or its level afterwards is defined. This is the
+    // separate step that frees it, called when the holder drops the handle.
+    //
+    // An inactive transaction is already invisible to MintReadView, so a
+    // handle held past its end costs memory and never correctness.
+    if (txn.active_) return;  // still running; freeing it now would dangle
+    live_.erase(std::remove_if(live_.begin(), live_.end(),
+                               [&](const std::unique_ptr<Transaction>& t) {
+                                   return t.get() == &txn;
+                               }),
+                live_.end());
+}
+
+std::size_t TransactionManager::ActiveCount() const noexcept {
+    std::size_t n = 0;
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (t->active_) ++n;
+    }
+    return n;
+}
+
+}  // namespace kds::txn

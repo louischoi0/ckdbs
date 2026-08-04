@@ -127,6 +127,12 @@ inline constexpr PageId kCatalogPageCabins = 12;
 // rather than one from a real transaction.
 inline constexpr std::uint64_t kBootstrapXid = 1;
 
+// The first id a real transaction may be issued (docs/txn.md section 4.2).
+// 2, so kBootstrapXid is never reissued - which is what makes it safe for
+// every read view to trust that id unconditionally and permanently.
+inline constexpr std::uint64_t kFirstUserTrxId = 2;
+static_assert(kFirstUserTrxId > kBootstrapXid);
+
 // sys.columns/sys.types `type_val` tags for the scalar types Bootstrap()
 // registers. Placeholder values (no external format they must match) but
 // named rather than left as magic numbers now that row_codec.cpp switches

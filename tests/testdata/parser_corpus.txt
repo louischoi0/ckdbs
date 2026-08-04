@@ -318,8 +318,13 @@ InvalidArgument	-	-	(SELECT * FROM t)
 # Only patterns can be dropped; there is no DROP TABLE.
 Unsupported	-	-	DROP TABLE t
 InvalidArgument	-	-	SELECTX * FROM t
-# [V10] DELETE, [V12] session and admin statements.
-InvalidArgument	-	-	DELETE FROM t WHERE id = 1
+# [txn T10] DELETE became a statement head - the transaction work needed it
+# (docs/txn.md section 10 tests it), so the flip is owned by that task
+# rather than by a parser one. It stays unfingerprinted: adding a
+# patternable leading word does **not** move any hash already stored, which
+# is the case fingerprint.hpp's bump rule names explicitly.
+ok	-	-	DELETE FROM t WHERE id = 1
+# [V12] session and admin statements.
 InvalidArgument	-	-	SET DURABILITY STRICT
 InvalidArgument	-	-	SHOW TABLES
 

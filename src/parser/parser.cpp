@@ -893,6 +893,26 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     return stmt;
 }
 
+StatusOr<DeleteStmt> Parser::ParseDelete() {
+    DeleteStmt stmt;
+
+    if (Status s = ExpectKeyword("FROM"); !s.ok()) return s;
+
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.table_name = std::move(name.value());
+
+    // Depth 0 and the same production UPDATE uses: a DELETE's WHERE is an
+    // outermost query block, and a predicate-position subquery in it nests
+    // exactly as a SELECT's does.
+    auto where = ParseOptionalWhere(/*depth=*/0);
+    if (!where.ok()) return where.status();
+    stmt.where = std::move(where.value());
+
+    ConsumeOptionalSemicolon();
+    return stmt;
+}
+
 StatusOr<UpdateStmt> Parser::ParseUpdate() {
     UpdateStmt stmt;
 
@@ -1001,6 +1021,10 @@ StatusOr<Statement> Parser::Parse() {
         auto s = ParseUpdate();
         if (!s.ok()) return s.status();
         stmt = std::move(s.value());
+    } else if (IEquals(tok.text, "DELETE")) {
+        auto s = ParseDelete();
+        if (!s.ok()) return s.status();
+        stmt = std::move(s.value());
     } else if (IEquals(tok.text, "WITH")) {
         // The other half of the structural rule (spec section 2): `WITH`
         // must not lex as a statement head. It is answered here, by name,
@@ -1012,7 +1036,7 @@ StatusOr<Statement> Parser::Parse() {
                                     "); subqueries are allowed in predicate position only");
     } else {
         return Status::InvalidArgument("unknown SQL keyword '" + std::string(tok.text) +
-                                        "' (supported: CREATE, DROP, INSERT, SELECT, UPDATE)");
+                                        "' (supported: CREATE, DROP, INSERT, SELECT, UPDATE, DELETE)");
     }
 
     // After a successful parse, only EOF may remain (a trailing semicolon

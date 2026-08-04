@@ -161,7 +161,12 @@ void TcpServer::OnListenerReadable() {
     int nodelay = 1;
     ::setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
-    clients_.emplace(client_fd, Connection{});
+    // Stamped with the server's configured level, so `isolation` in the
+    // config file is what a fresh connection actually starts at rather than
+    // the compiled-in default.
+    Connection fresh;
+    if (dispatcher_ != nullptr) fresh.session = Session(dispatcher_->default_isolation());
+    clients_.emplace(client_fd, std::move(fresh));
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "accepted fd=" + std::to_string(client_fd) +
                                   " open_connections=" + std::to_string(clients_.size()));
@@ -261,7 +266,7 @@ bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
                                       std::string(line) + "\"");
         }
 
-        DispatchOutcome outcome = dispatcher_->Dispatch(line);
+        DispatchOutcome outcome = dispatcher_->Dispatch(line, &conn.session);
         // Appended, not written: one readable event can carry a whole batch
         // of pipelined commands, and a write() per command is a syscall per
         // command plus a separate small segment per command on the wire.
@@ -294,6 +299,19 @@ bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
 }
 
 void TcpServer::CloseClient(int client_fd) {
+    // **A connection that goes away rolls back** (docs/txn.md section
+    // 10-8). Anything else would leave an open transaction holding its
+    // writes and its place in every other session's in-flight set, with
+    // nobody left to end it.
+    if (auto it = clients_.find(client_fd); it != clients_.end()) {
+        if (dispatcher_ != nullptr && it->second.session.in_explicit_txn()) {
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("client", "fd=" + std::to_string(client_fd) +
+                                         " closed with a transaction open; rolling it back");
+            }
+            (void)dispatcher_->Dispatch("ROLLBACK", &it->second.session);
+        }
+    }
     if (clients_.erase(client_fd) == 0) return;
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "closed fd=" + std::to_string(client_fd) +

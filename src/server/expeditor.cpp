@@ -17,6 +17,7 @@ std::string Expeditor::Config::LogPath() const {
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
+            "isolation",
             "wal_drain_interval_us", "log_dir",  "log_file",               "log_level",
             "max_rows_touched",      "inline_cell_width",      "waystone_recording",
             "waystone_replay",
@@ -72,6 +73,13 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("waystone_recording");
         if (!v.ok()) return v.status();
         waystone_recording = v.value();
+    }
+    if (file.Has("isolation")) {
+        auto v = file.GetString("isolation");
+        if (!v.ok()) return v.status();
+        auto parsed = txn::ParseIsolationLevel(v.value());
+        if (!parsed.ok()) return parsed.status();
+        isolation = parsed.value();
     }
     if (file.Has("waystone_replay")) {
         auto v = file.GetBool("waystone_replay");
@@ -226,22 +234,38 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->trail_recorder_.emplace(expeditor->database_->catalog, *expeditor->store_,
                                            &expeditor->clock_);
     }
+    // The transaction stack, before the dispatcher that reads through it.
+    // The persist callback is what makes a reserved id block durable: the
+    // superblock is unlogged, so a block is only safe once the page has
+    // been written and synced (txn/trx_id.hpp records the exposure that
+    // leaves).
+    Expeditor* self = expeditor.get();
+    expeditor->trx_ids_.emplace(expeditor->database_->superblock,
+                                [self] { return self->PersistSuperBlock(); });
+    expeditor->undo_log_.emplace(*expeditor->store_, &*expeditor->wal_);
+    expeditor->txn_manager_.emplace(*expeditor->trx_ids_, *expeditor->undo_log_,
+                                    *expeditor->store_, &*expeditor->wal_);
+
     expeditor->dispatcher_.emplace(
         expeditor->database_->superblock, expeditor->database_->catalog, *expeditor->store_,
         &*expeditor->logger_, &expeditor->clock_, &*expeditor->wal_,
         expeditor->config_.durability, exec::Budget(expeditor->config_.max_rows_touched),
         expeditor->trail_recorder_ ? &*expeditor->trail_recorder_ : nullptr,
         expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
-        expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr);
+        expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
+        &*expeditor->txn_manager_, expeditor->config_.isolation);
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
-                                 wal::DurabilityClassName(expeditor->config_.durability));
+                                 wal::DurabilityClassName(expeditor->config_.durability) +
+                                 ", isolation " +
+                                 txn::IsolationLevelName(expeditor->config_.isolation));
 
     expeditor->checkpoint_target_.emplace(*expeditor->store_);
     expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
     expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
     expeditor->checkpointer_.emplace(*expeditor->wal_, *expeditor->checkpoint_target_,
-                                     expeditor->no_txns_, *expeditor->checkpoint_anchor_);
+                                     *expeditor->txn_manager_,
+                                     *expeditor->checkpoint_anchor_);
     expeditor->checkpointer_->SetLogger(&*expeditor->logger_);
 
     if (Status s = expeditor->Sync(); !s.ok()) return s;
@@ -268,6 +292,13 @@ Status Expeditor::OpenLog() {
     log_sink_ = std::move(sink.value());
     logger_.emplace(log_sink_.get(), wall_clock_, config_.log_level);
     return Status::OK();
+}
+
+Status Expeditor::PersistSuperBlock() {
+    auto page = store_->Get(kSuperBlockPageId);
+    if (!page.ok()) return page.status();
+    database_->superblock.Encode(page.value());
+    return Sync();
 }
 
 Status Expeditor::Checkpoint() {

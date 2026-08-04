@@ -209,3 +209,27 @@ Also open:
 4. `docs/waystone-concpets.md` — §2 gains the negation rule and **rule 0**; §7 gains the subquery cases; §9's recording policy moves to `[CONFIRMED] n = 2`; §11 gains the stale-probe-key test and the note that the epoch rule is a stub.
 5. `docs/client-manual.md` — subquery forms, depth cap, `NOT IN` NULL semantics, the written-order contract, and the `Unsupported` surfaces.
 6. `CLAUDE.md` — parser and Waystone summary lines, the documents list, and the open list.
+
+## Addendum — `DELETE` (added by `txn-workplan.md` T10, 2026-08-04)
+
+`DELETE FROM <t> [WHERE <cond> [AND <cond>]*]` is a statement head. It was
+added by the transaction work rather than by a parser task, because
+`docs/txn.md` §10 tests it and the delete-mark half of the visibility
+predicate is unreachable without it.
+
+What it does and does not change:
+
+- **The WHERE is the same production `UPDATE` uses** (`ParseOptionalWhere`
+  at depth 0), compiled through the same `exec::CompileWhere`, so a
+  `DELETE`'s predicate means exactly what the `SELECT` that found the rows
+  meant. Predicate-position subqueries nest exactly as a `SELECT`'s do.
+- **No fingerprint bump.** `fingerprint.hpp`'s rule names this exact case:
+  making a statement fingerprintable that previously was not does not move
+  any hash already stored. `DELETE` is not fingerprinted today and the
+  golden corpus records it as `ok  -  -`.
+- **`DELETE` is not a reserved word.** Like `SELECT`, `INSERT` and
+  `UPDATE`, it is matched by text where the grammar expects it, so a column
+  may still be named `delete`.
+- It does not compile to a step chain. `HandleDelete` walks the relation
+  itself, exactly as `HandleUpdate` does, and applies the same visibility
+  predicate through `txn::Classify`.

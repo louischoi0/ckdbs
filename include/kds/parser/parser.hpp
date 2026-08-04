@@ -57,6 +57,7 @@ private:
     StatusOr<CreateTableStmt> ParseCreateTable();
     StatusOr<InsertStmt> ParseInsert();
     StatusOr<UpdateStmt> ParseUpdate();
+    StatusOr<DeleteStmt> ParseDelete();
 
     // `CREATE PATTERN <name> (<params>) [WITH (...)] OF <select>`. The
     // leading `CREATE PATTERN` is already consumed.

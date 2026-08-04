@@ -11,6 +11,13 @@ add_executable(kds_tests
     keystone_id_test.cpp
     keystone_budget_test.cpp
     heap_page_test.cpp
+    undo_page_test.cpp
+    undo_log_test.cpp
+    visibility_test.cpp
+    trx_id_test.cpp
+    step_vm_mvcc_test.cpp
+    txn_manager_test.cpp
+    txn_session_test.cpp
     heap_chain_test.cpp
     btree_test.cpp
     superblock_test.cpp
