@@ -298,6 +298,17 @@ public:
     // the deleter rather than failing.
     Status DeleteMark(std::uint16_t slot, std::uint64_t trx_id);
 
+    // The inverse of DeleteMark, for rollback (docs/txn.md section 6):
+    // clears the mark and restores the header the tuple carried before the
+    // deleter stamped it. Both halves matter - a cleared mark with the
+    // deleter still in `trx_id` would leave the row attributed to a
+    // transaction that aborted.
+    //
+    // Deliberately not "undelete": nothing above the transaction manager
+    // may call this. A delete-mark is undone by the transaction that made
+    // it and by nothing else.
+    Status ClearDeleteMark(std::uint16_t slot, std::uint64_t trx_id, std::uint64_t undo_ptr);
+
     // Marks `slot` dead; its bytes are not reclaimed (no page compaction -
     // an open item until a transaction manager can determine that no
     // snapshot still needs the space). Fails with NotFound if `slot` is already out of range/dead.

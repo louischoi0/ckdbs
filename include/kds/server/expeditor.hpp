@@ -12,6 +12,9 @@
 #include "kds/server/config_file.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/txn/manager.hpp"
+#include "kds/txn/trx_id.hpp"
+#include "kds/txn/undo_log.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/storage/device_page_store.hpp"
@@ -107,6 +110,19 @@ public:
         // every other client on it, so a bounded failure is the kinder
         // answer than a connection that never replies.
         std::uint64_t max_rows_touched = exec::kDefaultRowTouchBudget;
+
+        // ---- `isolation` (docs/txn.md section 1) -----------------------
+        //
+        // The level a session starts at, and therefore the level an
+        // autocommit statement runs at. **READ COMMITTED is the default**,
+        // and the reason is specific to this engine rather than convention:
+        // under first-updater-wins with no waiting, REPEATABLE READ holds
+        // one read view for a whole transaction and so converts more
+        // concurrent writes into retryable aborts. This is the server rung
+        // of the same three-level chain `durability` uses - server, then
+        // `SET ISOLATION LEVEL` per session, then `BEGIN ISOLATION LEVEL`
+        // per transaction.
+        txn::IsolationLevel isolation = txn::IsolationLevel::kReadCommitted;
 
         // Whether a successful SELECT records a Waystone trail
         // (`waystone_recording`, default on).
@@ -237,6 +253,16 @@ public:
         return store_->Sync();
     }
 
+    // Writes the superblock page and syncs it. What `txn::TrxIdSequence`
+    // calls when it raises the transaction-id ceiling: the sequence hands
+    // out a block of ids from memory, and this is what makes that block's
+    // ceiling survive a restart so the ids are never reissued.
+    //
+    // A full Sync() rather than a page write, because a superblock in the
+    // page cache is a ceiling that a crash still loses - which is the whole
+    // thing the durable write is bought for.
+    Status PersistSuperBlock();
+
     // Runs one checkpoint to completion: snapshot the dirty table, flush
     // it, log CHECKPOINT_END, publish the superblock anchor. This is what
     // the interval timer calls, exposed so a test can drive the cadence
@@ -288,13 +314,26 @@ private:
     // contract - the sets are memory-resident by design (§9: a crash
     // declares every Cabin unobserved and traffic rebuilds it).
     std::optional<stats::CabinStore> cabin_store_;
+
+    // ---- The transaction stack (docs/txn.md) ---------------------------
+    //
+    // Declared before the dispatcher, which holds a pointer into it, and
+    // torn down after it - the same construction-order rule every other
+    // member here follows. `ids_` writes the superblock through a callback
+    // rather than owning the page, because what "durable" means for the
+    // superblock belongs to this class (Sync()), not to the sequence.
+    std::optional<txn::TrxIdSequence> trx_ids_;
+    std::optional<txn::UndoLog> undo_log_;
+    std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
 
     std::unique_ptr<wal::FileLogDevice> log_device_;
     std::unique_ptr<wal::WalManager> wal_;
     std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
     std::optional<SuperBlockCheckpointAnchor> checkpoint_anchor_;
-    wal::NoActiveTransactions no_txns_;
+    // The live set a checkpoint records now comes from the transaction
+    // manager, which implements wal::ActiveTransactions. `NoActiveTransactions`
+    // was correct only while nothing could be live.
     std::optional<wal::Checkpointer> checkpointer_;
 };
 

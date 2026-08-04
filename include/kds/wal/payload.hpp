@@ -180,9 +180,21 @@ StatusOr<HeapDeleteMarkPayload> DecodeHeapDeleteMark(std::span<const std::byte> 
 
 // ---- SLOT_RETIRE ---------------------------------------------------------
 //
-// Physical retirement by a purge pass, deliberately a different record from
-// the delete-mark above: no transaction owns it, so the envelope's txn_id is
-// kNoTxnId.
+// Physical retirement, deliberately a different record from the delete-mark
+// above.
+//
+// **Who owns it depends on who emitted it** (docs/txn.md section 6's
+// amendment). This comment used to say no transaction owns a SLOT_RETIRE
+// and its envelope therefore carries kNoTxnId. That is true of a purge
+// pass and false of a rollback compensation, which *is* owned by the
+// aborting transaction - stamping kNoTxnId there would hide the rollback
+// from recovery's analysis phase. So:
+//
+//   emitted by rollback     the aborting transaction's id
+//   emitted by a purge pass kNoTxnId
+//
+// Nothing purges yet, so today every SLOT_RETIRE in a stream is a rollback
+// compensation (txn/manager.cpp).
 
 struct SlotRetirePayload {
     std::uint16_t slot;

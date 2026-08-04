@@ -131,15 +131,23 @@ StatusOr<std::uint64_t> KeyFromOperand(const Operand& operand, const ChainFrame&
     return static_cast<std::uint64_t>(value->int_val);
 }
 
+// The snapshot a caller who passed none gets: every writer visible, no undo
+// log, no copy ever taken. Named rather than default-constructed inline so
+// that "a runner without a transaction behaves exactly as the pre-MVCC
+// executor did" is one identifier a reader can follow.
+const txn::Snapshot kSeesEverything{};
+
 // One chain's execution state. Recreated per sub-chain, which is what
 // makes the frame stack a stack.
 class ChainRunner {
 public:
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
-                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins)
+                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
+                const txn::Snapshot* snapshot)
         : catalog_(catalog), store_(store), sink_(sink), depth_(depth), parent_(parent),
-          stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins) {}
+          stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins),
+          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything) {}
 
     Status Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
@@ -266,8 +274,12 @@ public:
         // ids are global across the whole statement (step_chain.hpp), so a
         // nested step's entries belong in the same trail and are already
         // distinguishable by their step_id.
+        // The snapshot is shared with the sub-chain for the same reason the
+        // collector is: a subquery is part of one statement, and a nested
+        // step reading a relation through a different view than its outer
+        // step would make one statement see two databases.
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_, cabins_);
+                          trail_, replay_, cabins_, &snapshot_);
         Status ran = inner.Run(sub.steps);
         if (!ran.ok()) return ran;
 
@@ -770,23 +782,90 @@ private:
         // span below is live (row_codec.hpp). Reused across rows so a scan
         // that never spills allocates nothing extra.
         spills_.clear();
+
+        // ---- MVCC, phase 1 (docs/txn.md section 4.3) --------------------
+        //
+        // **This is the one place visibility is applied**, and every access
+        // kind reaches it: the chain walk, the btree descent, the probe
+        // memo, a Waystone replay and a Cabin resolve all hand a
+        // (page, slot) to this function. That is what makes Waystone
+        // section 3.1 rule 2 structural rather than remembered.
+        //
+        // Stepping back an undo record is a page fetch, and R1 forbids one
+        // under the span below - so the classification happens here (no
+        // fetch, one integer comparison) and the *walk* happens after the
+        // release. A visible writer, which is every row of a
+        // single-transaction workload and every catalog row forever, is
+        // decided here and pays nothing at all.
+        bool needs_walk = false;
+        std::uint64_t walk_trx_id = 0;
+        std::uint64_t walk_undo_ptr = txn::kNoUndoPtr;
+        bool walk_deleted = false;
         {
             PageSpanGuard span;
             auto tuple = page.ReadTuple(slot);
             if (tuple.ok()) {
-                Status s = DecodeRowInto(access.schema, access.layout, tuple.value().payload,
-                                         frame_.SlotsFor(static_cast<std::uint16_t>(index)),
-                                         &spills_);
-                if (!s.ok()) {
-                    span.Release();
-                    return s;
+                switch (txn::Classify(snapshot_.view, tuple.value())) {
+                    case txn::Visibility::kNoVersion:
+                        // No version of this tuple exists for this reader.
+                        // Not an error and not a row: the statement simply
+                        // does not see it.
+                        span.Release();
+                        return Status::OK();
+                    case txn::Visibility::kNeedsUndoWalk:
+                        // R1's copy. Fixed-size, because invariant 13 makes
+                        // a row's size a schema constant - the same
+                        // property that makes relayout a memcpy.
+                        version_.assign(tuple.value().payload.begin(),
+                                        tuple.value().payload.end());
+                        walk_trx_id = tuple.value().trx_id;
+                        walk_undo_ptr = tuple.value().undo_ptr;
+                        walk_deleted = tuple.value().deleted;
+                        needs_walk = true;
+                        break;
+                    case txn::Visibility::kVisible:
+                        Status s = DecodeRowInto(
+                            access.schema, access.layout, tuple.value().payload,
+                            frame_.SlotsFor(static_cast<std::uint16_t>(index)), &spills_);
+                        if (!s.ok()) {
+                            span.Release();
+                            return s;
+                        }
+                        decoded = true;
+                        break;
                 }
-                decoded = true;
             }
             // Released here, explicitly, while the tuple bytes are still
             // in scope but finished with. Everything below may fetch.
             span.Release();
         }
+
+        // ---- MVCC, phase 2: the walk, with no span live -----------------
+        if (needs_walk) {
+            if (snapshot_.undo == nullptr) {
+                // A view that needs the chain with no log to walk. Reported
+                // rather than guessed at: guessing either way invents a row
+                // or hides one.
+                return Status::InvalidArgument(
+                    "a read view that cannot see a tuple's writer was given no undo log");
+            }
+            auto verdict = txn::ResolveThroughUndo(snapshot_.view, *snapshot_.undo, walk_trx_id,
+                                                    walk_deleted, walk_undo_ptr, version_);
+            if (!verdict.ok()) return verdict.status();
+            if (verdict.value() == txn::Visibility::kNoVersion) return Status::OK();
+
+            // Decoded from the reconstructed version rather than from the
+            // page: the bytes on the page belong to a version this reader
+            // is not entitled to.
+            if (Status s = DecodeRowInto(access.schema, access.layout, version_,
+                                          frame_.SlotsFor(static_cast<std::uint16_t>(index)),
+                                          &spills_);
+                !s.ok()) {
+                return s;
+            }
+            decoded = true;
+        }
+
         if (!decoded) return Status::OK();  // dead or out-of-range slot
 
         // Now that nothing is live, the spilled values can be resolved.
@@ -898,6 +977,18 @@ private:
     // Scratch for AcceptTupleAt()'s decode, reused across rows so a scan
     // that spills nothing allocates nothing for the possibility.
     std::vector<PendingSpill> spills_;
+
+    // The read view every tuple is filtered through, and the log an
+    // invisible writer is stepped back through (docs/txn.md section 4).
+    // Held by value: a Snapshot is a POD and copying one is cheaper than
+    // a pointer indirection on every row.
+    txn::Snapshot snapshot_;
+
+    // Where an invisible writer's visible version is reconstructed. Reused
+    // across rows, and **touched only when the undo chain is actually
+    // walked** - a scan whose rows are all visible never writes a byte
+    // here, which is what keeps the R1 copy off the common path.
+    std::vector<std::byte> version_;
     const RowSink& sink_;
     std::uint32_t depth_;
     const ChainFrame* parent_;
@@ -1066,7 +1157,7 @@ void ResetPageSpanGuard() noexcept { g_guard_tripped = false; }
 StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& store,
                                  const std::vector<const catalog::Schema*>& schemas,
                                  const Step& step, const ChainFrame& frame, ExecStats* stats,
-                                 const Budget& budget) {
+                                 const Budget& budget, const txn::Snapshot* snapshot) {
     auto matched = EvaluateAll(schemas, step.residual, frame);
     if (!matched.ok()) return matched.status();
     if (!matched.value()) return false;
@@ -1083,7 +1174,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     // conjuncts for UPDATE, which is not a chain execution and has no trail
     // of its own to contribute to.
     ChainRunner runner(catalog, store, kUnused, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr);
+                       /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr, snapshot);
 
     for (const SubChain& sub : step.sub_chains) {
         auto value = runner.EvaluateSubChain(sub, frame);
@@ -1096,7 +1187,8 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
 
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
-               TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins) {
+               TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
+               const txn::Snapshot* snapshot) {
     if (chain.steps.empty()) {
         return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -1119,7 +1211,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     Budget spend(budget.limit());
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay, cabins);
+                       trail, replay, cabins, snapshot);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by

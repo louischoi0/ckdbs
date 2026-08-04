@@ -235,7 +235,15 @@ unconditionally and permanently. This is not a migration shim that ages out:
 - It is the tail of every undo chain built over a pre-existing row.
 
 `SuperBlock::CreateFresh` seeds `next_trx_id = kFirstUserTrxId = 2`, so 1 is
-never reissued to a real transaction. This mirrors PostgreSQL's
+never reissued to a real transaction. The field was added in superblock
+format version **9** and lives past the WAL anchor table
+(`kNextTrxIdOffset`); ids are handed out a block at a time
+(`txn::TrxIdSequence`, `kTrxIdBlockSize = 4096` `[PROPOSED]`), so a crash
+burns the block's remainder - ids are unique and monotonic, never gapless,
+the same promise the row-id sequence makes. The superblock is unlogged, so
+a crash between raising the ceiling and the page reaching the platter
+reissues the block; that is the exposure `keystoneid-k0-findings.md`
+records for row ids, and it closes the same way, with recovery. This mirrors PostgreSQL's
 `FrozenTransactionId`, which is what `kBootstrapXid`'s own comment already says.
 
 ### 4.3 The predicate
@@ -264,12 +272,31 @@ set and never read.
 
 ### 4.4 Where it is applied
 
-`HandleSelect` and `HandleUpdate` each own a single lambda (`emit`, `apply`)
-shared by the Waystone probe path *and* the `ChainVisit` scan. Calling the
-predicate there makes `waystone-concpets.md` §3.1 rule 2 — "MVCC visibility is
-applied exactly as it would be on the authoritative path" — true **by
-construction** rather than by discipline. Before this document it was vacuously
-true, because nothing applied visibility anywhere.
+**Amended 2026-08-04 (`txn-workplan.md` A1).** This section was written
+before the step VM existed, and named `HandleSelect`'s `emit` and
+`HandleUpdate`'s `apply` as the two sites. Every SELECT-class read now goes
+through a compiled step chain, so the choke point is
+**`ChainRunner::AcceptTupleAt()`** (`src/exec/step_vm.cpp`) — one call site,
+reached by the chain walk, the btree descent, the probe memo, Waystone
+replay and the Cabin resolve alike. That makes `waystone-concpets.md` §3.1
+rule 2 — "MVCC visibility is applied exactly as it would be on the
+authoritative path" — true **by construction** rather than by discipline,
+and over three consumers this document did not know about.
+
+`HandleUpdate` and `HandleDelete` keep a call of their own, because neither
+compiles to a chain. Both reach the same `txn::Classify`, never a second
+predicate.
+
+**The predicate is split in two, and the split is not a style choice.**
+Stepping back an undo record is a page fetch, and `parser-v2.md` I15's R1
+forbids one while a page-frame span is live — which is exactly the state
+`AcceptTupleAt` decodes in. So `Classify()` answers with no fetch (safe
+under the span), and `ResolveThroughUndo()` walks after the span is
+released, over a copy of the tuple taken while it was still held. The copy
+is a fixed number of bytes because invariant 13 makes a row's size a schema
+constant, and it is taken **only** when the writer is invisible — a visible
+writer, which is every row of a single-transaction workload and every
+catalog row forever, costs one integer comparison and no copy at all.
 
 `heap::ChainVisit` remains a purely physical walk. Visibility belongs to its
 callback: that keeps `storage/` free of a dependency on `txn/`, and keeps

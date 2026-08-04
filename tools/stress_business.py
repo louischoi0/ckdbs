@@ -51,13 +51,21 @@ identical with it and without it.
 
 Three things this tool is NOT, and cannot be, on today's engine:
 
-1. **The four statements are not atomic.** There is no transaction manager
-   and no BEGIN/COMMIT (docs/txn.md is specification, not code; every row
-   is stamped kBootstrapXid). A failure between statement 2 and 3 leaves a
-   trade recorded against balances that were never moved. The tool counts
-   those separately and prints them as `torn`, because on a real engine
-   that number is the thing you would page someone about, and here it is a
-   known property of the target rather than a defect this tool found.
+1. **The four statements are not atomic *as this tool runs them*.** The
+   engine has transactions now - BEGIN / COMMIT / ROLLBACK, two isolation
+   levels, first-updater-wins (docs/txn.md, built) - but this tool does not
+   wrap the four statements in one, so a failure between statement 2 and 3
+   still leaves a trade recorded against balances that were never moved.
+   The tool counts those and prints them as `torn`.
+
+   **That number is now a property of this tool rather than of the
+   engine**, which is a change worth stating plainly: wrapping the four in
+   BEGIN/COMMIT would drive it to zero. It is left unwrapped on purpose, so
+   the scenario keeps measuring what it was written to measure and stays
+   comparable to every result recorded before transactions landed. A
+   transactional variant belongs beside it, not in place of it - and it
+   would measure something different: commit cost and conflict rate between
+   traders, not raw statement throughput.
 2. **Balances are computed client-side.** `UPDATE ... SET col = <val>`
    takes a *literal*, not an expression (parser.cpp's ParseUpdate ->
    ParseValue), so `balance = balance - notional` is not expressible. Each
@@ -1190,8 +1198,8 @@ def main():
     }
 
     report(phases, meta, footer=[
-        "the four statements are NOT atomic: there is no transaction manager and no "
-        "BEGIN/COMMIT on this engine (docs/txn.md is specification, not code), so a "
+        "the four statements are NOT atomic as this tool runs them: the engine has "
+        "BEGIN/COMMIT (docs/txn.md, built) but this tool does not use them, so a "
         "failure between them leaves a trade recorded against balances that never "
         "moved. `torn` in the scenario block below counts those.",
         "balances are computed client-side because UPDATE ... SET takes a literal, not "

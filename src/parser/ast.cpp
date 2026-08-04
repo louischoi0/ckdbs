@@ -10,6 +10,7 @@ const char* StatementTypeName(const Statement& stmt) {
             if constexpr (std::is_same_v<T, InsertStmt>) return "INSERT";
             if constexpr (std::is_same_v<T, SelectStmt>) return "SELECT";
             if constexpr (std::is_same_v<T, UpdateStmt>) return "UPDATE";
+            if constexpr (std::is_same_v<T, DeleteStmt>) return "DELETE";
             if constexpr (std::is_same_v<T, CreatePatternStmt>) return "CREATE PATTERN";
             if constexpr (std::is_same_v<T, DropPatternStmt>) return "DROP PATTERN";
             if constexpr (std::is_same_v<T, CabinStmt>) {

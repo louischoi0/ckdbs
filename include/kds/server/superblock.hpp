@@ -77,7 +77,15 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // it, because the file mounts cleanly and then fails on the first
 // statement that reaches for a table which does not exist. The refusal at
 // the door is the whole point.
-inline constexpr std::uint32_t kSuperBlockVersion = 8;
+// 8 -> 9: the transaction manager added `next_trx_id` (docs/txn.md section
+// 4.2). Unlike the four bumps above it this one adds a *field*, not a
+// relation - and it is exactly as breaking, because the field sits past the
+// WAL anchor table where a version-8 image holds zeroes. A zero there reads
+// as "the next transaction is id 0", which would hand a real transaction
+// the id that means "no transaction" and then reissue kBootstrapXid, the
+// one id every read view trusts unconditionally. Refusing at the door is
+// the only safe reading of a zero we cannot distinguish from a real value.
+inline constexpr std::uint32_t kSuperBlockVersion = 9;
 
 // ---- On-disk field layout ----------------------------------------------
 
@@ -113,6 +121,24 @@ struct SuperBlockFields {
     // version bump is what makes that repurposing safe: a version-3 image
     // is refused outright rather than read with a zero here.
     std::uint32_t inline_cell_width;
+
+    // ---- The transaction id ceiling (docs/txn.md section 4.2) -----------
+    //
+    // The next transaction id **never yet issued**, which is not the same
+    // as the next one to hand out: ids are allocated a block at a time and
+    // this is the block's ceiling, so a crash burns the unspent remainder
+    // (txn/trx_id.hpp). Ids are unique and monotonic, never gapless - the
+    // same promise `sys.tables.next_id` makes for row ids, and for the same
+    // reason: a durable write per id is what the alternative costs.
+    //
+    // Seeded to kFirstUserTrxId = 2 by CreateFresh, so kBootstrapXid (1) is
+    // never reissued to a real transaction. That is what makes every
+    // catalog row permanently visible to every read view.
+    //
+    // It lives past the WAL anchor table rather than in the header block
+    // because the table's offset is fixed by four earlier format versions
+    // and moving it would rewrite every anchor's position for no gain.
+    std::uint64_t next_trx_id;
 };
 
 inline constexpr std::size_t kMagicOffset = 0;
@@ -187,7 +213,12 @@ inline constexpr std::size_t kWalAnchorTableSize = kMaxWalCores * kWalAnchorEntr
 // Bytes actually read/written; the rest of the page (up to kPageSize) is
 // reserved for future fields and always encoded as zero, same intent as
 // an explicit reserved tail.
-inline constexpr std::size_t kSuperBlockUsedSize = kWalAnchorTableOffset + kWalAnchorTableSize;
+// Placed after the anchor table, so no existing offset moved (see
+// SuperBlockFields::next_trx_id).
+inline constexpr std::size_t kNextTrxIdOffset = kWalAnchorTableOffset + kWalAnchorTableSize;
+static_assert(kNextTrxIdOffset % alignof(std::uint64_t) == 0);
+
+inline constexpr std::size_t kSuperBlockUsedSize = kNextTrxIdOffset + sizeof(std::uint64_t);
 
 static_assert(kSuperBlockBodyOffset + kSuperBlockUsedSize <= kPageSize);
 
@@ -234,6 +265,21 @@ public:
     // The pinned kds.inline_cell_width (see SuperBlockFields). Every
     // relation's row size in this database was computed from it.
     std::uint32_t inline_cell_width() const noexcept { return fields_.inline_cell_width; }
+
+    // ---- The transaction id ceiling (docs/txn.md section 4.2) -----------
+    //
+    // The next id never yet issued. `txn::TrxIdSequence` owns the policy
+    // around it - block size, the durable write, and refusing to wrap - and
+    // this pair is only the storage.
+    std::uint64_t next_trx_id() const noexcept { return fields_.next_trx_id; }
+
+    // Raises the ceiling. Refuses to lower it: a ceiling that moved
+    // backwards would reissue ids that are already stamped on tuples, and
+    // two versions written by "the same" transaction is a wrong answer no
+    // later check could detect. In-memory only - it is durable once the
+    // page has been encoded and the store synced, exactly as SetWalAnchor
+    // is.
+    Status SetNextTrxId(std::uint64_t next) noexcept;
 
     // ---- Per-core WAL anchors (wal.md section 14-3) ---------------------
 

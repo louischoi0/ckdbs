@@ -3,6 +3,7 @@
 #include <cstring>
 #include <string>
 
+#include "kds/catalog/well_known.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/tagged_cell.hpp"
 
@@ -20,6 +21,8 @@ SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds,
     f.last_mount_time = now_unix_seconds;
     f.wal_anchor_count = 0;
     f.inline_cell_width = inline_cell_width;
+    // 2, never 1: kBootstrapXid is reserved forever (txn.md section 4.2).
+    f.next_trx_id = catalog::kFirstUserTrxId;
     // The anchor table is left zeroed by the member initializer: a fresh
     // database has no checkpoint on any core, which is what an all-zero
     // anchor means (superblock.hpp).
@@ -55,6 +58,15 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
         // computed from it: a nonsense width does not produce an error
         // later, it produces rows decoded at the wrong offsets.
         return Status::Corruption("superblock: " + s.message());
+    }
+
+    std::memcpy(&f.next_trx_id, base + kNextTrxIdOffset, sizeof(f.next_trx_id));
+    if (f.next_trx_id < catalog::kFirstUserTrxId) {
+        // A ceiling below the first user id would reissue kBootstrapXid,
+        // the one id every read view trusts unconditionally. There is no
+        // repair for that after the fact, so it is refused at the door.
+        return Status::Corruption("superblock next_trx_id " + std::to_string(f.next_trx_id) +
+                                  " is below the first user transaction id");
     }
 
     SuperBlock sb(f);
@@ -99,6 +111,8 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
     std::memcpy(base + kInlineCellWidthOffset, &fields_.inline_cell_width,
                 sizeof(fields_.inline_cell_width));
 
+    std::memcpy(base + kNextTrxIdOffset, &fields_.next_trx_id, sizeof(fields_.next_trx_id));
+
     // The whole table is written, not just the slots in use: an unpublished
     // slot's zeroes are meaningful (superblock.hpp), and writing only the
     // used prefix would leave the rest to the memset above by accident
@@ -131,6 +145,16 @@ Status SuperBlock::SetWalAnchor(std::uint32_t core_id, const WalAnchorFields& an
     if (core_id + 1 > fields_.wal_anchor_count) {
         fields_.wal_anchor_count = core_id + 1;
     }
+    return Status::OK();
+}
+
+Status SuperBlock::SetNextTrxId(std::uint64_t next) noexcept {
+    if (next < fields_.next_trx_id) {
+        return Status::InvalidArgument("superblock: next_trx_id may not move backwards, from " +
+                                       std::to_string(fields_.next_trx_id) + " to " +
+                                       std::to_string(next));
+    }
+    fields_.next_trx_id = next;
     return Status::OK();
 }
 

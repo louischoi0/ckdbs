@@ -14,6 +14,7 @@
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
+#include "kds/txn/visibility.hpp"
 
 // Executes a compiled StepChain (docs/parser-v2-workplan.md V17).
 //
@@ -204,10 +205,25 @@ struct ExecStats {
 // rows are *looked at*: a served value reads its entries instead of the
 // relation. Deleting every Cabin in the database costs latency and nothing
 // else, one value at a time (spec §1's corollary).
+// `snapshot` is the read view every tuple is filtered through, plus the
+// undo log an invisible writer is stepped back through (docs/txn.md §4).
+// **It is applied at exactly one place** - `AcceptTupleAt` - which every
+// access kind funnels into: the chain walk, the btree descent, the probe
+// memo, a Waystone replay and a Cabin resolve. That is what makes Waystone
+// §3.1 rule 2 ("MVCC visibility is applied exactly as it would be on the
+// authoritative path") true by construction rather than by discipline, and
+// it is a stronger statement than txn.md §4.4's, which was written when
+// two statement handlers owned the read path and the step VM did not exist.
+//
+// The default snapshot admits every writer and needs no undo log, which is
+// precisely what the engine did before MVCC: every row carried
+// kBootstrapXid and every row was visible. So a caller that passes nothing
+// gets byte-identical results to the pre-transactional executor.
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
-               const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr);
+               const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
+               const txn::Snapshot* snapshot = nullptr);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.
@@ -217,10 +233,14 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
 // WHERE means exactly what a SELECT's does, down to `NOT IN`'s tri-state
 // collapse. A second evaluator would be a second answer to "does this row
 // qualify", and the two would drift on the first NULL.
+// `snapshot` is threaded through for the sub-chains: a correlated subquery
+// inside an UPDATE's WHERE reads relations, and it must read them through
+// the same view the UPDATE does.
 StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& store,
                                  const std::vector<const catalog::Schema*>& schemas,
                                  const Step& step, const ChainFrame& frame,
-                                 ExecStats* stats = nullptr, const Budget& budget = Budget());
+                                 ExecStats* stats = nullptr, const Budget& budget = Budget(),
+                                 const txn::Snapshot* snapshot = nullptr);
 
 // Whether a debug-build page-span guard has fired during this process.
 // Exposed for the test that deliberately violates R1; production code has

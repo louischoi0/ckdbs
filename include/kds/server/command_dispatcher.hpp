@@ -21,6 +21,7 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
@@ -159,7 +160,10 @@ public:
                        stats::TrailRecorder* recorder = nullptr,
                        bool replay_enabled = false,
                        bool access_statistics = true,
-                       stats::CabinStore* cabins = nullptr) noexcept
+                       stats::CabinStore* cabins = nullptr,
+                       txn::TransactionManager* txn = nullptr,
+                       txn::IsolationLevel isolation =
+                           txn::IsolationLevel::kReadCommitted) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -171,7 +175,10 @@ public:
           recorder_(recorder),
           replay_enabled_(replay_enabled),
           access_stats_enabled_(access_statistics),
-          cabins_(cabins) {}
+          cabins_(cabins),
+          txn_(txn),
+          default_isolation_(isolation),
+          autocommit_session_(isolation) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -306,9 +313,61 @@ public:
     //                            an ERR (no fallback) if a changed value
     //                            no longer fits the tuple's original slot
     //                            capacity, e.g. growing a varchar.
-    DispatchOutcome Dispatch(std::string_view line);
+    //
+    // `session` carries the connection's transaction state (session.hpp).
+    // **Null means autocommit through a private session**, which is what
+    // every caller that predates transactions gets - and what keeps their
+    // behaviour identical, because an autocommit statement outside an
+    // explicit transaction is exactly what the engine did before.
+    DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
+
+    // The level a fresh session starts at (`isolation`). TcpServer stamps
+    // it on each connection's session at accept.
+    txn::IsolationLevel default_isolation() const noexcept { return default_isolation_; }
 
 private:
+    // ---- Transaction control (docs/txn.md sections 1, 6) ----------------
+    DispatchOutcome HandleBegin(std::string_view args, Session& session);
+    DispatchOutcome HandleCommit(Session& session);
+    DispatchOutcome HandleRollback(Session& session);
+    DispatchOutcome HandleSetIsolation(std::string_view args, Session& session);
+
+    // The read view a statement reads through. In autocommit it is minted
+    // fresh here and belongs to no transaction; inside an explicit one it
+    // is the transaction's, re-minted per statement under READ COMMITTED
+    // and held since BEGIN under REPEATABLE READ.
+    //
+    // Returns a snapshot that sees everything when no TransactionManager
+    // was given - the pre-MVCC engine, exactly.
+    StatusOr<txn::Snapshot> SnapshotFor(Session& session);
+
+    // ---- The write scope (section 6's failure atomicity) ----------------
+    //
+    // A write statement runs inside a transaction whether or not the client
+    // asked for one. `owned` says which: in autocommit this scope began the
+    // transaction and must end it, and inside an explicit transaction it
+    // borrows the session's and ends nothing.
+    struct WriteScope {
+        txn::Transaction* txn = nullptr;
+        bool owned = false;
+        bool ok() const noexcept { return txn != nullptr; }
+    };
+
+    // Fails only if a transaction cannot be started. A dispatcher with no
+    // manager returns an empty scope, and the write path then stamps
+    // kBootstrapXid exactly as it always did.
+    StatusOr<WriteScope> BeginWrite(Session& session);
+
+    // Ends what BeginWrite began. `result` is the statement's outcome: OK
+    // commits an owned scope, anything else aborts it. Inside an explicit
+    // transaction a failure **poisons the session** rather than unwinding -
+    // rows already written stay, and the client must ROLLBACK (section 6).
+    Status EndWrite(Session& session, WriteScope& scope, const Status& result);
+
+    // The trx_id a write stamps: the scope's transaction, or
+    // kBootstrapXid when there is no manager.
+    static std::uint64_t WriterId(const WriteScope& scope);
+
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables();
     DispatchOutcome HandleDescribe(std::string_view args);
@@ -350,7 +409,12 @@ private:
     // survive a restart at all. Reporting them together is what makes "this
     // Cabin exists but has never been probed" visible.
     DispatchOutcome HandleShowCabins();
-    DispatchOutcome HandleInsert(std::string_view line);
+    DispatchOutcome HandleInsert(std::string_view line, Session& session);
+
+    // The statement itself, inside a write scope the wrapper opened and
+    // will close. Split so that every early return below is an ordinary
+    // return rather than one that has to remember to end a transaction.
+    DispatchOutcome InsertInner(std::string_view line, WriteScope& scope);
     // `analyze` switches the reply from rows to the compiled plan plus
     // the per-step counters the run produced. Everything before that -
     // parse, compile, execute - is the same code on the same statement
@@ -363,7 +427,8 @@ private:
     // one the unprefixed statement would produce - which is what keeps
     // `sys.patterns` and a Waystone trail from splitting in two over a
     // diagnostic prefix.
-    DispatchOutcome HandleSelect(std::string_view line, bool analyze = false);
+    DispatchOutcome HandleSelect(std::string_view line, Session& session,
+                                 bool analyze = false);
 
     // The ANALYZE reply: run the chain for its counters, print the plan
     // beside them. Split out so HandleSelect's row-formatting path and
@@ -383,7 +448,8 @@ private:
     // `sql` to recompute a number it had already been handed.
     DispatchOutcome RunAnalyze(const exec::StepChain& chain, exec::TrailCollector* trail,
                                const exec::TrailReplay* replay,
-                               const std::optional<stats::InstanceKey>& instance);
+                               const std::optional<stats::InstanceKey>& instance,
+                               const txn::Snapshot& snapshot);
 
     // Hands a successful execution's trail to the recorder. Shared by the
     // row-returning path and ANALYZE so the two cannot come to disagree
@@ -432,7 +498,27 @@ private:
                         std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                         std::uint64_t pk, PageId page_id, std::uint16_t slot,
                         std::span<const parser::AstValue> previous = {});
-    DispatchOutcome HandleUpdate(std::string_view line);
+    DispatchOutcome HandleUpdate(std::string_view line, Session& session);
+
+    // `DELETE FROM <t> [WHERE ...]` (docs/txn.md sections 4.3, 6).
+    //
+    // A **delete-mark**, never a physical removal: the slot keeps its bytes
+    // and gains kSlotFlagDeleted, and the deleter's id goes in the tuple's
+    // writer field. That pair is the whole of DELETE in the no-xmax model,
+    // and it is why an older snapshot still reads the row - it steps back
+    // over the kDeleteMark undo record and finds the tuple's own payload
+    // unchanged.
+    //
+    // **The Cabin write hook is deliberately not called here.** By
+    // feat-cabin.md section 5 removal is forbidden: an older snapshot may
+    // still be entitled to match the row through the undo chain, so
+    // dropping its entry would break the superset invariant. The surplus is
+    // subtracted at read time, which now includes the visibility predicate.
+    DispatchOutcome HandleDelete(std::string_view line, Session& session);
+    DispatchOutcome DeleteInner(std::string_view line, WriteScope& scope,
+                                const txn::Snapshot& snapshot);
+    DispatchOutcome UpdateInner(std::string_view line, WriteScope& scope,
+                                const txn::Snapshot& snapshot);
     DispatchOutcome HandleSync();
 
     // Runs the insert against whichever storage the relation uses, and
@@ -484,9 +570,13 @@ private:
     // never reach a tuple whose pointer resolves to nothing. A crash
     // between the two leaves an unreferenced value for purge, which is the
     // harmless direction.
+    // `own_txn` false means a TransactionManager owns the transaction and
+    // has already logged TXN_BEGIN; this emits only the page records and
+    // leaves TXN_COMMIT and its durability wait to EndWrite().
     Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
-                     const std::vector<exec::AppendedSpill>& spills = {});
+                     const std::vector<exec::AppendedSpill>& spills = {},
+                     bool own_txn = true);
 
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer
@@ -535,7 +625,8 @@ private:
     // development tool, not an operating mode.
     // Dispatch() wraps this to time it and log the outcome once, in one
     // place, rather than at every return of every handler.
-    DispatchOutcome DispatchInner(std::string_view line);
+    DispatchOutcome DispatchInner(std::string_view line, Session& session);
+
 
     bool logging(LogLevel level) const noexcept {
         return log_ != nullptr && log_->enabled(level);
@@ -597,6 +688,23 @@ private:
     // always did, and so that "identical replies with cabins on and off" is
     // a property of the structure rather than of the test data.
     stats::CabinStore* cabins_ = nullptr;
+
+    // The transaction manager, or null when this dispatcher predates
+    // transactions - which every socket-free test does, and which is why
+    // null must behave exactly as the engine did before MVCC: every write
+    // stamped kBootstrapXid, every read seeing everything.
+    txn::TransactionManager* txn_ = nullptr;
+
+    // The session a caller who passed none gets. One per dispatcher rather
+    // than one per statement so `SET ISOLATION LEVEL` still means something
+    // to a single-connection tool, and so an autocommit write does not
+    // allocate a session per statement.
+    // The level a new session starts at, from the `isolation` config key.
+    // Held so TcpServer can stamp it on each connection's session rather
+    // than every connection defaulting to the compiled-in level.
+    txn::IsolationLevel default_isolation_ = txn::IsolationLevel::kReadCommitted;
+
+    Session autocommit_session_;
 
     // Implicit-transaction ids for the statements this dispatcher logs.
     // Process-local and restarting from 1 every boot, which is wrong the

@@ -293,6 +293,22 @@ struct UpdateStmt {
     std::vector<Condition> where;         // empty = no WHERE clause; AND-combined
 };
 
+// `DELETE FROM <t> [WHERE ...]`.
+//
+// A **delete-mark**, never a physical removal: the tuple's bytes stay for
+// readers whose snapshot predates the deleter (docs/txn.md section 4.3), and
+// physical retirement is a purge pass that does not exist. That is why there
+// is no column list and nothing to assign - a DELETE changes a slot flag and
+// a writer id, and nothing else.
+//
+// The WHERE is the same one UPDATE parses, and it is compiled through the
+// same `exec::CompileWhere`, so a DELETE's predicate means exactly what the
+// SELECT that found the rows meant.
+struct DeleteStmt {
+    std::string table_name;
+    std::vector<Condition> where;  // empty = every row
+};
+
 // ---- CREATE PATTERN / DROP PATTERN ---------------------------------------
 //
 //   CREATE PATTERN <name> ( $p <type> [, ...] ) [WITH (<k> = <v> [, ...])]
@@ -399,7 +415,7 @@ struct CabinStmt {
 };
 
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
-                               CreatePatternStmt, DropPatternStmt, CabinStmt>;
+                               DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

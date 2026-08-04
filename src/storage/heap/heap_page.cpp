@@ -295,6 +295,33 @@ Status PageView::DeleteMark(std::uint16_t slot_idx, std::uint64_t trx_id) {
     return Status::OK();
 }
 
+Status PageView::ClearDeleteMark(std::uint16_t slot_idx, std::uint64_t trx_id,
+                                 std::uint64_t undo_ptr) {
+    if (trx_id > kMaxTrxId) {
+        return Status::InvalidArgument("trx_id exceeds 48 bits");
+    }
+
+    HeapPageHeaderFields h = ReadHeader();
+    if (slot_idx >= h.nr_slots) {
+        return Status::NotFound("slot index out of range");
+    }
+
+    HeapSlotFields slot = ReadSlot(slot_idx);
+    if ((slot.flags & kSlotFlagDead) != 0 || slot.length == 0) {
+        return Status::NotFound("slot is dead");
+    }
+
+    // The exact inverse of DeleteMark, plus the header link: rollback
+    // restores the writer the tuple carried *before* the deleter stamped
+    // it, which is what the aborting transaction's trail entry holds.
+    std::memcpy(page_.data() + slot.offset + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
+    std::memcpy(page_.data() + slot.offset + kTupleUndoPtrOffset, &undo_ptr, sizeof(undo_ptr));
+
+    slot.flags &= static_cast<std::uint8_t>(~kSlotFlagDeleted);
+    WriteSlot(slot_idx, slot);
+    return Status::OK();
+}
+
 StatusOr<PageView::SlotInfo> PageView::DebugSlotInfo(std::uint16_t slot_idx) const {
     HeapPageHeaderFields h = ReadHeader();
     if (slot_idx >= h.nr_slots) {
