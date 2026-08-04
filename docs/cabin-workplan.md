@@ -3,11 +3,12 @@
 Work instructions, companion to `feat-cabin.md`. Tasks `CB01`-`CB11`.
 
 **Status: v1 is complete and measured.** Every task below is done; what
-remains is in "What v1 is not". Numbers in `bench/results-cabin.md`: on the
-business stress scenario the reporting scan is **10× faster** and the write
-workload **27% faster with it**, because a scan on a single-threaded
-dispatcher is a write-path cost. The write hook itself is unmeasurable
-(-0.1% on `account-update` p50).
+remains is in "What v1 is not". Numbers in `bench/results-cabin.md`, which was **corrected on
+2026-08-04**: the first pass was run on tmpfs and reported as a block
+device, which made the reporting scan look like the bottleneck it is not.
+On disk at 10,000 users the feature is a **wash** - TPS +3.2%, the targeted
+query's mean -20% at a 23.9% hit rate - because the WAL-logged inserts are
+311s of a 380s run and the scan is 63s. The write hook is at or below noise.
 
 Execution rules:
 - Do tasks in numeric order unless "needs" says otherwise.

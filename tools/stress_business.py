@@ -266,16 +266,40 @@ class Client:
 
 # ---- simulated business clock --------------------------------------------
 
-def sim_day(started_at, seconds, days):
+def sim_day(started_at, seconds, days, progress=None):
     """Which of the `days` business days the run is currently in.
 
-    A pure function of wall-clock progress, so the trader processes and the
-    reporting process derive the same day from the same start timestamp
-    without coordinating - which is the only shared state they need."""
+    Two clocks, because there are two kinds of run and they measure
+    different things:
+
+      time-based (`--seconds`)   wall-clock progress through the run. A pure
+                                 function of the shared start timestamp, so
+                                 the traders and the reporter derive the same
+                                 day without coordinating.
+      work-based (`--txn-per-user`)  progress through the *work*. `--seconds`
+                                 is only a ceiling there, and it is usually
+                                 much larger than the run - scaling the
+                                 business clock to it would leave a run that
+                                 finished in 68s of a 900s budget having
+                                 simulated 13 days of 180, and the reporting
+                                 job would barely run. `--days` means "the
+                                 span this workload represents", so for a
+                                 work target that is the target itself.
+
+    `progress` is a shared fraction in [0, 1] the traders publish; None
+    falls back to the wall clock."""
+    if progress is not None:
+        done = progress.value
+        if done > 0.0:
+            return min(days - 1, max(0, int(done * days)))
+        # Before the first transaction commits there is no work to measure,
+        # so day 0 - not a fall-through to the wall clock, which would jump
+        # the business date backwards on the first update.
+        return 0
     if seconds <= 0:
         return 0
-    progress = (time.time() - started_at) / seconds
-    return min(days - 1, max(0, int(progress * days)))
+    elapsed = (time.time() - started_at) / seconds
+    return min(days - 1, max(0, int(elapsed * days)))
 
 
 # ---- load ----------------------------------------------------------------
@@ -405,9 +429,15 @@ def phase_send(exec_, phase, command):
 
 # ---- the trader process --------------------------------------------------
 
-def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_q):
+def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_q,
+                   target=0, stop_event=None, progress=None):
     """Runs 4-statement business transactions against a disjoint account
-    partition until the run's wall clock is up.
+    partition until the run's wall clock is up, or until `target`
+    transactions have committed - whichever comes first.
+
+    `target` is this trader's own share of `--txn-per-user x --users`, not
+    the run's total. 0 means unlimited, which is the time-based default and
+    what every run before --txn-per-user existed did.
 
     `accounts` is this trader's partition only. Disjointness is what makes
     the in-memory balance authoritative: no other process updates these
@@ -434,12 +464,18 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
 
     try:
         while time.time() < deadline:
+            # The work target, checked at the top of the iteration so the
+            # count is exact rather than "the first check after". `torn`
+            # deliberately does not count toward it: the target is
+            # *committed* transactions, and a partial application is not one.
+            if target and committed >= target:
+                break
             buyer = rng.choice(ids)
             seller = rng.choice(ids)
             if seller == buyer:
                 continue
             asset = rng.choice(asset_ids)
-            day = sim_day(started_at, args.seconds, args.days)
+            day = sim_day(started_at, args.seconds, args.days, progress)
 
             price = rng.randint(1_000, 500_000)
             qty = rng.randint(1, 100)
@@ -507,6 +543,12 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
             latency = time.perf_counter() - t0
             if ok:
                 committed += 1
+                # Published for the reporting process's business clock. One
+                # unsynchronized double store per transaction; the traders
+                # are symmetric, so any one of them is representative and a
+                # torn read costs a simulated day, not a row.
+                if progress is not None and target:
+                    progress.value = min(1.0, committed / target)
                 txn_phase.record(latency, "OK")
             else:
                 # A partial application. There is no rollback to invoke -
@@ -520,6 +562,13 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
         return
     finally:
         elapsed = time.perf_counter() - started_running
+        # Tell the reporting process the measured window is over. Without
+        # this a count-targeted run that finishes in 40s of a 600s budget
+        # would leave the reporter walking the relation for another 560s,
+        # and the run would take as long as its *ceiling* rather than as
+        # long as its work.
+        if stop_event is not None:
+            stop_event.set()
         try:
             client.close()
         except OSError:
@@ -534,6 +583,8 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
         "torn": torn,
         "rejected": rejected,
         "elapsed": elapsed,
+        "target": target,
+        "hit_target": bool(target and committed >= target),
         "errors": client.errors,
         "first_error": client.first_error,
         "phases": {p.name: (p.latencies, p.errors, p.first_error, p.elapsed)
@@ -545,7 +596,8 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
 
 # ---- the periodic reporting process --------------------------------------
 
-def profit_process(args, suffix, user_ids, started_at, result_q):
+def profit_process(args, suffix, user_ids, started_at, result_q, stop_event=None,
+                   progress=None):
     """The 'other process': periodic per-user profit, written while the
     traders are writing trades.
 
@@ -575,8 +627,10 @@ def profit_process(args, suffix, user_ids, started_at, result_q):
 
     try:
         while time.time() < deadline:
+            if stop_event is not None and stop_event.is_set():
+                break
             time.sleep(min(args.profit_interval, max(0.0, deadline - time.time())))
-            day = sim_day(started_at, args.seconds, args.days)
+            day = sim_day(started_at, args.seconds, args.days, progress)
             if day < next_period:
                 continue
 
@@ -588,6 +642,8 @@ def profit_process(args, suffix, user_ids, started_at, result_q):
             sample = rng.sample(user_ids, min(args.profit_users, len(user_ids)))
             for user_id in sample:
                 if time.time() >= deadline:
+                    break
+                if stop_event is not None and stop_event.is_set():
                     break
                 text = client.timed(
                     f"SELECT * FROM {accounts_table} WHERE user_id = {user_id}",
@@ -754,6 +810,13 @@ def print_scenario(meta, trader_results, profit_result, verify):
           f"in {meta['seconds']:.1f}s wall")
     print(f"  transaction = 2 INSERT trades + 2 UPDATE accounts, "
           f"{meta['traders']} trader process(es)")
+    if meta.get("limit") == "transactions":
+        print(f"  ran to a work target of {meta['txn_target']:,} transactions "
+              f"(ceiling was {meta['seconds_budget']:.0f}s); TPS below is over the "
+              f"{meta['seconds']:.1f}s the work took")
+    elif meta.get("txn_target"):
+        print(f"  work target of {meta['txn_target']:,} transactions NOT reached in "
+              f"{meta['seconds_budget']:.0f}s - raise --seconds to complete it")
     print()
 
     committed = sum(r["committed"] for r in trader_results)
@@ -841,6 +904,14 @@ def main():
     parser.add_argument("--profit-users", type=int, default=50,
                         help="users sampled per period (default: 50); each costs one "
                              "FilterScan of accounts plus one INSERT")
+
+    parser.add_argument("--txn-per-user", type=float, default=0.0, metavar="N",
+                        help="stop after N x --users transactions have committed, "
+                             "instead of running for the whole --seconds. 0 (default) "
+                             "keeps the time-based behaviour. --seconds becomes a "
+                             "ceiling, and TPS is reported over the time the work "
+                             "actually took - so a run that hits its target early is "
+                             "measured over that shorter window, not over the budget")
 
     parser.add_argument("--cabin", dest="cabin", action="store_true", default=False,
                         help=f"declare a Cabin on {CABIN_RELATION}.{CABIN_COLUMN} "
@@ -933,9 +1004,24 @@ def main():
     result_q = multiprocessing.Queue()
     started_at = time.time()
 
+    # The work target, split across traders. Split rather than shared: a
+    # shared counter would need a lock on the hot path, and the partitions
+    # are already equal-sized, so an equal split is the same total.
+    total_target = int(round(args.txn_per_user * len(user_ids))) if args.txn_per_user else 0
+    per_trader = (total_target + args.traders - 1) // args.traders if total_target else 0
+
+    # Set by whichever trader finishes first, so the reporting process ends
+    # with the measured window instead of running out the --seconds ceiling.
+    stop_event = multiprocessing.Event()
+
+    # Shared work progress, for the business clock. Only meaningful for a
+    # target run; a time-based one leaves it None and keeps the wall clock.
+    progress = multiprocessing.Value("d", 0.0, lock=False) if total_target else None
+
     workers = [multiprocessing.Process(
         target=trader_process,
-        args=(i, args, suffix, partitions[i], asset_ids, started_at, result_q))
+        args=(i, args, suffix, partitions[i], asset_ids, started_at, result_q,
+              per_trader, stop_event, progress))
         for i in range(args.traders)]
 
     reporter_q = multiprocessing.Queue()
@@ -943,11 +1029,18 @@ def main():
     if args.profit:
         reporter = multiprocessing.Process(
             target=profit_process,
-            args=(args, suffix, user_ids, started_at, reporter_q))
+            args=(args, suffix, user_ids, started_at, reporter_q, stop_event, progress))
 
-    print(f"running {args.seconds:.0f}s: {args.traders} trader process(es)"
-          f"{' + 1 reporting process' if reporter else ''}, "
-          f"{args.days} simulated days", flush=True)
+    if total_target:
+        print(f"running until {total_target:,} transactions commit "
+              f"({args.txn_per_user:g} per user, ceiling {args.seconds:.0f}s): "
+              f"{args.traders} trader process(es)"
+              f"{' + 1 reporting process' if reporter else ''}, "
+              f"{args.days} simulated days", flush=True)
+    else:
+        print(f"running {args.seconds:.0f}s: {args.traders} trader process(es)"
+              f"{' + 1 reporting process' if reporter else ''}, "
+              f"{args.days} simulated days", flush=True)
 
     for w in workers:
         w.start()
@@ -988,7 +1081,17 @@ def main():
               f"{profit_result['fatal']}", file=sys.stderr)
         profit_result = None
 
-    wall = args.seconds
+    # **The measured window, not the budget.** TPS is committed/wall, so a
+    # count-targeted run that hit its target in 40s of a 600s ceiling must
+    # be divided by 40 or the number is meaningless. The traders' own
+    # measured elapsed is the truth; the max across them is the span in
+    # which all the work happened.
+    #
+    # For a time-based run this is the same number it always was, to within
+    # process startup - the traders run to the deadline by construction.
+    wall = max((r.get("elapsed", 0.0) for r in trader_results), default=args.seconds)
+    if wall <= 0:
+        wall = args.seconds
 
     # ---- report ----------------------------------------------------------
     phases = list(load_phases)
@@ -1058,7 +1161,15 @@ def main():
         "accounts": len(accounts),
         "assets": len(asset_ids),
         "days": args.days,
-        "seconds": wall,
+        "seconds": round(wall, 3),
+        "seconds_budget": args.seconds,
+        # What ended the run. A target-limited run is a *fixed amount of
+        # work* measured in time; a time-limited one is fixed time measured
+        # in work. They are not the same experiment and the numbers should
+        # not be read as though they were.
+        "limit": ("transactions" if any(r.get("hit_target") for r in trader_results)
+                  else "seconds"),
+        "txn_target": total_target,
         "traders": args.traders,
         # One per trader, plus the reporting process's own.
         "connections": args.traders + (1 if profit_result else 0),
