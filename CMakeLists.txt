@@ -82,6 +82,9 @@ add_library(kds
     src/exec/cabin_ddl.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
+    src/sched/spsc_ring.cpp
+    src/sched/ring_transport.cpp
+    src/sched/sim_ring_transport.cpp
     src/sched/epoll_io_backend.cpp
 )
 target_include_directories(kds PUBLIC include)

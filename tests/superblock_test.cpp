@@ -3,6 +3,7 @@
 #include <array>
 #include <cstring>
 #include <span>
+#include <string>
 
 #include <gtest/gtest.h>
 
@@ -159,6 +160,73 @@ TEST(SuperBlockTest, DecodeRefusesAnyVersionButThisBuilds) {
         EXPECT_FALSE(decoded.ok()) << "version " << version << " should not mount";
         EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
     }
+}
+
+// ---- The pinned core count (workplan-crosscore.md M6) -----------------
+
+TEST(SuperBlockTest, TheCoreCountIsPinnedAndRoundTrips) {
+    SuperBlock sb = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth,
+                                            /*core_count=*/4);
+    EXPECT_EQ(sb.core_count(), 4u);
+
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().core_count(), 4u);
+}
+
+TEST(SuperBlockTest, ADefaultFreshSuperBlockIsSingleCore) {
+    EXPECT_EQ(SuperBlock::CreateFresh(1000).core_count(), 1u);
+}
+
+TEST(SuperBlockTest, AZeroCoreCountIsCorruptionRatherThanADefault) {
+    // The state a version-9 image would decode to, reading the field out of
+    // what used to be the reserved tail. "Boot with no cores" is not
+    // something to carry forward, and the version bump is what normally
+    // catches it - this is the belt to that braces.
+    SuperBlock sb = SuperBlock::CreateFresh(1000);
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    const std::uint32_t zero = 0;
+    std::memcpy(buf.data() + kSuperBlockBodyOffset + kCoreCountOffset, &zero, sizeof(zero));
+
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+}
+
+TEST(SuperBlockTest, ACoreCountAboveTheAnchorTableIsRefused) {
+    // kMaxWalCores is a hard ceiling, not a preference: the anchor table is
+    // indexed by core_id and a core above it has nowhere to publish from.
+    EXPECT_TRUE(CheckCoreCount(kMaxWalCores).ok());
+    EXPECT_EQ(CheckCoreCount(kMaxWalCores + 1).code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(CheckCoreCount(0).code(), StatusCode::kInvalidArgument);
+
+    // And the ceiling is named, so an operator who hits it learns what
+    // bounds them.
+    EXPECT_NE(CheckCoreCount(kMaxWalCores + 1).message().find(std::to_string(kMaxWalCores)),
+              std::string::npos);
+}
+
+TEST(SuperBlockTest, TheCoreCountDoesNotDisturbTheAnchorTable) {
+    // It is appended past next_trx_id for exactly this reason: no existing
+    // offset moves. Asserted rather than assumed, because the last two
+    // format bumps both turned on this property holding.
+    SuperBlock sb = SuperBlock::CreateFresh(1000, storage::kDefaultInlineCellWidth, 8);
+    ASSERT_TRUE(sb.SetWalAnchor(3, WalAnchorFields{11, 22, 33, 44}).ok());
+
+    PageBuf buf{};
+    sb.Encode(AsSpan(buf));
+    auto decoded = SuperBlock::Decode(AsConstSpan(buf));
+    ASSERT_TRUE(decoded.ok());
+
+    EXPECT_EQ(decoded.value().core_count(), 8u);
+    EXPECT_EQ(decoded.value().wal_anchor(3).checkpoint_lsn, 11u);
+    EXPECT_EQ(decoded.value().wal_anchor(3).redo_start_lsn, 22u);
+    EXPECT_EQ(decoded.value().wal_anchor(3).durable_lsn, 33u);
+    EXPECT_EQ(decoded.value().wal_anchor(3).segment_no, 44u);
+    EXPECT_EQ(decoded.value().next_trx_id(), sb.next_trx_id());
 }
 
 }  // namespace

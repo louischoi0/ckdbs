@@ -149,5 +149,68 @@ TEST(BootstrapTest, AnIllegalCellWidthIsRefusedBeforeAnythingIsCreated) {
     EXPECT_FALSE(store.Get(server::kSuperBlockPageId).ok());
 }
 
+// ---- The pinned core count (docs/workplan-crosscore.md M6) -------------
+//
+// Same shape as the width above and for a reason of the same weight: WAL
+// streams are per core, so the count decides how many streams the database
+// has. Mounting under a different one would leave streams with nothing to
+// replay them, and recovery under a changed count is [OPEN] (wal.md §3) -
+// the refusal is what stops this path from settling it by accident.
+
+TEST(BootstrapTest, AFreshDatabasePinsTheConfiguredCoreCount) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+
+    auto result = BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/4);
+    ASSERT_TRUE(result.ok()) << result.status().message();
+    EXPECT_EQ(result.value().superblock.core_count(), 4u);
+}
+
+TEST(BootstrapTest, RemountingWithADifferentCoreCountIsRefusedNamingBoth) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+    ASSERT_TRUE(BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/1).ok());
+
+    auto second = BootstrapDatabase(store, 2000, storage::kDefaultInlineCellWidth, /*cores=*/2);
+    ASSERT_FALSE(second.ok());
+    EXPECT_EQ(second.status().code(), StatusCode::kInvalidArgument);
+
+    EXPECT_NE(second.status().message().find("cores 2"), std::string::npos)
+        << second.status().message();
+    EXPECT_NE(second.status().message().find("the 1"), std::string::npos)
+        << second.status().message();
+}
+
+TEST(BootstrapTest, RemountingWithTheSameCoreCountIsFine) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+    ASSERT_TRUE(BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/4).ok());
+
+    auto second = BootstrapDatabase(store, 2000, storage::kDefaultInlineCellWidth, /*cores=*/4);
+    ASSERT_TRUE(second.ok()) << second.status().message();
+    EXPECT_EQ(second.value().superblock.core_count(), 4u);
+}
+
+TEST(BootstrapTest, AnIllegalCoreCountIsRefusedBeforeAnythingIsCreated) {
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+
+    auto result = BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/0);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_FALSE(store.Get(server::kSuperBlockPageId).ok());
+}
+
+TEST(BootstrapTest, SystemRelationsAreOwnedByTheSystemCore) {
+    // M5: core 0 owns the superblock, the free map, file growth and the
+    // catalog pages, so every relation that lives on those pages is its.
+    storage::InMemoryPageStore store(server::kFirstUserPageId);
+    auto result = BootstrapDatabase(store, 1000, storage::kDefaultInlineCellWidth, /*cores=*/4);
+    ASSERT_TRUE(result.ok()) << result.status().message();
+
+    for (const catalog::Oid oid : {catalog::kSysTablesTable, catalog::kSysColumnsTable,
+                                    catalog::kSysObjectsTable, catalog::kSysTypesTable}) {
+        auto row = result.value().catalog.GetSysTableRow(oid);
+        ASSERT_TRUE(row.ok()) << row.status().message();
+        EXPECT_EQ(row.value().owner_core, catalog::kSystemCore) << "oid " << oid;
+    }
+}
+
 }  // namespace
 }  // namespace kds::bootstrap

@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <set>
+#include <string>
 #include <vector>
 
 #include "kds/catalog/well_known.hpp"
@@ -615,6 +617,101 @@ TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().use_count, 0u);
     EXPECT_EQ(row.value().last_seen, 0u);
+}
+
+// ---- Relation ownership (docs/workplan-crosscore.md M1) ---------------
+
+class OwnerCoreTest : public ::testing::Test {
+protected:
+    Schema OneColumnSchema() {
+        Schema schema;
+        SysColumnRow id{};
+        id.pos = 0;
+        SetName(id.name, "id");
+        id.type_val = kTypeValInt64;
+        id.len = 8;
+        id.notnull = true;
+        schema.columns.push_back(id);
+        return schema;
+    }
+
+    storage::InMemoryPageStore store_{128};
+};
+
+TEST_F(OwnerCoreTest, ASingleCoreInstancePutsEveryRelationOnCoreZero) {
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/1);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    auto oid = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    auto row = catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().owner_core, 0u);
+}
+
+TEST_F(OwnerCoreTest, CreateTableRecordsAnOwnerAndTableAccessCarriesIt) {
+    // The path that matters: the planner reads TableAccess, not the row, so
+    // an owner recorded on disk and lost on the way into the cache would be
+    // invisible until the pipeline existed to notice.
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    auto oid = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
+                                    ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    auto row = catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    EXPECT_NE(row.value().owner_core, kSystemCore) << "a user relation landed on the system core";
+
+    auto access = catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_EQ(access.value()->owner_core, row.value().owner_core);
+}
+
+TEST_F(OwnerCoreTest, SuccessiveRelationsDoNotAllLandOnOneCore) {
+    // The `[PROPOSED]` round-robin doing something. Asserted as a
+    // distribution property rather than as exact assignments, because the
+    // policy is explicitly not settled - what must hold is that ownership
+    // is recorded and spread, not which core got which table.
+    Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/3);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    std::set<std::uint32_t> owners;
+    for (int i = 0; i < 6; ++i) {
+        auto oid = catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
+                                        OneColumnSchema(), ClusteredType::kHeap);
+        ASSERT_TRUE(oid.ok()) << oid.status().message();
+        auto row = catalog.GetSysTableRow(oid.value());
+        ASSERT_TRUE(row.ok());
+        owners.insert(row.value().owner_core);
+    }
+    EXPECT_EQ(owners, (std::set<std::uint32_t>{1, 2}));
+}
+
+TEST_F(OwnerCoreTest, OwnershipSurvivesAReopen) {
+    // It is a catalog fact, so it has to come back off the page - not be
+    // re-derived, which workplan guideline 4 forbids outright.
+    std::uint32_t assigned = 0;
+    Oid oid = 0;
+    {
+        Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
+        ASSERT_TRUE(catalog.Bootstrap().ok());
+        auto created = catalog.CreateTable(kNamespacePublic, "t", OneColumnSchema(),
+                                            ClusteredType::kHeap);
+        ASSERT_TRUE(created.ok());
+        oid = created.value();
+        auto row = catalog.GetSysTableRow(oid);
+        ASSERT_TRUE(row.ok());
+        assigned = row.value().owner_core;
+    }
+
+    Catalog reopened(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
+    auto row = reopened.GetSysTableRow(oid);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    EXPECT_EQ(row.value().owner_core, assigned);
 }
 
 }  // namespace

@@ -29,6 +29,75 @@ Status Scheduler::UnregisterIoHandler(IoHandle handle) {
     return io_backend_.Unregister(handle);
 }
 
+void Scheduler::AttachTransport(RingTransport* transport, std::uint32_t core_id) noexcept {
+    transport_ = transport;
+    core_id_ = core_id;
+}
+
+Status Scheduler::RegisterMessageHandler(RingMessageKind kind, MessageHandler handler) {
+    const auto raw = static_cast<std::uint16_t>(kind);
+    if (!IsKnownRingMessageKind(raw)) {
+        // Including kUnset, which is the point of kUnset. A handler bound
+        // to a number no sender can produce is a no-op nobody would notice,
+        // and the central kind enum exists precisely so that number does
+        // not exist.
+        return Status::InvalidArgument("scheduler: message kind " + std::to_string(raw) +
+                                       " is not one this build knows");
+    }
+    message_handlers_[raw] = std::move(handler);
+    return Status::OK();
+}
+
+bool Scheduler::DrainInbox() {
+    if (transport_ == nullptr) return false;
+
+    bool did_work = false;
+    for (int drained = 0; drained < config_.max_messages_per_iteration; ++drained) {
+        MessageHeader header{};
+        if (!transport_->TryReceive(core_id_, header, message_payload_scratch_)) break;
+
+        did_work = true;
+        ++messages_drained_;
+
+        auto it = message_handlers_.find(header.kind);
+        if (it == message_handlers_.end()) {
+            // Dropped, not failed. A message with no handler here is the
+            // same situation as one whose tag matches no live pipeline
+            // state - normal operation under workplan guideline 5, since a
+            // request can be torn down while its messages are still in
+            // flight. It is logged because the *other* reading, a handler
+            // somebody forgot to register, looks identical from here and
+            // would otherwise be invisible.
+            if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+                log_->Debug("sched", std::string("dropped a ") +
+                                         RingMessageKindName(
+                                             static_cast<RingMessageKind>(header.kind)) +
+                                         " message from core " + std::to_string(header.src_core) +
+                                         ": no handler on core " + std::to_string(core_id_));
+            }
+            continue;
+        }
+
+        // The handler runs inside a task, not here. Phase 3's job is to
+        // move messages out of the ring - doing the work in the drain would
+        // put an unbounded amount of it inside a phase that has to stay
+        // cheap, which is the same contract the phase-1 io handlers are
+        // under.
+        //
+        // The payload is copied into the task because the scratch buffer is
+        // overwritten by the very next iteration of this loop, and the task
+        // does not run until phase 4.
+        Submit(std::make_unique<FunctionTask>(
+            GroupOf(header),
+            [handler = it->second, header,
+             payload = message_payload_scratch_]() mutable -> PollResult {
+                handler(header, std::span<const std::byte>(payload));
+                return PollResult::kDone;
+            }));
+    }
+    return did_work;
+}
+
 TimerId Scheduler::ArmTimer(MonoTimeNs deadline, MonoTimeNs period_ns,
                             std::function<void()> fn) {
     const TimerId id = next_timer_id_++;
@@ -224,8 +293,9 @@ bool Scheduler::RunOnce() {
     // replacing it would cost.
     if (ExpireTimers()) did_work = true;
 
-    // Phase 3: drain cross-core inboxes. [Phase 2+ - single reactor only,
-    // no SPSC rings yet; see docs/sched.md section 5.]
+    // Phase 3: drain cross-core inboxes (sched.md section 5). A no-op with
+    // no transport attached, which is every single-core build.
+    if (DrainInbox()) did_work = true;
 
     // Phase 4: run ready tasks under the loop budget.
     if (RunReadyTasks()) did_work = true;

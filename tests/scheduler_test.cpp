@@ -1,13 +1,17 @@
 #include "kds/sched/scheduler.hpp"
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
+#include <span>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
+#include "kds/sched/ring_transport.hpp"
 
 // Phase-2 timers, driven off a ManualClock so "an interval elapsed" is a
 // statement about the injected clock and never about wall time (rules.md
@@ -271,6 +275,209 @@ TEST_F(SchedulerTimerTest, AReadyTaskDropsTheIdleBlockToZero) {
     scheduler.RunOnce();
     ASSERT_EQ(io.timeouts.size(), 1u);
     EXPECT_EQ(io.timeouts[0], 0) << "runnable work must never wait on the io backend";
+}
+
+// ---- Phase 3: the cross-core inbox drain (sched.md §5, workplan P1) ----
+//
+// What the drain owes its callers: a received message becomes a *task*, in
+// the group the **sender** designated, run in phase 4 like any other - not
+// work done inside the drain. And a message nobody handles is dropped
+// rather than fatal, because a request can be torn down while its messages
+// are still in flight (workplan guideline 5).
+
+std::vector<std::byte> PayloadOf(std::string_view s) {
+    std::vector<std::byte> out(s.size());
+    if (!s.empty()) std::memcpy(out.data(), s.data(), s.size());
+    return out;
+}
+
+MessageHeader MessageTo(std::uint32_t dst, RingMessageKind kind, SchedulingGroup group) {
+    MessageHeader h{};
+    h.request_id = 1;
+    h.src_core = 0;
+    h.dst_core = dst;
+    h.session_core = 0;
+    h.kind = static_cast<std::uint16_t>(kind);
+    h.sched_group = static_cast<std::uint16_t>(group);
+    return h;
+}
+
+class SchedulerInboxTest : public ::testing::Test {
+protected:
+    ManualClock clock_;
+    NullIoBackend io_;
+};
+
+TEST_F(SchedulerInboxTest, WithNoTransportPhaseThreeIsANoOp) {
+    // The single-core build (workplan guideline 2): the phase is present in
+    // the fixed order and costs one null test.
+    Scheduler scheduler(clock_, io_);
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.messages_drained(), 0u);
+}
+
+TEST_F(SchedulerInboxTest, AReceivedMessageBecomesATaskInTheSendersGroup) {
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+
+    Scheduler scheduler(clock_, io_);
+    scheduler.AttachTransport(&transport.value(), /*core_id=*/1);
+
+    SchedulingGroup ran_in = SchedulingGroup::kSystem;
+    std::string got_payload;
+    bool handled = false;
+    ASSERT_TRUE(scheduler
+                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                                            [&](const MessageHeader& h,
+                                                std::span<const std::byte> payload) {
+                                                handled = true;
+                                                ran_in = GroupOf(h);
+                                                got_payload.assign(
+                                                    reinterpret_cast<const char*>(payload.data()),
+                                                    payload.size());
+                                            })
+                    .ok());
+
+    ASSERT_TRUE(transport.value()
+                    .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                                        SchedulingGroup::kMaintenance),
+                             PayloadOf("rows"))
+                    .ok());
+
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.messages_drained(), 1u);
+    EXPECT_TRUE(handled);
+    // The sender chose `maintenance`; the receiver must not substitute its
+    // own idea of what this kind is worth (sched.md §5).
+    EXPECT_EQ(ran_in, SchedulingGroup::kMaintenance);
+    EXPECT_EQ(got_payload, "rows");
+}
+
+TEST_F(SchedulerInboxTest, TheHandlerRunsInPhaseFourAndNotInsideTheDrain) {
+    // The drain has to stay cheap and bounded, exactly as the phase-1 io
+    // handlers do. The observable form of that: the handler has not run
+    // when the drain finishes, only when tasks do.
+    SchedulerConfig config;
+    config.max_tasks_per_iteration = 0;  // phase 4 runs nothing this iteration
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+
+    Scheduler scheduler(clock_, io_, config);
+    scheduler.AttachTransport(&transport.value(), 1);
+
+    bool handled = false;
+    ASSERT_TRUE(scheduler
+                    .RegisterMessageHandler(
+                        RingMessageKind::kStepBatch,
+                        [&](const MessageHeader&, std::span<const std::byte>) { handled = true; })
+                    .ok());
+    ASSERT_TRUE(transport.value()
+                    .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                                        SchedulingGroup::kForeground),
+                             PayloadOf("x"))
+                    .ok());
+
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.messages_drained(), 1u) << "the message was not taken off the ring";
+    EXPECT_FALSE(handled) << "the drain did the work itself instead of queuing a task";
+}
+
+TEST_F(SchedulerInboxTest, AMessageWithNoHandlerIsDroppedAndNotFatal) {
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+
+    Scheduler scheduler(clock_, io_);
+    scheduler.AttachTransport(&transport.value(), 1);
+
+    ASSERT_TRUE(transport.value()
+                    .TrySend(MessageTo(1, RingMessageKind::kStepCancel,
+                                        SchedulingGroup::kForeground),
+                             PayloadOf("late"))
+                    .ok());
+
+    // Normal operation, not an error: a cancel can outlive the request it
+    // belonged to. The reactor keeps going and the message is consumed.
+    EXPECT_TRUE(scheduler.RunOnce());
+    EXPECT_EQ(scheduler.messages_drained(), 1u);
+
+    MessageHeader header{};
+    std::vector<std::byte> payload;
+    EXPECT_FALSE(transport.value().TryReceive(1, header, payload)) << "the message was left behind";
+}
+
+TEST_F(SchedulerInboxTest, TheDrainIsBoundedByItsLoopBudget) {
+    // sched.md §2: a phase may not run unboundedly, or a flooded core never
+    // reaches its I/O completions. What is left on the ring is picked up
+    // next iteration, so nothing is lost by stopping early.
+    SchedulerConfig config;
+    config.max_messages_per_iteration = 2;
+    auto transport = RealRingTransport::Create(2, 16, 64);
+    ASSERT_TRUE(transport.ok());
+
+    Scheduler scheduler(clock_, io_, config);
+    scheduler.AttachTransport(&transport.value(), 1);
+    ASSERT_TRUE(scheduler
+                    .RegisterMessageHandler(
+                        RingMessageKind::kStepBatch,
+                        [](const MessageHeader&, std::span<const std::byte>) {})
+                    .ok());
+
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(transport.value()
+                        .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                                            SchedulingGroup::kForeground),
+                                 PayloadOf("x"))
+                        .ok());
+    }
+
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.messages_drained(), 2u);
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.messages_drained(), 4u);
+    scheduler.RunOnce();
+    EXPECT_EQ(scheduler.messages_drained(), 5u);
+}
+
+TEST_F(SchedulerInboxTest, AHandlerForAKindThisBuildDoesNotKnowIsRefused) {
+    // Including kUnset. A handler bound to a number no sender can produce
+    // is a silent no-op, and the central kind enum exists so that number
+    // does not exist.
+    Scheduler scheduler(clock_, io_);
+    EXPECT_EQ(scheduler
+                  .RegisterMessageHandler(
+                      RingMessageKind::kUnset,
+                      [](const MessageHeader&, std::span<const std::byte>) {})
+                  .code(),
+              StatusCode::kInvalidArgument);
+}
+
+TEST_F(SchedulerInboxTest, PhaseOrderIsUnchangedByTheDrain) {
+    // Phases run in the fixed order of sched.md §2, and phase 3 sits
+    // between timers and ready tasks. A timer armed for now must therefore
+    // fire before a message received this same iteration is handled.
+    auto transport = RealRingTransport::Create(2, 8, 64);
+    ASSERT_TRUE(transport.ok());
+
+    Scheduler scheduler(clock_, io_);
+    scheduler.AttachTransport(&transport.value(), 1);
+
+    std::vector<std::string> order;
+    scheduler.SubmitAt(0, [&] { order.push_back("timer"); });
+    ASSERT_TRUE(scheduler
+                    .RegisterMessageHandler(RingMessageKind::kStepBatch,
+                                            [&](const MessageHeader&,
+                                                std::span<const std::byte>) {
+                                                order.push_back("message");
+                                            })
+                    .ok());
+    ASSERT_TRUE(transport.value()
+                    .TrySend(MessageTo(1, RingMessageKind::kStepBatch,
+                                        SchedulingGroup::kForeground),
+                             PayloadOf("x"))
+                    .ok());
+
+    scheduler.RunOnce();
+    EXPECT_EQ(order, (std::vector<std::string>{"timer", "message"}));
 }
 
 }  // namespace

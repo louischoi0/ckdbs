@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -11,21 +13,24 @@
 #include "kds/base/log.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
+#include "kds/sched/ring_message.hpp"
+#include "kds/sched/ring_transport.hpp"
 #include "kds/sched/task.hpp"
 
-// Single-core reactor (docs/sched.md sections 2-4). This is Phase 1 of the
-// scheduler blueprint: exactly one Scheduler instance runs on the calling
-// thread (no worker-thread spawning or CPU pinning yet - sched.md's
-// thread-per-core fan-out, cross-core SPSC rings, hierarchical timing
-// wheel, SLO-feedback controller, and deterministic multi-reactor
-// simulation are all Phase 2+ and are not built here; see
-// docs/sched.md's "Implementation Status" section for what's left).
+// The reactor (docs/sched.md sections 2-4). One Scheduler runs on the
+// calling thread. Still missing from sched.md's blueprint: worker-thread
+// spawning and CPU pinning (workplan-crosscore.md P2), the hierarchical
+// timing wheel, and the SLO-feedback controller. The cross-core inbox
+// (phase 3) is built - see AttachTransport() - though nothing constructs a
+// transport in production yet, so today every instance runs alone.
 //
 // Concurrency protocol: a Scheduler is core-local by construction - all of
-// Submit()/RegisterIoHandler()/RunOnce()/Run()/Stop() must be called from
-// the single thread that owns this reactor. There is nothing to lock
-// because (per rules.md #3) there is exactly one reactor today; the ready
-// queues and consumed-runtime counters are plain (non-atomic) fields.
+// Submit()/RegisterIoHandler()/RegisterMessageHandler()/RunOnce()/Run()/
+// Stop() must be called from the single thread that owns this reactor.
+// There is nothing to lock: the ready queues, the handler tables and the
+// consumed-runtime counters are plain (non-atomic) fields, and the only
+// atomics anywhere near this class are the two indices inside each SpscRing
+// (workplan-crosscore.md guideline 1).
 
 namespace kds::sched {
 
@@ -38,6 +43,14 @@ struct SchedulerConfig {
     // Share weight per scheduling group (sched.md section 4's share-
     // proportional picking), indexed by SchedulingGroupIndex().
     std::array<std::uint32_t, kNumSchedulingGroups> group_shares{1000, 100, 50};
+
+    // Max cross-core messages drained per RunOnce() (phase 3). The same
+    // loop-budget rule phase 4 follows and for the same reason (sched.md
+    // §2): a core under a message flood must still get to its I/O
+    // completions and its ready tasks this iteration. Undrained messages
+    // stay in the ring and are picked up next iteration - nothing is lost
+    // by stopping early.
+    int max_messages_per_iteration = 64;
 
     // Consumed-runtime counters are halved (all groups at once, so
     // relative shares are preserved) once the largest counter exceeds this
@@ -58,6 +71,16 @@ struct SchedulerConfig {
 };
 
 using IoHandler = std::function<void(const IoEvent&)>;
+
+// What a core does with a message addressed to it. Invoked from inside the
+// task phase 3 creates, never from the drain itself - so a handler may take
+// as long as a task may, and must yield like one.
+//
+// `payload` is a view into the scheduler's receive buffer and is **not**
+// valid past the call; a handler that needs to keep the bytes copies them.
+// The alternative - handing over an owning vector per message - would put
+// an allocation on the one path sched.md §2 says has none.
+using MessageHandler = std::function<void(const MessageHeader&, std::span<const std::byte>)>;
 
 // Identifies an armed timer, for cancellation. Never reused, so cancelling
 // an already-fired one-shot is a harmless no-op rather than a way to kill
@@ -85,6 +108,31 @@ public:
     Status RegisterIoHandler(IoHandle handle, IoInterest interest, IoHandler handler);
     Status ModifyIoHandler(IoHandle handle, IoInterest interest);
     Status UnregisterIoHandler(IoHandle handle);
+
+    // ---- Cross-core messaging (sched.md §5, workplan P1) ----------------
+
+    // Attaches this reactor to `transport` as the reactor for `core_id`.
+    // `transport` must outlive the scheduler.
+    //
+    // Null is the default and the whole single-core story: a scheduler with
+    // no transport skips phase 3 at the cost of one null test, so every
+    // existing construction site is untouched and the `cores = 1` build
+    // contributes zero messages and zero allocations (workplan guideline
+    // 2).
+    void AttachTransport(RingTransport* transport, std::uint32_t core_id) noexcept;
+
+    // What to run when a message of `kind` arrives. Replaces any previous
+    // handler for that kind. Fails with InvalidArgument for `kUnset`, which
+    // names nothing, and for a kind this build does not know - a handler
+    // registered against a number nobody can send is a silent no-op, and
+    // the point of the central enum is that such a number does not exist.
+    Status RegisterMessageHandler(RingMessageKind kind, MessageHandler handler);
+
+    std::uint32_t core_id() const noexcept { return core_id_; }
+
+    // Messages this reactor has drained. Diagnostics and tests - notably
+    // the single-core assertion that it stays 0.
+    std::uint64_t messages_drained() const noexcept { return messages_drained_; }
 
     // ---- Timers (sched.md section 6, phase 2) ---------------------------
     //
@@ -117,10 +165,8 @@ public:
     std::size_t armed_timers() const noexcept { return timers_.size(); }
 
     // Runs one iteration of the fixed-order phase loop (sched.md section
-    // 2). Phase 3 (cross-core inbox drain) is still an explicit no-op - the
-    // ordering is preserved so Phase 2+ work slots in later without
-    // reshaping this method. Returns true if any task ran, any I/O event
-    // was drained, or any timer fired.
+    // 2). Returns true if any task ran, any I/O event was drained, any
+    // timer fired, or any cross-core message was received.
     bool RunOnce();
 
     // Runs RunOnce() until Stop() is called (from within a task, e.g. one
@@ -158,6 +204,7 @@ private:
     };
 
     bool RunReadyTasks();
+    bool DrainInbox();
     bool PickNextGroup(SchedulingGroup& out) const;
     void MaybeDecayConsumedRuntime();
     bool ExpireTimers();
@@ -178,6 +225,19 @@ private:
     std::array<std::uint64_t, kNumSchedulingGroups> consumed_ns_{};
     std::unordered_map<IoHandle, IoHandler> io_handlers_;
     std::vector<IoEvent> io_events_scratch_;
+
+    // ---- Cross-core (sched.md §5) ---------------------------------------
+    RingTransport* transport_ = nullptr;
+    std::uint32_t core_id_ = 0;
+    // Keyed by the enum's underlying value. A small flat map would do as
+    // well; what matters is that nothing iterates it, so its order is never
+    // observable (sched.md §8's deterministic-container rule).
+    std::unordered_map<std::uint16_t, MessageHandler> message_handlers_;
+    // Reused across drains, which is what keeps a received message from
+    // allocating in steady state - the same arrangement io_events_scratch_
+    // has.
+    std::vector<std::byte> message_payload_scratch_;
+    std::uint64_t messages_drained_ = 0;
 
     std::vector<Timer> timers_;                  // heap, LaterDeadlineFirst
     std::unordered_set<TimerId> cancelled_timers_;

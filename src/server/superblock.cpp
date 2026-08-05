@@ -9,10 +9,24 @@
 
 namespace kds::server {
 
+Status CheckCoreCount(std::uint32_t cores) {
+    if (cores == 0) {
+        return Status::InvalidArgument("cores must be at least 1");
+    }
+    if (cores > kMaxWalCores) {
+        return Status::InvalidArgument("cores " + std::to_string(cores) +
+                                       " is above kMaxWalCores (" +
+                                       std::to_string(kMaxWalCores) +
+                                       "), the number of superblock WAL anchor slots");
+    }
+    return Status::OK();
+}
+
 SuperBlock::SuperBlock() noexcept : fields_{} {}
 
 SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds,
-                                   std::uint32_t inline_cell_width) noexcept {
+                                   std::uint32_t inline_cell_width,
+                                   std::uint32_t core_count) noexcept {
     SuperBlockFields f{};
     f.magic = kSuperBlockMagic;
     f.version = kSuperBlockVersion;
@@ -23,6 +37,10 @@ SuperBlock SuperBlock::CreateFresh(std::uint64_t now_unix_seconds,
     f.inline_cell_width = inline_cell_width;
     // 2, never 1: kBootstrapXid is reserved forever (txn.md section 4.2).
     f.next_trx_id = catalog::kFirstUserTrxId;
+    // Not validated here - a constructor must not fail (rules.md #1), and
+    // the caller has already run CheckCoreCount before deciding to create a
+    // database at all. Exactly the arrangement inline_cell_width uses.
+    f.core_count = core_count;
     // The anchor table is left zeroed by the member initializer: a fresh
     // database has no checkpoint on any core, which is what an all-zero
     // anchor means (superblock.hpp).
@@ -69,6 +87,16 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
                                   " is below the first user transaction id");
     }
 
+    std::memcpy(&f.core_count, base + kCoreCountOffset, sizeof(f.core_count));
+    if (Status s = CheckCoreCount(f.core_count); !s.ok()) {
+        // A count this build could never have written - most likely a zero
+        // read out of an older image's reserved tail. Refused here rather
+        // than defaulted, because "how many streams does this database
+        // have" is not a question to guess at: the wrong answer leaves
+        // streams unreplayed.
+        return Status::Corruption("superblock: " + s.message());
+    }
+
     SuperBlock sb(f);
     for (std::uint32_t core = 0; core < kMaxWalCores; ++core) {
         const std::byte* entry = base + kWalAnchorTableOffset + core * kWalAnchorEntrySize;
@@ -112,6 +140,7 @@ void SuperBlock::Encode(std::span<std::byte, kPageSize> page) const {
                 sizeof(fields_.inline_cell_width));
 
     std::memcpy(base + kNextTrxIdOffset, &fields_.next_trx_id, sizeof(fields_.next_trx_id));
+    std::memcpy(base + kCoreCountOffset, &fields_.core_count, sizeof(fields_.core_count));
 
     // The whole table is written, not just the slots in use: an unpublished
     // slot's zeroes are meaningful (superblock.hpp), and writing only the

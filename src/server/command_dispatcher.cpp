@@ -660,6 +660,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
     std::ostringstream os;
     os << "oid=" << oid.value() << " root_page_id=" << table_row.value().desc_page_id
        << " clustered_type=" << clustered << " next_id=" << table_row.value().next_id
+       << " owner_core=" << table_row.value().owner_core
        << " columns=" << schema.columns.size();
 
     // K4's lifetime budget, beside the sequence it is derived from. Here as

@@ -6,12 +6,17 @@ namespace kds::bootstrap {
 
 StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
                                              std::uint64_t now_unix_seconds,
-                                             std::uint32_t inline_cell_width, Logger* log) {
+                                             std::uint32_t inline_cell_width,
+                                             std::uint32_t cores, Logger* log) {
     // Checked before anything is read or created: an illegal width must not
     // be the reason a fresh database gets pinned to a number no build can
     // use, and it must not be reported as a *mismatch* below when it is
     // really a bad setting.
     if (Status s = storage::CheckInlineCellWidth(inline_cell_width); !s.ok()) {
+        return s;
+    }
+    // Same rule, same reason (workplan-crosscore.md M6).
+    if (Status s = server::CheckCoreCount(cores); !s.ok()) {
         return s;
     }
 
@@ -55,12 +60,31 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
             return mismatch;
         }
 
+        // The pinned-core-count check (docs/workplan-crosscore.md M6). Both
+        // numbers are named for the reason the width's message gives, and
+        // the message says what the operator's actual options are - because
+        // unlike the width, this one has a legitimate fix that is not a
+        // rebuild: run with the count the database was created for.
+        if (sb.core_count() != cores) {
+            Status mismatch = Status::InvalidArgument(
+                "cores " + std::to_string(cores) + " does not match the " +
+                std::to_string(sb.core_count()) +
+                " this database was created with; WAL streams are per core, so mounting under a "
+                "different count would leave streams with nothing to replay them - restart with "
+                "cores = " + std::to_string(sb.core_count()) + ", or create a new database");
+            if (log != nullptr && log->enabled(LogLevel::kError)) {
+                log->Error("bootstrap", mismatch.message());
+            }
+            return mismatch;
+        }
+
         sb.MarkMounted(now_unix_seconds);
         sb.Encode(existing.value());
         if (log != nullptr && log->enabled(LogLevel::kInfo)) {
             log->Info("bootstrap", "mounted existing database, superblock version " +
                                        std::to_string(sb.version()) + ", inline_cell_width " +
-                                       std::to_string(sb.inline_cell_width()) +
+                                       std::to_string(sb.inline_cell_width()) + ", cores " +
+                                       std::to_string(sb.core_count()) +
                                        "; catalog bootstrap skipped");
         }
 
@@ -68,7 +92,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
         // already be there. Catalog::Bootstrap() is deliberately NOT
         // called here - see the file-level comment on why running it
         // again would be destructive.
-        catalog::Catalog catalog(store, sb.inline_cell_width());
+        catalog::Catalog catalog(store, sb.inline_cell_width(), sb.core_count());
         catalog.SetLogger(log);
         return BootstrapResult{sb, std::move(catalog)};
     }
@@ -84,15 +108,17 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     auto created = store.CreateAt(server::kSuperBlockPageId);
     if (!created.ok()) return created.status();
 
-    server::SuperBlock sb = server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width);
+    server::SuperBlock sb =
+        server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width, cores);
     sb.Encode(created.value());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +
                                    std::to_string(sb.version()) + ", inline_cell_width " +
-                                   std::to_string(inline_cell_width) + ")");
+                                   std::to_string(inline_cell_width) + ", cores " +
+                                   std::to_string(cores) + ")");
     }
 
-    catalog::Catalog catalog(store, inline_cell_width);
+    catalog::Catalog catalog(store, inline_cell_width, cores);
     catalog.SetLogger(log);
     if (Status s = catalog.Bootstrap(); !s.ok()) {
         return s;

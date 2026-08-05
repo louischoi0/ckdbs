@@ -46,6 +46,24 @@ data_file = kds.db
 # bytes per string column per row, paid whether or not the value is short.
 inline_cell_width = 64
 
+# How many reactor cores this instance runs (docs/workplan-crosscore.md M6).
+#
+# Pinned into the superblock when the database is created and validated
+# against it on every mount after — a mismatch refuses to start, naming both
+# numbers. WAL streams are per core, so this decides how many streams the
+# database has, and mounting under a different count would leave the
+# difference with nothing to replay them.
+#
+# 1 is the default, and today it is the only count that changes behaviour:
+# ownership is recorded and the cross-core transport is built (workplan P0,
+# P1), but nothing spawns a second reactor yet (P2). A higher value pins the
+# superblock and sizes the ring matrix, and does nothing else.
+#
+# Bounded above by the superblock's 64 WAL anchor slots, and refused if it
+# exceeds the machine's reported core count: reactors are pinned and never
+# block, so overcommitting them serializes whole workloads behind each other.
+cores = 1
+
 # ---- Network ---------------------------------------------------------------
 
 # TCP port, loopback only. 1..65535.

@@ -198,6 +198,30 @@ public:
         // threaded into catalog::RowLayout, never a compiled-in constant.
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth;
 
+        // How many reactor cores this instance runs
+        // (docs/workplan-crosscore.md M6). Pinned into the superblock at
+        // the bootstrap of a *new* database and validated against it on
+        // every mount after, exactly as `inline_cell_width` is - and for a
+        // reason of the same weight: WAL streams are per core, so the count
+        // decides how many streams the database has, and recovery under a
+        // changed count is [OPEN] (wal.md §3).
+        //
+        // **1 is the default and today it is also the only count that does
+        // anything.** The multicore workplan's P0 and P1 record ownership
+        // and build the cross-core transport; nothing spawns a second
+        // reactor yet (P2), so a value above 1 pins the superblock and
+        // sizes the ring matrix and changes nothing else. It is a real
+        // configuration rather than a placeholder because the pinning has
+        // to happen at bootstrap - a database created single-core cannot
+        // later be told it has four streams.
+        //
+        // Bounded above by server::kMaxWalCores (the superblock's anchor
+        // table is indexed by core_id) and validated against
+        // std::thread::hardware_concurrency() at startup: overcommitting
+        // pinned reactors to fewer physical cores is not a configuration
+        // this engine's cooperative, never-blocking task model survives.
+        std::uint32_t cores = 1;
+
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to
         // wherever the process runs"; the two are joined into one path, so
         // an absolute `log_file` is honoured on its own.

@@ -113,6 +113,18 @@ struct TableAccess {
     // through the pages' own links, never by moving the root.
     PageId varheap_page_id = kInvalidPageId;
 
+    // The core that owns this relation (docs/workplan-crosscore.md M1),
+    // from sys.tables. Cacheable by this struct's own admission test:
+    // ownership is assigned at CREATE and never rebalanced (M3 observes
+    // skew and deliberately does not act on it), so it cannot change
+    // without DDL.
+    //
+    // This is what the statement planner reads to pick crosscore.md §2's
+    // fast path over the pipeline. Defaulting to 0 is not a placeholder -
+    // it is the correct answer on a single-core instance and the system
+    // core's id everywhere else.
+    std::uint32_t owner_core = 0;
+
     // The relation's fixed row size and column offsets (row_layout.hpp),
     // computed once when the entry is filled. It belongs here for the same
     // reason the schema does and by the same test the rest of this struct

@@ -345,7 +345,7 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
 
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                                    PageId desc_page_id, ClusteredType clustered_type,
-                                   PageId varheap_page_id) {
+                                   PageId varheap_page_id, std::uint32_t owner_core) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -354,6 +354,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.clustered_type = clustered_type;
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
+    row.owner_core = owner_core;
     Status s = InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
@@ -462,11 +463,22 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
 
     Oid new_oid = GenerateUserOid();
 
+    // Placement (docs/workplan-crosscore.md M1). The rotation counter is
+    // how many relations already exist, read off the page rather than held
+    // in memory: it has to survive a restart, and the oid cannot serve
+    // because GenerateUserOid() restarts at kUserOidStart every boot
+    // (core_placement.hpp says why that matters). Nothing here decides the
+    // policy - AssignOwnerCore does, and it is `[PROPOSED]`.
+    auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables);
+    if (!existing_relations.ok()) return existing_relations.status();
+    const std::uint32_t owner_core =
+        AssignOwnerCore(core_count_, existing_relations.value().size());
+
     if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name); !s.ok()) {
         return s;
     }
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
-                                      varheap_root);
+                                      varheap_root, owner_core);
         !s.ok()) {
         return s;
     }
@@ -630,6 +642,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;
+    access.owner_core = table_row.value().owner_core;
 
     // The row-size constant, computed once here and carried for the life of
     // the entry (invariant 13). This is the only place it is derived: a

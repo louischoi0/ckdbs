@@ -50,9 +50,18 @@ struct BootstrapResult {
 // database opened under a different one decodes every row at the wrong
 // offsets rather than failing.
 //
+// `cores` is the running configuration's `cores`
+// (docs/workplan-crosscore.md M6), and is pinned and validated by exactly
+// the same rule and at exactly the same two moments. Its check is not about
+// tuple layout but about the WAL: streams are per core, so a database
+// created for N cores holds N streams, and mounting it at M leaves the
+// difference with nothing to replay them. Recovery under a changed core
+// count is [OPEN] (wal.md section 3) - the refusal is what keeps this
+// function from settling it silently.
+//
 // Fails if `store` reports an unexpected error at any step, if
-// `inline_cell_width` is outside the legal range or disagrees with the
-// pinned one, or if Catalog::Bootstrap() fails on the fresh path.
+// `inline_cell_width` or `cores` is outside its legal range or disagrees
+// with the pinned one, or if Catalog::Bootstrap() fails on the fresh path.
 //
 // `log` (optional, component tag "bootstrap") receives the one fact this
 // function decides and nothing else can recover afterwards: whether this
@@ -61,6 +70,7 @@ struct BootstrapResult {
 // outlive both the call and the returned result.
 StatusOr<BootstrapResult> BootstrapDatabase(
     storage::PageStore& store, std::uint64_t now_unix_seconds,
-    std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth, Logger* log = nullptr);
+    std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
+    std::uint32_t cores = 1, Logger* log = nullptr);
 
 }  // namespace kds::bootstrap

@@ -79,6 +79,29 @@ struct SysTableRow {
     // says may not be cached, and this one is cached on every TableAccess.
     PageId varheap_page_id;
 
+    // The core that owns this relation (docs/workplan-crosscore.md M1).
+    //
+    // **Ownership is a catalog fact and nothing else.** No code may derive
+    // it from a page id, a hash, or the topology - that is workplan
+    // guideline 4, and the reason is that page/extent hashing was rejected
+    // outright: a btree descent and a heap-chain walk cannot cross cores
+    // per hop, so ownership has to be per relation and it has to be
+    // recorded.
+    //
+    // What this field does *not* need to say is where the relation's
+    // auxiliaries live. Unique indexes, the Cabin, the Waystone pages and
+    // the var-heap are write-coupled and therefore always co-located
+    // (crosscore.md section 6) - and they are co-located structurally,
+    // because they hang off this same row rather than carrying an owner of
+    // their own. There is no way to spell a relation whose var-heap is
+    // somewhere else.
+    //
+    // Assigned once, at CREATE, by catalog/core_placement.hpp; never
+    // rebalanced (M3 observes skew and does not act on it), which is what
+    // makes it cacheable on TableAccess - a fact that cannot change without
+    // DDL.
+    std::uint32_t owner_core;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kNameOffset = 16;
@@ -88,7 +111,8 @@ struct SysTableRow {
     // streams read through memcpy, never overlaid on the buffer.
     static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kVarHeapPageIdOffset = kNextIdOffset + sizeof(std::uint64_t);
-    static constexpr std::size_t kOnDiskSize = kVarHeapPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kOwnerCoreOffset = kVarHeapPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kOnDiskSize = kOwnerCoreOffset + sizeof(std::uint32_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);

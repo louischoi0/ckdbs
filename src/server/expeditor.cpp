@@ -1,6 +1,7 @@
 #include "kds/server/expeditor.hpp"
 
 #include <limits>
+#include <thread>
 #include <utility>
 
 #include "kds/sched/epoll_io_backend.hpp"
@@ -22,7 +23,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "max_rows_touched",      "inline_cell_width",      "waystone_recording",
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
-            "cabin_max_entries_per_value"};
+            "cabin_max_entries_per_value", "cores"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -141,6 +142,23 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         inline_cell_width = width;
     }
+    if (file.Has("cores")) {
+        auto v = file.GetUint("cores");
+        if (!v.ok()) return v.status();
+        if (v.value() > std::numeric_limits<std::uint32_t>::max()) {
+            return Status::InvalidArgument(file.origin() + ": cores " +
+                                            std::to_string(v.value()) + " is not a u32");
+        }
+        auto count = static_cast<std::uint32_t>(v.value());
+        // Range-checked through the same function the superblock validates
+        // with, so a config file and a data file can never disagree about
+        // what a legal core count is - the arrangement inline_cell_width
+        // above already uses.
+        if (Status s = CheckCoreCount(count); !s.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + s.message());
+        }
+        cores = count;
+    }
     if (file.Has("log_dir")) {
         auto v = file.GetString("log_dir");
         if (!v.ok()) return v.status();
@@ -172,6 +190,29 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         config.wal_dir = config.data_file + ".wal";
     }
 
+    // Checked here rather than in ApplyFile() because it is the one
+    // validation that depends on the machine rather than on the value: a
+    // config file is portable and a hardware core count is not, so the same
+    // file must be able to fail on one host and pass on another. This is
+    // the platform layer (rules.md #4), which is the only place allowed to
+    // ask the hardware anything.
+    //
+    // Reactors are pinned and never block, so N of them on fewer than N
+    // cores does not run slower - it runs one reactor's whole workload
+    // behind another's, with no preemption to break the tie.
+    if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
+    const unsigned hardware_cores = std::thread::hardware_concurrency();
+    // 0 means "not detectable" - not "no cores". Skipping the check is the
+    // only honest response; refusing would make the server unstartable on a
+    // platform that simply declines to answer.
+    if (hardware_cores > 0 && config.cores > hardware_cores) {
+        return Status::InvalidArgument(
+            "cores " + std::to_string(config.cores) + " exceeds the " +
+            std::to_string(hardware_cores) +
+            " this machine reports; reactors are pinned one per core and never block, so "
+            "overcommitting them serializes whole workloads behind each other");
+    }
+
     auto device = storage::FilePageDevice::Open(config.data_file);
     if (!device.ok()) return device.status();
 
@@ -200,7 +241,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     auto database =
         bootstrap::BootstrapDatabase(*expeditor->store_, now_unix_seconds,
-                                     config.inline_cell_width, &*expeditor->logger_);
+                                     expeditor->config_.inline_cell_width,
+                                     expeditor->config_.cores, &*expeditor->logger_);
     if (!database.ok()) return database.status();
     expeditor->database_.emplace(std::move(database.value()));
     // The Catalog was moved out of the BootstrapResult; its logger came

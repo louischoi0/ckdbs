@@ -21,6 +21,10 @@ add_executable(kds_tests
     heap_chain_test.cpp
     btree_test.cpp
     superblock_test.cpp
+    spsc_ring_test.cpp
+    ring_transport_test.cpp
+    sim_ring_transport_test.cpp
+    send_retry_test.cpp
     row_codec_test.cpp
     row_layout_test.cpp
     tagged_cell_test.cpp

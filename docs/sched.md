@@ -54,6 +54,13 @@ Purpose: foreground OLTP and background engine work (physical relayout, statisti
 - **Backpressure:** a full ring fails the send with the KDS status type (no blocking, no `throw`). Callers must handle `ring_full` — typically by suspending the sending task until the reactor retries. Silent drop is forbidden.
 - The ring interface is injectable: simulation replaces it with an in-memory model that can delay and reorder deliveries (§8).
 
+**Status: built** (`docs/workplan-crosscore.md` P1, 2026-08-04). `sched/spsc_ring.hpp` is the ring, `sched/ring_transport.hpp` the injectable seam and its real N² implementation, `sched/sim_ring_transport.hpp` the simulated one, `sched/ring_message.hpp` the header and the central kind enum, `sched/send_retry.hpp` the `ring_full` answer. Two properties are worth stating here because callers depend on them and neither is obvious from the paragraph above:
+
+- **Delivery order is per edge only.** Messages on one `(src, dst)` pair arrive in send order; two messages from *different* peers to the same core have no defined relative order, and the real and simulated transports deliberately disagree about it — the real one rotates its peer sweep to avoid starvation, the simulation delivers by injected deadline. Nothing above this layer may depend on cross-peer order.
+- **The receiving handler runs in phase 4, not phase 3.** The drain moves messages off the ring and queues a task per message, under its own loop budget. A handler is a task and must yield like one.
+
+Nothing constructs a transport in production yet: with one reactor, phase 3 costs one null test.
+
 ## 6. Timers
 
 - Per-core **hierarchical timing wheel** keyed on the injected monotonic clock. No `std::chrono` reads in engine logic (`docs/rules.md` §4); the clock is a scheduler-provided interface.

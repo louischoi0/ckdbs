@@ -1,10 +1,12 @@
 #include "kds/catalog/rows.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "kds/catalog/core_placement.hpp"
 #include "kds/parser/fingerprint.hpp"
 
 // Pure codec tests for sys.patterns rows (docs/waystone-concpets.md
@@ -230,6 +232,109 @@ TEST(SysPatternRowTest, CatalogConstantsDoNotCollide) {
     EXPECT_NE(kCatalogPagePatterns, kCatalogPageTables);
     EXPECT_NE(kCatalogPagePatterns, kCatalogPageIndexes);
     EXPECT_LT(kCatalogPagePatterns, 128u);  // kds::server::kFirstUserPageId
+}
+
+// ---- sys.tables ------------------------------------------------------
+//
+// Covered here rather than only through catalog_test.cpp for the reason
+// this file's header gives: a round trip through the same code hides an
+// offset collision. `owner_core` was appended past `varheap_page_id`, so
+// the fields either side of it are the ones worth pinning.
+
+SysTableRow SampleTableRow() {
+    SysTableRow row{};
+    row.oid = 0x0102030405060708ull;
+    row.namespace_oid = 0x1112131415161718ull;
+    SetName(row.name, "orders");
+    row.desc_page_id = 0xA1A2A3A4u;
+    row.clustered_type = ClusteredType::kBtree;
+    row.next_id = 0x2122232425262728ull;
+    row.varheap_page_id = 0xB1B2B3B4u;
+    row.owner_core = 0xC1C2C3C4u;
+    return row;
+}
+
+TEST(SysTableRowTest, RoundTripsEveryFieldIncludingTheOwnerCore) {
+    const SysTableRow in = SampleTableRow();
+    auto out = SysTableRow::Decode(in.Encode());
+    ASSERT_TRUE(out.ok()) << out.status().message();
+
+    EXPECT_EQ(out.value().oid, in.oid);
+    EXPECT_EQ(out.value().namespace_oid, in.namespace_oid);
+    EXPECT_EQ(NameView(out.value().name), "orders");
+    EXPECT_EQ(out.value().desc_page_id, in.desc_page_id);
+    EXPECT_EQ(out.value().clustered_type, in.clustered_type);
+    EXPECT_EQ(out.value().next_id, in.next_id);
+    EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
+    EXPECT_EQ(out.value().owner_core, in.owner_core);
+}
+
+TEST(SysTableRowTest, TheOwnerCoreOccupiesItsOwnBytes) {
+    // Changing it must move nothing else - the check that catches an
+    // offset overlap, which a round trip through one codec cannot.
+    SysTableRow row = SampleTableRow();
+    const auto baseline = row.Encode();
+
+    row.owner_core = 0;
+    const auto zeroed = row.Encode();
+
+    for (std::size_t i = 0; i < SysTableRow::kOnDiskSize; ++i) {
+        const bool in_field = i >= SysTableRow::kOwnerCoreOffset &&
+                              i < SysTableRow::kOwnerCoreOffset + sizeof(std::uint32_t);
+        if (in_field) continue;
+        EXPECT_EQ(baseline[i], zeroed[i]) << "owner_core disturbed byte " << i;
+    }
+}
+
+TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
+    // The row grew by four bytes, which is a format-version event - the
+    // superblock bump to 10 is the other half of it. Pinned so the next
+    // person to add a field cannot do so quietly.
+    EXPECT_EQ(SysTableRow::kOwnerCoreOffset,
+              SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
+    EXPECT_EQ(SysTableRow::kOnDiskSize,
+              SysTableRow::kOwnerCoreOffset + sizeof(std::uint32_t));
+}
+
+TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {
+    const auto bytes = SampleTableRow().Encode();
+    std::vector<std::byte> short_row(bytes.begin(), bytes.end() - 1);
+    std::vector<std::byte> long_row(bytes.begin(), bytes.end());
+    long_row.push_back(std::byte{0});
+
+    EXPECT_FALSE(SysTableRow::Decode(short_row).ok());
+    EXPECT_FALSE(SysTableRow::Decode(long_row).ok());
+}
+
+// ---- Placement (core_placement.hpp) ----------------------------------
+
+TEST(CorePlacementTest, ASingleCoreInstancePutsEverythingOnTheSystemCore) {
+    for (std::uint64_t seq = 0; seq < 8; ++seq) {
+        EXPECT_EQ(AssignOwnerCore(/*core_count=*/1, seq), kSystemCore);
+    }
+}
+
+TEST(CorePlacementTest, UserRelationsRotateOverTheNonSystemCores) {
+    // The `[PROPOSED]` round-robin of M1. Nothing may depend on this
+    // distribution - only on ownership being recorded - but the policy that
+    // exists should be the one that was described.
+    EXPECT_EQ(AssignOwnerCore(4, 0), 1u);
+    EXPECT_EQ(AssignOwnerCore(4, 1), 2u);
+    EXPECT_EQ(AssignOwnerCore(4, 2), 3u);
+    EXPECT_EQ(AssignOwnerCore(4, 3), 1u);
+}
+
+TEST(CorePlacementTest, TheSystemCoreNeverOwnsAUserRelationWhenThereIsAnywhereElse) {
+    // M5: core 0 already owns the superblock, the free map, file growth and
+    // the catalog pages. A user relation on it is the one core everybody
+    // else queues behind.
+    for (std::uint32_t cores = 2; cores <= 8; ++cores) {
+        for (std::uint64_t seq = 0; seq < 20; ++seq) {
+            const std::uint32_t owner = AssignOwnerCore(cores, seq);
+            EXPECT_NE(owner, kSystemCore) << "cores=" << cores << " seq=" << seq;
+            EXPECT_LT(owner, cores);
+        }
+    }
 }
 
 }  // namespace

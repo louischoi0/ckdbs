@@ -213,5 +213,39 @@ TEST(ExpeditorConfigTest, KnownKeysCoverEveryKeyTheOverlayReads) {
     }
 }
 
+// ---- `cores` (docs/workplan-crosscore.md M6) --------------------------
+
+TEST(ExpeditorConfigTest, CoresParsesAndDefaultsToOne) {
+    Expeditor::Config config;
+    EXPECT_EQ(config.cores, 1u);
+
+    ASSERT_TRUE(config.ApplyFile(ParseOk("cores = 4\n")).ok());
+    EXPECT_EQ(config.cores, 4u);
+}
+
+TEST(ExpeditorConfigTest, ZeroCoresIsRefused) {
+    // A database with no reactor is not a configuration, it is a typo.
+    Expeditor::Config config;
+    Status s = config.ApplyFile(ParseOk("cores = 0\n"));
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(config.cores, 1u) << "a refused value must not be half-applied";
+}
+
+TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) {
+    // kMaxWalCores is a hard ceiling: the anchor table is indexed by
+    // core_id, so a core above it has nowhere to publish a checkpoint from.
+    Expeditor::Config config;
+    Status s = config.ApplyFile(
+        ParseOk("cores = " + std::to_string(kMaxWalCores + 1) + "\n"));
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
+}
+
+TEST(ExpeditorConfigTest, ExactlyTheCeilingIsAccepted) {
+    Expeditor::Config config;
+    ASSERT_TRUE(config.ApplyFile(ParseOk("cores = " + std::to_string(kMaxWalCores) + "\n")).ok());
+    EXPECT_EQ(config.cores, kMaxWalCores);
+}
+
 }  // namespace
 }  // namespace kds::server

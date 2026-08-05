@@ -85,7 +85,16 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // the id that means "no transaction" and then reissue kBootstrapXid, the
 // one id every read view trusts unconditionally. Refusing at the door is
 // the only safe reading of a zero we cannot distinguish from a real value.
-inline constexpr std::uint32_t kSuperBlockVersion = 9;
+// 9 -> 10: multicore added `core_count` (docs/workplan-crosscore.md M6), and
+// `sys.tables` grew `owner_core` (M1). Either alone is a bump by the rules
+// above - the first is a field past `next_trx_id` where a version-9 image
+// holds zeroes, and a zero core count is not "unset", it is "boot with no
+// cores"; the second is the fifth repeat of the catalog-row-layout break
+// 4 -> 5 first recorded. The count is pinned rather than adopted because
+// recovery under a changed core count is [OPEN] (wal.md section 3): a
+// database whose streams were written by N cores must not be mounted by M
+// until something decides what happens to the other streams.
+inline constexpr std::uint32_t kSuperBlockVersion = 10;
 
 // ---- On-disk field layout ----------------------------------------------
 
@@ -139,6 +148,29 @@ struct SuperBlockFields {
     // because the table's offset is fixed by four earlier format versions
     // and moving it would rewrite every anchor's position for no gain.
     std::uint64_t next_trx_id;
+
+    // ---- The pinned core count (docs/workplan-crosscore.md M6) ----------
+    //
+    // How many reactor cores this database was created for. Like
+    // `inline_cell_width` above it, configuration proposes the value once -
+    // at the bootstrap of a *new* database - and the superblock is what pins
+    // it; every later mount validates the running `cores` against this and
+    // refuses to start on a disagreement, naming both numbers
+    // (bootstrap.cpp).
+    //
+    // The reason it is pinned rather than simply adopted is the WAL. Streams
+    // are per core and LSNs are stream-local (wal.md section 3), so a
+    // database written by N cores holds N streams and N anchor slots; a
+    // mount at M cores would leave |N - M| streams with nothing to replay
+    // them and no rule for what to do about it. Stream reassignment is
+    // [OPEN], and a refusal at the door is what keeps this file from
+    // deciding it by accident.
+    //
+    // Never zero in a legal image: CreateFresh takes the count from a
+    // configuration that has already refused 0, and Decode refuses a zero
+    // outright - a version-9 image decodes this field out of the reserved
+    // tail as 0, and "boot with no cores" is not a state to carry forward.
+    std::uint32_t core_count;
 };
 
 inline constexpr std::size_t kMagicOffset = 0;
@@ -206,6 +238,18 @@ static_assert(offsetof(WalAnchorFields, durable_lsn) == kWalAnchorDurableLsnOffs
 static_assert(offsetof(WalAnchorFields, segment_no) == kWalAnchorSegmentNoOffset);
 static_assert(sizeof(WalAnchorFields) == kWalAnchorEntrySize);
 
+// Whether `cores` is a count this build can run. The one test, so a config
+// file, a fresh bootstrap and a mount can never come to disagree about what
+// a legal core count is - the same role storage::CheckInlineCellWidth plays
+// for the other pinned number.
+//
+// The ceiling is kMaxWalCores rather than a preference: the anchor table is
+// indexed directly by `core_id` and has exactly that many slots, so a core
+// above it has nowhere to publish a checkpoint from (SetWalAnchor refuses
+// it). Zero is refused because a database with no reactor is not a
+// configuration, it is a typo.
+Status CheckCoreCount(std::uint32_t cores);
+
 inline constexpr std::size_t kWalAnchorTableOffset = 40;
 static_assert(kWalAnchorTableOffset % alignof(std::uint64_t) == 0);
 inline constexpr std::size_t kWalAnchorTableSize = kMaxWalCores * kWalAnchorEntrySize;
@@ -218,7 +262,12 @@ inline constexpr std::size_t kWalAnchorTableSize = kMaxWalCores * kWalAnchorEntr
 inline constexpr std::size_t kNextTrxIdOffset = kWalAnchorTableOffset + kWalAnchorTableSize;
 static_assert(kNextTrxIdOffset % alignof(std::uint64_t) == 0);
 
-inline constexpr std::size_t kSuperBlockUsedSize = kNextTrxIdOffset + sizeof(std::uint64_t);
+// Appended past next_trx_id for the same reason next_trx_id was appended
+// past the anchor table: no existing offset moves.
+inline constexpr std::size_t kCoreCountOffset = kNextTrxIdOffset + sizeof(std::uint64_t);
+static_assert(kCoreCountOffset % alignof(std::uint32_t) == 0);
+
+inline constexpr std::size_t kSuperBlockUsedSize = kCoreCountOffset + sizeof(std::uint32_t);
 
 static_assert(kSuperBlockBodyOffset + kSuperBlockUsedSize <= kPageSize);
 
@@ -243,9 +292,13 @@ public:
     // The default exists for callers that are not testing the width
     // (anchor tests, tooling); BootstrapDatabase(), the only production
     // caller, always passes the configured value explicitly.
+    // `core_count` is pinned by the same rule and validated by the same
+    // caller (CheckCoreCount), and its default is 1 for the same reason the
+    // width's exists: callers that are not testing the count.
     static SuperBlock CreateFresh(
         std::uint64_t now_unix_seconds,
-        std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth) noexcept;
+        std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
+        std::uint32_t core_count = 1) noexcept;
 
     // Reads a superblock image out of a raw page buffer (e.g. just loaded
     // off disk). Fails with Corruption if the magic doesn't match
@@ -265,6 +318,11 @@ public:
     // The pinned kds.inline_cell_width (see SuperBlockFields). Every
     // relation's row size in this database was computed from it.
     std::uint32_t inline_cell_width() const noexcept { return fields_.inline_cell_width; }
+
+    // The pinned `cores` (see SuperBlockFields). There is deliberately no
+    // setter: the count is chosen once, at bootstrap, and a mount that
+    // disagrees is refused rather than reconciled.
+    std::uint32_t core_count() const noexcept { return fields_.core_count; }
 
     // ---- The transaction id ceiling (docs/txn.md section 4.2) -----------
     //

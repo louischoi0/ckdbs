@@ -7,6 +7,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
+#include "kds/catalog/core_placement.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/catalog/sys_object_registry.hpp"
@@ -59,9 +60,17 @@ public:
     // supplies the value the superblock pinned; the default is only for
     // callers that never store a varchar (the bootstrap catalog itself,
     // and tests).
+    //
+    // `core_count` is the instance-pinned `cores`
+    // (docs/workplan-crosscore.md M6), and is here for the same reason and
+    // under the same rule: it is fixed for the life of the database, and
+    // CreateTable() needs it to assign `sys.tables.owner_core`. The catalog
+    // does not *decide* placement - catalog/core_placement.hpp does - it
+    // only supplies the two inputs that policy takes.
     explicit Catalog(storage::PageStore& store,
-                     std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth) noexcept
-        : store_(store), inline_cell_width_(inline_cell_width) {}
+                     std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
+                     std::uint32_t core_count = 1) noexcept
+        : store_(store), inline_cell_width_(inline_cell_width), core_count_(core_count) {}
 
     // Diagnostic log, null (discard) by default. `log` must outlive the
     // catalog. Set rather than constructed with, because bootstrap builds
@@ -403,9 +412,14 @@ public:
     StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
 
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
+    // `owner_core` defaults to kSystemCore because every caller but
+    // CreateTable() is bootstrap writing a system relation, and M5 puts
+    // those on core 0 by definition - it owns the catalog pages they live
+    // on.
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
-                              PageId varheap_page_id);
+                              PageId varheap_page_id,
+                              std::uint32_t owner_core = kSystemCore);
 
     Status InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_pos,
                            std::uint32_t col_type, std::uint8_t flags);
@@ -482,6 +496,11 @@ private:
     // Instance-pinned, never mutated after construction - see the
     // constructor. Every RowLayout in the cache was built for this value.
     std::uint32_t inline_cell_width_ = storage::kDefaultInlineCellWidth;
+
+    // Instance-pinned, never mutated after construction, same as the width.
+    // Read only by CreateTable(), to hand catalog::AssignOwnerCore() the
+    // core count it takes.
+    std::uint32_t core_count_ = 1;
 
     Logger* log_ = nullptr;
     Oid next_user_oid_ = kUserOidStart;
