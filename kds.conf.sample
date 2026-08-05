@@ -54,10 +54,12 @@ inline_cell_width = 64
 # database has, and mounting under a different count would leave the
 # difference with nothing to replay them.
 #
-# 1 is the default, and today it is the only count that changes behaviour:
-# ownership is recorded and the cross-core transport is built (workplan P0,
-# P1), but nothing spawns a second reactor yet (P2). A higher value pins the
-# superblock and sizes the ring matrix, and does nothing else.
+# A value above 1 spawns that many pinned reactor threads, each with its own
+# WAL stream (workplan P0-P2). **Core 0 still serves every statement**: a
+# peer cannot read the catalog until the per-core catalog cache exists
+# (workplan P6), so the other cores come up alive and idle. Raising this
+# today buys parallel WAL streams and nothing else - and costs a thread and
+# a ring matrix - so 1 remains the right setting until P4.
 #
 # Bounded above by the superblock's 64 WAL anchor slots, and refused if it
 # exceeds the machine's reported core count: reactors are pinned and never

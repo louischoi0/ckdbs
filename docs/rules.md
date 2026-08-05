@@ -55,7 +55,7 @@ Normative coding rules for the KDS storage engine. Rules only: design rationale 
 - C++ standard pin (C++20 minimum), toolchain versions, build system, test framework.
 - Allocator policy: arena/pool design, global allocator choice, allocation-failure handling boundary.
 - STL usage scope in hot paths and third-party dependency policy.
-- Language feature whitelist: coroutines, virtual dispatch in hot paths, template complexity limits.
+- Language feature whitelist: virtual dispatch in hot paths, template complexity limits. **Coroutines are decided** (2026-08-05): C++20 stackless coroutines are the task representation (`docs/sched.md` §3, `include/kds/sched/coro.hpp`). They are permitted for *suspendable* work — a statement, a cross-core request, a lease — and not on the per-tuple path, because a frame is a heap allocation. A coroutine promise needs `unhandled_exception()`; ours does nothing, since §-level no-exceptions still holds and a throw should fail at its own site.
 - Release-build invariant checking tiers and fail-fast policy on corruption.
 - Platform pin (x86-64 Linux only vs portable) and its consequences for intrinsics/endianness rules.
 

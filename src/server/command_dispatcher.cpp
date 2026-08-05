@@ -103,6 +103,20 @@ std::string ErrorReply(const Status& status) {
     return "ERR " + status.message();
 }
 
+sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
+                                             DispatchOutcome* out) {
+    // Today this never suspends: every statement runs on the core that owns
+    // its relations, or is refused (core_affinity.hpp). The coroutine is
+    // here so that when a step *can* reach another core, the suspension
+    // point goes inside the executor and nothing above it changes.
+    //
+    // That it never suspends is also what makes this change verifiable: the
+    // whole suite has to behave exactly as it did, because nothing about
+    // when a reply is produced has moved yet.
+    *out = Dispatch(line, session);
+    co_return Status::OK();
+}
+
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     // Read only when something might report it; a dispatcher with no
     // logger does no clock reads at all.
@@ -1146,6 +1160,48 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     return out;
 }
 
+Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
+                                             std::string_view relation, Session& session) {
+    // A write to a relation this core does not own cannot be done here at
+    // all - the pages are not this core's to fault, let alone to modify.
+    if (access.owner_core != core_id_) {
+        cross_core_writes_.Record(session.home_bound() ? session.home_core() : core_id_,
+                                  access.owner_core, access.oid);
+        return CrossCoreWriteRefused(session.home_bound() ? session.home_core() : core_id_,
+                                     access.owner_core, relation);
+    }
+    // Owned here, but the transaction may already be committed to another
+    // core. That is the CC3 restriction proper, and it survives the
+    // pipeline: it is what keeps one transaction's writes in one WAL stream.
+    if (!session.MayWriteOn(access.owner_core)) {
+        cross_core_writes_.Record(session.home_core(), access.owner_core, access.oid);
+        return CrossCoreWriteRefused(session.home_core(), access.owner_core, relation);
+    }
+    session.BindHomeCore(access.owner_core);
+    return Status::OK();
+}
+
+Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
+    // Every step, hoisted sub-chains included: a sub-chain reads a real
+    // relation and is exactly as unable to reach another core's pages.
+    auto check = [this](const std::vector<exec::Step>& steps) -> Status {
+        for (const exec::Step& step : steps) {
+            auto access = catalog_.InitTableAccess(step.rel_oid);
+            if (!access.ok()) return access.status();
+            if (access.value()->owner_core != core_id_) {
+                return CrossCoreReadUnsupported(core_id_, access.value()->owner_core,
+                                                step.rel_name);
+            }
+        }
+        return Status::OK();
+    };
+
+    for (const exec::SubChain& sub : chain.hoisted) {
+        if (Status s = check(sub.steps); !s.ok()) return s;
+    }
+    return check(chain.steps);
+}
+
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
@@ -1168,6 +1224,13 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp).
     const catalog::TableAccess& ta = *access.value();
+
+    // Before anything is written: a relation this core does not own, or a
+    // transaction already bound to another core, is refused retryably
+    // (crosscore.md CC3, core_affinity.hpp).
+    if (Status affinity = CheckWriteAffinity(ta, stmt.table_name, *scope.session); !affinity.ok()) {
+        return {"ERR " + affinity.message(), false};
+    }
 
     // The primary key is the engine's to issue, never the caller's
     // (CLAUDE.md invariant 10), so VALUES supplies the columns *after* it.
@@ -1694,6 +1757,16 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {"ERR " + chain.status().message(), false};
     }
 
+    // The plan is resolved; now ask whether this core may run it
+    // (crosscore.md §2's fast-path-versus-pipeline decision). Every
+    // relation local is the fast path and the only path built - a chain
+    // spanning cores is refused with its reason rather than mis-executed,
+    // because the pipeline that would run it needs a suspendable statement
+    // path and task representation is an open decision (core_affinity.hpp).
+    if (Status affinity = CheckReadAffinity(chain.value()); !affinity.ok()) {
+        return {"ERR " + affinity.message(), false};
+    }
+
     // Same one-line-per-response contract as SHOW PAGE: a header line of
     // column names, then one "\n"-escaped section per matching row
     // (comma-joined values), never a raw newline byte.
@@ -1932,6 +2005,13 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     // Borrowed from the catalog's cache, not owned: valid for this
     // statement, including across AllocateRowId() (catalog.hpp).
     const catalog::TableAccess& ta = *access.value();
+
+    // Before anything is written: a relation this core does not own, or a
+    // transaction already bound to another core, is refused retryably
+    // (crosscore.md CC3, core_affinity.hpp).
+    if (Status affinity = CheckWriteAffinity(ta, stmt.table_name, *scope.session); !affinity.ok()) {
+        return {"ERR " + affinity.message(), false};
+    }
 
     // Validate every SET target names a real column before touching
     // storage, so a bad column name fails clean with no partial update.
@@ -2372,6 +2452,7 @@ StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
 
 StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& session) {
     WriteScope scope;
+    scope.session = &session;
     if (txn_ == nullptr) return scope;  // no manager: kBootstrapXid, as before
 
     if (session.in_explicit_txn()) {
@@ -2472,6 +2553,12 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return {"ERR " + access.status().message(), false};
     const catalog::TableAccess& ta = *access.value();
+
+    // Before anything is marked: same rule as INSERT and UPDATE
+    // (crosscore.md CC3). A delete-mark is a write.
+    if (Status affinity = CheckWriteAffinity(ta, stmt.table_name, *scope.session); !affinity.ok()) {
+        return {"ERR " + affinity.message(), false};
+    }
 
     // The same WHERE compilation UPDATE uses, so a DELETE's predicate means
     // exactly what the SELECT that found the rows meant.

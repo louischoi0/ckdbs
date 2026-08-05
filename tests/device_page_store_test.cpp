@@ -493,5 +493,123 @@ TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesThe
     EXPECT_EQ(written[written.size() - 2], kHeaderlessMapPageId);
 }
 
+// ---- Core ownership and leases (workplan-crosscore.md M5, P2) ---------
+//
+// A store bound to a non-system core allocates from a lease and **never
+// touches the free map**, which is what keeps that one durable page
+// single-owner. These pin both halves: that it uses the lease, and that it
+// leaves the map alone.
+
+TEST(DevicePageStoreOwnershipTest, ALeasedStoreAllocatesOnlyFromItsExtent) {
+    auto device = MakeDevice(/*extent_pages=*/64, /*initial_pages=*/0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    LeasedIdSource lease(Extent{1000, 3});
+    store->SetCoreOwnership(/*core_id=*/2, &lease);
+
+    for (PageId expected : {1000u, 1001u, 1002u}) {
+        auto created = store->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        EXPECT_EQ(created.value().first, expected);
+    }
+
+    // Spent, and the failure is retryable rather than "the disk is full".
+    auto spent = store->CreateNew();
+    ASSERT_FALSE(spent.ok());
+    EXPECT_EQ(spent.status().code(), StatusCode::kResourceExhausted);
+}
+
+TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverMutatesTheFreeMap) {
+    // The guideline-1 property: the free map is core 0's, so a second writer
+    // would be shared mutable state between cores.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    const std::uint32_t before = store->allocated_pages();
+
+    LeasedIdSource lease(Extent{1000, 4});
+    store->SetCoreOwnership(2, &lease);
+    ASSERT_TRUE(store->CreateNew().ok());
+    ASSERT_TRUE(store->CreateNew().ok());
+
+    EXPECT_EQ(store->allocated_pages(), before)
+        << "a leased core set bits in the free map it does not own";
+}
+
+TEST(DevicePageStoreOwnershipTest, ALeasedPageIsReadableThoughTheMapDoesNotKnowIt) {
+    // A non-zero core reads its free map at Open(); core 0 marks the lease's
+    // bits later, in *its* copy. So the lease has to answer for the core's
+    // own ids or every page it allocates reads back NotFound.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    LeasedIdSource lease(Extent{1000, 2});
+    store->SetCoreOwnership(2, &lease);
+
+    auto created = store->CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId id = created.value().first;
+    EXPECT_TRUE(store->IsAllocated(id));
+
+    auto again = store->Get(id);
+    EXPECT_TRUE(again.ok()) << again.status().message();
+}
+
+TEST(DevicePageStoreOwnershipTest, ALeasedStoreMayNotPlaceAPageAtAChosenId) {
+    // CreateAt is a claim on the free map. Every caller of it is bootstrap
+    // or a fixed system page, all core 0's - so this is unreachable rather
+    // than restrictive, and the check is here so it stays that way.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    LeasedIdSource lease(Extent{1000, 4});
+    store->SetCoreOwnership(2, &lease);
+
+    EXPECT_EQ(store->CreateAt(300).status().code(), StatusCode::kInvalidArgument);
+}
+
+TEST(DevicePageStoreOwnershipTest, TheSystemCoreMayFaultAnything) {
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    // No lease installed is core 0's arrangement, and it is also every
+    // construction site that predates multicore.
+    EXPECT_EQ(store->core_id(), 0u);
+    EXPECT_TRUE(store->MayFault(1));
+    EXPECT_TRUE(store->MayFault(50'000));
+}
+
+TEST(DevicePageStoreOwnershipTest, ALeasedCoreMayNotFaultAForeignPage) {
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    // A page that genuinely exists, allocated before the store became a
+    // leased one - so this is an ownership refusal and not a NotFound.
+    auto other = store->CreateNew();
+    ASSERT_TRUE(other.ok());
+    const PageId foreign = other.value().first;
+    ASSERT_TRUE(store->Sync().ok());
+
+    LeasedIdSource lease(Extent{1000, 4});
+    store->SetCoreOwnership(2, &lease);
+
+    EXPECT_FALSE(store->MayFault(foreign));
+    EXPECT_TRUE(store->MayFault(1000));
+
+#ifndef NDEBUG
+    // Debug builds refuse the fault outright. In release the check is
+    // compiled out, so this says nothing there and the test does not ask.
+    auto refused = store->Get(foreign);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
+#endif
+}
+
 }  // namespace
 }  // namespace kds::storage

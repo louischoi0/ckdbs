@@ -21,6 +21,8 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/sched/coro.hpp"
+#include "kds/server/core_affinity.hpp"
 #include "kds/server/session.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -163,7 +165,8 @@ public:
                        stats::CabinStore* cabins = nullptr,
                        txn::TransactionManager* txn = nullptr,
                        txn::IsolationLevel isolation =
-                           txn::IsolationLevel::kReadCommitted) noexcept
+                           txn::IsolationLevel::kReadCommitted,
+                       std::uint32_t core_id = 0) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -178,7 +181,8 @@ public:
           cabins_(cabins),
           txn_(txn),
           default_isolation_(isolation),
-          autocommit_session_(isolation) {}
+          autocommit_session_(isolation),
+          core_id_(core_id) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -321,6 +325,36 @@ public:
     // explicit transaction is exactly what the engine did before.
     DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
 
+    // The suspendable form. Writes its reply through `out` - which the
+    // **caller** owns and must keep alive across suspension - and finishes
+    // with a Status describing the dispatch itself, not the statement (a
+    // failed statement is an "ERR ..." in `out`, exactly as it is for the
+    // synchronous form).
+    //
+    // ---- Why both forms exist -------------------------------------------
+    //
+    // This is the seam `docs/workplan-crosscore.md` P4 needs: a statement
+    // that reaches another core has to send and then *wait*, and a function
+    // returning a finished reply cannot. Making it a coroutine is what lets
+    // the executor grow a suspension point later without the server around
+    // it changing again.
+    //
+    // The synchronous `Dispatch()` above stays, and is not deprecated. Every
+    // caller that has no reactor - the socket-free tests, a peer's
+    // `CoreRuntime`, the rollback on connection close - would otherwise have
+    // to acquire one to run a statement, which is a lot of machinery to
+    // demand of a caller that never suspends. It is implemented in terms of
+    // nothing; the coroutine wraps *it*, so there is one dispatch path and
+    // no chance of the two drifting.
+    //
+    // **`line` is not copied.** A coroutine's parameters live in its frame,
+    // but a `string_view` parameter copies the view and not the bytes - and
+    // the parser's tokens are themselves views into this buffer
+    // (parser-v2.md's zero-copy tokens). The caller must keep the statement
+    // text alive until the coroutine finishes, which is why `TcpServer`
+    // copies each line out of its inbox before dispatching one.
+    sched::Coro DispatchAsync(std::string_view line, Session* session, DispatchOutcome* out);
+
     // The level a fresh session starts at (`isolation`). TcpServer stamps
     // it on each connection's session at accept.
     txn::IsolationLevel default_isolation() const noexcept { return default_isolation_; }
@@ -350,6 +384,11 @@ private:
     struct WriteScope {
         txn::Transaction* txn = nullptr;
         bool owned = false;
+        // The session this write belongs to. Carried here rather than
+        // threaded separately through every *Inner() because the scope
+        // already *is* this write's transaction context, and the home-core
+        // binding (crosscore.md CC3) is part of that context.
+        Session* session = nullptr;
         bool ok() const noexcept { return txn != nullptr; }
     };
 
@@ -702,6 +741,27 @@ private:
     // The level a new session starts at, from the `isolation` config key.
     // Held so TcpServer can stamp it on each connection's session rather
     // than every connection defaulting to the compiled-in level.
+    // ---- Core affinity (crosscore.md CC3/§6) ---------------------------
+    //
+    // Which core this dispatcher runs on, and the refused-write counters
+    // §6 asks for. 0 is the system core and the only value a single-core
+    // build ever has, so every pre-multicore construction site is unchanged.
+    std::uint32_t core_id_ = 0;
+    CrossCoreWriteCounters cross_core_writes_;
+
+    // Refuses a write to a relation this core may not write, and binds the
+    // transaction's home core on the first one that is allowed. See
+    // core_affinity.hpp - the restriction is decided (CC3), not a stand-in
+    // for the pipeline.
+    Status CheckWriteAffinity(const catalog::TableAccess& access, std::string_view relation,
+                              Session& session);
+
+    // Refuses a read whose chain touches a relation owned by another core.
+    // Temporary in a way the write check is not: this is what the step
+    // pipeline will replace, and it exists so the refusal names the reason
+    // instead of surfacing as a page-store fault.
+    Status CheckReadAffinity(const exec::StepChain& chain);
+
     txn::IsolationLevel default_isolation_ = txn::IsolationLevel::kReadCommitted;
 
     Session autocommit_session_;

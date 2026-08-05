@@ -1,0 +1,387 @@
+#include "kds/sched/coro.hpp"
+
+#include <cstring>
+#include <memory>
+#include <span>
+#include <string>
+#include <vector>
+
+#include <gtest/gtest.h>
+
+#include "kds/sched/clock.hpp"
+#include "kds/sched/io_backend.hpp"
+#include "kds/sched/ring_transport.hpp"
+#include "kds/sched/scheduler.hpp"
+#include "kds/sched/send_retry.hpp"
+
+// C++20 stackless coroutines as the task representation (docs/sched.md §3,
+// settled 2026-08-05).
+//
+// The last test is the one that matters: a **cross-core request/response**,
+// which is the thing that could not be written at all before this and which
+// blocks the whole of workplan P4. Everything above it is the machinery that
+// has to be right for that one to mean anything.
+
+namespace kds::sched {
+namespace {
+
+TEST(CoroTest, ACoroutineDoesNotRunUntilItIsPolled) {
+    // Lazy start: creating the frame and running the body are two acts, as
+    // they are for every other task.
+    int ran = 0;
+    auto body = [&ran]() -> Coro {
+        ++ran;
+        co_return Status::OK();
+    };
+
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    EXPECT_EQ(ran, 0) << "the body ran at construction";
+
+    EXPECT_EQ(task->Poll(), PollResult::kDone);
+    EXPECT_EQ(ran, 1);
+}
+
+TEST(CoroTest, AYieldSuspendsAndResumesWhereItLeftOff) {
+    std::vector<int> marks;
+    auto body = [&marks]() -> Coro {
+        marks.push_back(1);
+        co_await Yield{};
+        marks.push_back(2);
+        co_await Yield{};
+        marks.push_back(3);
+        co_return Status::OK();
+    };
+
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    EXPECT_EQ(task->Poll(), PollResult::kSuspended);
+    EXPECT_EQ(marks, (std::vector<int>{1}));
+    EXPECT_EQ(task->Poll(), PollResult::kSuspended);
+    EXPECT_EQ(marks, (std::vector<int>{1, 2}));
+    EXPECT_EQ(task->Poll(), PollResult::kDone);
+    EXPECT_EQ(marks, (std::vector<int>{1, 2, 3}));
+}
+
+TEST(CoroTest, TheReturnedStatusReachesTheCompletionCallback) {
+    Status reported = Status::OK();
+    auto body = []() -> Coro { co_return Status::Unsupported("nope"); };
+
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body(),
+                             [&reported](const Status& s) { reported = s; });
+    EXPECT_EQ(task->Poll(), PollResult::kDone);
+    EXPECT_EQ(reported.code(), StatusCode::kUnsupported);
+    EXPECT_EQ(reported.message(), "nope");
+}
+
+TEST(CoroTest, AWaitDoesNotResumeUntilItsFlagIsSet) {
+    // The bug this exists to prevent: `await_ready` runs once, at the
+    // co_await, so a naive awaitable suspends once and then resumes on the
+    // next poll whatever the condition says. The re-test lives in Poll().
+    bool ready = false;
+    bool past_the_wait = false;
+    auto body = [&]() -> Coro {
+        co_await WaitFor{&ready};
+        past_the_wait = true;
+        co_return Status::OK();
+    };
+
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    for (int i = 0; i < 10; ++i) {
+        EXPECT_EQ(task->Poll(), PollResult::kSuspended);
+        EXPECT_FALSE(past_the_wait) << "resumed on poll " << i << " with the flag still false";
+    }
+
+    ready = true;
+    EXPECT_EQ(task->Poll(), PollResult::kDone);
+    EXPECT_TRUE(past_the_wait);
+}
+
+TEST(CoroTest, AWaitOnAnAlreadySetFlagNeverSuspends) {
+    // A reply that arrived before the wait began must cost nothing.
+    bool ready = true;
+    auto body = [&ready]() -> Coro {
+        co_await WaitFor{&ready};
+        co_return Status::OK();
+    };
+
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    EXPECT_EQ(task->Poll(), PollResult::kDone) << "an already-satisfied wait suspended";
+    EXPECT_EQ(task->resumes(), 1u);
+}
+
+TEST(CoroTest, WaitingCostsNoResumes) {
+    // The claim the header makes: a long wait is a predicate call per
+    // reactor turn, not a resumed frame.
+    bool ready = false;
+    auto body = [&ready]() -> Coro {
+        co_await WaitFor{&ready};
+        co_return Status::OK();
+    };
+
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    task->Poll();  // runs to the co_await and parks
+    const std::uint64_t after_park = task->resumes();
+    for (int i = 0; i < 20; ++i) task->Poll();
+    EXPECT_EQ(task->resumes(), after_park) << "a parked coroutine was resumed while waiting";
+}
+
+TEST(CoroTest, DroppingASuspendedTaskDestroysItsFrame) {
+    // What makes a cancelled or abandoned statement leak nothing. The
+    // destructor of a local inside the coroutine body runs when the frame
+    // is destroyed, which is what this observes.
+    struct Tracker {
+        bool* destroyed;
+        ~Tracker() { *destroyed = true; }
+    };
+
+    bool destroyed = false;
+    auto body = [&destroyed]() -> Coro {
+        Tracker t{&destroyed};
+        co_await Yield{};
+        co_return Status::OK();
+    };
+
+    {
+        auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+        EXPECT_EQ(task->Poll(), PollResult::kSuspended);
+        EXPECT_FALSE(destroyed);
+    }
+    EXPECT_TRUE(destroyed) << "a suspended coroutine's frame leaked";
+}
+
+TEST(CoroTest, ACoroutineNeverPolledIsStillCleanedUp) {
+    bool destroyed = false;
+    struct Tracker {
+        bool* destroyed;
+        ~Tracker() { *destroyed = true; }
+    };
+    auto body = [&destroyed]() -> Coro {
+        Tracker t{&destroyed};
+        co_await Yield{};
+        co_return Status::OK();
+    };
+
+    { auto task = MakeCoroTask(SchedulingGroup::kForeground, body()); }
+    // Never started, so the Tracker was never constructed - what matters is
+    // that destroying the frame does not crash or assert.
+    EXPECT_FALSE(destroyed);
+}
+
+// ---- On a real reactor -------------------------------------------------
+
+TEST(CoroTest, TheSchedulerRunsACoroutineToCompletionAcrossIterations) {
+    // No change to Scheduler was needed for any of this: kSuspended/kDone
+    // was already a coroutine's resume protocol.
+    ManualClock clock;
+    NullIoBackend io;
+    Scheduler scheduler(clock, io);
+
+    int steps = 0;
+    bool finished = false;
+    auto body = [&steps]() -> Coro {
+        for (int i = 0; i < 3; ++i) {
+            ++steps;
+            co_await Yield{};
+        }
+        co_return Status::OK();
+    };
+
+    scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, body(),
+                                  [&finished](const Status&) { finished = true; }));
+    for (int i = 0; i < 10 && !finished; ++i) scheduler.RunOnce();
+
+    EXPECT_TRUE(finished);
+    EXPECT_EQ(steps, 3);
+}
+
+TEST(CoroTest, AWaitingCoroutineDoesNotBlockTheCore) {
+    // sched.md §3's whole point: waiting is suspension, not occupation.
+    ManualClock clock;
+    NullIoBackend io;
+    Scheduler scheduler(clock, io);
+
+    bool ready = false;
+    bool finished = false;
+    auto waiter = [&ready]() -> Coro {
+        co_await WaitFor{&ready};
+        co_return Status::OK();
+    };
+    scheduler.Submit(MakeCoroTask(SchedulingGroup::kForeground, waiter(),
+                                  [&finished](const Status&) { finished = true; }));
+
+    int other_work = 0;
+    for (int i = 0; i < 5; ++i) {
+        scheduler.Submit(std::make_unique<FunctionTask>(SchedulingGroup::kForeground, [&] {
+            ++other_work;
+            return PollResult::kDone;
+        }));
+    }
+
+    for (int i = 0; i < 10; ++i) scheduler.RunOnce();
+    EXPECT_FALSE(finished);
+    EXPECT_EQ(other_work, 5) << "a waiting coroutine held the core";
+
+    ready = true;
+    for (int i = 0; i < 5 && !finished; ++i) scheduler.RunOnce();
+    EXPECT_TRUE(finished);
+}
+
+// ---- The thing that was blocked ----------------------------------------
+
+TEST(CoroTest, ACoroutineDoesACrossCoreRequestAndResponse) {
+    // **This is what the decision was for.** Send a message to a peer, wait
+    // for its reply, and continue - in straight-line code, on a reactor that
+    // never blocks. Before coroutines this could not be written at all:
+    // `Dispatch()` returns synchronously and `ChainRunner` has no suspension
+    // point, so the only options were blocking the core or hand-rolling the
+    // whole executor into a state machine.
+    //
+    // This is the exact shape workplan P4's step pipeline needs - send
+    // STEP_OPEN, await batches - and the exact shape P5's lease services
+    // need.
+    ManualClock clock;
+    NullIoBackend io_a;
+    NullIoBackend io_b;
+    Scheduler core0(clock, io_a);
+    Scheduler core1(clock, io_b);
+
+    auto transport = RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok());
+    core0.AttachTransport(&transport.value(), 0);
+    core1.AttachTransport(&transport.value(), 1);
+
+    // Per-request state the reply is routed to. It outlives the wait, which
+    // is WaitFor's one requirement.
+    struct Request {
+        bool replied = false;
+        std::uint64_t answer = 0;
+    };
+    Request request;
+
+    // Core 1: answers a lease request by sending one back.
+    ASSERT_TRUE(core1
+                    .RegisterMessageHandler(
+                        RingMessageKind::kExtentLease,
+                        [&transport](const MessageHeader& h, std::span<const std::byte>) {
+                            MessageHeader reply{};
+                            reply.src_core = 1;
+                            reply.dst_core = h.src_core;
+                            reply.request_id = h.request_id;
+                            reply.kind = static_cast<std::uint16_t>(RingMessageKind::kExtentLease);
+                            const std::uint64_t granted = 4096;
+                            std::byte bytes[sizeof(granted)];
+                            std::memcpy(bytes, &granted, sizeof(granted));
+                            (void)transport.value().TrySend(
+                                reply, std::span<const std::byte>(bytes, sizeof(bytes)));
+                        })
+                    .ok());
+
+    // Core 0: routes the reply into the waiting request's state.
+    ASSERT_TRUE(core0
+                    .RegisterMessageHandler(
+                        RingMessageKind::kExtentLease,
+                        [&request](const MessageHeader&, std::span<const std::byte> payload) {
+                            std::memcpy(&request.answer, payload.data(), sizeof(request.answer));
+                            request.replied = true;
+                        })
+                    .ok());
+
+    // The statement, as straight-line code.
+    bool finished = false;
+    std::uint64_t got = 0;
+    auto ask = [&]() -> Coro {
+        MessageHeader header{};
+        header.src_core = 0;
+        header.dst_core = 1;
+        header.request_id = 1;
+        header.kind = static_cast<std::uint16_t>(RingMessageKind::kExtentLease);
+        if (Status s = transport.value().TrySend(header, {}); !s.ok()) co_return s;
+
+        co_await WaitFor{&request.replied};
+
+        got = request.answer;
+        co_return Status::OK();
+    };
+
+    core0.Submit(MakeCoroTask(SchedulingGroup::kForeground, ask(),
+                              [&finished](const Status& s) { finished = s.ok(); }));
+
+    // Both reactors stepped round-robin on this thread - sched.md §8's
+    // simulation shape, which is what makes this deterministic.
+    for (int i = 0; i < 20 && !finished; ++i) {
+        core0.RunOnce();
+        core1.RunOnce();
+    }
+
+    EXPECT_TRUE(finished) << "the request/response never completed";
+    EXPECT_EQ(got, 4096u);
+}
+
+// ---- Suspension safety -------------------------------------------------
+//
+// The rule the executor's coming suspension points have to obey, made
+// mechanical *before* any of them exists. R1 already forbids a page fetch
+// under a live span; suspending under one is worse, because the span stays
+// live across every other statement that runs on this core in between.
+
+TEST(CoroSuspendAuditTest, NoAuditInstalledMeansNothingIsReported) {
+    ResetSuspendAudit();
+    SetSuspendAudit(nullptr);
+
+    auto body = []() -> Coro {
+        co_await Yield{};
+        co_return Status::OK();
+    };
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    task->Poll();
+    EXPECT_FALSE(SuspendAuditTripped());
+}
+
+TEST(CoroSuspendAuditTest, ASuspensionUnderAnUnsafeConditionIsReported) {
+    ResetSuspendAudit();
+    static bool unsafe = false;
+    SetSuspendAudit([]() -> std::string_view {
+        return unsafe ? std::string_view("holding something it must not hold")
+                      : std::string_view();
+    });
+
+    auto body = []() -> Coro {
+        co_await Yield{};
+        co_return Status::OK();
+    };
+
+    // Safe: suspending reports nothing.
+    auto ok_task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    ok_task->Poll();
+    EXPECT_FALSE(SuspendAuditTripped());
+
+    // Unsafe: the same suspension is caught.
+    unsafe = true;
+    auto bad_task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    bad_task->Poll();
+#ifndef NDEBUG
+    EXPECT_TRUE(SuspendAuditTripped()) << "a suspension under an unsafe condition went unnoticed";
+    EXPECT_EQ(SuspendAuditReason(), "holding something it must not hold");
+#endif
+
+    unsafe = false;
+    SetSuspendAudit(nullptr);
+    ResetSuspendAudit();
+}
+
+TEST(CoroSuspendAuditTest, ACompletedCoroutineIsNeverAudited) {
+    // The audit is about being *parked*, not about running. A coroutine
+    // that finishes in one poll held nothing across anything.
+    ResetSuspendAudit();
+    SetSuspendAudit([]() -> std::string_view { return "should not be consulted"; });
+
+    auto body = []() -> Coro { co_return Status::OK(); };
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, body());
+    EXPECT_EQ(task->Poll(), PollResult::kDone);
+    EXPECT_FALSE(SuspendAuditTripped());
+
+    SetSuspendAudit(nullptr);
+    ResetSuspendAudit();
+}
+
+}  // namespace
+}  // namespace kds::sched

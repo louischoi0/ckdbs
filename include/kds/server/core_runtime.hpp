@@ -1,0 +1,206 @@
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+
+#include "kds/base/log.hpp"
+#include "kds/base/status.hpp"
+#include "kds/catalog/catalog.hpp"
+#include "kds/exec/budget.hpp"
+#include "kds/sched/clock.hpp"
+#include "kds/sched/io_backend.hpp"
+#include "kds/sched/ring_transport.hpp"
+#include "kds/sched/scheduler.hpp"
+#include "kds/server/command_dispatcher.hpp"
+#include "kds/server/extent_lease_service.hpp"
+#include "kds/server/remote_checkpoint_anchor.hpp"
+#include "kds/server/superblock.hpp"
+#include "kds/storage/device_page_store.hpp"
+#include "kds/storage/extent_lease.hpp"
+#include "kds/storage/page_device.hpp"
+#include "kds/txn/manager.hpp"
+#include "kds/txn/trx_id.hpp"
+#include "kds/txn/undo_log.hpp"
+#include "kds/wal/checkpointer.hpp"
+#include "kds/wal/file_log_device.hpp"
+#include "kds/wal/manager.hpp"
+
+// One core's stack (docs/workplan-crosscore.md P2): the reactor and
+// everything below it that is *not* shared.
+//
+// `page.md` §6 puts the intent in one line - "multi-core adds instances, not
+// synchronization" - and this class is that sentence made a type. The
+// single-core wiring `Expeditor` already had becomes the per-core wiring,
+// instantiated N times.
+//
+// ---- What a non-system core has, and what it does with it ---------------
+//
+// As of P6 a peer has a full statement stack: its own `DevicePageStore` over
+// the shared device, its own `Catalog`, transaction manager and
+// `CommandDispatcher`. It can resolve a relation and run a statement.
+//
+// Three asymmetries against core 0 are deliberate and are the whole of P6's
+// soundness:
+//
+//   1. **The catalog is read-only here.** The catalog's fixed pages have one
+//      writer, core 0 (M5). A peer faults them read-only - the page store
+//      enforces it (`MayWrite`) - and re-reads them when core 0 broadcasts
+//      `kCatalogInvalidate` after a DDL. A peer that has not yet processed
+//      the broadcast answers "table not found", which crosscore.md §5
+//      already specifies as retryable.
+//   2. **Allocation comes from a lease**, never from the free map, which is
+//      also core 0's (storage/extent_lease.hpp).
+//   3. **Nothing is recorded.** `waystone_recording` and
+//      `access_statistics` are off on a peer, and this is not a default
+//      anybody should change without reading the next paragraph.
+//
+// ---- Why a peer records nothing (P6's known cost) -----------------------
+//
+// `sys.patterns` and `sys.access_stats` are catalog pages written on the
+// **ordinary statement path** - `TrailRecorder::EnsurePattern` registers a
+// shape seen twice, and every successful statement records its access
+// shapes. Under rule 1 above a peer cannot write them, and neither can be
+// shipped to core 0: the access-stat write could be (it is explicitly
+// best-effort), but `RegisterPattern` returns a `PatternAccess*` the
+// recorder uses immediately, so it needs an answer, and nothing here can
+// wait for one.
+//
+// Both features are advisory by construction - invariant 8 for Waystone,
+// "a degraded statistic, not a degraded database" for the other - so a peer
+// with them off returns **exactly the same rows**, more slowly, and
+// contributes nothing to the optimizer's input. That is the honest cost of
+// this phase. The fix is per-core statistics relations, which crosscore.md
+// §2 already calls for ("no statistics cross cores") and which is a page
+// layout change to three relations.
+//
+// Core 0 still owns the superblock, the free map, the catalog pages and the
+// listener. Those live on `Expeditor` rather than here: they are the
+// *database*, not a core's copy of anything.
+//
+// ---- Threading -----------------------------------------------------------
+//
+// A CoreRuntime is created on the startup thread and then handed to exactly
+// one worker, which owns it for the rest of its life. Nothing in it is
+// synchronized (rules.md #3), and nothing outside that worker may touch it
+// once `Run()` has begun - including to stop it, which is why shutdown is a
+// message (`RingMessageKind::kShutdown`) and not a method call.
+
+namespace kds::server {
+
+class CoreRuntime {
+public:
+    struct Config {
+        std::uint32_t core_id = 0;
+        std::string wal_dir;
+        sched::MonoTimeNs checkpoint_interval_ns = 0;
+        sched::MonoTimeNs wal_drain_interval_ns = 0;
+
+        // Copied from the superblock core 0 already decoded, on the startup
+        // thread and before any worker exists - so this is a plain copy,
+        // not a cross-core read of a structure that belongs to core 0.
+        std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth;
+        std::uint32_t core_count = 1;
+
+        // Settings a peer shares with core 0. Recording is *not* among
+        // them - see the header on why a peer records nothing.
+        wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
+        txn::IsolationLevel isolation = txn::IsolationLevel::kReadCommitted;
+        exec::Budget budget;
+
+        // This core's page-id lease, carved by core 0's ExtentAllocator
+        // before the worker starts.
+        storage::Extent lease;
+    };
+
+    // Opens this core's WAL stream, page store, catalog and dispatcher, and
+    // builds its reactor. `device` is the shared page device and must
+    // outlive this runtime; the store built over it is this core's own.
+    //
+    // The WAL segment files are named `wal-<core_id>-<segment_no>.log`
+    // (file_log_device.hpp), so N cores in one directory do not collide -
+    // that naming predates multicore and is why it needed no change.
+    static StatusOr<std::unique_ptr<CoreRuntime>> Open(Config config,
+                                                       storage::PageDevice& device,
+                                                       const sched::Clock& clock, Logger* log);
+
+    CoreRuntime(const CoreRuntime&) = delete;
+    CoreRuntime& operator=(const CoreRuntime&) = delete;
+
+    // Attaches this core to the ring matrix and installs the handlers every
+    // core needs - today just `kShutdown`, which is what lets core 0 stop
+    // this one without touching its memory. `transport` must outlive this.
+    Status AttachTransport(sched::RingTransport& transport);
+
+    // Runs this core's reactor until a `kShutdown` message arrives. This is
+    // the worker thread's whole body.
+    void Run();
+
+    // Drains and syncs this core's log. Called on the way down, after Run()
+    // returns, so an acknowledged commit on this core survives the stop.
+    Status Sync();
+
+    // Drops this core's cached view of the catalog - both the derived facts
+    // and the page frames they came from. What the `kCatalogInvalidate`
+    // handler calls; exposed so a test can drive it without a reactor.
+    void InvalidateCatalog();
+
+    // Asks the system core for another extent when this one crosses its
+    // low-water mark. A no-op with no transport, and at most one request in
+    // flight at a time.
+    void MaybeRefillLease();
+
+    std::uint32_t core_id() const noexcept { return config_.core_id; }
+    sched::Scheduler& scheduler() noexcept { return *scheduler_; }
+    wal::WalManager& wal() noexcept { return *wal_; }
+    catalog::Catalog& catalog() noexcept { return *catalog_; }
+    CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
+    storage::DevicePageStore& store() noexcept { return *store_; }
+
+private:
+    CoreRuntime(Config config, Logger* log) noexcept
+        : config_(config), log_(log), lease_(config.lease) {}
+
+    Config config_;
+    Logger* log_ = nullptr;
+    sched::RingTransport* transport_ = nullptr;
+
+    // Declared in construction order and torn down in reverse, the same
+    // discipline Expeditor's members follow: the reactor holds the io
+    // backend, the WAL manager holds the log device, and the dispatcher
+    // holds references into everything below it.
+    std::unique_ptr<sched::IoBackend> io_backend_;
+    std::optional<sched::Scheduler> scheduler_;
+    std::unique_ptr<wal::FileLogDevice> log_device_;
+    std::unique_ptr<wal::WalManager> wal_;
+
+    // This core's own supply of page ids, and the store that allocates from
+    // it. Declared before the store, which holds a pointer to it.
+    storage::LeasedIdSource lease_;
+    std::unique_ptr<storage::DevicePageStore> store_;
+
+    // The refill this core is waiting on, if any. It outlives the coroutine
+    // that waits on it, which is `WaitFor`'s one requirement - a flag on the
+    // coroutine's own frame would be gone the moment it suspended.
+    ExtentRefill refill_;
+    // One refill in flight at a time. Without this the low-water check
+    // would submit a fresh request on every tick until the first grant
+    // landed, and every one of them would be answered - burning an extent
+    // per tick for a core that needed one.
+    bool refill_in_flight_ = false;
+
+    // The statement stack. A peer's `SuperBlock` is a **copy** taken on the
+    // startup thread: the dispatcher needs one for SHOW-class commands, and
+    // the live instance belongs to core 0. Nothing here writes it, and the
+    // one field that would matter - the transaction-id ceiling - is P5's,
+    // not this phase's.
+    SuperBlock superblock_;
+    std::optional<catalog::Catalog> catalog_;
+    std::optional<txn::TrxIdSequence> trx_ids_;
+    std::optional<txn::UndoLog> undo_log_;
+    std::optional<txn::TransactionManager> txn_manager_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+}  // namespace kds::server

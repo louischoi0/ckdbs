@@ -134,6 +134,15 @@ Status DevicePageStore::FlushMaps() {
 
 bool DevicePageStore::IsAllocated(PageId page_id) const noexcept {
     if (page_id >= kFreeMapBitsPerPage) return false;
+    // A leased core's copy of the free map is the one it read at Open(),
+    // and core 0 sets the bits for a lease when it *reserves* it - which
+    // happens later, in core 0's copy. So this store's map cannot be asked
+    // about this store's own ids, and the lease is the authority for them.
+    //
+    // Only an addition, never a subtraction: a bit the map does have still
+    // counts. The two can only disagree in the direction of the map being
+    // behind, because nothing ever frees.
+    if (lease_ != nullptr && lease_->Owns(page_id)) return true;
     return FreeMapIsAllocated(free_map_bytes(), page_id);
 }
 
@@ -156,6 +165,28 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
                                                                          bool mark_dirty) {
+#ifndef NDEBUG
+    // The shared-nothing check (workplan-crosscore.md P2, guideline 1),
+    // debug builds only. It sits here rather than in Get()/GetForRead()
+    // because *faulting* is the act that makes a page this core's business;
+    // a frame already resident was faulted through this same test.
+    //
+    // A hard failure rather than an assert: the caller has a Status channel,
+    // and a test can assert on the code where it could not on a SIGABRT.
+    if (!MayFault(page_id)) {
+        return Status::InvalidArgument(
+            "DevicePageStore: core " + std::to_string(core_id_) + " may not fault page " +
+            std::to_string(page_id) + "; it belongs to another core");
+    }
+    // Reading a system page is how a peer reaches the catalog; *dirtying*
+    // one would make it a second writer of a page with exactly one owner.
+    if (mark_dirty && !MayWrite(page_id)) {
+        return Status::InvalidArgument(
+            "DevicePageStore: core " + std::to_string(core_id_) + " may not write page " +
+            std::to_string(page_id) + "; the system range has one writer, the system core");
+    }
+#endif
+
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
         // mutation stays dirty however many readers touch it afterwards.
@@ -199,7 +230,35 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     return InsertFrame(page_id, std::move(bytes), mark_dirty);
 }
 
+bool DevicePageStore::MayFault(PageId page_id) const noexcept {
+    // The system core owns every fixed structure, so it may reach anything.
+    if (lease_ == nullptr) return true;
+    // The fixed system range is readable by every core: the catalog lives
+    // there, and a core that cannot read it cannot serve a statement (P6).
+    if (page_id < system_page_limit_) return true;
+    return lease_->Owns(page_id);
+}
+
+bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
+    if (lease_ == nullptr) return true;
+    // Read-only for a peer, deliberately: one writer per catalog page is
+    // what makes a peer's stale view a retryable "not found" rather than a
+    // torn read.
+    if (page_id < system_page_limit_) return false;
+    return lease_->Owns(page_id);
+}
+
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAt(PageId page_id) {
+    if (lease_ != nullptr) {
+        // Placing a page at a *chosen* id is a claim on the free map, and
+        // this store does not own it (see SetCoreOwnership). Every caller of
+        // CreateAt is bootstrap or a fixed system page, all of which are
+        // core 0's by M5 - so this is unreachable rather than restrictive,
+        // and it is here so that it stays that way.
+        return Status::InvalidArgument(
+            "DevicePageStore: core " + std::to_string(core_id_) +
+            " may not place a page at a chosen id; the free map belongs to the system core");
+    }
     if (page_id >= kFreeMapBitsPerPage) {
         return Status::OutOfRange("DevicePageStore: page id " + std::to_string(page_id) +
                                   " is beyond the single free-map page's coverage (" +
@@ -225,6 +284,27 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAt(PageId page_
 }
 
 StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::CreateNew() {
+    if (lease_ != nullptr) {
+        // A leased core takes its id from the run core 0 already reserved
+        // for it, and touches no shared state to do it. The free-map bits
+        // were set at reservation, so there is nothing to mark here - which
+        // is exactly why this path needs no message and no suspension
+        // (extent_lease.hpp).
+        auto id = lease_->Next();
+        if (!id.ok()) return id.status();
+        if (Status s = EnsureAddressable(id.value()); !s.ok()) return s;
+
+        auto bytes = std::make_unique<Page>();
+        bytes->fill(std::byte{0});
+        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+            log_->Trace("pagestore", "alloc page=" + std::to_string(id.value()) + " from core " +
+                                         std::to_string(core_id_) + "'s lease (" +
+                                         std::to_string(lease_->remaining()) + " left)");
+        }
+        return std::make_pair(id.value(),
+                              InsertFrame(id.value(), std::move(bytes), /*dirty=*/true));
+    }
+
     auto found = FreeMapFindFirstFree(free_map_bytes(), next_new_page_id_);
     if (!found.has_value()) {
         return Status::OutOfSpace("DevicePageStore: no free page id at or above " +
@@ -388,6 +468,27 @@ std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn()
     }
     std::sort(dirty.begin(), dirty.end());
     return dirty;
+}
+
+Status DevicePageStore::EvictClean(std::span<const PageId> page_ids) {
+    // Checked before anything is dropped, so a bad call leaves the store
+    // exactly as it was rather than half-evicted.
+    for (const PageId id : page_ids) {
+        auto it = frames_.find(id);
+        if (it != frames_.end() && it->second.dirty) {
+            return Status::InvalidArgument(
+                "DevicePageStore: page " + std::to_string(id) +
+                " is dirty; evicting it would discard a write");
+        }
+    }
+    for (const PageId id : page_ids) {
+        frames_.erase(id);
+    }
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("pagestore", "evicted " + std::to_string(page_ids.size()) +
+                                     " page(s) for re-read on core " + std::to_string(core_id_));
+    }
+    return Status::OK();
 }
 
 Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {

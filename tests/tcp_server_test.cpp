@@ -1,5 +1,7 @@
 #include "kds/server/tcp_server.hpp"
 
+#include <algorithm>
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -148,6 +150,113 @@ TEST_F(TcpServerTest, HandlesClientDisconnectThenAcceptsNextClient) {
     EXPECT_EQ(SendAndReceiveLine(second, "STOP"), "OK bye");
 
     ::close(second);
+    server_thread.join();
+}
+
+// ---- The async dispatch seam ------------------------------------------
+//
+// `Dispatch` is a coroutine now, so a reply is no longer produced inside the
+// read handler. Nothing suspends yet - the executor is still synchronous -
+// so what these pin is that the *plumbing* preserved every property the
+// synchronous path had.
+
+TEST_F(TcpServerTest, PipelinedCommandsAreAnsweredInOrder) {
+    // The property one-statement-at-a-time exists to protect. A batch
+    // arrives in one write; the replies must come back in the order the
+    // commands were sent, because the newline protocol has no request ids
+    // to match them up with.
+    constexpr std::uint16_t kPort = 25414;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int fd = ConnectToLoopback(kPort);
+    ASSERT_GE(fd, 0);
+
+    // Five commands, one write() - the pipelining case.
+    const std::string batch = "PING\nPING\nPING\nPING\nPING\n";
+    ASSERT_EQ(::write(fd, batch.data(), batch.size()), static_cast<ssize_t>(batch.size()));
+
+    std::string response;
+    char buf[256];
+    int newlines = 0;
+    while (newlines < 5) {
+        ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        response.append(buf, static_cast<std::size_t>(n));
+        newlines = static_cast<int>(std::count(response.begin(), response.end(), '\n'));
+    }
+    EXPECT_EQ(response, "PONG\nPONG\nPONG\nPONG\nPONG\n");
+
+    EXPECT_EQ(SendAndReceiveLine(fd, "STOP"), "OK bye");
+    ::close(fd);
+    server_thread.join();
+}
+
+TEST_F(TcpServerTest, EachStatementSeesWhatTheOneBeforeItDid) {
+    // A statement boundary is a task completion now, not a function return.
+    // What must not change is that the next statement runs *after* the
+    // previous one finished - so its effects are visible.
+    //
+    // Session/transaction semantics are covered directly at the dispatcher
+    // level (txn_session_test.cpp); this fixture has no transaction manager
+    // and does not need one to pin the ordering property.
+    constexpr std::uint16_t kPort = 25415;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int fd = ConnectToLoopback(kPort);
+    ASSERT_GE(fd, 0);
+
+    EXPECT_EQ(SendAndReceiveLine(fd, "CREATE TABLE t (id INT64, v INT64)").rfind("ERR", 0),
+              std::string::npos);
+    // Sent as one batch: the INSERT must not begin before the CREATE has
+    // committed its catalog rows, or it resolves against a relation that
+    // does not exist yet.
+    const std::string batch = "INSERT INTO t VALUES (7)\nSELECT * FROM t\n";
+    ASSERT_EQ(::write(fd, batch.data(), batch.size()), static_cast<ssize_t>(batch.size()));
+
+    std::string response;
+    char buf[512];
+    while (std::count(response.begin(), response.end(), '\n') < 2) {
+        ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        response.append(buf, static_cast<std::size_t>(n));
+    }
+    EXPECT_EQ(response.rfind("INSERTED", 0), 0u) << response;
+    EXPECT_NE(response.find("7"), std::string::npos)
+        << "the SELECT did not see the INSERT that preceded it: " << response;
+
+    EXPECT_EQ(SendAndReceiveLine(fd, "STOP"), "OK bye");
+    ::close(fd);
+    server_thread.join();
+}
+
+TEST_F(TcpServerTest, ADisconnectMidBatchDoesNotTakeTheServerDown) {
+    // The path Connection::closing exists for: the client goes away while
+    // the server still has work queued for it. Nothing may dangle, and the
+    // next client must still be served.
+    constexpr std::uint16_t kPort = 25416;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int fd = ConnectToLoopback(kPort);
+    ASSERT_GE(fd, 0);
+    const std::string batch = "PING\nPING\nPING\nPING\n";
+    ASSERT_EQ(::write(fd, batch.data(), batch.size()), static_cast<ssize_t>(batch.size()));
+    // Hang up immediately, without reading a single reply.
+    ::close(fd);
+
+    int next = ConnectToLoopback(kPort);
+    ASSERT_GE(next, 0);
+    EXPECT_EQ(SendAndReceiveLine(next, "PING"), "PONG");
+    EXPECT_EQ(SendAndReceiveLine(next, "STOP"), "OK bye");
+    ::close(next);
     server_thread.join();
 }
 

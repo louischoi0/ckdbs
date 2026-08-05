@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/sched/coro.hpp"
+
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
@@ -421,4 +423,20 @@ TEST_F(ExecChainTest, ASubqueryBearingChainExecutes) {
 }
 
 }  // namespace
+
+// ---- The executor's suspension audit (sched/coro.hpp) -----------------
+
+TEST(ExecSuspendAuditTest, TheExecutorReportsAPageSpanAsUnsafeToSuspendUnder) {
+    // Installed before any executor suspension point exists, which is the
+    // point: the rule is checkable before anything can break it.
+    exec::InstallSuspendAudit();
+    ASSERT_NE(sched::suspend_audit(), nullptr);
+
+    // No span live outside a decode window, so suspending is safe.
+    EXPECT_EQ(exec::LivePageSpans(), 0);
+    EXPECT_TRUE(sched::suspend_audit()().empty());
+
+    sched::SetSuspendAudit(nullptr);
+}
+
 }  // namespace kds::exec

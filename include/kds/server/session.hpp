@@ -91,7 +91,42 @@ public:
         txn::Transaction* ended = txn_;
         txn_ = nullptr;
         state_ = State::kIdle;
+        // The home core belongs to the transaction, not the connection: the
+        // next one is free to write wherever it likes, and carrying the
+        // binding forward would restrict it for no reason.
+        home_core_ = kUnbound;
         return ended;
+    }
+
+    // ---- The transaction's home core (crosscore.md §6, CC3) ------------
+    //
+    // **A transaction's writes bind to one core.** The first write picks it;
+    // any later write to a relation owned by a different core is refused,
+    // retryably. That restriction is what keeps commit single-stream and the
+    // 2PC door closed - LSNs are stream-local and are never compared across
+    // cores (workplan guideline 3), so a transaction whose writes landed in
+    // two streams could not be recovered as one.
+    //
+    // `kUnbound` until the first write, so a read-only transaction never
+    // acquires a home and never restricts anything - reads pipeline freely
+    // under §5.
+    static constexpr std::uint32_t kUnbound = 0xFFFFFFFFu;
+
+    std::uint32_t home_core() const noexcept { return home_core_; }
+    bool home_bound() const noexcept { return home_core_ != kUnbound; }
+
+    // Binds the home core on the first write. Idempotent for the core
+    // already bound; a caller must check `MayWriteOn()` first rather than
+    // rely on this to refuse, because the refusal is a client-visible error
+    // with a message, not a silent no-op.
+    void BindHomeCore(std::uint32_t core_id) noexcept {
+        if (home_core_ == kUnbound) home_core_ = core_id;
+    }
+
+    // Whether a write to a relation owned by `core_id` is admissible.
+    // Always true before the first write and for the bound core itself.
+    bool MayWriteOn(std::uint32_t core_id) const noexcept {
+        return home_core_ == kUnbound || home_core_ == core_id;
     }
 
     // Which commands a poisoned session still answers (section 10-8).
@@ -122,6 +157,7 @@ private:
     State state_ = State::kIdle;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
     txn::Transaction* txn_ = nullptr;
+    std::uint32_t home_core_ = kUnbound;
 };
 
 }  // namespace kds::server

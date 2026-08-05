@@ -1,10 +1,17 @@
 #include "kds/server/expeditor.hpp"
 
+#include <pthread.h>
+#include <sched.h>
+
+#include <cstring>
 #include <limits>
 #include <thread>
 #include <utility>
 
+#include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
+#include "kds/sched/send_retry.hpp"
+#include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/file_page_device.hpp"
 
 namespace kds::server {
@@ -366,6 +373,79 @@ Status Expeditor::Checkpoint() {
     return Status::OK();
 }
 
+namespace {
+
+// Pins `thread` to `core_id`. Best-effort by design: a container or a
+// restricted cpuset can refuse, and a reactor that runs unpinned is slower
+// rather than wrong - so this reports and continues instead of failing the
+// server. The platform layer is allowed the syscall (rules.md #4).
+void PinToCore(std::thread& thread, std::uint32_t core_id, Logger* log) {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(static_cast<int>(core_id), &set);
+    const int rc = pthread_setaffinity_np(thread.native_handle(), sizeof(set), &set);
+    if (rc != 0 && log != nullptr && log->enabled(LogLevel::kWarn)) {
+        log->Warn("expeditor", "could not pin core " + std::to_string(core_id) +
+                                   " (errno " + std::to_string(rc) +
+                                   "); it will run unpinned");
+    }
+}
+
+}  // namespace
+
+void Expeditor::BroadcastCatalogInvalidation(sched::Scheduler& core0_scheduler) {
+    if (!transport_.has_value() || cores_.empty()) return;
+
+    // **Flush before telling anyone.** Catalog writes are unlogged and
+    // otherwise reach the device only at checkpoint or SYNC, so a peer told
+    // to re-read now would read the state *before* this DDL - and conclude
+    // the new relation does not exist, permanently, until something else
+    // happened to flush. This is the ordering the whole scheme rests on.
+    if (Status s = store_->FlushPages(catalog::kAllCatalogPages); !s.ok()) {
+        // Reported and not propagated: the DDL itself has already succeeded
+        // and the caller is BumpVersion(), which returns void. The cost is
+        // peers that keep a stale catalog until the next flush - stale, not
+        // wrong, because a stale catalog answers "not found" and never a
+        // wrong row.
+        logger_->Error("catalog", "flushing catalog pages before invalidating peers failed: " +
+                                      s.message());
+        return;
+    }
+
+    for (const auto& core : cores_) {
+        sched::MessageHeader header{};
+        header.src_core = 0;
+        header.dst_core = core->core_id();
+        header.session_core = 0;
+        header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kCatalogInvalidate);
+        header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+        core0_scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, {}));
+    }
+}
+
+void Expeditor::BroadcastShutdown(sched::Scheduler& core0_scheduler) {
+    if (!transport_.has_value()) return;
+
+    for (const auto& core : cores_) {
+        sched::MessageHeader header{};
+        header.src_core = 0;
+        header.dst_core = core->core_id();
+        header.session_core = 0;
+        header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
+        header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+        core0_scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, {}));
+    }
+
+    // Core 0's reactor has already left Run(), so nothing is draining its
+    // ready queue - the sends above have to be pumped by hand. Bounded
+    // rather than "until empty": a peer whose ring is full and whose reactor
+    // has already stopped would otherwise hang the shutdown, and a core that
+    // misses its message is joined below anyway once it notices its own
+    // stop.
+    for (int i = 0; i < 1000 && core0_scheduler.RunOnce(); ++i) {
+    }
+}
+
 Status Expeditor::Serve() {
     auto io_backend = sched::EpollIoBackend::Create();
     if (!io_backend.ok()) return io_backend.status();
@@ -375,6 +455,127 @@ Status Expeditor::Serve() {
 
     sched::Scheduler scheduler(clock_, io_backend.value());
     scheduler.SetLogger(&*logger_);
+
+    // Core-local, and installed before any statement runs: from here on a
+    // coroutine that suspends while holding a page span is detected rather
+    // than merely forbidden in prose (exec/step_vm.hpp, sched/coro.hpp).
+    // Nothing in the executor suspends yet - this is in place *before* the
+    // first thing that can.
+    exec::InstallSuspendAudit();
+
+    // ---- The fan-out (workplan-crosscore.md P2) -------------------------
+    //
+    // At `cores = 1` none of this runs: no transport is built, no thread is
+    // spawned, and the reactor below is the same single one that has always
+    // served. Guideline 2 asks for zero messages and zero allocations on the
+    // single-core path, and the cheapest way to mean it is to build nothing.
+    std::vector<std::thread> workers;
+    if (config_.cores > 1) {
+        auto transport = sched::RealRingTransport::Create(
+            config_.cores, kCoreRingSlots, kCoreRingPayloadBytes);
+        if (!transport.ok()) return transport.status();
+        transport_.emplace(std::move(transport.value()));
+
+        scheduler.AttachTransport(&*transport_, /*core_id=*/0);
+
+        // The system core's half of the anchor path (M5): the superblock is
+        // page 0 and belongs to core 0, so a peer's completed checkpoint
+        // sends its anchor here and this writes it. The write itself goes
+        // through the same SuperBlockCheckpointAnchor a local checkpoint
+        // uses, so there is exactly one piece of code that knows how an
+        // anchor reaches the page.
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kAnchorWrite,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    if (payload.size() != sizeof(AnchorWritePayload)) {
+                        logger_->Error("checkpoint",
+                                       "anchor write from core " +
+                                           std::to_string(header.src_core) + " has " +
+                                           std::to_string(payload.size()) +
+                                           " bytes, not " +
+                                           std::to_string(sizeof(AnchorWritePayload)));
+                        return;
+                    }
+                    AnchorWritePayload fields{};
+                    std::memcpy(&fields, payload.data(), sizeof(fields));
+
+                    wal::CheckpointAnchorRecord record;
+                    record.core_id = fields.core_id;
+                    record.checkpoint_lsn = fields.checkpoint_lsn;
+                    record.redo_start_lsn = fields.redo_start_lsn;
+                    record.durable_lsn = fields.durable_lsn;
+                    record.segment_no = fields.segment_no;
+
+                    if (Status s = checkpoint_anchor_->Publish(record); !s.ok()) {
+                        // Nowhere to return it: the sender is fire-and-forget
+                        // by design, because a lost anchor costs a longer
+                        // replay and never an answer (wal.md §8-3).
+                        logger_->Error("checkpoint", "publishing core " +
+                                                         std::to_string(fields.core_id) +
+                                                         "'s anchor failed: " + s.message());
+                    }
+                });
+            !s.ok()) {
+            return s;
+        }
+
+        // Every peer's page-id lease is carved here, on the startup thread,
+        // out of core 0's free map - which is the only writer of it (M5).
+        extents_.emplace(store_->free_map_bytes(), kFirstUserPageId);
+
+        for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
+            auto lease = extents_->Reserve(storage::kDefaultExtentPages);
+            if (!lease.ok()) return lease.status();
+
+            CoreRuntime::Config core_config;
+            core_config.core_id = core_id;
+            core_config.wal_dir = config_.wal_dir;
+            core_config.checkpoint_interval_ns = config_.checkpoint_interval_ns;
+            core_config.wal_drain_interval_ns = config_.wal_drain_interval_ns;
+            core_config.inline_cell_width = database_->superblock.inline_cell_width();
+            core_config.core_count = database_->superblock.core_count();
+            core_config.durability = config_.durability;
+            core_config.isolation = config_.isolation;
+            core_config.budget = exec::Budget(config_.max_rows_touched);
+            core_config.lease = lease.value();
+
+            auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
+            if (!core.ok()) return core.status();
+            if (Status s = core.value()->AttachTransport(*transport_); !s.ok()) return s;
+            cores_.push_back(std::move(core.value()));
+        }
+
+        // The reservations above set free-map bits that only exist in
+        // memory until something writes the page. A peer's first allocation
+        // must not be an id a restart would think free.
+        if (Status s = Sync(); !s.ok()) return s;
+
+        // Core 0's half of the page-id lease service (P5): a peer at its
+        // low-water mark asks here, and this carves the next extent. The
+        // reservation is synchronous because on this core it is a local
+        // call - it is the *asking* that had to wait for coroutines.
+        if (Status s = RegisterExtentGrantHandler(scheduler, *transport_, *extents_,
+                                                   storage::kDefaultExtentPages, &*logger_);
+            !s.ok()) {
+            return s;
+        }
+
+        // Core 0's DDL choke point, wired to the broadcast. Installed after
+        // the peers exist so the loop below always has somebody to tell.
+        database_->catalog.SetInvalidationHook([this, &scheduler] {
+            BroadcastCatalogInvalidation(scheduler);
+        });
+
+        // Spawned only after every core is built, so a failure above leaves
+        // no thread to unwind.
+        for (auto& core : cores_) {
+            workers.emplace_back([&core] { core->Run(); });
+            PinToCore(workers.back(), core->core_id(), &*logger_);
+        }
+        logger_->Info("expeditor", "running " + std::to_string(config_.cores) +
+                                       " cores; core 0 serves every statement until the "
+                                       "per-core catalog cache exists (workplan P6)");
+    }
     if (Status s = listener.value().Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
         return s;
     }
@@ -415,6 +616,25 @@ Status Expeditor::Serve() {
     logger_->Info("expeditor", "listening on 127.0.0.1:" + std::to_string(config_.port));
     scheduler.Run();
     logger_->Info("expeditor", "stopping");
+
+    // Every peer is told to stop, then joined. The message is how a core is
+    // stopped at all - `Scheduler::Stop()` writes a plain bool owned by that
+    // core's own thread (ring_message.hpp's kShutdown says why).
+    BroadcastShutdown(scheduler);
+    for (auto& worker : workers) {
+        if (worker.joinable()) worker.join();
+    }
+    // After the join, so nothing is still appending to a stream being
+    // synced. Each core's log is its own, so this is N independent syncs
+    // and not a barrier.
+    for (auto& core : cores_) {
+        if (Status s = core->Sync(); !s.ok()) {
+            logger_->Error("expeditor", "core " + std::to_string(core->core_id()) +
+                                            ": final log sync failed: " + s.message());
+        }
+    }
+    cores_.clear();
+    transport_.reset();
 
     // Torn down before the scheduler leaves scope: both hold fds
     // registered with it.

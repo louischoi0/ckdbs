@@ -308,33 +308,31 @@ TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {
 
 // ---- Placement (core_placement.hpp) ----------------------------------
 
-TEST(CorePlacementTest, ASingleCoreInstancePutsEverythingOnTheSystemCore) {
-    for (std::uint64_t seq = 0; seq < 8; ++seq) {
-        EXPECT_EQ(AssignOwnerCore(/*core_count=*/1, seq), kSystemCore);
-    }
-}
-
-TEST(CorePlacementTest, UserRelationsRotateOverTheNonSystemCores) {
-    // The `[PROPOSED]` round-robin of M1. Nothing may depend on this
-    // distribution - only on ownership being recorded - but the policy that
-    // exists should be the one that was described.
-    EXPECT_EQ(AssignOwnerCore(4, 0), 1u);
-    EXPECT_EQ(AssignOwnerCore(4, 1), 2u);
-    EXPECT_EQ(AssignOwnerCore(4, 2), 3u);
-    EXPECT_EQ(AssignOwnerCore(4, 3), 1u);
-}
-
-TEST(CorePlacementTest, TheSystemCoreNeverOwnsAUserRelationWhenThereIsAnywhereElse) {
-    // M5: core 0 already owns the superblock, the free map, file growth and
-    // the catalog pages. A user relation on it is the one core everybody
-    // else queues behind.
-    for (std::uint32_t cores = 2; cores <= 8; ++cores) {
-        for (std::uint64_t seq = 0; seq < 20; ++seq) {
-            const std::uint32_t owner = AssignOwnerCore(cores, seq);
-            EXPECT_NE(owner, kSystemCore) << "cores=" << cores << " seq=" << seq;
-            EXPECT_LT(owner, cores);
+TEST(CorePlacementTest, ARelationIsOwnedByTheCoreThatCreatesIt) {
+    // The invariant placement has to satisfy: ownership names the core that
+    // may run statements against a relation, and a page belongs to whichever
+    // core's lease it came from. A relation owned by a core that cannot
+    // fault its own pages is not a placement, it is an unreachable relation.
+    for (std::uint32_t cores : {1u, 2u, 4u}) {
+        for (std::uint64_t seq = 0; seq < 8; ++seq) {
+            EXPECT_EQ(AssignOwnerCore(kSystemCore, cores, seq), kSystemCore);
         }
     }
+}
+
+TEST(CorePlacementTest, TheRotationIsNotPerformedWhileDdlOwnsAllocation) {
+    // M1's round-robin is `[PROPOSED]` and is deliberately *not* applied:
+    // DDL runs on the system core and allocates from its free map, so every
+    // relation's pages are the system core's.
+    //
+    // It was applied, from P0 until the affinity guard existed, and nothing
+    // detected it - core 0 allocated and faulted the pages regardless, and
+    // no code compared the two facts. The moment CheckReadAffinity started
+    // asking, every statement on a two-core instance failed. This test is
+    // what would have caught it.
+    EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 0), kSystemCore);
+    EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 1), kSystemCore);
+    EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 2), kSystemCore);
 }
 
 }  // namespace

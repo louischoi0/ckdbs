@@ -40,24 +40,50 @@ namespace kds::catalog {
 // waits behind.
 inline constexpr std::uint32_t kSystemCore = 0;
 
-// The owner for the `relation_seq`-th user relation created on an instance
-// running `core_count` cores.
+// The owner for a user relation created on `creating_core`.
 //
-// `relation_seq` is any counter that advances once per created relation;
-// `Catalog::relations_created()` supplies it. It is deliberately not the
-// oid: oids restart at kUserOidStart every boot
+// ---- The invariant this has to satisfy ----------------------------------
+//
+// **A relation's owner must be the core that allocates its pages.**
+// Ownership is two facts that have to agree: `sys.tables.owner_core` says
+// which core may run statements against a relation, and a page belongs to
+// whichever core's lease it came from (storage/extent_lease.hpp). A
+// relation owned by a core that cannot fault its own pages is not a
+// placement, it is an unreachable relation.
+//
+// Today DDL runs on the system core and allocates from the system core's
+// free map, so **the answer is always the creating core**. The round-robin
+// M1 proposes is written out below rather than performed, because the thing
+// that would make it correct does not exist yet:
+//
+//     if (core_count > 1) {
+//         return kSystemCore + 1 + (relation_seq % (core_count - 1));
+//     }
+//
+// Enabling that needs CREATE TABLE to allocate the relation's root - and
+// every page it later grows into - from the *owner's* lease. Either DDL
+// gains a cross-core allocation, or core 0 reserves an extent and hands it
+// to the owner before the relation is visible. Both are real designs;
+// neither is built.
+//
+// ---- How this was found -------------------------------------------------
+//
+// The rotation *was* performed, from P0 until the affinity guard existed.
+// Nothing detected it, because core 0 allocated and faulted the pages
+// regardless and no code compared the two facts. The moment
+// `CheckReadAffinity` started asking, every statement on a two-core
+// instance failed: placement said core 1, execution ran on core 0. The
+// guard was right and the placement was wrong.
+//
+// `relation_seq` is kept in the signature for the rotation above, and is
+// deliberately not the oid: oids restart at kUserOidStart every boot
 // (docs/keystoneid-k0-findings.md), so a placement keyed on one would
-// re-walk the same rotation after every restart and pile the first few
-// relations of each session onto the same core.
-//
-// A single-core instance answers 0 for everything - there is nowhere else -
-// which is what makes this callable unconditionally on the CREATE TABLE
-// path rather than guarded by a core-count test.
-constexpr std::uint32_t AssignOwnerCore(std::uint32_t core_count,
+// re-walk the same rotation after every restart.
+constexpr std::uint32_t AssignOwnerCore(std::uint32_t creating_core, std::uint32_t core_count,
                                         std::uint64_t relation_seq) noexcept {
-    if (core_count <= 1) return kSystemCore;
-    const std::uint32_t user_cores = core_count - 1;
-    return kSystemCore + 1 + static_cast<std::uint32_t>(relation_seq % user_cores);
+    (void)core_count;
+    (void)relation_seq;
+    return creating_core;
 }
 
 }  // namespace kds::catalog

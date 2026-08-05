@@ -4,14 +4,18 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/sched/ring_transport.hpp"
 #include "kds/server/config_file.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/core_runtime.hpp"
+#include "kds/server/extent_lease_service.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -70,6 +74,21 @@
 // it was - a bound on the loss window, not a crash guarantee.
 
 namespace kds::server {
+
+// Per-core-pair ring sizing (docs/sched.md §10 leaves it `[OPEN]`).
+//
+// Both `[PROPOSED]` and nothing may depend on either: they are the
+// parameters `RealRingTransport::Create()` takes, held here so there is one
+// place to change them when the pipeline gives them a workload to be
+// measured against. 256 slots of 1 KiB is 256 KiB per directed pair - at 4
+// cores, 4 MiB of rings for the whole instance.
+//
+// The payload is deliberately *not* `crosscore.md` §4's 32 KiB batch
+// target: no batch is sent yet, and sizing every ring for a message that
+// does not exist would cost 8 MiB per pair on a promise. P4 raises it when
+// it has something to put in it.
+inline constexpr std::size_t kCoreRingSlots = 256;
+inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
 
 class Expeditor {
 public:
@@ -353,6 +372,34 @@ private:
 
     std::unique_ptr<wal::FileLogDevice> log_device_;
     std::unique_ptr<wal::WalManager> wal_;
+    // ---- The fan-out (docs/workplan-crosscore.md P2) --------------------
+    //
+    // Cores 1..N-1, each on its own pinned thread. Empty at `cores = 1`, and
+    // so is `transport_` - guideline 2's "the ring layer contributes zero
+    // messages and zero allocations" is kept literally, by not building one.
+    //
+    // Core 0's reactor is *not* here: it is the one Serve() runs on the
+    // calling thread, with the listener and dispatcher attached, exactly as
+    // it was before this existed. That asymmetry is deliberate - it is what
+    // makes the single-core path unchanged rather than merely equivalent.
+    std::optional<sched::RealRingTransport> transport_;
+    std::vector<std::unique_ptr<CoreRuntime>> cores_;
+
+    // Core 0's page-id allocator (M5): the only thing that carves the free
+    // map. A member rather than a local in Serve() because the grant handler
+    // registered on core 0's reactor borrows it and outlives the statement
+    // that installed it.
+    std::optional<storage::ExtentAllocator> extents_;
+
+    // Sends every peer a kShutdown. Called on the way down, from core 0's
+    // thread, before the workers are joined.
+    void BroadcastShutdown(sched::Scheduler& core0_scheduler);
+
+    // Flushes the catalog pages and tells every peer to drop its cache.
+    // Hooked to `Catalog::BumpVersion()`, the single DDL choke point, so a
+    // DDL added later broadcasts without knowing this exists.
+    void BroadcastCatalogInvalidation(sched::Scheduler& core0_scheduler);
+
     std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
     std::optional<SuperBlockCheckpointAnchor> checkpoint_anchor_;
     // The live set a checkpoint records now comes from the transaction

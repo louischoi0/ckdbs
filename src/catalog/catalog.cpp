@@ -19,9 +19,19 @@ namespace {
 // Scans every live row of type RowT out of the heap page at `page_id`.
 // Dead slots (RowT::Decode's caller never sees them - ReadTuple() itself
 // reports NotFound for a dead slot) are skipped.
+// **GetForRead, not Get.** A scan reads and modifies nothing, and Get()
+// marks the frame dirty by convention rather than by what the caller
+// actually wrote (page_store.hpp) - so every catalog lookup used to dirty a
+// catalog page, and every checkpoint wrote all nine of them back having
+// changed none.
+//
+// Multicore turned that waste into a refusal: a peer may read the catalog
+// pages and may never write one (workplan-crosscore.md P6), so a read that
+// dirties is a read a peer cannot do at all. Which is the ownership check
+// doing exactly its job - the bug predates it by a long way.
 template <typename RowT>
 StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId page_id) {
-    auto bytes = store.Get(page_id);
+    auto bytes = store.GetForRead(page_id);
     if (!bytes.ok()) return bytes.status();
 
     heap::PageView page(bytes.value());
@@ -326,6 +336,23 @@ void Catalog::BumpVersion(std::string_view what) {
         log_->Debug("catalog", "cache invalidated by " + std::string(what) + ": version " +
                                    std::to_string(catalog_version_));
     }
+    // After the local invalidation, never before: the hook flushes the
+    // catalog pages and tells peers to re-read, and a peer that re-read
+    // while this instance still held stale entries would be reading a
+    // catalog its own owner disagrees with.
+    if (on_invalidate_) on_invalidate_();
+}
+
+void Catalog::InvalidateFromPeer() {
+    // No version bump. `catalog_version_` is the counter parser-v2.md I5
+    // stamps *this instance's* bound statements with; another core's DDL is
+    // not an event in this instance's numbering, and advancing it here
+    // would invalidate bound statements for a reason they cannot check.
+    // What has to go is the cached content.
+    cache_.Invalidate();
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("catalog", "cache invalidated by a peer's DDL");
+    }
 }
 
 Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
@@ -471,8 +498,11 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // policy - AssignOwnerCore does, and it is `[PROPOSED]`.
     auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables);
     if (!existing_relations.ok()) return existing_relations.status();
+    // DDL runs on the system core and allocates from its free map, so the
+    // relation's pages are the system core's - and a relation must be owned
+    // by the core that can fault its pages (core_placement.hpp).
     const std::uint32_t owner_core =
-        AssignOwnerCore(core_count_, existing_relations.value().size());
+        AssignOwnerCore(kSystemCore, core_count_, existing_relations.value().size());
 
     if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name); !s.ok()) {
         return s;

@@ -121,6 +121,20 @@ inline constexpr PageId kCatalogPagePatternDefs = 10;
 inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 
+// Every fixed catalog page, in id order.
+//
+// One list, because two places now need "all of them at once" and a
+// hand-written second copy is how a page added later gets left out of one
+// of them: `Catalog::Bootstrap()` creates them, and multicore flushes them
+// before telling peers to re-read (docs/workplan-crosscore.md P6). A page
+// missing from the flush would leave a peer permanently unable to see the
+// relation it describes.
+inline constexpr PageId kAllCatalogPages[] = {
+    kCatalogPageTypes,       kCatalogPageColumns,     kCatalogPageObjects,
+    kCatalogPageTables,      kCatalogPageIndexes,     kCatalogPagePatterns,
+    kCatalogPagePatternDefs, kCatalogPageAccessStats, kCatalogPageCabins,
+};
+
 // Transaction id stamped on every bootstrap-time tuple - mirrors
 // PostgreSQL's FrozenTransactionId: bootstrap rows are inserted before a
 // transaction manager exists, so they need a fixed, always-visible xmin

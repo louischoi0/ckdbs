@@ -77,6 +77,29 @@ public:
     // a Catalog before the server has decided anything about logging.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
+    // Called after every DDL that invalidates cached facts - i.e. from
+    // BumpVersion(), the single choke point, and from nowhere else
+    // (docs/workplan-crosscore.md P6).
+    //
+    // On the system core this is what broadcasts `kCatalogInvalidate` so
+    // peers drop their caches and re-read. Hooking the choke point rather
+    // than each DDL site is the whole reason that choke point was built:
+    // a DDL added later broadcasts without knowing this exists.
+    //
+    // Deliberately **not** fired by `AllocateRowId()` or `RegisterPattern()`.
+    // Neither bumps the version - a sequence position and a pattern's
+    // existence are not cached facts (catalog_cache.hpp) - so neither is a
+    // DDL a peer needs to hear about, and firing on them would put a
+    // broadcast on the statement path.
+    using InvalidationHook = std::function<void()>;
+    void SetInvalidationHook(InvalidationHook hook) { on_invalidate_ = std::move(hook); }
+
+    // Drops every cached fact without bumping the version. What a **peer**
+    // does on receiving `kCatalogInvalidate`: the version counter is
+    // per-instance and means nothing across cores, but the cache contents
+    // are what would otherwise be stale.
+    void InvalidateFromPeer();
+
     // Registers the fixed namespace/type sys-objects in the in-memory
     // registry (no disk I/O - these are well-known constants, not stored
     // as catalog rows themselves).
@@ -503,6 +526,7 @@ private:
     std::uint32_t core_count_ = 1;
 
     Logger* log_ = nullptr;
+    InvalidationHook on_invalidate_;
     Oid next_user_oid_ = kUserOidStart;
     SysObjectRegistry sys_objects_;
     CatalogCache cache_;

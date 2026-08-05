@@ -75,6 +75,7 @@ PG-shaped phases, KDS semantics:
 - Row values: `{i32 len | -1 = NULL, bytes}` per field — one NULL convention everywhere (params and rows).
 - v1 type wire formats: `INT8/16/32/64` (LE two's complement), `UINT64` (Keystone ids), `FLOAT64` (IEEE 754 LE), `BOOL` (1 byte), `TEXT` (UTF-8), `BYTES`, `DECIMAL` `[OPEN: encoding — financial domain will need it; scaled-int128 vs string, decide with the type system]`, `TIMESTAMP` (i64 micros since epoch, UTC `[PROPOSED]`).
 - No text result mode exists. Human-readable rendering is a client concern (the CLI renders).
+- **Status: the row encoding above is implemented** — `include/kds/wire/row_codec.hpp` (2026-08-05). It is deliberately below both consumers: `docs/crosscore.md` CC2 requires cross-core `STEP_BATCH` payloads in this same encoding, so the encoder knows about neither frames nor cores. `DECIMAL` stays `[OPEN]` and is refused, not guessed.
 
 ## 7. Result Streaming
 

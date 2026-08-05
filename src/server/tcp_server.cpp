@@ -1,5 +1,7 @@
 #include "kds/server/tcp_server.hpp"
 
+#include "kds/sched/coro.hpp"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -218,7 +220,19 @@ void TcpServer::OnClientReadable(int client_fd) {
 bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
     std::size_t sent = 0;
     while (sent < conn.outbox.size()) {
-        ssize_t n = ::write(client_fd, conn.outbox.data() + sent, conn.outbox.size() - sent);
+        // **send() with MSG_NOSIGNAL, not write().** Writing to a socket the
+        // peer has closed raises SIGPIPE, whose default action is to
+        // terminate the process - so a client that hangs up without reading
+        // its reply could kill the server. MSG_NOSIGNAL turns that into a
+        // plain EPIPE, which the error path below already handles.
+        //
+        // The hole predates the async dispatch seam and was simply hard to
+        // hit: one write() per readable event gave a client a narrow window
+        // to disappear in. A reply per statement completion widened it
+        // enough that a pipelined client hanging up killed the process every
+        // time, which is how it was found.
+        ssize_t n = ::send(client_fd, conn.outbox.data() + sent, conn.outbox.size() - sent,
+                           MSG_NOSIGNAL);
         if (n > 0) {
             sent += static_cast<std::size_t>(n);
             continue;
@@ -250,55 +264,108 @@ void TcpServer::SyncWriteInterest(int client_fd, Connection& conn) {
 }
 
 bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
-    std::size_t nl;
-    while ((nl = conn.inbox.find('\n')) != std::string::npos) {
-        std::string_view line(conn.inbox.data(), nl);
-        if (!line.empty() && line.back() == '\r') {
-            line.remove_suffix(1);  // tolerate CRLF clients
-        }
+    // One at a time (tcp_server.hpp's Connection::in_flight): the session is
+    // stateful and the protocol has no request ids, so a second statement
+    // must not start until this one's reply has been appended.
+    if (conn.in_flight || conn.closing) return true;
 
-        // The request as the client sent it, before anything interprets
-        // it. Trace, because it is one line per command and it echoes
-        // whatever the client typed - including anything they should not
-        // have typed.
-        if (logging(LogLevel::kTrace)) {
-            log_->Trace("client", "fd=" + std::to_string(client_fd) + " request \"" +
-                                      std::string(line) + "\"");
-        }
+    const std::size_t nl = conn.inbox.find('\n');
+    if (nl == std::string::npos) return true;  // no complete command yet
 
-        DispatchOutcome outcome = dispatcher_->Dispatch(line, &conn.session);
-        // Appended, not written: one readable event can carry a whole batch
-        // of pipelined commands, and a write() per command is a syscall per
-        // command plus a separate small segment per command on the wire.
-        // The batch leaves in one write() below.
-        conn.outbox.append(outcome.response);
-        conn.outbox.push_back('\n');
-
-        conn.inbox.erase(0, nl + 1);
-
-        if (outcome.should_stop) {
-            // Best effort, exactly as the per-command write() it replaces
-            // was: the socket is non-blocking, so a full send buffer loses
-            // the goodbye. Nothing downstream depends on the client seeing
-            // it, and the alternative is blocking the reactor on shutdown.
-            (void)FlushOutbox(client_fd, conn);
-            if (logging(LogLevel::kInfo)) {
-                log_->Info("client", "STOP from fd=" + std::to_string(client_fd) +
-                                         "; shutting the server down");
-            }
-            // Stops the reactor, not just this connection - STOP has always
-            // meant the whole server. The connection is closed first so the
-            // client sees the reply land and the socket shut, rather than
-            // waiting on a process that is already tearing down.
-            CloseClient(client_fd);
-            scheduler_->Stop();
-            return false;
-        }
+    conn.current_line.assign(conn.inbox, 0, nl);
+    if (!conn.current_line.empty() && conn.current_line.back() == '\r') {
+        conn.current_line.pop_back();  // tolerate CRLF clients
     }
+    // Erased now, not on completion: the statement runs against
+    // `current_line`, and leaving its bytes in the inbox would mean the next
+    // read had to reason about which prefix was already taken.
+    conn.inbox.erase(0, nl + 1);
+
+    // The request as the client sent it, before anything interprets it.
+    // Trace, because it is one line per command and it echoes whatever the
+    // client typed - including anything they should not have typed.
+    if (logging(LogLevel::kTrace)) {
+        log_->Trace("client", "fd=" + std::to_string(client_fd) + " request \"" +
+                                  conn.current_line + "\"");
+    }
+
+    if (dispatcher_ == nullptr || scheduler_ == nullptr) return true;
+
+    conn.in_flight = true;
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
+        [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
     return true;
 }
 
+void TcpServer::OnStatementComplete(int client_fd) {
+    auto it = clients_.find(client_fd);
+    if (it == clients_.end()) return;  // nothing left to reply to
+    Connection& conn = it->second;
+    conn.in_flight = false;
+
+    // The connection went away while the statement ran (Connection::closing).
+    // Its reply has nowhere to go, and *now* it is safe to destroy the
+    // session the statement was holding.
+    if (conn.closing) {
+        conn.closing = false;
+        CloseClient(client_fd);
+        return;
+    }
+
+    // Appended, not written: one readable event can carry a whole batch of
+    // pipelined commands, and a write() per command is a syscall per command
+    // plus a separate small segment per command on the wire. The batch leaves
+    // in one write() below.
+    conn.outbox.append(conn.pending.response);
+    conn.outbox.push_back('\n');
+    const bool stop = conn.pending.should_stop;
+    conn.pending = DispatchOutcome{};
+
+    if (stop) {
+        // Best effort, exactly as the per-command write() it replaces was:
+        // the socket is non-blocking, so a full send buffer loses the
+        // goodbye. Nothing downstream depends on the client seeing it, and
+        // the alternative is blocking the reactor on shutdown.
+        (void)FlushOutbox(client_fd, conn);
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("client", "STOP from fd=" + std::to_string(client_fd) +
+                                     "; shutting the server down");
+        }
+        // Stops the reactor, not just this connection - STOP has always
+        // meant the whole server. The connection is closed first so the
+        // client sees the reply land and the socket shut, rather than
+        // waiting on a process that is already tearing down.
+        CloseClient(client_fd);
+        if (scheduler_ != nullptr) scheduler_->Stop();
+        return;
+    }
+
+    // The next pipelined command, then the batch's replies in one write.
+    if (!DrainCommands(client_fd, conn)) return;
+    if (!FlushOutbox(client_fd, conn)) return;
+    SyncWriteInterest(client_fd, conn);
+}
+
 void TcpServer::CloseClient(int client_fd) {
+    if (auto it = clients_.find(client_fd); it != clients_.end()) {
+        // **Deferred while a statement is running.** The coroutine holds a
+        // pointer to this connection's session and writes its reply into
+        // this connection's buffer, so destroying it now would pull both out
+        // from under a task that is still on a ready queue.
+        //
+        // Marked instead, and torn down by OnStatementComplete. Cancelling
+        // the statement would be better and needs cancellation the engine
+        // does not have; waiting for it is bounded by the statement's own
+        // row-touch budget (exec/budget.hpp), which is what stops a hung
+        // client from pinning a connection forever.
+        if (it->second.in_flight) {
+            it->second.closing = true;
+            return;
+        }
+    }
+
     // **A connection that goes away rolls back** (docs/txn.md section
     // 10-8). Anything else would leave an open transaction holding its
     // writes and its place in every other session's in-flight set, with

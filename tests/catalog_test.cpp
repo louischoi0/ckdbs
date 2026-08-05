@@ -654,7 +654,7 @@ TEST_F(OwnerCoreTest, ASingleCoreInstancePutsEveryRelationOnCoreZero) {
 TEST_F(OwnerCoreTest, CreateTableRecordsAnOwnerAndTableAccessCarriesIt) {
     // The path that matters: the planner reads TableAccess, not the row, so
     // an owner recorded on disk and lost on the way into the cache would be
-    // invisible until the pipeline existed to notice.
+    // invisible until something compared it against execution.
     Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/4);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
@@ -664,31 +664,32 @@ TEST_F(OwnerCoreTest, CreateTableRecordsAnOwnerAndTableAccessCarriesIt) {
 
     auto row = catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
-    EXPECT_NE(row.value().owner_core, kSystemCore) << "a user relation landed on the system core";
+    // The system core, even at cores=4: DDL allocates the relation's pages
+    // from the system core's free map, and a relation must be owned by the
+    // core that can fault its pages (core_placement.hpp).
+    EXPECT_EQ(row.value().owner_core, kSystemCore);
 
     auto access = catalog.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok()) << access.status().message();
     EXPECT_EQ(access.value()->owner_core, row.value().owner_core);
 }
 
-TEST_F(OwnerCoreTest, SuccessiveRelationsDoNotAllLandOnOneCore) {
-    // The `[PROPOSED]` round-robin doing something. Asserted as a
-    // distribution property rather than as exact assignments, because the
-    // policy is explicitly not settled - what must hold is that ownership
-    // is recorded and spread, not which core got which table.
+TEST_F(OwnerCoreTest, EveryRelationIsReachableFromTheCoreThatCreatedIt) {
+    // The property the round-robin broke, and which nothing checked until
+    // the affinity guard existed: placement and execution have to agree, or
+    // the relation cannot be read by anyone.
     Catalog catalog(store_, storage::kDefaultInlineCellWidth, /*core_count=*/3);
     ASSERT_TRUE(catalog.Bootstrap().ok());
 
-    std::set<std::uint32_t> owners;
     for (int i = 0; i < 6; ++i) {
         auto oid = catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
                                         OneColumnSchema(), ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto row = catalog.GetSysTableRow(oid.value());
         ASSERT_TRUE(row.ok());
-        owners.insert(row.value().owner_core);
+        EXPECT_EQ(row.value().owner_core, kSystemCore)
+            << "relation t" << i << " was placed where nothing can reach it";
     }
-    EXPECT_EQ(owners, (std::set<std::uint32_t>{1, 2}));
 }
 
 TEST_F(OwnerCoreTest, OwnershipSurvivesAReopen) {

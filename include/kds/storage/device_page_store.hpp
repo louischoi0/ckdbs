@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "kds/base/log.hpp"
+#include "kds/storage/extent_lease.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/durability.hpp"
@@ -155,6 +156,81 @@ public:
     // default) disables it. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
 
+    // ---- Core ownership (docs/workplan-crosscore.md M5, P2) -------------
+    //
+    // Binds this store to `core_id` and, for a core that is not the system
+    // core, to the lease it allocates from (storage/extent_lease.hpp).
+    //
+    // **With a lease installed this store never touches the free map.** That
+    // is the whole point: the map is one durable page and M5 gives it to
+    // core 0, so a second writer would be shared mutable state between cores
+    // - which workplan guideline 1 forbids outright. `CreateNew()` takes its
+    // ids from the lease instead, and `CreateAt()` becomes unavailable,
+    // since placing a page at a *chosen* id is a claim on the map that only
+    // its owner can make.
+    //
+    // `system_page_limit` is the first id that is *not* a fixed system
+    // structure - the superblock, the two bitmaps and the catalog's pages
+    // all sit below it. A peer may **read** those and may never write one
+    // (see MayFault/MayWrite), which is what lets a non-zero core resolve a
+    // relation while the single-writer property survives.
+    //
+    // It is a parameter rather than a constant because the boundary is
+    // `server::kFirstUserPageId` and this layer must not know the catalog's
+    // page layout; 0 means "no readable system range", which is what every
+    // caller predating multicore gets.
+    //
+    // `lease` must outlive the store. Null (the default) is core 0's
+    // arrangement and behaves exactly as this class always has.
+    void SetCoreOwnership(std::uint32_t core_id, LeasedIdSource* lease,
+                          PageId system_page_limit = 0) noexcept {
+        core_id_ = core_id;
+        lease_ = lease;
+        system_page_limit_ = system_page_limit;
+    }
+
+    std::uint32_t core_id() const noexcept { return core_id_; }
+
+    // Whether this store's core may **read** `page_id`.
+    //
+    // Core 0 may reach anything - it owns the superblock, the free map, the
+    // headerless map and the catalog pages. Any other core may reach ids
+    // inside an extent it was granted, plus the fixed system range
+    // read-only: the catalog lives there, and a core that cannot read the
+    // catalog cannot resolve a relation and so cannot serve a statement at
+    // all (workplan-crosscore.md P6).
+    //
+    // Enforced in the frame-load path **in debug builds only** (P2's
+    // "ownership-violation assert"), so release pays nothing. It is a
+    // mechanical check on shared-nothing rather than a security boundary:
+    // what it catches is a core reaching for a page that is not its own,
+    // which is a defect however it got there.
+    bool MayFault(PageId page_id) const noexcept;
+
+    // Whether this store's core may **write** `page_id` - i.e. take a frame
+    // it is allowed to dirty.
+    //
+    // Strictly narrower than MayFault: the system range is readable by
+    // every core and writable only by core 0. That asymmetry is the whole
+    // of P6's soundness. Catalog pages have exactly one writer, so a peer's
+    // view can be stale (which is a retryable "not found", crosscore.md §5)
+    // but never torn by a second writer.
+    bool MayWrite(PageId page_id) const noexcept;
+
+    // The live free-map page, for the one caller that carves extents out of
+    // it (storage/extent_lease.hpp's ExtentAllocator). Exposed rather than
+    // wrapped because reservation is *policy* about who gets which ids,
+    // which is not this class's business - what is its business is that the
+    // bytes have a single owner, and handing out a mutable view of them is
+    // exactly as narrow as that ownership.
+    //
+    // **The system core only.** A leased store never allocates from the map
+    // (see SetCoreOwnership), so calling this on one is a defect.
+    std::span<std::byte, kPageSize> free_map_bytes() noexcept {
+        maps_dirty_ = true;
+        return std::span<std::byte, kPageSize>(free_map_page_);
+    }
+
     // Records that the record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn and, if this is the first record to dirty the
     // frame since it was last written back, adopts `lsn` as its recLSN.
@@ -181,6 +257,23 @@ public:
     // or not resident, are skipped rather than treated as an error -
     // something else may have flushed them since the caller's snapshot.
     Status FlushPages(std::span<const PageId> page_ids);
+
+    // Drops these pages' frames so the next access re-reads them from the
+    // device. Ids that are not resident are skipped.
+    //
+    // **This is what makes a peer's cache invalidation mean anything**
+    // (docs/workplan-crosscore.md P6). A peer holds catalog pages this
+    // store faulted at some earlier moment; core 0 then does a DDL and
+    // flushes. Dropping the *catalog* cache is not enough - the next scan
+    // would read the same stale frame back and reach the same conclusion.
+    // The bytes have to go too.
+    //
+    // Refuses with InvalidArgument if any named page is **dirty**:
+    // evicting a dirty frame silently discards a write. On a peer they
+    // never are - the pages it evicts are exactly the ones it may not
+    // write - so the check guards against this being called somewhere it
+    // does not belong rather than against normal operation.
+    Status EvictClean(std::span<const PageId> page_ids);
 
     // Diagnostic log, null (discard) by default. Set after Open(), since
     // the store has to exist before a server has anything to log about;
@@ -227,9 +320,6 @@ private:
                                                 bool dirty);
     Status EnsureAddressable(PageId page_id);
 
-    std::span<std::byte, kPageSize> free_map_bytes() noexcept {
-        return std::span<std::byte, kPageSize>(free_map_page_);
-    }
     std::span<const std::byte, kPageSize> free_map_bytes() const noexcept {
         return std::span<const std::byte, kPageSize>(free_map_page_);
     }
@@ -243,6 +333,15 @@ private:
     PageDevice& device_;
     Logger* log_ = nullptr;
     wal::WalDurability* wal_gate_ = nullptr;
+
+    // Core ownership (see SetCoreOwnership). The defaults are core 0's, so
+    // every construction site that predates multicore keeps its behaviour.
+    std::uint32_t core_id_ = 0;
+    LeasedIdSource* lease_ = nullptr;
+    // First non-system page id; 0 means no readable system range. See
+    // SetCoreOwnership.
+    PageId system_page_limit_ = 0;
+
     Page free_map_page_;
     Page headerless_map_page_;
     // One flag for both maps: they are written together, in the same

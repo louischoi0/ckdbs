@@ -1,0 +1,298 @@
+#pragma once
+
+#include <coroutine>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string_view>
+#include <utility>
+
+#include "kds/base/status.hpp"
+#include "kds/sched/task.hpp"
+
+// C++20 stackless coroutines as the engine's task representation
+// (`docs/sched.md` §3, settled 2026-08-05).
+//
+// ---- The decision, and what it costs ------------------------------------
+//
+// sched.md §3 left task representation open between callback/future chains,
+// stackless coroutines and stackful fibers, and `docs/rules.md` §7 listed
+// coroutines under the undecided language-feature whitelist. **Coroutines.**
+//
+// The thing that forced it: every cross-core operation is a request whose
+// answer arrives later, and the engine had no way to express "wait" that was
+// not either blocking the reactor or rewriting a call chain into a state
+// machine by hand. `docs/workplan-crosscore.md` P4's step pipeline is exactly
+// that shape - send `STEP_OPEN`, then await batches - and it could not be
+// written at all. Callbacks would work and would invert every one of the 22
+// allocation sites and the whole executor; fibers would give the most natural
+// code and cost a stack per in-flight statement, which an engine sizing
+// itself in pages cannot price.
+//
+// What coroutines cost, stated plainly so nobody is surprised later:
+//
+//   - **A frame is a heap allocation.** One per coroutine, at first call.
+//     That is real, and it is why this is for *suspendable* work - a
+//     statement, a pipeline step, a lease request - and never for the
+//     per-tuple path. sched.md §2's "no allocation in steady state" applies
+//     to the reactor loop, which this does not touch.
+//   - **A coroutine is not a task until it is submitted**, and the frame
+//     lives until the handle is destroyed. `CoroTask` owns it, so a dropped
+//     task destroys a suspended coroutine's frame rather than leaking it.
+//   - **They compose badly with `Status`-returning code** unless the
+//     coroutine returns one itself, which is why `Coro` carries a Status.
+//
+// ---- Why this needed no change to Scheduler -----------------------------
+//
+// None. `Task::Poll()` returning `kSuspended`/`kDone`, with the scheduler
+// re-enqueueing on the former, is already precisely a coroutine's resume
+// protocol - task.hpp predicted this in as many words ("a future coroutine-
+// or fiber-backed Task subclass can be added later without any change to
+// Scheduler"). `CoroTask::Poll()` resumes the handle and reports whether it
+// finished.
+//
+// ---- Readiness, and the one thing to be careful about -------------------
+//
+// A suspended task is re-enqueued and polled again next iteration. For a
+// coroutine waiting on something that has not happened, that is a **poll
+// loop**: correct, bounded by the loop budget, and wasteful in proportion to
+// how long the wait is. `WaitFor` below therefore checks a flag before
+// resuming, so the coroutine body is entered only when its condition holds -
+// the spin costs a predicate call per iteration, not a resume.
+//
+// An event-driven version (the resumer re-submits the task) is strictly
+// better and is deliberately not built yet: it needs the waiter to be
+// reachable from the resumer, which is a lifetime question worth answering
+// against a real pipeline rather than in the abstract.
+
+namespace kds::sched {
+
+// A coroutine that runs on a reactor and finishes with a Status.
+//
+// Lazily started: `initial_suspend` suspends, so calling a `Coro` function
+// creates the frame and runs nothing. The first `Poll()` runs it to its
+// first suspension point. That is what makes submitting a coroutine and
+// running it two separate acts, exactly as it is for any other task.
+class Coro {
+public:
+    struct promise_type {
+        Status result = Status::OK();
+
+        // What this coroutine is waiting for, set by `WaitFor` as it
+        // suspends and cleared by whoever resumes it.
+        //
+        // It lives on the promise rather than in the awaitable because the
+        // *resumer* is the one that has to consult it: an awaitable's
+        // `await_ready` runs once, at the `co_await`, so a condition that
+        // was false then is never re-examined - the coroutine would suspend
+        // once and resume on the next poll regardless. `CoroTask::Poll()`
+        // reads this instead, which is what makes a wait actually wait.
+        const bool* wait_flag = nullptr;
+
+        Coro get_return_object() {
+            return Coro(std::coroutine_handle<promise_type>::from_promise(*this));
+        }
+
+        // Lazy start (see above).
+        std::suspend_always initial_suspend() noexcept { return {}; }
+
+        // **Suspends at the end rather than self-destructing**, so the
+        // handle stays valid for `done()` and for reading `result` after
+        // the body has run. CoroTask destroys the frame; a coroutine that
+        // destroyed itself here would leave that owner with a dangling
+        // handle.
+        std::suspend_always final_suspend() noexcept { return {}; }
+
+        void return_value(Status s) { result = std::move(s); }
+
+        // rules.md forbids exceptions in engine logic, so nothing should
+        // ever reach this. It cannot be omitted - the language requires the
+        // member - and it deliberately does nothing rather than calling
+        // std::terminate: a build that does enable exceptions should fail
+        // at the throw site, not here.
+        void unhandled_exception() {}
+    };
+
+    Coro() noexcept = default;
+    explicit Coro(std::coroutine_handle<promise_type> handle) noexcept : handle_(handle) {}
+
+    Coro(const Coro&) = delete;
+    Coro& operator=(const Coro&) = delete;
+    Coro(Coro&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
+    Coro& operator=(Coro&& other) noexcept {
+        if (this != &other) {
+            Destroy();
+            handle_ = std::exchange(other.handle_, {});
+        }
+        return *this;
+    }
+    ~Coro() { Destroy(); }
+
+    bool valid() const noexcept { return handle_ != nullptr; }
+    bool done() const noexcept { return handle_ == nullptr || handle_.done(); }
+
+    // The status the body returned. Meaningful only once `done()`.
+    const Status& result() const noexcept { return handle_.promise().result; }
+
+    // Runs to the next suspension point.
+    void Resume() {
+        if (handle_ != nullptr && !handle_.done()) handle_.resume();
+    }
+
+    // Hands the frame to a new owner - CoroTask, in every intended use.
+    std::coroutine_handle<promise_type> Release() noexcept {
+        return std::exchange(handle_, {});
+    }
+
+private:
+    void Destroy() noexcept {
+        if (handle_ != nullptr) {
+            handle_.destroy();
+            handle_ = {};
+        }
+    }
+
+    std::coroutine_handle<promise_type> handle_{};
+};
+
+// ---- Suspension safety --------------------------------------------------
+//
+// A hook a higher layer installs to answer one question: **is it safe for a
+// coroutine to be suspended right now?** It returns a reason when it is
+// not, and an empty view when it is.
+//
+// It exists because the executor is about to grow suspension points, and
+// the thing it must never do is suspend while holding a **page span**. The
+// existing rule (`docs/parser-v2.md` I15's R1, enforced by
+// `exec/step_vm.cpp`'s PageSpanGuard) already forbids a page *fetch* under
+// a live span, because nothing pins the frame the span points into.
+// Suspending under one is strictly worse: the span stays live not for the
+// length of a nested call but for arbitrary wall time, across every other
+// statement that runs on this core in between.
+//
+// A hook rather than a direct call because of layering - `sched/` sits
+// below `exec/` and must not know what a page is. `exec` installs it.
+//
+// **Debug builds only** at the call site below, so release pays nothing.
+using SuspendAuditFn = std::string_view (*)();
+
+// Installs the audit. Null (the default) disables it.
+void SetSuspendAudit(SuspendAuditFn fn) noexcept;
+SuspendAuditFn suspend_audit() noexcept;
+
+// Whether any audit has fired since the last reset, and what it said. A
+// test reads these; nothing in the engine branches on them.
+bool SuspendAuditTripped() noexcept;
+std::string_view SuspendAuditReason() noexcept;
+void ResetSuspendAudit() noexcept;
+
+// Runs the audit, if one is installed, and records a failure. Called from
+// CoroTask::Poll() in debug builds at the moment a coroutine suspends.
+void NoteSuspension() noexcept;
+
+// Runs a `Coro` on a scheduler. Owns the frame: dropping the task destroys
+// a coroutine suspended anywhere, which is what makes a cancelled or
+// abandoned statement leak nothing.
+class CoroTask final : public Task {
+public:
+    using DoneFn = std::function<void(const Status&)>;
+
+    // `on_done` is invoked once, with the coroutine's returned Status, when
+    // it finishes. Optional.
+    CoroTask(SchedulingGroup group, Coro coro, DoneFn on_done = {})
+        : Task(group), handle_(coro.Release()), on_done_(std::move(on_done)) {}
+
+    CoroTask(const CoroTask&) = delete;
+    CoroTask& operator=(const CoroTask&) = delete;
+
+    ~CoroTask() override {
+        if (handle_ != nullptr) handle_.destroy();
+    }
+
+    PollResult Poll() override {
+        if (handle_ == nullptr) return PollResult::kDone;
+
+        if (!handle_.done()) {
+            // The wait check, before the resume: a coroutine parked on a
+            // condition that still does not hold costs one predicate call
+            // this iteration and is not entered at all.
+            const bool* flag = handle_.promise().wait_flag;
+            if (flag != nullptr && !*flag) return PollResult::kSuspended;
+            handle_.promise().wait_flag = nullptr;
+
+            ++resumes_;
+            handle_.resume();
+        }
+        if (!handle_.done()) {
+#ifndef NDEBUG
+            // The coroutine gave the core back. Anything it is still
+            // holding that only makes sense within a call is now held
+            // across every other task on this core - see SuspendAuditFn.
+            NoteSuspension();
+#endif
+            return PollResult::kSuspended;
+        }
+
+        if (on_done_) on_done_(handle_.promise().result);
+        return PollResult::kDone;
+    }
+
+    // Resumes made. Diagnostics and tests - a coroutine that waits a long
+    // time shows up here as a large number, which is the poll loop the
+    // header describes.
+    std::uint64_t resumes() const noexcept { return resumes_; }
+
+private:
+    std::coroutine_handle<Coro::promise_type> handle_;
+    DoneFn on_done_;
+    std::uint64_t resumes_ = 0;
+};
+
+// Makes a submittable task out of a coroutine.
+inline std::unique_ptr<CoroTask> MakeCoroTask(SchedulingGroup group, Coro coro,
+                                              CoroTask::DoneFn on_done = {}) {
+    return std::make_unique<CoroTask>(group, std::move(coro), std::move(on_done));
+}
+
+// ---- Awaitables ---------------------------------------------------------
+
+// `co_await Yield{}` - give the core back and continue on a later
+// iteration. This is `docs/sched.md` §3's mandatory cooperative yield,
+// which until now could only be spelled by returning `kSuspended` from a
+// hand-written task and remembering where you were.
+struct Yield {
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+    void await_resume() const noexcept {}
+};
+
+// `co_await WaitFor{&flag}` - suspend until `flag` becomes true.
+//
+// The shape every cross-core request/response has: send, then wait for the
+// handler that receives the reply to set the flag. **The flag must outlive
+// the wait**, which in practice means it lives in the same per-request
+// state the reply is routed to - not on the coroutine's own stack frame
+// before a `co_await` that could outlive it.
+//
+// It records the flag on the promise as it suspends, and `CoroTask::Poll()`
+// is what re-tests it (see `promise_type::wait_flag` for why it cannot be
+// `await_ready`'s job). A long wait therefore costs one predicate call per
+// reactor turn and never a resumed frame.
+struct WaitFor {
+    const bool* flag = nullptr;
+
+    // Already true: no suspension at all, so a reply that arrived before
+    // the wait began costs nothing.
+    bool await_ready() const noexcept { return flag != nullptr && *flag; }
+
+    // Templated on the promise so it can reach `wait_flag`; a plain
+    // `coroutine_handle<>` has no promise to reach.
+    template <typename P>
+    void await_suspend(std::coroutine_handle<P> h) const noexcept {
+        h.promise().wait_flag = flag;
+    }
+
+    void await_resume() const noexcept {}
+};
+
+}  // namespace kds::sched

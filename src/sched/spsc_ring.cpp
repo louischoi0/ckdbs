@@ -29,6 +29,7 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kExtentLease: return "EXTENT_LEASE";
         case RingMessageKind::kTrxIdLease: return "TRXID_LEASE";
         case RingMessageKind::kCatalogInvalidate: return "CATALOG_INVALIDATE";
+        case RingMessageKind::kShutdown: return "SHUTDOWN";
     }
     return "unknown";
 }

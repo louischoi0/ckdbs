@@ -248,4 +248,16 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
 bool PageSpanGuardTripped() noexcept;
 void ResetPageSpanGuard() noexcept;
 
+// Page spans live right now. Zero everywhere outside a step's decode
+// window, which is what makes it a usable suspension-safety predicate.
+int LivePageSpans() noexcept;
+
+// Installs the executor's suspension audit into `sched` (coro.hpp's
+// SuspendAuditFn), so a coroutine that suspends while holding a page span
+// is detected rather than merely forbidden in prose.
+//
+// Call once per core, before running statements. It is idempotent and
+// core-local, like the guard counters it reads.
+void InstallSuspendAudit() noexcept;
+
 }  // namespace kds::exec

@@ -62,6 +62,18 @@ enum class RingMessageKind : std::uint16_t {
     kExtentLease = 17,        // -> core 0: request an extent for file growth
     kTrxIdLease = 18,         // -> core 0: request a transaction-id block
     kCatalogInvalidate = 19,  // core 0 -> all: DDL happened, drop caches
+
+    // core 0 -> all: stop your reactor.
+    //
+    // Not one of the four system kinds P1 enumerated, and added by P2
+    // because the fan-out needs a way to stop a peer. It is a *message*
+    // rather than a call to that reactor's Stop() because `stopped_` is a
+    // plain bool owned by its own thread: writing it from another thread is
+    // a data race, and making it atomic would put an atomic outside the ring
+    // indices, against workplan guideline 1. The seam is the only channel a
+    // core may use to reach another, and shutdown is not an exception to
+    // that - it is the case that proves it.
+    kShutdown = 20,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -78,6 +90,7 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kExtentLease:
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kCatalogInvalidate:
+        case RingMessageKind::kShutdown:
             return true;
         case RingMessageKind::kUnset:
             return false;

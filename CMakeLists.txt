@@ -26,6 +26,7 @@ add_library(kds
     src/storage/btree/btree_page.cpp
     src/storage/btree/btree.cpp
     src/storage/free_map.cpp
+    src/storage/extent_lease.cpp
     src/txn/undo_page.cpp
     src/txn/undo_log.cpp
     src/txn/visibility.cpp
@@ -36,6 +37,10 @@ add_library(kds
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
     src/server/superblock_checkpoint_anchor.cpp
+    src/server/remote_checkpoint_anchor.cpp
+    src/server/core_runtime.cpp
+    src/server/core_affinity.cpp
+    src/server/extent_lease_service.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
     src/catalog/keystone_budget.cpp
@@ -61,6 +66,7 @@ add_library(kds
     src/parser/ast.cpp
     src/parser/parser.cpp
     src/wire/frame_codec.cpp
+    src/wire/row_codec.cpp
     src/wal/record.cpp
     src/wal/payload.cpp
     src/wal/stream.cpp
@@ -82,6 +88,7 @@ add_library(kds
     src/exec/cabin_ddl.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
+    src/sched/coro.cpp
     src/sched/spsc_ring.cpp
     src/sched/ring_transport.cpp
     src/sched/sim_ring_transport.cpp

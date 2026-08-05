@@ -1,11 +1,18 @@
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
+#include <span>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/sched/clock.hpp"
+#include "kds/sched/io_backend.hpp"
+#include "kds/sched/ring_transport.hpp"
+#include "kds/sched/scheduler.hpp"
+#include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/page_mgr/checkpoint_target.hpp"
@@ -199,6 +206,90 @@ TEST_F(SuperBlockAnchorTest, PublishingForACoreBeyondTheTableIsRefused) {
     EXPECT_FALSE(s.ok());
     EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
     EXPECT_EQ(anchor.publishes(), 0u);
+}
+
+// ---- The cross-core path (workplan-crosscore.md M5, P2) ---------------
+//
+// The superblock is page 0 and belongs to the system core, so a checkpoint
+// completing anywhere else sends its anchor rather than writing it. What
+// must hold is that the two routes produce the **same page**: the remote one
+// is a delivery mechanism, not a second implementation.
+
+TEST_F(SuperBlockAnchorTest, AnAnchorSentFromAPeerLandsInThatPeersSlot) {
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/3, 16, 128);
+    ASSERT_TRUE(transport.ok());
+
+    // Core 2's side: a scheduler to run the send task on, and the anchor
+    // that queues it.
+    sched::NullIoBackend peer_io;
+    sched::Scheduler peer(clock_, peer_io);
+    RemoteCheckpointAnchor remote(transport.value(), peer, /*core_id=*/2);
+
+    ASSERT_TRUE(remote.Publish({/*core_id=*/2, 111, 222, 333, 44}).ok());
+    EXPECT_EQ(remote.sends(), 1u);
+    // Queued, not sent - Publish() returns before the task has run, which is
+    // the whole of "fire and forget".
+    peer.RunOnce();
+
+    // Core 0's side: the handler Expeditor installs, doing what a local
+    // publish does.
+    SuperBlockCheckpointAnchor local(superblock_, store_);
+    sched::MessageHeader header{};
+    std::vector<std::byte> payload;
+    ASSERT_TRUE(transport.value().TryReceive(/*dst_core=*/0, header, payload));
+    ASSERT_EQ(header.kind, static_cast<std::uint16_t>(sched::RingMessageKind::kAnchorWrite));
+    ASSERT_EQ(payload.size(), sizeof(AnchorWritePayload));
+
+    AnchorWritePayload fields{};
+    std::memcpy(&fields, payload.data(), sizeof(fields));
+    ASSERT_TRUE(local.Publish({fields.core_id, fields.checkpoint_lsn, fields.redo_start_lsn,
+                                fields.durable_lsn, fields.segment_no})
+                    .ok());
+
+    // In slot 2, not slot 0: the anchor names a WAL stream, and the sender
+    // says which - the transport's src_core is a different fact.
+    auto reloaded = store_.Get(kSuperBlockPageId);
+    ASSERT_TRUE(reloaded.ok());
+    auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(reloaded.value()));
+    ASSERT_TRUE(decoded.ok());
+    EXPECT_EQ(decoded.value().wal_anchor(2).checkpoint_lsn, 111u);
+    EXPECT_EQ(decoded.value().wal_anchor(2).redo_start_lsn, 222u);
+    EXPECT_EQ(decoded.value().wal_anchor(2).durable_lsn, 333u);
+    EXPECT_EQ(decoded.value().wal_anchor(2).segment_no, 44u);
+    EXPECT_EQ(decoded.value().wal_anchor(0).redo_start_lsn, 0u) << "it landed in the wrong slot";
+}
+
+TEST_F(SuperBlockAnchorTest, ThePeersAnchorScheduleSurvivesAMomentarilyFullRing) {
+    // Silent drop is forbidden (sched.md §5) even for a message whose loss
+    // would be survivable, so the send goes through the retry task.
+    auto transport = sched::RealRingTransport::Create(2, /*capacity_slots=*/1, 128);
+    ASSERT_TRUE(transport.ok());
+
+    // Fill core 1 -> core 0 so the anchor cannot go out on its first try.
+    sched::MessageHeader filler{};
+    filler.src_core = 1;
+    filler.dst_core = 0;
+    filler.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kStepEof);
+    ASSERT_TRUE(transport.value().TrySend(filler, {}).ok());
+
+    sched::NullIoBackend peer_io;
+    sched::Scheduler peer(clock_, peer_io);
+    RemoteCheckpointAnchor remote(transport.value(), peer, /*core_id=*/1);
+    ASSERT_TRUE(remote.Publish({1, 10, 20, 30, 0}).ok());
+
+    for (int i = 0; i < 4; ++i) peer.RunOnce();
+
+    // Drain the filler; the anchor goes out on the next iteration rather
+    // than having been dropped.
+    sched::MessageHeader got{};
+    std::vector<std::byte> payload;
+    ASSERT_TRUE(transport.value().TryReceive(0, got, payload));
+    EXPECT_EQ(got.kind, static_cast<std::uint16_t>(sched::RingMessageKind::kStepEof));
+
+    peer.RunOnce();
+    ASSERT_TRUE(transport.value().TryReceive(0, got, payload))
+        << "the anchor was dropped when the ring was full";
+    EXPECT_EQ(got.kind, static_cast<std::uint16_t>(sched::RingMessageKind::kAnchorWrite));
 }
 
 }  // namespace

@@ -1,5 +1,7 @@
 #include "kds/exec/step_vm.hpp"
 
+#include "kds/sched/coro.hpp"
+
 #include <algorithm>
 #include <unordered_set>
 
@@ -1153,6 +1155,27 @@ StepStats ExecStats::Total() const noexcept {
 
 bool PageSpanGuardTripped() noexcept { return g_guard_tripped; }
 void ResetPageSpanGuard() noexcept { g_guard_tripped = false; }
+
+int LivePageSpans() noexcept { return g_live_spans; }
+
+void InstallSuspendAudit() noexcept {
+    // The executor's answer to "is it safe to be suspended right now?".
+    //
+    // R1 already forbids a page *fetch* under a live span, because nothing
+    // pins the frame the span points into. Suspending under one is strictly
+    // worse: the span stays live for arbitrary wall time, across every other
+    // statement that runs on this core in between - so a store that ever
+    // evicts turns it from a latent bug into a routine one.
+    //
+    // Installed here rather than checked here: `sched/` sits below this
+    // layer and must not know what a page is (coro.hpp's SuspendAuditFn).
+    sched::SetSuspendAudit([]() -> std::string_view {
+        if (g_live_spans > 0) {
+            return "a coroutine suspended while holding a page span (parser-v2.md I15 R1)";
+        }
+        return {};
+    });
+}
 
 StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& store,
                                  const std::vector<const catalog::Schema*>& schemas,

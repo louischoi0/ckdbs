@@ -21,6 +21,11 @@ add_executable(kds_tests
     heap_chain_test.cpp
     btree_test.cpp
     superblock_test.cpp
+    extent_lease_test.cpp
+    extent_lease_service_test.cpp
+    core_runtime_test.cpp
+    core_affinity_test.cpp
+    coro_test.cpp
     spsc_ring_test.cpp
     ring_transport_test.cpp
     sim_ring_transport_test.cpp
@@ -73,6 +78,7 @@ add_executable(kds_tests
     exec_budget_test.cpp
     subsystem_logging_test.cpp
     kwp_frame_test.cpp
+    wire_row_codec_test.cpp
     wal_record_test.cpp
     wal_payload_test.cpp
     wal_stream_test.cpp

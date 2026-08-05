@@ -81,6 +81,42 @@ private:
         std::string outbox;
         bool want_writable = false;
 
+        // ---- One statement at a time (the async dispatch seam) ----------
+        //
+        // A statement may now suspend, so its reply is not ready when
+        // DrainCommands returns. Three fields carry that.
+        //
+        // **`in_flight` serializes the connection**, and it is not a
+        // simplification - it is required twice over. The session is
+        // stateful (an open transaction, the failed-txn flag), so a second
+        // statement starting before the first finished would interleave
+        // with it; and the newline protocol has no request ids, so replies
+        // must leave in the order the commands arrived. Pipelining still
+        // works exactly as it did - a batch of commands is drained one at a
+        // time and the replies leave in one write - it is only *concurrency
+        // within one connection* that is excluded, which the protocol never
+        // offered.
+        bool in_flight = false;
+
+        // The statement being run, copied out of `inbox` before dispatch.
+        // It has to live somewhere stable: the parser's tokens are views
+        // into it (parser-v2.md's zero-copy tokens) and the inbox is
+        // rewritten as more bytes arrive.
+        std::string current_line;
+
+        // The client hung up, or a write failed, while a statement was
+        // running. The connection cannot be destroyed yet - the statement
+        // holds a reference to its session - so it is marked and torn down
+        // when the statement finishes. Cancelling instead would need
+        // cancellation the engine does not have.
+        bool closing = false;
+
+        // The finished statement's reply, waiting to be appended to the
+        // outbox. Owned by the connection because the coroutine writes
+        // through a pointer to it and may outlive the call that started it.
+        DispatchOutcome pending;
+
+
         // This connection's transaction state (session.hpp). Per
         // connection and not per server: two clients on one dispatcher must
         // not see each other's open transaction, which is exactly what
@@ -95,10 +131,18 @@ private:
     void OnListenerReadable();
     void OnClientEvent(int client_fd, const sched::IoEvent& event);
     void OnClientReadable(int client_fd);
-    // Returns false if the connection was closed and must not be touched
-    // again - either the client hung up or a dispatched command stopped
-    // the server.
+    // Starts the next complete command, if the connection has one and is
+    // not already running one. Returns false if the connection was closed
+    // and must not be touched again.
+    //
+    // It no longer *runs* commands - it starts one and returns. The reply
+    // is appended by OnStatementComplete when the statement finishes, which
+    // then calls this again for the next line.
     bool DrainCommands(int client_fd, Connection& conn);
+
+    // The other half: a statement finished, so append its reply, honour
+    // STOP, and continue draining.
+    void OnStatementComplete(int client_fd);
     // Writes as much of conn.outbox as the socket will take and drops what
     // went out. Returns false if the connection was closed (write error).
     bool FlushOutbox(int client_fd, Connection& conn);

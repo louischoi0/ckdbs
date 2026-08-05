@@ -35,8 +35,9 @@ Rules:
 - A task is a unit of work executed run-to-completion until it finishes or **yields**.
 - **Cooperative yielding is mandatory:** every task must yield within its budget (work-item count or injected-clock time). Any loop that cannot statically prove boundedness must contain an explicit yield check. Blocking syscalls inside tasks are forbidden; all waiting is expressed as suspension on I/O, timer, or message events.
 - **No preemption.** Signal- or timer-driven preemption is forbidden — it destroys deterministic simulation.
+- **Suspension safety.** A coroutine must not be parked while holding a resource that only makes sense within a call — above all a page span (`docs/parser-v2.md` I15's R1). `sched::SetSuspendAudit` is the hook a higher layer installs to answer that, checked in debug builds at every suspension; `exec::InstallSuspendAudit()` is the executor's answer, installed per core on the thread that runs statements.
 - **No work-stealing.** A task created on a core runs and completes on that core. Moving *work* between cores happens only by sending a message that causes the peer to create its own task.
-- Task representation `[OPEN]`: callback/future chains vs C++20 stackless coroutines vs stackful fibers. The scheduler interface is a queue of runnable task handles, keeping all three viable. This decision is coupled to the language-feature whitelist in `docs/rules.md` §7.
+- Task representation: **C++20 stackless coroutines** (decided 2026-08-05, `include/kds/sched/coro.hpp`). What forced it is that every cross-core operation is a request whose answer arrives later, and the engine had no way to spell "wait" that was not blocking the reactor or hand-rolling a call chain into a state machine — `docs/workplan-crosscore.md` P4's step pipeline could not be written at all. Callbacks would have inverted the executor and all 22 allocation sites; fibers cost a stack per in-flight statement, which an engine sizing itself in pages cannot price. **The scheduler needed no change**: `Task::Poll()` returning `kSuspended`/`kDone` was already a coroutine's resume protocol. The cost is a heap-allocated frame per coroutine, so this is for *suspendable* work — a statement, a pipeline step, a lease request — and never the per-tuple path.
 
 ## 4. Scheduling Groups
 
@@ -96,7 +97,6 @@ The reactor depends only on injectable interfaces: **I/O backend, clock, RNG, cr
 
 ## 10. Open Decisions `[OPEN — do not assume]`
 
-- Task representation (callbacks vs C++20 coroutines vs fibers).
 - Loop budget values and yield-budget units (task count vs simulated-time slice).
 - SLO controller specifics: latency estimator, window size, share adjustment law.
 - Ring capacity sizing and the suspension/retry protocol for `ring_full`.
