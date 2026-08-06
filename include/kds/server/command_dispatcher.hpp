@@ -10,6 +10,7 @@
 
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/aggregate.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -554,6 +555,20 @@ private:
                                const std::optional<stats::InstanceKey>& instance,
                                const txn::Snapshot& snapshot);
 
+    // The aggregated SELECT path (docs/feat-aggregate.md AG1): the same
+    // execution, with an `Aggregator` in the sink and the fold's output
+    // emitted after it. `header` is the column-heading line the caller
+    // already built.
+    //
+    // A sibling of RunAnalyze rather than a branch inside the row loop, for
+    // the reason ANALYZE is one: the two differ in what consumes the rows
+    // and in nothing else, and a per-row `if` would put that difference
+    // where it is paid for on every row of every statement.
+    DispatchOutcome RunAggregated(const exec::StepChain& chain, std::string header,
+                                  exec::TrailCollector* trail, const exec::TrailReplay* replay,
+                                  const std::optional<stats::InstanceKey>& instance,
+                                  const txn::Snapshot& snapshot);
+
     // Hands a successful execution's trail to the recorder. Shared by the
     // row-returning path and ANALYZE so the two cannot come to disagree
     // about when a trail is written.
@@ -748,6 +763,14 @@ private:
     // value and handed to each execution, which takes its own copy - so
     // one statement's spend never carries into the next.
     exec::Budget budget_;
+
+    // AG11's caps, handed to every fold this dispatcher runs. Held by value
+    // for the reason `budget_` is: a limit is a property of the server's
+    // configuration, and reading it per statement from somewhere else would
+    // let one statement's fold see a different ceiling from the next.
+    // AG07 makes the two numbers config keys; until then they are spec §6's
+    // `[PROPOSED]` defaults.
+    exec::AggregateLimits aggregate_limits_;
 
     // Where a successful SELECT reports the tuples it found, or null when
     // nothing is recording - which is a valid production configuration

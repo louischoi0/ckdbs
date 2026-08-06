@@ -10,6 +10,8 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/server/command_dispatcher.hpp"
+#include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
 // The aggregation contract suite (docs/feat-aggregate.md §9,
@@ -375,3 +377,236 @@ TEST_F(AggregateContractTest, SumOverEachSignedIntegerWidthIsAllowed) {
 
 }  // namespace
 }  // namespace kds::exec
+
+// ---- End to end, through the dispatcher (AG06) --------------------------
+//
+// The other half of the contract: what a client actually gets back. These
+// run the real path - parse, compile, affinity check, Waystone lookup,
+// execute, fold - because AG1's claim is about that path and not about the
+// fold in isolation.
+
+namespace kds::server {
+namespace {
+
+class AggregateDispatchTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto boot = bootstrap::BootstrapDatabase(store_, 1000);
+        ASSERT_TRUE(boot.ok());
+        boot_.emplace(std::move(boot.value()));
+        recorder_.emplace(boot_->catalog, store_);
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                            /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
+                            exec::Budget(), &*recorder_, /*replay_enabled=*/true);
+    }
+
+    std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+
+    // The reply as a list of lines: the header, then one line per row. The
+    // wire form escapes a newline as the two characters `\n`, never a raw
+    // byte, so splitting on that is reading the protocol rather than
+    // guessing at it.
+    std::vector<std::string> Lines(const std::string& reply) {
+        std::vector<std::string> out;
+        std::size_t at = 0;
+        while (true) {
+            const std::size_t next = reply.find("\\n", at);
+            out.push_back(reply.substr(at, next == std::string::npos ? next : next - at));
+            if (next == std::string::npos) break;
+            at = next + 2;
+        }
+        return out;
+    }
+
+    void Load() {
+        ASSERT_EQ(Run("CREATE TABLE h (id int64, tier int64, qty int64, sym varchar)")
+                      .substr(0, 7),
+                  "CREATED");
+        ASSERT_EQ(Run("CREATE TABLE b (id int64, tier int64, qty int64, sym varchar) BTREE")
+                      .substr(0, 7),
+                  "CREATED");
+        ASSERT_EQ(Run("CREATE TABLE j (id int64, w int64) BTREE").substr(0, 7), "CREATED");
+        // tier cycles 1,2,1,2,1,2 and qty is 10..60, so every grouped
+        // expectation below is arithmetic a reader can check by eye.
+        for (int i = 1; i <= 6; ++i) {
+            const std::string tier = std::to_string((i % 2 == 1) ? 1 : 2);
+            const std::string qty = std::to_string(i * 10);
+            const std::string sym = (i % 3 == 0) ? "'C'" : ((i % 3 == 1) ? "'A'" : "'B'");
+            ASSERT_EQ(Run("INSERT INTO h VALUES (" + tier + ", " + qty + ", " + sym + ")")
+                          .substr(0, 8),
+                      "INSERTED");
+            ASSERT_EQ(Run("INSERT INTO b VALUES (" + tier + ", " + qty + ", " + sym + ")")
+                          .substr(0, 8),
+                      "INSERTED");
+            ASSERT_EQ(Run("INSERT INTO j VALUES (" + std::to_string(i * 100) + ")").substr(0, 8),
+                      "INSERTED");
+        }
+    }
+
+    storage::InMemoryPageStore store_{kFirstUserPageId};
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<stats::TrailRecorder> recorder_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+TEST_F(AggregateDispatchTest, AGlobalCountOverAnEmptyRelationIsOneRowOfZero) {
+    ASSERT_EQ(Run("CREATE TABLE e (id int64, v int64)").substr(0, 7), "CREATED");
+    const std::vector<std::string> lines = Lines(Run("SELECT COUNT(*) FROM e"));
+    ASSERT_EQ(lines.size(), 2u) << "header plus exactly one row";
+    EXPECT_EQ(lines[0], "count(*)");
+    EXPECT_EQ(lines[1], "0");
+}
+
+TEST_F(AggregateDispatchTest, AGroupedCountOverAnEmptyRelationIsNoRowsAtAll) {
+    ASSERT_EQ(Run("CREATE TABLE e (id int64, v int64)").substr(0, 7), "CREATED");
+    const std::vector<std::string> lines = Lines(Run("SELECT v, COUNT(*) FROM e GROUP BY v"));
+    ASSERT_EQ(lines.size(), 1u) << "the header and nothing else";
+    EXPECT_EQ(lines[0], "v,count(*)");
+}
+
+TEST_F(AggregateDispatchTest, AGlobalFoldOverANonEmptyRelation) {
+    Load();
+    const std::vector<std::string> lines =
+        Lines(Run("SELECT COUNT(*), SUM(qty), MIN(qty), MAX(qty) FROM h"));
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[0], "count(*),sum(qty),min(qty),max(qty)");
+    EXPECT_EQ(lines[1], "6,210,10,60");
+}
+
+TEST_F(AggregateDispatchTest, GroupByOverAHeapAndABtreeRelationAgree) {
+    // The two storages are walked by different code and must fold to the
+    // same answer in the same order - which they do because both walk the
+    // same `next_page_id` links left to right.
+    Load();
+    const std::string heap = Run("SELECT tier, COUNT(*), SUM(qty) FROM h GROUP BY tier");
+    const std::string btree = Run("SELECT tier, COUNT(*), SUM(qty) FROM b GROUP BY tier");
+    EXPECT_EQ(heap, btree);
+
+    const std::vector<std::string> lines = Lines(heap);
+    ASSERT_EQ(lines.size(), 3u);
+    EXPECT_EQ(lines[0], "tier,count(*),sum(qty)");
+    EXPECT_EQ(lines[1], "1,3,90");   // qty 10, 30, 50
+    EXPECT_EQ(lines[2], "2,3,120");  // qty 20, 40, 60
+}
+
+TEST_F(AggregateDispatchTest, WhereThenGroupBy) {
+    Load();
+    const std::vector<std::string> lines =
+        Lines(Run("SELECT tier, COUNT(*) FROM h WHERE qty > 25 GROUP BY tier"));
+    ASSERT_EQ(lines.size(), 3u);
+    // qty 30 and 50 in tier 1; 40 and 60 in tier 2.
+    EXPECT_EQ(lines[1], "1,2");
+    EXPECT_EQ(lines[2], "2,2");
+}
+
+TEST_F(AggregateDispatchTest, AJoinWithGroupBy) {
+    Load();
+    const std::vector<std::string> lines =
+        Lines(Run("SELECT a.tier, COUNT(*), SUM(c.w) FROM h AS a JOIN j AS c ON a.id = c.id "
+                  "GROUP BY a.tier"));
+    ASSERT_EQ(lines.size(), 3u);
+    EXPECT_EQ(lines[0], "a.tier,count(*),sum(c.w)");
+    EXPECT_EQ(lines[1], "1,3,900");   // w 100, 300, 500
+    EXPECT_EQ(lines[2], "2,3,1200");  // w 200, 400, 600
+}
+
+TEST_F(AggregateDispatchTest, CountDistinctThroughTheDispatcher) {
+    Load();
+    const std::vector<std::string> lines =
+        Lines(Run("SELECT COUNT(DISTINCT sym), COUNT(sym) FROM h"));
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[1], "3,6");  // A, B, C over six rows
+}
+
+TEST_F(AggregateDispatchTest, AFoldOverAPointLookupIsAOneRowAnswer) {
+    Load();
+    const std::vector<std::string> lines = Lines(Run("SELECT COUNT(*) FROM b WHERE id = 3"));
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[1], "1");
+}
+
+TEST_F(AggregateDispatchTest, AFoldOverAMissingKeyStillAnswersZero) {
+    // The global form emits its row even when the chain produced nothing,
+    // which is the standard's answer and the one a client counting rows
+    // depends on.
+    Load();
+    const std::vector<std::string> lines = Lines(Run("SELECT COUNT(*) FROM b WHERE id = 999"));
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[1], "0");
+}
+
+TEST_F(AggregateDispatchTest, AnAggregatedProbeChainReplaysWithIdenticalOutput) {
+    // AG10's claim, end to end: recording is n=2, so the second execution
+    // records a trail and the third replays it. If the fold were anywhere
+    // near the trail machinery, this is where it would show - the replayed
+    // execution supplies a location and the fold consumes rows, and neither
+    // knows about the other.
+    Load();
+    const std::string sql =
+        "SELECT COUNT(*), SUM(c.w) FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4";
+    const std::string first = Run(sql);
+    const std::string second = Run(sql);
+    const std::string third = Run(sql);
+    EXPECT_EQ(first, second);
+    EXPECT_EQ(second, third) << "replay must not change a reply";
+
+    const std::vector<std::string> lines = Lines(third);
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[1], "1,400");
+}
+
+TEST_F(AggregateDispatchTest, RecordingAndReplayAreOffTheFoldsPathEntirely) {
+    // The same statement over a dispatcher that records nothing and replays
+    // nothing must give the same bytes - invariant 8 applied to an
+    // aggregated statement, which AG10 says holds for free.
+    Load();
+    CommandDispatcher quiet(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                            /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
+                            exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false);
+    const std::string sql =
+        "SELECT COUNT(*), SUM(c.w) FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4";
+    for (int i = 0; i < 3; ++i) Run(sql);  // let a trail exist on the loud one
+    EXPECT_EQ(Run(sql), quiet.Dispatch(sql).response);
+}
+
+TEST_F(AggregateDispatchTest, AggregationOverACatalogViewIsRefused) {
+    // AG12: a view's rows come from the catalog's typed readers, not from a
+    // step chain, so there is nothing for the fold to wrap.
+    const std::string reply = Run("SELECT COUNT(*) FROM sys.tables");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("catalog view"), std::string::npos) << reply;
+}
+
+TEST_F(AggregateDispatchTest, AnUnaggregatedCatalogViewStillWorks) {
+    const std::string reply = Run("SELECT * FROM sys.tables");
+    EXPECT_NE(reply.substr(0, 3), "ERR") << reply;
+}
+
+TEST_F(AggregateDispatchTest, ASumOverflowReachesTheClientAndEmitsNoRows) {
+    ASSERT_EQ(Run("CREATE TABLE big (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO big VALUES (9223372036854775807)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO big VALUES (1)").substr(0, 8), "INSERTED");
+
+    const std::string reply = Run("SELECT SUM(v) FROM big");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("SUM overflow"), std::string::npos) << reply;
+    EXPECT_EQ(reply.find("\\n"), std::string::npos) << "no partial answer may be emitted";
+}
+
+TEST_F(AggregateDispatchTest, APlainSelectIsByteIdenticalToWhatItAlwaysWas) {
+    // The regression this whole placement decision is meant to make
+    // impossible: a statement that does not aggregate must be untouched.
+    Load();
+    const std::vector<std::string> lines = Lines(Run("SELECT tier, qty FROM h WHERE id = 2"));
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[0], "tier,qty");
+    EXPECT_EQ(lines[1], "2,20");
+
+    const std::vector<std::string> star = Lines(Run("SELECT * FROM h WHERE id = 2"));
+    ASSERT_EQ(star.size(), 2u);
+    EXPECT_EQ(star[0], "id,tier,qty,sym");
+    EXPECT_EQ(star[1], "2,2,20,B");
+}
+
+}  // namespace
+}  // namespace kds::server

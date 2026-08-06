@@ -1819,6 +1819,18 @@ StatusOr<std::span<std::byte, kPageSize>> CommandDispatcher::PageForRead(
 }
 
 DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt) {
+    // **AG12.** A catalog view's rows come from the catalog's typed readers,
+    // not from a step chain - so there is no `RowSink` for AG1's fold to
+    // wrap and nothing for it to consume. Refused here rather than
+    // half-supported by a second fold over a different row source, which
+    // would be exactly the "second place that reasons about statement
+    // shape" the placement decision exists to prevent.
+    if (stmt.aggregated()) {
+        return {"ERR aggregation over a catalog view (sys." + stmt.from.table_name +
+                    ") is not supported; a view's rows do not come from a step chain",
+                false};
+    }
+
     auto view = exec::ReadCatalogView(catalog_, stmt.from.table_name);
     if (!view.ok()) {
         return {"ERR " + view.status().message(), false};
@@ -1926,6 +1938,73 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 }
 
 }  // namespace
+
+// Executes `chain` with an `Aggregator` in place of the row formatter, and
+// emits the fold's output rows (docs/feat-aggregate.md AG1, workplan AG06).
+//
+// `header` is the column-heading line the caller already built from
+// `chain.column_names` - which for an aggregated chain labels the *fold's*
+// output (`b`, `count(*)`, `sum(distinct x)`), so the reply's shape is one
+// heading per emitted value exactly as it is for a projection.
+//
+// Note what this function does not touch. The trail collector and the
+// replay index are passed straight through to `Execute` and behave as they
+// would without a fold; nothing here consults them, and nothing here can
+// change what the chain read. That is AG1 - the fold consumes rows and has
+// no opinion about where they came from.
+DispatchOutcome CommandDispatcher::RunAggregated(
+    const exec::StepChain& chain, std::string header, exec::TrailCollector* trail,
+    const exec::TrailReplay* replay, const std::optional<stats::InstanceKey>& instance,
+    const txn::Snapshot& snapshot) {
+    auto aggregator = exec::Aggregator::Create(*chain.aggregate, chain.column_names,
+                                               aggregate_limits_);
+    if (!aggregator.ok()) {
+        return {"ERR " + aggregator.status().message(), false};
+    }
+
+    // The fold's own failures - a SUM overflow, a cap - have to reach the
+    // client, and a `RowSink` answers `StatusOr<VisitControl>`, so a
+    // non-ok status ends the walk and propagates out of Execute. That is
+    // the same path a decode error already takes.
+    Status ran = exec::Execute(
+        catalog_, page_store_, chain,
+        [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            if (Status s = aggregator.value().Accumulate(frame); !s.ok()) return s;
+            return storage::VisitControl::kContinue;
+        },
+        /*stats=*/nullptr, budget_, trail, replay, cabins_, &snapshot);
+    if (!ran.ok()) {
+        // **No trail on the failure path**, exactly as the unaggregated
+        // path has it: a statement that stopped part way through touched
+        // some tuples, and a trail describing that points a later reader at
+        // a state no reader should be pointed at.
+        return {"ERR " + ran.message(), false};
+    }
+
+    std::ostringstream os;
+    os << header;
+    Status emitted = aggregator.value().Finish(
+        [&](std::span<const parser::AstValue> row) -> Status {
+            os << "\\n";
+            bool first = true;
+            for (const parser::AstValue& value : row) {
+                if (!first) os << ',';
+                os << exec::FormatValue(value);
+                first = false;
+            }
+            return Status::OK();
+        });
+    if (!emitted.ok()) {
+        return {"ERR " + emitted.message(), false};
+    }
+
+    // Recorded after a *complete* execution, and unconditionally - the fold
+    // is downstream of both, so an aggregated statement records the trail
+    // and the access shape its unaggregated twin would.
+    RecordTrail(instance, trail, chain);
+    RecordAccessShapes(chain);
+    return {os.str(), false};
+}
 
 // Executes `chain` for its counters rather than its rows, and reports the
 // plan beside them.
@@ -2078,16 +2157,6 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {"ERR " + chain.status().message(), false};
     }
 
-    // **[AG02, removed by AG06]** The chain carries a fold and nothing
-    // consumes one yet. Refused rather than run: an aggregated chain has an
-    // empty projection, so executing it would emit one blank row per input
-    // row under the fold's column headings - a wrong answer wearing a right
-    // answer's shape, which is what this feature may not produce even for
-    // one commit.
-    if (chain.value().aggregated()) {
-        return {"ERR aggregation is not executable yet (docs/feat-aggregate.md)", false};
-    }
-
     // The plan is resolved; now ask whether this core may run it
     // (crosscore.md §2's fast-path-versus-pipeline decision). Every
     // relation local is the fast path and the only path built - a chain
@@ -2180,6 +2249,18 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
     if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value());
+
+    // ---- AG1: the fold wraps the sink, and nothing else moves -----------
+    //
+    // Everything above this point ran unchanged and unconditionally for an
+    // aggregated statement: the compile, the affinity check, the Waystone
+    // lookup, the trail collector. The fold is strictly downstream of all
+    // of them, which is what makes AG10's "recording, replay, Cabin probes
+    // and access statistics hold unchanged" a structural fact rather than a
+    // list of things that were remembered.
+    if (compiled.aggregated()) {
+        return RunAggregated(compiled, os.str(), trail, replay_ptr, instance, snapshot.value());
+    }
 
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
