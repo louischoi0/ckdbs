@@ -159,7 +159,14 @@ rounds to a whole extent (`kDefaultExtentPages`). **Worth fixing for log
 volume - it is what `docs/wal.md`'s `HEAP_CHAIN_LINK` record type would
 retire - but it is not where the tail comes from.**
 
-**3. The 10-15 ms maxima are the host, not the engine.** In the *unlogged*
+**3. The 10-15 ms maxima are the host, not the engine** — and that applies
+to more of this section than it first appeared. Every number in §6 was taken
+while this box was at load average ~3.2 on 2 cores. `bench/results-latency-matrix.md`
+re-measures the same shapes through the server on a **quiet** host and gets
+a `group` tail of 2.1× rather than 10×, so **the ratios in the table above
+are inflated by host preemption**. The per-phase budget in §§3-4 stands (a
+median is far more robust to preemption than a p99), and the ranking in §7
+stands, but do not quote §6's ratios. In the *unlogged*
 configuration - where a statement touches no device at all - 6 of 800
 statements ran beyond 20x the median, up to 14.4 ms, and **every one of them
 allocated no page and wrote no WAL byte**. There is no engine work that
