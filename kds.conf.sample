@@ -109,6 +109,16 @@ durability = group
 # next checkpoint or shutdown.
 wal_drain_interval_us = 1000
 
+# How long a `relaxed` commit may sit unsynced - D3's loss window
+# (docs/wal.md). It is also a **latency** dial, which is less obvious: the
+# sync that enforces it runs on the reactor thread, so the statement in
+# flight when it fires pays the device's full latency. Measured on an EBS
+# volume, the default produces one ~2.2 ms statement every 12 ms and is the
+# whole of a relaxed instance's tail (bench/results-latency-matrix.md).
+# Raising it thins the stalls out and lengthens the window of committed work
+# a crash can lose; it cannot remove them.
+relaxed_flush_interval_us = 10000
+
 # ---- Query limits ----------------------------------------------------------
 
 # Ceiling on the tuples a single statement may decode before it is refused

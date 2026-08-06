@@ -152,3 +152,68 @@ unattributed item.
 And the checkpointer still makes no measurable difference at any connection
 count, in either direction, which is the second run to say so.
 
+---
+
+# The ~2.2 ms floor, attributed
+
+The unexplained item above is **D3's loss-window sync, performed on the
+reactor thread**. Found by recording every statement's arrival time as well
+as its duration (`stress_business.py --latency-trace`), because a percentile
+says how bad a tail is and never *when* it happened - and "when" is the
+whole answer here.
+
+Under `relaxed`, one connection, 10 s, 62,204 statements:
+
+```
+statements >= 1 ms: 824 (1.32%)   trade-insert 435, account-update 389
+median gap between them: 12.2 ms
+first slow statements at t = 0.0062, 0.0183, 0.0305, 0.0426, 0.0547 s
+```
+
+Evenly spaced to the millisecond, hitting both statement kinds in proportion
+to their frequency. That is a timer, not a data-dependent event - no page
+split, no chain growth, no allocation is that regular.
+
+`WalManagerConfig::relaxed_flush_interval_ns` is **10 ms**, and the observed
+period is 10 ms plus the ~2.2 ms the sync itself takes. Confirmed by moving
+the knob:
+
+| `relaxed_flush_interval` | stall period | statements >= 1 ms | insert p99 | TPS |
+|---|---|---|---|---|
+| 10 ms (default) | 12.2 ms | 1.32% | 2,169 us | 1,555 |
+| 50 ms | 52.7 ms | 0.29% | **177 us** | 1,770 |
+
+The period tracks the setting exactly. It is now a config key,
+`relaxed_flush_interval_us`, exposed for that reason as much as for
+durability.
+
+## What this is, and is not
+
+**It is the D3 bound being honoured.** `relaxed` promises a commit is
+durable within the loss window, and this is the sync that makes that true.
+Nothing is broken.
+
+**What is wrong is who pays.** The sync runs on the single reactor thread,
+so the statement in flight when it fires is charged the device's full
+latency - 2.2 ms against a 122 us median. The cost belongs to the system and
+lands on an unlucky client.
+
+**Tuning moves it and cannot remove it.** A longer window means fewer,
+equally deep stalls and more data at risk; a shorter one means more of them.
+The trade is a straight line and the depth is fixed by the device. Removing
+it needs the fsync off the reactor thread - a WAL writer thread, or async
+submission - which is W1's shape applied to maintenance rather than commits,
+and which touches the thread-per-core model (`docs/rules.md` section 3).
+That is a design decision, not a tuning one.
+
+**It is invisible under `group`, and was always there.** `DrainOnce()` syncs
+on a pending commit *or* on the interval, so with continuous traffic the
+commit branch fires first and the interval branch rarely runs. `group`'s
+~2.2 ms tail is the commit sync - the same device cost by a different route.
+
+## The default is not changed
+
+10 ms stays. Raising it is a durability decision - how much committed work a
+`relaxed` instance may lose - and this measurement is not the argument for
+making it. It is the argument for knowing what the current value costs.
+

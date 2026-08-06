@@ -581,6 +581,14 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
     update_phase = Phase("account-update")
     txn_phase = Phase("txn")
 
+    # --latency-trace: keep (arrival, duration) per statement so the slow
+    # ones can be located in time rather than only counted. What it answers
+    # is whether a stall is periodic or proportional, which no percentile
+    # can (bench/results-latency-matrix.md's unattributed floor).
+    if getattr(args, "latency_trace", None):
+        insert_phase.trace = []
+        update_phase.trace = []
+
     # (account_id, user_id) -> [balance, asset_qty, trade_count]. Seeded
     # from the load, then owned entirely by this process.
     state = {aid: [OPENING_BALANCE, 0, 0] for aid, _ in accounts}
@@ -735,6 +743,15 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
 
     for phase in (insert_phase, update_phase, txn_phase):
         phase.elapsed = elapsed
+
+    if getattr(args, "latency_trace", None):
+        # One file per trader, since two processes cannot share a handle
+        # without ordering their writes - and the ordering is the data.
+        with open(f"{args.latency_trace}.{index}", "w") as f:
+            for name, phase in (("trade-insert", insert_phase),
+                                ("account-update", update_phase)):
+                for at, took in phase.trace:
+                    f.write(f"{name} {at:.6f} {took * 1e6:.1f}\n")
 
     result_q.put({
         "index": index,
@@ -1108,6 +1125,13 @@ def main():
                              "ceiling, and TPS is reported over the time the work "
                              "actually took - so a run that hits its target early is "
                              "measured over that shorter window, not over the budget")
+
+    parser.add_argument("--latency-trace", metavar="PATH", default=None,
+                        help="write every statement's arrival time and duration to "
+                             "PATH.<trader> - one line per statement, for locating slow "
+                             "ones in time. A percentile says how bad the tail is and "
+                             "never when it happened, which is what tells a periodic "
+                             "stall from a proportional one")
 
     parser.add_argument("--echo", dest="echo", action="store_true", default=False,
                         help="print every statement this tool sends, and its reply, to "

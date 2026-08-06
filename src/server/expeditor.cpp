@@ -26,7 +26,8 @@ std::string Expeditor::Config::LogPath() const {
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
             "isolation",
-            "wal_drain_interval_us", "log_dir",  "log_file",               "log_level",
+            "wal_drain_interval_us", "relaxed_flush_interval_us",
+            "log_dir",  "log_file",               "log_level",
             "max_rows_touched",      "inline_cell_width",      "waystone_recording",
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
@@ -132,6 +133,11 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // Microseconds in the file: a drain interval an operator cares
         // about is well under a millisecond, so ms would round it away.
         wal_drain_interval_ns = v.value() * 1'000ULL;
+    }
+    if (file.Has("relaxed_flush_interval_us")) {
+        auto v = file.GetUint("relaxed_flush_interval_us");
+        if (!v.ok()) return v.status();
+        relaxed_flush_interval_ns = v.value() * 1'000ULL;
     }
     if (file.Has("inline_cell_width")) {
         auto v = file.GetUint("inline_cell_width");
@@ -263,8 +269,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!log_device.ok()) return log_device.status();
     expeditor->log_device_ = std::move(log_device.value());
 
+    wal::WalManagerConfig wal_config;
+    wal_config.relaxed_flush_interval_ns = expeditor->config_.relaxed_flush_interval_ns;
     auto wal = wal::WalManager::Open(expeditor->log_device_.get(), expeditor->clock_,
-                                     /*core_id=*/0);
+                                     /*core_id=*/0, wal_config);
     if (!wal.ok()) return wal.status();
     expeditor->wal_ = std::move(wal.value());
     expeditor->wal_->SetLogger(&*expeditor->logger_);

@@ -37,11 +37,20 @@ class Phase:
         self.name = name
         self.detail = detail
         self.latencies = []
+        self.trace = None
         self.errors = 0
         self.first_error = None
         self.elapsed = 0.0
 
     def record(self, latency, reply):
+        # The arrival time as well as the duration, when a caller asked for
+        # the trace. Percentiles say how bad the tail is and never *when* -
+        # and "when" is what separates a periodic stall (maintenance, a
+        # timer, the kernel) from a proportional one (every Nth row grows a
+        # page). Off unless enabled: two floats per statement is memory a
+        # long run does not need to spend.
+        if self.trace is not None:
+            self.trace.append((time.time(), latency))
         self.latencies.append(latency)
         if reply.startswith("ERR"):
             self.errors += 1

@@ -202,6 +202,17 @@ public:
         // next checkpoint or shutdown.
         sched::MonoTimeNs wal_drain_interval_ns = 1'000'000;  // 1 ms
 
+        // How long a `relaxed` commit may sit unsynced - D3's loss window
+        // (docs/wal.md). Exposed because it is not only a durability dial:
+        // the sync that enforces it runs on the reactor thread, so whatever
+        // statement is in flight when it fires pays the device's full
+        // latency. Measured on an EBS volume, the default produces one
+        // ~2.2 ms statement every 12 ms and is the whole of `relaxed`'s tail
+        // (bench/results-latency-matrix.md). Raising it lengthens the loss
+        // window and thins the stalls out; it cannot remove them while the
+        // sync is on this thread.
+        sched::MonoTimeNs relaxed_flush_interval_ns = 10'000'000;  // 10 ms
+
         // How many bytes every variable-width value occupies inside a
         // tuple (docs/heap-and-tuple.md section 3.3). It is read from
         // configuration exactly once - at the bootstrap of a *new*
