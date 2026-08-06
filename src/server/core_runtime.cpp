@@ -156,14 +156,23 @@ void CoreRuntime::Run() {
     // which today is every core but 0 (see the header) - so arming them
     // costs a timer and buys the property that a core which *starts*
     // logging needs no new wiring.
+    auto drain = [this] {
+        if (Status s = wal_->DrainOnce(); !s.ok() && log_ != nullptr &&
+                                          log_->enabled(LogLevel::kError)) {
+            log_->Error("wal", "core " + std::to_string(config_.core_id) +
+                                   ": drain failed: " + s.message());
+        }
+    };
+
+    // **After every iteration's tasks**, which is what makes group commit a
+    // group: a statement stages its commit and parks, every other runnable
+    // statement does the same, and this syncs once for all of them. The
+    // timer below still exists for the D3 loss-window bound, which is about
+    // a core with nothing running rather than about a waiting commit.
+    scheduler_->SetPostTaskHook(drain);
+
     if (config_.wal_drain_interval_ns > 0) {
-        scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] {
-            if (Status s = wal_->DrainOnce(); !s.ok() && log_ != nullptr &&
-                                              log_->enabled(LogLevel::kError)) {
-                log_->Error("wal", "core " + std::to_string(config_.core_id) +
-                                       ": drain failed: " + s.message());
-            }
-        });
+        scheduler_->SubmitEvery(config_.wal_drain_interval_ns, drain);
     }
 
     // The low-water check (extent_lease_service.hpp). It runs on the WAL

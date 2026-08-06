@@ -167,6 +167,22 @@ public:
     // Runs one iteration of the fixed-order phase loop (sched.md section
     // 2). Returns true if any task ran, any I/O event was drained, any
     // timer fired, or any cross-core message was received.
+    // Work to do once per loop iteration, **after** the ready tasks have
+    // run and before the reactor blocks again.
+    //
+    // It exists for group commit, and the position is the whole of it. A
+    // committing statement stages its commit record and parks; every other
+    // runnable statement does the same in the same iteration; then this runs
+    // once and makes all of them durable with one device sync. Put on a
+    // timer instead, it would add that timer's period to every commit's
+    // latency; run inside the task, it would sync per commit, which is the
+    // batch-of-one this exists to end.
+    //
+    // Cheap when there is nothing to do - the WAL's drain returns
+    // immediately when nothing is staged - so it is called unconditionally
+    // rather than gated on whether a task ran.
+    void SetPostTaskHook(std::function<void()> hook) { post_task_hook_ = std::move(hook); }
+
     bool RunOnce();
 
     // Runs RunOnce() until Stop() is called (from within a task, e.g. one
@@ -244,6 +260,7 @@ private:
     TimerId next_timer_id_ = kInvalidTimerId + 1;
 
     bool stopped_ = false;
+    std::function<void()> post_task_hook_;
 };
 
 }  // namespace kds::sched

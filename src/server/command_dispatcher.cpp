@@ -122,11 +122,24 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // That it never suspends is also what makes this change verifiable: the
     // whole suite has to behave exactly as it did, because nothing about
     // when a reply is produced has moved yet.
-    *out = Dispatch(line, session);
+    *out = DispatchAndStage(line, session);
+
+    if (out->pending_lsn != wal::kNoLsn) {
+        // **The group commit.** Parking here rather than syncing inside the
+        // statement is the whole change: every other runnable connection
+        // gets to stage its own commit before the reactor's post-task hook
+        // syncs once for all of them (Scheduler::SetPostTaskHook). Nothing
+        // is held across this - the statement finished above, its page
+        // spans with it.
+        const wal::Lsn lsn = out->pending_lsn;
+        const std::function<bool()> durable = [this, lsn] { return wal_->IsDurable(lsn); };
+        co_await sched::WaitUntil{&durable};
+        out->pending_lsn = wal::kNoLsn;
+    }
     co_return Status::OK();
 }
 
-DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
+DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Session* session) {
     // Read only when something might report it; a dispatcher with no
     // logger does no clock reads at all.
     const sched::MonoTimeNs started_ns = log_ == nullptr ? 0 : NowNs();
@@ -137,7 +150,16 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
     // before transactions existed.
     Session& active = session != nullptr ? *session : autocommit_session_;
 
+    pending_commit_lsn_ = wal::kNoLsn;
     DispatchOutcome outcome = DispatchInner(line, active);
+    // Read back out of the member the write paths set: threading it through
+    // InsertInner/UpdateInner/EndWrite and every handler between would be a
+    // parameter on a dozen signatures for one number, and one statement runs
+    // at a time on a core (sched.md section 3), so there is no second value
+    // to confuse it with.
+    outcome.pending_lsn = pending_commit_lsn_;
+    pending_commit_lsn_ = wal::kNoLsn;
+
     if (log_ == nullptr) return outcome;
 
     // A failed command reports at Warn and a successful one at Debug, so
@@ -159,6 +181,32 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
         msg += " in " + std::to_string((NowNs() - started_ns) / 1000) + "us";
     }
     log_->Log(level, "query", msg);
+    return outcome;
+}
+
+// ---- The durability wait (docs/wal.md D2) --------------------------------
+//
+// Two entry points, one statement path, and the difference is only *how the
+// wait is taken*. `Dispatch()` blocks on this thread, because its callers -
+// tests, tools, anything without a reactor - have nowhere to park.
+// `DispatchAsync()` parks, which is what lets the next connection's
+// statement run and stage its commit into the same device sync. The
+// statement itself is finished either way before this runs, so nothing is
+// held across the wait.
+
+DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
+    DispatchOutcome outcome = DispatchAndStage(line, session);
+    if (outcome.pending_lsn == wal::kNoLsn) return outcome;
+
+    // Inline, on this thread: the batch is whatever happened to be staged
+    // already, which with no scheduler is this commit alone.
+    if (Status s = wal_->DrainOnce(); !s.ok()) {
+        return {ErrorReply(s), outcome.should_stop};
+    }
+    if (Status s = wal_->EnsureDurable(outcome.pending_lsn); !s.ok()) {
+        return {ErrorReply(s), outcome.should_stop};
+    }
+    outcome.pending_lsn = wal::kNoLsn;
     return outcome;
 }
 
@@ -1388,8 +1436,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     // batching only pays off once concurrent committers exist to fill it
     // (manager.hpp). kRelaxed waits for nothing by definition.
     if (durability_ == wal::DurabilityClass::kGroup && !wal_->IsDurable(commit.value())) {
-        if (Status s = wal_->DrainOnce(); !s.ok()) return s;
-        if (Status s = wal_->EnsureDurable(commit.value()); !s.ok()) return s;
+        pending_commit_lsn_ = commit.value();
     }
     return Status::OK();
 }
@@ -2696,14 +2743,7 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     // and the acknowledgement means "durable".
     if (wal_ != nullptr && durability_ == wal::DurabilityClass::kGroup &&
         !wal_->IsDurable(committed.value())) {
-        if (Status s = wal_->DrainOnce(); !s.ok()) {
-            txn_->Release(*txn);
-            return {"ERR " + s.message(), false};
-        }
-        if (Status s = wal_->EnsureDurable(committed.value()); !s.ok()) {
-            txn_->Release(*txn);
-            return {"ERR " + s.message(), false};
-        }
+        pending_commit_lsn_ = committed.value();
     }
     txn_->Release(*txn);
     return {"COMMIT trx_id=" + std::to_string(id), false};
@@ -2812,16 +2852,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
     }
     if (wal_ != nullptr && durability_ == wal::DurabilityClass::kGroup &&
         !wal_->IsDurable(committed.value())) {
-        if (Status s = wal_->DrainOnce(); !s.ok()) {
-            txn_->Release(*scope.txn);
-            scope.txn = nullptr;
-            return s;
-        }
-        if (Status s = wal_->EnsureDurable(committed.value()); !s.ok()) {
-            txn_->Release(*scope.txn);
-            scope.txn = nullptr;
-            return s;
-        }
+        pending_commit_lsn_ = committed.value();
     }
     txn_->Release(*scope.txn);
     scope.txn = nullptr;

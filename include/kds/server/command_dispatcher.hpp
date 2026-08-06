@@ -125,6 +125,23 @@ namespace kds::server {
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
+
+    // The commit this statement staged, when the client may not be told
+    // about it until the log is durable (`durability = group`, docs/wal.md
+    // D2). `kNoLsn` means there is nothing to wait for - every relaxed
+    // statement, every read, and every strict commit, which synced on its
+    // own stack before returning.
+    //
+    // **The wait is deliberately not taken where the commit happens.** A
+    // statement that syncs inline is a statement that holds the core while
+    // the device works, which serializes every other connection behind it -
+    // measured as a batch size of exactly 1 and TPS that does not move with
+    // the connection count (bench/results-latency-matrix.md). Returning the
+    // LSN instead lets the *caller* decide how to wait: `Dispatch()` waits
+    // inline, because its callers have no scheduler to park on;
+    // `DispatchAsync()` parks, which is what lets the next connection's
+    // statement run and stage its own commit into the same sync.
+    wal::Lsn pending_lsn = wal::kNoLsn;
 };
 
 // Where a tuple lives, as a point lookup reports it. Local to the
@@ -324,6 +341,12 @@ public:
     // behaviour identical, because an autocommit statement outside an
     // explicit transaction is exactly what the engine did before.
     DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
+
+    // The statement path without the durability wait: it runs the statement
+    // and reports any commit it staged through `DispatchOutcome::pending_lsn`.
+    // Both entry points above go through it; they differ only in how they
+    // wait.
+    DispatchOutcome DispatchAndStage(std::string_view line, Session* session);
 
     // The suspendable form. Writes its reply through `out` - which the
     // **caller** owns and must keep alive across suspension - and finishes
@@ -768,6 +791,11 @@ private:
     // always did, and so that "identical replies with cabins on and off" is
     // a property of the structure rather than of the test data.
     stats::CabinStore* cabins_ = nullptr;
+
+    // The commit a write path staged and did not wait for, read out at the
+    // end of DispatchAndStage(). One statement runs at a time on a core, so
+    // this cannot hold two.
+    wal::Lsn pending_commit_lsn_ = wal::kNoLsn;
 
     // The transaction manager, or null when this dispatcher predates
     // transactions - which every socket-free test does, and which is why

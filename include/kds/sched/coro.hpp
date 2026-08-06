@@ -89,6 +89,14 @@ public:
         // reads this instead, which is what makes a wait actually wait.
         const bool* wait_flag = nullptr;
 
+        // The predicate form of the same thing (see WaitUntil below): a
+        // condition that is not a bool somebody sets, but a question worth
+        // re-asking - "is my commit durable yet". Pointed at rather than
+        // owned for the reason `wait_flag` is: the promise is polled from
+        // outside the coroutine, and the object it points at lives in the
+        // coroutine frame, which outlives every poll that can see it.
+        const std::function<bool()>* wait_pred = nullptr;
+
         Coro get_return_object() {
             return Coro(std::coroutine_handle<promise_type>::from_promise(*this));
         }
@@ -220,6 +228,10 @@ public:
             if (flag != nullptr && !*flag) return PollResult::kSuspended;
             handle_.promise().wait_flag = nullptr;
 
+            const std::function<bool()>* pred = handle_.promise().wait_pred;
+            if (pred != nullptr && !(*pred)()) return PollResult::kSuspended;
+            handle_.promise().wait_pred = nullptr;
+
             ++resumes_;
             handle_.resume();
         }
@@ -278,6 +290,31 @@ struct Yield {
 // is what re-tests it (see `promise_type::wait_flag` for why it cannot be
 // `await_ready`'s job). A long wait therefore costs one predicate call per
 // reactor turn and never a resumed frame.
+// Parks until `pred()` answers true, re-tested once per poll.
+//
+// `WaitFor`'s sibling, and the difference is what the condition *is*. A flag
+// is set by whoever satisfies it, which suits a request whose reply arrives.
+// A predicate is asked, which suits a watermark that moves for reasons this
+// coroutine has no hook into - a commit waiting on `durable_lsn` is the
+// first of those: the sync that satisfies it covers every waiter at once and
+// knows about none of them.
+//
+// The predicate must not fetch a page or touch anything a suspension is not
+// allowed to hold (see SuspendAuditFn); asking whether a number has moved is
+// the shape it is for.
+struct WaitUntil {
+    const std::function<bool()>* pred = nullptr;
+
+    bool await_ready() const noexcept { return pred == nullptr || (*pred)(); }
+
+    template <typename P>
+    void await_suspend(std::coroutine_handle<P> h) const noexcept {
+        h.promise().wait_pred = pred;
+    }
+
+    void await_resume() const noexcept {}
+};
+
 struct WaitFor {
     const bool* flag = nullptr;
 

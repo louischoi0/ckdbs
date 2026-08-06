@@ -94,3 +94,61 @@ It refuses to run on tmpfs (where every durability class measures the same)
 and on a host above 0.6 runnable processes per core, which are the two ways
 this measurement has already gone wrong. `--force` overrides both and says
 so in the output.
+
+---
+
+# W1: the group committer
+
+Measured 2026-08-06, same harness, same host, same parameters. The change:
+a committing statement stages its `TXN_COMMIT` and **parks** instead of
+calling `DrainOnce`/`EnsureDurable` on its own stack, and the reactor syncs
+once per iteration after every runnable statement has had its turn
+(`Scheduler::SetPostTaskHook`).
+
+## What moved
+
+| configuration | conns | TPS before | after | | insert p50 | insert p99 |
+|---|---|---|---|---|---|---|
+| ckdbs `group` | 1 | 200.9 | 197.5 | **−2%** | 1035 → 1051 | 2242 → 2338 |
+| ckdbs `group` | 4 | 213.7 | **388.6** | **+82%** | 3949 → **2124** | 9422 → **4681** |
+| ckdbs `relaxed` | 1 | 1,611.9 | 1,580.8 | −2% | 121 → 121 | 2208 → 2165 |
+| ckdbs `relaxed` | 4 | 2,874.9 | 2,958.9 | +3% | 210 → 207 | 2760 → 2691 |
+| PostgreSQL | 1 | 212.9 | 212.7 | −0% | 1140 → 1138 | 1322 → 1322 |
+| PostgreSQL | 4 | 491.5 | 494.4 | +1% | 1975 → 1972 | 2672 → 2635 |
+
+**The controls are what make this attributable.** PostgreSQL and `relaxed`
+were measured in the same runs and did not move: `relaxed` has no durability
+wait to batch, and PostgreSQL is a different process entirely. Only the
+configuration with a serialized commit changed, and it changed by 82%.
+
+## It scales now, which is the actual fix
+
+| connections | ckdbs before W1 | ckdbs after | PostgreSQL |
+|---|---|---|---|
+| 1 | 200.8 | 197.5 | 212.7 |
+| 4 | 213.7 (**+6%**) | 388.6 (+97%) | 494.4 (+132%) |
+| 8 | — | 660.6 (+70%) | 918.9 (+86%) |
+
+Before, ckdbs answered 6% more transactions with four times the clients —
+one commit per device sync however many asked. It now scales at roughly
+PostgreSQL's rate from a lower base: 72-79% of its throughput at 4 and 8
+connections, against 43% before.
+
+## What it cost
+
+**1-2% at one connection**, consistently across `group` and `group-nockpt`
+(p50 1035 → 1051 µs). That is the extra reactor iteration a parked statement
+waits through: staging, giving the core back, the hook syncing, and being
+resumed on the next pass. It is the predicted price and it is the right
+trade — the single-connection case was already at parity with PostgreSQL and
+the four-connection case was not.
+
+## What did not move
+
+The **~2.2 ms floor** under `relaxed`'s tail (p50 121 µs, p99 2,165 µs) is
+untouched, as expected: it was never the commit path. It remains the
+unattributed item.
+
+And the checkpointer still makes no measurable difference at any connection
+count, in either direction, which is the second run to say so.
+

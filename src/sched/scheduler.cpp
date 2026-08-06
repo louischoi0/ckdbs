@@ -300,6 +300,12 @@ bool Scheduler::RunOnce() {
     // Phase 4: run ready tasks under the loop budget.
     if (RunReadyTasks()) did_work = true;
 
+    // Phase 4.5: the post-task hook (see SetPostTaskHook). One call per
+    // iteration, after every task that could stage work has had its turn -
+    // which is what lets one device sync cover every commit staged this
+    // iteration instead of one per commit.
+    if (post_task_hook_) post_task_hook_();
+
     // Phase 5: submit pending I/O. Phase 1's Register/Modify/Unregister
     // calls above take effect synchronously (no batching) - batched
     // submission is Phase 2+ (e.g. a real io_uring submission queue).

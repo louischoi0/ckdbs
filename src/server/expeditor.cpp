@@ -600,14 +600,25 @@ Status Expeditor::Serve() {
     // bounds a kRelaxed commit's loss window and what resolves a kGroup
     // batch no committer is waiting on; a tick with nothing staged does no
     // I/O, so the interval is chosen for the loss window, not for cost.
+    auto drain = [this] {
+        if (Status s = wal_->DrainOnce(); !s.ok()) {
+            // Same shape as the checkpoint timer: no caller to return
+            // to, so the log is the only place this becomes visible.
+            logger_->Error("wal", "drain failed: " + s.message());
+        }
+    };
+
+    // **The group committer.** Once per reactor iteration, after every
+    // runnable statement has staged whatever it is going to stage, so one
+    // device sync covers all of them. A committing statement parks instead
+    // of syncing on its own stack (command_dispatcher.hpp's `pending_lsn`),
+    // and this is what it parks *for*: without it the parked statement has
+    // nothing to wake it until the timer below fires, and with the timer
+    // alone every commit would pay that interval.
+    scheduler.SetPostTaskHook(drain);
+
     if (config_.wal_drain_interval_ns > 0) {
-        scheduler.SubmitEvery(config_.wal_drain_interval_ns, [this] {
-            if (Status s = wal_->DrainOnce(); !s.ok()) {
-                // Same shape as the checkpoint timer: no caller to return
-                // to, so the log is the only place this becomes visible.
-                logger_->Error("wal", "drain failed: " + s.message());
-            }
-        });
+        scheduler.SubmitEvery(config_.wal_drain_interval_ns, drain);
     } else {
         logger_->Warn("wal", "drain cadence disabled; relaxed commits stay unsynced "
                              "until checkpoint or shutdown");
