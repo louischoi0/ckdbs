@@ -49,9 +49,10 @@ advantage grows to 2.52× on the three-relation point join where two more
 probes compound it.
 
 **The full-relation scan is PostgreSQL's, by ~3.8×.** `day-slice` walks
-60,480 feature rows to return 8. Both engines do the same thing; PostgreSQL
-does it faster. That is a straightforward statement about scan throughput
-per row and it is the single largest structural gap in the table.
+60,480 feature rows to return 8. **Not because PostgreSQL scans faster** -
+see the investigation below, which measures where the 473 ns per row go and
+finds that ckdbs builds a full row object for every one of the 60,472 it
+rejects, where PostgreSQL tests the qualifier against the raw tuple first.
 
 **`bar-range` is the one result that names a known gap rather than a general
 one.** A pk `BETWEEN` compiles to a `Range` step that prunes the *tail* of
@@ -59,6 +60,62 @@ the chain — the first page whose `min_key` passes the high bound ends the
 walk — and never the head, because skipping leading pages needs a seek that
 does not exist. So a range 200 wide costs everything before it. The tool's
 own comment predicted this; the 0.20× is its size.
+
+## Why ckdbs loses those three, investigated
+
+Re-measured at HEAD on an idle box. The three losing shapes have **two**
+root causes, and neither is "PostgreSQL scans faster".
+
+### day-slice and cross-join: the scan materialises every row it discards
+
+`ANALYZE` on the live relation reports `examined=60480 matched=8` for one
+`day-slice`. At 28.6 ms that is **473 ns per row**, and it decomposes:
+
+| | ns/row |
+|---|---:|
+| the whole scan | 473 |
+| `DecodeRowInto` alone, on this 12-column row | **355 (75%)** |
+| reading all 12 cells - the floor | **13** |
+| ~876 page fetches, amortised | ~15 (3%) |
+
+So 96% of the decode is not reading bytes. It is building twelve 80-byte
+`AstValue`s per row, each carrying two `std::string`s - for a predicate that
+reads **one column**.
+
+`ChainRunner::AcceptTupleAt` decodes the whole row as soon as the tuple is
+visible and evaluates the residual afterwards, so this scan fully
+materialises 60,472 rows it immediately throws away. `cross-join` is the
+same scan plus two probes - 34 QPS against day-slice's 35 - so the probes
+cost almost nothing and it is the same finding twice.
+
+PostgreSQL's seqscan tests the qualifier against the raw tuple and forms a
+result row only for the 8 that match. **The engines are not doing the same
+thing**, which is what the first version of this document assumed.
+
+### bar-range: a seek that exists and is not used
+
+`daily_bars` is BTREE-clustered, so `BtreeLookup` can descend to the low
+bound. `kRange` does not: it starts at the head of the leaf chain and prunes
+only the tail. The tool draws the low bound uniformly, so on average it
+walks half the relation to return 200 rows.
+
+The arithmetic confirms the mechanism rather than merely asserting it:
+bar-range is 12.5 ms against a full scan's 28.6 ms - **44% of a full scan**,
+which is what "start at the head, stop at the match" predicts for a
+uniformly drawn bound. PostgreSQL's index range scan touches only the
+qualifying leaves.
+
+### What each would take
+
+- **Lazy decode**: decode the columns the residual references, evaluate, and
+  materialise the rest only on a match. `Step::residual` already records
+  which columns those are. At 8/60,480 selectivity that is roughly a 12x cut
+  in decode work on this shape.
+- **A range seek**: descend to the low bound, then walk siblings until the
+  high bound. The primitive exists; `kRange` never calls it.
+
+Neither is a throughput ceiling. Both are design choices with the
+measurements above as their price.
 
 ## The accelerator each engine offers for a non-pk equality
 
