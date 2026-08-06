@@ -336,6 +336,36 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         if (!type_name.ok()) return type_name.status();
         col.type_name = std::move(type_name.value());
 
+        // Optional `REFERENCES <table>` (docs/impl-foreign-keys.md §1).
+        // Peeked like the cabin clause below it, and written *before* it
+        // when both appear - a fixed order, because two optional suffixes
+        // accepted in either order is a grammar with a shape nobody can
+        // state, and the fingerprint would have to hash both spellings of
+        // one declaration.
+        if (const Token& refs = lexer_.Peek();
+            refs.type == TokenType::kIdent && IEquals(refs.text, "REFERENCES")) {
+            col.references_byte_offset = refs.byte_offset;
+            lexer_.Next();
+
+            auto parent = ParseIdent();
+            if (!parent.ok()) {
+                return parent.status().WithContext("REFERENCES names the parent relation");
+            }
+            col.references_table = std::move(parent.value());
+
+            // `REFERENCES parent(col)` is refused rather than parsed and
+            // checked: the parent side is always the Keystone id (F1), so
+            // the only column that could be named is the one the engine
+            // would have used anyway, and naming any other is asking for a
+            // reference the engine cannot store.
+            if (lexer_.Peek().type == TokenType::kLParen) {
+                return Status::Unsupported(
+                    "a foreign key references the parent's primary key and no other column, so "
+                    "REFERENCES takes no column list (byte " +
+                    std::to_string(lexer_.Peek().byte_offset) + ")");
+            }
+        }
+
         // Optional cabin policy: `CABIN`, `CABIN AUTO`, or `NO CABIN`
         // (docs/feat-cabin.md). Peeked rather than required, so every
         // pre-existing CREATE TABLE parses unchanged and lands on

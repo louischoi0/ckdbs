@@ -434,6 +434,47 @@ public:
     // this per step (catalog_cache.hpp's absence rule).
     StatusOr<SysCabinRow> FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos);
 
+    // ---- Foreign keys (docs/impl-foreign-keys.md, FK-M1) ----------------
+
+    // Records that `child_rel_oid`'s column `child_column_no` references
+    // `parent_rel_oid`'s Keystone id, and returns the new `fk_id`.
+    //
+    // **The one door.** Every route to a foreign key comes through here -
+    // the `REFERENCES` clause today, an `ALTER TABLE ADD CONSTRAINT` if one
+    // is ever built - so the declaration checks live here rather than in the
+    // DDL layer, the argument Catalog::CreateCabin() already makes about
+    // `NO CABIN`. The checks themselves are catalog::CheckForeignKey*()
+    // (foreign_key.hpp), shared with CREATE TABLE's pre-check so a
+    // declaration cannot be legal at one door and not the other.
+    //
+    // What it writes is that the constraint **exists**. It validates no
+    // existing rows: a foreign key declared at CREATE TABLE is declared on
+    // an empty relation, and since there is no ALTER TABLE there is no way
+    // to declare one over rows that might already violate it. A back-check
+    // is what that path would need, and it does not exist to need it.
+    //
+    // Fails with NotFound for either relation; InvalidArgument for column 0,
+    // a column past the schema, or a column that cannot hold a Keystone id;
+    // Unsupported for a heap parent or a cross-core pair (F5); AlreadyExists
+    // for a second foreign key on the same column.
+    //
+    // **Bumps the catalog version**, and reaches further than its arguments:
+    // the parent's cached `fkeys_in` is stale too. Not to be called from a
+    // statement path holding a `const TableAccess*`.
+    StatusOr<std::uint64_t> CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,
+                                             Oid parent_rel_oid, std::uint16_t flags = 0);
+
+    // Every sys.fkeys row, in page order. The inspection surface behind
+    // `SHOW FKEYS`, and what InitTableAccess() builds both per-relation
+    // lists from in one scan.
+    StatusOr<std::vector<SysFkeyRow>> ListForeignKeys();
+
+    // The foreign key on `(child_rel_oid, child_column_no)`. NotFound is the
+    // ordinary answer - most columns reference nothing - and is never
+    // cached, which is why a *write path* asks `TableAccess::fkeys_out`
+    // instead of calling this per row (catalog_cache.hpp's absence rule).
+    StatusOr<SysFkeyRow> FindForeignKeyOnColumn(Oid child_rel_oid, std::uint16_t child_column_no);
+
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
     // `owner_core` defaults to kSystemCore because every caller but
     // CreateTable() is bootstrap writing a system relation, and M5 puts

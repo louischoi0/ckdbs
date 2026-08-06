@@ -94,7 +94,14 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // recovery under a changed core count is [OPEN] (wal.md section 3): a
 // database whose streams were written by N cores must not be mounted by M
 // until something decides what happens to the other streams.
-inline constexpr std::uint32_t kSuperBlockVersion = 10;
+// 10 -> 11: bootstrap gained `sys.fkeys` (docs/impl-foreign-keys.md §1) on a
+// fixed page id a pre-existing file does not have - the fourth repeat of the
+// 5 -> 6 shape, and the one where mounting anyway would be worst. A
+// version-10 file has no page 13, so `CREATE TABLE ... REFERENCES` would
+// fail to find the relation that records the constraint, and - once FK-M2
+// lands - every write path would read an empty foreign-key list and enforce
+// nothing. A constraint that silently does not run is not a degraded mode.
+inline constexpr std::uint32_t kSuperBlockVersion = 11;
 
 // ---- On-disk field layout ----------------------------------------------
 

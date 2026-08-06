@@ -1,5 +1,6 @@
 #include "kds/catalog/catalog.hpp"
 
+#include "kds/catalog/foreign_key.hpp"
 #include "kds/parser/fingerprint.hpp"
 
 #include <algorithm>
@@ -118,7 +119,7 @@ Status Catalog::Bootstrap() {
         std::string_view name;
         PageId page_id;
     };
-    static constexpr std::array<SysTableBootstrap, 8> kSysTables{{
+    static constexpr std::array<SysTableBootstrap, 9> kSysTables{{
         {kSysTypesTable, "types", kCatalogPageTypes},
         {kSysObjectsTable, "objects", kCatalogPageObjects},
         {kSysColumnsTable, "columns", kCatalogPageColumns},
@@ -139,6 +140,10 @@ Status Catalog::Bootstrap() {
         // relation's own `next_id`, like sys.patterns' oid), which is why
         // it needs the sys.tables row and not just the page.
         {kSysCabinsTable, "cabins", kCatalogPageCabins},
+        // sys.fkeys, same shape again. It issues Keystone ids for the same
+        // reason sys.cabins does - an `fk_id` comes from this relation's own
+        // `next_id`, not from GenerateUserOid(), which restarts every boot.
+        {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
     }};
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -705,6 +710,25 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         }
     }
 
+    // The relation's foreign keys at **both** ends, in one sys.fkeys scan
+    // (schema.hpp says why both lists live here). Unlike the Cabin scan
+    // above, a failure here is not a lost accelerator: a foreign key the
+    // write path cannot see is a constraint that does not run, so an
+    // unreadable sys.fkeys must fail opening the relation rather than open
+    // it unconstrained.
+    auto fkeys = ListForeignKeys();
+    if (!fkeys.ok()) return fkeys.status();
+    for (const SysFkeyRow& fk : fkeys.value()) {
+        if (fk.child_rel_oid == oid) {
+            access.fkeys_out.push_back(
+                ForeignKeyRef{fk.fk_id, fk.parent_rel_oid, fk.child_column_no, fk.flags});
+        }
+        if (fk.parent_rel_oid == oid) {
+            access.fkeys_in.push_back(
+                ForeignKeyRef{fk.fk_id, fk.child_rel_oid, fk.child_column_no, fk.flags});
+        }
+    }
+
     return cache_.PutTableAccess(std::move(access));
 }
 
@@ -1244,6 +1268,83 @@ StatusOr<SysCabinRow> Catalog::FindCabinOnColumn(Oid rel_oid, std::uint16_t col_
         if (row.rel_oid == rel_oid && row.column_no == col_pos) return row;
     }
     return Status::NotFound("no cabin on this column");
+}
+
+StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16_t child_column_no,
+                                                  Oid parent_rel_oid, std::uint16_t flags) {
+    auto child = InitTableAccess(child_rel_oid);
+    if (!child.ok()) return child.status();
+    auto parent = InitTableAccess(parent_rel_oid);
+    if (!parent.ok()) return parent.status();
+
+    if (child_column_no >= child.value()->schema.columns.size()) {
+        return Status::InvalidArgument("catalog: relation oid " + std::to_string(child_rel_oid) +
+                                       " has no column at position " +
+                                       std::to_string(child_column_no));
+    }
+
+    // The declaration's own checks, shared with the CREATE TABLE pre-check
+    // (foreign_key.hpp) so the two doors cannot answer differently.
+    if (Status s = CheckForeignKeyDeclaration(*parent.value(),
+                                              child.value()->schema.columns[child_column_no],
+                                              child_column_no);
+        !s.ok()) {
+        return s.WithContext("catalog");
+    }
+    if (Status s = CheckForeignKeyColocation(*parent.value(), *child.value()); !s.ok()) {
+        return s.WithContext("catalog");
+    }
+
+    // One foreign key per (child, column). A second would mean a column
+    // referencing two parents, which under F1 - the value *is* a parent's
+    // Keystone id - would require one id to name a row in both.
+    if (FindForeignKeyOnColumn(child_rel_oid, child_column_no).ok()) {
+        return Status::AlreadyExists("catalog: this column already has a foreign key");
+    }
+
+    auto fk_id = AllocateRowId(kSysFkeysTable);
+    if (!fk_id.ok()) return fk_id.status();
+
+    SysFkeyRow row{};
+    row.fk_id = fk_id.value();
+    row.child_rel_oid = child_rel_oid;
+    row.parent_rel_oid = parent_rel_oid;
+    row.child_column_no = child_column_no;
+    row.flags = flags;
+
+    if (Status s = InsertRow(store_, kCatalogPageFkeys, row, kBootstrapXid); !s.ok()) {
+        return s;
+    }
+
+    // **Bumped**, and note which entries it has to reach: a new foreign key
+    // stales `fkeys_out` on the child *and* `fkeys_in` on the parent, which
+    // is a relation this call's arguments do not otherwise touch. That is
+    // why this is a global invalidation and not an in-place update of the
+    // child's cached entry.
+    BumpVersion("sys.fkeys create");
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("catalog", "created foreign key " + std::to_string(row.fk_id) + " on relation "
+                                  "oid " + std::to_string(child_rel_oid) + " column " +
+                                  std::to_string(child_column_no) + " referencing relation oid " +
+                                  std::to_string(parent_rel_oid));
+    }
+    return row.fk_id;
+}
+
+StatusOr<std::vector<SysFkeyRow>> Catalog::ListForeignKeys() {
+    return ScanAll<SysFkeyRow>(store_, kCatalogPageFkeys);
+}
+
+StatusOr<SysFkeyRow> Catalog::FindForeignKeyOnColumn(Oid child_rel_oid,
+                                                     std::uint16_t child_column_no) {
+    auto rows = ListForeignKeys();
+    if (!rows.ok()) return rows.status();
+    for (const SysFkeyRow& row : rows.value()) {
+        if (row.child_rel_oid == child_rel_oid && row.child_column_no == child_column_no) {
+            return row;
+        }
+    }
+    return Status::NotFound("no foreign key on this column");
 }
 
 StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {

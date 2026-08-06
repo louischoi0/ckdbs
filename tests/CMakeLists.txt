@@ -48,6 +48,7 @@ add_executable(kds_tests
     waystone_replay_test.cpp
     waystone_contract_test.cpp
     cabin_contract_test.cpp
+    foreign_key_test.cpp
     cabin_store_test.cpp
     scheduler_test.cpp
     log_test.cpp

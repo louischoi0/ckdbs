@@ -91,6 +91,20 @@ inline constexpr Oid kSysAccessStatsTable = 130;
 // every Cabin, which is invariant-preserving by C1's own terms.
 inline constexpr Oid kSysCabinsTable = 131;
 
+// sys.fkeys (docs/impl-foreign-keys.md §1): one row per foreign key - a
+// child relation's column that references a parent relation's Keystone id.
+// Fixed-offset typed rows like every catalog relation except
+// sys.pattern_defs, since nothing in the row is variable-width.
+//
+// **There is no parent-column field, and that is F1, not an omission.** A
+// foreign key references the parent's engine pk and never a business key,
+// so the parent side is fixed by the invariant that issues it: ids are
+// issue-once (docs/keystoneid-invariant.md K1) and a pk cannot be updated
+// (invariant 11), which is what buys ON UPDATE CASCADE never having to
+// exist and a stored reference being able to dangle but never to
+// mis-attribute.
+inline constexpr Oid kSysFkeysTable = 132;
+
 // Starting point for user-created object oids. **KNOWN GAP:** this counter
 // is in-memory only and resets on every process restart, so two objects
 // created in different runs can share an oid. Persisting it means adding a
@@ -120,6 +134,7 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 inline constexpr PageId kCatalogPagePatternDefs = 10;
 inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
+inline constexpr PageId kCatalogPageFkeys = 13;
 
 // Every fixed catalog page, in id order.
 //
@@ -133,6 +148,7 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,     kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,     kCatalogPagePatterns,
     kCatalogPagePatternDefs, kCatalogPageAccessStats, kCatalogPageCabins,
+    kCatalogPageFkeys,
 };
 
 // Transaction id stamped on every bootstrap-time tuple - mirrors

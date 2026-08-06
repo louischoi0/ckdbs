@@ -270,4 +270,32 @@ StatusOr<SysCabinRow> SysCabinRow::Decode(std::span<const std::byte> bytes) {
     return row;
 }
 
+std::array<std::byte, SysFkeyRow::kOnDiskSize> SysFkeyRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kFkIdOffset, &fk_id, sizeof(fk_id));
+    std::memcpy(base + kChildRelOidOffset, &child_rel_oid, sizeof(child_rel_oid));
+    std::memcpy(base + kParentRelOidOffset, &parent_rel_oid, sizeof(parent_rel_oid));
+    std::memcpy(base + kChildColumnNoOffset, &child_column_no, sizeof(child_column_no));
+    std::memcpy(base + kFlagsOffset, &flags, sizeof(flags));
+    return buf;
+}
+
+StatusOr<SysFkeyRow> SysFkeyRow::Decode(std::span<const std::byte> bytes) {
+    if (Status s = CheckSize(bytes, kOnDiskSize); !s.ok()) return s;
+
+    SysFkeyRow row{};
+    const std::byte* base = bytes.data();
+    std::memcpy(&row.fk_id, base + kFkIdOffset, sizeof(row.fk_id));
+    std::memcpy(&row.child_rel_oid, base + kChildRelOidOffset, sizeof(row.child_rel_oid));
+    std::memcpy(&row.parent_rel_oid, base + kParentRelOidOffset, sizeof(row.parent_rel_oid));
+    std::memcpy(&row.child_column_no, base + kChildColumnNoOffset, sizeof(row.child_column_no));
+    std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
+    // Pure, like its neighbours: a `child_column_no == 0` - a foreign key
+    // claiming the child's own pk - is CreateForeignKey()'s to refuse, and
+    // whether the two oids name live relations is a question this function
+    // has no catalog to ask.
+    return row;
+}
+
 }  // namespace kds::catalog

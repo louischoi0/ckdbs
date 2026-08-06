@@ -448,6 +448,47 @@ private:
     // survive a restart at all. Reporting them together is what makes "this
     // Cabin exists but has never been probed" visible.
     DispatchOutcome HandleShowCabins();
+
+    // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
+    //
+    // The write paths' three entry points. They live here rather than in
+    // `exec/` because they are what turns a verdict into a *reply* - which
+    // needs relation names, the access-statistics switch, and the retryable
+    // spelling - while the verdicts themselves are `exec::fk_check`'s, so
+    // there is exactly one implementation of each check.
+
+    // A read view of **now**, for a constraint check. See §4: not the
+    // statement's snapshot, because a check reads latest state.
+    StatusOr<txn::ReadView> CheckView(const WriteScope& scope);
+
+    // The forward check for one foreign key and one written value (§2).
+    // OK when the value is not an id at all - the row codec has the better
+    // error for that.
+    Status CheckForeignKeyOnWrite(const catalog::TableAccess& child,
+                                  const catalog::ForeignKeyRef& fk, const parser::AstValue& value,
+                                  const txn::ReadView& check_view);
+
+    // The reverse check for every foreign key pointing at `parent` (§3),
+    // run per row about to be delete-marked.
+    Status CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent, std::uint64_t parent_pk,
+                                       const txn::ReadView& check_view);
+
+    // One access shape, recorded by hand because a check is not a step
+    // (FK-M4). Never fails a write.
+    void RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_oid, std::uint64_t column_mask);
+
+    // A relation's name for a human-readable reply, or `oid=<n>` when it
+    // cannot be resolved. Inspection surfaces only: catalog rows store oids
+    // so they stay fixed width, and printing one is where the name is
+    // needed. Never called from an execute path - resolving a name during
+    // execution is what parser-v2.md I11 forbids.
+    std::string RelationNameOf(catalog::Oid oid);
+
+    // Every declared foreign key (docs/impl-foreign-keys.md §1). One line
+    // per sys.fkeys row: which relation references which, through which
+    // column. Prints `action=RESTRICT` unconditionally, because v1 has one
+    // action (F2) - a stored action field would have exactly one value.
+    DispatchOutcome HandleShowFkeys();
     DispatchOutcome HandleInsert(std::string_view line, Session& session);
 
     // The statement itself, inside a write scope the wrapper opened and

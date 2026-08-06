@@ -615,6 +615,82 @@ constexpr bool IsCabinServing(const SysCabinRow& row) noexcept {
     return row.status == kCabinStatusActive;
 }
 
+// ---- sys.fkeys --------------------------------------------------------
+//
+// One row per foreign key: a column of a child relation whose value is a
+// **parent relation's Keystone id** (`docs/impl-foreign-keys.md` §1, F1).
+//
+// The row is what a foreign key *is*; the checks it drives are FK-M2 and
+// FK-M3 and read nothing else. Two fields that a reader expects and will
+// not find, both by decision rather than by omission:
+//
+//   - **no parent column.** F1 fixes the parent side to the Keystone id
+//     for every foreign key there can be. That is what makes ON UPDATE
+//     CASCADE unnecessary rather than deferred - the referenced key is
+//     immutable (invariant 11) - and what makes a stale reference able to
+//     dangle but never to name a different row (K1's issue-once).
+//   - **no action.** v1 is RESTRICT / NO ACTION only (F2), so an action
+//     field would have exactly one legal value. CASCADE and SET NULL need
+//     the budget-interaction design F2 defers, and adding the field then is
+//     a format-version event like any other - the same trade `SysCabinRow`
+//     made in the other direction with `observed_ct`, and here the field
+//     that would be speculative is the one left out.
+//
+// Field order by descending alignment, so the on-disk offsets and the
+// struct's coincide and every field carries an offsetof assert.
+struct SysFkeyRow {
+    // From AllocateRowId(kSysFkeysTable) - the persistent sequence in
+    // sys.fkeys' own sys.tables row, for the reason SysCabinRow records:
+    // GenerateUserOid() restarts at kUserOidStart every boot and this row
+    // is persisted.
+    std::uint64_t fk_id;
+
+    // The relation holding the reference, and the one referenced. Both are
+    // needed on the row because both directions are read: the forward check
+    // (child INSERT/UPDATE) starts from the child, the reverse check
+    // (parent DELETE) from the parent.
+    Oid child_rel_oid;
+    Oid parent_rel_oid;
+
+    // The referencing column's schema position. **Never 0**: column 0 is
+    // the Keystone pk, which is the child's own identity and not a field of
+    // it, so a 0 here is a row no writer produces.
+    std::uint16_t child_column_no;
+
+    // kFkNullable and whatever joins it. A never-written row decodes to 0,
+    // which reads as "not nullable" - the reading under which the check
+    // always runs. That direction is deliberate: a zeroed row must not be
+    // able to switch a constraint off.
+    std::uint16_t flags;
+
+    static constexpr std::size_t kFkIdOffset = 0;
+    static constexpr std::size_t kChildRelOidOffset = 8;
+    static constexpr std::size_t kParentRelOidOffset = 16;
+    static constexpr std::size_t kChildColumnNoOffset = 24;
+    static constexpr std::size_t kFlagsOffset = 26;
+    static constexpr std::size_t kOnDiskSize = kFlagsOffset + sizeof(std::uint16_t);
+
+    std::array<std::byte, kOnDiskSize> Encode() const;
+    static StatusOr<SysFkeyRow> Decode(std::span<const std::byte> bytes);
+};
+
+static_assert(offsetof(SysFkeyRow, fk_id) == SysFkeyRow::kFkIdOffset);
+static_assert(offsetof(SysFkeyRow, child_rel_oid) == SysFkeyRow::kChildRelOidOffset);
+static_assert(offsetof(SysFkeyRow, parent_rel_oid) == SysFkeyRow::kParentRelOidOffset);
+static_assert(offsetof(SysFkeyRow, child_column_no) == SysFkeyRow::kChildColumnNoOffset);
+static_assert(offsetof(SysFkeyRow, flags) == SysFkeyRow::kFlagsOffset);
+static_assert(SysFkeyRow::kOnDiskSize == 28);
+
+// MATCH SIMPLE: a NULL fk value skips the check (§2).
+//
+// **No writer sets it in v1**, because no column can hold a NULL - every
+// sys.columns row is written `notnull = true` and the row codec has no NULL
+// encoding. It is defined now so that the bit has a meaning fixed before
+// there is data to reinterpret, and because the alternative - deciding what
+// an unset flag means once NULLs exist - is how a stored 0 acquires a
+// second reading.
+inline constexpr std::uint16_t kFkNullable = 1u << 0;
+
 // Deepest directory a pattern's waystones can need, and therefore the
 // largest value `dir_depth` may hold.
 //

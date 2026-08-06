@@ -56,6 +56,21 @@ enum class StatusCode {
     // client on it. Failing after a bounded amount of work is the kinder
     // answer than a connection that never replies.
     kResourceExhausted,
+    // A write would leave a foreign key unsatisfied (docs/impl-foreign-keys.md
+    // F2): a child row referencing a parent that is not there, or a parent
+    // delete with a child still referencing it. RESTRICT, the only action v1
+    // has.
+    //
+    // **Not retryable, and its sibling case deliberately is.** A check that
+    // meets a *committed* absence will meet it again, so this code says
+    // "wrong statement". A check that meets an **in-flight** writer instead
+    // answers kTxnConflict, because that one may succeed on a retry - which
+    // is the whole of F3's fail-fast rule, and why it needs no code of its
+    // own: the retryable case already had one, and clients already retry on
+    // it. Splitting the two verdicts across an existing retryable code and a
+    // new non-retryable one keeps the wire's `retryable` bit - a
+    // compatibility surface (docs/protocol.md §11) - one code wide.
+    kFkViolation,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -98,6 +113,9 @@ public:
     }
     static Status ResourceExhausted(std::string msg) {
         return Status(StatusCode::kResourceExhausted, std::move(msg));
+    }
+    static Status FkViolation(std::string msg) {
+        return Status(StatusCode::kFkViolation, std::move(msg));
     }
 
     // The same failure, said with more context: "<prefix>: <message>",

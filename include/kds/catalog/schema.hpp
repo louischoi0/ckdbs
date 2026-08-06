@@ -100,6 +100,18 @@ struct RowLayout {
 // no var-heap page.
 bool SchemaCanSpill(const Schema& schema) noexcept;
 
+// One end of a foreign key, as the relation at the *other* end holds it
+// (docs/impl-foreign-keys.md §1). Which end `rel_oid` names depends on
+// which list it is in - the parent in `fkeys_out`, the child in `fkeys_in`
+// - because a relation reading its own list already knows which side it is
+// on, and a field saying so again is a field that can disagree.
+struct ForeignKeyRef {
+    std::uint64_t fk_id = 0;
+    Oid rel_oid = 0;
+    std::uint16_t column_no = 0;
+    std::uint16_t flags = 0;
+};
+
 struct TableAccess {
     Oid namespace_oid;
     Oid oid;
@@ -171,6 +183,40 @@ struct TableAccess {
     // re-derives the relationship between the mask and the vector.
     CabinRef CabinOn(std::uint16_t col_pos) const noexcept {
         return col_pos < cabin_ids.size() ? cabin_ids[col_pos] : CabinRef{};
+    }
+
+    // ---- Foreign keys at both ends (docs/impl-foreign-keys.md §1) -------
+    //
+    // `fkeys_out` is this relation as the **child**: each entry names the
+    // parent it references and the local column holding the reference. The
+    // forward check (§2) reads it when a row is inserted or an fk column is
+    // updated.
+    //
+    // `fkeys_in` is this relation as the **parent**: each entry names a
+    // child that references it and that child's column. The reverse check
+    // (§3) reads it when a row is deleted.
+    //
+    // Both are DDL facts by the same test the rest of this struct passes -
+    // a foreign key is declared at CREATE TABLE and there is no ALTER - so
+    // they are cached here and dropped by the same BumpVersion() that drops
+    // everything else. Note the direction that makes the bump necessary
+    // rather than tidy: creating a *child* changes the **parent's**
+    // `fkeys_in`, so an FK-creating DDL stales an entry for a relation it
+    // does not name.
+    //
+    // Neither is consulted per tuple. A write path reads the list once and
+    // then works from what it compiled, exactly as §1 requires.
+    std::vector<ForeignKeyRef> fkeys_out;
+    std::vector<ForeignKeyRef> fkeys_in;
+
+    // The foreign key on `col_pos`, or nullptr. Linear over a list whose
+    // length is the number of references a relation declares - single
+    // digits - so no index is built for it.
+    const ForeignKeyRef* ForeignKeyOn(std::uint16_t col_pos) const noexcept {
+        for (const ForeignKeyRef& fk : fkeys_out) {
+            if (fk.column_no == col_pos) return &fk;
+        }
+        return nullptr;
     }
 };
 

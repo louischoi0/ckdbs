@@ -96,6 +96,59 @@ StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
                                          std::uint64_t undo_ptr,
                                          std::vector<std::byte>& payload);
 
+// ---- Check visibility (docs/impl-foreign-keys.md §4) ---------------------
+//
+// What a **constraint check** is entitled to see, which is not what a reader
+// is. A foreign key check cannot read at the statement snapshot: a parent
+// committed-deleted after that snapshot was taken must still fail the check
+// (latest-state semantics, as in commercial engines), and an in-flight
+// writer must be *seen* rather than looked through, so the check can fail
+// fast instead of blocking (F3).
+//
+// **It never walks the undo chain, and that is what makes it small.** The
+// latest state of a tuple is the version on its page; older versions are by
+// definition not the latest. So this is a pure function of the three header
+// fields, safe under a live page span, with no phase 2 and no scratch copy.
+//
+// It is *not* Classify with a different view, and the case that proves it is
+// an in-flight **insert** of the parent: `undo_ptr == 0` under an invisible
+// writer, which Classify answers kNoVersion - correct for a reader, since no
+// version is visible - and which a check must answer kBusy, because the row
+// may well be there a moment from now. That single disagreement is why this
+// is a sibling function rather than a flag on the other one.
+//
+// The caller supplies a view minted **at check time**
+// (TransactionManager::MintReadView), not the statement's. Under such a view
+// "not visible" means "in flight right now", which is exactly the question
+// F3 asks. A transaction's own uncommitted writes stay visible through
+// `own_trx_id`, so a check inside a transaction judges by that
+// transaction's own pending image with no special case here.
+enum class CheckVerdict : std::uint8_t {
+    // A row is there, at latest state.
+    kLive,
+    // No row is there: never inserted, or delete-marked by a writer this
+    // view can see.
+    kAbsent,
+    // Another transaction is writing this row and has not resolved. The
+    // answer depends on how it ends, so the check refuses now rather than
+    // waiting - there is nothing to wait *on* under a cooperative
+    // single-writer core.
+    kBusy,
+};
+
+// `undo_ptr` is deliberately absent from the parameter list: latest state
+// never consults it. See the note above.
+constexpr CheckVerdict CheckVisibility(const ReadView& view, std::uint64_t trx_id,
+                                       bool deleted) noexcept {
+    if (!view.Visible(trx_id)) return CheckVerdict::kBusy;
+    return deleted ? CheckVerdict::kAbsent : CheckVerdict::kLive;
+}
+
+inline CheckVerdict CheckVisibility(const ReadView& view,
+                                    const heap::PageView::Tuple& tuple) noexcept {
+    return CheckVisibility(view, tuple.trx_id, tuple.deleted);
+}
+
 // What a reader carries: the view, and the log it steps back through. One
 // struct because the two are useless apart - a view with no log cannot
 // resolve an invisible writer, and a log with no view has no question to

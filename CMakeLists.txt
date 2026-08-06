@@ -45,6 +45,7 @@ add_library(kds
     src/catalog/rows.cpp
     src/catalog/keystone_budget.cpp
     src/catalog/schema.cpp
+    src/catalog/foreign_key.cpp
     src/catalog/row_layout.cpp
     src/catalog/sys_object_registry.cpp
     src/stats/waystone_page.cpp
@@ -76,6 +77,7 @@ add_library(kds
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp
     src/exec/row_codec.cpp
+    src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
     src/exec/step_compiler.cpp
     src/exec/chain_frame.cpp

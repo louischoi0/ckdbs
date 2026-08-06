@@ -202,6 +202,28 @@ struct ColumnDef {
     // it - a cabin on the primary key is refused, and the refusal has to
     // say where.
     std::uint32_t cabin_byte_offset = 0;
+
+    // The relation this column references, from an optional `REFERENCES
+    // <table>` suffix (docs/impl-foreign-keys.md §1), or empty for a column
+    // that references nothing:
+    //
+    //     account_id int REFERENCES accounts
+    //
+    // **No parent column is written and none may be.** F1 fixes the parent
+    // side to the referenced relation's Keystone id for every foreign key
+    // there can be, so `REFERENCES accounts(id)` would spell out the only
+    // thing it could mean - and `REFERENCES accounts(balance)` would spell
+    // out something the engine cannot do. Accepting the parenthesized form
+    // and checking it is a grammar that exists to reject itself; the parser
+    // refuses the '(' with a position instead.
+    //
+    // Unreserved, like the `CABIN` suffix beside it: a column may still be
+    // named `references`, and the fingerprint is untouched because a
+    // keyword hashes exactly as an identifier does.
+    std::string references_table;
+
+    // Where `REFERENCES` was written, for a refusal that can point at it.
+    std::uint32_t references_byte_offset = 0;
 };
 
 struct CreateTableStmt {

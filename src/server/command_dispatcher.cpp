@@ -13,9 +13,11 @@
 
 #include <vector>
 
+#include "kds/catalog/foreign_key.hpp"
 #include "kds/catalog/keystone_budget.hpp"
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/chain_frame.hpp"
+#include "kds/exec/fk_check.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
@@ -99,6 +101,13 @@ std::string HexEncode(std::span<const std::byte> bytes) {
 std::string ErrorReply(const Status& status) {
     if (status.code() == StatusCode::kTxnConflict) {
         return "ERR TXN_CONFLICT retryable=1 " + status.message();
+    }
+    // A constraint the statement broke, as opposed to a race it lost. Given
+    // a spelling of its own for the same reason TXN_CONFLICT has one - a
+    // client library switches on it - and carrying `retryable=0` explicitly
+    // rather than by omission, so the two look alike where they are read.
+    if (status.code() == StatusCode::kFkViolation) {
+        return "ERR FK_VIOLATION retryable=0 " + status.message();
     }
     return "ERR " + status.message();
 }
@@ -199,6 +208,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
         if (IEquals(sub, "BUDGET")) return HandleShowBudget();
         if (IEquals(sub, "CABINS")) return HandleShowCabins();
+        if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -707,6 +717,13 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
            << " leaves=" << (leaves.ok() ? std::to_string(leaves.value()) : std::string("?"));
     }
 
+    // The relation's access entry, for the facts that are not on a
+    // sys.columns row - today its foreign keys. Best-effort like the btree
+    // shape above: a bootstrap catalog relation has no sys.columns rows and
+    // therefore no access entry, and that is a relation with no foreign keys
+    // rather than a DESCRIBE that should fail.
+    auto access = catalog_.InitTableAccess(oid.value());
+
     for (std::size_t i = 0; i < schema.columns.size(); ++i) {
         const catalog::SysColumnRow& col = schema.columns[i];
 
@@ -739,6 +756,18 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
             os << " cabin=" << (policy == catalog::kCabinPolicyDisabled  ? "no"
                                 : policy == catalog::kCabinPolicyEnabled ? "yes"
                                                                          : "auto");
+
+            // What this column references, if anything
+            // (docs/impl-foreign-keys.md §1). Read from the relation's own
+            // outgoing list rather than by asking the catalog per column,
+            // which is the same absence rule the cabin mask follows.
+            if (access.ok()) {
+                if (const catalog::ForeignKeyRef* fk =
+                        access.value()->ForeignKeyOn(static_cast<std::uint16_t>(i));
+                    fk != nullptr) {
+                    os << " references=" << RelationNameOf(fk->rel_oid);
+                }
+            }
         }
     }
 
@@ -926,6 +955,170 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
     return {os.str(), false};
 }
 
+// ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) ----------------
+
+StatusOr<txn::ReadView> CommandDispatcher::CheckView(const WriteScope& scope) {
+    // **Minted here, not taken from the statement.** A constraint check reads
+    // latest state, so it needs a view of *now*: a parent committed-deleted
+    // after this statement's snapshot must still fail the check, and an
+    // in-flight writer must be seen rather than looked through (§4).
+    //
+    // The writer's own id goes in, so a transaction's own uncommitted rows
+    // satisfy its own constraints - the table's fourth row, with no special
+    // case anywhere.
+    if (txn_ == nullptr) return txn::ReadView::Everything();
+    return txn_->MintReadView(WriterId(scope));
+}
+
+void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_oid,
+                                       std::uint64_t column_mask) {
+    // FK-M4. The checks are not steps (fk_check.hpp says why), so the shape
+    // they touch is recorded by hand where a step would have been counted by
+    // being one. Same relation and the same call every other access goes
+    // through, so `SHOW ACCESS` compares constraint cost against query cost
+    // without anyone having to know which is which.
+    if (!access_stats_enabled_) return;
+    Status recorded = catalog_.RecordAccess(exec::StoredAccessKind(kind), rel_oid, column_mask,
+                                            static_cast<std::uint64_t>(NowNs()));
+    // Dropped deliberately: a statistic that could fail a write would be a
+    // worse trade than no statistic (catalog.hpp says so at the source).
+    (void)recorded;
+}
+
+Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& child,
+                                                 const catalog::ForeignKeyRef& fk,
+                                                 const parser::AstValue& value,
+                                                 const txn::ReadView& check_view) {
+    // A value that is not an id cannot reference one. Left alone rather than
+    // failed here: the row codec refuses it a moment later with a message
+    // about the column's declared type, which is the better error - a type
+    // mistake reported as a constraint violation sends the reader looking at
+    // the wrong table.
+    if (value.type != parser::ValueType::kInt || value.int_val < 0) return Status::OK();
+
+    auto parent = catalog_.InitTableAccess(fk.rel_oid);
+    if (!parent.ok()) return parent.status();
+
+    auto verdict = exec::CheckParentPresent(page_store_, *parent.value(),
+                                            static_cast<std::uint64_t>(value.int_val), check_view,
+                                            &budget_);
+    if (!verdict.ok()) return verdict.status();
+
+    // The pk column, which is the only column a foreign key ever probes (F1).
+    RecordFkAccess(exec::AccessKind::kLookup, fk.rel_oid, 1);
+
+    const std::string column =
+        fk.column_no < child.schema.columns.size()
+            ? std::string(catalog::NameView(child.schema.columns[fk.column_no].name))
+            : std::to_string(fk.column_no);
+
+    switch (verdict.value()) {
+        case exec::FkVerdict::kPass:
+            return Status::OK();
+        case exec::FkVerdict::kBusy:
+            return Status::TxnConflict("row id=" + std::to_string(value.int_val) + " of '" +
+                                       RelationNameOf(fk.rel_oid) +
+                                       "' is being written by another transaction, so the "
+                                       "foreign key on '" +
+                                       column + "' cannot be checked yet");
+        case exec::FkVerdict::kViolation:
+            break;
+    }
+    return Status::FkViolation("'" + column + "' references row id=" +
+                               std::to_string(value.int_val) + " of '" +
+                               RelationNameOf(fk.rel_oid) + "', which does not exist");
+}
+
+Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess& parent,
+                                                      std::uint64_t parent_pk,
+                                                      const txn::ReadView& check_view) {
+    // RESTRICT (F2): the first child that still references this row refuses
+    // the delete. No action of any kind is taken on the child - v1 never
+    // writes to the other relation, which is what CASCADE would start.
+    for (const catalog::ForeignKeyRef& fk : parent.fkeys_in) {
+        auto child = catalog_.InitTableAccess(fk.rel_oid);
+        if (!child.ok()) return child.status();
+
+        exec::FkReverseOptions options;
+        const catalog::TableAccess::CabinRef cabin = child.value()->CabinOn(fk.column_no);
+        if (cabins_ != nullptr && cabin.id != 0) {
+            options.cabins = cabins_;
+            options.cabin_id = cabin.id;
+        }
+
+        auto outcome = exec::CheckNoChildReferences(page_store_, *child.value(), fk.column_no,
+                                                    parent_pk, check_view, options, &budget_);
+        if (!outcome.ok()) return outcome.status();
+
+        // A cabin-served check probed one value's set; a walk read the
+        // relation filtered on one column. Two different shapes, recorded as
+        // what they were.
+        RecordFkAccess(outcome.value().served_from_cabin ? exec::AccessKind::kCabinProbe
+                                                         : exec::AccessKind::kFilterScan,
+                       fk.rel_oid, std::uint64_t{1} << fk.column_no);
+
+        const std::string column =
+            fk.column_no < child.value()->schema.columns.size()
+                ? std::string(catalog::NameView(child.value()->schema.columns[fk.column_no].name))
+                : std::to_string(fk.column_no);
+
+        switch (outcome.value().verdict) {
+            case exec::FkVerdict::kPass:
+                continue;
+            case exec::FkVerdict::kBusy:
+                return Status::TxnConflict("a row of '" + RelationNameOf(fk.rel_oid) +
+                                           "' referencing id=" + std::to_string(parent_pk) +
+                                           " is being written by another transaction");
+            case exec::FkVerdict::kViolation:
+                return Status::FkViolation("row id=" + std::to_string(parent_pk) +
+                                           " is still referenced by '" +
+                                           RelationNameOf(fk.rel_oid) + "." + column + "'");
+        }
+    }
+    return Status::OK();
+}
+
+std::string CommandDispatcher::RelationNameOf(catalog::Oid oid) {
+    if (auto tables = catalog_.ListTables(); tables.ok()) {
+        for (const catalog::SysObjectRow& obj : tables.value()) {
+            if (obj.oid == oid) return std::string(catalog::NameView(obj.name));
+        }
+    }
+    return "oid=" + std::to_string(oid);
+}
+
+DispatchOutcome CommandDispatcher::HandleShowFkeys() {
+    auto rows = catalog_.ListForeignKeys();
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    std::ostringstream os;
+    os << "fkeys=" << rows.value().size();
+
+    for (const catalog::SysFkeyRow& row : rows.value()) {
+        os << "\\n";
+        os << "fk_id=" << row.fk_id;
+        os << " child=" << RelationNameOf(row.child_rel_oid);
+
+        os << " column=";
+        auto child = catalog_.InitTableAccess(row.child_rel_oid);
+        if (child.ok() && row.child_column_no < child.value()->schema.columns.size()) {
+            os << catalog::NameView(child.value()->schema.columns[row.child_column_no].name);
+        } else {
+            os << row.child_column_no;
+        }
+
+        // The parent column is not printed because there is not one: the
+        // reference is to the parent's Keystone id, always (F1). Printing
+        // the pk's name would suggest a choice was made.
+        os << " parent=" << RelationNameOf(row.parent_rel_oid);
+        os << " action=RESTRICT";
+        os << " nullable=" << ((row.flags & catalog::kFkNullable) != 0 ? "yes" : "no");
+    }
+    return {os.str(), false};
+}
+
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
@@ -978,10 +1171,72 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
         schema.columns.push_back(row);
     }
 
+    // ---- REFERENCES, checked before anything is created -----------------
+    //
+    // A foreign key is a **constraint**, so it does not get the Cabin's
+    // treatment below, where a failure is reported as a warning and the
+    // table is created anyway: a relation that says REFERENCES and enforces
+    // nothing is worse than a refused CREATE TABLE, and there is no DROP
+    // TABLE to undo one with. Everything decidable without the child
+    // relation existing is therefore decided here, with nothing written.
+    struct PendingForeignKey {
+        std::uint16_t column_no;
+        catalog::Oid parent_oid;
+        std::string parent_name;
+    };
+    std::vector<PendingForeignKey> pending_fkeys;
+
+    for (std::size_t i = 0; i < stmt.columns.size(); ++i) {
+        const parser::ColumnDef& col = stmt.columns[i];
+        if (col.references_table.empty()) continue;
+
+        auto parent_oid = catalog_.FindTableOidByName(col.references_table);
+        if (!parent_oid.ok()) {
+            return {"ERR column '" + col.name + "' references unknown relation '" +
+                        col.references_table + "' (byte " +
+                        std::to_string(col.references_byte_offset) + ")",
+                    false};
+        }
+        auto parent = catalog_.InitTableAccess(parent_oid.value());
+        if (!parent.ok()) {
+            return {"ERR " + parent.status().message(), false};
+        }
+
+        // The shared declaration checks (catalog/foreign_key.hpp) - the same
+        // ones Catalog::CreateForeignKey() applies at the door, so a
+        // declaration cannot pass here and fail there.
+        if (Status s = catalog::CheckForeignKeyDeclaration(
+                *parent.value(), schema.columns[i], static_cast<std::uint16_t>(i));
+            !s.ok()) {
+            return {"ERR " + s.message() + " (byte " +
+                        std::to_string(col.references_byte_offset) + ")",
+                    false};
+        }
+        pending_fkeys.push_back(PendingForeignKey{static_cast<std::uint16_t>(i),
+                                                  parent_oid.value(), col.references_table});
+    }
+
     auto oid =
         catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema, stmt.clustered);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
+    }
+
+    // The constraints, now that there is a child relation to hang them on.
+    // What can still fail here is the colocation check (F5), which needs the
+    // child's assigned owner core, and catalog I/O. Either leaves a created
+    // relation behind and is reported as an error naming that - the honest
+    // reply, since nothing can take the relation back.
+    for (const PendingForeignKey& fk : pending_fkeys) {
+        auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
+        if (!created.ok()) {
+            return {"ERR relation '" + stmt.table_name + "' was created (oid " +
+                        std::to_string(oid.value()) +
+                        ") but its foreign key on column " + std::to_string(fk.column_no) +
+                        " referencing '" + fk.parent_name +
+                        "' was not: " + created.status().message(),
+                    false};
+        }
     }
 
     // ---- `CABIN` on a column creates one now (docs/feat-cabin.md) -------
@@ -1242,6 +1497,25 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
                     std::string(catalog::NameView(ta.schema.columns.front().name)) +
                     "' - it is autoincrement and engine-assigned",
                 false};
+    }
+
+    // ---- The forward check (docs/impl-foreign-keys.md §2) ---------------
+    //
+    // **Before the id is allocated**, which is a stronger form of §2's
+    // "before the heap write": a refused row costs no undo work *and* no
+    // Keystone id. VALUES supplies the columns after the pk, so a column at
+    // schema position c is at index c-1.
+    if (!ta.fkeys_out.empty()) {
+        auto view = CheckView(scope);
+        if (!view.ok()) return {ErrorReply(view.status()), false};
+        for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
+            if (fk.column_no == 0 || fk.column_no > stmt.values.size()) continue;
+            if (Status s = CheckForeignKeyOnWrite(ta, fk, stmt.values[fk.column_no - 1],
+                                                  view.value());
+                !s.ok()) {
+                return {ErrorReply(s), false};
+            }
+        }
     }
 
     auto id = catalog_.AllocateRowId(oid.value());
@@ -2042,6 +2316,33 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     exec::ChainFrame frame;
     frame.Open(schemas, /*parent=*/nullptr);
 
+    // ---- Which foreign keys this SET list touches (§2) -------------------
+    //
+    // Resolved once, here: an UPDATE that changes no fk column must cost
+    // nothing, and asking per row would mean a name comparison per row per
+    // foreign key to answer a question about the *statement*.
+    std::vector<std::pair<const catalog::ForeignKeyRef*, const parser::AstValue*>> fk_assignments;
+    for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
+        if (fk.column_no >= ta.schema.columns.size()) continue;
+        const std::string_view column = catalog::NameView(ta.schema.columns[fk.column_no].name);
+        for (const auto& assignment : stmt.assignments) {
+            if (assignment.col_name != column) continue;
+            fk_assignments.emplace_back(&fk, &assignment.val);
+            break;
+        }
+    }
+
+    // Minted once per statement rather than per row. Nothing can join or
+    // leave the live set while this statement runs: a write to this relation
+    // can only come from the core that owns it, which is this one, and it is
+    // running this statement (crosscore.md CC3).
+    txn::ReadView check_view = txn::ReadView::Everything();
+    if (!fk_assignments.empty()) {
+        auto view = CheckView(scope);
+        if (!view.ok()) return {ErrorReply(view.status()), false};
+        check_view = view.value();
+    }
+
     std::uint32_t updated = 0;
     std::uint32_t pages_touched = 0;
     PageId last_page = kInvalidPageId;
@@ -2116,6 +2417,19 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             if (Status s = txn_->CheckWriteConflict(*scope.txn, trx_id, id.value()); !s.ok()) {
                 return s;
             }
+        }
+
+        // ---- The forward check, for an fk column this SET touches (§2) --
+        //
+        // Per matched row, after the row has qualified and the cheap
+        // conflict check has passed. The *value* is statement-constant - a
+        // SET assigns a literal - so this repeats one descent per row where
+        // one would do; hoisting it is safe only for an UPDATE that matches
+        // at least one row, which is not known until one does, and the
+        // probe memo that would have absorbed the repetition is in the step
+        // VM this path does not use (fk_check.hpp's amendment).
+        for (const auto& [fk, value] : fk_assignments) {
+            if (Status s = CheckForeignKeyOnWrite(ta, *fk, *value, check_view); !s.ok()) return s;
         }
 
         // The row as it stands *before* the SET list is applied, kept only
@@ -2568,6 +2882,14 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     exec::ChainFrame frame;
     frame.Open(schemas, /*parent=*/nullptr);
 
+    // Minted once per statement, for the reason UPDATE's copy records.
+    txn::ReadView check_view = txn::ReadView::Everything();
+    if (!ta.fkeys_in.empty()) {
+        auto view = CheckView(scope);
+        if (!view.ok()) return {ErrorReply(view.status()), false};
+        check_view = view.value();
+    }
+
     std::uint32_t deleted = 0;
 
     auto mark = [&](PageId page_id, heap::PageView& page, std::uint16_t slot) -> Status {
@@ -2604,6 +2926,19 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
         if (scope.txn != nullptr) {
             if (Status s = txn_->CheckWriteConflict(*scope.txn, trx_id, id.value()); !s.ok()) {
+                return s;
+            }
+        }
+
+        // ---- The reverse check (docs/impl-foreign-keys.md §3) ----------
+        //
+        // RESTRICT: a row still referenced may not be deleted. Run per
+        // qualifying row, since the id being deleted *is* the value every
+        // child is checked against, and before the mark - the same
+        // check-before-write ordering INSERT uses, and here it also means a
+        // refused delete leaves no undo record behind.
+        if (!ta.fkeys_in.empty()) {
+            if (Status s = CheckNoChildrenBeforeDelete(ta, id.value(), check_view); !s.ok()) {
                 return s;
             }
         }
