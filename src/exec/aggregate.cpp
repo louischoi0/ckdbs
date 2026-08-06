@@ -40,7 +40,26 @@ std::string DescribeGroup(const std::vector<parser::AstValue>& keys) {
 StatusOr<Aggregator> Aggregator::Create(const AggregateSpec& spec,
                                         std::span<const std::string> labels,
                                         AggregateLimits limits) {
-    Aggregator agg(spec, labels, limits);
+    Aggregator agg;
+    if (Status s = agg.Reset(spec, labels, limits); !s.ok()) return s;
+    return agg;
+}
+
+Status Aggregator::Reset(const AggregateSpec& spec, std::span<const std::string> labels,
+                         AggregateLimits limits) {
+    spec_ = &spec;
+    labels_ = labels;
+    limits_ = limits;
+
+    // `clear()` throughout, never a fresh container: every one of these
+    // keeps its capacity, which is the whole point of reusing the object.
+    groups_.clear();
+    index_.clear();
+    key_scratch_.clear();
+    out_scratch_.clear();
+    distinct_entries_ = 0;
+
+    Aggregator& agg = *this;
 
     // A non-aggregate item is a grouping column carried into the output,
     // which AG5 already enforced at compile. Resolving *which* key it is
@@ -75,7 +94,7 @@ StatusOr<Aggregator> Aggregator::Create(const AggregateSpec& spec,
     if (spec.group_keys.empty()) {
         agg.groups_.push_back(agg.NewGroup());
     }
-    return agg;
+    return Status::OK();
 }
 
 bool Aggregator::NeedsDistinct(const AggregateItem& item) noexcept {

@@ -85,6 +85,30 @@ public:
                                        std::span<const std::string> labels,
                                        AggregateLimits limits = {});
 
+    // An aggregator with nothing to fold. Usable only after `Reset`.
+    Aggregator() = default;
+
+    // Points a **reused** aggregator at one statement's fold, keeping every
+    // buffer's capacity: the group vector, the index's buckets, the key
+    // scratch and the output scratch (workplan AP03).
+    //
+    // The dispatcher already hoists `trail_scratch_` and `replay_scratch_`
+    // for the same reason and against the same measurement - constructing a
+    // collector per statement cost 18% on a point join - and a fold costs
+    // about **4 microseconds of server CPU** on a pk lookup, roughly 6.5% of
+    // what the whole statement spends there, almost all of it setup rather
+    // than per-row work.
+    //
+    // **`spec` and `labels` are borrowed for the statement, not for the
+    // aggregator's life.** They live on the `StepChain` being executed, so a
+    // reused aggregator holds dangling pointers between statements by
+    // construction - which is safe only because nothing reads it there.
+    // `Reset` is what makes each statement's borrow explicit, and is the
+    // reason this is not a constructor argument on a member that outlives
+    // every chain.
+    Status Reset(const AggregateSpec& spec, std::span<const std::string> labels,
+                 AggregateLimits limits = {});
+
     // Folds one row of the chain's output. Called from the statement's row
     // sink, once per row the chain emits.
     Status Accumulate(const ChainFrame& frame);

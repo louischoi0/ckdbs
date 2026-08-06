@@ -182,22 +182,65 @@ FEES = (
     ("cargo-insurance", 112, BASIS_PER_MILLE, 8),
 )
 
+# The freight's own price, in minor units per m^3, before any fee. Jittered
+# per booking so `revenue` is not a multiple of one constant, which would
+# make a lost update arithmetically invisible in a verify pass.
+BASE_RATE_PER_CBM = 2_500
+RATE_JITTER = 400
+
 COUNTRIES = ("KR", "US", "JP", "GB", "DE", "SG", "HK", "AU", "NL", "CN")
 SHIP_TYPES = 6
 ORG_TYPES = 4
 
-# Volume is milli-m^3 throughout (S2-8). A ship carries 20,000 to 250,000
-# CBM; a cargo is 5 to 400 CBM, so a voyage fills after a few hundred
-# bookings - which is what makes the capacity limit reachable inside a
-# 60-second run rather than a limit that exists only in the schema.
-SHIP_CAPACITY_MIN_CBM, SHIP_CAPACITY_MAX_CBM = 20_000, 250_000
+# Volume is milli-m^3 throughout (S2-8). A cargo is 5 to 400 CBM.
 CARGO_MIN_CBM, CARGO_MAX_CBM = 5, 400
 MILLI = 1_000
 
-# Credit is what the customer axis is bounded by, and it is deliberately
-# reachable for the same reason: a limit nothing ever hits is not an
-# invariant, it is a column.
-CREDIT_LIMIT_MIN, CREDIT_LIMIT_MAX = 5_000_000_00, 400_000_000_00
+# **Both limits are sized to the run's own demand, not written as
+# constants**, and that is the difference between a scenario that measures
+# rejection and one that only claims to. A fixed 20,000-250,000 CBM ship is
+# unreachable at 400 cargos and trivially full at 2,000,000, so a fixed
+# number makes the capacity axis a property of the flags rather than of the
+# workload - and the two rejection classes are half of what S2-6 counts.
+#
+# So: expected demand per voyage is (cargos x mean cargo CBM) / voyages, and
+# a ship's capacity is that times a spread. A ship at the bottom of the
+# spread fills and starts refusing; one at the top never does. Same
+# construction for credit, over expected spend per customer. The headroom
+# flags scale both, and 1.0 means "sized to exactly this run's demand".
+CAPACITY_SPREAD = (0.5, 2.5)
+CREDIT_SPREAD = (0.4, 2.0)
+
+# A cargo's declared value, in minor units: 10,000.00 to 2,000,000.00. The
+# per-mille fees price off it, so its spread is most of the spread in what a
+# booking costs.
+DECLARED_MIN, DECLARED_MAX = 10_000_00, 2_000_000_00
+
+# A booking's total is its freight amount plus fees. The three route-agnostic
+# per-CBM fees come to 2,700 per m^3 against a 2,500 base rate, so a booking
+# costs a little over twice its freight - which is what sizes credit.
+FEE_MULTIPLE = 2.2
+
+# **Two floors, and they are the same rule twice.** No voyage may be too
+# small for the largest cargo that exists, and no customer's credit may be
+# smaller than the most expensive booking that can be priced. Either one
+# creates a row that is refused by every counterparty forever: it returns to
+# the pool on each rejection, is drawn again, and drives a rejection rate
+# with nothing behind it. A limit is meant to bind by *accumulation* - after
+# a voyage has filled, after a customer has spent - and never on the first
+# attempt.
+CAPACITY_FLOOR_CBM = CARGO_MAX_CBM * 2 * MILLI
+
+# The worst case a booking can price: the largest cargo, every per-CBM fee
+# this rule set can match, and every per-mille fee against the highest
+# declared value. Times three, so a customer at the floor can accumulate
+# rather than being stopped at one.
+MAX_PER_CBM_FEES = 1_450 + 900 + 350 + 6_200 + 700
+MAX_PER_MILLE = 3 + 8
+CREDIT_FLOOR = 3 * (
+    CARGO_MAX_CBM * (BASE_RATE_PER_CBM + RATE_JITTER + MAX_PER_CBM_FEES)
+    + DECLARED_MAX * MAX_PER_MILLE // 1000
+    + 50_000)
 
 # Epoch day of 2026-01-01, which the simulated business clock counts from.
 DAY0 = (datetime.date(2026, 1, 1) - datetime.date(1970, 1, 1)).days
@@ -352,7 +395,23 @@ def explain_ddl_failure(base, suffix, reply, cabin, fk):
 
 # ---- load ----------------------------------------------------------------
 
-def load_organizations(exec_, table, count, rng, phase):
+def demand_of(args):
+    """What this run is expected to ask of the fleet and of the customers.
+
+    Computed once, from the flags, before anything is loaded - both limits
+    are derived from it, which is what keeps the two rejection axes
+    reachable at any scale (see CAPACITY_SPREAD)."""
+    mean_cbm = (CARGO_MIN_CBM + CARGO_MAX_CBM) / 2 * MILLI
+    per_voyage = mean_cbm * args.cargos / max(args.operations, 1)
+    mean_total = mean_cbm / MILLI * BASE_RATE_PER_CBM * FEE_MULTIPLE
+    per_customer = mean_total * args.cargos / max(args.organizations, 1)
+    return {
+        "cbm_per_voyage": per_voyage * args.capacity_headroom,
+        "spend_per_customer": per_customer * args.credit_headroom,
+    }
+
+
+def load_organizations(exec_, table, count, demand, rng, phase):
     """Returns [(org_id, credit_limit)] in creation order.
 
     `outstanding` opens at 0 and is the column the booking transaction
@@ -361,7 +420,8 @@ def load_organizations(exec_, table, count, rng, phase):
     is no server-side CHECK to lean on)."""
     orgs = []
     for i in range(count):
-        limit = rng.randint(CREDIT_LIMIT_MIN, CREDIT_LIMIT_MAX)
+        limit = max(CREDIT_FLOOR,
+                    int(demand["spend_per_customer"] * rng.uniform(*CREDIT_SPREAD)))
         reply = send(exec_, phase,
                      f"INSERT INTO {table} VALUES "
                      f"('ORG{i:06d}', 'org{i:06d}', "
@@ -375,12 +435,12 @@ def load_organizations(exec_, table, count, rng, phase):
     return orgs
 
 
-def load_ships(exec_, table, count, rng, phase):
+def load_ships(exec_, table, count, demand, rng, phase):
     """Returns [(ship_id, capacity_cbm)] in creation order."""
     ships = []
     for i in range(count):
-        capacity = rng.randint(SHIP_CAPACITY_MIN_CBM,
-                               SHIP_CAPACITY_MAX_CBM) * MILLI
+        capacity = max(CAPACITY_FLOOR_CBM,
+                       int(demand["cbm_per_voyage"] * rng.uniform(*CAPACITY_SPREAD)))
         reply = send(exec_, phase,
                      f"INSERT INTO {table} VALUES "
                      f"('IMO{9000000 + i}', 'vessel{i:05d}', "
@@ -428,7 +488,7 @@ def load_cargos(exec_, table, count, orgs, rng, phase):
         org_id, _limit = rng.choice(orgs)
         cargo_type = rng.randrange(len(CARGO_TYPES))
         cbm = rng.randint(CARGO_MIN_CBM, CARGO_MAX_CBM) * MILLI
-        value = rng.randint(1_000_00, 5_000_000_00)
+        value = rng.randint(DECLARED_MIN, DECLARED_MAX)
         origin = rng.randrange(PORTS)
         destination = (origin + rng.randint(1, PORTS - 1)) % PORTS
         reply = send(exec_, phase,
@@ -502,11 +562,445 @@ def load_recipes(exec_, table, fees, hot_routes, rng, phase):
     return rows
 
 
+def fees_by_id(fees):
+    """The rate card re-keyed by the Keystone id the server issued, which is
+    what a recipe row names. `load_fees` keys by `fee_code` because that is
+    the stable business number this file writes; the booking joins on
+    neither, it looks up by id."""
+    return {fee_id: (basis, amount) for fee_id, basis, amount in fees.values()}
+
+
 def route_code(origin, destination):
     """One packed route. PORTS is small and fixed, so this is a stable
     integer key rather than a hash - two runs of this tool address the same
     route with the same number."""
     return origin * PORTS + destination
+
+
+# ---- the booking transaction (docs/scenario2-freight.md §3) --------------
+#
+# The measured unit (S2-1): one cargo placed on one voyage. Eight statements
+# under one BEGIN/COMMIT - two pk lookups, two filtered reads, two ledger
+# inserts, two btree updates - and three possible outcomes, counted
+# separately because a TPS number that folds them together is a wrong number
+# (S2-6):
+#
+#   committed   the business said yes and the engine agreed
+#   rejected    the business said no  - over the voyage's capacity, or over
+#               the customer's credit limit. A *correct* outcome, not a
+#               failure, and the driver rolls back and moves on
+#   conflicted  ERR TXN_CONFLICT - another booker wrote one of the two rows
+#               this one updates. Retried from the top, because every input
+#               it read is stale by definition
+#
+# **The two checks are client-side**, between statements 4 and 5, and they
+# have to be: the engine has no arithmetic in a select list and no CHECK
+# constraint, so there is no server-side expression that could refuse a
+# booking. What the engine provides is the part that matters - that the
+# read the check was made against and the write the check authorized are one
+# atomic unit - and `--no-txn` is what measures the difference.
+
+# How far the simulated business clock runs. Only the fee validity windows
+# read it, and they are wider than this on purpose: a booking refused
+# because every rule expired would be a rejection this scenario does not
+# mean to measure.
+HORIZON_DAYS = 180
+
+COMMITTED, REJECTED_CAPACITY, REJECTED_CREDIT, CONFLICTED, FAILED = (
+    "committed", "rejected-capacity", "rejected-credit", "conflicted", "failed")
+
+
+def select_rows(reply):
+    """The data rows of a SELECT reply, each split into its fields.
+
+    None when the statement failed, which is not the same as an empty list -
+    the caller has to be able to tell "no such row" from "no answer"."""
+    if reply.startswith("ERR"):
+        return None
+    lines = [line for line in reply.split("\n") if line]
+    return [line.split(",") for line in lines[1:]]
+
+
+def sum_value(rows):
+    """A `SELECT SUM(...)` answer as an integer.
+
+    SUM over no rows is NULL by AG4's standard semantics, and the text
+    protocol spells that `NULL`. Reading it as zero is right *here* -
+    "nothing booked on this voyage yet" - and would not be right in general,
+    which is why the coercion lives at the two call sites' shared helper and
+    not in `select_rows`."""
+    if not rows or not rows[0] or rows[0][0].strip() in ("", "NULL"):
+        return 0
+    return int(rows[0][0])
+
+
+def is_conflict(reply):
+    """`ERR TXN_CONFLICT retryable=1 ...` - the one error worth
+    special-casing (docs/client-manual.md). Every other ERR is a defect in
+    this driver or in the engine, and is counted as one."""
+    return reply.startswith("ERR") and "TXN_CONFLICT" in reply
+
+
+def charge_lines(recipe_rows, fee_book, route, day, cbm, declared_value, max_fees):
+    """The fees that apply to one booking, priced.
+
+    Computed here rather than read per fee, because the rate card is
+    immutable for the length of a run: `fees` is loaded once and `recipes`
+    is read per booking, which is the split the workload actually has - the
+    rules are what a query filters on, the amounts are reference data.
+
+    `max_fees` caps the list at N by priority. The generated rule set bounds
+    itself at 8 matches (§10), so the cap is inert at its default of 0 and
+    exists to *lower* the fan-out for a variance experiment, never to make
+    the workload work."""
+    lines = []
+    for fee_id, rc, priority, valid_from, valid_to in recipe_rows:
+        if rc != ROUTE_ANY and rc != route:
+            continue
+        if not (valid_from <= day <= valid_to):
+            continue
+        priced = fee_book.get(fee_id)
+        if priced is None:
+            continue
+        basis, amount = priced
+        if basis == BASIS_FLAT:
+            charged = amount
+        elif basis == BASIS_PER_CBM:
+            charged = amount * (cbm // MILLI)
+        else:
+            charged = declared_value * amount // 1000
+        lines.append((priority, fee_id, charged))
+    lines.sort()
+    if max_fees > 0:
+        lines = lines[:max_fees]
+    return [(fee_id, charged) for _priority, fee_id, charged in lines]
+
+
+class BookingState:
+    """Everything one booker draws from, and everything it believes it
+    wrote.
+
+    The belief half is what `--verify` checks the engine against. It is kept
+    per relation rather than as one running total, because the two questions
+    a torn transaction raises are different: "is this voyage's stored
+    `booked_cbm` the sum of its freights" is answerable from the engine
+    alone, and "did a write this driver counted get lost" is only answerable
+    against what the driver thinks it sent."""
+
+    def __init__(self, operations, orgs, cargos, fee_book, rng):
+        self.operations = operations
+        self.voyage = {op: (ship, capacity, route_code(origin, destination))
+                       for op, ship, capacity, origin, destination in operations}
+        self.credit_limit = dict(orgs)
+        self.cargos = cargos
+        # A cargo ships once. Drawn without replacement so a booking never
+        # re-books one, which would make `booked_cbm` grow past what the
+        # cargo relation can account for and turn I1 into a false alarm.
+        self.pool = list(range(len(cargos)))
+        rng.shuffle(self.pool)
+        self.fee_book = fee_book
+        # Driver-side belief, keyed by row id.
+        self.booked_cbm = {op: 0 for op, _s, _c, _o, _d in operations}
+        self.revenue = {op: 0 for op, _s, _c, _o, _d in operations}
+        self.outstanding = {org: 0 for org, _limit in orgs}
+        self.freight_total = {}      # freight_id -> what the customer owes
+        self.freight_charges = {}    # freight_id -> number of charge rows
+
+    def take_cargo(self):
+        """The pool holds *indices*, so returning a cargo is O(1) - a
+        rejection rate in the tens of percent must not cost a linear scan of
+        200,000 rows each time."""
+        return self.pool.pop() if self.pool else None
+
+    def give_back(self, index):
+        """A rejected or conflicted booking returns its cargo to the pool:
+        it was never shipped, and a run that consumed cargos on rejection
+        would exhaust the pool at a rate set by the rejection rate."""
+        self.pool.append(index)
+
+
+def book_once(client, tables, state, args, phases, rng, day):
+    """One booking attempt. Returns one of the five outcome constants.
+
+    A `conflicted` return means the caller should retry: nothing was
+    written, the transaction is rolled back, and every value this attempt
+    read is by definition stale."""
+    index = state.take_cargo()
+    if index is None:
+        return None
+    cargo_id, _cargo_org, cargo_type, cbm, declared_value = state.cargos[index]
+    op_id = rng.choice(state.operations)[0]
+    ship_id, capacity, route = state.voyage[op_id]
+
+    def finish(outcome, opened):
+        if opened:
+            client("ROLLBACK")
+        # **A capacity rejection returns the cargo; a credit rejection
+        # retires it.** The asymmetry is not a tuning choice: `outstanding`
+        # only ever grows - nothing in this workload pays an invoice - so a
+        # cargo its customer could not afford now can never be afforded
+        # later, and putting it back means drawing it again forever. A
+        # voyage that was full is a different matter: the next draw picks a
+        # different voyage, and this cargo may well fit it.
+        if outcome not in (COMMITTED, REJECTED_CREDIT):
+            state.give_back(index)
+        return outcome
+
+    opened = False
+    if args.txn:
+        if client("BEGIN").startswith("ERR"):
+            state.give_back(cargo)
+            return FAILED
+        opened = True
+
+    # 1. the cargo - a pk lookup, and the only statement that tells the
+    #    booking who the customer is.
+    reply = send(client, phases["cargo-lookup"],
+                 f"SELECT org_id, cargo_type, cbm, declared_value "
+                 f"FROM {tables['cargos']} WHERE id = {cargo_id}")
+    rows = select_rows(reply)
+    if rows is None:
+        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+    if not rows:
+        return finish(FAILED, opened)
+    org_id = int(rows[0][0])
+
+    # 2. the customer's credit - the second lookup, and the second row this
+    #    transaction will update.
+    reply = send(client, phases["credit-lookup"],
+                 f"SELECT credit_limit, outstanding FROM "
+                 f"{tables['organizations']} WHERE id = {org_id}")
+    rows = select_rows(reply)
+    if rows is None:
+        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+    if not rows:
+        return finish(FAILED, opened)
+    credit_limit, outstanding = int(rows[0][0]), int(rows[0][1])
+
+    # 3. the capacity, one of two ways. `cached` trusts the derived column;
+    #    `scan` re-derives it from the ledger every booking. Identical
+    #    outcomes, very different cost - the gap is what the derived column
+    #    is worth (S2-7).
+    if args.capacity_mode == "cached":
+        reply = send(client, phases["capacity-read"],
+                     f"SELECT booked_cbm FROM {tables['operations']} "
+                     f"WHERE id = {op_id}")
+        rows = select_rows(reply)
+        if rows is None:
+            return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        booked = int(rows[0][0]) if rows else 0
+    else:
+        reply = send(client, phases["capacity-read"],
+                     f"SELECT SUM(cbm) FROM {tables['freights']} "
+                     f"WHERE operation_id = {op_id}")
+        rows = select_rows(reply)
+        if rows is None:
+            return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        booked = sum_value(rows)
+
+    # 4. the pricing rules for this cargo type - a non-pk equality, so a
+    #    FilterScan, and the statement `--cabin` serves.
+    reply = send(client, phases["recipe-read"],
+                 f"SELECT fee_id, route_code, priority, valid_from, valid_to "
+                 f"FROM {tables['recipes']} WHERE cargo_type = {cargo_type}")
+    rows = select_rows(reply)
+    if rows is None:
+        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+    recipe_rows = [(int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4]))
+                   for r in rows]
+
+    # The two checks. Client-side, because there is no server-side
+    # expression that could make them - and this is the seam `--no-txn`
+    # measures: the read above and the write below are one unit or they are
+    # not.
+    if booked + cbm > capacity:
+        return finish(REJECTED_CAPACITY, opened)
+
+    rate = BASE_RATE_PER_CBM + rng.randint(-RATE_JITTER, RATE_JITTER)
+    freight_amount = (cbm // MILLI) * rate
+    lines = charge_lines(recipe_rows, state.fee_book, route, day, cbm,
+                         declared_value, args.max_fees)
+    total = freight_amount + sum(charged for _fee, charged in lines)
+
+    if outstanding + total > credit_limit:
+        return finish(REJECTED_CREDIT, opened)
+
+    # 5. the order line.
+    reply = send(client, phases["freight-insert"],
+                 f"INSERT INTO {tables['freights']} VALUES "
+                 f"({op_id}, {ship_id}, {cargo_id}, {cbm}, {rate}, {day}, 0)")
+    freight_id = inserted_id(reply)
+    if freight_id is None:
+        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+
+    # 6. what it was charged.
+    for fee_id, charged in lines:
+        reply = send(client, phases["charge-insert"],
+                     f"INSERT INTO {tables['charges']} VALUES "
+                     f"({freight_id}, {fee_id}, {charged}, {day})")
+        if reply.startswith("ERR"):
+            return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+
+    # 7. the voyage. The value written depends on the value read at step 3,
+    #    which is exactly the lost-update shape.
+    reply = send(client, phases["operation-update"],
+                 f"UPDATE {tables['operations']} SET booked_cbm = {booked + cbm}, "
+                 f"revenue = {state.revenue[op_id] + total} WHERE id = {op_id}")
+    if reply.startswith("ERR"):
+        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+
+    # 8. the customer. Same shape, different axis - two bookers collide here
+    #    when they carry one customer's cargo, and at step 7 when they load
+    #    one voyage.
+    reply = send(client, phases["org-update"],
+                 f"UPDATE {tables['organizations']} SET "
+                 f"outstanding = {outstanding + total} WHERE id = {org_id}")
+    if reply.startswith("ERR"):
+        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+
+    if opened:
+        reply = send(client, phases["commit"], "COMMIT")
+        if reply.startswith("ERR"):
+            client("ROLLBACK")
+            state.give_back(index)
+            return CONFLICTED if is_conflict(reply) else FAILED
+
+    state.booked_cbm[op_id] = booked + cbm
+    state.revenue[op_id] = state.revenue[op_id] + total
+    state.outstanding[org_id] = outstanding + total
+    state.freight_total[freight_id] = total
+    state.freight_charges[freight_id] = len(lines)
+    return COMMITTED
+
+
+def run_bookings(client, tables, state, args, phases, rng):
+    """Drives bookings until `--seconds` or `--bookings` runs out.
+
+    One booker in-process: `S2-03` is what makes this several processes, and
+    until it does, no conflict can occur - the retry loop below is built and
+    counted here so that when contention arrives it is measured rather than
+    discovered."""
+    counts = {COMMITTED: 0, REJECTED_CAPACITY: 0, REJECTED_CREDIT: 0,
+              CONFLICTED: 0, FAILED: 0}
+    retries = 0
+    exhausted = False
+    booking = phases["booking"]
+    started = time.perf_counter()
+    deadline = started + args.seconds
+
+    while time.perf_counter() < deadline:
+        if args.bookings and counts[COMMITTED] >= args.bookings:
+            break
+        elapsed = time.perf_counter() - started
+        day = DAY0 + min(HORIZON_DAYS - 1,
+                         int(elapsed / max(args.seconds, 1e-9) * HORIZON_DAYS))
+        t0 = time.perf_counter()
+        outcome = None
+        for attempt in range(args.max_retries + 1):
+            if attempt:
+                retries += 1
+            outcome = book_once(client, tables, state, args, phases, rng, day)
+            if outcome != CONFLICTED:
+                break
+            counts[CONFLICTED] += 1
+        if outcome is None:
+            exhausted = True
+            break
+        # A conflict that exhausted its retries is charged to the conflict
+        # count already; only a terminal outcome is charged to the unit.
+        if outcome != CONFLICTED:
+            counts[outcome] += 1
+            booking.record(time.perf_counter() - t0, "" if outcome != FAILED else "ERR")
+
+    return {
+        "counts": counts,
+        "retries": retries,
+        "elapsed": time.perf_counter() - started,
+        "cargo_pool_exhausted": exhausted,
+        "cargo_pool_left": len(state.pool),
+    }
+
+
+# ---- verification (docs/scenario2-freight.md §4) -------------------------
+
+def verify(client, tables, state, sample, rng):
+    """I1-I4, on a sample. Returns (checks, failures, first).
+
+    What is being asked is not "is the arithmetic right" - the driver did
+    the arithmetic - but **whether a write this driver counted as applied
+    was lost**, and whether the engine's own two accounts of the same
+    quantity agree with each other. Under `--txn` both must hold; under
+    `--no-txn` and concurrency they need not, and that contrast is the
+    reason the flag exists."""
+    checks = failures = 0
+    first = None
+
+    def fail(message):
+        nonlocal failures, first
+        failures += 1
+        if first is None:
+            first = message
+
+    booked = [op for op, total in state.booked_cbm.items() if total > 0]
+    for op_id in rng.sample(booked, min(sample, len(booked))):
+        rows = select_rows(client(f"SELECT SUM(cbm) FROM {tables['freights']} "
+                                  f"WHERE operation_id = {op_id}"))
+        stored = select_rows(client(f"SELECT booked_cbm FROM {tables['operations']} "
+                                    f"WHERE id = {op_id}"))
+        if rows is None or stored is None or not stored:
+            continue
+        ledger = sum_value(rows)
+        column = int(stored[0][0])
+        checks += 1
+        # I1: the derived column against the ledger it derives from.
+        if ledger != column:
+            fail(f"I1 operation {op_id}: booked_cbm={column}, "
+                 f"SUM(freights.cbm)={ledger}")
+        elif column != state.booked_cbm[op_id]:
+            fail(f"I1 operation {op_id}: stored {column}, driver wrote "
+                 f"{state.booked_cbm[op_id]} - a write was lost")
+        # I2: and neither of them past what the ship can carry.
+        _ship, capacity, _route = state.voyage[op_id]
+        checks += 1
+        if column > capacity:
+            fail(f"I2 operation {op_id}: booked_cbm={column} over capacity {capacity}")
+
+    owing = [org for org, total in state.outstanding.items() if total > 0]
+    for org_id in rng.sample(owing, min(sample, len(owing))):
+        rows = select_rows(
+            client(f"SELECT f.id, f.cbm, f.price_per_cbm FROM {tables['freights']} AS f "
+                   f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
+                   f"WHERE c.org_id = {org_id}"))
+        stored = select_rows(client(f"SELECT outstanding FROM "
+                                    f"{tables['organizations']} WHERE id = {org_id}"))
+        if rows is None or stored is None or not stored:
+            continue
+        # I3: recomputed from the rows the engine returns, never re-read
+        # from a column that would only be agreeing with itself.
+        recomputed = 0
+        for freight in rows:
+            freight_id, cbm, rate = int(freight[0]), int(freight[1]), int(freight[2])
+            charged = select_rows(client(f"SELECT SUM(amount) FROM {tables['charges']} "
+                                         f"WHERE freight_id = {freight_id}"))
+            recomputed += (cbm // MILLI) * rate + sum_value(charged)
+        checks += 1
+        if recomputed != int(stored[0][0]):
+            fail(f"I3 organization {org_id}: outstanding={stored[0][0]}, "
+                 f"recomputed from its freights and charges={recomputed}")
+
+    # I4: a freight's charge rows against the rule set replayed for it.
+    written = list(state.freight_charges)
+    for freight_id in rng.sample(written, min(sample, len(written))):
+        rows = select_rows(client(f"SELECT id FROM {tables['charges']} "
+                                  f"WHERE freight_id = {freight_id}"))
+        if rows is None:
+            continue
+        checks += 1
+        if len(rows) != state.freight_charges[freight_id]:
+            fail(f"I4 freight {freight_id}: {len(rows)} charge rows stored, "
+                 f"{state.freight_charges[freight_id]} written")
+
+    return checks, failures, first
 
 
 # ---- the capability probe (docs/scenario2-freight.md §6) -----------------
@@ -570,6 +1064,47 @@ def print_probe(results):
     print()
 
 
+def print_bookings(result, args):
+    """The three outcomes, separately (S2-6), and the TPS that only the
+    first of them earns."""
+    counts = result["counts"]
+    committed = counts[COMMITTED]
+    attempted = sum(counts.values()) - counts[CONFLICTED]
+    elapsed = result["elapsed"]
+    print("bookings")
+    print(f"  {'committed':<20}{committed:>10}"
+          f"{committed / elapsed if elapsed else 0:>12.1f} TPS")
+    for name in (REJECTED_CAPACITY, REJECTED_CREDIT):
+        share = 100.0 * counts[name] / attempted if attempted else 0.0
+        print(f"  {name:<20}{counts[name]:>10}{share:>11.1f}% of attempts")
+    print(f"  {'conflicted':<20}{counts[CONFLICTED]:>10}"
+          f"{result['retries']:>11} retries")
+    if counts[FAILED]:
+        print(f"  {'failed':<20}{counts[FAILED]:>10}"
+              f"  <- not a rejection: an ERR this driver did not expect")
+    print()
+    print(f"  mode                 {'BEGIN/COMMIT' if args.txn else 'autocommit'}, "
+          f"capacity={args.capacity_mode}, max_fees="
+          f"{args.max_fees or 'uncapped'}")
+    if result["cargo_pool_exhausted"]:
+        print(f"  the cargo pool ran out before --seconds did: every cargo was "
+              f"booked.\n  Raise --cargos, or read the TPS as an average over a "
+              f"run that ended early.")
+    else:
+        print(f"  cargo pool left      {result['cargo_pool_left']}")
+
+    if "verify" in result:
+        checks, failures, first = result["verify"]
+        print()
+        print(f"verify (§4)          {checks} checks, {failures} failure(s)")
+        if first:
+            print(f"  first: {first}")
+        elif checks:
+            print("  I1 booked_cbm == SUM(freights.cbm), I2 within ship capacity,")
+            print("  I3 outstanding == recomputed charges, I4 charge rows == rules")
+    print()
+
+
 # ---- main ----------------------------------------------------------------
 
 def main():
@@ -597,6 +1132,48 @@ def main():
     parser.add_argument("--cargos", type=int, default=200000,
                         help="the bulk relation, and most of the load's wall "
                              "clock (default: 200000)")
+    parser.add_argument("--seconds", type=float, default=60.0,
+                        help="how long to book for (default: 60)")
+    parser.add_argument("--bookings", type=int, default=0, metavar="N",
+                        help="stop after N committed bookings; --seconds is "
+                             "then a ceiling (default: 0, time-based)")
+    parser.add_argument("--capacity-mode", choices=("cached", "scan"),
+                        default="cached",
+                        help="how the voyage's used capacity is read: `cached` "
+                             "trusts operations.booked_cbm (one pk lookup), "
+                             "`scan` re-derives it with SUM over the ledger "
+                             "every booking (default: cached)")
+    parser.add_argument("--txn", dest="txn", action="store_true", default=True,
+                        help="run each booking inside BEGIN/COMMIT (default)")
+    parser.add_argument("--no-txn", dest="txn", action="store_false",
+                        help="send the eight statements as eight transactions. "
+                             "The checks then read state the writes cannot be "
+                             "assumed to still match - which is what §4's "
+                             "invariants are for")
+    parser.add_argument("--max-retries", type=int, default=5,
+                        help="attempts after a TXN_CONFLICT before the booking "
+                             "is abandoned (default: 5)")
+    parser.add_argument("--max-fees", type=int, default=0, metavar="N",
+                        help="cap the fees applied to one booking at N by "
+                             "priority. The rule set bounds itself at 8, so 0 "
+                             "(the default) is uncapped and this only lowers it")
+    parser.add_argument("--verify", type=int, default=0, metavar="N",
+                        help="after the run, check §4's invariants over a "
+                             "sample of N operations, organizations and "
+                             "freights (default: 0, off)")
+    parser.add_argument("--isolation", choices=("read-committed", "repeatable-read"),
+                        default=None,
+                        help="SET ISOLATION LEVEL for the booking connection "
+                             "(default: the server's)")
+    parser.add_argument("--capacity-headroom", type=float, default=1.0,
+                        help="scales every ship's capacity against this run's "
+                             "expected demand per voyage. 1.0 sizes the fleet "
+                             "to exactly the cargo it is offered, so the "
+                             "smaller ships fill and start refusing; raise it "
+                             "to make the capacity axis quiet (default: 1.0)")
+    parser.add_argument("--credit-headroom", type=float, default=1.0,
+                        help="the same, for customer credit against expected "
+                             "spend (default: 1.0)")
     parser.add_argument("--hot-routes", type=int, default=6,
                         help="routes carrying a route-specific pricing rule, "
                              "which is what makes a booking's fee count vary "
@@ -653,9 +1230,11 @@ def main():
         phases.append(p)
         return p
 
-    orgs = load_organizations(client, tables["organizations"],
-                              args.organizations, rng, phase("load-organizations"))
-    ships = load_ships(client, tables["ships"], args.ships, rng, phase("load-ships"))
+    demand = demand_of(args)
+    orgs = load_organizations(client, tables["organizations"], args.organizations,
+                              demand, rng, phase("load-organizations"))
+    ships = load_ships(client, tables["ships"], args.ships, demand, rng,
+                       phase("load-ships"))
     if not orgs or not ships:
         abort("the load produced no organizations or no ships; every later phase "
               "addresses rows by the ids it returns",
@@ -677,8 +1256,32 @@ def main():
         "freights": 0, "charges": 0,
     }
 
-    if not args.load_only and operations and orgs:
+    if args.load_only:
+        print()
+        print("--load-only: stopping before the bookings. Drive this data file with")
+        print(f"  {sys.argv[0]} --suffix {suffix}")
+        result = None
+    else:
         print_probe(probe_reads(client, tables, operations[0][0], orgs[0][0]))
+        if args.isolation:
+            level = args.isolation.replace("-", " ").upper()
+            reply = client(f"SET ISOLATION LEVEL {level}")
+            if reply.startswith("ERR"):
+                abort(f"--isolation {args.isolation}", reply)
+        booking_phases = {
+            name: phase(name) for name in (
+                "booking", "cargo-lookup", "credit-lookup", "capacity-read",
+                "recipe-read", "freight-insert", "charge-insert",
+                "operation-update", "org-update", "commit")}
+        booking_phases["booking"].detail = (
+            f"{'BEGIN/COMMIT' if args.txn else 'autocommit'}, "
+            f"capacity={args.capacity_mode}")
+        state = BookingState(operations, orgs, cargos, fees_by_id(fees), rng)
+        result = run_bookings(client, tables, state, args, booking_phases, rng)
+        loaded["freights"] = result["counts"][COMMITTED]
+        loaded["charges"] = sum(state.freight_charges.values())
+        if args.verify:
+            result["verify"] = verify(client, tables, state, args.verify, rng)
 
     meta = {
         "engine": "ckdbs",
@@ -689,18 +1292,26 @@ def main():
         "table": f"scenario2_{suffix}",
         "loaded": loaded,
         "fk": args.fk, "cabin": args.cabin,
+        "txn": args.txn, "capacity_mode": args.capacity_mode,
         "seed": args.seed,
     }
     if args.server_log:
         durability = read_durability(args.server_log)
         if durability:
             meta["durability"] = durability
+    if result is not None:
+        meta["outcomes"] = result["counts"]
+        meta["retries"] = result["retries"]
+        meta["tps"] = (result["counts"][COMMITTED] / result["elapsed"]
+                       if result["elapsed"] > 0 else 0.0)
 
     report(phases, meta, footer=(
-        "S2-01 only: this tool builds and loads. It drives no booking",
-        "transaction, so there is no TPS number here by construction -",
-        "see docs/scenario2-freight.md §9 for what S2-02..S2-06 add.",
+        "S2-01/S2-02: this tool builds, loads and books. The reporter",
+        "process (S2-04) and the PostgreSQL twin (S2-05) are not here, and",
+        "one booker cannot conflict - see docs/scenario2-freight.md §9.",
     ))
+    if result is not None:
+        print_bookings(result, args)
     if args.json:
         write_json(args.json, meta, phases)
     if args.sync:

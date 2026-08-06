@@ -4,6 +4,7 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -577,7 +578,11 @@ private:
     // the reason ANALYZE is one: the two differ in what consumes the rows
     // and in nothing else, and a per-row `if` would put that difference
     // where it is paid for on every row of every statement.
-    DispatchOutcome RunAggregated(const exec::StepChain& chain, std::string header,
+    // `os` is the caller's buffer, already holding the column-heading line -
+    // taken by reference rather than as a copied header, because building a
+    // second `std::ostringstream` costs a stringbuf and a locale and was
+    // measured as most of the fold's per-statement overhead (AP03).
+    DispatchOutcome RunAggregated(const exec::StepChain& chain, std::ostringstream& os,
                                   exec::TrailCollector* trail, const exec::TrailReplay* replay,
                                   const std::optional<stats::InstanceKey>& instance,
                                   const txn::Snapshot& snapshot);
@@ -784,6 +789,19 @@ private:
     // AG07 makes the two numbers config keys; until then they are spec §6's
     // `[PROPOSED]` defaults.
     exec::AggregateLimits aggregate_limits_;
+
+    // The fold, **reused rather than constructed per statement** (workplan
+    // AP03). Same reason `trail_scratch_` and `replay_scratch_` beside it
+    // are hoisted, and the same shape of measurement: building one per
+    // statement cost about 4 microseconds of server CPU on a pk lookup,
+    // roughly 6.5% of what that statement spends there, nearly all of it
+    // allocation for buffers the previous statement had already sized.
+    //
+    // `Reset` points it at each statement's spec and labels, which live on
+    // that statement's chain - so between statements it holds pointers that
+    // are not valid, and nothing may read it there. That is the same
+    // contract `trail_scratch_` has with `Clear()`.
+    exec::Aggregator aggregator_;
 
     // Where a successful SELECT reports the tuples it found, or null when
     // nothing is recording - which is a valid production configuration

@@ -1,9 +1,12 @@
 # KDS Scenario 2 — Freight & Cargo (Workload Specification)
 
-**Status:** Plan confirmed 2026-08-06 (S2-1–S2-11, §0). **`S2-01` is built** —
-the eight relations, the loaders, `--schema-only` / `--load-only`, and the
-read probe that settled §6. Nothing is measured yet: no booking transaction
-exists, so there is no TPS number by construction.
+**Status:** Plan confirmed 2026-08-06 (S2-1–S2-11, §0). **`S2-01` and `S2-02`
+are built** — the eight relations, the loaders, `--schema-only` /
+`--load-only`, the read probe that settled §6, the booking transaction in
+both capacity modes, the three-way outcome accounting, and `--verify`. One
+booker cannot conflict, so the conflict counters are built and unexercised
+until `S2-03`, and no number here is a benchmark: `S2-06` owns the
+measurements.
 Deliverables: `tools/scenario2_freight.py`, `tools/pg_scenario2_freight.py`,
 `tools/compare_scenario2.py`, `bench/results-scenario2-freight.md`. Markers:
 `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/txn.md`,
@@ -169,6 +172,33 @@ booking through an aggregate over a FilterScan. The two must produce
 identical outcomes, and the gap between their TPS is what the derived column
 is worth.
 
+### 3.1 Both limits are sized to the run's demand `[CONFIRMED, built]`
+
+A ship of a fixed 20,000–250,000 CBM is unreachable at 400 cargos and
+trivially full at 2,000,000, so a constant makes the capacity axis a property
+of the *flags* rather than of the workload — and two of S2-6's three outcomes
+would be unobservable. `S2-02` therefore derives both limits from expected
+demand: a ship's capacity is `(cargos × mean CBM) / voyages` times a spread,
+a customer's credit is expected spend per customer times a spread, and
+`--capacity-headroom` / `--credit-headroom` scale each (1.0 = sized to
+exactly this run's demand). At the bottom of each spread the limit binds; at
+the top it never does.
+
+Two floors sit under that, and they are the same rule twice: **no voyage may
+be too small for the largest cargo, and no customer's credit smaller than the
+most expensive booking that can be priced.** Either one creates a row every
+counterparty refuses forever — drawn, rejected, returned, drawn again — which
+is a rejection rate with nothing behind it. A limit must bind by
+*accumulation*, never on the first attempt.
+
+One asymmetry follows from the same reasoning, and it is not a tuning choice.
+**A capacity rejection returns its cargo to the pool; a credit rejection
+retires it.** `outstanding` only ever grows — nothing in this workload pays an
+invoice — so a cargo its customer could not afford now can never be afforded
+later. Returning it means drawing it forever: the first build of `S2-02` did,
+and spent 96% of its attempts re-rejecting the same cargo. A full voyage is a
+different matter, because the next draw picks a different voyage.
+
 ---
 
 ## 4. The invariants `[CONFIRMED]`
@@ -252,10 +282,14 @@ All six reads §3 and §6 depend on are accepted by the engine as of
 | `--suffix` | timestamp | relation-name suffix, so runs share a data file |
 | **`--schema-only`** | off | **create the eight relations and exit.** No load, no workload, no measurement |
 | **`--load-only`** | off | create and load the reference data, then exit |
-| `--organizations`, `--ships`, `--operations`, `--cargos`, `--fees` | 2000 / 200 / 2000 / 200000 / 12 | load sizes |
-| `--bookers` | 4 | client processes |
+| `--organizations`, `--ships`, `--operations`, `--cargos` | 2000 / 200 / 2000 / 200000 | load sizes |
+| `--capacity-headroom`, `--credit-headroom` | 1.0 | scale each limit against expected demand (§3.1) |
+| `--bookers` | 4 | client processes (`S2-03`) |
 | `--seconds` | 60 | run length |
+| `--bookings` | 0 | stop after N commits; `--seconds` then a ceiling |
 | `--capacity-mode` | `cached` | `cached` \| `scan` (§3) |
+| `--max-retries` | 5 | attempts after a `TXN_CONFLICT` |
+| `--max-fees` | 0 | cap fees per booking by priority; 0 is uncapped (§10) |
 | `--txn` / `--no-txn` | **on** | explicit `BEGIN`/`COMMIT` (S2-2) |
 | `--contend` / `--no-contend` | `[OPEN]` | §5 |
 | `--manifest` / `--no-manifest` | on | the reporter process |
@@ -316,7 +350,7 @@ Each is a real limit as of 2026-08-06, not a preference:
 | Task | Delivers | Done when |
 |---|---|---|
 | `S2-01` **done** | schema, loaders, `--schema-only` / `--load-only`, the §6 join-aggregate probe | eight relations create on a fresh file; `--schema-only` exits without loading; the probe reports all six reads accepted. `--verify` moves to `S2-02`, which is where there is state worth verifying |
-| `S2-02` | the §3 transaction, one booker, both `--capacity-mode` values | a run commits, rejects and reports the three §S2-6 outcomes separately; `--verify` passes |
+| `S2-02` **done** | the §3 transaction, one booker, both `--capacity-mode` values, §3.1's demand sizing, `--verify` | a single run commits, rejects for capacity **and** rejects for credit, reports the three outcomes separately, and passes all four invariants in every flag combination |
 | `S2-03` | `--bookers`, `--contend`, the retry loop and its per-axis counters | conflicts are observed and retried, not counted as errors; §5's `[OPEN]` default is settled with both numbers measured |
 | `S2-04` | the `--manifest` reporter process | reporter latency reported beside TPS, as scenario0 does |
 | `S2-05` | `pg_scenario2_freight.py`, `compare_scenario2.py` | same schema, same transaction, same phase names; the two tools' JSON is diffable |

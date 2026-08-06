@@ -1953,13 +1953,12 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 // change what the chain read. That is AG1 - the fold consumes rows and has
 // no opinion about where they came from.
 DispatchOutcome CommandDispatcher::RunAggregated(
-    const exec::StepChain& chain, std::string header, exec::TrailCollector* trail,
+    const exec::StepChain& chain, std::ostringstream& os, exec::TrailCollector* trail,
     const exec::TrailReplay* replay, const std::optional<stats::InstanceKey>& instance,
     const txn::Snapshot& snapshot) {
-    auto aggregator = exec::Aggregator::Create(*chain.aggregate, chain.column_names,
-                                               aggregate_limits_);
-    if (!aggregator.ok()) {
-        return {"ERR " + aggregator.status().message(), false};
+    if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names, aggregate_limits_);
+        !s.ok()) {
+        return {"ERR " + s.message(), false};
     }
 
     // The fold's own failures - a SUM overflow, a cap - have to reach the
@@ -1969,7 +1968,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
-            if (Status s = aggregator.value().Accumulate(frame); !s.ok()) return s;
+            if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, budget_, trail, replay, cabins_, &snapshot);
@@ -1981,9 +1980,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         return {"ERR " + ran.message(), false};
     }
 
-    std::ostringstream os;
-    os << header;
-    Status emitted = aggregator.value().Finish(
+    Status emitted = aggregator_.Finish(
         [&](std::span<const parser::AstValue> row) -> Status {
             os << "\\n";
             bool first = true;
@@ -2028,22 +2025,24 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     // SUM that overflows fails the statement. Skipping it would make
     // ANALYZE describe an execution the client cannot reproduce, which is
     // the same reason replay is not skipped here.
-    std::optional<exec::Aggregator> aggregator;
-    if (chain.aggregated()) {
-        auto created = exec::Aggregator::Create(*chain.aggregate, chain.column_names,
-                                                aggregate_limits_);
-        if (!created.ok()) {
-            return {"ERR " + created.status().message(), false};
+    // The same hoisted aggregator the row-returning path uses. Safe to
+    // share because the two are mutually exclusive per statement: ANALYZE
+    // returns before the sink path is reached.
+    const bool folding = chain.aggregated();
+    if (folding) {
+        if (Status s = aggregator_.Reset(*chain.aggregate, chain.column_names,
+                                         aggregate_limits_);
+            !s.ok()) {
+            return {"ERR " + s.message(), false};
         }
-        aggregator.emplace(std::move(created.value()));
     }
 
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
             ++rows;
-            if (aggregator.has_value()) {
-                if (Status s = aggregator->Accumulate(frame); !s.ok()) return s;
+            if (folding) {
+                if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             }
             return storage::VisitControl::kContinue;
         },
@@ -2064,8 +2063,8 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     // what it has always been - the rows the *chain* produced - so the two
     // together say what the fold cost and what it collapsed to, which one
     // number could not.
-    if (aggregator.has_value()) {
-        os << " groups=" << aggregator->group_count();
+    if (folding) {
+        os << " groups=" << aggregator_.group_count();
     }
 
     // The statement's own pattern_id, in the same hex CREATE PATTERN
@@ -2286,7 +2285,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // and access statistics hold unchanged" a structural fact rather than a
     // list of things that were remembered.
     if (compiled.aggregated()) {
-        return RunAggregated(compiled, os.str(), trail, replay_ptr, instance, snapshot.value());
+        return RunAggregated(compiled, os, trail, replay_ptr, instance, snapshot.value());
     }
 
     Status ran = exec::Execute(
