@@ -1,6 +1,6 @@
 // Where a business transaction's time goes, layer by layer.
 //
-// `tools/stress_business.py` reports TPS for a four-statement transaction:
+// `tools/scenario0_stockmarket.py` reports TPS for a four-statement transaction:
 //
 //     INSERT INTO trades ...   the buy leg   (HEAP relation, logged)
 //     INSERT INTO trades ...   the sell leg

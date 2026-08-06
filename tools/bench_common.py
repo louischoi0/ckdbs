@@ -119,7 +119,7 @@ def report(phases, meta, footer=()):
     phases do, so a table without it beside them is unreadable.
 
     `meta['connections']` is optional and defaults to 1, which is what the
-    two single-connection drivers want. stress_business.py drives several
+    two single-connection drivers want. scenario0_stockmarket.py drives several
     processes at once, and a header claiming one connection over an
     aggregate throughput number would misread by exactly that factor.
     """

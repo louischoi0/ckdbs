@@ -11,7 +11,7 @@ entirely on two things the Cabin does not control** — how often the workload
 repeats a value, and whether the scan it replaces is actually the bottleneck.
 On the larger, disk-backed configuration it is a wash.
 
-The scenario is `tools/stress_business.py --cabin`: a brokerage book where
+The scenario is `tools/scenario0_stockmarket.py --cabin`: a brokerage book where
 one process executes trades (2 `INSERT trades` + 2 `UPDATE accounts` per
 transaction) while a separate process runs periodic reporting over
 `SELECT * FROM accounts WHERE user_id = <n>` — a non-pk equality on a foreign
@@ -46,7 +46,7 @@ Two servers, two fresh data files, identical arguments apart from `--cabin`.
 
 ```
 ./build-release/kds_server <fresh>.db --port <p> --log-level error
-python3 tools/stress_business.py --port <p> --users 10000 --assets 10000 \
+python3 tools/scenario0_stockmarket.py --port <p> --users 10000 --assets 10000 \
     --txn-per-user 10 --seconds 1200 --profit-users 100 \
     --profit-interval 0.2 --profit-period-days 3 --verify 200 [--cabin]
 ```

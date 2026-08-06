@@ -1,7 +1,7 @@
 # Where a business transaction's time goes
 
 Measured 2026-08-05 with `bench/txn_layers_bench.cpp` (`kds_txn_bench`),
-driving the four statements `tools/stress_business.py` counts TPS for:
+driving the four statements `tools/scenario0_stockmarket.py` counts TPS for:
 
 ```
 INSERT INTO trades ...    buy leg   (HEAP, logged)
@@ -46,7 +46,7 @@ they are.
 statement is its own transaction and therefore its own `fsync`; wrapping the
 four makes one. The stress tool does not wrap them — deliberately, so its
 numbers stay comparable to results recorded before transactions existed
-(`tools/stress_business.py`'s header says so) — but that means its TPS is
+(`tools/scenario0_stockmarket.py`'s header says so) — but that means its TPS is
 measuring four durability points per business transaction, and any client
 that groups them gets this straight away.
 

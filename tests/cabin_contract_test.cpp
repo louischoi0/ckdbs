@@ -373,7 +373,7 @@ TEST(CabinContractTest, AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing) {
     // un-observed it, and the Cabin would stop serving the relation it was
     // declared for. Correct and useless is still a defect.
     //
-    // This is exactly the shape `tools/stress_business.py` drives: two
+    // This is exactly the shape `tools/scenario0_stockmarket.py` drives: two
     // account UPDATEs per trade, neither touching the `user_id` the Cabin
     // is on.
     Instance db(/*cabins=*/true);

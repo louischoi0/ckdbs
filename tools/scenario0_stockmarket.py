@@ -117,18 +117,18 @@ Usage:
     #   cmake --build build-release -j
     #   ./build-release/kds_server /tmp/stress.db --port 15599 \
     #       --log-dir /tmp --log-file s.log --log-level debug
-    python3 tools/stress_business.py --port 15599
-    python3 tools/stress_business.py --users 10000 --assets 10000 --seconds 120
-    python3 tools/stress_business.py --traders 4 --json out.json
-    python3 tools/stress_business.py --no-profit      # OLTP alone, for the delta
-    python3 tools/stress_business.py --cabin          # the same run, with a Cabin on
+    python3 tools/scenario0_stockmarket.py --port 15599
+    python3 tools/scenario0_stockmarket.py --users 10000 --assets 10000 --seconds 120
+    python3 tools/scenario0_stockmarket.py --traders 4 --json out.json
+    python3 tools/scenario0_stockmarket.py --no-profit      # OLTP alone, for the delta
+    python3 tools/scenario0_stockmarket.py --cabin          # the same run, with a Cabin on
                                                       # accounts.user_id
     # the A/B, on two fresh data files - the numbers to compare are TPS and
     # the profit-scan p50, and the --verify verdict must match:
-    python3 tools/stress_business.py --json plain.json
-    python3 tools/stress_business.py --cabin --json cabin.json
-    python3 tools/stress_business.py --fk --json fk.json
-    python3 tools/stress_business.py --txn --json txn.json
+    python3 tools/scenario0_stockmarket.py --json plain.json
+    python3 tools/scenario0_stockmarket.py --cabin --json cabin.json
+    python3 tools/scenario0_stockmarket.py --fk --json fk.json
+    python3 tools/scenario0_stockmarket.py --txn --json txn.json
 
 Every run creates its own five tables, suffixed `_<epoch>_<rand>`, because
 there is no DROP TABLE: a shared data file would otherwise accumulate

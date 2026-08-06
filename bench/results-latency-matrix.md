@@ -158,7 +158,7 @@ count, in either direction, which is the second run to say so.
 
 The unexplained item above is **D3's loss-window sync, performed on the
 reactor thread**. Found by recording every statement's arrival time as well
-as its duration (`stress_business.py --latency-trace`), because a percentile
+as its duration (`scenario0_stockmarket.py --latency-trace`), because a percentile
 says how bad a tail is and never *when* it happened - and "when" is the
 whole answer here.
 

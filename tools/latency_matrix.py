@@ -311,7 +311,7 @@ def main():
             print(f"\n  running {name} at {traders} connection(s)...", flush=True)
             port += 1
             with Server(binary, scratch, f"{name}-{traders}", port, CONFIGS[name]):
-                result = run_stress("stress_business.py", args,
+                result = run_stress("scenario0_stockmarket.py", args,
                                     scratch / f"matrix-{name}-{traders}.json",
                                     ["--port", str(port)])
             rows.append(row_from(result, name))
@@ -320,7 +320,7 @@ def main():
 
         if args.pg:
             print(f"\n  running postgresql at {traders} connection(s)...", flush=True)
-            result = run_stress("pg_stress_business.py", args,
+            result = run_stress("pg_scenario0_stockmarket.py", args,
                                 scratch / f"matrix-pg-{traders}.json",
                                 ["--port", str(args.pg_port),
                                  "--synchronous-commit", "on"])

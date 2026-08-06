@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""PostgreSQL baseline for tools/stress_business.py - the same scenario, other engine.
+"""PostgreSQL baseline for tools/scenario0_stockmarket.py - the same scenario, other engine.
 
 Where tools/pg_benchmark.py prices one statement kind at a time against one
 synthetic table, this drives the **identical five-relation brokerage workload**
-stress_business.py drives against ckdbs, and reports the same number the same
+scenario0_stockmarket.py drives against ckdbs, and reports the same number the same
 way: completed business transactions per second, under concurrent periodic
 reporting. The two tools share bench_common.py, so their `--json` outputs are
 diffable phase by phase and scenario line by scenario line.
@@ -42,7 +42,7 @@ workload; every one of them makes PostgreSQL look *worse* than it would if
 written idiomatically, and each is stated here so a quoted number carries it.
 
 1. **The four statements are not wrapped in BEGIN/COMMIT by default**,
-   exactly as stress_business.py leaves them unwrapped, and `--txn` wraps
+   exactly as scenario0_stockmarket.py leaves them unwrapped, and `--txn` wraps
    them on both sides. PostgreSQL has had transactions since before this repo
    existed, so the default is not a limitation being matched - it is the
    *statement count* being matched. Wrapping turns four commits into one and
@@ -88,7 +88,7 @@ Simulated time is identical: `--days` (default 180) is a **business** span
 compressed into the `--seconds` the run takes, and both the trade's
 `trade_day` and the reporter's period boundaries derive from progress through
 the run. Nothing sleeps to make it true. The clock function is imported from
-stress_business.py rather than reimplemented, so the two runs cannot drift.
+scenario0_stockmarket.py rather than reimplemented, so the two runs cannot drift.
 
 ## The `--cabin` counterpart
 
@@ -120,15 +120,15 @@ one relation - is where either belongs.
 
 Usage:
     ./tools/pg_setup.sh init                      # scratch cluster on :15433
-    python3 tools/pg_stress_business.py --port 15433 --database bench
-    python3 tools/pg_stress_business.py --users 10000 --assets 10000 --seconds 120
-    python3 tools/pg_stress_business.py --traders 4 --json pg.json
-    python3 tools/pg_stress_business.py --no-profit    # OLTP alone, for the delta
-    python3 tools/pg_stress_business.py --user-id-index
+    python3 tools/pg_scenario0_stockmarket.py --port 15433 --database bench
+    python3 tools/pg_scenario0_stockmarket.py --users 10000 --assets 10000 --seconds 120
+    python3 tools/pg_scenario0_stockmarket.py --traders 4 --json pg.json
+    python3 tools/pg_scenario0_stockmarket.py --no-profit    # OLTP alone, for the delta
+    python3 tools/pg_scenario0_stockmarket.py --user-id-index
 
     # the cross-engine comparison, on a fresh data file / fresh cluster:
-    python3 tools/stress_business.py    --json ckdbs.json
-    python3 tools/pg_stress_business.py --json pg.json --synchronous-commit on
+    python3 tools/scenario0_stockmarket.py    --json ckdbs.json
+    python3 tools/pg_scenario0_stockmarket.py --json pg.json --synchronous-commit on
 
 Durability is not silently different, and it is the one setting that decides
 whether the comparison means anything. ckdbs INSERT is WAL-logged and its
@@ -159,7 +159,7 @@ from pg_wire import DEFAULT_HOST, PgConnection, PgError
 # from the ckdbs driver rather than being restated here: an opening balance
 # or a business clock that differed by a digit between the two runs would be
 # invisible in both reports and would invalidate every number in them.
-from stress_business import (ASSET_CLASSES, COUNTRIES, CREATE_ORDER,
+from scenario0_stockmarket import (ASSET_CLASSES, COUNTRIES, CREATE_ORDER,
                              OPENING_BALANCE, SIDE_BUY, SIDE_SELL,
                              merge_phase, sim_day)
 
@@ -238,7 +238,7 @@ def abort(message, reply=None):
 
 # ---- --echo: every statement, as it is sent ------------------------------
 #
-# stress_business.py's, verbatim in behaviour, so a transcript from the two
+# scenario0_stockmarket.py's, verbatim in behaviour, so a transcript from the two
 # engines can be diffed. Off by default and not free: a write per statement,
 # on a tool whose unit is statements per second.
 ECHO = False
@@ -266,7 +266,7 @@ def echo_query(command, reply):
 
 class Client:
     """One connection plus the one-command-one-reply callable everything below
-    is written against - the same surface stress_business.Client presents, so
+    is written against - the same surface scenario0_stockmarket.Client presents, so
     the trader and reporter bodies are the same code shape on both engines.
 
     Counts errors, so a caller that does not inspect every reply still cannot
@@ -277,7 +277,7 @@ class Client:
             self._conn = PgConnection(args.host, args.port, args.user,
                                       args.database, args.password,
                                       timeout=args.timeout,
-                                      application_name="pg_stress_business.py")
+                                      application_name="pg_scenario0_stockmarket.py")
         except (OSError, PgError) as e:
             abort(f"could not connect to {args.host}:{args.port}/{args.database}: {e}\n"
                   f"  start one with: ./tools/pg_setup.sh init")
@@ -487,7 +487,7 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
     partition until the run's wall clock is up, or until `target` transactions
     have committed - whichever comes first.
 
-    Statement for statement the same body as stress_business.trader_process;
+    Statement for statement the same body as scenario0_stockmarket.trader_process;
     only the connection underneath it differs. `target` is this trader's own
     share of `--txn-per-user x --users`, not the run's total; 0 is unlimited,
     the time-based default.
@@ -936,7 +936,7 @@ def main():
     parser.add_argument("--password", default=None, help="default: $PGPASSWORD")
     parser.add_argument("--suffix", default=None,
                         help="table-name suffix; default <epoch>_<rand>, i.e. fresh "
-                             "relations per run, named as stress_business.py names them")
+                             "relations per run, named as scenario0_stockmarket.py names them")
 
     parser.add_argument("--users", type=int, default=10000,
                         help="rows in users (default: 10000)")
@@ -982,7 +982,7 @@ def main():
     parser.add_argument("--echo", dest="echo", action="store_true", default=False,
                         help="print every statement this tool sends, and its reply, to "
                              "stderr as `[<who>] <statement>  ->  <reply>`. The same "
-                             "flag and the same line format stress_business.py has, so "
+                             "flag and the same line format scenario0_stockmarket.py has, so "
                              "the two transcripts can be diffed. Off by default: it "
                              "costs a write per statement on a tool that measures "
                              "statements per second")
@@ -1323,7 +1323,7 @@ def main():
 
     report(phases, meta, footer=[
         "the four statements are NOT one transaction as this tool runs them - four "
-        "autocommits, matching stress_business.py statement for statement. PostgreSQL "
+        "autocommits, matching scenario0_stockmarket.py statement for statement. PostgreSQL "
         "would happily wrap them; wrapping them would price the commit, not the "
         "statements, and would drive `torn` to zero.",
         "balances are computed client-side and sent as literals because ckdbs's UPDATE "

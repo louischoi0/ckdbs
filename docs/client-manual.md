@@ -352,7 +352,7 @@ This is the whole-request counterpart to `bench/bench_main.cpp`, which
 times WAL/page internals in-process with no server, parser or socket; the
 two sets of numbers are not comparable.
 
-`tools/stress_business.py` measures the same server under a **business
+`tools/scenario0_stockmarket.py` measures the same server under a **business
 scenario** instead of one statement kind at a time, and reports the number
 an OLTP system is operated on: **committed transactions per second**. It
 builds five relations - `users`, `accounts` (many per user), `assets`,
@@ -374,9 +374,9 @@ appends one `user_periodic_profit` row per user. That is the contention
 the scenario exists to create, and `--no-profit` prices what it costs.
 
 ```sh
-python3 tools/stress_business.py --port 15599              # 10K users, 10K assets, 180 days
-python3 tools/stress_business.py --seconds 120 --traders 4 --json out.json
-python3 tools/stress_business.py --no-profit               # traders alone, for the delta
+python3 tools/scenario0_stockmarket.py --port 15599              # 10K users, 10K assets, 180 days
+python3 tools/scenario0_stockmarket.py --seconds 120 --traders 4 --json out.json
+python3 tools/scenario0_stockmarket.py --no-profit               # traders alone, for the delta
 ```
 
 `--days` (default 180) is a **business** span compressed into the

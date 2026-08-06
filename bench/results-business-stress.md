@@ -1,6 +1,6 @@
 # Business-scenario stress test, measured
 
-Measured 2026-08-03 with `tools/stress_business.py`, the five-relation
+Measured 2026-08-03 with `tools/scenario0_stockmarket.py`, the five-relation
 brokerage workload: `users`, `accounts`, `assets`, `trades`,
 `user_periodic_profit`. The unit is a **business transaction** — one
 executed trade, four statements:
@@ -181,7 +181,7 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-re
 # a real disk, NOT /tmp if /tmp is tmpfs:
 ./build-release/kds_server ~/scratch/s.db --port 15630 \
     --log-dir ~/scratch --log-file s.log --log-level debug &
-python3 tools/stress_business.py --port 15630 --traders 4 --seconds 120 \
+python3 tools/scenario0_stockmarket.py --port 15630 --traders 4 --seconds 120 \
     --server-log ~/scratch/s.log --json bench/results/business-stress-4t.json
 ```
 

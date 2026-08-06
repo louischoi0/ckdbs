@@ -1,6 +1,6 @@
 # Where a business transaction's time goes, by layer
 
-Measured 2026-08-05 against `tools/stress_business.py`, decomposing **one
+Measured 2026-08-05 against `tools/scenario0_stockmarket.py`, decomposing **one
 business transaction** — the four statements the scenario counts as its unit:
 
 ```

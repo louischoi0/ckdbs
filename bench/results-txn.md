@@ -23,7 +23,7 @@ until T09 stamps a real `trx_id`.
 ## Setup
 
 ```
-tools/stress_business.py --users 10000 --assets 10000 --seconds 120 \
+tools/scenario0_stockmarket.py --users 10000 --assets 10000 --seconds 120 \
                          --traders 4 --seed 1
 ```
 
