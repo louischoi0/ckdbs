@@ -568,6 +568,25 @@ TEST_F(StepCompileTest, AFilteredColumnStaysReadableAfterTheFilter) {
     EXPECT_TRUE(chain.steps[0].read_columns & Col(2));
 }
 
+TEST_F(StepCompileTest, ARelationWiderThanSixtyFourColumnsGetsNoMask) {
+    // **A latent correctness bug, found while building AP01 and fixed with
+    // it.** A uint64 mask cannot name column 64, and DecodeColumnsInto stops
+    // at that bound - its comment says "the caller decodes fully", which was
+    // true of every caller *except* the partial decode, where the tail would
+    // silently keep the previous row's values. So a wide relation gets
+    // kAllColumns and takes the whole-row path.
+    std::string sql = "CREATE TABLE huge (id int64";
+    for (int i = 1; i < 70; ++i) sql += ", c" + std::to_string(i) + " int64";
+    sql += ")";
+    Create(sql);
+
+    const StepChain chain = MustCompile("SELECT c1 FROM huge WHERE c2 = 1");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].filter_columns, Step::kAllColumns);
+    EXPECT_EQ(chain.steps[0].read_columns, Step::kAllColumns)
+        << "a mask cannot describe column 64 and beyond, so there must be no mask";
+}
+
 TEST_F(StepCompileTest, ADefaultConstructedStepDecodesEverything) {
     // The zero-initialised default is the *opposite* of the mask, on
     // purpose: a Step built by anything other than the compiler is slow

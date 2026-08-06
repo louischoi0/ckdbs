@@ -897,7 +897,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // this row, and the frame is where it reads them from.
     for (std::size_t i = 0; i < chain.steps.size(); ++i) {
         Step& step = chain.steps[i];
-        step.filter_columns = step.sub_chains.empty()
+        // **A relation wider than 64 columns gets no mask at all.** A
+        // `std::uint64_t` cannot name column 64, and `DecodeColumnsInto`
+        // stops at that bound - its comment says "the caller decodes fully",
+        // which is true of every caller *except* a partial decode, where the
+        // tail would silently keep the previous row's values. Answering
+        // kAllColumns here is what makes that comment true: the VM takes the
+        // whole-row path and a wide relation is merely slow.
+        const bool maskable = scope.relations[i].access->schema.columns.size() <= 64;
+        step.filter_columns = (step.sub_chains.empty() && maskable)
                                   ? FilterColumnsOf(step, static_cast<std::uint16_t>(i))
                                   : Step::kAllColumns;
     }
@@ -1073,8 +1081,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     const bool sub_chains_anywhere = HasAnySubChain(chain);
     for (std::size_t i = 0; i < chain.steps.size(); ++i) {
         Step& step = chain.steps[i];
+        const bool maskable = scope.relations[i].access->schema.columns.size() <= 64;
         step.read_columns =
-            sub_chains_anywhere
+            (sub_chains_anywhere || !maskable)
                 ? Step::kAllColumns
                 : ReadColumnsOf(chain, step, static_cast<std::uint16_t>(i));
     }

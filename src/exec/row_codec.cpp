@@ -99,10 +99,16 @@ StatusOr<std::uint64_t> ParseUint64Text(const std::string& text) {
 // appends or decides a size: the size was decided by the schema.
 Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& val,
                        std::span<std::byte> cell, const VarHeapSink& varheap) {
-    std::string col_name(catalog::NameView(col.name));
+    // **The name is built only where an error is built.** This is called
+    // once per column per row, and constructing a std::string here
+    // unconditionally - for messages that are almost never produced - was
+    // measured as most of the per-column decode cost (workplan AP02,
+    // bench/results-aggregate.md). `NameOf` costs nothing on the path that
+    // succeeds, which is every path in a working system.
+    const auto NameOf = [&col] { return std::string(catalog::NameView(col.name)); };
 
     if (val.type == parser::ValueType::kNull) {
-        return Status::InvalidArgument("column '" + col_name +
+        return Status::InvalidArgument("column '" + NameOf() +
                                         "' is NULL - NULL values are not supported yet");
     }
     // A declared pattern's `$param` has no value to encode, and never will:
@@ -110,7 +116,7 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
     // fall through to "expects an integer", which would send whoever hit it
     // looking for a type error that is not there.
     if (val.type == parser::ValueType::kParam) {
-        return Status::Corruption("column '" + col_name + "': parameter '$" +
+        return Status::Corruption("column '" + NameOf() + "': parameter '$" +
                                   val.param_name() + "' has no bound value to store");
     }
 
@@ -120,19 +126,19 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
         case kTypeValInt32:
         case kTypeValInt64: {
             if (val.type != parser::ValueType::kInt) {
-                return Status::InvalidArgument("column '" + col_name + "' expects an integer");
+                return Status::InvalidArgument("column '" + NameOf() + "' expects an integer");
             }
             int width = IntWidthFor(col.type_val);
             if (!FitsSigned(val.int_val, width)) {
                 return Status::InvalidArgument("value " + std::to_string(val.int_val) +
-                                                " does not fit column '" + col_name + "'");
+                                                " does not fit column '" + NameOf() + "'");
             }
             PutLE(cell, static_cast<std::uint64_t>(val.int_val), width);
             return Status::OK();
         }
         case kTypeValUint64: {
             if (val.type != parser::ValueType::kInt) {
-                return Status::InvalidArgument("column '" + col_name + "' expects an integer");
+                return Status::InvalidArgument("column '" + NameOf() + "' expects an integer");
             }
             // `raw_int_text` carries the value only when `int_val` cannot -
             // a uint64 above INT64_MAX. A decoded row leaves it empty for
@@ -140,24 +146,24 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             // which is what an UPDATE does to every column its SET list did
             // not touch - reads the integer it already has.
             auto u = ValueAsUint64(val);
-            if (!u.ok()) return u.status().WithContext("column '" + col_name + "'");
+            if (!u.ok()) return u.status().WithContext("column '" + NameOf() + "'");
             PutLE(cell, u.value(), 8);
             return Status::OK();
         }
         case kTypeValBool: {
             if (val.type != parser::ValueType::kInt || (val.int_val != 0 && val.int_val != 1)) {
                 return Status::InvalidArgument(
-                    "column '" + col_name + "' expects 0 or 1 (no boolean literal in this grammar)");
+                    "column '" + NameOf() + "' expects 0 or 1 (no boolean literal in this grammar)");
             }
             PutLE(cell, static_cast<std::uint64_t>(val.int_val), 1);
             return Status::OK();
         }
         case kTypeValChar: {
             if (val.type != parser::ValueType::kStr) {
-                return Status::InvalidArgument("column '" + col_name + "' expects a string");
+                return Status::InvalidArgument("column '" + NameOf() + "' expects a string");
             }
             if (val.str_val.size() > cell.size()) {
-                return Status::InvalidArgument("value too long for column '" + col_name +
+                return Status::InvalidArgument("value too long for column '" + NameOf() +
                                                 "' (max " + std::to_string(cell.size()) +
                                                 " bytes)");
             }
@@ -172,7 +178,7 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
         }
         case kTypeValVarchar: {
             if (val.type != parser::ValueType::kStr) {
-                return Status::InvalidArgument("column '" + col_name + "' expects a string");
+                return Status::InvalidArgument("column '" + NameOf() + "' expects a string");
             }
             // One tagged cell of kds.inline_cell_width bytes, whatever the
             // value's length - that is invariant 13, and it holds whether
@@ -180,7 +186,7 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             Status inlined = storage::EncodeInlineCell(cell, val.str_val);
             if (inlined.ok()) return Status::OK();
             if (inlined.code() != StatusCode::kOutOfSpace) {
-                return inlined.WithContext("column '" + col_name + "'");
+                return inlined.WithContext("column '" + NameOf() + "'");
             }
 
             // Too long to inline: spill. The cell still occupies exactly
@@ -189,7 +195,7 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             // the tuple.
             if (!varheap.usable()) {
                 return Status::Unsupported(
-                    "column '" + col_name + "': value of " +
+                    "column '" + NameOf() + "': value of " +
                     std::to_string(val.str_val.size()) +
                     " bytes must spill to the var-heap, and this caller supplied no var-heap "
                     "chain to spill into");
@@ -197,7 +203,7 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
 
             auto bytes = std::as_bytes(std::span<const char>(val.str_val));
             auto ptr = varheap::ChainAppend(*varheap.store, varheap.root, bytes);
-            if (!ptr.ok()) return ptr.status().WithContext("column '" + col_name + "'");
+            if (!ptr.ok()) return ptr.status().WithContext("column '" + NameOf() + "'");
 
             if (varheap.appended != nullptr) {
                 varheap.appended->push_back(
@@ -207,7 +213,7 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             return storage::EncodeSpilledCell(cell,
                                               static_cast<std::uint32_t>(val.str_val.size()),
                                               varheap::EncodePtr(ptr.value()))
-                .WithContext("column '" + col_name + "'");
+                .WithContext("column '" + NameOf() + "'");
         }
         case kTypeValFloat:
         case kTypeValDecimal:
@@ -215,11 +221,11 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             // refuses these columns at CREATE TABLE (schema.hpp). Kept as a
             // failure rather than an assert for a hand-built schema.
             return Status::Unsupported(
-                "column '" + col_name +
+                "column '" + NameOf() +
                 "' has type float/decimal - no on-disk encoding exists yet (open decision, see "
                 "catalog/schema.hpp)");
         default:
-            return Status::InvalidArgument("column '" + col_name + "' has an unrecognized type_val");
+            return Status::InvalidArgument("column '" + NameOf() + "' has an unrecognized type_val");
     }
 }
 
@@ -229,7 +235,10 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
 Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std::byte> cell,
                            std::size_t column_index, parser::AstValue& out,
                            std::vector<PendingSpill>* spills) {
-    std::string col_name(catalog::NameView(col.name));
+    // Built only where an error is built - see EncodeOneValue above. This
+    // one is the hotter of the two: every column of every row every scan
+    // decodes came through here and paid for a name nobody read.
+    const auto NameOf = [&col] { return std::string(catalog::NameView(col.name)); };
 
     switch (col.type_val) {
         case kTypeValInt8:
@@ -288,7 +297,7 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
         case kTypeValVarchar: {
             auto decoded = storage::DecodeCell(cell);
             if (!decoded.ok()) {
-                return decoded.status().WithContext("column '" + col_name + "'");
+                return decoded.status().WithContext("column '" + NameOf() + "'");
             }
             if (decoded.value().tag == storage::CellTag::kNull) {
                 out.type = parser::ValueType::kNull;
@@ -301,7 +310,7 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
                 // caller's span into this tuple's page is live (row_codec.hpp).
                 if (spills == nullptr) {
                     return Status::Unsupported(
-                        "column '" + col_name +
+                        "column '" + NameOf() +
                         "' holds a spilled value and this caller cannot resolve one; pass a "
                         "pending-spill list and call ResolveSpills() after releasing the page");
                 }
@@ -325,11 +334,11 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
         case kTypeValFloat:
         case kTypeValDecimal:
             return Status::Corruption(
-                "column '" + col_name +
+                "column '" + NameOf() +
                 "' has type float/decimal, which no row this codec wrote should ever contain "
                 "(see row_codec.hpp)");
         default:
-            return Status::Corruption("column '" + col_name + "' has an unrecognized type_val");
+            return Status::Corruption("column '" + NameOf() + "' has an unrecognized type_val");
     }
 }
 

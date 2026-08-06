@@ -216,6 +216,38 @@ visible, being the one that can read zero columns.
 either way, so it executes the identical code path. It is reported rather
 than dropped because a reader checking the table would otherwise wonder.
 
+### AP02, measured — and the premise it was built on
+
+AP02 assumed the remaining per-column cost was building an `AstValue`, on
+the strength of a prior finding that "96% of a decode was building
+`AstValue`s rather than reading cells". Reading the code first found
+something else: **`DecodeOneValueInto` constructed a `std::string` of the
+column's name on every call** — once per column per row — for error messages
+that are almost never produced. `EncodeOneValue` did the same on the write
+path. Building the name only where an error is built:
+
+| statement | AP01 | + AP02 | |
+|---|---:|---:|---:|
+| `SELECT SUM(a) FROM wide` | 5,691 µs | 5,186 µs | **−8.9%** |
+| `SELECT a FROM wide` | 7,672 µs | 7,162 µs | **−6.6%** |
+| `SELECT * FROM wide` | 35,304 µs | 31,978 µs | **−9.4%** |
+| `SELECT COUNT(*) FROM wide` | 3,732 µs | 3,762 µs | — |
+
+The last row is the check on the other three: `COUNT(*)` decodes no column
+after AP01, so it must not move, and it does not.
+
+7-9% on everything that decodes a column, and it is not an aggregation fix
+either — a `SELECT *` gained the most, being the statement that decodes the
+most columns. **AP02 is therefore only partly done**: the general decode got
+cheaper, and the "fold from the cell" half it was named for is still open
+and now carries an architectural question rather than a measurement one (see
+the workplan).
+
+Decoding one integer column still costs about 71 ns/row over and above
+`COUNT(*)`, which is the call framing — per-row input validation, a
+12-iteration mask loop for one set bit, and a `Status` per column — not the
+int path itself, which is a load, a sign-extend and two `clear()`s.
+
 ## AG11's defaults
 
 **`aggregate_max_groups = 65,536` — ratified `[CONFIRMED]`.** Two reasons,

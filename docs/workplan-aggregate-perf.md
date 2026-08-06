@@ -118,7 +118,7 @@ literally — it fixes identity on "steps, kinds, residuals, class" and a
 decode mask is none of the four. The exclusion is commented in the test
 rather than left to be re-derived.
 
-## AP02 — Fold from the cell, not from an `AstValue` (needs AP01)
+## AP02 — Fold from the cell, not from an `AstValue` (needs AP01) — **PARTLY DONE**
 
 Even with AP01, a folded column is decoded into an `AstValue` — two
 `std::string` members and a tag — and then read once. `bench/results-scenario1-vs-pg.md`
@@ -139,6 +139,33 @@ operators it has become the thing spec I10 keeps out of the grammar.
 statement's `MIN` over a varchar; the NULL table and the overflow behaviour
 are unchanged; no new code path can produce a value the `AstValue` path
 would not.
+
+*What was actually found and done.* **The premise was wrong.** Reading the
+code before writing any found that `DecodeOneValueInto` built a
+`std::string` of the column's name on **every call** - once per column per
+row - for error messages almost never produced, and `EncodeOneValue` did the
+same on the write path. Building the name only where an error is built is
+worth **7-9%** on every statement that decodes a column
+(`bench/results-aggregate.md`), and nothing on `COUNT(*)`, which after AP01
+decodes none - which is the check that the measurement is real.
+
+*What is still open, and why it is now a design question.* Decoding one
+integer column still costs ~71 ns/row over `COUNT(*)`, and that is the call
+framing rather than the int path: per-row input validation, a 12-iteration
+mask loop to find one set bit, and a `Status` returned per column. Two ways
+on, and they are not equivalent:
+
+  **(a) Make the decode call cheaper** - hoist the schema validation out of
+  the per-row path, iterate the mask's set bits instead of every column.
+  General, benefits every statement, no architectural cost. Do this first.
+
+  **(b) Fold from the cell**, as this task was named. It needs the raw
+  payload and the layout at the `Aggregator`, which today consumes a
+  `ChainFrame` - the same thing every `RowSink` consumes, which is the
+  AG1 seam. Giving the fold raw bytes means either widening `RowSink` for
+  every consumer or teaching the executor that aggregation exists. **Neither
+  is obviously right and the measurement does not yet justify either**, so
+  this stays unbuilt pending a decision, not pending effort.
 
 ## AP03 — Hoist the `Aggregator` onto the dispatcher
 

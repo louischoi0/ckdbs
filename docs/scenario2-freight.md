@@ -1,0 +1,327 @@
+# KDS Scenario 2 — Freight & Cargo (Workload Specification)
+
+**Status:** Plan confirmed 2026-08-06 (S2-1–S2-11, §0). **Nothing measured yet.**
+Deliverables: `tools/scenario2_freight.py`, `tools/pg_scenario2_freight.py`,
+`tools/compare_scenario2.py`, `bench/results-scenario2-freight.md`. Markers:
+`[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/txn.md`,
+`docs/impl-foreign-keys.md`, `docs/feat-cabin.md`, `docs/feat-aggregate.md`,
+`docs/parser-v2.md`.
+
+Sibling workloads, and what each already owns:
+
+| Tool | Half of a financial system it measures |
+|---|---|
+| `tools/scenario0_stockmarket.py` | a **write** workload — trades and balance updates under a concurrent reporter, in TPS |
+| `tools/scenario1_backtest.py` | a **read** workload — 30 years of bars through join chains, in QPS |
+| **this one** | a **contended write** workload — bookings that can be *refused*, in TPS, with the refusals counted |
+
+---
+
+## 0. Decision Record `[CONFIRMED 2026-08-06]`
+
+| # | Decision | Choice |
+|---|---|---|
+| S2-1 | The measured unit | **One freight booking** — a cargo placed on a voyage: two pk lookups, two filtered scans, two ledger inserts, two btree updates, under one `BEGIN`/`COMMIT` (§3) |
+| S2-2 | Transactions | **Explicit `BEGIN`/`COMMIT` on by default.** This is the first scenario where autocommit is the *comparison* (`--no-txn`) rather than the default |
+| S2-3 | "Recipe" | A **pricing rule set**: which additional fee applies to which `(cargo_type, route_code)` in which date window. `fees` is the rate card, `recipes` the rules over it, `charges` the ledger of what was applied |
+| S2-4 | Scale and baseline | **~100k freights** by default, with a PostgreSQL twin, as both existing scenarios have |
+| S2-5 | The customer | **`organizations`** — the party that places the shipping order. **A freight row *is* the order line**; there is no order-header relation |
+| S2-6 | Failure taxonomy | Three outcomes, counted separately: **committed**, **rejected** (over capacity or over credit — the business said no), **conflicted** (`TXN_CONFLICT`, retried). A TPS number that folds the second into the third, or either into "errors", is a wrong number |
+| S2-7 | One derived column, deliberately | `operations.booked_cbm` is the running total of its freights' CBM. scenario0 refuses derived columns; here it *is* the subject — the value two statements must agree on and a torn transaction corrupts. `freights` carries **no `org_id`**: the customer axis goes through the join, so `--verify` recomputes rather than re-reads |
+| S2-8 | Encodings | Money `int64` **minor units**, volume `int32` **milli-m³**, dates `int32` **epoch days**. Forced: KDS refuses `float`/`decimal` at `CREATE TABLE` (fixed-length rule) and has no date type |
+| S2-9 | Off by default | `--fk`, `--cabin`, `--isolation repeatable-read`, `--verify`. Each is a measurement of its own cost against a baseline run, which is what "off by default" is for |
+| S2-10 | Contention | Bookers **share voyages and customers by default** (`--contend`). scenario0 partitions accounts so first-updater-wins never fires; this scenario exists partly to fire it `[OPEN: default, §5]` |
+| S2-11 | Schema construction is its own run | `--schema-only` and `--load-only` end the run before any measurement, so a data file can be prepared once and driven many times (§7.1) |
+
+---
+
+## 1. What this measures that the other two do not
+
+Three things, none of which scenario0 or scenario1 can show.
+
+**A transaction that is allowed to say no.** Every scenario0 trade succeeds —
+the driver generates ids it created and balances it opened, so a rejection
+means a bug. A booking here is checked against two live limits, and a
+rejection is a *correct* outcome that costs a rollback. The ratio of
+committed to rejected to conflicted is the workload's shape, and TPS alone
+does not carry it.
+
+**Write conflicts on two axes.** scenario0's traders partition accounts, so
+`first-updater-wins` never fires and the retry path is never measured. Here
+two bookers collide on `operations` when they load the same voyage and on
+`organizations` when they carry the same customer's cargo — different
+partitions of the same run. The cost of `ERR TXN_CONFLICT retryable=1` plus
+a full re-drive of the transaction is a number this project does not have.
+
+**A consistency invariant that a torn transaction actually breaks.**
+`operations.booked_cbm` must equal `SUM(freights.cbm)` for that operation,
+and `organizations.outstanding` must equal the recomputed charge total. Run
+with `--no-txn` and the invariant is violable under concurrency; run with
+`--txn` and it is not. §4's checker is what turns that from a claim into a
+verdict.
+
+---
+
+## 2. Schema — eight relations `[CONFIRMED]`
+
+Column 0 of every relation is the Keystone primary key: system-generated,
+never supplied on INSERT (invariant 11), declared in `CREATE TABLE` and
+omitted from every `INSERT`.
+
+```
+organizations  BTREE  id int64, org_code varchar, name varchar, country int32,
+                      org_type int32, credit_limit int64, outstanding int64,
+                      tier int32, contact varchar, registered_day int32, status int32
+
+ships          BTREE  id int64, imo varchar, name varchar, ship_type int32,
+                      capacity_cbm int32, dwt int64, built_year int32, flag varchar,
+                      owner_id int64, home_port int32, status int32
+
+operations     BTREE  id int64, ship_id int64, origin int32, destination int32,
+                      depart_day int32, arrive_day int32, status int32,
+                      booked_cbm int32, revenue int64
+
+cargos         BTREE  id int64, org_id int64, cargo_type int32, weight_kg int64,
+                      cbm int32, hazmat int32, declared_value int64, origin int32,
+                      destination int32, ready_day int32
+
+fees           BTREE  id int64, fee_name varchar, fee_code int32, basis int32,
+                      amount int64, valid_from int32, valid_to int32
+
+recipes        BTREE  id int64, cargo_type int32, route_code int32, fee_id int64,
+                      priority int32, valid_from int32, valid_to int32
+
+freights       HEAP   id int64, operation_id int64, ship_id int64, cargo_id int64,
+                      cbm int32, price_per_cbm int64, booked_day int32, status int32
+
+charges        HEAP   id int64, freight_id int64, fee_id int64, amount int64,
+                      applied_day int32
+```
+
+87 columns per run against a ~7,800-column instance ceiling (catalog
+relations chain — `docs/keystoneid-k0-findings.md`), so ~90 runs per data
+file. Nothing reclaims a catalog row: there is no `DROP TABLE`.
+
+**Why each clustering.** BTREE wherever the transaction probes by pk or a
+foreign key needs a parent to descend into — a heap parent is refused at
+declaration (`docs/impl-foreign-keys.md` F1), so `--fk` requires it. HEAP for
+the two append-only ledgers, which are written at the chain tail and never
+probed by pk.
+
+**Creation order** is load-bearing under `--fk` and cosmetic without it: a
+parent must exist before a child references it, and there is no `ALTER TABLE`
+to add a constraint later.
+
+```
+organizations → ships → operations → cargos → fees → recipes → freights → charges
+```
+
+**The foreign keys** (`--fk`): `cargos.org_id REFERENCES organizations`,
+`operations.ship_id REFERENCES ships`, `freights.cargo_id REFERENCES cargos`.
+All three fire on the *forward* check only — nothing in this workload deletes
+a parent, which is the honest shape of an insert-dominated OLTP run.
+
+**The Cabin** (`--cabin`): `recipes.cargo_type`. Declared as a column policy
+(`cargo_type int32 CABIN`) rather than by `CREATE CABIN`, for the reason
+scenario0 states: a declared Cabin observes on first selection, an
+engine-created one waits for the second. It is the best-shaped Cabin
+candidate in the repo — a small hot value set, probed by a non-pk equality,
+once per booking, on a relation nothing writes after load.
+
+---
+
+## 3. The measured transaction `[CONFIRMED]`
+
+```
+BEGIN
+1  SELECT org_id, cargo_type, cbm, declared_value FROM cargos WHERE id = <cargo>
+                                                        Lookup    (trail-replayable)
+2  SELECT credit_limit, outstanding FROM organizations WHERE id = <org>
+                                                        Lookup    (trail-replayable)
+3  capacity read, per --capacity-mode:
+     cached: SELECT booked_cbm FROM operations WHERE id = <op>          Lookup
+     scan:   SELECT SUM(cbm) FROM freights WHERE operation_id = <op>    FilterScan + fold
+4  SELECT fee_id, priority, basis, amount FROM recipes WHERE cargo_type = <t>
+                                                        FilterScan  (Cabin candidate)
+5  INSERT INTO freights ...
+6  INSERT INTO charges ...                              × matched recipes (1–3)
+7  UPDATE operations     SET booked_cbm = <lit>, revenue = <lit>
+8  UPDATE organizations  SET outstanding = <lit>
+COMMIT
+```
+
+A booking counts toward TPS only if every statement replied without `ERR`
+**and** `COMMIT` succeeded.
+
+**The two checks happen client-side, between statements 4 and 5**, because
+the engine has no arithmetic in a select list. Over capacity or over credit →
+`ROLLBACK`, counted as a *rejection*, not a failure. `TXN_CONFLICT` on
+statement 7 or 8 → `ROLLBACK`, counted as a conflict, and the whole
+transaction is re-driven from statement 1 (its inputs are stale by
+definition).
+
+**`--capacity-mode {cached,scan}` is the load-bearing knob.** `cached` is one
+pk lookup that trusts the derived column; `scan` re-derives the truth every
+booking through an aggregate over a FilterScan. The two must produce
+identical outcomes, and the gap between their TPS is what the derived column
+is worth.
+
+---
+
+## 4. The invariants `[CONFIRMED]`
+
+`--verify N` samples `N` operations and `N` organizations after the run and
+checks four things. It is **off by default** (`--verify 0`) — it is a
+measurement of correctness, not of speed, and it re-reads a large part of the
+relation.
+
+| # | Invariant | How it is checked |
+|---|---|---|
+| I1 | `operations.booked_cbm == SUM(freights.cbm)` for that operation | `SELECT SUM(cbm) FROM freights WHERE operation_id = <n>` against the stored column |
+| I2 | No operation exceeds its ship's `capacity_cbm` | join `operations`→`ships`, compare |
+| I3 | `organizations.outstanding` equals the recomputed charge total | `FROM freights JOIN cargos ON freights.cargo_id = cargos.id WHERE cargos.org_id = <n>`, charges summed client-side |
+| I4 | Every freight's `charges` rows equal the recipe set recomputed for its cargo type and day | client-side replay of the rule set |
+
+I1 and I3 are what `--no-txn` is expected to **break** under concurrency and
+`--txn` is expected to hold. That contrast is the point of the flag, and it
+belongs in the results file as a table, not as a sentence.
+
+---
+
+## 5. Contention `[OPEN: default]`
+
+`--bookers N` client processes, each driving the §3 transaction in a loop.
+
+- `--contend` (default `[OPEN]`, see below): bookers draw voyages and cargos
+  from the whole space, so two may load the same voyage or carry the same
+  customer.
+- `--no-contend`: the space is partitioned by booker index — no conflict is
+  possible, and the number is directly comparable to scenario0's.
+
+Counters, per axis, because a single "conflicts" number cannot be acted on:
+conflicts on `operations`, conflicts on `organizations`, retries per commit
+(mean and max), and retry time as a fraction of the run.
+
+**`[OPEN]`: whether `--contend` defaults on.** It lowers the headline TPS and
+is the more honest number; leaving it off makes the scenario comparable to
+scenario0 by construction. Settle at `S2-03`, with both measured.
+
+---
+
+## 6. The reporter
+
+One separate process (`--manifest`, on by default), scenario0's
+`profit_process` shape — an analytic reader contending with the writes on one
+thread's dispatcher:
+
+```
+SELECT * FROM freights WHERE operation_id = <n>                       manifest
+SELECT status, COUNT(*), SUM(cbm) FROM freights WHERE operation_id = <n>
+    GROUP BY status                                                   voyage rollup
+SELECT c.org_id, SUM(f.cbm) FROM freights f JOIN cargos c
+    ON f.cargo_id = c.id GROUP BY c.org_id                            customer statement
+```
+
+The third is the one to confirm before the rest is written: **nothing in this
+repo aggregates over a joined chain today.** `docs/feat-aggregate.md` AG1
+puts the fold over the sink and leaves the chain byte-identical, so a group
+key resolving to a second step's column *should* work. `S2-01` probes it, and
+the fallback if it does not is a per-organization filtered aggregate.
+
+---
+
+## 7. Flags
+
+| Flag | Default | What |
+|---|---|---|
+| `--host`, `--port`, `--timeout` | as scenario0 | connection |
+| `--suffix` | timestamp | relation-name suffix, so runs share a data file |
+| **`--schema-only`** | off | **create the eight relations and exit.** No load, no workload, no measurement |
+| **`--load-only`** | off | create and load the reference data, then exit |
+| `--organizations`, `--ships`, `--operations`, `--cargos`, `--fees` | 2000 / 200 / 2000 / 200000 / 12 | load sizes |
+| `--bookers` | 4 | client processes |
+| `--seconds` | 60 | run length |
+| `--capacity-mode` | `cached` | `cached` \| `scan` (§3) |
+| `--txn` / `--no-txn` | **on** | explicit `BEGIN`/`COMMIT` (S2-2) |
+| `--contend` / `--no-contend` | `[OPEN]` | §5 |
+| `--manifest` / `--no-manifest` | on | the reporter process |
+| `--fk` | off | declare the three foreign keys |
+| `--cabin` | off | declare the Cabin on `recipes.cargo_type` |
+| `--isolation` | server default | `read-committed` \| `repeatable-read` |
+| `--verify` | 0 (off) | sample size for §4 |
+| `--seed`, `--json`, `--echo`, `--sync`, `--server-log` | as scenario0 | |
+
+### 7.1 Why schema construction is its own run (S2-11)
+
+Three reasons, all of them things the other two scenarios do awkwardly.
+
+1. **DDL is not transactional and is unlogged.** A `CREATE TABLE` inside a
+   failed run leaves the relation behind, and there is no `DROP TABLE` to
+   undo it. Separating construction from measurement makes "which relations
+   exist" a decision rather than a side effect.
+2. **A prepared data file is reusable.** `--schema-only` once, then many
+   measured runs against the same `--suffix`, is how a sweep over
+   `--capacity-mode` or `--bookers` should be driven — the load is the
+   expensive part and it does not change between them.
+3. **It is the smallest thing that can fail.** Every schema-shaped refusal
+   this engine has — a heap FK parent, a `float` column, an unrecognized
+   `CABIN` policy, an exhausted catalog range — surfaces in a run that takes
+   a second, with an error naming the flag that caused it, instead of eight
+   relations into a load.
+
+---
+
+## 8. Engine constraints this workload is written around
+
+Each is a real limit as of 2026-08-06, not a preference:
+
+- **No arithmetic in a select list.** New `booked_cbm`, `revenue` and
+  `outstanding` values are computed by the driver and sent as literals. Every
+  total in §4 is recomputed client-side.
+- **No `ORDER BY`, no `HAVING`, no `AVG`.** Recipe `priority` is ordered
+  client-side; there is no server-side top-N anywhere.
+- **`SUM` over `uint64` is `Unsupported`** — all money and volume columns are
+  signed.
+- **`float`/`decimal` are refused at `CREATE TABLE`** — S2-8's encodings are
+  forced, not chosen.
+- **A heap FK parent is refused** — which is why `cargos`, `ships` and
+  `organizations` are BTREE.
+- **Single core.** The cross-core pipeline is not built; a chain spanning
+  cores is refused. Run `cores = 1`.
+- **Nothing purges undo, and there is no recovery.** A long run grows the
+  data file monotonically, and durability holds only as far as `SYNC` or a
+  clean shutdown. A `--no-txn` run is not a crash-safety comparison, only a
+  concurrency one.
+- **DDL is not transactional** — `CREATE TABLE` inside a transaction is not
+  rolled back.
+
+---
+
+## 9. Workplan
+
+| Task | Delivers | Done when |
+|---|---|---|
+| `S2-01` | schema, loaders, `--schema-only` / `--load-only`, the §6 join-aggregate probe, `--verify` | eight relations create on a fresh file; `--schema-only` exits without loading; the probe prints which of the three reporter queries the server accepts |
+| `S2-02` | the §3 transaction, one booker, both `--capacity-mode` values | a run commits, rejects and reports the three §S2-6 outcomes separately; `--verify` passes |
+| `S2-03` | `--bookers`, `--contend`, the retry loop and its per-axis counters | conflicts are observed and retried, not counted as errors; §5's `[OPEN]` default is settled with both numbers measured |
+| `S2-04` | the `--manifest` reporter process | reporter latency reported beside TPS, as scenario0 does |
+| `S2-05` | `pg_scenario2_freight.py`, `compare_scenario2.py` | same schema, same transaction, same phase names; the two tools' JSON is diffable |
+| `S2-06` | `bench/results-scenario2-freight.md` | `--txn` vs `--no-txn` invariant table, capacity-mode gap, conflict cost, `--fk` and `--cabin` deltas, PostgreSQL side by side |
+
+---
+
+## 10. Open items — do not assume
+
+- **`--contend` default** (§5). Both numbers measured at `S2-03`, then settled
+  here.
+- **Recipe match cap.** Whether a booking applies all matching recipes or caps
+  at N fees per freight. A cap bounds statement count per transaction and
+  therefore the variance of the TPS unit; no cap is more realistic. Settle at
+  `S2-02`.
+- **Whether `GROUP BY` resolves a key on a joined chain** (§6). A capability
+  question about the engine, not a choice — `S2-01` answers it, and the answer
+  belongs in `docs/feat-aggregate.md` if it is no.
+- **Whether the credit check needs its own status code.** Today an over-credit
+  booking is a driver-side rollback, indistinguishable at the wire from a
+  voluntary one. Making it an engine-side constraint would need `CHECK`, which
+  does not exist and is not proposed here.
