@@ -249,6 +249,28 @@ cabins = on
 cabin_max_values = 4096
 cabin_max_entries_per_value = 4096
 
+# ---- Aggregation -----------------------------------------------------------
+
+# How much one aggregated statement may hold: groups, and DISTINCT entries
+# summed over every set in the statement. `[PROPOSED]` - docs/feat-aggregate.md
+# section 6 leaves the numbers open until the first bench, so they are
+# configurable rather than compiled in and nothing depends on either value.
+#
+# What does depend on them is the rule they enforce, and it is a *different*
+# rule from the Cabin caps above. A Cabin that hits its cap stops observing
+# and falls back to a scan, which is always legal because a Cabin is only
+# ever a shortcut. An aggregation has no shortcut to fall back to: a group
+# set that stopped growing is missing groups, and a distinct set that stopped
+# growing counts too few. Both are wrong answers with a right answer's shape,
+# and no reader can detect either. So these caps **fail the statement**,
+# naming the key, and emit nothing at all - there is no spill, no truncation
+# and no partial answer.
+#
+# `aggregate_max_groups = 0` founds no group, which refuses every aggregated
+# statement while leaving the grammar in place.
+aggregate_max_groups = 65536
+aggregate_max_distinct = 1048576
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

@@ -593,6 +593,49 @@ TEST_F(AggregateDispatchTest, ASumOverflowReachesTheClientAndEmitsNoRows) {
     EXPECT_EQ(reply.find("\\n"), std::string::npos) << "no partial answer may be emitted";
 }
 
+// ---- §9.9 Bounds, through the dispatcher (AG07) -------------------------
+
+TEST_F(AggregateDispatchTest, ExceedingMaxGroupsFailsTheStatementNamingTheKey) {
+    Load();
+    // Six rows with six distinct qty values, and room for two groups.
+    dispatcher_->set_aggregate_limits(exec::AggregateLimits{/*max_groups=*/2,
+                                                           /*max_distinct=*/1048576});
+    const std::string reply = Run("SELECT qty, COUNT(*) FROM h GROUP BY qty");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("aggregate_max_groups"), std::string::npos) << reply;
+    EXPECT_EQ(reply.find("\\n"), std::string::npos)
+        << "a cap emits nothing at all - no truncated group set";
+}
+
+TEST_F(AggregateDispatchTest, ExceedingMaxDistinctFailsTheStatementNamingTheKey) {
+    Load();
+    dispatcher_->set_aggregate_limits(exec::AggregateLimits{/*max_groups=*/65536,
+                                                           /*max_distinct=*/2});
+    const std::string reply = Run("SELECT COUNT(DISTINCT sym) FROM h");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("aggregate_max_distinct"), std::string::npos) << reply;
+    EXPECT_EQ(reply.find("\\n"), std::string::npos);
+}
+
+TEST_F(AggregateDispatchTest, ACapBelowTheGroupCountStillAdmitsAStatementUnderIt) {
+    Load();
+    dispatcher_->set_aggregate_limits(exec::AggregateLimits{/*max_groups=*/2,
+                                                           /*max_distinct=*/1048576});
+    // Two tiers, and the cap is two.
+    const std::vector<std::string> lines =
+        Lines(Run("SELECT tier, COUNT(*) FROM h GROUP BY tier"));
+    ASSERT_EQ(lines.size(), 3u);
+    EXPECT_EQ(lines[1], "1,3");
+}
+
+TEST_F(AggregateDispatchTest, ACapDoesNotTouchANonAggregatedStatement) {
+    Load();
+    dispatcher_->set_aggregate_limits(exec::AggregateLimits{/*max_groups=*/0,
+                                                           /*max_distinct=*/0});
+    const std::vector<std::string> lines = Lines(Run("SELECT id, qty FROM h"));
+    EXPECT_EQ(lines.size(), 7u) << "header plus six rows";
+}
+
 TEST_F(AggregateDispatchTest, APlainSelectIsByteIdenticalToWhatItAlwaysWas) {
     // The regression this whole placement decision is meant to make
     // impossible: a statement that does not aggregate must be untouched.

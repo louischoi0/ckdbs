@@ -213,6 +213,31 @@ TEST(ExpeditorConfigTest, KnownKeysCoverEveryKeyTheOverlayReads) {
     }
 }
 
+// ---- Aggregation caps (docs/feat-aggregate.md §6, AG11) ---------------
+
+TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
+    Expeditor::Config config;
+    // The spec's `[PROPOSED]` numbers, in one place each. Nothing may
+    // depend on the values - this pins where they live, not what they are.
+    EXPECT_EQ(config.aggregate_max_groups, 65536u);
+    EXPECT_EQ(config.aggregate_max_distinct, 1048576u);
+
+    ASSERT_TRUE(config
+                    .ApplyFile(ParseOk("aggregate_max_groups = 128\n"
+                                       "aggregate_max_distinct = 256\n"))
+                    .ok());
+    EXPECT_EQ(config.aggregate_max_groups, 128u);
+    EXPECT_EQ(config.aggregate_max_distinct, 256u);
+}
+
+TEST(ExpeditorConfigTest, ZeroGroupsIsAcceptedAndMeansRefuseEveryFold) {
+    // The same shape `cabin_max_values = 0` has: a coherent way to switch
+    // the behaviour off per instance while leaving the grammar in place.
+    Expeditor::Config config;
+    ASSERT_TRUE(config.ApplyFile(ParseOk("aggregate_max_groups = 0\n")).ok());
+    EXPECT_EQ(config.aggregate_max_groups, 0u);
+}
+
 // ---- `cores` (docs/workplan-crosscore.md M6) --------------------------
 
 TEST(ExpeditorConfigTest, CoresParsesAndDefaultsToOne) {

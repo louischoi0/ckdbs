@@ -31,7 +31,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "max_rows_touched",      "inline_cell_width",      "waystone_recording",
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
-            "cabin_max_entries_per_value", "cores"};
+            "cabin_max_entries_per_value", "cores",
+            "aggregate_max_groups",  "aggregate_max_distinct"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -117,6 +118,20 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetUint("cabin_max_entries_per_value");
         if (!v.ok()) return v.status();
         cabin_max_entries_per_value = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("aggregate_max_groups")) {
+        auto v = file.GetUint("aggregate_max_groups");
+        if (!v.ok()) return v.status();
+        // No zero check, for the reason `cabin_max_values` has none: 0
+        // means no group may be founded, which refuses every aggregated
+        // statement - a coherent way to switch the feature off per
+        // instance while leaving the grammar in place.
+        aggregate_max_groups = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("aggregate_max_distinct")) {
+        auto v = file.GetUint("aggregate_max_distinct");
+        if (!v.ok()) return v.status();
+        aggregate_max_distinct = static_cast<std::size_t>(v.value());
     }
     if (file.Has("max_rows_touched")) {
         auto v = file.GetUint("max_rows_touched");
@@ -319,6 +334,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
         expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
         &*expeditor->txn_manager_, expeditor->config_.isolation);
+    expeditor->dispatcher_->set_aggregate_limits(
+        exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
+                              expeditor->config_.aggregate_max_distinct});
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
                                  wal::DurabilityClassName(expeditor->config_.durability) +

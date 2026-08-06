@@ -194,6 +194,24 @@ public:
         std::size_t cabin_max_values = 4096;
         std::size_t cabin_max_entries_per_value = 4096;
 
+        // AG11's caps (docs/feat-aggregate.md §6), both `[PROPOSED]` and
+        // both held here for the reason the Cabin pair above are: nothing
+        // may depend on either number, only on the rule they enforce - a
+        // cap **fails the statement**, never truncates the group set and
+        // never spills, because a truncated set is a wrong answer with a
+        // right answer's shape.
+        //
+        // `aggregate_max_distinct` is summed over every DISTINCT set in one
+        // statement rather than applied per set: the resource being bounded
+        // is the statement's memory, and a hundred small sets cost what one
+        // large one does.
+        //
+        // 0 is meaningful for the first, as it is for `cabin_max_values`:
+        // no group may be founded, which refuses every aggregated statement
+        // while leaving the grammar in place.
+        std::size_t aggregate_max_groups = 65536;
+        std::size_t aggregate_max_distinct = 1048576;
+
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
         // kGroup batch nobody is waiting on; a drain with nothing pending

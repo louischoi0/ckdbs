@@ -555,6 +555,19 @@ private:
                                const std::optional<stats::InstanceKey>& instance,
                                const txn::Snapshot& snapshot);
 
+public:
+    // AG11's caps, from `aggregate_max_groups` / `aggregate_max_distinct`.
+    //
+    // A setter rather than a fifteenth constructor parameter: the ceiling
+    // is read once at boot and never varies per statement, so it does not
+    // need to be threaded through every test's construction - and the
+    // defaults are the spec's `[PROPOSED]` numbers, so a dispatcher that is
+    // never told behaves exactly as the documented configuration does.
+    void set_aggregate_limits(exec::AggregateLimits limits) noexcept {
+        aggregate_limits_ = limits;
+    }
+
+private:
     // The aggregated SELECT path (docs/feat-aggregate.md AG1): the same
     // execution, with an `Aggregator` in the sink and the fold's output
     // emitted after it. `header` is the column-heading line the caller
