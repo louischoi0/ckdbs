@@ -73,6 +73,7 @@ add_executable(kds_tests
     parser_projection_test.cpp
     parser_aggregate_test.cpp
     aggregate_contract_test.cpp
+    aggregate_test.cpp
     parser_subquery_test.cpp
     parser_fuzz_test.cpp
     step_compile_test.cpp

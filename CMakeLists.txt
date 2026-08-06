@@ -81,6 +81,7 @@ add_library(kds
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
     src/exec/step_compiler.cpp
+    src/exec/aggregate.cpp
     src/exec/chain_frame.cpp
     src/exec/step_vm.cpp
     src/exec/budget.cpp
