@@ -60,16 +60,13 @@ PatternDef ToPatternDef(const std::vector<parser::AstValue>& values) {
     // The pk arrives as a plain signed decode; ids are 40-bit, so it cannot
     // be negative and the cast is total.
     def.id = static_cast<std::uint64_t>(values[kColId].int_val);
-    // pattern_id is a uint64 column, so its exact value lives in the digit
-    // text - int_val cannot represent the upper half of the range
-    // (row_codec.hpp). Parsing the text back is the only lossless read.
-    const std::string& digits = values[kColPatternId].raw_int_text;
-    std::uint64_t id = 0;
-    for (char c : digits) {
-        if (c < '0' || c > '9') break;
-        id = id * 10 + static_cast<std::uint64_t>(c - '0');
-    }
-    def.pattern_id = id;
+    // pattern_id is a uint64 column, so reading it back is the codec's
+    // question rather than this file's: below INT64_MAX the integer is
+    // exact and the digit text is not written at all, above it only the
+    // text is lossless (exec::ValueAsUint64). Doing the arithmetic here is
+    // what made this the one reader that broke when the rule changed.
+    auto pattern_id = exec::ValueAsUint64(values[kColPatternId]);
+    def.pattern_id = pattern_id.ok() ? pattern_id.value() : 0;
     def.param_count = static_cast<std::uint32_t>(values[kColParamCount].int_val);
     def.name = values[kColName].str_val;
     def.source_text = values[kColSourceText].str_val;

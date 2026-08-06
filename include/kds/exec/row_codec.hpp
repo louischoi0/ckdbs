@@ -198,6 +198,16 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
 // falling back to int_val otherwise.
 std::string FormatValue(const parser::AstValue& value);
 
+// The unsigned reading of a decoded integer value.
+//
+// **The one place that knows the `raw_int_text` rule**, which is worth
+// having exactly once: the text carries the value only when `int_val`
+// cannot - a uint64 above INT64_MAX - and is empty otherwise, because
+// writing it cost a string conversion per integer column per row decoded.
+// A caller that reads the text directly gets an empty string for every
+// ordinary value and silently reads zero, which is how this rule breaks.
+StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value);
+
 // Compares two decoded values under one operator, with `type_val` saying
 // how to read them - uint64 columns compare through their digit text,
 // since int_val cannot represent the upper half of the range.

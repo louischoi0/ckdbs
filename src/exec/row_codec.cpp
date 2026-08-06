@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <limits>
 #include <cstdint>
 #include <string>
 
@@ -133,8 +134,13 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             if (val.type != parser::ValueType::kInt) {
                 return Status::InvalidArgument("column '" + col_name + "' expects an integer");
             }
-            auto u = ParseUint64Text(val.raw_int_text);
-            if (!u.ok()) return u.status();
+            // `raw_int_text` carries the value only when `int_val` cannot -
+            // a uint64 above INT64_MAX. A decoded row leaves it empty for
+            // everything else (see DecodeOneValueInto), so re-encoding one -
+            // which is what an UPDATE does to every column its SET list did
+            // not touch - reads the integer it already has.
+            auto u = ValueAsUint64(val);
+            if (!u.ok()) return u.status().WithContext("column '" + col_name + "'");
             PutLE(cell, u.value(), 8);
             return Status::OK();
         }
@@ -234,7 +240,13 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             std::int64_t v = SignExtend(GetLE(cell, width), width);
             out.type = parser::ValueType::kInt;
             out.int_val = v;
-            out.raw_int_text = std::to_string(v);
+            // **Left empty on purpose.** `raw_int_text` exists to carry a
+            // value `int_val` cannot hold, which for a signed column is
+            // never - and FormatValue() falls back to std::to_string(int_val)
+            // for exactly this case, so the rendering is identical. Writing
+            // it here cost a string conversion per integer column per row
+            // decoded, on every scan and twice per UPDATE.
+            out.raw_int_text.clear();
             out.str_val.clear();
             return Status::OK();
         }
@@ -242,7 +254,14 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             std::uint64_t v = GetLE(cell, 8);
             out.type = parser::ValueType::kInt;
             out.int_val = static_cast<std::int64_t>(v);
-            out.raw_int_text = std::to_string(v);
+            // The one case the text is needed for: above INT64_MAX the cast
+            // above is lossy, so the digits are the only correct rendering
+            // and the only thing a re-encode can read back.
+            if (v > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+                out.raw_int_text = std::to_string(v);
+            } else {
+                out.raw_int_text.clear();
+            }
             out.str_val.clear();
             return Status::OK();
         }
@@ -250,7 +269,7 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             std::uint64_t v = GetLE(cell, 1);
             out.type = parser::ValueType::kInt;
             out.int_val = static_cast<std::int64_t>(v);
-            out.raw_int_text = std::to_string(v);
+            out.raw_int_text.clear();  // 0 or 1: int_val says it exactly
             out.str_val.clear();
             return Status::OK();
         }
@@ -466,7 +485,9 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     // why the loop below starts at column 1.
     out[0].type = parser::ValueType::kInt;
     out[0].int_val = static_cast<std::int64_t>(id.value());
-    out[0].raw_int_text = std::to_string(id.value());
+    // Same rule as every other integer: a 40-bit id fits int_val exactly, so
+    // the text would be a string conversion per row for nothing.
+    out[0].raw_int_text.clear();
     out[0].str_val.clear();
 
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
@@ -521,6 +542,18 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
         out[spill.column].raw_int_text.clear();
     }
     return Status::OK();
+}
+
+StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value) {
+    if (value.type != parser::ValueType::kInt) {
+        return Status::InvalidArgument("expected an integer value");
+    }
+    if (!value.raw_int_text.empty()) return ParseUint64Text(value.raw_int_text);
+    if (value.int_val < 0) {
+        return Status::InvalidArgument("expected a non-negative integer, got " +
+                                        std::to_string(value.int_val));
+    }
+    return static_cast<std::uint64_t>(value.int_val);
 }
 
 std::string FormatValue(const parser::AstValue& value) {
