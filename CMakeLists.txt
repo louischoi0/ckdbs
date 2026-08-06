@@ -121,6 +121,12 @@ if(KDS_BUILD_BENCH)
     # apart is what keeps that distinction visible.
     add_executable(kds_keystone_alloc_bench bench/keystone_alloc_bench.cpp)
     target_link_libraries(kds_keystone_alloc_bench PRIVATE kds)
+
+    # A third binary, asking where a *transaction's* time goes rather than
+    # what one component costs: it drives the four statements
+    # tools/stress_business.py measures TPS for, and prices each layer.
+    add_executable(kds_txn_bench bench/txn_layers_bench.cpp)
+    target_link_libraries(kds_txn_bench PRIVATE kds)
 endif()
 
 option(KDS_BUILD_TESTS "Build ckdbs unit tests" ON)
