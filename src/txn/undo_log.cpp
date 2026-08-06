@@ -54,36 +54,29 @@ Status UndoLog::LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t
 }
 
 StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
-    Tail* tail = nullptr;
-    for (Tail& t : tails_) {
-        if (t.trx_id == trx_id) {
-            tail = &t;
-            break;
-        }
-    }
-
-    if (tail != nullptr) {
-        auto bytes = store_.Get(tail->page_id);
+    // The current page, whoever last wrote to it. `trx_id` decides nothing
+    // about *which* page is used - only what goes in the new page's
+    // `first_trx_id` and in the PAGE_INIT envelope if one has to be created.
+    if (tail_ != kInvalidPageId) {
+        auto bytes = store_.Get(tail_);
         if (!bytes.ok()) return bytes.status();
         if (UndoPageFreeSpace(std::span<const std::byte, kPageSize>(bytes.value())) >= need) {
-            return tail->page_id;
+            return tail_;
         }
     }
 
-    // Either the transaction has no page yet or its tail is full. Grow.
-    const PageId prev = tail == nullptr ? kInvalidPageId : tail->page_id;
+    // No page yet, or the current one cannot hold this record. Grow.
     auto created = store_.CreateNew();
     if (!created.ok()) return created.status();
     const PageId page_id = created.value().first;
 
-    if (Status s = FormatUndoPage(created.value().second, trx_id, prev); !s.ok()) return s;
+    if (Status s = FormatUndoPage(created.value().second, trx_id, tail_); !s.ok()) return s;
     if (Status s = LogPageInit(trx_id, page_id); !s.ok()) return s;
 
-    if (tail == nullptr) {
-        tails_.push_back(Tail{trx_id, page_id});
-    } else {
-        tail->page_id = page_id;
-    }
+    // Published only once the page is formatted and its PAGE_INIT is
+    // logged: a failure above leaves the log pointing at the page that was
+    // working before, never at one recovery has not been told about.
+    tail_ = page_id;
     return page_id;
 }
 
@@ -149,20 +142,12 @@ Status UndoLog::Walk(std::uint64_t ptr, const std::function<bool(const UndoVersi
     return Status::OK();
 }
 
-StatusOr<std::uint32_t> UndoLog::PageCountFor(std::uint64_t trx_id) {
-    PageId page_id = kInvalidPageId;
-    for (const Tail& t : tails_) {
-        if (t.trx_id == trx_id) {
-            page_id = t.page_id;
-            break;
-        }
-    }
-
+StatusOr<std::uint32_t> UndoLog::PageCount() {
+    PageId page_id = tail_;
     std::uint32_t count = 0;
     while (page_id != kInvalidPageId) {
         if (++count > kMaxUndoChainLength) {
-            return Status::Corruption("undo page chain for transaction " +
-                                      std::to_string(trx_id) + " does not terminate");
+            return Status::Corruption("the undo page chain does not terminate");
         }
         auto bytes = store_.GetForRead(page_id);
         if (!bytes.ok()) return bytes.status();
@@ -170,16 +155,6 @@ StatusOr<std::uint32_t> UndoLog::PageCountFor(std::uint64_t trx_id) {
                       .prev_page_id;
     }
     return count;
-}
-
-void UndoLog::Forget(std::uint64_t trx_id) {
-    for (std::size_t i = 0; i < tails_.size(); ++i) {
-        if (tails_[i].trx_id == trx_id) {
-            tails_[i] = tails_.back();
-            tails_.pop_back();
-            return;
-        }
-    }
 }
 
 }  // namespace kds::txn

@@ -63,13 +63,20 @@ struct UndoPageHeaderFields {
     // would invite one missing `+ kPageBodyOffset`.
     std::uint16_t lower;
     std::uint16_t reserved0;  // 0
-    // The transaction that owns this page; 0 = unowned. One page belongs to
-    // one transaction for its whole life - undo records from two
-    // transactions never share a page, which is what lets prev_page_id
-    // below mean one unambiguous thing.
-    std::uint64_t owner_trx_id;
-    // Previous undo page of the **same** transaction, so a transaction's
-    // pages form a chain a future purge pass can free without a side table.
+    // The transaction whose append created this page; 0 = unknown. It is a
+    // **diagnostic, not an owner**: an undo page is shared by every
+    // transaction that appends to it while it has room, because a page per
+    // transaction costs 8 KB per autocommitted UPDATE and autocommit is one
+    // transaction per statement (bench/results-txn-layer-budget.md §3).
+    // Nothing reads this field to decide anything, and nothing may - a
+    // record's writer is in the UNDO_WRITE envelope, and a record's
+    // *reachability* is a property of the tuples pointing at it.
+    std::uint64_t first_trx_id;
+    // The log's previous undo page - **not** the previous page of any one
+    // transaction, which sharing makes unanswerable. It chains the pages in
+    // creation order so a future purge pass can walk them without a side
+    // table; that pass will need a per-page high-water mark this header does
+    // not carry yet, and reserved1 is where it goes.
     PageId prev_page_id;
     std::uint32_t reserved1;  // 0
 };
@@ -78,7 +85,7 @@ inline constexpr std::size_t kUndoHeaderFlagsOffset = 0;
 inline constexpr std::size_t kUndoHeaderNrRecordsOffset = 2;
 inline constexpr std::size_t kUndoHeaderLowerOffset = 4;
 inline constexpr std::size_t kUndoHeaderReserved0Offset = 6;
-inline constexpr std::size_t kUndoHeaderOwnerTrxIdOffset = 8;
+inline constexpr std::size_t kUndoHeaderFirstTrxIdOffset = 8;
 inline constexpr std::size_t kUndoHeaderPrevPageIdOffset = 16;
 inline constexpr std::size_t kUndoHeaderReserved1Offset = 20;
 // 2+2+2+2+8+4+4 = 24, every field naturally aligned and no tail padding at
@@ -89,7 +96,7 @@ static_assert(offsetof(UndoPageHeaderFields, flags) == kUndoHeaderFlagsOffset);
 static_assert(offsetof(UndoPageHeaderFields, nr_records) == kUndoHeaderNrRecordsOffset);
 static_assert(offsetof(UndoPageHeaderFields, lower) == kUndoHeaderLowerOffset);
 static_assert(offsetof(UndoPageHeaderFields, reserved0) == kUndoHeaderReserved0Offset);
-static_assert(offsetof(UndoPageHeaderFields, owner_trx_id) == kUndoHeaderOwnerTrxIdOffset);
+static_assert(offsetof(UndoPageHeaderFields, first_trx_id) == kUndoHeaderFirstTrxIdOffset);
 static_assert(offsetof(UndoPageHeaderFields, prev_page_id) == kUndoHeaderPrevPageIdOffset);
 static_assert(offsetof(UndoPageHeaderFields, reserved1) == kUndoHeaderReserved1Offset);
 static_assert(sizeof(UndoPageHeaderFields) == kUndoPageHeaderSize);
@@ -223,10 +230,12 @@ Status UndoPtrIsPlausible(std::uint64_t ptr);
 
 // ---- Page operations -----------------------------------------------------
 
-// Formats `page` as a brand-new, empty undo page owned by `owner_trx_id`
-// and chained behind `prev_page_id` (kInvalidPageId for the first page of a
-// transaction). Stamps the common header as kUndo.
-Status FormatUndoPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_trx_id,
+// Formats `page` as a brand-new, empty undo page, recording `first_trx_id`
+// as the transaction whose append created it and chaining it behind
+// `prev_page_id` (kInvalidPageId for the log's first page). Stamps the
+// common header as kUndo. Neither field grants anyone exclusive use of the
+// page: see the header struct.
+Status FormatUndoPage(std::span<std::byte, kPageSize> page, std::uint64_t first_trx_id,
                       PageId prev_page_id);
 
 UndoPageHeaderFields ReadUndoPageHeader(std::span<const std::byte, kPageSize> page);

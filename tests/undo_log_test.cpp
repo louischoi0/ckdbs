@@ -137,11 +137,12 @@ TEST_F(UndoLogTest, UndoPagesAreHeaderedAndStamped) {
 
     const UndoPageHeaderFields h =
         ReadUndoPageHeader(std::span<const std::byte, kPageSize>(page.value()));
-    EXPECT_EQ(h.owner_trx_id, 50u);
+    // The creating transaction, recorded as a diagnostic - it owns nothing.
+    EXPECT_EQ(h.first_trx_id, 50u);
     EXPECT_EQ(h.prev_page_id, kInvalidPageId);
 }
 
-TEST_F(UndoLogTest, OneTransactionsAppendsShareAPageUntilItFills) {
+TEST_F(UndoLogTest, AppendsShareAPageUntilItFills) {
     // 2000-byte images: 2028 bytes per record, four to a page.
     const std::vector<std::byte> image(2000, std::byte{0x5A});
     std::vector<PageId> pages;
@@ -155,7 +156,7 @@ TEST_F(UndoLogTest, OneTransactionsAppendsShareAPageUntilItFills) {
     EXPECT_EQ(pages[0], pages[3]);
     EXPECT_NE(pages[0], pages[4]) << "the fifth record must land on a fresh page";
 
-    auto count = log_->PageCountFor(50);
+    auto count = log_->PageCount();
     ASSERT_TRUE(count.ok());
     EXPECT_EQ(count.value(), 2u);
 
@@ -167,16 +168,37 @@ TEST_F(UndoLogTest, OneTransactionsAppendsShareAPageUntilItFills) {
               pages[0]);
 }
 
-// Two transactions never share an undo page: owner_trx_id means one thing.
-TEST_F(UndoLogTest, TwoTransactionsNeverShareAPage) {
+// Transactions **share** a page, which is the whole point: an autocommitted
+// statement is a transaction, so a page per transaction is 8 KB per UPDATE
+// (undo_log.hpp). Three transactions, three small records, one page.
+TEST_F(UndoLogTest, TransactionsShareTheCurrentPage) {
     auto a = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("a"));
     auto b = log_->Append(51, Overwrite(41, kNoUndoPtr, 300, 3), BytesOf("b"));
+    auto c = log_->Append(52, Overwrite(41, kNoUndoPtr, 300, 4), BytesOf("c"));
     ASSERT_TRUE(a.ok());
     ASSERT_TRUE(b.ok());
-    EXPECT_NE(UndoPtrPageId(a.value()), UndoPtrPageId(b.value()));
+    ASSERT_TRUE(c.ok());
+    EXPECT_EQ(UndoPtrPageId(a.value()), UndoPtrPageId(b.value()));
+    EXPECT_EQ(UndoPtrPageId(a.value()), UndoPtrPageId(c.value()));
+    EXPECT_EQ(log_->PageCount().value(), 1u);
 
-    EXPECT_EQ(log_->PageCountFor(50).value(), 1u);
-    EXPECT_EQ(log_->PageCountFor(51).value(), 1u);
+    // Sharing a page changes nothing about reading one: each record is
+    // reached by its own undo_ptr, and no reader consults the page's header.
+    EXPECT_EQ(StringOf(log_->Read(a.value()).value().image), "a");
+    EXPECT_EQ(StringOf(log_->Read(b.value()).value().image), "b");
+    EXPECT_EQ(StringOf(log_->Read(c.value()).value().image), "c");
+}
+
+// The saving, stated as the test that would have caught the old behaviour:
+// 200 autocommit-shaped transactions of one small record each must not cost
+// 200 pages.
+TEST_F(UndoLogTest, ManyShortTransactionsDoNotCostAPageEach) {
+    for (std::uint64_t trx_id = 100; trx_id < 300; ++trx_id) {
+        ASSERT_TRUE(log_->Append(trx_id, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("image"))
+                        .ok());
+    }
+    EXPECT_EQ(log_->PageCount().value(), 1u)
+        << "200 records of 33 bytes fit on one 8,136-byte page";
 }
 
 // A version chain crosses transactions freely - which is the difference
@@ -239,7 +261,7 @@ TEST_F(UndoLogTest, AnOversizeImageIsRefusedWithoutLeakingAPage) {
     const std::vector<std::byte> huge(kMaxUndoImageLen + 1, std::byte{0x01});
     auto refused = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), huge);
     EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
-    EXPECT_EQ(log_->PageCountFor(50).value(), 0u);
+    EXPECT_EQ(log_->PageCount().value(), 0u);
 }
 
 // ---- The WAL mapping (txn.md section 3.5) --------------------------------
@@ -377,16 +399,19 @@ TEST_F(UndoLogTest, AnUnloggedLogStillAppendsAndReads) {
     EXPECT_EQ(StringOf(version.value().image), "before");
 }
 
-TEST_F(UndoLogTest, ForgettingATransactionLeavesItsPagesReadable) {
-    auto ptr = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("before"));
-    ASSERT_TRUE(ptr.ok());
-    log_->Forget(50);
+// A finished transaction releases nothing, and there is no longer an API
+// that could pretend otherwise: its records stay readable through any
+// tuple's undo_ptr, and the page it wrote to goes on serving the next
+// transaction (txn.md section 6).
+TEST_F(UndoLogTest, AFinishedTransactionsRecordsStayReadableAndItsPageStaysInUse) {
+    auto old = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("before"));
+    ASSERT_TRUE(old.ok());
 
-    // The tail is gone...
-    EXPECT_EQ(log_->PageCountFor(50).value(), 0u);
-    // ...but an older snapshot's undo_ptr still resolves, which is the
-    // point: nothing is freed (txn.md section 6).
-    auto version = log_->Read(ptr.value());
+    auto next = log_->Append(51, Overwrite(50, old.value(), 300, 2), BytesOf("after"));
+    ASSERT_TRUE(next.ok());
+    EXPECT_EQ(UndoPtrPageId(next.value()), UndoPtrPageId(old.value()));
+
+    auto version = log_->Read(old.value());
     ASSERT_TRUE(version.ok());
     EXPECT_EQ(StringOf(version.value().image), "before");
 }

@@ -83,8 +83,8 @@ byte 8192  end
 | 2 | 2 | `nr_records` | O(1) "is this page empty" for a future purge pass |
 | 4 | 2 | `lower` | **absolute** page offset of the next free byte |
 | 6 | 2 | `reserved0` | 0 |
-| 8 | 8 | `owner_trx_id` | the transaction that owns this page; 0 = unowned |
-| 16 | 4 | `prev_page_id` | previous undo page of the **same** transaction |
+| 8 | 8 | `first_trx_id` | the transaction whose append created this page — a diagnostic, **not** an owner |
+| 16 | 4 | `prev_page_id` | the log's previous undo page, in creation order |
 | 20 | 4 | `reserved1` | 0 |
 
 `kUndoPageHeaderSize = 24`; `kUndoRecordsOffset = 56`;
@@ -93,8 +93,31 @@ byte 8192  end
 `lower` is absolute for the same reason `HeapPageHeaderFields::lower` is: it is
 compared against `kPageSize` and used directly as a `memcpy` destination, and a
 body-relative value would invite one missing `+ kPageBodyOffset`.
-`prev_page_id` lets a transaction's undo pages form a chain a future purge pass
-can free without a side table.
+**One current page, shared by every transaction.** The log appends each
+transaction's records to the same page until it fills, then chains a new one
+behind it through `prev_page_id`. This is a change of 2026-08-05: a page *was*
+owned by one transaction, and since an autocommitted statement is a
+transaction, that cost a fresh 8 KB page per `UPDATE` for one ~88-byte record —
+132 MB of data file for 16,414 updates, and the instance's whole ~510 MB
+page-id space exhausted after ~65,000 of them, after which every further write
+failed (`bench/results-txn-layer-budget.md` §3). Sharing puts ~92 records on a
+page: the same 45-second workload now writes 19 MB instead of 510 MB and
+sustains 1,344 TPS instead of 716 with 97,826 failures.
+
+Nothing was relying on the exclusivity. A reader follows `undo_ptr`, which
+names a page and an offset directly; rollback replays the transaction's
+in-memory trail (§3.6) and never walks undo pages; redo names each record's
+offset explicitly, so interleaved writers replay onto one page in LSN order
+correctly. Exclusivity would only have let a purge free a transaction's pages
+without a side table — and purge does not exist, cannot without reader
+registration (§9), and would need a per-page horizon rather than an owner
+anyway, because a page's records outlive their writer. `reserved1` is where
+that horizon goes.
+
+`prev_page_id` therefore chains the log's pages in creation order, for the same
+future purge pass, and no longer answers "which pages are this transaction's" —
+which sharing makes unanswerable. The on-disk layout is unchanged: same
+offsets, same widths, two fields with new meanings, so no format version moves.
 
 ### 3.3 Undo record
 

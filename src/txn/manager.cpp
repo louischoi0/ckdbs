@@ -204,9 +204,12 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
 
     // Dropped, not kept: a committed write needs no compensation, and the
     // undo records stay behind for readers whose snapshots predate it.
+    //
+    // Nothing is said to the undo log. Its pages are shared by every
+    // transaction (undo_log.hpp), so a transaction ending releases nothing
+    // and reserves nothing to release.
     txn.trail_.clear();
     txn.active_ = false;
-    undo_.Forget(txn.id_);
     return lsn;
 }
 
@@ -300,8 +303,9 @@ Status TransactionManager::Abort(Transaction& txn) {
 
     txn.trail_.clear();
     txn.active_ = false;
-    // Undo pages are **not** freed; purge is a non-goal (section 9).
-    undo_.Forget(txn.id_);
+    // Undo pages are **not** freed; purge is a non-goal (section 9). Nor is
+    // this transaction's undo separable from anyone else's - one page holds
+    // many transactions' records (undo_log.hpp).
     return first_failure;
 }
 

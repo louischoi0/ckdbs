@@ -14,22 +14,36 @@
 // The undo log: where before-images go, and how a reader walks back to the
 // version its snapshot is entitled to (docs/txn.md section 3).
 //
-// ---- One chain per transaction -------------------------------------------
+// ---- One current page, shared by every transaction -----------------------
 //
-// A transaction's undo pages form a chain through `prev_page_id`, newest
-// first, and every page on it carries that transaction's id in
-// `owner_trx_id`. Two transactions never share a page. That is what lets a
-// future purge pass free a whole transaction's undo with no side table -
-// and purge is the *only* reason the per-transaction chain exists, because
-// a reader never follows it: a reader follows `undo_ptr`, which names a
-// page and an offset directly.
+// The log keeps a single current page and appends every transaction's
+// records to it until it fills, then chains a new one behind it through
+// `prev_page_id`. **A page is not owned by a transaction.**
 //
-// So there are two chains here and they are not the same chain:
+// It was, until 2026-08-05, and the cost of that is what changed it: an
+// autocommitted statement *is* a transaction, so a page per transaction is
+// a fresh 8 KB page per `UPDATE` holding one ~88-byte record - measured at
+// 132 MB of data file for 16,414 updates, and at the instance's whole
+// ~510 MB page-id space exhausted after ~65,000 of them, at which point
+// every further write failed (bench/results-txn-layer-budget.md §3).
+// Sharing puts ~92 records on a page instead of one.
 //
-//   prev_page_id     page -> page, one transaction's pages, for reclamation
+// Nothing was relying on the exclusivity. A reader follows `undo_ptr`,
+// which names a page and an offset directly; rollback replays the
+// transaction's in-memory trail (manager.hpp) and never walks undo pages;
+// redo names each record's offset explicitly, so interleaved writers replay
+// in LSN order onto the same page correctly. The only thing exclusivity
+// would have bought is a purge that could free a transaction's pages
+// without a side table - and purge does not exist, cannot exist without
+// reader registration (§9), and would in any case need a per-page horizon
+// rather than an owner, because a page's records outlive their writer.
+//
+// So there are two chains here and they are still not the same chain:
+//
+//   prev_page_id     page -> page, the log's pages in creation order
 //   prior_undo_ptr   record -> record, one tuple's versions, for reading
 //
-// A version chain crosses transactions freely; a page chain never does.
+// A version chain crosses transactions freely, and now so does a page.
 //
 // ---- Allocation ----------------------------------------------------------
 //
@@ -96,7 +110,8 @@ public:
 
     // Appends one before-image on behalf of `trx_id` and returns the
     // `undo_ptr` to stamp into the tuple that now supersedes it. Allocates
-    // a page when the transaction has none or its tail is full.
+    // a page only when the log has none or the current one is full - a
+    // transaction is not entitled to a page of its own.
     //
     // `fields.prior_undo_ptr` is the *tuple's* current undo_ptr - the
     // version chain's next link - and `fields.prior_trx_id` its current
@@ -125,28 +140,20 @@ public:
     // rollback and for tests that assert a whole chain.
     Status Walk(std::uint64_t ptr, const std::function<bool(const UndoVersion&)>& fn);
 
-    // Pages this transaction has allocated, for tests and inspection.
-    StatusOr<std::uint32_t> PageCountFor(std::uint64_t trx_id);
+    // How many undo pages this log has allocated, walked off the page chain
+    // rather than counted in memory, so it reports what is on the device.
+    // For tests and inspection; it is O(pages) and not for a hot path.
+    //
+    // It replaced `PageCountFor(trx_id)`, which sharing makes unanswerable:
+    // a page holds records from many transactions and none of them owns it.
+    StatusOr<std::uint32_t> PageCount();
 
-    // Forgets a committed or aborted transaction's tail. The pages stay
-    // allocated and readable - an older snapshot may still walk into them
-    // through a tuple's undo_ptr - this only stops the *next* transaction
-    // with the same id from appending to them, which cannot happen anyway
-    // since ids are never reissued. It is here so the tail table does not
-    // grow without bound over a long-running process.
-    void Forget(std::uint64_t trx_id);
+    // There is no Forget(). It existed to drop a finished transaction's tail
+    // from a per-transaction table, and there is no such table now - one
+    // current page serves everyone, and a transaction ending changes nothing
+    // about it.
 
 private:
-    // The tail undo page of each live transaction. Small and core-local:
-    // one entry per transaction currently holding undo, dropped at
-    // Forget(). A vector rather than a map because the live set is bounded
-    // by kMaxTrackedLiveTxns (read_view.hpp) and a linear scan over 64
-    // entries beats a hash on every append.
-    struct Tail {
-        std::uint64_t trx_id;
-        PageId page_id;
-    };
-
     StatusOr<PageId> TailFor(std::uint64_t trx_id, std::size_t need);
     Status LogPageInit(std::uint64_t trx_id, PageId page_id);
     Status LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t offset,
@@ -154,7 +161,12 @@ private:
 
     storage::PageStore& store_;
     wal::WalManager* wal_;
-    std::vector<Tail> tails_;
+    // The log's current page - one integer, where a per-transaction table
+    // used to be. kInvalidPageId until the first append, and after a restart:
+    // a page from a previous run is still readable through a tuple's
+    // undo_ptr, but nothing appends to it, because its free space is not
+    // recorded anywhere this log reads at startup.
+    PageId tail_ = kInvalidPageId;
 };
 
 }  // namespace kds::txn

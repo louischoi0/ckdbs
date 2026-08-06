@@ -56,7 +56,7 @@ UndoRecordFields OverwriteRecord(std::uint64_t prior_trx_id, std::uint64_t prior
 
 TEST(UndoPageTest, FormatStampsTheCommonHeaderAndTheOwner) {
     PageBuf buf{};
-    ASSERT_TRUE(FormatUndoPage(AsSpan(buf), /*owner_trx_id=*/91, /*prev_page_id=*/kInvalidPageId)
+    ASSERT_TRUE(FormatUndoPage(AsSpan(buf), /*first_trx_id=*/91, /*prev_page_id=*/kInvalidPageId)
                     .ok());
 
     EXPECT_TRUE(storage::ValidatePageHeader(AsConstSpan(buf), PageType::kUndo).ok());
@@ -65,7 +65,7 @@ TEST(UndoPageTest, FormatStampsTheCommonHeaderAndTheOwner) {
     EXPECT_EQ(h.flags, kUndoPageFlagInitialized);
     EXPECT_EQ(h.nr_records, 0);
     EXPECT_EQ(h.lower, kUndoRecordsOffset);
-    EXPECT_EQ(h.owner_trx_id, 91u);
+    EXPECT_EQ(h.first_trx_id, 91u);
     EXPECT_EQ(h.prev_page_id, kInvalidPageId);
     EXPECT_EQ(h.reserved0, 0);
     EXPECT_EQ(h.reserved1, 0u);

@@ -96,10 +96,10 @@ Status UndoPtrIsPlausible(std::uint64_t ptr) {
     return Status::OK();
 }
 
-Status FormatUndoPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_trx_id,
+Status FormatUndoPage(std::span<std::byte, kPageSize> page, std::uint64_t first_trx_id,
                       PageId prev_page_id) {
-    if (owner_trx_id > heap::kMaxTrxId) {
-        return Status::InvalidArgument("owner_trx_id " + std::to_string(owner_trx_id) +
+    if (first_trx_id > heap::kMaxTrxId) {
+        return Status::InvalidArgument("first_trx_id " + std::to_string(first_trx_id) +
                                        " exceeds the 48-bit transaction id space");
     }
     storage::FormatPage(page, PageType::kUndo);
@@ -109,7 +109,7 @@ Status FormatUndoPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_
     h.nr_records = 0;
     h.lower = static_cast<std::uint16_t>(kUndoRecordsOffset);
     h.reserved0 = 0;
-    h.owner_trx_id = owner_trx_id;
+    h.first_trx_id = first_trx_id;
     h.prev_page_id = prev_page_id;
     h.reserved1 = 0;
     WriteUndoPageHeader(page, h);
@@ -123,7 +123,7 @@ UndoPageHeaderFields ReadUndoPageHeader(std::span<const std::byte, kPageSize> pa
     std::memcpy(&h.nr_records, base + kUndoHeaderNrRecordsOffset, sizeof(h.nr_records));
     std::memcpy(&h.lower, base + kUndoHeaderLowerOffset, sizeof(h.lower));
     std::memcpy(&h.reserved0, base + kUndoHeaderReserved0Offset, sizeof(h.reserved0));
-    std::memcpy(&h.owner_trx_id, base + kUndoHeaderOwnerTrxIdOffset, sizeof(h.owner_trx_id));
+    std::memcpy(&h.first_trx_id, base + kUndoHeaderFirstTrxIdOffset, sizeof(h.first_trx_id));
     std::memcpy(&h.prev_page_id, base + kUndoHeaderPrevPageIdOffset, sizeof(h.prev_page_id));
     std::memcpy(&h.reserved1, base + kUndoHeaderReserved1Offset, sizeof(h.reserved1));
     return h;
@@ -136,7 +136,7 @@ void WriteUndoPageHeader(std::span<std::byte, kPageSize> page,
     std::memcpy(base + kUndoHeaderNrRecordsOffset, &h.nr_records, sizeof(h.nr_records));
     std::memcpy(base + kUndoHeaderLowerOffset, &h.lower, sizeof(h.lower));
     std::memcpy(base + kUndoHeaderReserved0Offset, &h.reserved0, sizeof(h.reserved0));
-    std::memcpy(base + kUndoHeaderOwnerTrxIdOffset, &h.owner_trx_id, sizeof(h.owner_trx_id));
+    std::memcpy(base + kUndoHeaderFirstTrxIdOffset, &h.first_trx_id, sizeof(h.first_trx_id));
     std::memcpy(base + kUndoHeaderPrevPageIdOffset, &h.prev_page_id, sizeof(h.prev_page_id));
     std::memcpy(base + kUndoHeaderReserved1Offset, &h.reserved1, sizeof(h.reserved1));
 }
