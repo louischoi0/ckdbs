@@ -826,13 +826,15 @@ private:
                         needs_walk = true;
                         break;
                     case txn::Visibility::kVisible:
-                        Status s = DecodeRowInto(
-                            access.schema, access.layout, tuple.value().payload,
-                            frame_.SlotsFor(static_cast<std::uint16_t>(index)), &spills_);
-                        if (!s.ok()) {
-                            span.Release();
-                            return s;
-                        }
+                        // **The row's bytes, copied; the row itself, not
+                        // built yet.** The copy is fixed-size (invariant 13)
+                        // and costs a memcpy; building the row costs an
+                        // 80-byte AstValue per column, and this step may be
+                        // about to reject it on one of them. So the bytes
+                        // come out from under the span and the decode
+                        // happens below, in two halves.
+                        version_.assign(tuple.value().payload.begin(),
+                                        tuple.value().payload.end());
                         decoded = true;
                         break;
                 }
@@ -856,28 +858,55 @@ private:
             if (!verdict.ok()) return verdict.status();
             if (verdict.value() == txn::Visibility::kNoVersion) return Status::OK();
 
-            // Decoded from the reconstructed version rather than from the
-            // page: the bytes on the page belong to a version this reader
-            // is not entitled to.
-            if (Status s = DecodeRowInto(access.schema, access.layout, version_,
-                                          frame_.SlotsFor(static_cast<std::uint16_t>(index)),
-                                          &spills_);
-                !s.ok()) {
-                return s;
-            }
+            // The reconstructed version's bytes are already in `version_`,
+            // which is where the decode below reads from - the same buffer
+            // the visible path copies into, and for the same reason: the
+            // bytes on the page belong to a version this reader is not
+            // entitled to.
             decoded = true;
         }
 
         if (!decoded) return Status::OK();  // dead or out-of-range slot
 
-        // Now that nothing is live, the spilled values can be resolved.
-        if (!spills_.empty()) {
-            stats_.For(step.step_id).spill_fetches += spills_.size();
-            if (Status s = ResolveSpills(store_, spills_,
-                                          frame_.SlotsFor(static_cast<std::uint16_t>(index)));
+        // ---- Decode what the filter reads, and only that ----------------
+        //
+        // `Step::filter_columns` is the compiler's answer to "which of this
+        // relation's columns does the residual look at" (step_chain.hpp).
+        // Decoding those, testing, and building the rest only for a row that
+        // survives is what separates *reading* a row from *materialising*
+        // one: a 12-column scan returning 8 rows of 60,480 was paying twelve
+        // AstValues on every row it rejected, which measured as 75% of the
+        // scan (bench/results-scenario1-vs-pg.md).
+        //
+        // A step with a sub-chain, or a relation wider than 64 columns,
+        // carries kAllColumns and takes the whole row here as before.
+        const std::span<parser::AstValue> slots =
+            frame_.SlotsFor(static_cast<std::uint16_t>(index));
+        // **Not while recording a Cabin.** The write-hook block below reads
+        // the cabin's key column and the pk before the residual runs, and a
+        // slot this row did not decode still holds the *previous* row's
+        // value - which would record an entry for a row that does not carry
+        // the value. A miss walk is already committed to reading everything,
+        // so it decodes everything.
+        const bool recording_here =
+            recording_ != nullptr && recording_->step_id == step.step_id;
+        const bool partial = step.filter_columns != Step::kAllColumns && !recording_here;
+        if (partial) {
+            if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
+                                             step.filter_columns, &spills_);
                 !s.ok()) {
                 return s;
             }
+        } else if (Status s = DecodeRowInto(access.schema, access.layout, version_, slots,
+                                            &spills_);
+                   !s.ok()) {
+            return s;
+        }
+
+        // Now that nothing is live, the spilled values can be resolved.
+        if (!spills_.empty()) {
+            stats_.For(step.step_id).spill_fetches += spills_.size();
+            if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
         }
 
         StepStats& step_stats = stats_.For(step.step_id);
@@ -925,6 +954,25 @@ private:
         auto matched = EvaluateAll(schemas_, step.residual, frame_);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
+
+        // ---- The row survived: build the rest of it ---------------------
+        //
+        // Everything past this point reads columns the filter had no reason
+        // to touch - the projection, the next step's probe key, the trail's
+        // pk, a sub-chain's correlation. Until now those slots still hold
+        // the *previous* row's values, so this is not an optimization to
+        // skip: it is what makes the partial decode above correct.
+        if (partial) {
+            if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
+                                             ~step.filter_columns, &spills_);
+                !s.ok()) {
+                return s;
+            }
+            if (!spills_.empty()) {
+                stats_.For(step.step_id).spill_fetches += spills_.size();
+                if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
+            }
+        }
 
         // Counted after the residual and *before* the sub-chains: this is
         // the ordinary-predicate selectivity, and folding a sub-chain's

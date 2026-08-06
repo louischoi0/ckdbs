@@ -308,6 +308,28 @@ struct Step {
     // order. Placed by the same rule as `residual`: the latest step any of
     // their outward references reaches.
     std::vector<SubChain> sub_chains;
+
+    // ---- Which of *this* relation's columns the residual reads ----------
+    //
+    // A bit per `col_pos`, for the columns `residual` references on this
+    // step's own relation. It exists so a scan can decide whether a row
+    // qualifies **before** building the whole row.
+    //
+    // That ordering is the difference between reading a row and materialising
+    // one. A `WHERE session_no = <n>` over 60,480 rows returning 8 used to
+    // decode twelve values per row and throw away 60,472 of them; the decode
+    // was 75% of the scan and 96% of the decode was building `AstValue`s
+    // rather than reading cells (`bench/results-scenario1-vs-pg.md`).
+    //
+    // Computed here rather than per row for the obvious reason, and it is
+    // exactly the kind of thing the compiler exists to answer once.
+    //
+    // **`kAllColumns` means "decode everything"** - set when a referenced
+    // column sits past bit 63, and the value a zero-initialised Step would
+    // *not* carry, so a step built without the compiler decodes fully and is
+    // merely slow rather than wrong.
+    static constexpr std::uint64_t kAllColumns = ~std::uint64_t{0};
+    std::uint64_t filter_columns = kAllColumns;
 };
 
 // Execution shape, dispatched on by a `switch` - there is no plan

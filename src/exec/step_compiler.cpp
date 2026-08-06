@@ -456,10 +456,41 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
         }
         out.residual.push_back(pred);
     }
+    // **kAllColumns, deliberately.** UPDATE and DELETE walk the relation
+    // themselves rather than through the step VM, and they need every column
+    // of a matching row anyway - one to re-encode, one to hand the write
+    // hook. A mask here would be a promise the caller does not keep.
+    out.filter_columns = Step::kAllColumns;
     return out;
 }
 
 namespace {
+
+// The columns of step `index`'s own relation that its residual reads.
+//
+// Only `up == 0 && rel_slot == index` references count: a predicate reaching
+// into an earlier step reads a value that step already put in the frame, and
+// an outward reference belongs to an enclosing chain. Both are present when
+// this row is filtered and neither costs this row a decode.
+//
+// A column past bit 63 answers kAllColumns - a relation that wide loses the
+// optimization and keeps every answer, which is the right way round.
+std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
+    std::uint64_t mask = 0;
+    auto note = [&](const ColumnRef& ref) {
+        if (ref.up != 0 || ref.rel_slot != index) return;
+        if (ref.col_pos >= 64) {
+            mask = Step::kAllColumns;
+            return;
+        }
+        if (mask != Step::kAllColumns) mask |= std::uint64_t{1} << ref.col_pos;
+    };
+    for (const StepPredicate& pred : step.residual) {
+        note(pred.lhs);
+        if (pred.rhs.kind == OperandKind::kColumn) note(pred.rhs.column);
+    }
+    return mask;
+}
 
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
@@ -647,6 +678,19 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         std::uint16_t ready_at = sub.has_value ? AvailableAt(sub.lhs) : 0;
         ready_at = std::max(ready_at, DeepestReferenceIntoThisChain(sub.steps, /*from_depth=*/1));
         chain.steps[ready_at].sub_chains.push_back(std::move(sub));
+    }
+
+    // ---- 4. What each step must decode before it can filter -------------
+    //
+    // Last, because it reads the residual and the residual is only final
+    // once every conjunct has been placed. A step carrying a **sub-chain**
+    // answers kAllColumns: a sub-chain's correlation can reach any column of
+    // this row, and the frame is where it reads them from.
+    for (std::size_t i = 0; i < chain.steps.size(); ++i) {
+        Step& step = chain.steps[i];
+        step.filter_columns = step.sub_chains.empty()
+                                  ? FilterColumnsOf(step, static_cast<std::uint16_t>(i))
+                                  : Step::kAllColumns;
     }
 
     // ---- 4. Assign an access kind ----------------------------------------

@@ -189,6 +189,27 @@ StatusOr<std::vector<parser::AstValue>> DecodeRow(const catalog::Schema& schema,
 // row carries; the caller resolves them once its page span is released.
 // When null, a spilled cell is refused with Unsupported - a caller that
 // cannot resolve one must not silently return an empty value for it.
+// Decodes only the columns `columns` selects - a bit per `col_pos` - leaving
+// every other slot of `out` untouched.
+//
+// **The point is not to skip reads; it is to skip *building*.** Reading all
+// twelve cells of a `daily_stats` row costs 13 ns and decoding it costs 355,
+// because each column materialises an 80-byte `AstValue` carrying two
+// `std::string`s (`bench/results-scenario1-vs-pg.md`). A scan that filters
+// on one column and returns 8 rows of 60,480 was paying the 355 on every row
+// it rejected.
+//
+// The caller is responsible for what it left behind: a slot outside the mask
+// holds whatever it held before, so a row that *matches* must be completed
+// with the complement mask before anything reads the rest of it.
+//
+// `spills` collects only the masked columns' spilled values, for the same
+// reason DecodeRowInto's does - resolving one is a page fetch and must
+// happen after the caller's span is released.
+Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                         std::span<const std::byte> payload, std::span<parser::AstValue> out,
+                         std::uint64_t columns, std::vector<PendingSpill>* spills);
+
 Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
                      std::vector<PendingSpill>* spills = nullptr);

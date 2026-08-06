@@ -456,6 +456,67 @@ StatusOr<std::uint64_t> RowKeystoneId(std::span<const std::byte> payload) {
     return Keystone::Decode(LoadLe64(payload.data())).id;
 }
 
+namespace {
+
+// The shared front half of both decoders: everything that has to be true
+// before a single cell is read.
+Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                         std::span<const std::byte> payload,
+                         std::span<parser::AstValue> out) {
+    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
+    if (out.size() != schema.columns.size()) {
+        return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
+                                        " slot(s) for a schema of " +
+                                        std::to_string(schema.columns.size()) + " column(s)");
+    }
+    // Checked redundancy (invariant 13): the row size is a schema constant,
+    // so a stored payload of any other length is not a row this build can
+    // interpret - the slot's `length` and the header's `data_len` add no
+    // information the schema does not already give.
+    if (payload.size() != layout.row_size) {
+        return Status::Corruption("tuple payload is " + std::to_string(payload.size()) +
+                                   " bytes for a relation whose row size is " +
+                                   std::to_string(layout.row_size));
+    }
+    return Status::OK();
+}
+
+// Column 0 is not in the body: it lives in the Keystone word.
+Status DecodeKeystoneInto(std::span<const std::byte> payload, parser::AstValue& out) {
+    auto id = RowKeystoneId(payload);
+    if (!id.ok()) return id.status();
+    out.type = parser::ValueType::kInt;
+    out.int_val = static_cast<std::int64_t>(id.value());
+    out.raw_int_text.clear();
+    out.str_val.clear();
+    return Status::OK();
+}
+
+}  // namespace
+
+Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                         std::span<const std::byte> payload, std::span<parser::AstValue> out,
+                         std::uint64_t columns, std::vector<PendingSpill>* spills) {
+    if (spills != nullptr) spills->clear();
+    if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
+
+    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+        if (i < 64 && (columns & (std::uint64_t{1} << i)) == 0) continue;
+        if (i >= 64) break;  // a mask cannot name these; the caller decodes fully
+        if (i == 0) {
+            if (Status s = DecodeKeystoneInto(payload, out[0]); !s.ok()) return s;
+            continue;
+        }
+        if (Status s = DecodeOneValueInto(schema.columns[i], CellOf(layout, payload, i), i, out[i],
+                                           spills);
+            !s.ok()) {
+            return s;
+        }
+    }
+    return Status::OK();
+}
+
 Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& layout,
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
                      std::vector<PendingSpill>* spills) {
