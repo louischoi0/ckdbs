@@ -330,6 +330,44 @@ struct Step {
     // merely slow rather than wrong.
     static constexpr std::uint64_t kAllColumns = ~std::uint64_t{0};
     std::uint64_t filter_columns = kAllColumns;
+
+    // ---- Which of this relation's columns anything reads at all ---------
+    //
+    // The superset of `filter_columns`: every column of this step's relation
+    // that *any* consumer of the row touches - a later step's join predicate
+    // or probe key, the projection, the fold's items and group keys, the
+    // trail's pk. A step decodes `filter_columns` before the residual and
+    // then only `read_columns & ~filter_columns` after it, instead of
+    // everything else (workplan AP01).
+    //
+    // **Why this is not a micro-optimization.** Without it, `filter_columns`
+    // narrows the decode of a row that is about to be *rejected* and does
+    // nothing for one that survives - so a statement with no WHERE at all
+    // gets no benefit, because every row survives. `SELECT COUNT(*) FROM t`
+    // built an AstValue for every column of every row to fold none of them,
+    // which measured at 2.7x the cost of the same statement on a two-column
+    // relation, and made `SELECT COUNT(*) FROM t WHERE a = 1` **3.1x faster
+    // than dropping the WHERE** (`bench/results-aggregate.md`).
+    //
+    // **The rule that keeps it correct: this must be a superset of every
+    // reader.** A slot outside it still holds the *previous* row's value,
+    // so a missing column is a silently wrong answer rather than a crash.
+    // Two consequences the compiler enforces: a chain containing any
+    // sub-chain answers `kAllColumns` everywhere, since a correlated
+    // reference reaches outward into any earlier step's row; and `SELECT *`
+    // answers `kAllColumns` for the step it projects.
+    //
+    // **It is deliberately not part of AG1's chain-identity contract.** Spec
+    // §9.1 fixes that on "steps, kinds, residuals, class", and a decode mask
+    // is none of the four - it describes what a row is read *for*, not how
+    // it is found. An aggregated statement and its unaggregated twin do
+    // differ here, and must: `SELECT COUNT(*)` reads no column where
+    // `SELECT qty` reads one.
+    //
+    // `kAllColumns` is the zero-initialised default's opposite on purpose,
+    // the same way `filter_columns` has it: a Step built by anything other
+    // than the compiler decodes everything and is merely slow.
+    std::uint64_t read_columns = kAllColumns;
 };
 
 // Execution shape, dispatched on by a `switch` - there is no plan

@@ -473,5 +473,109 @@ TEST_F(StepCompileTest, ASubqueryPredicateLowersToASubChain) {
     EXPECT_TRUE(chain.hoisted.empty());
 }
 
+// ---- read_columns: what a step decodes after it has filtered (AP01) -----
+//
+// The mask is a **superset of every reader**, and the failure mode if it is
+// not is the reason these tests are per-shape rather than one smoke test: a
+// column outside the mask keeps the *previous* row's value in its slot, so a
+// miss is a silently wrong answer, not a crash. Anything the compiler cannot
+// prove it knows about answers kAllColumns.
+
+// Bit for one column position, for readability below.
+constexpr std::uint64_t Col(std::uint16_t pos) { return std::uint64_t{1} << pos; }
+
+TEST_F(StepCompileTest, ACountStarOverAScanReadsNoColumn) {
+    // The statement AP01 exists for: no residual, no projection, no fold
+    // argument. The walk decodes nothing per row.
+    const StepChain chain = MustCompile("SELECT COUNT(*) FROM trade");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].read_columns, 0u)
+        << "COUNT(*) reads no column and must decode none";
+}
+
+TEST_F(StepCompileTest, AFoldReadsItsArgumentsAndItsGroupKeys) {
+    // trade(id, acct_id, sym) - group by acct_id (1), sum over id (0).
+    const StepChain chain =
+        MustCompile("SELECT acct_id, COUNT(*), MIN(sym) FROM trade GROUP BY acct_id");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].read_columns, Col(1) | Col(2));
+}
+
+TEST_F(StepCompileTest, AProjectionReadsExactlyWhatItNames) {
+    const StepChain chain = MustCompile("SELECT sym FROM trade");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].read_columns, Col(2));
+}
+
+TEST_F(StepCompileTest, StarReadsEveryColumn) {
+    const StepChain chain = MustCompile("SELECT * FROM trade");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].read_columns, Step::kAllColumns)
+        << "SELECT * emits every column by definition";
+}
+
+TEST_F(StepCompileTest, ALookupReadsThePkForTheTrail) {
+    // A replayable step records the Keystone id of every row it accepts,
+    // and reads it out of the frame. The kind is a compile-time fact, so
+    // only the steps that can record one pay for the column.
+    const StepChain chain = MustCompile("SELECT COUNT(*) FROM trade WHERE id = 7");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup);
+    EXPECT_TRUE(chain.steps[0].read_columns & Col(0))
+        << "the trail reads column 0 from the frame";
+}
+
+TEST_F(StepCompileTest, AJoinsEarlierStepIsReadByTheLaterStepsPredicate) {
+    // **The trap this mask has to avoid.** The join predicate is attached
+    // to step 1 and reads step 0's column out of the frame, so step 0 must
+    // decode it even though step 0's own residual never mentions it.
+    const StepChain chain = MustCompile(
+        "SELECT COUNT(*) FROM acct AS a JOIN trade AS t ON a.id = t.acct_id");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_TRUE(chain.steps[0].read_columns & Col(0))
+        << "step 0's pk is read by step 1's probe key and predicate";
+}
+
+TEST_F(StepCompileTest, AProbeKeyIsCountedAsAReadOfTheStepItPointsAt) {
+    const StepChain chain = MustCompile(
+        "SELECT t.sym FROM trade AS t JOIN acct AS a ON t.acct_id = a.id");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    // step 0 is trade; acct_id (1) feeds step 1's probe, sym (2) is projected.
+    EXPECT_TRUE(chain.steps[0].read_columns & Col(1)) << "the probe key";
+    EXPECT_TRUE(chain.steps[0].read_columns & Col(2)) << "the projection";
+}
+
+TEST_F(StepCompileTest, ASubChainAnywhereMakesEveryStepReadEverything) {
+    // A correlated reference reaches outward into an earlier step's row and
+    // is invisible from out here - it lives inside the sub-chain with
+    // up > 0. Rather than map it back, the whole chain keeps every column.
+    const StepChain chain = MustCompile(
+        "SELECT COUNT(*) FROM acct AS a "
+        "WHERE EXISTS (SELECT t.id FROM trade AS t WHERE t.acct_id = a.id)");
+    for (const Step& step : chain.steps) {
+        EXPECT_EQ(step.read_columns, Step::kAllColumns)
+            << "a chain with a sub-chain must not narrow any step";
+    }
+}
+
+TEST_F(StepCompileTest, AFilteredColumnStaysReadableAfterTheFilter) {
+    // filter_columns and read_columns overlap rather than partition: the
+    // VM decodes the filter's mask first and only `read & ~filter` after,
+    // so a column in both is decoded exactly once and is present either way.
+    const StepChain chain = MustCompile("SELECT sym FROM trade WHERE sym = 'AAPL'");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_TRUE(chain.steps[0].filter_columns & Col(2));
+    EXPECT_TRUE(chain.steps[0].read_columns & Col(2));
+}
+
+TEST_F(StepCompileTest, ADefaultConstructedStepDecodesEverything) {
+    // The zero-initialised default is the *opposite* of the mask, on
+    // purpose: a Step built by anything other than the compiler is slow
+    // rather than wrong.
+    const Step fresh;
+    EXPECT_EQ(fresh.read_columns, Step::kAllColumns);
+    EXPECT_EQ(fresh.filter_columns, Step::kAllColumns);
+}
+
 }  // namespace
 }  // namespace kds::exec

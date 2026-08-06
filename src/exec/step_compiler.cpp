@@ -492,6 +492,83 @@ bool ReferencesAnOuterChain(const std::vector<Step>& steps) {
 // Compiles one query block. `parent` is the enclosing scope, or nullptr at
 // the top level; `next_step_id` is the statement-wide counter every block
 // shares, so a step_id is unambiguous without parent linkage.
+// Whether any sub-chain exists anywhere in `chain`.
+//
+// A correlated sub-chain reads outward through the frame stack, and from
+// out here those references are invisible - they live inside the sub-chain's
+// own steps with `up > 0`. Rather than map them back, a chain containing one
+// gives every step `kAllColumns` and keeps every answer. Conservative, and
+// the shape AP01 is aimed at (a fold over a walk) carries no sub-chain.
+bool HasAnySubChain(const StepChain& chain) {
+    if (!chain.hoisted.empty()) return true;
+    for (const Step& step : chain.steps) {
+        if (!step.sub_chains.empty()) return true;
+    }
+    return false;
+}
+
+// Every column of step `index`'s relation that anything reads (AP01).
+//
+// Walks the **whole chain**, not this step's residual: a join predicate
+// attached to a later step reads an earlier step's columns out of the frame,
+// and so does a probe key. Missing one leaves a slot holding the previous
+// row's value, which is a wrong answer rather than a crash - so when in
+// doubt this answers kAllColumns.
+std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint16_t index) {
+    std::uint64_t mask = 0;
+    bool all = false;
+    auto note = [&](const ColumnRef& ref) {
+        if (all || ref.up != 0 || ref.rel_slot != index) return;
+        if (ref.col_pos >= 64) {
+            all = true;
+            return;
+        }
+        mask |= std::uint64_t{1} << ref.col_pos;
+    };
+
+    for (const Step& other : chain.steps) {
+        for (const StepPredicate& pred : other.residual) {
+            note(pred.lhs);
+            if (pred.rhs.kind == OperandKind::kColumn) note(pred.rhs.column);
+        }
+        if (other.key.has_value() && other.key->kind == OperandKind::kColumn) {
+            note(other.key->column);
+        }
+    }
+
+    // The sink. `SELECT *` emits every column of the step it projects, and
+    // an aggregated chain reads its items and its grouping keys.
+    if (chain.star()) {
+        if (index == 0) all = true;
+    } else {
+        for (const ColumnRef& ref : chain.projection) note(ref);
+    }
+    if (chain.aggregate.has_value()) {
+        for (const AggregateItem& item : chain.aggregate->items) {
+            if (!item.star_arg) note(item.ref);
+        }
+        for (const ColumnRef& key : chain.aggregate->group_keys) note(key);
+    }
+
+    // The trail records the Keystone pk of every row a replayable step
+    // accepts, and reads it from the frame rather than looking it up. The
+    // *kind* is a compile-time fact, so this costs a column only on the
+    // steps that can record one.
+    if (IsTrailReplayable(step.kind)) {
+        mask |= 1;  // column 0 is the pk (invariant 11)
+    }
+
+    // A Cabin's miss walk records the key column and the pk. It forces a
+    // full decode at execute time already (step_vm.cpp), and naming the
+    // column here as well costs nothing and removes the dependency.
+    if (step.cabin.has_value() && step.cabin->col_pos < 64) {
+        mask |= std::uint64_t{1} << step.cabin->col_pos;
+        mask |= 1;
+    }
+
+    return all ? Step::kAllColumns : mask;
+}
+
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth);
@@ -984,6 +1061,22 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         chain.klass = StatementClass::kRangeSelect;
     } else {
         chain.klass = StatementClass::kJoinSelect;  // a one-relation scan is a chain of one
+    }
+
+    // ---- 7. What each step must decode *after* it has filtered (AP01) ---
+    //
+    // Last of all, because it reads the projection and the fold, which
+    // section 5 only just resolved. Everything above this line is unchanged
+    // by it - the steps, kinds, residuals and class an aggregated statement
+    // compiles to are still its unaggregated twin's, which is AG1 and which
+    // the contract suite pins.
+    const bool sub_chains_anywhere = HasAnySubChain(chain);
+    for (std::size_t i = 0; i < chain.steps.size(); ++i) {
+        Step& step = chain.steps[i];
+        step.read_columns =
+            sub_chains_anywhere
+                ? Step::kAllColumns
+                : ReadColumnsOf(chain, step, static_cast<std::uint16_t>(i));
     }
 
     return chain;

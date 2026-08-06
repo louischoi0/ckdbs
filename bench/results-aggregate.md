@@ -179,7 +179,42 @@ that pass and is therefore cheaper than no predicate at all.
 **This is not aggregation's defect** — `SELECT a FROM wide` decodes 12
 columns to emit 1 — but a fold is the consumer that makes it visible,
 because it is the only one that can read zero columns. `docs/workplan-aggregate-perf.md`
-`AP01` is the fix, and the plan's other items are sized against it.
+`AP01` is the fix.
+
+### AP01, measured
+
+`Step::read_columns` — the columns any consumer of the row touches, as
+opposed to the ones the filter needs — now bounds the post-residual decode.
+Same relations, same statements, same Release build:
+
+| statement | before | after | |
+|---|---:|---:|---:|
+| `SELECT COUNT(*) FROM narrow` (2 cols) | 4,474 µs | 3,259 µs | 1.37× |
+| `SELECT COUNT(*) FROM wide` (12 cols) | 11,990 µs | **3,732 µs** | **3.21×** |
+| `SELECT COUNT(*) FROM wide WHERE a = 1` | 3,898 µs | 3,764 µs | 1.04× |
+| `SELECT SUM(a) FROM wide` | 11,370 µs | **5,691 µs** | **2.00×** |
+| `SELECT a FROM wide` (1 of 12) | 13,022 µs | **7,672 µs** | **1.70×** |
+| `SELECT * FROM wide` | 32,009 µs | 35,304 µs | 0.91× |
+
+Three things to read out of it.
+
+**The anomaly is gone.** `COUNT(*)` without a WHERE was 3.1× *slower* than
+the same statement with one; it is now marginally faster, which is the only
+defensible ordering — a predicate cannot make a scan cheaper than not having
+one.
+
+**Width almost stopped mattering** for a statement that reads no column:
+`wide` was 2.7× `narrow` and is now 1.15×, and what remains is the wider
+relation's pages, not its columns.
+
+**A plain projection gained more than the fold did in absolute terms.**
+`SELECT a FROM wide` is 1.70× faster, which is AP01 confirming it was never
+an aggregation fix — the fold was only the consumer that made the waste
+visible, being the one that can read zero columns.
+
+`SELECT *` moved 9% the wrong way and is noise: its mask is `kAllColumns`
+either way, so it executes the identical code path. It is reported rather
+than dropped because a reader checking the table would otherwise wonder.
 
 ## AG11's defaults
 

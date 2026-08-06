@@ -983,16 +983,30 @@ private:
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
 
-        // ---- The row survived: build the rest of it ---------------------
+        // ---- The row survived: build the rest of what is read ------------
         //
         // Everything past this point reads columns the filter had no reason
         // to touch - the projection, the next step's probe key, the trail's
-        // pk, a sub-chain's correlation. Until now those slots still hold
-        // the *previous* row's values, so this is not an optimization to
-        // skip: it is what makes the partial decode above correct.
-        if (partial) {
+        // pk, the fold's items. Until now those slots still hold the
+        // *previous* row's values, so this is not an optimization to skip:
+        // it is what makes the partial decode above correct.
+        //
+        // **`read_columns`, not everything else** (workplan AP01). The
+        // filter's mask narrows the decode of a row about to be *rejected*
+        // and does nothing for one that survives, so a statement with no
+        // WHERE got no benefit at all - every row survived and every row
+        // decoded every column. `SELECT COUNT(*) FROM t` built an AstValue
+        // per column per row to fold none of them, which made adding a
+        // predicate 3.1x *faster* than not having one
+        // (`bench/results-aggregate.md`).
+        //
+        // A step that reads nothing further - a bare `COUNT(*)` over a
+        // relation with no predicate - decodes nothing here, and the walk
+        // becomes page iteration and a counter.
+        const std::uint64_t rest = step.read_columns & ~step.filter_columns;
+        if (partial && rest != 0) {
             if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
-                                             ~step.filter_columns, &spills_);
+                                             rest, &spills_);
                 !s.ok()) {
                 return s;
             }

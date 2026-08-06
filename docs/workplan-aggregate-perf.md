@@ -57,7 +57,7 @@ therefore shows the waste undiluted.
 
 ---
 
-## AP01 — Decode what the statement reads, not what the filter reads
+## AP01 — Decode what the statement reads, not what the filter reads — **BUILT**
 
 `Step` gains a second mask beside `filter_columns`: the columns any consumer
 of the row actually reads — the projection's refs, the aggregate spec's item
@@ -102,6 +102,21 @@ unchanged; and the chain-identity decision above is written into the spec.
 `agg-global` (9 columns, 2 read), which would move it from 0.36× to roughly
 0.7× of PostgreSQL. **Every projection benefits too**, which is the larger
 prize and the reason this is AP01.
+
+*Measured* (`bench/results-aggregate.md`): **3.21×** on `COUNT(*)` over a
+12-column relation, **2.00×** on `SUM`, and **1.70×** on a plain
+`SELECT a` — the projection gain confirming this was never an aggregation
+fix. `COUNT(*)` without a WHERE is no longer slower than with one, and
+relation width costs 1.15× where it cost 2.7×.
+
+*The decision the task said to settle, settled:* **a second field**, not a
+change to `filter_columns`. That name means what the *filter* needs, which
+is what the Cabin write-hook logic keys off and what the contract suite
+renders; narrowing the identity test would have been the more invasive
+answer. `read_columns` is simply not rendered, which conforms to spec §9.1
+literally — it fixes identity on "steps, kinds, residuals, class" and a
+decode mask is none of the four. The exclusion is commented in the test
+rather than left to be re-derived.
 
 ## AP02 — Fold from the cell, not from an `AstValue` (needs AP01)
 

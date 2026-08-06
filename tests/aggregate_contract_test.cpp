@@ -119,9 +119,18 @@ protected:
 
 // ---- Rendering, so a failure is readable --------------------------------
 //
-// Everything a chain carries **except** the fold and the output labels.
-// Those two are exactly what an aggregated statement is allowed to differ
-// in; anything else differing is the bug this file exists to catch.
+// Everything a chain carries **except** the fold, the output labels and
+// `read_columns`. Those are exactly what an aggregated statement is allowed
+// to differ in; anything else differing is the bug this file exists to
+// catch.
+//
+// `read_columns` is excluded deliberately, and the reason is spec §9.1: the
+// identity it fixes is "steps, kinds, residuals, class", and a decode mask
+// is none of the four - it says what a row is read *for*, not how it is
+// found. An aggregated statement and its twin do differ there, and must:
+// `SELECT COUNT(*)` reads no column where `SELECT qty` reads one (AP01).
+// `filter_columns` stays rendered, because it *is* derived from the residual
+// and would move only if the access path did.
 
 void RenderRef(std::ostringstream& os, const ColumnRef& ref) {
     os << ref.up << ':' << ref.rel_slot << ':' << ref.col_pos;
