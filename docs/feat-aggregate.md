@@ -202,8 +202,16 @@ word pays nothing for the feature.
 
 | Key | Meaning | Default |
 |---|---|---|
-| `aggregate_max_groups` | groups per statement | 65,536 `[PROPOSED]` |
+| `aggregate_max_groups` | groups per statement | 65,536 `[CONFIRMED 2026-08-06]` |
 | `aggregate_max_distinct` | DISTINCT entries per statement, summed over all sets | 1,048,576 `[PROPOSED]` |
+
+`aggregate_max_groups` is ratified by measurement (`bench/results-aggregate.md`):
+the fold's cost is proportional to **group count**, not row count, so a
+statement approaching the cap is already slow enough to be visible - the cap
+is a backstop rather than a tuning knob - and the ceiling works out at about
+27 MB per statement. `aggregate_max_distinct` stays `[PROPOSED]`: the same
+arithmetic puts it at about 84 MB per statement, the largest allocation any
+statement here can ask for, and no measured workload argues for a number.
 
 Exceeding either **fails the statement** with the key's name in the error.
 No spill, no truncation, no silent partial answer — a truncated group set
@@ -266,7 +274,11 @@ statement and leaves nothing behind.
 
 ## 10. Open items — do not assume
 
-- AG11 defaults (65,536 / 1,048,576) — ratify after the first bench.
+- ~~AG11's `aggregate_max_groups`~~ — **ratified at 65,536, 2026-08-06**
+  (`bench/results-aggregate.md`). `aggregate_max_distinct` is still open:
+  1,048,576 entries is roughly 84 MB per statement, and settling it needs a
+  workload with a genuinely high-cardinality `COUNT(DISTINCT)` measured for
+  resident memory rather than latency.
 - `MIN/MAX(DISTINCT)` accept-as-no-op vs refuse (§3.2 `[PROPOSED]`).
 - Lifting ORDER BY over aggregated output — needs an output sort; decide
   with HAVING, since both are post-fold consumers and should share the
