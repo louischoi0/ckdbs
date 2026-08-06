@@ -154,6 +154,33 @@ this file expected: ckdbs loses the low-cardinality folds by 2-3× and **wins
 the high-cardinality one at 1.37×**, because PostgreSQL's HashAggregate
 degrades with group count faster than this fold does.
 
+## Where the time actually goes
+
+Measured on the Release build, same 20,000-row walk, one connection. The
+fold reads **no column** in any of these three:
+
+| statement | mean | relation |
+|---|---:|---|
+| `SELECT COUNT(*) FROM narrow` | 4,474 µs | 2 columns |
+| `SELECT COUNT(*) FROM wide` | 11,990 µs | 12 columns |
+| `SELECT COUNT(*) FROM wide WHERE a = 1` | **3,898 µs** | 12 columns |
+
+Two facts fall out. Width costs **2.7×** on a statement that reads no
+column. And adding a predicate makes `COUNT(*)` **3.1× faster** than not
+having one, while doing strictly more logical work.
+
+`Step::filter_columns` is computed from the residual alone, and
+`AcceptTupleAt` decodes that mask, tests the residual, then decodes
+`~filter_columns` for every *surviving* row. An unfiltered `COUNT(*)` has an
+empty residual, so every row survives and every row builds an `AstValue` for
+all 12 columns to fold none of them. A predicate rejects 19,999 rows before
+that pass and is therefore cheaper than no predicate at all.
+
+**This is not aggregation's defect** — `SELECT a FROM wide` decodes 12
+columns to emit 1 — but a fold is the consumer that makes it visible,
+because it is the only one that can read zero columns. `docs/workplan-aggregate-perf.md`
+`AP01` is the fix, and the plan's other items are sized against it.
+
 ## AG11's defaults
 
 **`aggregate_max_groups = 65,536` — ratified `[CONFIRMED]`.** Two reasons,

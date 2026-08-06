@@ -113,6 +113,38 @@ largest single movement in this document. A heap relation still starts at
 the head, because it has no index to descend and finding the low bound *is*
 the walk.
 
+### The second run, 2026-08-06 at `983d72d`
+
+A full independent re-run on a Release build, which is where the `agg-*`
+section below comes from. Kept beside the table above rather than replacing
+it, because those "was" columns are tied to the run that produced them and a
+substitution would strand them.
+
+| shape | run A ckdbs | run B ckdbs | run A pg | run B pg | run B vs pg |
+|---|---:|---:|---:|---:|---:|
+| bar-lookup | 7,842 | 7,656 | 4,538 | 4,447 | 1.72× |
+| point-join | 6,910 | 6,711 | 2,688 | 2,046 | 3.28× |
+| bar-range | 2,183 | 2,199 | 381 | 391 | 5.63× |
+| symbol-history | 34 | 36 | 9 | 9 | 4.04× |
+| model-join | 820 | 890 | 278 | 220 | 4.04× |
+| day-slice | 78 | 82 | 140 | 138 | 0.59× |
+| cross-join | 79 | 82 | 130 | 127 | 0.65× |
+
+**Every ckdbs figure reproduced within 3%.** The PostgreSQL side is the
+noisier of the two — `point-join` moved 24% and `model-join` 21% between
+runs, both downward — so a ckdbs/pg ratio quoted to three significant
+figures is over-reading this data. The direction and the order of magnitude
+are what reproduce.
+
+The Cabin gains reproduce too: day-slice **83.22×** against PostgreSQL's
+index at 20.94×, cross-join **64.83×** against 13.04×, and `symbol-history`
+still **0.59×** — a Cabin on a column with 8 values over 60,480 rows costs
+more than it saves, which is the row this table exists to keep honest.
+
+The write sweep reproduced almost exactly: 683 against 707 rows/s at
+autocommit (0.97×), reaching **1.75×** at 1,000 rows per transaction, with
+each engine's gain against its own autocommit rate at 13.60× and 7.51×.
+
 ## Why ckdbs lost those three — the investigation that produced the fixes
 
 Kept because it is the reasoning behind `a1559e3` and `43d05aa`, and because
