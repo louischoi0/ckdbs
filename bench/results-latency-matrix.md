@@ -280,3 +280,116 @@ verified both times. The three sharing points are the segment table (a
 mutex, copied out and synced outside it), the durable watermark (atomic),
 and the ring (reactor-only, untouched by the writer).
 
+---
+
+# W3, the drain bound: built, measured, reverted
+
+The plan carried a fourth item - bound the WAL drain per tick, the way the
+checkpointer bounds itself at `pages_per_step = 64`. Its justification was
+preventive: "once W1 lands, the drain is the thing standing between a parked
+committer and its reply, so an unbounded one reintroduces the convoy in a
+new place." Nothing had measured it.
+
+## What the drain actually costs
+
+Two configurations, 4 connections, read from the sync line's `durable_lsn`
+deltas:
+
+| | syncs | bytes made durable per sync |
+|---|---|---|
+| `group` | 6,746 | p50 **424 B**, p95 680 B, p99 768 B, max 16,760 B |
+| `relaxed` | 34 | p50 **1,018,112 B**, p95 1,026,472 B, max 1,096,648 B |
+
+Under `group` there is nothing to bound: the post-task hook drains every
+reactor iteration, so each drain writes a few hundred bytes and the ring is
+empty every time. A cap would have capped nothing.
+
+Under `relaxed` the drain wrote **~1 MB in one call**, on the reactor
+thread. `DrainOnce()` only flushed when the 10 ms sync interval fired, so
+the ring was allowed to fill for the whole window first.
+
+## The fix that followed, and why it did not help
+
+A byte cap was the wrong instrument; the two cadences are the point. D3
+bounds when bytes must be **durable** and says nothing about when they must
+be **written**, and writing is cheap - a page-cache write, no device round
+trip. So: flush whatever is staged on every tick, sync only when the window
+is up. No tuning parameter, and a ring emptied every iteration cannot grow
+large, which is a bound by construction.
+
+Measured against the split design in the section above:
+
+| | conns | before | after W3 |
+|---|---|---|---|
+| `relaxed` TPS | 1 | 1,890 | 1,828 |
+| `relaxed` insert p99 | 1 | 202 us | 199 us |
+| `relaxed` TPS | 4 | 3,443 | 3,384 |
+| `relaxed` insert p99 | 4 | 937 us | 984 us |
+| `group` insert p99 | 4 | 4,920 us | 4,823 us |
+| *PostgreSQL TPS* | *4* | *483* | *491* |
+
+**Nothing moved.** Every difference is inside the drift PostgreSQL shows in
+the same runs. If anything the two `relaxed` TPS figures are 2-3% lower,
+which would be the extra `pwrite` per reactor iteration - too small to
+separate from noise at this magnitude.
+
+**So it was reverted.** The error worth naming is the one in the reasoning:
+the flush *size* was measured and its *cost* was assumed. A megabyte of
+sequential writing into page cache is one syscall at memory bandwidth, on
+the order of 100-200 us, against a p95 of ~520 us and a p99 of ~940 us - it
+was never the dominant term.
+
+The speculative case for keeping it - that at ten times the throughput the
+accumulated write would be 10 MB and would matter - is the same species of
+argument that produced W2 and W3's original framing, both of which were
+wrong. It can be rebuilt in an afternoon if a workload ever shows the drain
+costing something.
+
+## The scoreboard for the plan
+
+| item | outcome |
+|---|---|
+| W0, the harness | built; falsified a finding from the session that proposed it |
+| W1, the group committer | built; +82% TPS at 4 connections |
+| the ~2.2 ms floor | attributed to D3's loss-window sync; the interval is now a config key |
+| the WAL writer thread | built, then split by *who waits*; `relaxed` p99 2,208 -> 202 us |
+| W2, the checkpoint sync | never built - its evidence came from a host at load average 3.2 |
+| W3, the drain bound | built, measured, reverted - no effect |
+
+Two of the five items were aimed at nothing, and both were caught by
+measuring rather than by argument.
+
+---
+
+# Current state
+
+Measured at `41cef92` on a quiet host (load 0.17), same harness and
+parameters as the baseline at the top of this file. `trade-insert`
+microseconds; PostgreSQL measured in the same runs as the control.
+
+| configuration | conns | TPS then | now | | p99 then | now | | ratio then | now |
+|---|---|---|---|---|---|---|---|---|---|
+| ckdbs `group` | 1 | 201 | 198 | −2% | 2,242 | 2,310 | +3% | 2.2× | 2.2× |
+| ckdbs `relaxed` | 1 | 1,612 | **1,829** | +13% | 2,208 | **187** | **−92%** | 18.2× | **1.5×** |
+| ckdbs `group` | 4 | 214 | **390** | **+83%** | 9,422 | **4,377** | **−54%** | 2.4× | 2.1× |
+| ckdbs `relaxed` | 4 | 2,875 | **3,556** | +24% | 2,760 | **768** | −72% | 13.2× | **3.6×** |
+| PostgreSQL | 1 | 213 | 212 | −0% | 1,322 | 1,346 | +2% | 1.2× | 1.2× |
+| PostgreSQL | 4 | 491 | 495 | +1% | 2,672 | 2,626 | −2% | 1.4× | 1.3× |
+
+PostgreSQL moving by 2% or less across every row is what says the rest is
+the engine and not the box.
+
+**Where the two engines now stand.** At one connection `relaxed` answers
+1,829 TPS against PostgreSQL's 212 with a tighter tail ratio (1.5× against
+1.2×, at an eighth of the latency); `group` - the durable, shipped default -
+answers 198 against 212, at parity. At four connections `group` reaches 390
+against 494, or **79% of PostgreSQL**, where it began at 43%.
+
+**What is left is not durability.** The remaining gap at four connections is
+general throughput on two cores against a process-per-connection engine, and
+`group`'s tail ratio (2.1×) is now within sight of PostgreSQL's (1.3×) while
+its median is the same fsync. The next honest target is elsewhere: the
+statement path itself, where parse was measured at 32-38% of an unlogged
+statement (`results-txn-layers.md` §4) and is no longer hidden behind a
+device.
+
