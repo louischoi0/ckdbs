@@ -401,7 +401,7 @@ void Expeditor::BroadcastCatalogInvalidation(sched::Scheduler& core0_scheduler) 
     // to re-read now would read the state *before* this DDL - and conclude
     // the new relation does not exist, permanently, until something else
     // happened to flush. This is the ordering the whole scheme rests on.
-    if (Status s = store_->FlushPages(catalog::kAllCatalogPages); !s.ok()) {
+    if (Status s = store_->FlushPages(catalog::kEveryCatalogPage); !s.ok()) {
         // Reported and not propagated: the DDL itself has already succeeded
         // and the caller is BumpVersion(), which returns void. The cost is
         // peers that keep a stale catalog until the next flush - stale, not

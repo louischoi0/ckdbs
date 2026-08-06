@@ -8,12 +8,20 @@
 #include <cctype>
 #include <limits>
 
+#include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/visit.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/varheap.hpp"
 
 namespace kds::catalog {
+
+// The overflow range must end exactly where the user pages begin: a catalog
+// page at or above this is one a peer core may not fault (well_known.hpp).
+static_assert(kCatalogOverflowLimit == server::kFirstUserPageId,
+              "the catalog overflow range must end at the first user page");
 
 namespace {
 
@@ -31,37 +39,163 @@ namespace {
 // dirties is a read a peer cannot do at all. Which is the ownership check
 // doing exactly its job - the bug predates it by a long way.
 template <typename RowT>
-StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId page_id) {
-    auto bytes = store.GetForRead(page_id);
-    if (!bytes.ok()) return bytes.status();
-
-    heap::PageView page(bytes.value());
+StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root) {
     std::vector<RowT> rows;
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
-        }
-        auto row = RowT::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        rows.push_back(row.value());
-    }
+    Status inner = Status::OK();
+    Status walked = heap::ChainVisit(
+        store, root, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                inner = tuple.status();
+                return tuple.status();
+            }
+            auto row = RowT::Decode(tuple.value().payload);
+            if (!row.ok()) {
+                inner = row.status();
+                return row.status();
+            }
+            rows.push_back(row.value());
+            return storage::VisitControl::kContinue;
+        });
+    if (!inner.ok()) return inner;
+    if (!walked.ok()) return walked;
     return rows;
 }
 
-template <typename RowT>
-Status InsertRow(storage::PageStore& store, PageId page_id, const RowT& row,
-                  std::uint64_t trx_id) {
-    auto bytes = store.Get(page_id);
-    if (!bytes.ok()) return bytes.status();
+// Walks the chain and lets `fn` act on the first row it accepts.
+//
+// Every catalog mutation has the same shape - find the row that matches,
+// change it or retire it, stop - and each used to spell out its own loop
+// over a single page's slots. That loop is what chaining breaks, so there
+// is now one of it: `fn` returns false to keep looking, true when it has
+// acted, or a failure, which is reported as-is.
+//
+// **kWrite**, unconditionally: every caller of this writes. A reader uses
+// ScanAll, which fetches read-only so a lookup does not dirty a catalog
+// page (the bug multicore's ownership check surfaced).
+template <typename RowT, typename Fn>
+StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn) {
+    bool acted = false;
+    Status inner = Status::OK();
+    Status walked = heap::ChainVisit(
+        store, root, storage::PageAccess::kWrite,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                inner = tuple.status();
+                return tuple.status();
+            }
+            auto row = RowT::Decode(tuple.value().payload);
+            if (!row.ok()) {
+                inner = row.status();
+                return row.status();
+            }
+            auto done = fn(row.value(), page, slot, tuple.value());
+            if (!done.ok()) {
+                inner = done.status();
+                return done.status();
+            }
+            if (!done.value()) return storage::VisitControl::kContinue;
+            acted = true;
+            return storage::VisitControl::kStop;
+        });
+    if (!inner.ok()) return inner;
+    if (!walked.ok()) return walked;
+    return acted;
+}
 
-    heap::PageView page(bytes.value());
-    auto encoded = row.Encode();
-    auto slot = page.InsertTuple(encoded, trx_id);
-    if (!slot.ok()) return slot.status();
-    return Status::OK();
+// The page a growing catalog chain takes next.
+//
+// **From the reserved low range, never from the free map's general
+// supply** (well_known.hpp says why: a peer may only fault low pages, and
+// the invalidation flush has to be able to name every catalog page). The
+// range is probed rather than tracked, because `CreateAt` already answers
+// "is this id taken" durably through the free map - a second record of it
+// here would be a second thing to keep true across a crash.
+StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> AllocateCatalogPage(
+    storage::PageStore& store) {
+    for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) {
+        auto created = store.CreateAt(id);
+        if (created.ok()) return std::make_pair(id, created.value());
+        if (created.status().code() != StatusCode::kAlreadyExists) return created.status();
+    }
+    return Status::OutOfSpace(
+        "catalog: the reserved catalog page range (" + std::to_string(kCatalogOverflowFirst) +
+        ".." + std::to_string(kCatalogOverflowLimit - 1) +
+        ") is full; every catalog relation's chain together has outgrown it");
+}
+
+// Appends one row to the chain rooted at `root`, growing it by a page when
+// the tail is full.
+//
+// This is `heap::ChainInsert` minus the one thing a catalog row does not
+// have: a **Keystone id**. A user tuple's first word is its primary key, and
+// the heap chain uses it to keep pages key-ordered and to enforce `min_key`
+// (invariant 3). A catalog row is a fixed-offset struct with no such word,
+// so there is no key to order by and every page carries `min_key = 0` - the
+// chain here is an append list, not a semi-sorted heap. Sharing the heap's
+// insert would mean inventing an id for a row nothing looks up by id.
+template <typename RowT>
+Status InsertRow(storage::PageStore& store, PageId root, const RowT& row,
+                  std::uint64_t trx_id) {
+    const auto encoded = row.Encode();
+
+    PageId current = root;
+    for (std::uint32_t steps = 0; steps < kCatalogOverflowLimit; ++steps) {
+        auto bytes = store.Get(current);
+        if (!bytes.ok()) return bytes.status();
+
+        heap::PageView page(bytes.value());
+        auto slot = page.InsertTuple(encoded, trx_id);
+        if (slot.ok()) return Status::OK();
+        if (slot.status().code() != StatusCode::kOutOfSpace) return slot.status();
+
+        // Full. Walk on if there is already a next page, otherwise grow.
+        const PageId next = page.next_page_id();
+        if (next != kInvalidPageId) {
+            current = next;
+            continue;
+        }
+
+        auto created = AllocateCatalogPage(store);
+        if (!created.ok()) return created.status();
+        auto [new_id, new_bytes] = created.value();
+
+        // min_key 0, like every catalog page: these rows carry no key to
+        // prune by, and a nonzero min_key would be a claim about ids that
+        // do not exist here.
+        auto fresh = heap::PageView::CreateEmpty(new_bytes, 0);
+        if (!fresh.ok()) return fresh.status();
+
+        auto placed = fresh.value().InsertTuple(encoded, trx_id);
+        if (!placed.ok()) {
+            // A row no empty page can hold. The page stays allocated and
+            // unlinked rather than freed - there is no free-page path - and
+            // nothing reaches it, which is the same trade heap_chain makes.
+            return placed.status();
+        }
+
+        // Linked **after** the row is in it, and through a re-fetch:
+        // CreateAt may have moved frames, and a link published before the
+        // page it points at is filled is a link a reader can follow into an
+        // empty page. Catalog writes are unlogged, so this ordering is the
+        // only thing protecting a concurrent reader on this core.
+        auto tail_again = store.Get(current);
+        if (!tail_again.ok()) return tail_again.status();
+        heap::PageView(tail_again.value()).set_next_page_id(new_id);
+        return Status::OK();
+    }
+    return Status::Corruption("catalog: chain from page " + std::to_string(root) +
+                              " is longer than the reserved range can be");
 }
 
 }  // namespace
@@ -743,23 +877,14 @@ StatusOr<SysTypeRow> Catalog::ResolveTypeByVal(std::uint32_t type_val) {
 }
 
 StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
-    auto bytes = store_.Get(kCatalogPageTables);
-    if (!bytes.ok()) return bytes.status();
+    std::uint64_t issued = 0;
+    auto acted = ForFirstRow<SysTableRow>(
+        store_, kCatalogPageTables,
+        [&](SysTableRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+        if (row.oid != table_oid) return false;
 
-    heap::PageView page(bytes.value());
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
-        }
-
-        auto row = SysTableRow::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        if (row.value().oid != table_oid) continue;
-
-        const std::uint64_t id = row.value().next_id;
+        const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
             // bottom would hand out an id that is still some tuple's
@@ -772,11 +897,9 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // between here and the insert burns an id, which is harmless - the
         // sequence only has to be unique and monotonic, never gapless. The
         // reverse order would reissue an id after a crash, which is not.
-        row.value().next_id = id + 1;
-        auto encoded = row.value().Encode();
-        if (Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id,
-                                            tuple.value().undo_ptr);
-            !s.ok()) {
+        row.next_id = id + 1;
+        auto encoded = row.Encode();
+        if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
         }
         // One line per issued id: the sequence is the tuple identity
@@ -786,48 +909,43 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
             log_->Trace("catalog", "issued row id " + std::to_string(id) + " for table oid " +
                                        std::to_string(table_oid));
         }
-        return id;
-    }
-
-    return Status::NotFound("no sys.tables row for this oid");
+        issued = id;
+        return true;
+    });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.tables row for this oid");
+    return issued;
 }
 
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
-    auto bytes = store_.Get(kCatalogPageTables);
-    if (!bytes.ok()) return bytes.status();
+    auto acted = ForFirstRow<SysTableRow>(
+        store_, kCatalogPageTables,
+        [&](SysTableRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+        if (row.oid != table_oid) return false;
 
-    heap::PageView page(bytes.value());
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
+        const PageId old_desc_page_id = row.desc_page_id;
+        row.desc_page_id = new_desc_page_id;
+        auto encoded = row.Encode();
+        if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+            return s;
         }
-
-        auto row = SysTableRow::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        if (row.value().oid != table_oid) continue;
-
-        const PageId old_desc_page_id = row.value().desc_page_id;
-        row.value().desc_page_id = new_desc_page_id;
-        auto encoded = row.value().Encode();
-        Status s = page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
         // desc_page_id is a field of every cached TableAccess, so a relink
         // stales it. Bumped only on success: a failed overwrite moved
         // nothing.
-        if (s.ok()) BumpVersion("desc-page relink");
-        if (s.ok() && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        BumpVersion("desc-page relink");
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
             // A relation's entry page moving is a structural change to the
             // relation, rare enough to deserve Debug rather than Trace.
             log_->Debug("catalog", "table oid " + std::to_string(table_oid) +
                                        " desc page " + std::to_string(old_desc_page_id) + " -> " +
                                        std::to_string(new_desc_page_id));
         }
-        return s;
-    }
-
-    return Status::NotFound("no sys.tables row for this oid");
+        return true;
+    });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.tables row for this oid");
+    return Status::OK();
 }
 
 // ---- sys.patterns ----------------------------------------------------
@@ -968,36 +1086,30 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
 
 Status Catalog::MutatePatternRow(std::uint64_t pattern_id,
                                   const std::function<void(SysPatternRow&)>& mutate) {
-    auto bytes = store_.Get(kCatalogPagePatterns);
-    if (!bytes.ok()) return bytes.status();
-
-    heap::PageView page(bytes.value());
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
-        }
-
-        auto row = SysPatternRow::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        if (row.value().pattern_id != pattern_id) continue;
+    auto acted = ForFirstRow<SysPatternRow>(
+        store_, kCatalogPagePatterns,
+        [&](SysPatternRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+        if (row.pattern_id != pattern_id) return false;
         // The same version filter GetSysPatternRow() applies, and for the
         // same reason: a row from another revision names a shape that is
         // not the one it claims, so it is not this pattern and must not be
         // written through.
-        if (!parser::IsCurrentFingerprintVersion(row.value().fingerprint_version)) continue;
+        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) return false;
 
-        mutate(row.value());
-        auto encoded = row.value().Encode();
+        mutate(row);
+        auto encoded = row.Encode();
         // In place, never delete+insert: the row size is unchanged, and a
         // pattern that briefly does not exist is a pattern a concurrent
         // lookup misses.
-        return page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
-    }
-
-    return Status::NotFound("no sys.patterns row for this pattern_id");
+        if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+            return s;
+        }
+        return true;
+    });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.patterns row for this pattern_id");
+    return Status::OK();
 }
 
 Status Catalog::SetPatternWaystoneRoot(std::uint64_t pattern_id, PageId root,
@@ -1060,21 +1172,12 @@ Status Catalog::TouchPattern(std::uint64_t pattern_id, std::uint64_t last_seen) 
 }
 
 Status Catalog::RetirePattern(std::uint64_t pattern_id) {
-    auto bytes = store_.Get(kCatalogPagePatterns);
-    if (!bytes.ok()) return bytes.status();
-
-    heap::PageView page(bytes.value());
-    std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
-        }
-        auto row = SysPatternRow::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        if (row.value().pattern_id != pattern_id) continue;
-        if (!parser::IsCurrentFingerprintVersion(row.value().fingerprint_version)) continue;
+    auto acted = ForFirstRow<SysPatternRow>(
+        store_, kCatalogPagePatterns,
+        [&](SysPatternRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple&) -> StatusOr<bool> {
+        if (row.pattern_id != pattern_id) return false;
+        if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) return false;
 
         if (Status s = page.RetireSlot(i); !s.ok()) return s;
 
@@ -1088,9 +1191,11 @@ Status Catalog::RetirePattern(std::uint64_t pattern_id) {
         if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
             log_->Debug("catalog", "retired pattern " + std::to_string(pattern_id));
         }
-        return Status::OK();
-    }
-    return Status::NotFound("no sys.patterns row for this pattern_id");
+        return true;
+    });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.patterns row for this pattern_id");
+    return Status::OK();
 }
 
 Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
@@ -1099,37 +1204,32 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
         return Status::InvalidArgument("catalog: access kind 0 is reserved for an unset row");
     }
 
-    auto bytes = store_.Get(kCatalogPageAccessStats);
-    if (!bytes.ok()) return bytes.status();
-
-    heap::PageView page(bytes.value());
-    const std::uint16_t n = page.slot_count();
+    // `live` counts every row the walk passed, across every page of the
+    // chain - which is what the cap below has to be measured against now
+    // that the relation is not one page.
     std::size_t live = 0;
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
-        }
+    auto acted = ForFirstRow<SysAccessStatRow>(
+        store_, kCatalogPageAccessStats,
+        [&](SysAccessStatRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
         ++live;
-
-        auto row = SysAccessStatRow::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        if (row.value().kind != kind || row.value().rel_id != rel_id ||
-            row.value().column_mask != column_mask) {
-            continue;
+        if (row.kind != kind || row.rel_id != rel_id || row.column_mask != column_mask) {
+            return false;
         }
 
         // Saturating for the reason rows.hpp gives: a wrapped count would
         // invert the ranking this exists to produce.
-        if (row.value().use_count != std::numeric_limits<std::uint64_t>::max()) {
-            ++row.value().use_count;
-        }
-        row.value().last_seen = last_seen;
-        auto encoded = row.value().Encode();
+        if (row.use_count != std::numeric_limits<std::uint64_t>::max()) ++row.use_count;
+        row.last_seen = last_seen;
+        auto encoded = row.Encode();
         // In place - the row size is fixed, so there is nothing to move.
-        return page.OverwriteTuple(i, encoded, tuple.value().trx_id, tuple.value().undo_ptr);
-    }
+        if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+            return s;
+        }
+        return true;
+    });
+    if (!acted.ok()) return acted.status();
+    if (acted.value()) return Status::OK();
 
     // A shape nobody has recorded. Admitted only under the cap: an
     // unbounded catalog relation written from the statement path is the
@@ -1227,20 +1327,11 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
 }
 
 Status Catalog::DropCabin(std::uint64_t cabin_id) {
-    auto bytes = store_.Get(kCatalogPageCabins);
-    if (!bytes.ok()) return bytes.status();
-
-    heap::PageView page(bytes.value());
-    const std::uint16_t n = page.slot_count();
-    for (std::uint16_t i = 0; i < n; ++i) {
-        auto tuple = page.ReadTuple(i);
-        if (!tuple.ok()) {
-            if (tuple.status().code() == StatusCode::kNotFound) continue;
-            return tuple.status();
-        }
-        auto row = SysCabinRow::Decode(tuple.value().payload);
-        if (!row.ok()) return row.status();
-        if (row.value().cabin_id != cabin_id) continue;
+    auto acted = ForFirstRow<SysCabinRow>(
+        store_, kCatalogPageCabins,
+        [&](SysCabinRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple&) -> StatusOr<bool> {
+        if (row.cabin_id != cabin_id) return false;
 
         // Retired, not delete-marked - RetirePattern() states the argument,
         // and it is the same one: a catalog read has no snapshot to filter a
@@ -1252,9 +1343,11 @@ Status Catalog::DropCabin(std::uint64_t cabin_id) {
         if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
             log_->Info("catalog", "dropped cabin " + std::to_string(cabin_id));
         }
-        return Status::OK();
-    }
-    return Status::NotFound("no sys.cabins row for this cabin_id");
+        return true;
+    });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.cabins row for this cabin_id");
+    return Status::OK();
 }
 
 StatusOr<std::vector<SysCabinRow>> Catalog::ListCabins() {

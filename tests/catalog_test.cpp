@@ -8,6 +8,7 @@
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/server/superblock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -713,6 +714,149 @@ TEST_F(OwnerCoreTest, OwnershipSurvivesAReopen) {
     auto row = reopened.GetSysTableRow(oid);
     ASSERT_TRUE(row.ok()) << row.status().message();
     EXPECT_EQ(row.value().owner_core, assigned);
+}
+
+// ---- The catalog relations chain (docs/keystoneid-k0-findings.md) --------
+//
+// `sys.columns` used to be one fixed 8 KB page that did not chain, so the
+// whole instance held ~68 column rows and the CREATE TABLE that needed the
+// 69th failed with "heap page has no room for this tuple". These tests
+// cross that boundary on purpose: the interesting row is the first one on
+// the *second* page, because everything about reading it - the scan, the
+// lookups built on the scan, the mutators that find a row and write it
+// back - used to stop at the end of page one.
+
+namespace {
+
+// Wide enough that a handful of relations exhaust one page, and named so
+// the arithmetic is visible: a page holds about 68 column rows.
+Schema WideSchema(int columns) {
+    Schema schema;
+    for (int i = 0; i < columns; ++i) {
+        SysColumnRow col{};
+        col.pos = static_cast<std::uint32_t>(i);
+        SetName(col.name, "c" + std::to_string(i));
+        col.type_val = kTypeValInt64;
+        col.len = 8;
+        col.notnull = true;
+        schema.columns.push_back(col);
+    }
+    return schema;
+}
+
+}  // namespace
+
+TEST(CatalogChain, ColumnsBeyondOnePageAreStoredAndReadBack) {
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
+    Catalog catalog(store, storage::kDefaultInlineCellWidth);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    // 12 relations x 20 columns = 240 column rows, comfortably past the
+    // ~68 one page holds.
+    std::vector<Oid> oids;
+    for (int i = 0; i < 12; ++i) {
+        auto oid = catalog.CreateTable(kNamespacePublic, "wide" + std::to_string(i),
+                                       WideSchema(20), ClusteredType::kHeap);
+        ASSERT_TRUE(oid.ok()) << "relation " << i << ": " << oid.status().message();
+        oids.push_back(oid.value());
+    }
+
+    // Every relation's schema still reads back whole - including the ones
+    // whose rows landed on a later page.
+    for (std::size_t i = 0; i < oids.size(); ++i) {
+        auto schema = catalog.BuildSchemaFromColumns(oids[i]);
+        ASSERT_TRUE(schema.ok()) << "relation " << i << ": " << schema.status().message();
+        EXPECT_EQ(schema.value().columns.size(), 20u) << "relation " << i;
+        EXPECT_EQ(NameView(schema.value().columns[19].name), "c19") << "relation " << i;
+    }
+}
+
+TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
+    Catalog catalog(store, storage::kDefaultInlineCellWidth);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    for (int i = 0; i < 12; ++i) {
+        ASSERT_TRUE(catalog.CreateTable(kNamespacePublic, "wide" + std::to_string(i),
+                                        WideSchema(20), ClusteredType::kHeap)
+                        .ok());
+    }
+
+    // Follow sys.columns' links: more than one page, and every page after
+    // the root inside the reserved range - which is what keeps a peer able
+    // to fault it (MayFault admits only low pages read-only).
+    PageId at = kCatalogPageColumns;
+    int pages = 0;
+    while (at != kInvalidPageId) {
+        ++pages;
+        if (at != kCatalogPageColumns) {
+            EXPECT_GE(at, kCatalogOverflowFirst) << "page " << at << " is below the range";
+            EXPECT_LT(at, kCatalogOverflowLimit) << "page " << at << " is a user page";
+        }
+        auto bytes = store.GetForRead(at);
+        ASSERT_TRUE(bytes.ok());
+        at = heap::PageView(bytes.value()).next_page_id();
+        ASSERT_LE(pages, 64) << "the chain does not terminate";
+    }
+    EXPECT_GT(pages, 1) << "240 column rows should not fit on one page";
+}
+
+// The mutators walk too. `AllocateRowId` finds a sys.tables row and writes
+// it back; a row on a later page used to be invisible to it, which would
+// have made the relation un-insertable rather than merely un-listable.
+TEST(CatalogChain, ASequenceOnALaterPageStillIssuesIds) {
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
+    Catalog catalog(store, storage::kDefaultInlineCellWidth);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    // Enough relations that sys.tables itself needs a second page: its rows
+    // are wider than a column row, so this takes fewer of them.
+    std::vector<Oid> oids;
+    for (int i = 0; i < 60; ++i) {
+        auto oid = catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
+                                       WideSchema(1), ClusteredType::kHeap);
+        ASSERT_TRUE(oid.ok()) << "relation " << i << ": " << oid.status().message();
+        oids.push_back(oid.value());
+    }
+
+    // The last relation created is the furthest into the chain.
+    const Oid last = oids.back();
+    auto first_id = catalog.AllocateRowId(last);
+    ASSERT_TRUE(first_id.ok()) << first_id.status().message();
+    auto second_id = catalog.AllocateRowId(last);
+    ASSERT_TRUE(second_id.ok()) << second_id.status().message();
+    EXPECT_EQ(second_id.value(), first_id.value() + 1);
+
+    // And the bump persisted, which is the half that needs the *write* to
+    // have found the right page.
+    auto row = catalog.GetSysTableRow(last);
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().next_id, second_id.value() + 1);
+}
+
+TEST(CatalogChain, NameLookupFindsARelationOnALaterPage) {
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
+    Catalog catalog(store, storage::kDefaultInlineCellWidth);
+    ASSERT_TRUE(catalog.Bootstrap().ok());
+
+    for (int i = 0; i < 60; ++i) {
+        ASSERT_TRUE(catalog.CreateTable(kNamespacePublic, "t" + std::to_string(i),
+                                        WideSchema(1), ClusteredType::kHeap)
+                        .ok());
+    }
+    auto oid = catalog.FindTableOidByName("t59");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // The 60 user relations plus the bootstrap ones - the point is that the
+    // listing walks past the end of the root page, not the exact total.
+    auto listed = catalog.ListTables();
+    ASSERT_TRUE(listed.ok());
+    EXPECT_GE(listed.value().size(), 60u);
+    bool found_last = false;
+    for (const SysObjectRow& obj : listed.value()) {
+        if (NameView(obj.name) == "t59") found_last = true;
+    }
+    EXPECT_TRUE(found_last) << "the relation furthest into the chain is missing from the list";
 }
 
 }  // namespace

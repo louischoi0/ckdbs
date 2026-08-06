@@ -135,7 +135,7 @@ void CoreRuntime::InvalidateCatalog() {
     // they were derived from is a no-op: the next scan reads the same stale
     // bytes back and reaches the same conclusion. The frames are the
     // authority, the cache is the memo.
-    if (Status s = store_->EvictClean(catalog::kAllCatalogPages); !s.ok()) {
+    if (Status s = store_->EvictClean(catalog::kEveryCatalogPage); !s.ok()) {
         // A dirty catalog frame on a peer means something wrote a page it
         // may not write, which the store's own check should already have
         // refused. Reported rather than propagated - there is no caller,

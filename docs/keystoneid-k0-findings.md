@@ -144,13 +144,26 @@ specified. Implemented without bump-ahead, it makes inserts roughly 8× slower
 than they are today and forecloses the relaxed durability class entirely.
 
 **One thing found while measuring, unrelated to K1 and more serious than
-it.** The catalog cannot hold more than **~62 columns in total across every
-user relation** — 31 two-column tables, 15 four-column tables, 7
-eight-column tables, measured. The fixed catalog pages are single pages that
-do not chain and `sys.columns` fills first. This bounds §3's O(relations)
-scan so tightly that the scaling cliff cannot happen, which is the only
-reason it appears in this document; it belongs to the catalog, and for a
-product aimed at financial systems it needs its own item.
+it — since fixed.** The catalog could not hold more than **~62 columns in
+total across every user relation** — 31 two-column tables, 15 four-column
+tables, 7 eight-column tables, measured. The fixed catalog pages were single
+pages that did not chain, and `sys.columns` filled first.
+
+**Fixed 2026-08-06: the catalog relations chain.** Each fixed page id is now
+a chain *root*; a full page links to the next, taken from a reserved range
+of low page ids (`kCatalogOverflowFirst`..`kCatalogOverflowLimit`, ~114
+pages). A page holds 68 `sys.columns` rows measured on disk, so the ceiling
+is ~7,800 columns for the instance. It is still a ceiling, and the range is
+still reserved rather than unbounded, for a reason worth keeping: a catalog
+page has to sit below the first user page or a peer core may not fault it
+(`DevicePageStore::MayFault`, workplan-crosscore.md P6).
+
+Two things this did **not** change. Nothing reclaims a catalog row - there
+is no `DROP TABLE` - so the ceiling is on columns ever created, not on
+columns live. And §3's O(relations) scan is now genuinely O(relations)
+across pages rather than bounded by one page filling, so the scaling cliff
+this finding said "cannot happen" now can; that is the cost of removing the
+limit and it belongs to whoever owns the catalog's lookup path.
 
 ## 6. The oid half of §1.2 is false
 

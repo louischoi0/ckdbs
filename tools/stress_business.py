@@ -154,12 +154,14 @@ from ckdbs_cli import DEFAULT_HOST, DEFAULT_PORT, ServerConnection, format_reply
 # not supplied on INSERT (invariant 11). It is written out in each column
 # list anyway because CREATE TABLE declares it; only INSERT omits it.
 #
-# The whole instance holds roughly 62 columns across all user relations -
-# the catalog's fixed pages do not chain (docs/keystoneid-k0-findings.md) -
-# so these five relations spend 27 of them. That is the reason there is no
-# `notional` column on trades (it is qty * price) and no `unrealized` on
-# the profit relation: a derived column here costs catalog capacity that
-# another relation cannot then have.
+# These five relations spend 27 columns per run. That used to be a third of
+# the instance's whole capacity - the catalog's pages did not chain, so
+# `sys.columns` held ~68 rows and the third consecutive run on one data file
+# failed - and it is now ~0.3% of it, since the catalog relations chain
+# (docs/keystoneid-k0-findings.md). The schema is left lean anyway: there is
+# still no `notional` column on trades (it is qty * price) and no
+# `unrealized` on the profit relation, because a derived column is a column
+# to keep consistent for no answer it makes possible.
 
 SCHEMA = {
     # BTREE: every account access in the transaction is `WHERE id = <n>`.
@@ -440,18 +442,19 @@ def create_tables(exec_, suffix, cabin=False, fk=False):
                       f"policy.\n  `{CABIN_RELATION}.{CABIN_COLUMN} int64 CABIN` needs a "
                       f"build with docs/feat-cabin.md in it; re-run without --cabin, or "
                       f"rebuild the server.", reply)
-            # By far the likeliest failure, and the least self-explanatory:
-            # the catalog's column page does not chain, so the whole
-            # instance holds roughly 62 user columns
-            # (docs/keystoneid-k0-findings.md). These five relations spend
-            # 27 of them, so a data file survives two runs and then refuses
-            # the third with a message about a heap page.
-            if "no room" in reply:
+            # This used to be the likeliest failure by a wide margin: the
+            # catalog's column page did not chain, so the instance held ~68
+            # column rows in total and a data file survived exactly two runs
+            # of this scenario. The catalog relations chain now, into a
+            # reserved range of ~114 pages, so reaching this means the whole
+            # range is full - thousands of columns, and still no DROP TABLE
+            # to reclaim any of them.
+            if "no room" in reply or "reserved catalog page range" in reply:
                 abort(f"could not create {base}_{suffix}: the catalog is out of column "
-                      f"space.\n  The catalog's column page does not chain and holds "
-                      f"~62 columns for the whole instance; this scenario needs 27 of "
-                      f"them per run.\n  Restart the server on a fresh data file - "
-                      f"there is no DROP TABLE.", reply)
+                      f"space.\n  Catalog relations chain into a reserved range of ~114 "
+                      f"pages (~7,800 columns for the whole instance); this scenario "
+                      f"needs 27 per run and nothing reclaims them, because there is no "
+                      f"DROP TABLE.\n  Restart the server on a fresh data file.", reply)
             abort(f"could not create {base}_{suffix}", reply)
 
 

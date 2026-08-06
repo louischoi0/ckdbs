@@ -322,10 +322,13 @@ asserting:
 - **Object oids are re-issued on every boot** (`well_known.hpp`'s
   `kUserOidStart`), which falsifies the oid half of §1.2 with no crash
   involved. Owner: the catalog.
-- **The catalog holds ~62 columns across all user relations** — 31
-  two-column tables, measured — because its fixed pages do not chain.
-  Unrelated to id identity, more serious than anything here, and recorded
-  because K0 found it. Owner: the catalog.
+- ~~**The catalog holds ~62 columns across all user relations**~~ — **fixed
+  2026-08-06.** The catalog relations chain now, exactly as user relations
+  do: each fixed page id is a chain *root*, and a full page links to the
+  next from a reserved range of low page ids. The ceiling moves from ~68
+  column rows for the whole instance to ~7,800. Unrelated to id identity,
+  recorded because K0 found it, and kept here struck rather than deleted so
+  a reader of the original finding can see what became of it.
 
 ## 6. Out of scope
 

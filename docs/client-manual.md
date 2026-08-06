@@ -409,12 +409,15 @@ number would then be a function of `--users` rather than of the engine.
 `trades` and `user_periodic_profit` are `HEAP`: insert-only, never probed
 by pk, so a tail append is exactly right.
 
-One operational limit worth knowing before the second run: the catalog's
-column page does not chain, so the whole instance holds roughly 62 user
-columns (`docs/keystoneid-invariant.md`), and these five relations spend 27
-of them. A data file survives two runs and refuses the third - the tool
-says so by name rather than passing on the `ERR heap page has no room`
-underneath. There is no `DROP TABLE`; use a scratch data file.
+One operational limit worth knowing: catalog relations chain into a
+reserved range of low page ids, so the whole instance holds roughly **7,800
+user columns** (`docs/keystoneid-k0-findings.md`), and these five relations
+spend 27 per run. Nothing reclaims them — there is no `DROP TABLE` — so the
+count is columns ever created, not columns live, and a long-lived scratch
+file will eventually refuse a `CREATE TABLE`. The tool says so by name
+rather than passing on the storage error underneath. Until 2026-08-06 the
+ceiling was ~68 for the whole instance, and a data file survived exactly
+two runs of this scenario.
 
 **Put the data file on a real disk.** The tool's footer says so and it is
 not a formality: the same 4-trader configuration measures **1,731 TPS on

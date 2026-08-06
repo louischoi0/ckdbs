@@ -1,5 +1,9 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <iterator>
+
 #include "kds/base/common.hpp"
 #include "kds/catalog/oid.hpp"
 
@@ -136,7 +140,7 @@ inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
 
-// Every fixed catalog page, in id order.
+// Every catalog relation's **root** page, in id order.
 //
 // One list, because two places now need "all of them at once" and a
 // hand-written second copy is how a page added later gets left out of one
@@ -144,12 +148,73 @@ inline constexpr PageId kCatalogPageFkeys = 13;
 // before telling peers to re-read (docs/workplan-crosscore.md P6). A page
 // missing from the flush would leave a peer permanently unable to see the
 // relation it describes.
+//
+// **These are roots, not the whole relation.** A catalog relation is a
+// chain of heap pages linked through `next_page_id`, exactly as a user
+// relation is; the id here is where the chain starts. Callers that need
+// every page use the overflow range below as well.
 inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,     kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,     kCatalogPagePatterns,
     kCatalogPagePatternDefs, kCatalogPageAccessStats, kCatalogPageCabins,
     kCatalogPageFkeys,
 };
+
+// ---- Where a catalog chain grows into ------------------------------------
+//
+// A catalog relation that outgrows its root page takes its next page from
+// **this reserved range**, never from the free map's general supply, and
+// that is a correctness requirement rather than tidiness.
+//
+// Two rules depend on a catalog page's id being low. A peer core may fault
+// any page below `system_page_limit_` read-only and may fault nothing else
+// it was not leased (`DevicePageStore::MayFault`, workplan-crosscore.md P6)
+// - so a catalog page allocated from the general supply, at an id above
+// that limit, would be one a peer could not read, and a peer that cannot
+// read the catalog cannot resolve a relation at all. And the flush that
+// precedes `kCatalogInvalidate` has to name every catalog page; a bounded
+// range can be named, an arbitrary set of general-supply ids cannot without
+// storing it somewhere durable.
+//
+// The range is what is left of the reserved low pages after the roots: ids
+// 14 up to the first user page. That is ~114 pages, and a page holds ~68
+// `sys.columns` rows, so the whole instance's ceiling moves from ~68
+// columns to ~7,800. It is a ceiling and not "unbounded" - saying so is the
+// point, because the previous ceiling was also unstated until something hit
+// it.
+inline constexpr PageId kCatalogOverflowFirst = 14;
+
+// One past the last id a catalog chain may take. Must equal
+// kds::server::kFirstUserPageId; the static_assert lives in catalog.cpp,
+// which is free to include both headers.
+inline constexpr PageId kCatalogOverflowLimit = 128;
+
+static_assert(kCatalogOverflowFirst > kCatalogPageFkeys,
+              "the overflow range must start past every fixed root");
+
+// Every page a catalog relation can occupy: the roots, then the whole
+// overflow range.
+//
+// The two callers - the flush that precedes `kCatalogInvalidate` and a
+// peer's eviction of its stale copy - both need "all of them", and both
+// tolerate an id that is not resident (`FlushPages` skips a page it has no
+// frame for; `EvictClean` erases nothing). So the range is named in full
+// rather than tracked: an exact set would have to be discovered by walking
+// every chain, and a walk that happens on the invalidation path is a walk
+// that can fail there.
+inline constexpr std::size_t kCatalogPageSpanSize =
+    std::size(kAllCatalogPages) + (kCatalogOverflowLimit - kCatalogOverflowFirst);
+
+inline constexpr std::array<PageId, kCatalogPageSpanSize> MakeCatalogPageSpan() {
+    std::array<PageId, kCatalogPageSpanSize> out{};
+    std::size_t at = 0;
+    for (const PageId id : kAllCatalogPages) out[at++] = id;
+    for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) out[at++] = id;
+    return out;
+}
+
+inline constexpr std::array<PageId, kCatalogPageSpanSize> kEveryCatalogPage =
+    MakeCatalogPageSpan();
 
 // Transaction id stamped on every bootstrap-time tuple - mirrors
 // PostgreSQL's FrozenTransactionId: bootstrap rows are inserted before a
