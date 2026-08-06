@@ -340,6 +340,156 @@ Status Aggregator::Finish(const AggregateSink& emit) {
     return Status::OK();
 }
 
+// ---- AG-M: the merge -----------------------------------------------------
+
+namespace {
+
+// Reads an int back out of the value encoding. Exact by construction: the
+// encoding stores `int_val`'s bits, so this is the inverse of writing them
+// and not a re-parse.
+//
+// Only `SUM(DISTINCT)` needs it, and only at merge time - the fold itself
+// never decodes, because the value is in hand when it inserts. That is why
+// the set stores encodings rather than encodings *and* values: the 8 bytes
+// per distinct entry a value copy would cost buys nothing on the hot path.
+bool DecodeInt(std::string_view encoded, std::int64_t& out) {
+    if (encoded.size() != 1 + sizeof(std::int64_t) || encoded[0] != kTagInt) return false;
+    std::memcpy(&out, encoded.data() + 1, sizeof(out));
+    return true;
+}
+
+}  // namespace
+
+Status Aggregator::MergeGroup(Group& into, Group& from) {
+    for (std::size_t i = 0; i < spec_->items.size(); ++i) {
+        const AggregateItem& item = spec_->items[i];
+        ItemState& dst = into.items[i];
+        ItemState& src = from.items[i];
+
+        if (!item.is_aggregate) continue;
+
+        // ---- DISTINCT: union, and only the newcomers contribute -------
+        //
+        // The counters cannot simply be added for a distinct item: a value
+        // present in both partitions was counted once on each side, and
+        // adding would count it twice. So the union decides, and each entry
+        // that is genuinely new adds its own contribution.
+        if (dst.distinct != nullptr) {
+            if (src.distinct == nullptr) {
+                return Status::InvalidArgument(
+                    "cannot merge a DISTINCT item against one that kept no set");
+            }
+            for (const std::string& entry : *src.distinct) {
+                if (dst.distinct->find(entry) != dst.distinct->end()) continue;
+                if (distinct_entries_ >= limits_.max_distinct) {
+                    return Status::ResourceExhausted(
+                        "merging exceeded aggregate_max_distinct (" +
+                        std::to_string(limits_.max_distinct) + ") in " + LabelOf(i));
+                }
+                dst.distinct->insert(entry);
+                ++distinct_entries_;
+
+                if (item.func == parser::AggFunc::kCount) {
+                    ++dst.count;
+                } else {
+                    std::int64_t value = 0;
+                    if (!DecodeInt(entry, value)) {
+                        return Status::InvalidArgument(
+                            "SUM(DISTINCT) merged a non-integer value in " + LabelOf(i));
+                    }
+                    if (__builtin_add_overflow(dst.sum, value, &dst.sum)) {
+                        return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
+                                                  DescribeGroup(into.keys) + " while merging");
+                    }
+                }
+                dst.has_value = true;
+            }
+            continue;
+        }
+
+        switch (item.func) {
+            case parser::AggFunc::kCount:
+                dst.count += src.count;
+                break;
+
+            case parser::AggFunc::kSum:
+                if (__builtin_add_overflow(dst.sum, src.sum, &dst.sum)) {
+                    return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
+                                              DescribeGroup(into.keys) + " while merging");
+                }
+                break;
+
+            case parser::AggFunc::kMin:
+            case parser::AggFunc::kMax: {
+                if (!src.has_value) break;
+                if (!dst.has_value) {
+                    dst.extreme = std::move(src.extreme);
+                    break;
+                }
+                const parser::CompareOp op = item.func == parser::AggFunc::kMin
+                                                 ? parser::CompareOp::kLt
+                                                 : parser::CompareOp::kGt;
+                if (CompareValues(item.type_val, src.extreme, dst.extreme, op)) {
+                    dst.extreme = std::move(src.extreme);
+                }
+                break;
+            }
+        }
+        dst.has_value = dst.has_value || src.has_value;
+    }
+    return Status::OK();
+}
+
+Status Aggregator::Merge(Aggregator&& other) {
+    if (spec_->items.size() != other.spec_->items.size() ||
+        spec_->group_keys.size() != other.spec_->group_keys.size()) {
+        return Status::InvalidArgument(
+            "cannot merge two folds of different shapes; a merge is only defined over "
+            "partitions of one statement's rows");
+    }
+
+    // **In `other`'s own group order**, which is what makes the merged
+    // result's order defined: this side keeps its groups where they are and
+    // the far side's newcomers arrive behind them, in the order that side
+    // founded them. Iterating the far side's *index* instead would append in
+    // hash order and make the output depend on a seed.
+    for (Group& incoming : other.groups_) {
+        std::size_t at = 0;
+        if (!spec_->group_keys.empty()) {
+            // Re-encoded from the group's own values rather than carried
+            // across, so a merge depends on nothing but the two groups.
+            key_scratch_.clear();
+            for (const parser::AstValue& value : incoming.keys) {
+                if (Status s = EncodeValue(value, key_scratch_); !s.ok()) return s;
+            }
+
+            if (auto it = index_.find(std::string_view(key_scratch_)); it != index_.end()) {
+                at = it->second;
+            } else {
+                if (groups_.size() >= limits_.max_groups) {
+                    return Status::ResourceExhausted(
+                        "merging exceeded aggregate_max_groups (" +
+                        std::to_string(limits_.max_groups) + ")");
+                }
+                at = groups_.size();
+                Group fresh = NewGroup();
+                fresh.keys = incoming.keys;
+                groups_.push_back(std::move(fresh));
+                index_.emplace(key_scratch_, at);
+            }
+        }
+        if (Status s = MergeGroup(groups_[at], incoming); !s.ok()) return s;
+    }
+
+    // Left empty rather than merely moved-from: an aggregator whose groups
+    // have been folded elsewhere must not be finishable, and an empty one
+    // that is asked to finish emits nothing instead of a duplicate.
+    other.groups_.clear();
+    other.index_.clear();
+    other.distinct_entries_ = 0;
+    return Status::OK();
+}
+
 std::string Aggregator::LabelOf(std::size_t item_index) const {
     if (item_index < labels_.size()) return labels_[item_index];
     return "aggregate #" + std::to_string(item_index);

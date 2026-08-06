@@ -1,5 +1,6 @@
 #include "kds/exec/aggregate.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <new>
 #include <string>
@@ -736,6 +737,260 @@ TEST(AggregateTest, MaxDistinctIsSummedOverEverySetInTheStatement) {
         ASSERT_TRUE(fold.Row(agg, {IntVal(g), IntVal(g)}).ok()) << g;
     }
     EXPECT_FALSE(fold.Row(agg, {IntVal(9), IntVal(9)}).ok());
+}
+
+// ---- AG-M: Merge (AG05) --------------------------------------------------
+
+// Folds `rows` in one pass.
+std::vector<std::vector<std::string>> FoldOnePass(
+    const AggregateSpec& spec, std::size_t columns,
+    const std::vector<std::vector<parser::AstValue>>& rows) {
+    Aggregator agg = Make(spec);
+    Fold fold(columns);
+    for (const auto& row : rows) {
+        EXPECT_TRUE(fold.Row(agg, row).ok());
+    }
+    return Collect(agg);
+}
+
+// Folds `rows` in two partitions decided by `in_left`, then merges.
+std::vector<std::vector<std::string>> FoldPartitioned(
+    const AggregateSpec& spec, std::size_t columns,
+    const std::vector<std::vector<parser::AstValue>>& rows,
+    const std::vector<bool>& in_left) {
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(columns);
+    Fold rfold(columns);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (in_left[i]) {
+            EXPECT_TRUE(lfold.Row(left, rows[i]).ok());
+        } else {
+            EXPECT_TRUE(rfold.Row(right, rows[i]).ok());
+        }
+    }
+    EXPECT_TRUE(left.Merge(std::move(right)).ok());
+    return Collect(left);
+}
+
+// Sorted by the first output column, so two runs can be compared as sets
+// of groups rather than as sequences.
+std::vector<std::vector<std::string>> Sorted(std::vector<std::vector<std::string>> rows) {
+    std::sort(rows.begin(), rows.end());
+    return rows;
+}
+
+TEST(AggregateTest, PartitionFoldMergeEqualsOnePassFold) {
+    // AG-M stated as a test rather than as a promise, and stated with the
+    // precision the invariant has.
+    //
+    // **Two claims, not one.** The aggregate *values* are equal for any
+    // partition whatsoever - that is what "mergeable" means and it is the
+    // half a cross-core pipeline's correctness rests on. The group *order*
+    // is equal only for a partition with a defined order, which spec §1
+    // says in as many words: merge preserves the left's order and appends
+    // the right's unseen groups in their own order. An arbitrary
+    // interleaving has no order to preserve - a group founded second
+    // overall can be the first one its partition sees - so the ordered
+    // claim is tested against a **contiguous split**, which is also the
+    // only kind a partitioned execution actually produces.
+    AggregateSpec spec;
+    spec.group_keys.push_back(ColumnRef{0, 0, 0});
+    spec.items.push_back(KeyItem(0));
+    spec.items.push_back(CountStar());
+    spec.items.push_back(Agg(parser::AggFunc::kCount, 1));
+    spec.items.push_back(Agg(parser::AggFunc::kSum, 1));
+    spec.items.push_back(Agg(parser::AggFunc::kMin, 1));
+    spec.items.push_back(Agg(parser::AggFunc::kMax, 1));
+    AggregateItem count_distinct = Agg(parser::AggFunc::kCount, 1);
+    count_distinct.distinct = true;
+    spec.items.push_back(count_distinct);
+    AggregateItem sum_distinct = Agg(parser::AggFunc::kSum, 1);
+    sum_distinct.distinct = true;
+    spec.items.push_back(sum_distinct);
+
+    std::vector<std::vector<parser::AstValue>> rows;
+    std::uint64_t rng = 0x9E3779B97F4A7C15ULL;
+    auto next = [&rng]() {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        return rng;
+    };
+    for (int i = 0; i < 200; ++i) {
+        const std::int64_t key = static_cast<std::int64_t>(next() % 7);
+        // Every fourth value NULL, so the "no non-NULL argument" path is
+        // merged too and not just the arithmetic.
+        rows.push_back({IntVal(key), (i % 4 == 3) ? NullVal()
+                                                  : IntVal(static_cast<std::int64_t>(next() % 11))});
+    }
+
+    const auto one_pass = FoldOnePass(spec, 2, rows);
+
+    // (1) Any partition at all: the same groups with the same values.
+    for (int trial = 0; trial < 8; ++trial) {
+        std::vector<bool> in_left(rows.size());
+        for (std::size_t i = 0; i < rows.size(); ++i) in_left[i] = (next() & 1) != 0;
+        EXPECT_EQ(Sorted(FoldPartitioned(spec, 2, rows, in_left)), Sorted(one_pass))
+            << "randomized trial " << trial;
+    }
+
+    // (2) A contiguous split - the shape a partitioned execution produces:
+    // byte for byte, order included.
+    for (std::size_t cut : {std::size_t{0}, std::size_t{1}, std::size_t{37},
+                            rows.size() / 2, rows.size() - 1, rows.size()}) {
+        std::vector<bool> in_left(rows.size());
+        for (std::size_t i = 0; i < rows.size(); ++i) in_left[i] = i < cut;
+        EXPECT_EQ(FoldPartitioned(spec, 2, rows, in_left), one_pass) << "cut at " << cut;
+    }
+}
+
+TEST(AggregateTest, MergePreservesTheLeftGroupOrderAndAppendsTheRest) {
+    // The order rule AG6 depends on across a merge: this side's groups stay
+    // where they are, and the far side's newcomers arrive behind them in
+    // the order that side founded them.
+    AggregateSpec spec;
+    spec.group_keys.push_back(ColumnRef{0, 0, 0});
+    spec.items.push_back(KeyItem(0));
+    spec.items.push_back(CountStar());
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    for (std::int64_t v : {50, 10}) ASSERT_TRUE(lfold.Row(left, {IntVal(v)}).ok());
+    for (std::int64_t v : {10, 90, 20}) ASSERT_TRUE(rfold.Row(right, {IntVal(v)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 4u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"50", "1"}));
+    EXPECT_EQ(rows[1], (std::vector<std::string>{"10", "2"}));  // seen by both
+    EXPECT_EQ(rows[2], (std::vector<std::string>{"90", "1"}));
+    EXPECT_EQ(rows[3], (std::vector<std::string>{"20", "1"}));
+}
+
+TEST(AggregateTest, MergingTheGlobalFormAddsTheTwoStates) {
+    AggregateSpec spec;
+    spec.items.push_back(CountStar());
+    spec.items.push_back(Agg(parser::AggFunc::kSum, 0));
+    spec.items.push_back(Agg(parser::AggFunc::kMin, 0));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    for (std::int64_t v : {5, 9}) ASSERT_TRUE(lfold.Row(left, {IntVal(v)}).ok());
+    for (std::int64_t v : {2, 8}) ASSERT_TRUE(rfold.Row(right, {IntVal(v)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"4", "24", "2"}));
+}
+
+TEST(AggregateTest, MergingAnEmptyRightSideChangesNothing) {
+    AggregateSpec spec;
+    spec.items.push_back(CountStar());
+    spec.items.push_back(Agg(parser::AggFunc::kMin, 0));
+
+    Aggregator left = Make(spec);
+    Fold lfold(1);
+    ASSERT_TRUE(lfold.Row(left, {IntVal(7)}).ok());
+
+    ASSERT_TRUE(left.Merge(Make(spec)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"1", "7"}));
+}
+
+TEST(AggregateTest, MergingIntoAnEmptyLeftSideTakesTheRightWhole) {
+    AggregateSpec spec;
+    spec.group_keys.push_back(ColumnRef{0, 0, 0});
+    spec.items.push_back(KeyItem(0));
+    spec.items.push_back(Agg(parser::AggFunc::kMax, 0));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold rfold(1);
+    for (std::int64_t v : {4, 6}) ASSERT_TRUE(rfold.Row(right, {IntVal(v)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"4", "4"}));
+    EXPECT_EQ(rows[1], (std::vector<std::string>{"6", "6"}));
+}
+
+TEST(AggregateTest, ADistinctValueInBothPartitionsIsCountedOnce) {
+    // The case adding the counters would get wrong: each side counted the
+    // value once, so the union has to decide rather than the sum.
+    AggregateSpec spec;
+    AggregateItem count_distinct = Agg(parser::AggFunc::kCount, 0);
+    count_distinct.distinct = true;
+    AggregateItem sum_distinct = Agg(parser::AggFunc::kSum, 0);
+    sum_distinct.distinct = true;
+    spec.items.push_back(count_distinct);
+    spec.items.push_back(sum_distinct);
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    for (std::int64_t v : {1, 2, 1}) ASSERT_TRUE(lfold.Row(left, {IntVal(v)}).ok());
+    for (std::int64_t v : {2, 3, 2}) ASSERT_TRUE(rfold.Row(right, {IntVal(v)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    // {1, 2, 3}: three distinct values summing to six.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"3", "6"}));
+}
+
+TEST(AggregateTest, AMergedAggregatorIsLeftEmptyRatherThanDuplicable) {
+    AggregateSpec spec;
+    spec.items.push_back(CountStar());
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold rfold(1);
+    ASSERT_TRUE(rfold.Row(right, {IntVal(1)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    // Deliberately reading the moved-from object: it must be empty rather
+    // than holding a second copy of what was just folded elsewhere.
+    EXPECT_EQ(right.group_count(), 0u);
+    EXPECT_TRUE(Collect(right).empty());
+}
+
+TEST(AggregateTest, MergingFoldsOfDifferentShapesIsRefused) {
+    AggregateSpec one;
+    one.items.push_back(CountStar());
+    AggregateSpec two;
+    two.items.push_back(CountStar());
+    two.items.push_back(Agg(parser::AggFunc::kSum, 0));
+
+    Aggregator left = Make(one);
+    Aggregator right = Make(two);
+    const Status refused = left.Merge(std::move(right));
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
+}
+
+TEST(AggregateTest, AMergeThatOverflowsSumFails) {
+    AggregateSpec spec;
+    spec.items.push_back(Agg(parser::AggFunc::kSum, 0));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    ASSERT_TRUE(lfold.Row(left, {IntVal(INT64_MAX)}).ok());
+    ASSERT_TRUE(rfold.Row(right, {IntVal(1)}).ok());
+
+    const Status overflowed = left.Merge(std::move(right));
+    ASSERT_FALSE(overflowed.ok());
+    EXPECT_EQ(overflowed.code(), StatusCode::kOutOfRange);
 }
 
 // ---- Malformed specs -----------------------------------------------------

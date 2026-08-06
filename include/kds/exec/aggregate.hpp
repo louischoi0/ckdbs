@@ -96,6 +96,24 @@ public:
     // walks it, so the order is by construction rather than by sorting.
     Status Finish(const AggregateSink& emit);
 
+    // **AG-M**, the merge invariant. Folds `other`'s groups into this one:
+    // addition for COUNT and SUM, comparison for MIN and MAX, union for
+    // DISTINCT - such that folding a row stream in one pass and folding two
+    // disjoint partitions of it then merging give the same output rows.
+    //
+    // This aggregator's group order is preserved and `other`'s unseen
+    // groups are appended in their own order, so first-seen determinism
+    // (AG6) survives a merge with a defined partition order.
+    //
+    // **Nothing in v1 calls it, and the test is its only consumer.** It
+    // exists because it is what lets `docs/crosscore.md`'s step pipeline
+    // ship *partial aggregates* - a remote core folding its own partition
+    // and shipping states, the home core merging - without touching the
+    // step VM. A v1 that quietly broke it would take that option away
+    // silently, which is why it is built and tested now rather than
+    // promised.
+    Status Merge(Aggregator&& other);
+
     // How many groups the fold founded. The global form is always 1.
     std::size_t group_count() const noexcept { return groups_.size(); }
 
@@ -180,6 +198,9 @@ private:
     // comes into being, so the global form and a keyed one cannot differ
     // in what they carry.
     Group NewGroup() const;
+
+    // Folds one group's states into another's (AG-M's per-item half).
+    Status MergeGroup(Group& into, Group& from);
 
     // Folds one row into one group's item states.
     Status FoldInto(Group& group, const ChainFrame& frame);
