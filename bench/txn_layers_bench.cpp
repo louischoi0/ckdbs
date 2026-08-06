@@ -57,6 +57,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/parser/lexer.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -366,6 +367,38 @@ void MeasureLayers(Instance& db, int iterations) {
                         Percentile(insert_parse, 0.99), "lexer + AST, zero-copy tokens"});
         rows.push_back({"parse UPDATE", Percentile(update_parse, 0.5),
                         Percentile(update_parse, 0.99), ""});
+    }
+
+    // 1b. Lexing alone, against the full parse above.
+    //
+    // The split is the whole question for the statement path: parse is ~35%
+    // of an unlogged INSERT, and what to do about it depends entirely on
+    // whether the time is in the scanner or in building the AST. A slow
+    // scanner is a scanner problem; a slow AST is an *allocation* problem,
+    // since every name the AST keeps is a `std::string` copied at the
+    // boundary (parser-v2.md I4) - and the arena that would fix that is
+    // already specified and not built.
+    {
+        std::vector<double> insert_lex, update_lex;
+        for (int i = 0; i < iterations; ++i) {
+            auto t = Clock::now();
+            {
+                kds::parser::Lexer lexer(s.buy_leg);
+                while (lexer.Peek().type != kds::parser::TokenType::kEof) lexer.Next();
+            }
+            insert_lex.push_back(MicrosSince(t));
+
+            t = Clock::now();
+            {
+                kds::parser::Lexer lexer(s.buyer_update);
+                while (lexer.Peek().type != kds::parser::TokenType::kEof) lexer.Next();
+            }
+            update_lex.push_back(MicrosSince(t));
+        }
+        rows.push_back({"  lex only INSERT", Percentile(insert_lex, 0.5),
+                        Percentile(insert_lex, 0.99), "scanner, no AST"});
+        rows.push_back({"  lex only UPDATE", Percentile(update_lex, 0.5),
+                        Percentile(update_lex, 0.99), ""});
     }
 
     // 2. Catalog resolution, the cached path: name -> oid -> TableAccess.

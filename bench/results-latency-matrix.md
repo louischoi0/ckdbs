@@ -393,3 +393,58 @@ statement path itself, where parse was measured at 32-38% of an unlogged
 statement (`results-txn-layers.md` §4) and is no longer hidden behind a
 device.
 
+---
+
+# The statement path, measured
+
+With durability off the reactor, the engine's own per-statement cost is what
+is left. Measured in-process with `kds_txn_bench` (no socket, no reactor),
+three runs, quiet host, at `c6c754b`:
+
+| | unlogged p50 |
+|---|---|
+| INSERT trades | ~5.9 us |
+| UPDATE accounts | ~7.9 us |
+
+Per layer, called directly:
+
+| layer | INSERT | UPDATE |
+|---|---|---|
+| **parse** | **2.12 us** | **2.93 us** |
+| ...of which lexing | 1.10 us | 1.56 us |
+| ...of which building the AST | **1.02 us** | **1.37 us** |
+| catalog resolve (cached) | 0.10 us | — |
+| `AllocateRowId` | 0.52 us | — |
+| `EncodeRow` | 0.28 us | — |
+| `CompileWhere` | — | 0.27 us |
+
+**Parse is ~35% of an unlogged statement and splits almost evenly between
+the scanner and the AST.** That is the useful part: there is no hot spot
+inside it to shave. The AST half is allocation - every name it keeps is a
+`std::string` copied at the boundary (parser-v2.md I4), plus vectors for
+values and conditions - and the scanner half is already zero-copy.
+
+## What removing it would take
+
+Both routes are specified in this repo already, and both are large:
+
+- **The arena AST** (`parser-v2.md`: "flat index-based AST in a per-session
+  arena"). Removes the build half, ~1 us, ~17% of an unlogged INSERT. It is
+  the V-6 blueprint-parser rewrite, whose acceptance criterion is emitting
+  *identical* chains over the corpus.
+- **Prepared statements** (`protocol.md`'s PARSE/BIND over server-side
+  handles). Removes both halves per execution, ~35%. Larger still: the wire
+  protocol is otherwise unimplemented.
+
+## The scope that decides whether either is worth it
+
+On the shipped `group` path a statement is ~1 ms, essentially all of it one
+`fsync`, so **every microsecond here is worth about 0.2%**. All of it pays
+only under `relaxed`, where an INSERT is ~6 us and parse is a third.
+
+One regression was found and fixed along the way: routing catalog mutations
+through `heap::ChainVisit` (a `std::function` per slot) had cost
+`AllocateRowId` 0.84 -> 0.52 us per INSERT. That one was worth taking
+because it was a self-inflicted 38%, not because the absolute number is
+large.
+
