@@ -272,6 +272,43 @@ class PgConnection:
                 total += length
         return total
 
+    def fetch(self, sql):
+        """Runs one simple query and returns (rows, error).
+
+        Each row is a list of raw column bytes in the statement's column
+        order, with None for SQL NULL; values are left undecoded because the
+        caller knows the types and this module deliberately has no type map.
+
+        Separate from query() because that one is the *benchmark* path and
+        must not build a Python object per column - see _skip_data_row. This
+        one is for a driver that actually needs the values (a balance read
+        back, an id from RETURNING), and it pays for them, so a latency
+        measured around it is not comparable to one measured around
+        send_command().
+        """
+        self._send(b"Q", sql.encode() + b"\0")
+        rows, error, columns = [], None, 0
+        while True:
+            kind, body = self._read_message()
+            if kind == b"D":
+                row = _decode_data_row(body)
+                if columns and len(row) != columns:
+                    raise PgError(f"DataRow has {len(row)} columns, "
+                                  f"RowDescription said {columns}")
+                rows.append(row)
+            elif kind == b"T":
+                (columns,) = _INT16.unpack(body[:2])
+            elif kind == b"E":
+                error = _format_error(body)
+            elif kind == b"Z":
+                if error is not None:
+                    self.last_error = error
+                return rows, error
+            elif kind in (b"C", b"I", b"N", b"S", b"A", b"G", b"H"):
+                continue
+            else:
+                raise PgError(f"unexpected message {kind!r} in query reply")
+
     def send_command(self, sql):
         """One statement in, one flat reply line out - the shape
         bench_common.Phase scores. See the module docstring."""
@@ -315,6 +352,22 @@ class PgConnection:
                 self._in.close()
             finally:
                 self._sock.close()
+
+
+def _decode_data_row(body):
+    """Splits a DataRow into its column payloads. -1 is SQL NULL, which is
+    not the same as an empty value and is kept distinct as None."""
+    (count,) = _INT16.unpack(body[:2])
+    offset, values = 2, []
+    for _ in range(count):
+        (length,) = _INT32.unpack(body[offset:offset + 4])
+        offset += 4
+        if length < 0:
+            values.append(None)
+        else:
+            values.append(body[offset:offset + length])
+            offset += length
+    return values
 
 
 def _split_cstrings(payload, count):
