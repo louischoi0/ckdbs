@@ -29,11 +29,15 @@ Both have already happened here, so both are refused rather than documented:
 1. **tmpfs.** fsync costs ~0.3 us there and every durability class measures
    the same. The scratch directory's filesystem is checked, and a run on
    tmpfs aborts.
-2. **A busy host.** These runs were once taken on a 2-core box at load
-   average 3.2, which produced 14 ms outliers with no engine work behind
-   them. The load average is checked before starting and the run refuses
-   unless it is below a threshold - `--force` overrides, and the number is
-   recorded in the output either way.
+2. **A busy host**, checked on *two* averages. These runs were once taken on
+   a 2-core box at load average 3.2, which produced 14 ms outliers with no
+   engine work behind them - so the one-minute average is checked. Then a
+   run was admitted at a one-minute average of 0.73 while the five-minute
+   was 4.77, and PostgreSQL, measured as the control in the same run, came
+   out 17-26% worse on p99 than the run before it: a one-minute figure dips
+   between bursts, and a box still draining sustained load reads as quiet
+   for exactly long enough. Both are checked, both are recorded in the
+   output and the JSON, and `--force` overrides them.
 
 Usage:
 
@@ -76,6 +80,20 @@ DEFAULT_CONFIGS = "group,group-nockpt,relaxed,relaxed-nockpt"
 # One runnable process per core is already generous.
 MAX_LOAD_PER_CORE = 0.6
 
+# **And the five-minute average, which is the check that was missing.** A
+# one-minute average dips between bursts, so a box still draining sustained
+# load reads as quiet for long enough to admit a run. That happened: a matrix
+# was admitted at a one-minute average of 0.73 while the five- and
+# fifteen-minute averages were 4.77 and 5.93, and PostgreSQL - unchanged code
+# in a separate process, measured as the control - came out 17-26% worse on
+# p99 than in the run before it. Every ckdbs number in that run was
+# unattributable.
+#
+# Looser per core than the one-minute bound because it is a *trailing*
+# figure: a machine that was busy four minutes ago and is idle now should be
+# allowed to measure, and one that is still working should not.
+MAX_LOAD5_PER_CORE = 1.0
+
 
 def abort(message):
     print(f"latency-matrix aborted: {message}", file=sys.stderr)
@@ -100,14 +118,21 @@ def check_host(scratch, force):
               f"  measures the same. Point --scratch at a real device (df -T tells you\n"
               f"  which), or pass --force to measure something else on purpose.")
 
-    load1 = os.getloadavg()[0]
+    load1, load5, _ = os.getloadavg()
     cores = os.cpu_count() or 1
     if load1 > MAX_LOAD_PER_CORE * cores and not force:
         abort(f"load average is {load1:.2f} on {cores} core(s): a statement preempted by\n"
               f"  another process produces outliers with no engine work behind them, and\n"
               f"  this run would attribute them to the engine. Wait for the box to go\n"
               f"  quiet, or pass --force.")
-    return {"filesystem": fs, "loadavg_1m": round(load1, 2), "cores": cores}
+    if load5 > MAX_LOAD5_PER_CORE * cores and not force:
+        abort(f"the 5-minute load average is {load5:.2f} on {cores} core(s) (1-minute is\n"
+              f"  {load1:.2f}): the box is still draining sustained load, and a one-minute\n"
+              f"  average dips between bursts long enough to look quiet. A run admitted\n"
+              f"  this way once produced a control - PostgreSQL, unchanged - that was\n"
+              f"  17-26% worse than the run before it. Wait, or pass --force.")
+    return {"filesystem": fs, "loadavg_1m": round(load1, 2), "loadavg_5m": round(load5, 2),
+            "cores": cores}
 
 
 def git_commit():
@@ -271,8 +296,8 @@ def main():
     print(f"latency matrix @ {git_commit()}")
     print(f"  server     {binary}")
     print(f"  scratch    {scratch}  ({host['filesystem']})")
-    print(f"  host       {host['cores']} core(s), load {host['loadavg_1m']}"
-          + ("  [--force]" if args.force else ""))
+    print(f"  host       {host['cores']} core(s), load {host['loadavg_1m']} (1m) / "
+          f"{host['loadavg_5m']} (5m)" + ("  [--force]" if args.force else ""))
     print(f"  workload   users={args.users} assets={args.assets} "
           f"seconds={args.seconds:g} reporter=off")
 
