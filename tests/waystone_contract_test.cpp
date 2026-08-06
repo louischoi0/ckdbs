@@ -101,6 +101,30 @@ const std::vector<std::string>& Queries() {
         "SELECT id, label FROM b WHERE id = 2",
         "SELECT a.label, c.w FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
         "SELECT a.label, c.w FROM h AS a JOIN j AS c ON a.id = c.id WHERE a.id = 6",
+
+        // ---- Aggregated statements (docs/feat-aggregate.md §9 item 8) --
+        //
+        // They belong in *this* set rather than in a suite of their own,
+        // and the reason is AG1. The fold consumes rows and has no opinion
+        // about where they came from, so an aggregated statement's
+        // exposure to a trail is exactly its chain's - which means the
+        // question "can a trail change an aggregated answer?" is answered
+        // by the five configurations already compared here, at the cost of
+        // adding lines to a list.
+        //
+        // A fold is also a *sharper* probe than a projection for the
+        // corrupted-trail case below. A projection prints whatever row the
+        // trail pointed at, so a wrong row shows up as wrong text; a
+        // COUNT collapses every row to one number, and a trail that
+        // silently produced a row twice or dropped one moves that number
+        // while every column that could have shown it is gone.
+        "SELECT COUNT(*) FROM b WHERE id = 3",
+        "SELECT COUNT(*) FROM b WHERE id = 99",
+        "SELECT COUNT(*), MIN(v), MAX(v) FROM h WHERE id = 5",
+        "SELECT v, COUNT(*) FROM b GROUP BY v",
+        "SELECT COUNT(DISTINCT label) FROM h",
+        "SELECT COUNT(*), SUM(c.w) FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
+        "SELECT a.label, COUNT(*) FROM h AS a JOIN j AS c ON a.id = c.id GROUP BY a.label",
     };
     return kQueries;
 }

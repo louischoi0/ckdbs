@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/server/command_dispatcher.hpp"
@@ -33,6 +34,28 @@
 // Written in the style of waystone_contract_test.cpp: configurations
 // rendered to text and compared byte for byte, so a failure prints the
 // difference rather than an index.
+//
+// ---- Where each of spec §9's nine items is pinned ----------------------
+//
+//   1 chain identity        here, TheChainIsIdenticalWithAndWithoutTheFold
+//   2 fingerprint invariance tests/parser_golden_test.cpp - the corpus is
+//                           the only place that can hold the *previous*
+//                           hashes, and this file asserts the version.
+//   3 NULL table            tests/aggregate_test.cpp, at the fold. See the
+//                           note on the empty-input tests below: the
+//                           engine cannot store a NULL yet, so the rest of
+//                           §3.1 is only reachable at that level.
+//   4 DISTINCT              tests/aggregate_test.cpp and here, end to end
+//   5 overflow / uint64     both levels
+//   6 strict grouping       here (compile-time) and
+//                           tests/parser_aggregate_test.cpp (parse-time)
+//   7 determinism           here, end to end; the merge half is in
+//                           tests/aggregate_test.cpp
+//   8 Waystone              tests/waystone_contract_test.cpp - the
+//                           aggregated statements were added to *its*
+//                           query set rather than copied here, so all five
+//                           of its configurations cover them at once
+//   9 bounds                here, end to end
 
 namespace kds::exec {
 namespace {
@@ -343,6 +366,36 @@ TEST_F(AggregateContractTest, AnUnknownColumnInAnAggregateIsReportedAsSuch) {
     EXPECT_EQ(chain.status().code(), StatusCode::kInvalidArgument);
 }
 
+// ---- §9.2 Fingerprint invariance ----------------------------------------
+
+TEST(AggregateContractShapeTest, TheFingerprintVersionDidNotMove) {
+    // Half of item 2, and the half a running process can answer. Nothing
+    // was reserved and no token type was added, so every previously
+    // accepted statement lexes to the same token stream and hashes
+    // identically - which means no stored pattern_id moved and no recorded
+    // waystone was retired.
+    //
+    // The other half needs the *previous* hashes, which only the golden
+    // corpus holds: tests/parser_golden_test.cpp compares every statement
+    // in it against a recorded value and fails loudly if one moves. A bump
+    // here without that file changing is the contradiction to look for.
+    EXPECT_EQ(parser::kFingerprintVersion, 1u)
+        << "docs/feat-aggregate.md §2 claims no bump; a bump retires every stored waystone";
+}
+
+TEST(AggregateContractShapeTest, AnAggregateHeadHashesAsTheIdentifierItUsedToBe) {
+    // Why the version did not have to move, stated as a check rather than
+    // as an argument: `count` is lexed as an identifier whether or not a
+    // paren follows, so the shape of the token stream is what it was.
+    const auto as_column = parser::FingerprintOf("SELECT count FROM t");
+    const auto as_alias = parser::FingerprintOf("SELECT sum FROM t");
+    ASSERT_TRUE(as_column.has_value());
+    ASSERT_TRUE(as_alias.has_value());
+    // Two different identifiers in the same position hash differently -
+    // otherwise the check above would pass for the wrong reason.
+    EXPECT_NE(as_column->pattern_id, as_alias->pattern_id);
+}
+
 // ---- §3.3 SUM's documented product constraints --------------------------
 
 TEST_F(AggregateContractTest, SumOverUint64IsDeclined) {
@@ -591,6 +644,106 @@ TEST_F(AggregateDispatchTest, ASumOverflowReachesTheClientAndEmitsNoRows) {
     EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
     EXPECT_NE(reply.find("SUM overflow"), std::string::npos) << reply;
     EXPECT_EQ(reply.find("\\n"), std::string::npos) << "no partial answer may be emitted";
+}
+
+// ---- §9.6 §2's refusal table, in one place ------------------------------
+
+TEST_F(AggregateDispatchTest, EveryRefusalRowOfTheSpecTableIsRefused) {
+    Load();
+    struct Case {
+        const char* sql;
+        const char* must_mention;  // the reason, not the wording
+    };
+    // Spec §2's table, top to bottom. Split across the parser and the
+    // compiler by which layer can answer - and gathered here so the *table*
+    // has one owner, since a refusal quietly turning into an answer is the
+    // failure this feature can least afford.
+    const Case cases[] = {
+        {"SELECT * FROM h GROUP BY tier", "GROUP BY"},
+        {"SELECT sym, COUNT(*) FROM h GROUP BY tier", "GROUP BY"},
+        {"SELECT tier, COUNT(*) FROM h GROUP BY tier, tier", "twice"},
+        {"SELECT AVG(qty) FROM h", "AVG"},
+        {"SELECT SUM(*) FROM h", "COUNT"},
+        {"SELECT MIN(*) FROM h", "COUNT"},
+        {"SELECT MAX(*) FROM h", "COUNT"},
+        {"SELECT COUNT(DISTINCT *) FROM h", "name a column"},
+        {"SELECT tier, COUNT(*) FROM h GROUP BY tier HAVING COUNT(*) > 1", "HAVING"},
+        {"SELECT COUNT(*) FROM h WHERE id IN (SELECT COUNT(*) FROM j)", "subquery"},
+        {"SELECT COUNT(*) FROM sys.tables", "catalog view"},
+        {"SELECT tier, COUNT(*) FROM h GROUP BY tier ORDER BY tier", "ORDER BY"},
+    };
+    for (const Case& c : cases) {
+        const std::string reply = Run(c.sql);
+        EXPECT_EQ(reply.substr(0, 3), "ERR") << c.sql << " -> " << reply;
+        EXPECT_NE(reply.find(c.must_mention), std::string::npos)
+            << c.sql << " -> " << reply;
+        EXPECT_EQ(reply.find("\\n"), std::string::npos)
+            << "a refused statement must emit no rows: " << c.sql;
+    }
+}
+
+TEST_F(AggregateDispatchTest, EveryParseTimeRefusalCarriesAPosition) {
+    Load();
+    // The parse-time half of §2's promise. The compile-time refusals carry
+    // one too and are checked beside their rules above; these are the ones
+    // a client is likeliest to hit, because they are typos.
+    for (const char* sql : {"SELECT AVG(qty) FROM h", "SELECT SUM(*) FROM h",
+                            "SELECT COUNT(DISTINCT *) FROM h",
+                            "SELECT tier, COUNT(*) FROM h GROUP BY tier HAVING COUNT(*) > 1"}) {
+        const std::string reply = Run(sql);
+        EXPECT_NE(reply.find("byte "), std::string::npos) << sql << " -> " << reply;
+    }
+}
+
+// ---- §9.7 Determinism, end to end ---------------------------------------
+
+TEST_F(AggregateDispatchTest, TwoExecutionsEmitIdenticalBytes) {
+    Load();
+    const char* statements[] = {
+        "SELECT tier, COUNT(*), SUM(qty), MIN(qty), MAX(qty) FROM h GROUP BY tier",
+        "SELECT sym, COUNT(*) FROM h GROUP BY sym",
+        "SELECT COUNT(DISTINCT sym), COUNT(*) FROM h",
+    };
+    for (const char* sql : statements) {
+        const std::string first = Run(sql);
+        EXPECT_EQ(first, Run(sql)) << sql;
+        EXPECT_EQ(first, Run(sql)) << sql;
+    }
+}
+
+TEST_F(AggregateDispatchTest, GroupsComeBackInFirstSeenOrderNotSortedOrder) {
+    // AG6, and the distinction is visible only when the two differ: `sym`
+    // is inserted A, B, C, A, B, C but the *first* group founded is A's, so
+    // a sorted answer and a first-seen answer agree - insert one more row
+    // whose value sorts first and they do not.
+    Load();
+    ASSERT_EQ(Run("INSERT INTO h VALUES (9, 70, '0first')").substr(0, 8), "INSERTED");
+    const std::vector<std::string> lines = Lines(Run("SELECT sym, COUNT(*) FROM h GROUP BY sym"));
+    ASSERT_EQ(lines.size(), 5u);
+    EXPECT_EQ(lines[1].substr(0, 1), "A") << "the first group founded must be emitted first";
+    EXPECT_EQ(lines[4].substr(0, 6), "0first")
+        << "a value that sorts first but was seen last must be emitted last";
+}
+
+// ---- §9.5 uint64 exactness, end to end ----------------------------------
+
+TEST_F(AggregateDispatchTest, MinAndMaxOverUint64AboveInt64MaxAreExactThroughTheEngine) {
+    ASSERT_EQ(Run("CREATE TABLE u (id int64, big uint64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO u VALUES (18446744073709551615)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO u VALUES (9223372036854775809)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO u VALUES (5)").substr(0, 8), "INSERTED");
+
+    const std::vector<std::string> lines = Lines(Run("SELECT MIN(big), MAX(big) FROM u"));
+    ASSERT_EQ(lines.size(), 2u);
+    // A signed reading would order the two large values below 5.
+    EXPECT_EQ(lines[1], "5,18446744073709551615");
+}
+
+TEST_F(AggregateDispatchTest, SumOverUint64IsDeclinedThroughTheEngine) {
+    ASSERT_EQ(Run("CREATE TABLE u (id int64, big uint64)").substr(0, 7), "CREATED");
+    const std::string reply = Run("SELECT SUM(big) FROM u");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("uint64"), std::string::npos) << reply;
 }
 
 // ---- The plan line and ANALYZE (AG08) -----------------------------------

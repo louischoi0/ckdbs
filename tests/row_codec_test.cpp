@@ -169,5 +169,61 @@ TEST(RowCodecKeystoneTest, ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth) {
     EXPECT_EQ(FormatValue(row.value()[0]), "100000");
 }
 
+// ---- CompareValues over a uint64 column ---------------------------------
+//
+// A decoded uint64 carries its value in `raw_int_text` **only when int_val
+// cannot hold it** - above INT64_MAX - and leaves the text empty otherwise.
+// `ValueAsUint64` is the one place that knows that rule, and its header
+// warns that a caller reading the text directly "gets an empty string for
+// every ordinary value and silently reads zero, which is how this rule
+// breaks". CompareValues was such a caller: it parsed the text on both
+// sides and answered false whenever either parse failed, so every
+// comparison with an ordinary uint64 operand was a non-match.
+//
+// Found while building MIN/MAX over uint64 (docs/feat-aggregate.md §3.3),
+// which could not descend below INT64_MAX - but the bug was never about
+// aggregation: `WHERE big = 5` returned no rows.
+
+TEST(RowCodecCompareTest, AUint64ComparesCorrectlyBelowInt64Max) {
+    const parser::AstValue five = Int(5);
+    const parser::AstValue nine = Int(9);
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, five, nine, parser::CompareOp::kLt));
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, nine, five, parser::CompareOp::kLt));
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, five, five, parser::CompareOp::kEq));
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, nine, five, parser::CompareOp::kGt));
+}
+
+TEST(RowCodecCompareTest, AUint64ComparesADecodedValueAgainstALiteral) {
+    // The shape a real predicate has: the decoded side carries no text for
+    // an ordinary value, the literal side always carries the digits it was
+    // written with. Both readings must agree.
+    parser::AstValue decoded = Int(5);           // as row_codec produces it
+    parser::AstValue literal = Int(5);
+    literal.raw_int_text = "5";                  // as the parser produces it
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, decoded, literal,
+                              parser::CompareOp::kEq));
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, literal, decoded,
+                              parser::CompareOp::kEq));
+}
+
+TEST(RowCodecCompareTest, AUint64AboveInt64MaxOutranksEverySmallValue) {
+    // The reason the unsigned path exists at all: a signed reading orders
+    // these backwards.
+    parser::AstValue big = Int(0);
+    big.int_val = static_cast<std::int64_t>(18446744073709551615ULL);
+    big.raw_int_text = "18446744073709551615";
+
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, Int(5), big, parser::CompareOp::kLt));
+    EXPECT_TRUE(CompareValues(catalog::kTypeValUint64, big, Int(5), parser::CompareOp::kGt));
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, big, Int(5), parser::CompareOp::kLt));
+}
+
+TEST(RowCodecCompareTest, ANegativeOperandAgainstAUint64IsANonMatch) {
+    // Not an error: a type mismatch is a non-match everywhere else in this
+    // function, and a negative literal is not a uint64.
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(-1), Int(5), parser::CompareOp::kLt));
+    EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(-1), Int(5), parser::CompareOp::kGt));
+}
+
 }  // namespace
 }  // namespace kds::exec

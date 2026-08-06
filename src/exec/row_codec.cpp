@@ -641,11 +641,24 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         return false;  // no NULL support; NULL never matches (see file comment)
     }
     if (type_val == kTypeValUint64) {
-        // Through the digit text: int_val is signed and cannot represent
-        // the upper half of the unsigned range, so comparing it would
-        // order large ids below small ones.
-        auto a = ParseUint64Text(lhs.raw_int_text);
-        auto b = ParseUint64Text(rhs.raw_int_text);
+        // Unsigned, because int_val is signed and cannot represent the
+        // upper half of the range - comparing it would order large ids
+        // below small ones.
+        //
+        // **Through ValueAsUint64, not through raw_int_text.** That field
+        // carries the value only when int_val cannot (a value above
+        // INT64_MAX) and is empty otherwise, which is precisely the rule
+        // ValueAsUint64 exists to be the single owner of. Reading the text
+        // directly here parsed an empty string for every ordinary value and
+        // failed, so *any* comparison with a uint64 operand at or below
+        // INT64_MAX answered false: `WHERE big = 5` returned no rows, and
+        // MIN over a uint64 column could not descend past INT64_MAX. The
+        // header's warning about this caller was already written; this is
+        // that caller.
+        auto a = ValueAsUint64(lhs);
+        auto b = ValueAsUint64(rhs);
+        // A negative operand is not a uint64 and so is a non-match, which
+        // is the answer every other type mismatch here gets.
         if (!a.ok() || !b.ok()) return false;
         return CompareUint(a.value(), b.value(), op);
     }
