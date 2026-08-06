@@ -73,17 +73,24 @@ StatusOr<Aggregator> Aggregator::Create(const AggregateSpec& spec,
     // emits zero rows over empty input. Founding it here is what makes the
     // difference structural instead of a special case in Finish().
     if (spec.group_keys.empty()) {
-        Group global;
-        global.items.resize(spec.items.size());
-        agg.groups_.push_back(std::move(global));
+        agg.groups_.push_back(agg.NewGroup());
     }
     return agg;
 }
 
-Status Aggregator::EncodeValue(const parser::AstValue& value) {
+bool Aggregator::NeedsDistinct(const AggregateItem& item) noexcept {
+    if (!item.distinct) return false;
+    // `MIN`/`MAX` accept the word and ignore it (spec §3.2): an extreme of
+    // a set equals the extreme of its support, so a set here would spend
+    // memory and a cap budget to reach an identical answer. `COUNT(*)`
+    // cannot carry it at all - the parser refuses `COUNT(DISTINCT *)`.
+    return item.func == parser::AggFunc::kCount || item.func == parser::AggFunc::kSum;
+}
+
+Status Aggregator::EncodeValue(const parser::AstValue& value, std::string& out) {
     switch (value.type) {
         case parser::ValueType::kNull:
-            key_scratch_.push_back(kTagNull);
+            out.push_back(kTagNull);
             return Status::OK();
 
         case parser::ValueType::kInt: {
@@ -92,22 +99,22 @@ Status Aggregator::EncodeValue(const parser::AstValue& value) {
             // the engine has - a uint64 above INT64_MAX wraps to a distinct
             // bit pattern, not a colliding one - so this is identity
             // without a string conversion per value per row.
-            key_scratch_.push_back(kTagInt);
+            out.push_back(kTagInt);
             char bytes[sizeof(std::int64_t)];
             std::memcpy(bytes, &value.int_val, sizeof(bytes));
-            key_scratch_.append(bytes, sizeof(bytes));
+            out.append(bytes, sizeof(bytes));
             return Status::OK();
         }
 
         case parser::ValueType::kStr: {
-            key_scratch_.push_back(kTagStr);
+            out.push_back(kTagStr);
             const std::uint32_t len = static_cast<std::uint32_t>(value.str_val.size());
             char bytes[sizeof(len)];
             std::memcpy(bytes, &len, sizeof(bytes));
             // Length-prefixed, so ('a','bc') and ('ab','c') cannot encode
             // to the same bytes and read as one group.
-            key_scratch_.append(bytes, sizeof(bytes));
-            key_scratch_.append(value.str_val);
+            out.append(bytes, sizeof(bytes));
+            out.append(value.str_val);
             return Status::OK();
         }
 
@@ -122,6 +129,21 @@ Status Aggregator::EncodeValue(const parser::AstValue& value) {
                 "' has no value; a declared pattern's body is never executed");
     }
     return Status::InvalidArgument("unknown value kind in a grouping key");
+}
+
+Aggregator::Group Aggregator::NewGroup() const {
+    Group group;
+    group.items.resize(spec_->items.size());
+    // A DISTINCT set exists per `(group, item)` and only for an item that
+    // declared the word - so a statement without DISTINCT allocates none of
+    // these, which is what "pays nothing for the feature" has to mean to be
+    // worth saying.
+    for (std::size_t i = 0; i < spec_->items.size(); ++i) {
+        if (!NeedsDistinct(spec_->items[i])) continue;
+        group.items[i].distinct =
+            std::make_unique<std::unordered_set<std::string, KeyHash, std::equal_to<>>>();
+    }
+    return group;
 }
 
 Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
@@ -150,6 +172,32 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
         // whose value is not NULL; SUM/MIN/MAX fold over the non-NULL
         // values and answer NULL for a group that had none.
         if (value.type == parser::ValueType::kNull) continue;
+
+        // ---- DISTINCT (§3.2) -----------------------------------------
+        //
+        // **Before the fold, and after the NULL test.** A repeated value is
+        // dropped here and reaches no counter, which is the whole of what
+        // the word means; and a NULL was already skipped, so no set ever
+        // holds one and `COUNT(DISTINCT col)` cannot count it.
+        if (state.distinct != nullptr) {
+            value_scratch_.clear();
+            if (Status s = EncodeValue(value, value_scratch_); !s.ok()) return s;
+
+            // A hit allocates nothing: the set is probed with a
+            // `std::string` that is already there, and only a miss builds
+            // a node.
+            if (state.distinct->find(value_scratch_) != state.distinct->end()) continue;
+
+            if (distinct_entries_ >= limits_.max_distinct) {
+                return Status::ResourceExhausted(
+                    "this statement exceeded aggregate_max_distinct (" +
+                    std::to_string(limits_.max_distinct) + ") in " + LabelOf(i) +
+                    "; no partial answer is emitted, because a truncated distinct set counts "
+                    "too few and is a wrong answer with a right answer's shape");
+            }
+            state.distinct->insert(value_scratch_);
+            ++distinct_entries_;
+        }
 
         switch (item.func) {
             case parser::AggFunc::kCount:
@@ -215,7 +263,7 @@ Status Aggregator::Accumulate(const ChainFrame& frame) {
         if (!frame.CanResolve(key)) {
             return Status::InvalidArgument("GROUP BY reads a column the frame cannot resolve");
         }
-        if (Status s = EncodeValue(frame.Get(key)); !s.ok()) return s;
+        if (Status s = EncodeValue(frame.Get(key), key_scratch_); !s.ok()) return s;
     }
 
     // Heterogeneous, so the probe never materialises a string. This is the
@@ -238,10 +286,9 @@ Status Aggregator::Accumulate(const ChainFrame& frame) {
             "with a right answer's shape");
     }
 
-    Group group;
+    Group group = NewGroup();
     group.keys.reserve(spec_->group_keys.size());
     for (const ColumnRef& key : spec_->group_keys) group.keys.push_back(frame.Get(key));
-    group.items.resize(spec_->items.size());
 
     const std::size_t at = groups_.size();
     groups_.push_back(std::move(group));

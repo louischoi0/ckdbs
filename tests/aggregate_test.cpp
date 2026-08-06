@@ -529,6 +529,215 @@ TEST(AggregateTest, ARowThatLandsInAnExistingGroupIsUnaffectedByTheCap) {
     EXPECT_EQ(agg.group_count(), 1u);
 }
 
+// ---- §3.2 DISTINCT (AG04) ------------------------------------------------
+
+TEST(AggregateTest, CountDistinctAndSumDistinctFoldEachValueOnce) {
+    AggregateSpec spec;
+    spec.items.push_back(CountStar());
+    spec.items.push_back(Agg(parser::AggFunc::kCount, 0));
+    AggregateItem count_distinct = Agg(parser::AggFunc::kCount, 0);
+    count_distinct.distinct = true;
+    spec.items.push_back(count_distinct);
+    AggregateItem sum_distinct = Agg(parser::AggFunc::kSum, 0);
+    sum_distinct.distinct = true;
+    spec.items.push_back(sum_distinct);
+    spec.items.push_back(Agg(parser::AggFunc::kSum, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    for (std::int64_t v : {10, 20, 10, 30, 20, 10}) {
+        ASSERT_TRUE(fold.Row(agg, {IntVal(v)}).ok());
+    }
+
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    // 6 rows, 6 non-NULL values, 3 distinct, 60 distinct-summed, 100 summed.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"6", "6", "3", "60", "100"}));
+}
+
+TEST(AggregateTest, DistinctIsPerGroupNotPerStatement) {
+    // The set lives on the `(group, item)` pair: the same value in two
+    // groups is distinct within each.
+    AggregateSpec spec;
+    spec.group_keys.push_back(ColumnRef{0, 0, 0});
+    spec.items.push_back(KeyItem(0));
+    AggregateItem distinct = Agg(parser::AggFunc::kCount, 1);
+    distinct.distinct = true;
+    spec.items.push_back(distinct);
+
+    Aggregator agg = Make(spec);
+    Fold fold(2);
+    ASSERT_TRUE(fold.Row(agg, {IntVal(1), IntVal(5)}).ok());
+    ASSERT_TRUE(fold.Row(agg, {IntVal(2), IntVal(5)}).ok());
+    ASSERT_TRUE(fold.Row(agg, {IntVal(1), IntVal(5)}).ok());
+
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"1", "1"}));
+    EXPECT_EQ(rows[1], (std::vector<std::string>{"2", "1"}));
+}
+
+TEST(AggregateTest, CountDistinctSkipsNullsLikeEveryOtherAggregate) {
+    AggregateSpec spec;
+    AggregateItem distinct = Agg(parser::AggFunc::kCount, 0);
+    distinct.distinct = true;
+    spec.items.push_back(distinct);
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    ASSERT_TRUE(fold.Row(agg, {NullVal()}).ok());
+    ASSERT_TRUE(fold.Row(agg, {NullVal()}).ok());
+    ASSERT_TRUE(fold.Row(agg, {IntVal(4)}).ok());
+
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    // NULL is never a distinct value, because it is skipped before the set
+    // is reached at all.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"1"}));
+}
+
+TEST(AggregateTest, DistinctUsesTheSameEncodingTheGroupKeyUses) {
+    // So an empty string and a NULL are told apart in a distinct set
+    // exactly as they are told apart as group keys.
+    AggregateSpec spec;
+    AggregateItem distinct = Agg(parser::AggFunc::kCount, 0, catalog::kTypeValVarchar);
+    distinct.distinct = true;
+    spec.items.push_back(distinct);
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    ASSERT_TRUE(fold.Row(agg, {StrVal("")}).ok());
+    ASSERT_TRUE(fold.Row(agg, {NullVal()}).ok());
+    ASSERT_TRUE(fold.Row(agg, {StrVal("")}).ok());
+    ASSERT_TRUE(fold.Row(agg, {StrVal("x")}).ok());
+
+    const auto rows = Collect(agg);
+    // '' and 'x' are the two distinct values; the NULL was skipped.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"2"}));
+}
+
+TEST(AggregateTest, MinDistinctEqualsMin) {
+    // §3.2's accept-as-no-op: an extreme of a set equals the extreme of its
+    // support, so the word changes nothing - and no set is built for it.
+    AggregateSpec plain;
+    plain.items.push_back(Agg(parser::AggFunc::kMin, 0));
+    plain.items.push_back(Agg(parser::AggFunc::kMax, 0));
+
+    AggregateSpec worded;
+    AggregateItem min_distinct = Agg(parser::AggFunc::kMin, 0);
+    min_distinct.distinct = true;
+    AggregateItem max_distinct = Agg(parser::AggFunc::kMax, 0);
+    max_distinct.distinct = true;
+    worded.items.push_back(min_distinct);
+    worded.items.push_back(max_distinct);
+
+    std::vector<std::vector<std::string>> results[2];
+    const AggregateSpec* specs[2] = {&plain, &worded};
+    for (int i = 0; i < 2; ++i) {
+        Aggregator agg = Make(*specs[i]);
+        Fold fold(1);
+        for (std::int64_t v : {7, 2, 7, 9, 2}) {
+            ASSERT_TRUE(fold.Row(agg, {IntVal(v)}).ok());
+        }
+        results[i] = Collect(agg);
+    }
+    EXPECT_EQ(results[0], results[1]);
+    EXPECT_EQ(results[0][0], (std::vector<std::string>{"2", "9"}));
+}
+
+TEST(AggregateTest, AStatementWithoutDistinctAllocatesNoSet) {
+    // "Pays nothing for the feature" measured rather than asserted: the
+    // group founded below allocates its key and state vectors and no set.
+    AggregateSpec spec;
+    spec.group_keys.push_back(ColumnRef{0, 0, 0});
+    spec.items.push_back(KeyItem(0));
+    spec.items.push_back(Agg(parser::AggFunc::kCount, 1));
+
+    Aggregator with_sets_off = Make(spec);
+    Fold fold(2);
+    fold.Write({IntVal(1), IntVal(2)});
+    std::size_t without = 0;
+    {
+        CountAllocations counter;
+        ASSERT_TRUE(with_sets_off.Accumulate(fold.frame()).ok());
+        without = counter.count();
+    }
+
+    AggregateSpec with = spec;
+    with.items[1].distinct = true;
+    Aggregator with_sets_on = Make(with);
+    Fold fold2(2);
+    fold2.Write({IntVal(1), IntVal(2)});
+    std::size_t withd = 0;
+    {
+        CountAllocations counter;
+        ASSERT_TRUE(with_sets_on.Accumulate(fold2.frame()).ok());
+        withd = counter.count();
+    }
+    EXPECT_LT(without, withd) << "the DISTINCT set should be the difference";
+}
+
+TEST(AggregateTest, ARepeatedDistinctValueAllocatesNothing) {
+    AggregateSpec spec;
+    AggregateItem distinct = Agg(parser::AggFunc::kCount, 0);
+    distinct.distinct = true;
+    spec.items.push_back(distinct);
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    ASSERT_TRUE(fold.Row(agg, {IntVal(3)}).ok());
+
+    fold.Write({IntVal(3)});
+    CountAllocations counter;
+    for (int i = 0; i < 50; ++i) {
+        ASSERT_TRUE(agg.Accumulate(fold.frame()).ok());
+    }
+    EXPECT_EQ(counter.count(), 0u) << "a value already in the set must not allocate";
+}
+
+TEST(AggregateTest, ExceedingMaxDistinctFailsTheStatementByName) {
+    AggregateSpec spec;
+    AggregateItem distinct = Agg(parser::AggFunc::kCount, 0);
+    distinct.distinct = true;
+    spec.items.push_back(distinct);
+
+    AggregateLimits limits;
+    limits.max_distinct = 4;
+    Aggregator agg = Make(spec, limits);
+
+    Fold fold(1);
+    for (std::int64_t v = 0; v < 4; ++v) {
+        ASSERT_TRUE(fold.Row(agg, {IntVal(v)}).ok()) << v;
+    }
+    const Status refused = fold.Row(agg, {IntVal(99)});
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kResourceExhausted);
+    EXPECT_NE(refused.message().find("aggregate_max_distinct"), std::string::npos)
+        << refused.message();
+}
+
+TEST(AggregateTest, MaxDistinctIsSummedOverEverySetInTheStatement) {
+    // The resource being bounded is the statement's memory, and a hundred
+    // small sets cost what one large one does.
+    AggregateSpec spec;
+    spec.group_keys.push_back(ColumnRef{0, 0, 0});
+    AggregateItem distinct = Agg(parser::AggFunc::kCount, 1);
+    distinct.distinct = true;
+    spec.items.push_back(distinct);
+
+    AggregateLimits limits;
+    limits.max_distinct = 3;
+    Aggregator agg = Make(spec, limits);
+
+    Fold fold(2);
+    // Three groups, one distinct value each: three entries in total, in
+    // three separate sets.
+    for (std::int64_t g = 0; g < 3; ++g) {
+        ASSERT_TRUE(fold.Row(agg, {IntVal(g), IntVal(g)}).ok()) << g;
+    }
+    EXPECT_FALSE(fold.Row(agg, {IntVal(9), IntVal(9)}).ok());
+}
+
 // ---- Malformed specs -----------------------------------------------------
 
 TEST(AggregateTest, ASpecSelectingANonGroupingColumnIsRefused) {

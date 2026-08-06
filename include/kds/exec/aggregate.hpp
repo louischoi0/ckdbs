@@ -3,10 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/base/status.hpp"
@@ -98,6 +100,18 @@ public:
     std::size_t group_count() const noexcept { return groups_.size(); }
 
 private:
+    // Heterogeneous lookup, which is the whole reason the index is keyed by
+    // `std::string` and probed by `std::string_view`: without
+    // `is_transparent` every probe would materialise a string, and the
+    // per-row allocation this class exists to avoid would be back. The
+    // DISTINCT sets use it for the same reason.
+    struct KeyHash {
+        using is_transparent = void;
+        std::size_t operator()(std::string_view v) const noexcept {
+            return std::hash<std::string_view>{}(v);
+        }
+    };
+
     // One aggregate's running state.
     //
     // The three counters are not exclusive by kind on purpose: `COUNT`
@@ -121,6 +135,20 @@ private:
 
         // MIN/MAX's running extreme, valid when `has_value`.
         parser::AstValue extreme;
+
+        // DISTINCT's observed-value set, over the **same encoding the
+        // group key uses** - so "distinct" means exactly what "same group
+        // key" means, including how NULL and the empty string are told
+        // apart. Distinctness is per `(group, item)`, which is why the set
+        // lives here and not on the aggregator.
+        //
+        // Null unless this item declared the word *and* the function is one
+        // it changes: `MIN`/`MAX` accept DISTINCT and ignore it (spec §3.2
+        // `[PROPOSED]`), since an extreme of a set equals the extreme of
+        // its support - so building one would cost memory and a cap budget
+        // to compute an identical answer. A statement without the word
+        // allocates nothing at all for the feature.
+        std::unique_ptr<std::unordered_set<std::string, KeyHash, std::equal_to<>>> distinct;
     };
 
     struct Group {
@@ -130,26 +158,28 @@ private:
         std::vector<ItemState> items;
     };
 
-    // Heterogeneous lookup, which is the whole reason the index is keyed by
-    // `std::string` and probed by `std::string_view`: without
-    // `is_transparent` every probe would materialise a string, and the
-    // per-row allocation this class exists to avoid would be back.
-    struct KeyHash {
-        using is_transparent = void;
-        std::size_t operator()(std::string_view v) const noexcept {
-            return std::hash<std::string_view>{}(v);
-        }
-    };
-
     Aggregator(const AggregateSpec& spec, std::span<const std::string> labels,
                AggregateLimits limits)
         : spec_(&spec), labels_(labels), limits_(limits) {}
 
-    // Appends one value to `key_scratch_` in the encoding both the group
-    // key and DISTINCT use: a tag byte (null / int / str) then the value's
-    // own bytes, length-prefixed for a string so `('a','bc')` and
-    // `('ab','c')` cannot collide.
-    Status EncodeValue(const parser::AstValue& value);
+    // Appends one value to `out` in the encoding both the group key and
+    // DISTINCT use: a tag byte (null / int / str) then the value's own
+    // bytes, length-prefixed for a string so `('a','bc')` and `('ab','c')`
+    // cannot collide.
+    //
+    // **One encoder for both**, deliberately: spec §3.2 defines distinctness
+    // as "the same value encoding the group key uses", and two encoders
+    // would be two answers to what "the same value" means.
+    static Status EncodeValue(const parser::AstValue& value, std::string& out);
+
+    // Whether an item keeps a DISTINCT set: it declared the word, and the
+    // function is one the word changes.
+    static bool NeedsDistinct(const AggregateItem& item) noexcept;
+
+    // A zeroed group with its DISTINCT sets built. The one place a group
+    // comes into being, so the global form and a keyed one cannot differ
+    // in what they carry.
+    Group NewGroup() const;
 
     // Folds one row into one group's item states.
     Status FoldInto(Group& group, const ChainFrame& frame);
@@ -172,6 +202,18 @@ private:
 
     // Reused across every emitted row, for the same reason.
     std::vector<parser::AstValue> out_scratch_;
+
+    // The encoded candidate a DISTINCT item probes with. Separate from the
+    // group key's buffer only because they are live at the same time would
+    // be one bug away; both are reused and neither allocates after the
+    // first row.
+    std::string value_scratch_;
+
+    // Entries across every DISTINCT set in this statement, against
+    // `AggregateLimits::max_distinct`. Summed rather than per set, because
+    // the resource being bounded is the statement's memory and a hundred
+    // small sets cost what one large one does.
+    std::size_t distinct_entries_ = 0;
 
     // For each item, which group key it reads - meaningful only for a
     // non-aggregate item, which AG5 guarantees is a grouping column.
