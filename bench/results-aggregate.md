@@ -243,10 +243,45 @@ cheaper, and the "fold from the cell" half it was named for is still open
 and now carries an architectural question rather than a measurement one (see
 the workplan).
 
-Decoding one integer column still costs about 71 ns/row over and above
-`COUNT(*)`, which is the call framing — per-row input validation, a
-12-iteration mask loop for one set bit, and a `Status` per column — not the
-int path itself, which is a load, a sign-extend and two `clear()`s.
+### The general decode fix — where the rest of it was
+
+After the lazy name, decoding one integer column still cost ~71 ns/row over
+`COUNT(*)`, and it was the call framing rather than the int path — which is
+a load, a sign-extend and two `clear()`s. Two causes, both general:
+
+**`Status` carries a `std::string` by value**, so a Status-returning check
+constructs and destroys one *even when it passes*. `DecodeColumnsInto` ran
+two of those per call — per row, and twice per row on the partial path —
+before reading a byte. Testing the predicate first and calling the
+Status-returning checker only on failure keeps every check and every message
+and builds nothing on the path that succeeds.
+
+**The column loop tested every column's bit.** A statement reading one
+column of twelve tested twelve to find it. Iterating the mask's set bits
+(`countr_zero` on a cleared-lowest-bit loop) visits exactly the columns
+named.
+
+| statement | AP01 | +lazy name | +this | from AP01 |
+|---|---:|---:|---:|---:|
+| `SELECT COUNT(*) FROM wide` | 3,732 µs | 3,762 µs | **3,033 µs** | **−19%** |
+| `SELECT SUM(a) FROM wide` | 5,691 µs | 5,186 µs | **3,686 µs** | **−35%** |
+| `SELECT a FROM wide` | 7,672 µs | 7,162 µs | **5,031 µs** | **−34%** |
+| `SELECT a, COUNT(*) … GROUP BY a` | 8,009 µs | 8,396 µs | **6,522 µs** | **−19%** |
+| `SELECT * FROM wide` | 35,304 µs | 31,978 µs | **29,813 µs** | −16% |
+
+**Against the original, before any of AP01 or AP02:**
+
+| statement | before | now | |
+|---|---:|---:|---:|
+| `SELECT COUNT(*) FROM wide` | 11,990 µs | 3,033 µs | **3.95×** |
+| `SELECT SUM(a) FROM wide` | 11,370 µs | 3,686 µs | **3.08×** |
+| `SELECT a FROM wide` | 13,022 µs | 5,031 µs | **2.59×** |
+| `SELECT COUNT(*) FROM narrow` | 4,474 µs | 2,905 µs | 1.54× |
+
+Decoding one integer column now costs **33 ns/row** where it cost 98, and
+`COUNT(*)` over twelve columns is within 4% of the same statement over two —
+relation width has almost stopped mattering to a statement that does not
+read the columns.
 
 ## AG11's defaults
 

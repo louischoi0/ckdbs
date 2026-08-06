@@ -1,6 +1,9 @@
 # KDS Scenario 2 — Freight & Cargo (Workload Specification)
 
-**Status:** Plan confirmed 2026-08-06 (S2-1–S2-11, §0). **Nothing measured yet.**
+**Status:** Plan confirmed 2026-08-06 (S2-1–S2-11, §0). **`S2-01` is built** —
+the eight relations, the loaders, `--schema-only` / `--load-only`, and the
+read probe that settled §6. Nothing is measured yet: no booking transaction
+exists, so there is no TPS number by construction.
 Deliverables: `tools/scenario2_freight.py`, `tools/pg_scenario2_freight.py`,
 `tools/compare_scenario2.py`, `bench/results-scenario2-freight.md`. Markers:
 `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/txn.md`,
@@ -98,8 +101,8 @@ charges        HEAP   id int64, freight_id int64, fee_id int64, amount int64,
                       applied_day int32
 ```
 
-87 columns per run against a ~7,800-column instance ceiling (catalog
-relations chain — `docs/keystoneid-k0-findings.md`), so ~90 runs per data
+68 columns per run against a ~7,800-column instance ceiling (catalog
+relations chain — `docs/keystoneid-k0-findings.md`), so ~110 runs per data
 file. Nothing reclaims a catalog row: there is no `DROP TABLE`.
 
 **Why each clustering.** BTREE wherever the transaction probes by pk or a
@@ -222,11 +225,22 @@ SELECT c.org_id, SUM(f.cbm) FROM freights f JOIN cargos c
     ON f.cargo_id = c.id GROUP BY c.org_id                            customer statement
 ```
 
-The third is the one to confirm before the rest is written: **nothing in this
-repo aggregates over a joined chain today.** `docs/feat-aggregate.md` AG1
-puts the fold over the sink and leaves the chain byte-identical, so a group
-key resolving to a second step's column *should* work. `S2-01` probes it, and
-the fallback if it does not is a per-organization filtered aggregate.
+The third had to be confirmed before the rest was written, because **nothing
+else in this repo aggregates over a joined chain**. `docs/feat-aggregate.md`
+AG1 puts the fold over the statement's `RowSink` and leaves the compiled
+chain byte-identical, so a group key resolving to a *second* step's column
+should work — and `S2-01`'s probe measured that it does, on real rows and not
+only at compile:
+
+```
+SELECT c.org_id, SUM(f.cbm) FROM freights AS f
+    JOIN cargos AS c ON f.cargo_id = c.id
+    WHERE c.org_id = 29 GROUP BY c.org_id      ->  29  30000   (three freights)
+```
+
+The per-organization filtered-aggregate fallback is therefore not needed.
+All six reads §3 and §6 depend on are accepted by the engine as of
+2026-08-06.
 
 ---
 
@@ -301,7 +315,7 @@ Each is a real limit as of 2026-08-06, not a preference:
 
 | Task | Delivers | Done when |
 |---|---|---|
-| `S2-01` | schema, loaders, `--schema-only` / `--load-only`, the §6 join-aggregate probe, `--verify` | eight relations create on a fresh file; `--schema-only` exits without loading; the probe prints which of the three reporter queries the server accepts |
+| `S2-01` **done** | schema, loaders, `--schema-only` / `--load-only`, the §6 join-aggregate probe | eight relations create on a fresh file; `--schema-only` exits without loading; the probe reports all six reads accepted. `--verify` moves to `S2-02`, which is where there is state worth verifying |
 | `S2-02` | the §3 transaction, one booker, both `--capacity-mode` values | a run commits, rejects and reports the three §S2-6 outcomes separately; `--verify` passes |
 | `S2-03` | `--bookers`, `--contend`, the retry loop and its per-axis counters | conflicts are observed and retried, not counted as errors; §5's `[OPEN]` default is settled with both numbers measured |
 | `S2-04` | the `--manifest` reporter process | reporter latency reported beside TPS, as scenario0 does |
@@ -318,9 +332,11 @@ Each is a real limit as of 2026-08-06, not a preference:
   at N fees per freight. A cap bounds statement count per transaction and
   therefore the variance of the TPS unit; no cap is more realistic. Settle at
   `S2-02`.
-- **Whether `GROUP BY` resolves a key on a joined chain** (§6). A capability
-  question about the engine, not a choice — `S2-01` answers it, and the answer
-  belongs in `docs/feat-aggregate.md` if it is no.
+- ~~**Whether `GROUP BY` resolves a key on a joined chain**~~ — **answered
+  2026-08-06 by `S2-01`'s probe: it does**, with correct values over real
+  rows (§6). It was a capability question about the engine, not a choice.
+  `docs/feat-aggregate.md` documents no join case either way; this is the
+  first workload to exercise one.
 - **Whether the credit check needs its own status code.** Today an over-credit
   booking is a driver-side rollback, indistinguishable at the wire from a
   voluntary one. Making it an engine-side constraint would need `CHECK`, which

@@ -155,11 +155,19 @@ framing rather than the int path: per-row input validation, a 12-iteration
 mask loop to find one set bit, and a `Status` returned per column. Two ways
 on, and they are not equivalent:
 
-  **(a) Make the decode call cheaper** - hoist the schema validation out of
-  the per-row path, iterate the mask's set bits instead of every column.
-  General, benefits every statement, no architectural cost. Do this first.
+  **(a) Make the decode call cheaper** - **DONE.** Two causes, both
+  general. `Status` carries a `std::string` by value, so a Status-returning
+  check builds one even when it passes, and `DecodeColumnsInto` ran two per
+  call before reading a byte; testing the predicate first and calling the
+  checker only on failure keeps every check and builds nothing on the path
+  that succeeds. And the column loop tested every column's bit to find the
+  one it wanted; it iterates the mask's set bits now. Worth **19-35%** on
+  top of the lazy name, which takes `COUNT(*)` over twelve columns to
+  **3.95x** its original cost and one column's decode from 98 ns/row to 33.
 
-  **(b) Fold from the cell**, as this task was named. It needs the raw
+  **(b) Fold from the cell**, as this task was named - **still open, and
+  the case for it is now weaker**: one column's decode is 33 ns/row, so the
+  ceiling on this route has fallen with (a). It needs the raw
   payload and the layout at the `Aggregator`, which today consumes a
   `ChainFrame` - the same thing every `RowSink` consumes, which is the
   AG1 seam. Giving the fold raw bytes means either widening `RowSink` for

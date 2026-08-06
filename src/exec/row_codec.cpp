@@ -1,6 +1,7 @@
 #include "kds/exec/row_codec.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <limits>
 #include <cstdint>
@@ -472,8 +473,20 @@ namespace {
 Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout& layout,
                          std::span<const std::byte> payload,
                          std::span<parser::AstValue> out) {
-    if (Status s = catalog::CheckKeystoneColumn(schema); !s.ok()) return s;
-    if (Status s = CheckLayoutMatches(schema, layout); !s.ok()) return s;
+    // **The predicate first, the Status only on failure.** `Status` carries
+    // a `std::string` by value, so calling a Status-returning checker
+    // constructs and destroys one even when it passes - and this function
+    // runs once per row per decode, twice per row on the partial path. The
+    // checks are unchanged and their messages still come from the one
+    // function that words them; what is gone is building an empty message
+    // for a row that is fine (workplan AP02).
+    if (schema.columns.empty() ||
+        !catalog::IsIntegerTypeVal(schema.columns.front().type_val)) {
+        return catalog::CheckKeystoneColumn(schema);
+    }
+    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
+        return CheckLayoutMatches(schema, layout);
+    }
     if (out.size() != schema.columns.size()) {
         return Status::InvalidArgument("decode target has " + std::to_string(out.size()) +
                                         " slot(s) for a schema of " +
@@ -510,9 +523,21 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
     if (spills != nullptr) spills->clear();
     if (Status s = CheckDecodeInputs(schema, layout, payload, out); !s.ok()) return s;
 
-    for (std::size_t i = 0; i < schema.columns.size(); ++i) {
-        if (i < 64 && (columns & (std::uint64_t{1} << i)) == 0) continue;
-        if (i >= 64) break;  // a mask cannot name these; the caller decodes fully
+    // **Iterate the mask's set bits, not the relation's columns.** A fold or
+    // a projection reading one column of twelve used to test twelve bits to
+    // find it; this visits exactly the columns named. `countr_zero` on a
+    // cleared-lowest-bit loop is the standard idiom and needs no bound of
+    // its own - the mask cannot name a column past 63, which is why the
+    // compiler answers kAllColumns for a relation that wide (step_compiler
+    // section 4) and why this can no longer silently skip a tail.
+    std::uint64_t remaining = columns;
+    if (schema.columns.size() < 64) {
+        // Never look at a bit the schema has no column for.
+        remaining &= (std::uint64_t{1} << schema.columns.size()) - 1;
+    }
+    while (remaining != 0) {
+        const std::size_t i = static_cast<std::size_t>(std::countr_zero(remaining));
+        remaining &= remaining - 1;
         if (i == 0) {
             if (Status s = DecodeKeystoneInto(payload, out[0]); !s.ok()) return s;
             continue;
