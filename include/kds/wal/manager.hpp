@@ -12,6 +12,7 @@
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/record.hpp"
 #include "kds/wal/stream.hpp"
+#include "kds/wal/writer.hpp"
 
 // One core's WAL manager (wal.md sections 1, 3, 6): the layer that owns a
 // WalStream and turns the durability classes into a policy about when that
@@ -153,7 +154,32 @@ public:
 
     // WalDurability. The comparison against a record LSN is strict - see
     // durability.hpp.
-    Lsn durable_lsn() const noexcept override { return stream_->durable_lsn(); }
+    // **The writer thread's watermark, not the stream's** (wal/writer.hpp).
+    // The stream stages bytes and writes them into the page cache; making
+    // them durable belongs to the writer, so it owns the number that says
+    // so. Without a writer - every in-process test, every tool - the stream
+    // syncs on the caller's stack and its own watermark is the answer.
+    // **The higher of the two watermarks**, because two things can make
+    // bytes durable now: the reactor, for any sync a caller is waiting on,
+    // and the writer thread, for D3's loss-window tick that nobody waits
+    // on (DrainOnce). Both only ever move forwards, so the max is the
+    // answer and neither can pull it back.
+    Lsn durable_lsn() const noexcept override {
+        const Lsn by_stream = stream_->durable_lsn();
+        const Lsn by_writer = writer_ != nullptr ? writer_->durable_lsn() : 0;
+        return by_stream > by_writer ? by_stream : by_writer;
+    }
+
+    // Starts the WAL writer thread, which from then on performs every sync.
+    //
+    // Off by default and started by the server, deliberately: a test or a
+    // tool that drives a WalManager on one thread wants its syncs to have
+    // happened by the time the call returns, and a thread would turn every
+    // such assertion into a wait. The server starts one because its reactor
+    // must not block on a device (bench/results-latency-matrix.md).
+    void StartWriter();
+
+    bool has_writer() const noexcept { return writer_ != nullptr; }
     Status EnsureDurable(Lsn lsn) override;
 
     // Appends one record and returns its LSN. A full ring is drained
@@ -199,7 +225,12 @@ public:
     // its window is up; this is for the two moments where that pacing is
     // wrong - a clean shutdown and an explicit client SYNC, both of which
     // promise that everything acknowledged has landed.
-    Status SyncAll() { return Sync(); }
+    // **Blocking, and it has to be**: this is the one promise that
+    // everything acknowledged has landed, so it may not return on a sync
+    // that has merely been *asked for*. With a writer thread that means
+    // waiting for the watermark; without one, Sync() already did the work
+    // on this stack.
+    Status SyncAll();
 
 private:
     WalManager(std::unique_ptr<WalStream> stream, const sched::Clock& clock,
@@ -208,6 +239,10 @@ private:
     Status Sync();
 
     std::unique_ptr<WalStream> stream_;
+
+    // Null until StartWriter(). When set, it is the only thing that calls
+    // the device's Sync(), and this manager never does.
+    std::unique_ptr<WalWriter> writer_;
     const sched::Clock& clock_;
     WalManagerConfig config_;
     WalStats stats_;

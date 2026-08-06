@@ -76,6 +76,7 @@ add_library(kds
     src/wal/log_device.cpp
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp
+    src/wal/writer.cpp
     src/exec/row_codec.cpp
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp

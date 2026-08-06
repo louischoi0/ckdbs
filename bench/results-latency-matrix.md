@@ -217,3 +217,66 @@ commit branch fires first and the interval branch rarely runs. `group`'s
 `relaxed` instance may lose - and this measurement is not the argument for
 making it. It is the argument for knowing what the current value costs.
 
+---
+
+# The WAL writer thread
+
+Measured 2026-08-06, same harness, quiet host. `wal::WalWriter` is a thread
+that owns the device sync; the reactor's `Append` and `Flush` stay
+single-threaded `WalStream` work, and the shared state is two atomics plus a
+mutex never held across an `fsync`.
+
+**The first version gave it every sync, and that was wrong.** Measured:
+
+| | conns | before | writer takes *every* sync |
+|---|---|---|---|
+| `relaxed` insert p99 | 1 | 2,165 us | **194 us** |
+| `group` insert p99 | 1 | 2,338 us | **4,750 us** |
+| `group` insert p99 | 4 | 4,681 us | **8,165 us** |
+
+The floor it was built for vanished, and `group`'s tail doubled. The two
+classes differ in **who waits**: nobody waits for D3's loss-window tick, and
+every committer waits for a commit sync. Handing a waited-on sync to another
+thread adds a wake-up to a latency somebody is measuring - visible as a
+doubled p99 against a median that barely moved (1,051 -> 1,087 us), which is
+what an occasional slow wake-up looks like on a 2-core host with no spare
+core to schedule the writer on.
+
+## The rule that shipped: the writer takes the syncs nobody waits for
+
+D3's interval tick goes to the writer. Commit syncs, `SYNC`, shutdown and
+the checkpoint gate stay on the reactor. `durable_lsn()` became the **max of
+two watermarks**, since both can now advance it and both are monotonic.
+
+| | conns | baseline | W1 | writer-everywhere | **split** |
+|---|---|---|---|---|---|
+| `relaxed` insert p99 | 1 | 2,208 | 2,165 | 194 | **202 us** |
+| `relaxed` TPS | 1 | 1,612 | 1,581 | 1,881 | **1,890** |
+| `relaxed` insert p99 | 4 | 2,760 | 2,691 | 839 | **937 us** |
+| `relaxed` TPS | 4 | 2,875 | 2,959 | 3,488 | **3,443** |
+| `group` insert p99 | 1 | 2,242 | 2,338 | 4,750 | **2,372 us** |
+| `group` insert p99 | 4 | 9,422 | 4,681 | 8,165 | **4,920 us** |
+| `group` TPS | 4 | 214 | 389 | 404 | **381** |
+
+The win is kept and the regression is gone. PostgreSQL, measured in every
+run, moves by ~2% across all four - which is the drift these comparisons
+carry.
+
+**`relaxed` at one connection now answers p50 122 us / p99 202 us - a ratio
+of 1.7x**, against PostgreSQL's 1.2x and its own 18x at the start of this
+work. That ratio was the point of the plan.
+
+## What is not claimed
+
+The writer-everywhere regression is a **2-core** result. A host with a core
+to spare may well schedule the writer fast enough that a waited-on sync is
+cheaper off-thread, which would make the split unnecessary. Nothing here
+tests that, and the split is what the available evidence supports.
+
+Verified under ThreadSanitizer: a server built with `-fsanitize=thread`,
+driven by 3 traders plus the reporter and then 4 traders under `--txn`,
+followed by `SYNC` and a clean shutdown - **zero warnings**, balances
+verified both times. The three sharing points are the segment table (a
+mutex, copied out and synced outside it), the durable watermark (atomic),
+and the ring (reactor-only, untouched by the writer).
+

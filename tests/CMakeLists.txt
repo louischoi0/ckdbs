@@ -11,6 +11,7 @@ add_executable(kds_tests
     keystone_id_test.cpp
     keystone_budget_test.cpp
     heap_page_test.cpp
+    wal_writer_test.cpp
     undo_page_test.cpp
     undo_log_test.cpp
     visibility_test.cpp

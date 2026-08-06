@@ -192,6 +192,8 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::Open(const std::string& 
                                       std::to_string(segment_size));
         }
 
+        // Open() runs before any writer thread exists, so this one needs
+        // no lock - stated rather than left as an inconsistency.
         device->segments_.push_back(std::move(fd.value()));
         ++expected;
     }
@@ -239,7 +241,13 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no) {
         return s;
     }
 
-    segments_.push_back(std::move(fd.value()));
+    {
+        // The only mutation of the table, and the only reason the lock
+        // exists: a vector growing under the writer thread's iteration is
+        // the one race here that corrupts rather than delays.
+        std::lock_guard<std::mutex> guard(segments_mutex_);
+        segments_.push_back(std::move(fd.value()));
+    }
     return Status::OK();
 }
 
@@ -311,8 +319,23 @@ Status FileLogDevice::Sync() {
     // Every segment, not just the tail: a torn-page-style partial write to an
     // earlier segment (recovery rewriting a record, an FPI landing late) is
     // still pending until its own fd is synced.
-    for (std::size_t i = 0; i < segments_.size(); ++i) {
-        while (::fsync(segments_[i].get()) != 0) {
+    //
+    // **The descriptors are copied out under the lock and synced without
+    // it** (see the header's justification). This runs on the WAL writer
+    // thread while the reactor may be rolling to a new segment, and holding
+    // the lock across an fsync would put the reactor behind the device -
+    // which is the thing this whole design exists to stop. A segment created
+    // after the copy is simply not covered by *this* sync, which is what the
+    // writer's snapshot rule already assumes.
+    std::vector<int> raw;
+    {
+        std::lock_guard<std::mutex> guard(segments_mutex_);
+        raw.reserve(segments_.size());
+        for (const FileDescriptor& fd : segments_) raw.push_back(fd.get());
+    }
+
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        while (::fsync(raw[i]) != 0) {
             if (errno == EINTR) {
                 continue;
             }

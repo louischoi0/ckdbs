@@ -64,7 +64,34 @@ Status WalManager::Flush() {
     return Status::OK();
 }
 
+Status WalManager::SyncAll() {
+    // The reactor's, like every other waited-on sync. It also has to cover
+    // whatever the writer thread has in flight, which Sync() does by
+    // syncing the device itself - the two watermarks are merged by
+    // durable_lsn().
+    return Sync();
+}
+
+void WalManager::StartWriter() {
+    if (writer_ != nullptr) return;
+    writer_ = std::make_unique<WalWriter>(stream_->device());
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("wal", "writer thread started; syncs leave the reactor from here on");
+    }
+}
+
 Status WalManager::Sync() {
+    // **On the calling thread, always.** The writer thread is not used here
+    // and that is the decision, not an omission: every caller of this has
+    // someone waiting on the result - a parked committer, a client's SYNC,
+    // a checkpoint's gate - and handing such a sync to another thread adds
+    // a wake-up to a latency somebody is measuring. Measured on a 2-core
+    // host it doubled `group`'s p99 while barely moving its median, which is
+    // what an occasional slow wake-up looks like
+    // (bench/results-latency-matrix.md).
+    //
+    // What the writer *does* take is the sync nobody waits for - D3's
+    // loss-window tick in DrainOnce(). See there.
     const bool had_staged_bytes = stream_->ring_used() > 0;
     if (Status s = stream_->Sync(); !s.ok()) {
         // Sync() flushes first, so the failure could be either half. The
@@ -188,11 +215,30 @@ Status WalManager::DrainOnce() {
         return Status::OK();  // nothing to do; a tick must be free
     }
     if (pending_group_commits_ > 0) {
+        // Someone is parked on this. Performed here, on the reactor, for
+        // the reason Sync() gives: a waiter pays for a hand-off.
         return Sync();
     }
+
     // No commit is waiting, so the only thing forcing a sync is the D3
-    // loss-window bound.
+    // loss-window bound - and **nobody is waiting for it**. That is what
+    // makes it the writer thread's: the fsync leaves this thread entirely,
+    // and the statement that would have been charged for it keeps running.
+    // Measured: `relaxed`'s p99 falls from 2,208 us to 194 us, because that
+    // stall *was* this tick.
     if (clock_.Now() - last_sync_ns_ >= config_.relaxed_flush_interval_ns) {
+        if (writer_ != nullptr) {
+            const bool staged = stream_->ring_used() > 0;
+            if (Status s = stream_->Flush(); !s.ok()) {
+                ++stats_.sync_failures;
+                return s;
+            }
+            if (staged) ++stats_.flushes;
+            last_sync_ns_ = clock_.Now();
+            writer_->RequestSync(stream_->flushed_lsn());
+            ++stats_.interval_syncs;
+            return Status::OK();
+        }
         if (Status s = Sync(); !s.ok()) {
             return s;
         }

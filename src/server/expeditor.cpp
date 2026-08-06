@@ -277,6 +277,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->wal_ = std::move(wal.value());
     expeditor->wal_->SetLogger(&*expeditor->logger_);
 
+    // **The reactor stops touching the device here.** Every sync moves to
+    // the WAL writer thread (wal/writer.hpp): a commit's, the D3
+    // loss-window's, and the checkpoint gate's. The server starts one and
+    // an in-process caller does not, because a test that drives a
+    // WalManager on one thread wants its syncs to have happened by the time
+    // the call returns.
+    expeditor->wal_->StartWriter();
+
     // WAL-before-data, enforced by the store rather than asked of its
     // callers (device_page_store.hpp): from here on no dirty page reaches
     // the device ahead of the records describing it.

@@ -117,6 +117,12 @@ public:
     bool sealed() const noexcept { return sealed_; }
     std::size_t ring_used() const noexcept { return ring_used_; }
     std::size_t ring_capacity() const noexcept { return ring_.size(); }
+
+    // The device under this stream, for the one caller that has to reach it
+    // past the stream: the WAL writer thread syncs the device while this
+    // stream keeps staging and writing on the reactor (wal/writer.hpp). It
+    // is deliberately not an owning handle - the device outlives both.
+    LogDevice* device() const noexcept { return device_; }
     std::size_t ring_free() const noexcept { return ring_.size() - ring_used_; }
 
     // Stages one record and returns the LSN it was placed at.

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,27 @@ private:
     std::string dir_;
     std::uint32_t core_id_;
     std::uint64_t segment_size_;
+
+    // ---- The one lock in the log device (rules.md §3's justification) ---
+    //
+    // **What it protects:** `segments_` - the open segment descriptors -
+    // and nothing else. **Acquisition order:** innermost; nothing is taken
+    // while it is held, and it is *never* held across an `fsync` or a
+    // `pwrite`.
+    //
+    // It exists because the WAL writer thread (wal/writer.hpp) syncs while
+    // the reactor may be rolling to a new segment, and a vector that grows
+    // under an iterator is the one race here that corrupts rather than
+    // merely delays. `Sync()` copies the descriptors under it, releases,
+    // and does the I/O outside - so the reactor can roll a segment while a
+    // sync is in flight, and the sync covers the segments that existed when
+    // it started, which is exactly what the writer's snapshot rule wants.
+    //
+    // Concurrent `pwrite` and `fsync` on one descriptor need no lock: the
+    // kernel serializes them, and whether the fsync includes a write racing
+    // with it is precisely the question `WalWriter` answers by publishing
+    // the watermark it was *asked* for rather than the current one.
+    mutable std::mutex segments_mutex_;
     std::vector<FileDescriptor> segments_;
 };
 
