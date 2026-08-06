@@ -541,9 +541,15 @@ def run_read_phases(client, suffix, symbols, session_count, bar_count, ops,
 # index, and may parallelise the scan under them. ckdbs makes no plan choice
 # at all - it walks the relation and folds outside the executor, which is
 # what keeps the compiled chain identical to the same statement without a
-# GROUP BY (docs/feat-aggregate.md AG1). The high-cardinality shape is where
-# that asymmetry should show most, and nothing about ckdbs's design is
-# trying to close it in v1.
+# GROUP BY (docs/feat-aggregate.md AG1).
+#
+# The high-cardinality shape is where that asymmetry was expected to show
+# most. **It is where PostgreSQL loses** (bench/results-scenario1-vs-pg.md):
+# from 1 group to 7,560 over the same 60,480 rows, this side's p50 grows
+# +454% and ckdbs's +46%, so a 2.7x deficit on the global form becomes a
+# 1.37x win. Worth knowing before reading the low-cardinality rows as a
+# verdict on either aggregate implementation - most of that gap is the scan
+# underneath.
 #
 # The two engines emit groups in different orders - ckdbs in first-seen
 # order, PostgreSQL in whatever its aggregate produced - and neither was

@@ -1,122 +1,160 @@
 # What a fold costs
 
 Measurements for `docs/feat-aggregate.md` (workplan AG10). Driver:
-`tools/aggregate_benchmark.py`.
+`tools/aggregate_benchmark.py`, plus the `agg-*` phases of
+`tools/scenario1_backtest.py`.
 
-## Device and configuration
+## Device, build and configuration
 
-**A block device, not tmpfs.** `bench/results-cabin.md` records what
-happens otherwise: with fsync free the scan becomes the bottleneck and
-anything touching a scan measures as a much larger win than it is. That is
-a rule now, and this run obeys it.
+**Two things this file gets wrong if you skip them.**
+
+**A block device, not tmpfs.** `bench/results-cabin.md` records what happens
+otherwise: with fsync free the scan becomes the bottleneck and anything
+touching a scan measures as a much larger win than it is.
+
+**A Release build, not the CMake default.** `CMakeLists.txt` defaults
+`CMAKE_BUILD_TYPE` to **Debug** — unoptimized, with debug assertions live —
+so `cmake -S . -B build` produces a binary that is roughly 14× slower on a
+scan than `-O3 -DNDEBUG`. The first version of this document was measured
+that way, and it was wrong in **both directions**: it reported +7.9% where
+the release build reports −3.7%, and +0.4% where the release build reports
++30.1%. A debug build does not merely scale everything down; it hides fixed
+costs inside inflated variable ones, which is exactly the distinction a fold
+is about. Every number below is `build-release`.
 
 | | |
 |---|---|
 | device | `/dev/nvme0n1p1` — Amazon EBS gp3, non-rotational, 8 GB |
-| data file | `/home/ec2-user/aggbench.db` on that device |
+| build | **`-DCMAKE_BUILD_TYPE=Release`** (`-O3 -DNDEBUG`), gcc 11.5 |
 | kernel | 6.18.38-73.137.amzn2023.x86_64 |
 | cores | 2 (server `cores = 1`) |
-| memory | 7 GB |
 | durability | `group` (default) |
-| build | default CMake build, gcc 11.5 |
-| client | one connection, `tools/aggregate_benchmark.py`, 30 reps/statement |
+| client | one connection, 30 reps/statement |
 
-Latencies include the Python client's own socket cost. That is the floor
-this harness can resolve, so **differences under ~50 µs are noise** and the
-per-group constant derived below is an order of magnitude, not a figure.
+Latencies include the Python client's own socket cost, which on a release
+build is now a **large** share of the small statements — a pk lookup is
+~100 µs end to end. Treat differences under ~20 µs on those rows as noise.
 
 ## What is being measured
 
 A *difference*, not a throughput. AG1 places the fold outside the executor
-and compiles the same chain either way, so the only question the numbers
-can answer is what folding a row costs on top of producing it. Every
-statement is therefore run against its **unaggregated twin** — same chain,
-same rows, same access kind.
+and compiles the same chain either way, so the only question the numbers can
+answer is what folding a row costs on top of producing it. Every statement
+runs against its **unaggregated twin** — same chain, same rows, same access
+kind.
 
 ## Grouped scan — 20,000 rows, heap relation
 
-One relation per group count, so the row count does not move with the
-variable.
-
 | statement | mean | p50 | rows back | vs plain |
-|---|---|---|---|---|
-| `SELECT bucket, qty FROM aggscan2` | 155.5 ms | 155.1 ms | 20,000 | — |
-| `SELECT bucket, COUNT(*), SUM(qty) … GROUP BY bucket` (2 groups) | 167.8 ms | 165.5 ms | 2 | **+7.9%** |
-| `SELECT bucket, qty FROM aggscan64` | 156.9 ms | 154.8 ms | 20,000 | — |
-| … `GROUP BY bucket` (64 groups) | 171.0 ms | 169.8 ms | 64 | **+9.0%** |
-| `SELECT bucket, qty FROM aggscan1024` | 155.5 ms | 154.8 ms | 20,000 | — |
-| … `GROUP BY bucket` (1024 groups) | 180.3 ms | 178.3 ms | 1,024 | **+16.0%** |
+|---|---:|---:|---:|---:|
+| `SELECT bucket, qty FROM aggscan2` | 11,108 µs | 10,748 µs | 20,000 | — |
+| … `COUNT(*), SUM(qty) … GROUP BY bucket` (2 groups) | 10,695 µs | 9,226 µs | 2 | **−3.7%** |
+| `SELECT bucket, qty FROM aggscan64` | 10,983 µs | 10,602 µs | 20,000 | — |
+| … `GROUP BY bucket` (64 groups) | 10,640 µs | 9,792 µs | 64 | **−3.1%** |
+| `SELECT bucket, qty FROM aggscan1024` | 11,173 µs | 10,785 µs | 20,000 | — |
+| … `GROUP BY bucket` (1,024 groups) | 11,811 µs | 11,175 µs | 1,024 | **+5.7%** |
+
+At 2 and 64 groups the fold is *faster* than its twin: it walks the same
+20,000 rows and serialises a handful instead of all of them, and that saving
+exceeds what the map costs. Only at 1,024 groups does the fold turn positive.
 
 ## The global form — the same walk with no map
 
 | statement | mean | p50 | rows back | vs plain |
-|---|---|---|---|---|
-| `SELECT qty FROM aggscan1024` | 153.3 ms | 150.8 ms | 20,000 | — |
-| `SELECT COUNT(*), SUM(qty) FROM aggscan1024` | 148.5 ms | 146.7 ms | 1 | **−3.2%** |
+|---|---:|---:|---:|---:|
+| `SELECT qty FROM aggscan1024` | 9,927 µs | 8,980 µs | 20,000 | — |
+| `SELECT COUNT(*), SUM(qty) FROM aggscan1024` | 7,834 µs | 7,736 µs | 1 | **−21.1%** |
 
 The no-GROUP-BY path encodes no key, computes no hash and probes no map
-(spec §5), and it is the only configuration here that is *faster* than its
-twin — it folds 20,000 rows and serialises one.
+(spec §5). It is the cheapest way to read a whole relation this engine has.
 
 ## DISTINCT
 
 | statement | mean | p50 | vs plain |
-|---|---|---|---|
-| `SELECT COUNT(sym) FROM aggscan1024` | 145.9 ms | 145.1 ms | — |
-| `SELECT COUNT(DISTINCT sym) FROM aggscan1024` | 166.4 ms | 164.4 ms | **+14.1%** |
+|---|---:|---:|---:|
+| `SELECT COUNT(sym) FROM aggscan1024` | 7,704 µs | 7,633 µs | — |
+| `SELECT COUNT(DISTINCT sym) FROM aggscan1024` | 9,814 µs | 9,373 µs | **+27.4%** |
 
 16 distinct values over 20,000 rows, so all but 16 probes are hits — which
-allocate nothing. The +14% is the per-row encode and set probe, not the
-inserts.
+allocate nothing. The +27% is the per-row encode and set probe, not the
+inserts, and it is the largest per-row cost in this feature.
 
 ## Grouped probe — btree, keyed chain
 
 | statement | mean | p50 | rows back | vs plain |
-|---|---|---|---|---|
-| `SELECT qty FROM aggprobe WHERE id = 42` | 299.5 µs | 277.8 µs | 1 | — |
-| `SELECT COUNT(*) FROM aggprobe WHERE id = 42` | 300.7 µs | 287.3 µs | 1 | **+0.4%** |
-| `SELECT bucket, qty … WHERE id BETWEEN 100 AND 200` | 1,274 µs | 1,259 µs | 101 | — |
-| `SELECT bucket, COUNT(*) … GROUP BY bucket` | 1,836 µs | 1,811 µs | 64 | **+44.1%** |
+|---|---:|---:|---:|---:|
+| `SELECT qty FROM aggprobe WHERE id = 42` | 102.7 µs | 83.1 µs | 1 | — |
+| `SELECT COUNT(*) FROM aggprobe WHERE id = 42` | 133.7 µs | 133.5 µs | 1 | **+30.1%** |
+| `SELECT bucket, qty … BETWEEN 100 AND 200` | 193.9 µs | 184.6 µs | 101 | — |
+| `SELECT bucket, COUNT(*) … GROUP BY bucket` | 249.9 µs | 236.0 µs | 64 | **+28.9%** |
 
-A point lookup is unchanged at noise level, which is AG1 behaving as
-specified: one row in, one row out, one state folded.
-
-The +44% is the headline number and it needed a second measurement to
-explain, because a 44% regression on a keyed chain would be a design
-problem if it were about rows.
+**The point lookup is where the debug build lied worst.** It measured +0.4%
+there and the release build measures +30.1% — not because the fold got
+slower, but because the statement got 3× faster and the fold's *fixed* cost
+(building the aggregator, founding one group, walking it at Finish) stopped
+being hidden. In absolute terms it is ~31 µs on a statement that is ~103 µs.
 
 ## The finding: cost tracks *group count*, not row count
 
-Same relation, same predicate, same 101 input rows, 60 reps — only the
+Same relation, same predicate, same 101 input rows, 100 reps — only the
 number of groups moves:
 
 | statement | groups | mean | p50 | vs plain |
-|---|---|---|---|---|
-| `SELECT bucket, qty … BETWEEN 100 AND 200` (plain) | — | 1,349 µs | 1,266 µs | — |
-| `SELECT COUNT(*) …` | 1 | 1,247 µs | 1,209 µs | **−7.6%** |
-| `SELECT sym, COUNT(*) … GROUP BY sym` | 16 | 1,565 µs | 1,463 µs | +16.0% |
-| `SELECT bucket, COUNT(*) … GROUP BY bucket` | 64 | 1,848 µs | 1,813 µs | +37.0% |
+|---|---:|---:|---:|---:|
+| `SELECT bucket, qty … BETWEEN 100 AND 200` (plain) | — | 200.1 µs | 187.3 µs | — |
+| `SELECT COUNT(*) …` | 1 | 185.1 µs | 172.4 µs | **−7.5%** |
+| `SELECT sym, COUNT(*) … GROUP BY sym` | 16 | 206.3 µs | 200.1 µs | +3.1% |
+| `SELECT bucket, COUNT(*) … GROUP BY bucket` | 64 | 246.6 µs | 243.1 µs | **+23.2%** |
 
 101 rows throughout. The fold is **free at one group and pays per group
-founded** — roughly 6–10 µs each at this scale, which this harness cannot
-resolve more precisely than that. So the +44% above is not a per-row cost
-that would scale with the relation; it is 64 group foundings amortised over
-only 101 rows, which is the shape where a fold buys the least: nearly
-unique groups, so almost no aggregation is happening.
+founded** — about **1 µs each** here, where the debug build's noise put it at
+6–10 µs. So the +28.9% above is 64 foundings amortised over 101 rows, the
+shape where a fold buys least: nearly unique groups, almost no aggregation
+happening.
 
-The same effect explains the scan sweep. Going from 2 to 1,024 groups over
-a fixed 20,000 rows costs +12.5 ms, which is both the foundings and the
-worse probe locality of a larger map — the per-row arithmetic did not
-change.
+## Confirmation at 30× the size, on a real schema
 
-Nothing here is a surprise about the *fold*: it hashes a key, probes a map
-and folds a state in place, with zero allocations for a row landing in an
-existing group (pinned by `tests/aggregate_test.cpp`). What the numbers add
-is which of those dominates, and it is the map.
+`tools/scenario1_backtest.py` runs the same shapes as `agg-*` phases against
+the backtest schema — 60,480 daily bars over 30 years, nine columns,
+ingested through the ordinary write path. Same relation, same 60,480 rows,
+only the group count moving (p50):
+
+| phase | groups | p50 | vs 1 group |
+|---|---:|---:|---:|
+| `agg-global` | 1 | 31.6 ms | — |
+| `agg-distinct` | 1, with a set | 32.6 ms | +3.2% |
+| `agg-by-symbol` | 8 | 34.7 ms | **+9.8%** |
+| `agg-by-session` | 7,560 | 46.2 ms | **+46.5%** |
+
+7,560 groups is one per trading day — the high-cardinality end of what this
+schema produces, and it costs 46%.
+
+**And the finding only a real workload could produce**: on a scan-dominated
+statement the fold is free.
+
+| phase | p50 |
+|---|---:|
+| `read-day-slice` (FilterScan, no fold) | 12.12 ms |
+| `agg-day-slice` (the same statement, folded) | 12.23 ms |
+
+Identical relation, identical predicate, 8 rows out of 60,480 either way:
+**+0.9%**, inside the noise of a statement that spends 12 ms finding 8 rows.
+
+Read together with the point lookup's +30%, the two say the same thing from
+opposite ends: **a fold costs group foundings and a small fixed setup, and
+whether that is visible depends entirely on what the chain underneath it
+costs.** A statement cheap enough for the fold to matter is a statement that
+was already fast.
+
+## Against PostgreSQL
+
+`bench/results-scenario1-vs-pg.md` compares the `agg-*` phases against
+PostgreSQL 17.10 on the same data. The short version, because it is not what
+this file expected: ckdbs loses the low-cardinality folds by 2-3× and **wins
+the high-cardinality one at 1.37×**, because PostgreSQL's HashAggregate
+degrades with group count faster than this fold does.
 
 ## AG11's defaults
-
-The workplan asks this file to ratify or amend them.
 
 **`aggregate_max_groups = 65,536` — ratified `[CONFIRMED]`.** Two reasons,
 one measured and one arithmetic. Measured: cost is proportional to group
@@ -124,27 +162,26 @@ count, so a statement approaching this cap is already slow enough to be
 visible to whoever ran it — the cap is a backstop, not a tuning knob.
 Arithmetic: a group with one key and two items costs roughly 416 bytes
 across its key vector, its state vector, its index node and its key string,
-so the ceiling is about **27 MB per statement**. That is a defensible
-worst case for one statement on an OLTP engine.
+so the ceiling is about **27 MB per statement**.
 
 **`aggregate_max_distinct = 1,048,576` — not ratified, stays
 `[PROPOSED]`.** The same arithmetic puts its ceiling at roughly **84 MB per
 statement** (about 80 bytes per entry: a set node plus a short-string
-encoding), which is three times the group ceiling and the largest single
-allocation any statement in this engine can ask for. Nothing measured here
-argues for a number, because no scenario in this bench needs a million
-distinct values — and picking one without data is exactly what the
-`[PROPOSED]` marker exists to prevent. What would settle it is a workload
-with a genuinely high-cardinality `COUNT(DISTINCT)`, measured for resident
-memory rather than latency. Until then the default stands and the exposure
-is written down here.
+encoding), three times the group ceiling and the largest single allocation
+any statement in this engine can ask for. Nothing measured here argues for a
+number, because no scenario needs a million distinct values — and picking one
+without data is exactly what the `[PROPOSED]` marker exists to prevent. What
+would settle it is a workload with a genuinely high-cardinality
+`COUNT(DISTINCT)`, measured for resident memory rather than latency.
 
 ## Reproducing
 
 ```
-kds_server --config <conf with data_file on a block device>
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && make -C build-release -j8
+build-release/kds_server --config <conf with data_file on a block device>
 python3 tools/aggregate_benchmark.py --port <port> --rows 20000 --reps 30
 ```
 
 `--cardinalities` sweeps the group count; `--suffix` keeps repeated runs
-against one data file from colliding.
+against one data file from colliding. **Do not use `./build`** unless you
+configured it Release — see the top of this file.

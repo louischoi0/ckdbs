@@ -20,6 +20,23 @@ did not hold constant and had to caveat table by table:
 - **Sequential**, one engine at a time, 1-minute load average 0.29 at the
   start.
 
+**Independently reproduced 2026-08-06 at `983d72d`**, when the `agg-*`
+phases were added. Every read shape landed within 1-3% of the table below —
+`bar-lookup` 7,656 against 7,842, `bar-range` 2,199 against 2,183,
+`day-slice` 82 against 78, `cross-join` 82 against 79 — across a different
+build directory, a different data file and a separate run of both engines.
+That reproduction is what licenses reading the ratios here as properties of
+the engines rather than of one afternoon.
+
+**The reproduction also found the trap that produces a fake regression.**
+`CMakeLists.txt` defaults `CMAKE_BUILD_TYPE` to **Debug**, so a run against
+`./build` measures an unoptimized binary with debug assertions live against
+a production PostgreSQL. Done by accident once here, it reported `bar-range`
+at 302 q/s instead of 2,199, `day-slice` at 5 instead of 82, and `bar-lookup`
+below PostgreSQL's — a uniform 3-25× loss that looks exactly like a real
+regression and is not one. **Check `CMAKE_BUILD_TYPE` in the cache before
+believing any number in this file**, and see the Reproducing section.
+
 **Headline: the two engines lose and win in opposite places, and the Cabin
 is the largest single effect in the table.** ckdbs is 1.7-2.6× faster on the
 primary-key shapes, 5.7× on a pk range, and 3-4× on the two FilterScans with
@@ -278,15 +295,69 @@ one `fsync` per row, which is the write sweep's first row at a smaller
 sample. The batched phases above barely moved, because one sync per 200 rows
 is not what the medium decides.
 
+## Aggregation — the `agg-*` phases
+
+Added 2026-08-06, when `docs/feat-aggregate.md` resolved `docs/parser-v2.md`
+I14 and `GROUP BY` became expressible. Both tools run the identical
+statements; `bench/results-aggregate.md` measures the fold on its own.
+
+This is the **least even table in the report, and the most interesting**.
+PostgreSQL plans these: it picks a HashAggregate or a GroupAggregate, may
+read the grouping column from an index, and may parallelise the scan beneath
+it. ckdbs makes no plan choice at all — it walks the relation and folds
+outside the executor, which is what keeps the compiled chain identical to
+the same statement without a `GROUP BY` (AG1).
+
+| phase | groups | ckdbs p50 | pg p50 | ckdbs/pg |
+|---|---:|---:|---:|---:|
+| `agg-global` (`COUNT/MIN/MAX/SUM`) | 1 | 31.6 ms | 11.5 ms | 0.36× |
+| `agg-distinct` (`COUNT(DISTINCT)`) | 1 | 32.6 ms | 11.9 ms | 0.37× |
+| `agg-by-symbol` | 8 | 34.7 ms | 18.7 ms | 0.54× |
+| **`agg-by-session`** | **7,560** | **46.2 ms** | **63.7 ms** | **1.37×** |
+| `agg-day-slice` (FilterScan + fold) | 8 | 12.2 ms | 7.5 ms | 0.62× |
+
+**The result the tool's own comments predicted backwards.** Those comments
+said "nothing here is expected to be close on the high-cardinality shape",
+reasoning that a planned HashAggregate must beat an unplanned walk by more
+as the work grows. The opposite happened, and the two engines' own curves say
+why:
+
+| groups | ckdbs p50 | pg p50 |
+|---:|---:|---:|
+| 1 | 31.6 ms | 11.5 ms |
+| 8 | 34.7 ms (+9.8%) | 18.7 ms (+63%) |
+| 7,560 | 46.2 ms (+46%) | 63.7 ms (**+454%**) |
+
+Over the same 60,480 rows, **PostgreSQL's aggregate degrades ~10× harder
+with group count than this fold does.** ckdbs starts 2.7× behind on the
+global form — that gap is the scan, not the fold, and the rest of this
+document is about the scan — and closes it entirely by 7,560 groups.
+
+Two things worth stating about what this is and is not. It is **not** a
+claim that the fold is better engineered than a HashAggregate; it is a
+first-seen-ordered vector plus a heterogeneous map probe, and it does less.
+And it is **not** a plan-quality result: ckdbs has no plan to get wrong here,
+which is the only reason its curve is flat.
+
+What it does license is narrower and still useful: the AG1 placement — a fold
+outside the executor, no operator in the chain, no step-kind table to teach —
+does not cost anything that shows up as group count rises. `agg-day-slice`
+against `read-day-slice` (12.23 ms against 12.12 ms, +0.9%) says the same
+from the other side: where the scan dominates, the fold is free on both
+engines and the ratio is just the scan's.
+
 ## What this does not measure
 
 - **Recovery.** ckdbs has none (`docs/wal.md`); PostgreSQL's is being paid
   for in every write number above. This is the largest unpriced difference
   in the report.
-- **Aggregates.** The model comparison is a plain join reduced client-side
-  on both sides, because ckdbs's grammar has no `SUM`/`GROUP BY`
-  (`docs/parser-v2.md` I14). Written idiomatically, PostgreSQL would return
-  8 rows instead of 2,872 and the `compare-all` row would invert.
+- **Aggregates inside the model comparison.** That phase is still a plain
+  join reduced client-side on both sides, and deliberately: its job is to
+  price the join, and rewriting one engine's statement would make the two
+  tools time different questions. Written idiomatically, PostgreSQL would
+  return 8 rows instead of 2,872 and the `compare-all` row would invert.
+  Aggregates are now measured **as their own phases** — see the section
+  below, added 2026-08-06 when `docs/feat-aggregate.md` resolved I14.
 - **Concurrent readers and writers.** Every phase here is single-connection
   apart from the concurrency sweep. `tools/scenario0_stockmarket.py` and its
   PostgreSQL twin are where contention is measured.
@@ -295,7 +366,10 @@ is not what the medium decides.
 ## Reproducing
 
 ```
-# Build first: a stale binary is the easiest way to measure the wrong engine.
+# Build first, and build **Release**: a stale binary is the easiest way to
+# measure the wrong engine, and CMakeLists defaults CMAKE_BUILD_TYPE to Debug,
+# which is the second easiest. Check it rather than assume it:
+grep CMAKE_BUILD_TYPE build-release/CMakeCache.txt   # must say Release
 cmake --build build-release -j
 
 # NOT /tmp - that is tmpfs on this host, where fsync is free and every write

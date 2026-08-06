@@ -1,0 +1,100 @@
+
+scenario1 comparison - ckdbs against pg
+  30 years x 8 symbols = 60,480 bars + 60,480 feature rows, 7,560 sessions, seed 1
+  359 rebalance periods, 21 sessions apart, 8 models
+  ckdbs: 127.0.0.1:15603, daily_bars BTREE
+  pg: 127.0.0.1:15433
+
+identity: OK - same parameters, and all 8 models scored identically to the basis point on both engines
+
+QPS by read shape - ckdbs against pg
+  cells are queries per second; `x` columns are ckdbs/pg
+shape              cold ckdbs      cold pg        x   warm ckdbs      warm pg        x
+--------------------------------------------------------------------------------------
+bar-lookup              7,587        4,464    1.70x        7,656        4,447    1.72x
+bar-range               2,192          386    5.68x        2,199          391    5.63x
+day-slice                  80          131    0.61x           82          138    0.59x
+symbol-history             36            9    4.06x           36            9    4.04x
+cross-join                 82          127    0.64x           82          127    0.65x
+point-join              6,651        2,708    2.46x        6,711        2,046    3.28x
+model-join                869          143    6.08x          890          220    4.04x
+
+the accelerator each engine offers for a non-pk equality
+  ckdbs: CABIN;  pg: INDEX
+shape              ckdbs warm  ckdbs cabin     gain      pg warm     pg index     gain   filter column
+------------------------------------------------------------------------------------------------------------------
+day-slice                  82        6,782   83.22x          138        2,888   20.94x   daily_stats.session_no
+symbol-history             36           22    0.59x            9            9    1.02x   daily_stats.symbol_id
+cross-join                 82        5,336   64.83x          127        1,658   13.04x   daily_stats.session_no
+model-join                890        1,310    1.47x          220          316    1.44x   model_results.model_id
+
+  drop check - warm again after dropping the accelerator, as a
+  fraction of the original warm. Far from 1.00x means the third
+  column measured something besides the accelerator:
+    day-slice       ckdbs    0.98x   pg    1.01x
+    symbol-history  ckdbs    0.98x   pg    0.94x
+    cross-join      ckdbs    1.00x   pg    1.00x
+    model-join      ckdbs    1.01x   pg    1.37x
+
+  symbol-history (ckdbs): cold ran 8 of 100 - fewer distinct arguments exist than the cell size, so its cold/warm gap is understated
+  symbol-history (pg): cold ran 8 of 100 - fewer distinct arguments exist than the cell size, so its cold/warm gap is understated
+  model-join (ckdbs): cold ran 8 of 100 - fewer distinct arguments exist than the cell size, so its cold/warm gap is understated
+  model-join (pg): cold ran 8 of 100 - fewer distinct arguments exist than the cell size, so its cold/warm gap is understated
+
+INSERT rows/s by transaction batch size
+rows/txn            ckdbs           pg        x    ckdbs gain       pg gain
+---------------------------------------------------------------------------
+1 (auto)              683          707    0.97x         1.00x         1.00x
+10                  3,601        3,183    1.13x         5.27x         4.50x
+100                 7,975        4,945    1.61x        11.67x         6.99x
+1,000               9,292        5,308    1.75x        13.60x         7.51x
+
+  the `gain` columns are each engine against its own autocommit
+  rate, which is the comparable half: the absolute numbers carry
+  two different default durability settings (ckdbs `group`,
+  PostgreSQL `synchronous_commit = on`) and the gains do not.
+
+the 3-relation join by connection count
+connections          ckdbs           pg        x    ckdbs scale       pg scale
+------------------------------------------------------------------------------
+1                       82          129    0.64x          1.00x          1.00x
+2                       82          202    0.41x          1.00x          1.56x
+4                       83          200    0.42x          1.01x          1.55x
+8                       83          189    0.44x          1.00x          1.46x
+
+  the `scale` columns are each engine against its own one-
+  connection rate. This is the weakest row of the report and the
+  difference is architectural: ckdbs dispatches one core's
+  statements on one thread, so its curve is round-trip overlap;
+  PostgreSQL runs a backend process per connection, so its curve
+  is parallel execution. Both are being reported correctly.
+
+phases as the workload ran - qps, and p50 latency
+phase                     ckdbs qps       pg qps        x    ckdbs p50       pg p50        x
+--------------------------------------------------------------------------------------------
+load-exchanges                  323          740    0.44x       1,086u       1,196u    1.10x
+load-symbols                    705          817    0.86x       1,194u       1,204u    1.01x
+load-sessions                 9,417        4,873    1.93x         108u         195u    1.80x
+load-bars                     8,678        4,338    2.00x         113u         218u    1.93x
+load-stats                    6,969        4,350    1.60x         139u         217u    1.56x
+load-models                     809          772    1.05x       1,063u       1,233u    1.16x
+backtest-read                    81          122    0.66x      12,164u       8,066u    0.66x
+result-insert                   719          846    0.85x       1,062u       1,166u    1.10x
+backtest-replay                  81          123    0.66x      12,131u       7,995u    0.66x
+compare-all                     173           37    4.68x       5,769u      27,028u    4.69x
+compare-one                     851          304    2.80x       1,115u       3,281u    2.94x
+read-bar-lookup               7,689        4,243    1.81x         125u         223u    1.78x
+read-bar-range                2,211          381    5.80x         448u       2,599u    5.80x
+read-symbol-history              34            9    3.87x      27,855u     112,141u    4.03x
+read-day-slice                   82          131    0.62x      12,124u       7,599u    0.63x
+read-join-point               6,784        2,723    2.49x         142u         356u    2.50x
+read-join-exists                 24           40    0.61x      39,321u      24,904u    0.63x
+agg-global                       32           87    0.36x      31,567u      11,492u    0.36x
+agg-by-symbol                    29           53    0.54x      34,668u      18,728u    0.54x
+agg-by-session                   21           16    1.37x      46,240u      63,738u    1.38x
+agg-day-slice                    82          132    0.62x      12,234u       7,549u    0.62x
+agg-distinct                     30           83    0.37x      32,579u      11,942u    0.37x
+
+  every `x` column reads the same way: above 1.00x means ckdbs did better,
+  including the p50 pair, where the ratio is inverted because lower latency is better.
+

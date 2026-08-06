@@ -1262,12 +1262,21 @@ def run_read_phases(client, suffix, symbols, session_count, bar_count, ops,
 # the map anyway - the shape where it buys least, and the pair is the
 # measurement.
 #
-# Against PostgreSQL these are the sharpest comparison in the scenario, and
-# for a structural reason: PostgreSQL plans a HashAggregate or a GroupAggregate
-# and may read the grouping column from an index, while ckdbs walks the
-# relation and folds outside the executor with no plan choice at all
-# (docs/feat-aggregate.md AG1). Nothing here is expected to be close on the
-# high-cardinality shape.
+# Against PostgreSQL these are the sharpest comparison in the scenario, for a
+# structural reason: PostgreSQL plans a HashAggregate or a GroupAggregate and
+# may read the grouping column from an index, while ckdbs walks the relation
+# and folds outside the executor with no plan choice at all
+# (docs/feat-aggregate.md AG1).
+#
+# **This comment used to predict that ckdbs would not be close on the
+# high-cardinality shape. It was measured backwards** - see
+# bench/results-scenario1-vs-pg.md. ckdbs loses the low-cardinality folds by
+# 2-3x, which is the scan and not the fold, and *wins* agg-by-session at
+# 1.37x, because PostgreSQL's aggregate degrades with group count about 10x
+# harder than this one does (+454% against +46% from 1 group to 7,560). The
+# prediction is left here, corrected, because the reasoning that produced it
+# - "a planned operator must win by more as the work grows" - is the obvious
+# one and worth having on record as wrong.
 #
 # Note what the two engines do *not* agree on and why it does not matter
 # here: ckdbs emits groups in first-seen order and PostgreSQL in whatever
