@@ -146,17 +146,43 @@ TEST_F(RangeScanTest, ARangeNearTheStartStopsBeforeReadingTheWholeRelation) {
     }
 }
 
-TEST_F(RangeScanTest, ARangeReachingTheEndPrunesNothingAndSaysSo) {
-    // The honest other half: pruning is a tail optimization, so a range
-    // that runs to the end of the relation saves nothing. Pinned so the
-    // counter is not mistaken for "ranges are always cheap".
-    const Outcome out =
-        RunWithStats("SELECT id FROM b WHERE id BETWEEN " + std::to_string(kRows - 2) + " AND " +
-                     std::to_string(kRows));
-    EXPECT_EQ(out.rows.size(), 3u);
-    EXPECT_EQ(out.stats.Total().range_pages_pruned, 0u);
-    // And it read the whole relation to find them - the head is not pruned.
-    EXPECT_EQ(out.stats.Total().rows_examined, static_cast<std::uint64_t>(kRows));
+TEST_F(RangeScanTest, ARangeAtTheEndSeeksOnABtreeAndStillWalksOnAHeap) {
+    // A range at the far end of the relation, which is the case tail
+    // pruning cannot help with: there is no tail to prune. What decides the
+    // cost is whether the walk can *start* at the low bound.
+    const std::string where = " WHERE id BETWEEN " + std::to_string(kRows - 2) + " AND " +
+                              std::to_string(kRows);
+
+    // **Clustered: the descent goes to the leaf holding the low bound.**
+    const Outcome b = RunWithStats("SELECT id FROM b" + where);
+    EXPECT_EQ(b.rows.size(), 3u);
+    EXPECT_LT(b.stats.Total().rows_examined, static_cast<std::uint64_t>(kRows))
+        << "a clustered range must not read the rows before it";
+    EXPECT_EQ(b.stats.Total().range_pages_pruned, 0u)
+        << "nothing to prune at the end - the saving is the seek, not the stop";
+
+    // **Heap: no index to descend, so finding the low bound *is* the walk.**
+    // The honest other half, pinned so the seek is not mistaken for a
+    // property of ranges generally.
+    const Outcome h = RunWithStats("SELECT id FROM h" + where);
+    EXPECT_EQ(h.rows.size(), 3u);
+    EXPECT_EQ(h.stats.Total().rows_examined, static_cast<std::uint64_t>(kRows));
+}
+
+// The seek may only change *where the walk starts*, never which rows come
+// back - the same contract tail pruning has, and the reason the residual
+// still carries both bounds. Every range over the clustered relation must
+// answer exactly what the heap one answers.
+TEST_F(RangeScanTest, TheSeekReturnsTheSameRowsAsTheWalk) {
+    for (int low = 1; low <= kRows; low += 37) {
+        for (int width : {0, 1, 9, 100}) {
+            const std::string where = " WHERE id BETWEEN " + std::to_string(low) + " AND " +
+                                      std::to_string(low + width);
+            const Outcome b = RunWithStats("SELECT id FROM b" + where);
+            const Outcome h = RunWithStats("SELECT id FROM h" + where);
+            ASSERT_EQ(b.rows, h.rows) << "btree and heap disagree on" << where;
+        }
+    }
 }
 
 }  // namespace

@@ -388,21 +388,34 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
                             std::to_string(leaf_id));
 }
 
+StatusOr<PageId> BtreeSeekLeaf(storage::PageStore& store, PageId root, std::uint64_t id) {
+    auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
+    if (!descent.ok()) return descent.status();
+    return descent.value().path[descent.value().depth];
+}
+
 Status BtreeVisit(
     storage::PageStore& store, PageId root, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn) {
     auto first = LeftmostLeaf(store, root);
     if (!first.ok()) return first.status();
+    return BtreeVisitFrom(store, first.value(), access, fn);
+}
 
-    PageId current = first.value();
+Status BtreeVisitFrom(
+    storage::PageStore& store, PageId first_leaf, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn) {
+    PageId current = first_leaf;
     for (std::uint32_t steps = 0;; ++steps) {
         // Same cycle guard the heap chain applies to next_page_id, for the
         // same reason: a cyclic sibling link would otherwise be an infinite
         // loop inside a request.
         if (steps >= heap::kMaxChainPages) {
-            return Status::Corruption("btree leaf chain from page " + std::to_string(root) +
-                                      " exceeds " + std::to_string(heap::kMaxChainPages) +
+            return Status::Corruption("btree leaf chain from page " +
+                                      std::to_string(first_leaf) + " exceeds " +
+                                      std::to_string(heap::kMaxChainPages) +
                                       " pages; the sibling links are cyclic or corrupt");
         }
 

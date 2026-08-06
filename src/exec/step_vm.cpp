@@ -759,6 +759,34 @@ private:
         };
 
         NoteFetch();
+
+        // ---- The head seek (kRange on a clustered relation) --------------
+        //
+        // Tail pruning above ends the walk; this is what stops it starting
+        // at the beginning. A `BETWEEN` on a btree relation descends to the
+        // leaf holding the low bound and walks siblings from there, so a
+        // range near the end of the relation costs the range rather than
+        // everything before it - measured at 44% of a full scan when the
+        // bound is drawn uniformly (bench/results-scenario1-vs-pg.md).
+        //
+        // **A heap relation still starts at the head**, and that is not an
+        // oversight: it has no index to descend, so finding the low bound
+        // *is* the walk. The residual carries both bounds either way, which
+        // is what makes the seek an accelerator that cannot change the
+        // answer - the same property tail pruning rests on.
+        if (pruning && access.clustered_type == catalog::ClusteredType::kBtree) {
+            auto first = btree::BtreeSeekLeaf(store_, access.desc_page_id, step.range->low);
+            if (first.ok()) {
+                Status seeked =
+                    btree::BtreeVisitFrom(store_, first.value(), storage::PageAccess::kRead,
+                                          visitor);
+                if (!inner.ok()) return inner;
+                return seeked;
+            }
+            // A descent that failed is a reason to walk, not to fail: the
+            // walk is the authoritative path and reaches the same rows.
+        }
+
         Status walked = access.clustered_type == catalog::ClusteredType::kBtree
                             ? btree::BtreeVisit(store_, access.desc_page_id,
                                                 storage::PageAccess::kRead, visitor)

@@ -147,6 +147,29 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
 // VisitControl contract included, with the same meaning and the same
 // consequence for getting either wrong. kStop ends the walk with
 // Status::OK() and leaves the remaining leaves unread.
+// The leaf that holds `id`, or that *would* hold it - the descent alone,
+// without asking whether the key is present.
+//
+// It exists for a range: `WHERE id BETWEEN low AND high` on a clustered
+// relation should start at `low`, not at the leftmost leaf. Walking from the
+// head and stopping at the tail reads everything before the range, which for
+// a uniformly drawn bound is half the relation - measured at 44% of a full
+// scan on a 60,480-row table (bench/results-scenario1-vs-pg.md).
+//
+// The distinction from BtreeLookup is the whole point: a lookup answers
+// NotFound when the key is absent, and a range's low bound very often is.
+StatusOr<PageId> BtreeSeekLeaf(storage::PageStore& store, PageId root, std::uint64_t id);
+
+// BtreeVisit, starting at a given leaf rather than the leftmost one.
+//
+// `first_leaf` comes from BtreeSeekLeaf. Everything else is identical -
+// including that a `kStop` never fetches the leaves to its right, which is
+// what lets a range end at its high bound.
+Status BtreeVisitFrom(
+    storage::PageStore& store, PageId first_leaf, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn);
+
 Status BtreeVisit(
     storage::PageStore& store, PageId root, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
