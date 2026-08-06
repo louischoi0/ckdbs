@@ -1,20 +1,38 @@
 # Backtest QPS — ckdbs against PostgreSQL 17.10
 
-Measured 2026-08-06 with `tools/scenario1_backtest.py` and
+Measured with `tools/scenario1_backtest.py` and
 `tools/pg_scenario1_backtest.py`, compared by `tools/compare_scenario1.py`.
 30 years of daily bars: 7,560 sessions × 8 symbols = 60,480 rows in
 `daily_bars` and 60,480 derived feature rows in `daily_stats`, plus 2,872
 `model_results` rows written by eight strategy models walking forward.
-Runs were **sequential**, one engine at a time on an idle box; the seed was
-1 on both.
+
+**Every number in this document is from one re-measurement on 2026-08-06,
+after `2251623`**, with the earlier partial figures kept only where they are
+labelled "was". The conditions, which the previous version of this document
+did not hold constant and had to caveat table by table:
+
+- **ckdbs built at HEAD.** The binary in the tree was five minutes older
+  than `43d05aa` and did not contain the range seek; it was rebuilt first.
+- **Both data directories on the same xfs volume.** The earlier ckdbs runs
+  put the data file in `/tmp`, which is **tmpfs on this host**, against a
+  PostgreSQL cluster whose data directory was not. That inflated every
+  unbatched ckdbs write by ~4.9× and is the correction below.
+- **Sequential**, one engine at a time, 1-minute load average 0.29 at the
+  start.
 
 **Headline: the two engines lose and win in opposite places, and the Cabin
-is the largest single effect in the table.** ckdbs is 1.7-2.9× faster on
-every primary-key shape and 4-8× faster on writes; PostgreSQL is ~3.8×
-faster on the unindexed scans that dominate this workload. Given its own
-accelerator on those scans, ckdbs's Cabin is worth **184×** where
-PostgreSQL's btree index is worth **22×** — and lands 2.2× higher in
-absolute QPS, turning ckdbs's worst column into its best.
+is the largest single effect in the table.** ckdbs is 1.7-2.6× faster on the
+primary-key shapes, 5.7× on a pk range, and 3-4× on the two FilterScans with
+low match counts; PostgreSQL is ~1.7× faster on the two full-relation scans
+that dominate this workload. Given each engine's own accelerator on those
+scans, ckdbs's Cabin is worth **86×** where PostgreSQL's btree index is
+worth **20×**, and lands 2.4× higher in absolute QPS.
+
+**Correction to the previous headline: "4-8× faster on writes" was a tmpfs
+artifact and is withdrawn.** On the same volume the two engines are within
+5% of each other at autocommit (684 against 717 rows/s), and ckdbs's
+advantage appears only with batching, reaching 1.75× at 1,000 rows per
+transaction.
 
 ## The workload is provably one workload
 
@@ -31,49 +49,61 @@ through the comparison join, matches what the driver accumulated.
 
 ## Read QPS, by shape
 
-**Re-measured 2026-08-06 after two engine changes** - lazy decode (`a1559e3`)
-and the clustered range seek (`43d05aa`). The ckdbs columns are the new
-figures; the PostgreSQL columns are unchanged, and the two pk shapes are the
-**controls**: neither change touches their path and neither moved.
+Both engines re-measured together, after lazy decode (`a1559e3`) and the
+clustered range seek (`43d05aa`). "was" is the pre-change ckdbs figure. The
+two pk shapes are the **controls**: neither change touches their path, and
+neither moved.
 
-| shape | ckdbs was | ckdbs now | pg warm | was vs pg | now vs pg |
+| shape | ckdbs was | **ckdbs** | **pg** | was vs pg | **now vs pg** |
 |---|---:|---:|---:|---:|---:|
-| bar-lookup (pk =) *control* | 7,714 | 8,076 | 4,636 | 1.66× | **1.74×** |
-| point-join (3-rel, pk) *control* | 6,897 | 6,793 | 2,735 | 2.52× | **2.48×** |
-| model-join (FilterScan+Probe) | 688 | 886 | 311 | 2.21× | **2.85×** |
-| symbol-history (FilterScan) | 24 | 34 | 8 | 2.88× | **4.25×** |
-| **bar-range (pk BETWEEN)** | 83 | **2,154** | 405 | 0.20× | **5.32×** |
-| **day-slice (FilterScan)** | 35 | **76** | 131 | 0.27× | **0.58×** |
-| **cross-join (FilterScan+2 Probe)** | 34 | **78** | 130 | 0.26× | **0.60×** |
+| bar-lookup (pk =) *control* | 7,714 | 7,842 | 4,538 | 1.66× | **1.73×** |
+| point-join (3-rel, pk) *control* | 6,897 | 6,910 | 2,688 | 2.52× | **2.57×** |
+| **bar-range (pk BETWEEN)** | 83 | **2,183** | 381 | 0.20× | **5.73×** |
+| symbol-history (FilterScan) | 24 | 34 | 9 | 2.88× | **3.94×** |
+| model-join (FilterScan+Probe) | 688 | 820 | 278 | 2.21× | **2.95×** |
+| **day-slice (FilterScan)** | 35 | **78** | 140 | 0.27× | **0.56×** |
+| **cross-join (FilterScan+2 Probe)** | 34 | **79** | 130 | 0.26× | **0.61×** |
+
+The controls landed within 1-2% of their pre-change values across a rebuild,
+a different filesystem and a separate day, which is the reproducibility this
+table rests on.
 
 Three things this says.
 
 **The pk path is ckdbs's.** A clustered-btree descent plus a tagged-cell
-decode beats PostgreSQL's index scan plus heap fetch by 1.74×, and the
-advantage grows to 2.48× on the three-relation point join where two more
-probes compound it. These two are also what makes the rest of the table
-readable: they are the shapes neither change touches, and they moved by 1-4%
-across builds and across a machine whose load varied.
+decode beats PostgreSQL's index scan plus heap fetch by 1.73×, and the
+advantage grows to 2.57× on the three-relation point join where two more
+probes compound it.
 
 **The full-relation scan is still PostgreSQL's, now by 1.7× rather than
 3.8×.** The investigation below found the reason - ckdbs built a full row
 object for every one of the 60,472 rows it rejected - and lazy decode closed
-about half the gap: `day-slice` 35 -> 76 and `cross-join` 34 -> 78. What is
-left is no longer decode; it has not been attributed.
+about half the gap: `day-slice` 35 -> 78 and `cross-join` 34 -> 79. What is
+left is no longer decode; it has not been attributed. Note this is the one
+place where the two full-relation shapes and the two *selective* FilterScans
+part company: `symbol-history` and `model-join` are also unindexed walks and
+ckdbs wins both by 3-4×, so "PostgreSQL scans faster" is too coarse a
+reading. What PostgreSQL is faster at here is specifically the 60,480-row
+walk that discards 60,472 rows.
 
 **`bar-range` was the one result that named a known gap, and the gap is
 closed.** A pk `BETWEEN` compiled to a `Range` step that pruned the *tail* -
 the first page whose `min_key` passes the high bound ends the walk - and
 never the head, so a range 200 wide cost everything before it. It now
 descends to its low bound (`btree::BtreeSeekLeaf`) and walks siblings from
-there: **83 -> 2,154 QPS, from 5× behind PostgreSQL to 5.3× ahead.** A heap
-relation still starts at the head, because it has no index to descend and
-finding the low bound *is* the walk.
+there: **83 -> 2,183 QPS, from 5× behind PostgreSQL to 5.7× ahead** - the
+largest single movement in this document. A heap relation still starts at
+the head, because it has no index to descend and finding the low bound *is*
+the walk.
 
-## Why ckdbs loses those three, investigated
+## Why ckdbs lost those three — the investigation that produced the fixes
 
-Re-measured at HEAD on an idle box. The three losing shapes have **two**
-root causes, and neither is "PostgreSQL scans faster".
+Kept because it is the reasoning behind `a1559e3` and `43d05aa`, and because
+the measurements in it are what the tables above should be read against.
+**The numbers in this section are pre-fix**: `bar-range` is now 5.7× ahead
+rather than 5× behind, and `day-slice`/`cross-join` have roughly halved
+their gap. The three losing shapes had **two** root causes, and neither was
+"PostgreSQL scans faster".
 
 ### day-slice and cross-join: the scan materialises every row it discards
 
@@ -114,17 +144,21 @@ which is what "start at the head, stop at the match" predicts for a
 uniformly drawn bound. PostgreSQL's index range scan touches only the
 qualifying leaves.
 
-### What each would take
+### What each took — both are now done
 
-- **Lazy decode**: decode the columns the residual references, evaluate, and
-  materialise the rest only on a match. `Step::residual` already records
-  which columns those are. At 8/60,480 selectivity that is roughly a 12x cut
-  in decode work on this shape.
-- **A range seek**: descend to the low bound, then walk siblings until the
-  high bound. The primitive exists; `kRange` never calls it.
+- **Lazy decode** (`a1559e3`): decode the columns the residual references,
+  evaluate, and materialise the rest only on a match. `Step::residual`
+  already recorded which columns those are. Predicted roughly a 12× cut in
+  decode work at 8/60,480 selectivity; **delivered 2.2× end to end**
+  (`day-slice` 35 → 78), which says decode was 75% of the scan and the
+  remaining 25% is now the ceiling.
+- **A range seek** (`43d05aa`): descend to the low bound, then walk siblings
+  until the high bound. The primitive existed and `kRange` never called it;
+  it now calls `btree::BtreeSeekLeaf`. **26× end to end** (83 → 2,183),
+  which is what removing "walk half the relation first" is worth.
 
-Neither is a throughput ceiling. Both are design choices with the
-measurements above as their price.
+Neither was a throughput ceiling. Both were design choices, and the
+measurements above were their price.
 
 ## The accelerator each engine offers for a non-pk equality
 
@@ -136,21 +170,22 @@ nothing about the client, the machine, or the wire.
 
 | shape | ckdbs warm | ckdbs **cabin** | gain | pg warm | pg **index** | gain |
 |---|---:|---:|---:|---:|---:|---:|
-| day-slice | 76 | **6,703** | **87.82×** | 131 | 2,937 | 22.37× |
-| cross-join | 78 | **5,275** | **67.70×** | 130 | 1,844 | 14.24× |
-| model-join | 886 | 1,304 | 1.47× | 311 | 287 | 0.92× |
-| symbol-history | 34 | 21 | **0.61×** | 8 | 9 | 1.07× |
+| day-slice | 78 | **6,668** | **85.60×** | 140 | 2,805 | 20.08× |
+| cross-join | 79 | **5,497** | **69.58×** | 130 | 1,316 | 10.16× |
+| model-join | 820 | 1,125 | 1.37× | 278 | 268 | 0.97× |
+| symbol-history | 34 | 21 | **0.62×** | 9 | 9 | 1.03× |
 
-**The gains fell and the Cabin did not get worse** - 184× became 88×
-because the *baseline* nearly doubled, while the served number barely moved
-(6,407 -> 6,703). A ratio against a moving denominator is the thing to read
-carefully here: what a Cabin is worth in absolute QPS is unchanged, and what
-it is worth *relative to walking* halves the moment walking gets cheaper.
+**The gains fell and the Cabin did not get worse** - 184× became 86×
+because the *baseline* more than doubled, while the served number barely
+moved (6,407 -> 6,668). A ratio against a moving denominator is the thing
+to read carefully here: what a Cabin is worth in absolute QPS is unchanged,
+and what it is worth *relative to walking* halves the moment walking gets
+cheaper.
 Both are still far above PostgreSQL's indexed answer on the same shape.
 
 **The Cabin turns ckdbs's worst two shapes into its best.** `day-slice` goes
-from 3.8× behind PostgreSQL to 2.2× ahead of it; `cross-join` from 3.8×
-behind to 3.05× ahead. That is the feature working exactly as
+from 1.8× behind PostgreSQL to 2.4× ahead of it; `cross-join` from 1.6×
+behind to 4.2× ahead. That is the feature working exactly as
 `docs/feat-cabin.md` §1 specifies — an observed value's entry set is served
 without opening the relation — on a workload whose filter column repeats.
 
@@ -158,7 +193,7 @@ without opening the relation — on a workload whose filter column repeats.
 `symbol-history` has 8 distinct values each matching 7,560 rows: the entry
 set is as large as the scan it replaces. It used to cost what walking cost
 (0.97×); now that walking is cheaper it costs **more** - 34 QPS walking
-against 21 served, **0.61×**. Resolving 7,560 entries one pk at a time was
+against 21 served, **0.62×**. Resolving 7,560 entries one pk at a time was
 always the more expensive way to read them, and lazy decode made the
 comparison honest by removing the per-row penalty the walk was paying.
 That is an argument for the `CABIN AUTO` threshold (`feat-cabin.md` §8.1)
@@ -176,49 +211,44 @@ and dropping a Cabin is a performance event and never a correctness one.
 
 ## Write QPS, by transaction batch size
 
-> **These numbers are not comparable to the read tables above, and were not
-> re-measured with them.** The reproduce line at the foot of this document
-> puts the data file at `/tmp/cmp.db`, and `/tmp` on this host is **tmpfs**,
-> where `fsync` costs ~0.3 us. That is why autocommit reads 3,324 rows/s -
-> 300 us a row, faster than one `fsync` on the real volume, which
-> `bench/results-latency-matrix.md` measures at ~1 ms. Re-run on xfs the same
-> sweep gives **679** rows/s at batch 1 and 8,785 at batch 1,000; the batched
-> figures barely move because they amortise the sync, and the unbatched one
-> falls 4.9x because it *is* the sync.
->
-> So the table below is a tmpfs measurement of ckdbs against a PostgreSQL
-> cluster whose data directory was not on tmpfs. **It overstates ckdbs's
-> write advantage and should be re-run like for like before it is quoted.**
-> The read tables are unaffected: both engines serve those from cache, and
-> the two pk controls landed within 1-4% of their previous values.
-
+Both data directories on the same xfs volume. The previous version of this
+table had the ckdbs file on tmpfs and is withdrawn; its autocommit figure of
+3,324 rows/s was measuring a page cache, not a durable write.
 
 | rows/txn | ckdbs | pg | ckdbs/pg | ckdbs gain | pg gain |
 |---|---:|---:|---:|---:|---:|
-| 1 (autocommit) | 3,324 | 718 | **4.63×** | 1.00× | 1.00× |
-| 10 | 8,097 | 3,272 | 2.47× | 2.44× | 4.56× |
-| 100 | 9,392 | 4,999 | 1.88× | 2.83× | 6.96× |
-| 1,000 | 9,451 | 5,355 | 1.76× | 2.84× | 7.46× |
+| 1 (autocommit) | 684 | 717 | **0.95×** | 1.00× | 1.00× |
+| 10 | 3,621 | 3,144 | 1.15× | 5.29× | 4.38× |
+| 100 | 7,998 | 5,012 | 1.60× | 11.69× | 6.99× |
+| 1,000 | 9,186 | 5,259 | **1.75×** | **13.42×** | 7.33× |
 
-ckdbs is faster at every batch size, most so at autocommit. The *gain*
-columns are the comparable half: PostgreSQL gains 7.46× from batching where
-ckdbs gains 2.84×, which is what two different default durability settings
-look like — ckdbs `durability = group`, PostgreSQL `synchronous_commit =
-on`. Neither cluster was tuned, on the principle that a baseline tuned by
-hand is not a baseline.
+**On equal media the two engines are the same speed at autocommit** - 684
+against 717 rows/s, a 5% difference that is inside this harness's noise.
+Both are paying one `fsync` per row on the same device, and that `fsync`
+dominates everything either engine does around it.
+
+ckdbs's advantage is entirely in how well it amortises: **13.42× from
+batching against PostgreSQL's 7.33×**, which is what a WAL with a
+group-commit durability class buys over one that fully honours
+`synchronous_commit = on` per commit. That reaches 1.75× in absolute rows
+per second at 1,000 rows a transaction. Neither cluster was tuned, on the
+principle that a baseline tuned by hand is not a baseline - so this is a
+comparison of two defaults, and PostgreSQL's default is the more
+conservative one.
 
 ## Concurrency — the weakest row, and not a defect
 
 | connections | ckdbs was | ckdbs now | pg | ckdbs scale | pg scale |
 |---|---:|---:|---:|---:|---:|
-| 1 | 35 | 72 | 130 | 1.00× | 1.00× |
-| 2 | 35 | 74 | 188 | 1.03× | 1.44× |
-| 4 | 35 | 77 | 198 | 1.07× | 1.52× |
-| 8 | 35 | 76 | 194 | 1.06× | 1.49× |
+| 1 | 35 | 80 | 130 | 1.00× | 1.00× |
+| 2 | 35 | 80 | 191 | 0.99× | 1.48× |
+| 4 | 35 | 80 | 197 | 1.00× | 1.52× |
+| 8 | 35 | 79 | 190 | 0.99× | 1.46× |
 
-The absolute figures doubled with lazy decode - this sweep runs `day-slice`
-- and the shape of the line did not change at all, which is the point of
-the paragraph below.
+The absolute figures more than doubled with lazy decode - this sweep runs
+the `cross-join` shape - and the shape of the line did not change at all:
+ckdbs is flat to within 1% across an 8× change in connection count. That
+invariance is the point of the paragraph below.
 
 ckdbs is flat because it dispatches one core's statements on one thread, so
 more connections buy round-trip overlap and this workload has none to
@@ -230,26 +260,23 @@ numbers mean structurally different things. The cross-core pipeline
 
 ## Load
 
-> Same caveat as the write sweep: taken on tmpfs. The re-run on xfs gives
-> load-bars 8,867/s, load-stats 7,140/s and load-sessions 9,337/s - within a
-> few percent of the figures below, because these phases batch 200 rows per
-> transaction and so pay one sync per 200 rows either way. It is the
-> unbatched path that the medium decides.
-
+Batched 200 rows per transaction on both sides, both on xfs.
 
 | phase | ckdbs | pg | ckdbs/pg |
 |---|---:|---:|---:|
-| load-bars (60,480 rows) | 8,691/s | 4,428/s | 1.96× |
-| load-stats (60,480 rows) | 7,050/s | 4,511/s | 1.56× |
-| load-sessions (7,560 rows) | 9,324/s | 5,043/s | 1.85× |
+| load-bars (60,480 rows) | 8,818/s | 4,376/s | 2.01× |
+| load-stats (60,480 rows) | 7,207/s | 4,407/s | 1.64× |
+| load-sessions (7,560 rows) | 9,197/s | 4,919/s | 1.87× |
 
-Batched 200 rows per transaction on both sides. The whole ckdbs ingest took
-64s.
-
-The single-row phases (`load-exchanges`, `load-symbols`, `load-models`,
-`result-insert`) show ckdbs 6-9× ahead, but they are unbatched autocommit
-statements and so are measuring the same thing the write sweep's first row
-measures, at a smaller sample. Read the sweep, not these.
+**The unbatched phases correct a claim the previous version made.** On tmpfs
+`load-exchanges`, `load-symbols`, `load-models` and `result-insert` showed
+ckdbs 6-9× ahead, and that document said to read the write sweep instead of
+them. It was right to, and the size of the error is now visible: on xfs the
+same four phases read **0.39×, 1.08×, 0.94× and 0.85×** - ckdbs at parity or
+slightly behind. They are unbatched autocommit statements, so they measure
+one `fsync` per row, which is the write sweep's first row at a smaller
+sample. The batched phases above barely moved, because one sync per 200 rows
+is not what the medium decides.
 
 ## What this does not measure
 
@@ -268,13 +295,18 @@ measures, at a smaller sample. Read the sweep, not these.
 ## Reproducing
 
 ```
+# Build first: a stale binary is the easiest way to measure the wrong engine.
+cmake --build build-release -j
+
 # NOT /tmp - that is tmpfs on this host, where fsync is free and every write
-# number becomes a measurement of the page cache (see the write sweep's note).
-./build-release/kds_server ~/scratch/cmp.db --port 15734 --log-dir ~/scratch --log-file cmp.log
+# number becomes a measurement of the page cache. Put the data file on the
+# same volume as the PostgreSQL cluster's data directory, or the write sweep
+# compares two media rather than two engines.
+./build-release/kds_server ~/scn1.db --port 15740 --log-dir ~ --log-file scn1.log
 ./tools/pg_setup.sh init          # scratch cluster on 15433, untuned
 
 # sequentially — running both at once makes each measure the other:
-python3 tools/scenario1_backtest.py    --port 15734 --years 30 --symbols 8 --seed 1 --json kds.json
+python3 tools/scenario1_backtest.py    --port 15740 --years 30 --symbols 8 --seed 1 --json kds.json
 python3 tools/pg_scenario1_backtest.py --port 15433 --years 30 --symbols 8 --seed 1 --json pg.json
 python3 tools/compare_scenario1.py kds.json pg.json
 ```
