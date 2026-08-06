@@ -17,7 +17,7 @@ Carried forward from `docs/step-chains.md` §0 unchanged, with the merge note on
 | # | Decision | Choice |
 |---|---|---|
 | J1 | Subquery scope | **Wide**: predicate-position subqueries — scalar (uncorrelated *and* correlated), `IN`/`NOT IN (SELECT …)`, `EXISTS`/`NOT EXISTS` — nesting to a fixed depth cap. Not restricted to flattenable forms |
-| J2 | Inexecutable forms | **`Unsupported`** with exact position — never a slow generic path. Table-position nesting (derived tables, CTEs), subqueries containing aggregates (I14 still open), and over-depth are truthful errors |
+| J2 | Inexecutable forms | **`Unsupported`** with exact position — never a slow generic path. Table-position nesting (derived tables, CTEs), subqueries containing aggregates (**AG8**, permanent for v1), and over-depth are truthful errors |
 | J3 | Classification | Absorbed into **`kJoinSelect`**; the concept generalizes from "join chain" to **step chain**. No new enum value |
 | J4 | Vehicle | **Bolt-on to the current recursive-descent parser** — do not wait for the blueprint parser. The AST→`StepChain` compile contract is the seam that survives the parser replacement. *(Reaffirmed at the merge, 2026-08-01: the blueprint parser's arena/flat-AST work moves behind the language, not in front of it — phase V-6 of the workplan)* |
 | J5 | Trail recording policy | **n = 2**: an instance's trail is recorded on its **second** execution (the first only counts) |
@@ -48,7 +48,7 @@ Step numbering is global in compile order (the outer chain and every sub-chain s
 - **Scalar cardinality:** more than one row is a runtime error, `CardinalityViolation` (retryable = 0). Parse time cannot prove cardinality in general, so the check is per execution. Zero rows is NULL, and therefore a false predicate. A first-row pick is never acceptable — it makes the answer depend on physical order.
 - **`IN` (positive)** compiles to `Exists` per outer row over the sub-chain, or a hoisted probe set when uncorrelated. **`NOT IN` / `NOT EXISTS`** compile to `NotExists`. `NOT IN` keeps standard three-valued semantics — any NULL in the subquery result makes the predicate never-true — implemented, tested, and called out in the client manual as the foot-gun it is.
 - **Depth cap:** sub-chains nest to depth **4** `[PROPOSED default]`; deeper is `Unsupported`.
-- **Out of scope (J2), each `Unsupported` with an exact position:** subqueries in FROM (derived tables), CTEs, subqueries containing `GROUP BY`/aggregates (blocked on I14), subqueries in `INSERT`/`UPDATE` value position `[OPEN: revisit]`.
+- **Out of scope (J2), each `Unsupported` with an exact position:** subqueries in FROM (derived tables), CTEs, subqueries containing `GROUP BY`/aggregates (**AG8** — a fold inside a sub-chain puts an aggregation boundary where the execution model has none; permanent for v1, not blocked), subqueries in `INSERT`/`UPDATE` value position `[OPEN: revisit]`.
 
 **Why table-position nesting stays out**, since it is the question every reader asks next: a derived table's result must become a relation with a schema, materialized somewhere and probed by something other than a pk. That breaks pk-direct probing into the next step, which is the entire shape of the execution model, and it puts a temporary relation in the storage layer. A predicate-position subquery needs none of it — it consumes rows and yields a boolean or a value.
 
@@ -175,7 +175,11 @@ Two things the VM inherits from I15 rather than choosing: frames own their decod
 
 ## 8. Open decisions — do not assume
 
-**I14 — Aggregates (`COUNT`/`SUM`, `GROUP BY`). `[OPEN]`** Exclude from the grammar entirely, or reserve the keywords and reject with `Unsupported`. Do not implement either path. Subqueries make this more likely to be *attempted* — `= (SELECT COUNT(*) …)` is the obvious reflex — and until it lands, `COUNT` is an identifier that fails to parse where a column is expected. J2 already requires a subquery containing an aggregate to answer `Unsupported`.
+**~~I14 — Aggregates (`COUNT`/`SUM`, `GROUP BY`)~~. RESOLVED 2026-08-06 by `docs/feat-aggregate.md`, and by that document only.** Neither of the two options this item offered was taken: aggregates are neither excluded from the grammar nor reserved-and-rejected. They are **built** (AG1-AG15), as a fold outside the executor that wraps the statement's row sink, so the compiled chain is byte-identical to the same statement without it.
+
+What that resolution preserves, and why this item could be closed without disturbing anything above: **nothing is reserved**, so `COUNT` and `GROUP` are still identifiers that a column may be named after - a function head is an unqualified name from the set *followed by* `(`, and no production puts a paren after a column reference. Every previously accepted statement therefore lexes to the same token stream, `kFingerprintVersion` did not move, and no stored `pattern_id` or recorded waystone changed meaning. The golden corpus is the evidence.
+
+J2's requirement stands and is now permanent for v1 rather than blocked: a subquery containing an aggregate or `GROUP BY` answers `Unsupported` with an exact position (AG8), because a fold inside a sub-chain puts an aggregation boundary where the execution model has none. `HAVING`, `AVG` and `ORDER BY` over aggregated output are refused the same way.
 
 Also open:
 

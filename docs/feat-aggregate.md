@@ -3,7 +3,7 @@
 **Status:** Official specification, decisions confirmed 2026-08-06 (AG1–AG15, §0).
 Resolves `docs/parser-v2.md` **I14 `[OPEN]`** — aggregates are now specified; that
 item's "do not implement either path" is lifted by this document and only by it.
-Companion tasks: `docs/aggregate-workplan.md`. Markers: `[CONFIRMED]`,
+Companion tasks: `docs/workplan-aggregate.md`. Markers: `[CONFIRMED]`,
 `[PROPOSED]`, `[OPEN]`. Consistent with `docs/parser-v2.md` (J-series, step
 chains), `docs/rules.md`, `docs/waystone-concpets.md` (trail model),
 `docs/feat-cabin.md`, `docs/crosscore.md` (CC-series), `docs/txn.md`.

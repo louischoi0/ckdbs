@@ -1,6 +1,6 @@
 # Aggregation — Workplan
 
-Work instructions, companion to `docs/aggregate.md` (AG1–AG15). Tasks
+Work instructions, companion to `docs/feat-aggregate.md` (AG1–AG15). Tasks
 `AG01`–`AG10`. Written as instructions: each task states what to build and
 when it counts as done.
 
@@ -15,9 +15,15 @@ Execution rules:
   `step_vm.cpp` or to `AccessKind` in service of this workplan means the
   placement decision was violated, not that the task needed it.
 
-Environment note: gcc 13 fails the current tree on a missing `<cstdint>`
-include in `include/kds/server/config_file.hpp` (`std::uint64_t`). Fix it
-first, in its own commit — it predates this work and blocks every task.
+Environment note: `include/kds/server/config_file.hpp` used `std::uint64_t`
+with no `<cstdint>`. **Fixed 2026-08-06 in its own commit**, as this note
+asked. It reproduced on gcc 13 and not on gcc 11.5, which supplies the
+include transitively — the header owed it either way.
+
+**Status: AG01–AG10 are built (2026-08-06).** One task was added, `AG11`,
+because this workplan had no doc-sync step and the work resolves
+`parser-v2.md` I14 — which CLAUDE.md's own closing rule requires be moved
+out of Open Decisions by whoever closes it.
 
 ---
 
@@ -139,3 +145,18 @@ from the numbers.
 
 *Done when:* results file exists with device noted; AG11 defaults either
 ratified `[CONFIRMED]` in the spec or amended with the measurement cited.
+
+## AG11 — Doc sync (added, not in the original workplan)
+
+`parser-v2.md` I14 marked resolved and J2's two references corrected from
+"blocked on I14" to AG8 (permanent for v1, not blocked); CLAUDE.md's Open
+Decisions entry for I14 replaced with what was decided, a Core
+Architecture entry for aggregation added, an **Aggregation** open-decisions
+section added for what is genuinely still open, and the Documents list
+extended; `docs/client-manual.md` given the grammar and its refusals, since
+that is the client-visible surface; the two aggregate documents' filename
+cross-references fixed — the spec cited `docs/aggregate-workplan.md` and
+this file cited `docs/aggregate.md`, and neither exists.
+
+*Done when:* no document refers to I14 as open, and nothing cites a
+filename that is not on disk.
