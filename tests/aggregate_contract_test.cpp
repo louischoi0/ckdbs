@@ -593,6 +593,62 @@ TEST_F(AggregateDispatchTest, ASumOverflowReachesTheClientAndEmitsNoRows) {
     EXPECT_EQ(reply.find("\\n"), std::string::npos) << "no partial answer may be emitted";
 }
 
+// ---- The plan line and ANALYZE (AG08) -----------------------------------
+
+TEST_F(AggregateDispatchTest, AnalyzePrintsTheAggregateLineAndTheGroupCount) {
+    Load();
+    const std::string reply = Run("ANALYZE SELECT tier, COUNT(*), SUM(qty) FROM h GROUP BY tier");
+    ASSERT_NE(reply.substr(0, 3), "ERR") << reply;
+
+    // `rows=` stays the rows the chain produced and `groups=` is what the
+    // fold collapsed them to. Both, because one number cannot say what the
+    // fold cost *and* what it produced.
+    EXPECT_NE(reply.find("rows=6"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("groups=2"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("aggregate keys="), std::string::npos) << reply;
+    EXPECT_NE(reply.find("count(*)"), std::string::npos) << reply;
+    // An aggregated chain has no projection, so the plan must not claim one.
+    EXPECT_EQ(reply.find("project "), std::string::npos) << reply;
+}
+
+TEST_F(AggregateDispatchTest, AnalyzeMarksTheGlobalFormAsSuch) {
+    Load();
+    const std::string reply = Run("ANALYZE SELECT COUNT(*) FROM h");
+    EXPECT_NE(reply.find("keys=(global)"), std::string::npos) << reply;
+    // One output row whatever the input, which is a different shape from
+    // "no grouping happened".
+    EXPECT_NE(reply.find("groups=1"), std::string::npos) << reply;
+}
+
+TEST_F(AggregateDispatchTest, AnalyzeRunsTheFoldRatherThanDescribingOne) {
+    // AG15: the run ANALYZE describes is the run that happened. A fold that
+    // would fail a real execution has to fail here too, or the diagnostic
+    // is describing something the client cannot reproduce.
+    ASSERT_EQ(Run("CREATE TABLE big (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO big VALUES (9223372036854775807)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO big VALUES (1)").substr(0, 8), "INSERTED");
+
+    const std::string reply = Run("ANALYZE SELECT SUM(v) FROM big");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("SUM overflow"), std::string::npos) << reply;
+}
+
+TEST_F(AggregateDispatchTest, ANonAggregatedPlanIsUnchangedByTheAggregateLineExisting) {
+    Load();
+    const std::string reply = Run("ANALYZE SELECT tier, qty FROM h WHERE id = 2");
+    EXPECT_NE(reply.find("project "), std::string::npos) << reply;
+    EXPECT_EQ(reply.find("aggregate "), std::string::npos) << reply;
+    EXPECT_EQ(reply.find("groups="), std::string::npos) << reply;
+}
+
+TEST_F(AggregateDispatchTest, TheDistinctFlagIsPrintedAsStoredNotAsWritten) {
+    // MIN/MAX accept the word and keep no set, so a plan echoing the
+    // spelling would claim work the fold does not do.
+    Load();
+    const std::string counted = Run("ANALYZE SELECT COUNT(DISTINCT sym) FROM h");
+    EXPECT_NE(counted.find("distinct"), std::string::npos) << counted;
+}
+
 // ---- §9.9 Bounds, through the dispatcher (AG07) -------------------------
 
 TEST_F(AggregateDispatchTest, ExceedingMaxGroupsFailsTheStatementNamingTheKey) {

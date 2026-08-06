@@ -2022,10 +2022,29 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     exec::ExecStats stats;
     std::uint64_t rows = 0;
 
+    // **The fold runs under ANALYZE too** (AG15). Its whole contract is
+    // that the run it describes is the run that actually happened, and a
+    // fold is not free - it hashes a key and folds a state per row, and a
+    // SUM that overflows fails the statement. Skipping it would make
+    // ANALYZE describe an execution the client cannot reproduce, which is
+    // the same reason replay is not skipped here.
+    std::optional<exec::Aggregator> aggregator;
+    if (chain.aggregated()) {
+        auto created = exec::Aggregator::Create(*chain.aggregate, chain.column_names,
+                                                aggregate_limits_);
+        if (!created.ok()) {
+            return {"ERR " + created.status().message(), false};
+        }
+        aggregator.emplace(std::move(created.value()));
+    }
+
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
-        [&](const exec::ChainFrame&) -> StatusOr<storage::VisitControl> {
+        [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
             ++rows;
+            if (aggregator.has_value()) {
+                if (Status s = aggregator->Accumulate(frame); !s.ok()) return s;
+            }
             return storage::VisitControl::kContinue;
         },
         &stats, budget_, trail, replay, cabins_, &snapshot);
@@ -2040,6 +2059,14 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     os << "analyze rows=" << rows << " class=" << exec::StatementClassName(chain.klass)
        << " steps=" << chain.steps.size() << " examined=" << total.rows_examined
        << " opens=" << total.relation_opens;
+
+    // The number an aggregated statement is actually about. `rows=` stays
+    // what it has always been - the rows the *chain* produced - so the two
+    // together say what the fold cost and what it collapsed to, which one
+    // number could not.
+    if (aggregator.has_value()) {
+        os << " groups=" << aggregator->group_count();
+    }
 
     // The statement's own pattern_id, in the same hex CREATE PATTERN
     // returns. This is what closes the "I declared it, why doesn't traffic

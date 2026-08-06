@@ -192,6 +192,53 @@ std::string FormatPlan(const StepChain& chain) {
     }
     for (const Step& step : chain.steps) PrintStep(os, step, /*depth=*/0);
 
+    // ---- The fold (AG08) ------------------------------------------------
+    //
+    // **One line, after the steps and instead of the projection**, which is
+    // where it sits in execution order: the chain produces rows and the
+    // fold consumes them. Printing it beside a projection an aggregated
+    // chain does not have would describe a statement that does not exist.
+    //
+    // A non-aggregated plan reaches none of this and its output is
+    // byte-identical to what it was before aggregation existed - which is
+    // the property AG08 is done when it has, and one the test checks
+    // rather than assumes.
+    if (chain.aggregated()) {
+        const AggregateSpec& spec = *chain.aggregate;
+        os << "aggregate keys=";
+        if (spec.group_keys.empty()) {
+            // Not "none": the global form is a different shape, not an
+            // absent one, and a reader has to be able to tell "one output
+            // row whatever the input" from "one per group".
+            os << "(global)";
+        } else {
+            for (std::size_t i = 0; i < spec.group_keys.size(); ++i) {
+                if (i > 0) os << ", ";
+                os << FormatColumnRef(spec.group_keys[i]);
+            }
+        }
+
+        os << " items=";
+        for (std::size_t i = 0; i < spec.items.size(); ++i) {
+            if (i > 0) os << ", ";
+            os << (i < chain.column_names.size() ? chain.column_names[i] : std::string("?"));
+            if (!spec.items[i].is_aggregate) {
+                os << "=key" << FormatColumnRef(spec.items[i].ref);
+                continue;
+            }
+            if (spec.items[i].star_arg) {
+                os << "=*";
+                continue;
+            }
+            // The flag as *stored*, not as written: MIN/MAX accept the word
+            // and keep no set, so a plan that echoed the spelling would
+            // claim work the fold does not do.
+            os << '=' << (spec.items[i].distinct ? "distinct " : "")
+               << FormatColumnRef(spec.items[i].ref);
+        }
+        return os.str();
+    }
+
     os << "project ";
     if (chain.star()) {
         os << "* (" << chain.column_names.size() << " column(s) of step 0)";
