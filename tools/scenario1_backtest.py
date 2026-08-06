@@ -48,15 +48,21 @@ record of what happened, the feature row is one model generation's view of
 it, and the two are rewritten on completely different schedules.
 
 **Why the features are precomputed and stored.** The engine has no
-aggregates and no arithmetic in a select list (`docs/parser-v2.md` I14 is an
-open decision, deliberately): `SUM`, `COUNT`, `GROUP BY`, and even
-`close - prev_close` are not expressible. A 20-session rolling standard
-deviation is therefore computed by this driver at generation time and
-stored, exactly as a real pipeline would materialize it, and every model
-comparison at the end is likewise **calculated client-side** from rows the
-join returned. That is a statement about today's engine, not about the
-workload - the reads being measured are precisely the reads a backtest makes
-either way.
+arithmetic in a select list: `close - prev_close` is not expressible, and a
+20-session rolling standard deviation is not a fold over a group but a
+window over an ordered run, which nothing here has. So the features are
+computed by this driver at generation time and stored, exactly as a real
+pipeline would materialize them, and every model comparison at the end is
+**calculated client-side** from rows the join returned.
+
+Aggregates themselves *are* expressible now (`docs/feat-aggregate.md`
+resolved `docs/parser-v2.md` I14): `COUNT`, `SUM`, `MIN`, `MAX` and
+`GROUP BY`. They are measured as their own phases (`agg-*`) rather than
+folded into the phases above, because rewriting the model comparison to
+`GROUP BY model_id` would make this tool and its PostgreSQL twin time
+different questions - the point of that phase is the join's cost. What is
+still absent, and what keeps the client-side reduction honest, is the
+arithmetic: no `SUM(a - b)`, no expression anywhere in a select list.
 
 The eight models, four per family, all long-only and rebalanced every
 `--rebalance` sessions:
@@ -1049,8 +1055,13 @@ def compare_all_sql(suffix):
     """Every result row joined to the model that produced it, in one
     statement: a Scan of `model_results` and a pk Probe into `models` per
     row. This is the statement a "compare the models" report issues, and the
-    one whose result the client then has to reduce itself - `SUM` and
-    `GROUP BY` are not in the grammar (`docs/parser-v2.md` I14)."""
+    one whose result the client then reduces itself.
+
+    Deliberately not rewritten to `SUM(...) GROUP BY model_id`, which the
+    grammar now takes (`docs/feat-aggregate.md`): this phase prices the
+    *join*, and its PostgreSQL twin has to issue the same statement for the
+    two numbers to mean anything. The fold is measured on its own, in the
+    `agg-*` phases."""
     return (f"SELECT r.model_id, r.period_no, r.pnl_bp, r.equity_bp, "
             f"r.trades, m.name, m.family "
             f"FROM model_results_{suffix} AS r "
@@ -1215,6 +1226,105 @@ def run_read_phases(client, suffix, symbols, session_count, bar_count, ops,
             f"SELECT s.ticker FROM symbols_{suffix} AS s "
             f"WHERE EXISTS (SELECT b.id FROM daily_bars_{suffix} AS b "
             f"WHERE b.symbol_id = s.id)", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+
+# ---- the aggregate shapes (docs/feat-aggregate.md) -----------------------
+#
+# The rollups a research notebook issues beside the backtest: how many bars
+# per symbol, what the price range was, how wide each session was.
+#
+# **The first four run over one relation, `daily_bars`, and move only the
+# group count.** That is what makes them a measurement rather than five
+# timings: the row count, the row width, the storage and the walk are held
+# fixed, so the spread across them is the one thing about a fold that is not
+# obvious - `bench/results-aggregate.md` found that **its cost tracks group
+# count, not row count**, and this is that curve drawn on a real relation.
+#
+#   agg-global      every bar -> 1 row. No key encoded, no map probed; the
+#                   shape that can be *faster* than its unaggregated twin,
+#                   because it folds every row and serialises one.
+#   agg-by-symbol   -> 8 groups (--symbols). The map exists and fits in
+#                   cache.
+#   agg-by-session  -> one group per trading day, ~7,560 over 30 years. The
+#                   high-cardinality end, where nearly every row founds a
+#                   group - and the scale `aggregate_max_groups` of 65,536
+#                   is a backstop for rather than a limit on.
+#   agg-distinct    the one path that allocates per new value: an observed
+#                   set per (group, item), over the same encoding the group
+#                   key uses.
+#
+# `agg-day-slice` is the exception and the only one with a **direct
+# unaggregated twin in this table**: it is `read-day-slice`'s statement with
+# a fold on top, same relation and same predicate. One session's cross
+# section is 8 rows in 8 groups, so the fold collapses nothing and pays for
+# the map anyway - the shape where it buys least, and the pair is the
+# measurement.
+#
+# Against PostgreSQL these are the sharpest comparison in the scenario, and
+# for a structural reason: PostgreSQL plans a HashAggregate or a GroupAggregate
+# and may read the grouping column from an index, while ckdbs walks the
+# relation and folds outside the executor with no plan choice at all
+# (docs/feat-aggregate.md AG1). Nothing here is expected to be close on the
+# high-cardinality shape.
+#
+# Note what the two engines do *not* agree on and why it does not matter
+# here: ckdbs emits groups in first-seen order and PostgreSQL in whatever
+# order its aggregate produced them. This phase measures latency, not row
+# order, and neither engine was asked to sort.
+
+def run_aggregate_phases(client, suffix, session_count, ops, rng, phases):
+    # A full scan per execution, so these run at the reduced count the other
+    # whole-relation shapes use rather than at `ops`.
+    scans = max(1, ops // 20)
+
+    # SUM over `volume` cannot overflow at this scale and that is worth
+    # knowing rather than discovering: volume is drawn under 50,000,000 and
+    # there are ~60,480 bars, so the sum tops out near 3e15 against an
+    # int64 accumulator's 9.2e18. A `SUM` that crossed it would fail the
+    # statement rather than wrap (docs/feat-aggregate.md §3.3), which would
+    # show up here as an error count, not a wrong number.
+    phase = Phase("agg-global", "whole-relation fold, no GROUP BY")
+    for _ in range(scans):
+        client.timed(f"SELECT COUNT(*), MIN(close), MAX(close), SUM(volume) "
+                     f"FROM daily_bars_{suffix}", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    phase = Phase("agg-by-symbol", "GROUP BY symbol_id - 8 groups")
+    for _ in range(scans):
+        client.timed(f"SELECT symbol_id, COUNT(*), MIN(close), MAX(close) "
+                     f"FROM daily_bars_{suffix} GROUP BY symbol_id", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    phase = Phase("agg-by-session", "GROUP BY session_no - one per day")
+    for _ in range(scans):
+        client.timed(f"SELECT session_no, COUNT(*), SUM(volume) "
+                     f"FROM daily_bars_{suffix} GROUP BY session_no", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    # `read-day-slice`'s statement with a fold on top - the same relation
+    # and the same predicate, so the pair is a controlled A/B and the only
+    # one in this table. Read the two rows together.
+    phase = Phase("agg-day-slice", "one session's cross section, grouped")
+    for _ in range(ops):
+        client.timed(f"SELECT symbol_id, COUNT(*), SUM(ret_bp) "
+                     f"FROM daily_stats_{suffix} "
+                     f"WHERE session_no = {rng.randrange(session_count)} "
+                     f"GROUP BY symbol_id", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    # COUNT(DISTINCT) keeps an observed-value set per (group, item) over the
+    # same encoding the group key uses. Eight distinct symbols over 60,480
+    # rows, so all but eight probes are hits - which allocate nothing.
+    phase = Phase("agg-distinct", "COUNT(DISTINCT symbol_id) over the run")
+    for _ in range(scans):
+        client.timed(f"SELECT COUNT(DISTINCT symbol_id) "
+                     f"FROM daily_bars_{suffix}", phase)
     phase.elapsed = sum(phase.latencies)
     phases.append(phase)
 
@@ -1959,6 +2069,18 @@ def main():
                              "to build something worth querying")
     parser.add_argument("--no-sweep", dest="sweep", action="store_false",
                         help="skip the QPS matrix")
+    parser.add_argument("--aggregates", dest="aggregates",
+                        action="store_true", default=True,
+                        help="time the GROUP BY rollups beside the read "
+                             "shapes (default: on). Each is priced against "
+                             "the unaggregated statement above it, and the "
+                             "set spans the group-count range that decides "
+                             "a fold's cost (docs/feat-aggregate.md)")
+    parser.add_argument("--no-aggregates", dest="aggregates",
+                        action="store_false",
+                        help="skip the aggregate phases - needed against a "
+                             "server older than the aggregation work, where "
+                             "GROUP BY is a syntax error")
     parser.add_argument("--qps-ops", type=int, default=100,
                         help="statements per cell of the QPS matrix "
                              "(default: 100). The matrix has 22 cells and "
@@ -2138,6 +2260,9 @@ def main():
     read_phases = []
     run_read_phases(client, suffix, symbols, len(session_ids), bar_total,
                     args.ops, rng, read_phases)
+    if args.aggregates:
+        run_aggregate_phases(client, suffix, len(session_ids), args.ops, rng,
+                             read_phases)
 
     # ---- the QPS sweeps --------------------------------------------------
     #
@@ -2218,8 +2343,10 @@ def main():
         f"{'descends' if args.bars_clustered == 'btree' else 'has no index and walks the chain'}",
         "money and P&L are int64 basis points; float/decimal columns are "
         "refused at CREATE TABLE",
-        "totals, means and deviations are computed client-side: there are no "
-        "aggregates in the grammar",
+        "the model totals are computed client-side because the comparison "
+        "phase prices a join, not a fold; the agg-* phases price the fold "
+        "on its own, and means and deviations stay client-side because "
+        "there is still no arithmetic in a select list",
         "this table is the workload as it ran, with tail latency; the QPS "
         "matrix below re-measures the same shapes as a controlled A/B. Both "
         "are here because throughput and p99 are different questions",

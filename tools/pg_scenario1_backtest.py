@@ -32,12 +32,21 @@ different workloads and licenses no comparison at all. Every choice below
 makes PostgreSQL look *worse* than it would if written idiomatically, and
 each is stated here so a quoted number carries it.
 
-1. **No aggregates.** The model comparison is a plain join, reduced
-   client-side, exactly as the ckdbs side must do it - there is no
-   `SUM`/`GROUP BY` in that grammar (`docs/parser-v2.md` I14 is open). Here
-   `SELECT model_id, sum(pnl_bp) ... GROUP BY model_id` would return eight
-   rows instead of thousands and would be enormously faster. It is not
-   written, because then the two tools would be timing different questions.
+1. **The model comparison stays a plain join**, reduced client-side, on
+   both sides. `SELECT model_id, sum(pnl_bp) ... GROUP BY model_id` would
+   return eight rows instead of thousands and would be enormously faster
+   here - and it is now expressible on the ckdbs side too, since
+   `docs/parser-v2.md` I14 was resolved by `docs/feat-aggregate.md`. It is
+   still not written into that phase, for the original reason: rewriting one
+   engine's statement makes the two tools time different questions, and this
+   phase's job is to price the join.
+
+   Aggregates are instead measured *as their own phases* (`agg-*`), where
+   both sides run the identical statement. That is the comparison the
+   rewrite would have destroyed by hiding it inside a phase about something
+   else - and it is deliberately the least even table in this tool, because
+   PostgreSQL plans a HashAggregate over these and ckdbs makes no plan
+   choice at all.
 
 2. **No index on the filter columns by default.** `daily_stats.session_no`
    and `model_results.model_id` are unindexed, which is a seqscan here and a
@@ -520,6 +529,67 @@ def run_read_phases(client, suffix, symbols, session_count, bar_count, ops,
     phases.append(phase)
 
 
+# ---- the aggregate shapes ------------------------------------------------
+#
+# The same five statements the ckdbs side times, phase for phase, so
+# compare_scenario1.py can put them beside each other - it matches phases by
+# name and silently drops any that exists on only one side.
+#
+# This is the sharpest comparison in the scenario and the least even, which
+# is why it is worth running. PostgreSQL plans these: it chooses a
+# HashAggregate or a GroupAggregate, may read the grouping column from an
+# index, and may parallelise the scan under them. ckdbs makes no plan choice
+# at all - it walks the relation and folds outside the executor, which is
+# what keeps the compiled chain identical to the same statement without a
+# GROUP BY (docs/feat-aggregate.md AG1). The high-cardinality shape is where
+# that asymmetry should show most, and nothing about ckdbs's design is
+# trying to close it in v1.
+#
+# The two engines emit groups in different orders - ckdbs in first-seen
+# order, PostgreSQL in whatever its aggregate produced - and neither was
+# asked to sort. These phases measure latency, so that does not enter.
+
+def run_aggregate_phases(client, suffix, session_count, ops, rng, phases):
+    scans = max(1, ops // 20)
+
+    phase = Phase("agg-global", "whole-relation fold, no GROUP BY")
+    for _ in range(scans):
+        client.timed(f"SELECT COUNT(*), MIN(close), MAX(close), SUM(volume) "
+                     f"FROM daily_bars_{suffix}", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    phase = Phase("agg-by-symbol", "GROUP BY symbol_id - 8 groups")
+    for _ in range(scans):
+        client.timed(f"SELECT symbol_id, COUNT(*), MIN(close), MAX(close) "
+                     f"FROM daily_bars_{suffix} GROUP BY symbol_id", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    phase = Phase("agg-by-session", "GROUP BY session_no - one per day")
+    for _ in range(scans):
+        client.timed(f"SELECT session_no, COUNT(*), SUM(volume) "
+                     f"FROM daily_bars_{suffix} GROUP BY session_no", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    phase = Phase("agg-day-slice", "one session's cross section, grouped")
+    for _ in range(ops):
+        client.timed(f"SELECT symbol_id, COUNT(*), SUM(ret_bp) "
+                     f"FROM daily_stats_{suffix} "
+                     f"WHERE session_no = {rng.randrange(session_count)} "
+                     f"GROUP BY symbol_id", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+    phase = Phase("agg-distinct", "COUNT(DISTINCT symbol_id) over the run")
+    for _ in range(scans):
+        client.timed(f"SELECT COUNT(DISTINCT symbol_id) "
+                     f"FROM daily_bars_{suffix}", phase)
+    phase.elapsed = sum(phase.latencies)
+    phases.append(phase)
+
+
 # ---- the QPS sweep -------------------------------------------------------
 #
 # Structurally identical to the ckdbs sweep, which is the point: the shapes
@@ -794,6 +864,15 @@ def main():
                              "(default: on)")
     parser.add_argument("--no-sweep", dest="sweep", action="store_false",
                         help="skip the QPS matrix")
+    parser.add_argument("--aggregates", dest="aggregates",
+                        action="store_true", default=True,
+                        help="time the GROUP BY rollups beside the read "
+                             "shapes (default: on), matching the ckdbs "
+                             "side phase for phase")
+    parser.add_argument("--no-aggregates", dest="aggregates",
+                        action="store_false",
+                        help="skip the aggregate phases; pass it on both "
+                             "sides or the comparison drops them anyway")
     parser.add_argument("--qps-ops", type=int, default=100,
                         help="statements per cell of the QPS matrix "
                              "(default: 100). Keep it equal to the ckdbs "
@@ -935,6 +1014,9 @@ def main():
     read_phases = []
     run_read_phases(client, suffix, symbols, len(session_ids), bar_total,
                     args.ops, rng, read_phases)
+    if args.aggregates:
+        run_aggregate_phases(client, suffix, len(session_ids), args.ops, rng,
+                             read_phases)
 
     # ---- the sweeps ------------------------------------------------------
     model_ids = [model_id for model_id, *_rest in models]
