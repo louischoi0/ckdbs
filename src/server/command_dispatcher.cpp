@@ -2078,6 +2078,16 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {"ERR " + chain.status().message(), false};
     }
 
+    // **[AG02, removed by AG06]** The chain carries a fold and nothing
+    // consumes one yet. Refused rather than run: an aggregated chain has an
+    // empty projection, so executing it would emit one blank row per input
+    // row under the fold's column headings - a wrong answer wearing a right
+    // answer's shape, which is what this feature may not produce even for
+    // one commit.
+    if (chain.value().aggregated()) {
+        return {"ERR aggregation is not executable yet (docs/feat-aggregate.md)", false};
+    }
+
     // The plan is resolved; now ask whether this core may run it
     // (crosscore.md §2's fast-path-versus-pipeline decision). Every
     // relation local is the fast path and the only path built - a chain

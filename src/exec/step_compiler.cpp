@@ -69,6 +69,138 @@ bool FindColumnPos(const catalog::Schema& schema, std::string_view name, std::ui
 // column and no qualifier has no correct reading, and picking the first
 // would make the answer depend on written order in a way the client
 // never asked for.
+StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& name);
+
+// The column heading one fold item carries: `b`, `count(*)`,
+// `sum(distinct x)`. Built from what was *written*, so a client sees back
+// the shape it sent - which is the one place a name is allowed to survive
+// compilation, for the reason `column_names` already existed.
+std::string AggregateLabel(const parser::SelectItem& item) {
+    const std::string written =
+        item.column.qualified() ? item.column.qualifier + "." + item.column.name
+                                : item.column.name;
+    if (!item.is_aggregate) return written;
+
+    std::string out(parser::AggFuncText(item.func));
+    out += '(';
+    if (item.distinct) out += "distinct ";
+    out += item.star_arg ? "*" : written;
+    out += ')';
+    return out;
+}
+
+// The type a resolved reference points at. The scope holds every relation's
+// schema already, so this is an index rather than a catalog read.
+const catalog::SysColumnRow& ColumnAt(const Scope& scope, const ColumnRef& ref) {
+    const Scope* s = &scope;
+    for (std::uint16_t i = 0; i < ref.up; ++i) s = s->parent;
+    return s->relations[ref.rel_slot].access->schema.columns[ref.col_pos];
+}
+
+// AG3's arithmetic constraints, stated as product facts rather than
+// discovered at execute time (spec §3.3).
+//
+// The accumulator is int64 with checked addition, so the two refusals are
+// different in kind and get different codes. A `SUM` over text is a
+// statement that does not typecheck - InvalidArgument, the client wrote the
+// wrong column. A `SUM` over `uint64` typechecks and is *declined*: half its
+// range does not fit the accumulator, and a sum of Keystone ids is a
+// statement nobody meant. `MIN`/`MAX` over `uint64` are exact and stay
+// allowed, because comparison goes through the digit-text path rather than
+// through a signed reading.
+Status CheckAggregateArgType(const parser::SelectItem& item, std::uint32_t type_val,
+                             const std::string& label) {
+    if (item.func != parser::AggFunc::kSum) return Status::OK();
+
+    if (type_val == catalog::kTypeValUint64) {
+        return Status::Unsupported(
+            "SUM over a uint64 column is not supported (" + label + ")" +
+            Position(item.byte_offset) +
+            "; half its range does not fit the int64 accumulator, and a wrapped sum is wrong "
+            "in a way no reader can detect");
+    }
+    if (!catalog::IsIntegerTypeVal(type_val)) {
+        return Status::InvalidArgument("SUM requires a signed integer column (" + label + ")" +
+                                        Position(item.byte_offset));
+    }
+    return Status::OK();
+}
+
+// Resolves the fold: the GROUP BY keys, then the output items (spec §4).
+//
+// Every check here is positioned, and every one of them is a *compile*
+// check on purpose - the compile stays pure, so the same statement over the
+// same catalog produces the same spec, which is what keeps the chain
+// `f(shape, catalog)` and lets `pattern_id` go on naming it.
+StatusOr<AggregateSpec> CompileAggregate(const Scope& scope, const parser::SelectStmt& stmt) {
+    AggregateSpec spec;
+
+    for (const parser::ColumnName& key : stmt.group_by) {
+        auto ref = ResolveColumn(scope, key);
+        if (!ref.ok()) return ref.status();
+
+        // A duplicate key is always a slip, and it would double the key
+        // encoding for nothing - the same group, named twice.
+        for (const ColumnRef& seen : spec.group_keys) {
+            if (seen != ref.value()) continue;
+            return Status::InvalidArgument("column '" + key.name +
+                                            "' appears twice in GROUP BY" +
+                                            Position(key.byte_offset));
+        }
+        spec.group_keys.push_back(ref.value());
+    }
+
+    for (const parser::SelectItem& item : stmt.agg_items) {
+        AggregateItem out;
+        out.is_aggregate = item.is_aggregate;
+        out.func = item.func;
+        out.star_arg = item.star_arg;
+        out.distinct = item.distinct;
+
+        if (item.is_aggregate && item.star_arg) {
+            // `COUNT(*)` reads no column, so there is nothing to resolve
+            // and no type to carry.
+            spec.items.push_back(out);
+            continue;
+        }
+
+        auto ref = ResolveColumn(scope, item.column);
+        if (!ref.ok()) return ref.status();
+        out.ref = ref.value();
+        out.type_val = ColumnAt(scope, out.ref).type_val;
+
+        if (item.is_aggregate) {
+            if (Status s = CheckAggregateArgType(item, out.type_val, AggregateLabel(item));
+                !s.ok()) {
+                return s;
+            }
+        } else {
+            // AG5: a bare column in an aggregated select list must be a
+            // grouping key. There is no "any row" mode and there will not
+            // be one - an answer that depends on scan order is an answer
+            // this engine refuses to give.
+            //
+            // Compared as *resolved* references, so `SELECT a.b ... GROUP
+            // BY b` is accepted when both name the same column, and
+            // `SELECT b ... GROUP BY c` is refused however they are
+            // spelled.
+            bool grouped = false;
+            for (const ColumnRef& key : spec.group_keys) {
+                if (key == out.ref) { grouped = true; break; }
+            }
+            if (!grouped) {
+                return Status::InvalidArgument(
+                    "column '" + item.column.name +
+                    "' is selected beside an aggregate but is not in GROUP BY" +
+                    Position(item.byte_offset) +
+                    "; add it to GROUP BY, or aggregate it");
+            }
+        }
+        spec.items.push_back(out);
+    }
+    return spec;
+}
+
 StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& name) {
     std::uint16_t up = 0;
     for (const Scope* s = &scope; s != nullptr; s = s->parent, ++up) {
@@ -505,16 +637,6 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                                     " is not supported");
     }
 
-    // **[AG01, removed by AG02]** The grammar takes aggregates now and the
-    // compiled form does not carry them yet. Refused rather than ignored:
-    // an aggregated statement leaves `projection` empty, which every reader
-    // downstream would take for `SELECT *` and answer with whole rows - a
-    // wrong answer wearing a right answer's shape, which is exactly what
-    // this feature is not allowed to produce even for one commit.
-    if (stmt.aggregated()) {
-        return Status::Unsupported("aggregation is not executable yet (docs/feat-aggregate.md)");
-    }
-
     // ---- 1. Bind every relation in written order --------------------------
     Scope scope;
     scope.parent = parent;
@@ -811,18 +933,37 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         step.access_columns = AccessColumnsOf(step, static_cast<std::uint16_t>(i));
     }
 
-    // ---- 5. Projection ---------------------------------------------------
+    // ---- 5. Projection, or the fold --------------------------------------
+    //
+    // An aggregated statement names its output through `AggregateSpec` and
+    // leaves `projection` empty. Note what is *not* here: nothing above this
+    // point read `stmt.agg_items` or `stmt.group_by`, so the steps, kinds,
+    // residuals and access columns of an aggregated statement are the ones
+    // its unaggregated twin compiles to, bit for bit (AG1). The chain
+    // identity test is what keeps that from drifting.
+    if (stmt.aggregated()) {
+        auto spec = CompileAggregate(scope, stmt);
+        if (!spec.ok()) return spec.status();
+        chain.aggregate = std::move(spec.value());
+        for (const parser::SelectItem& item : stmt.agg_items) {
+            chain.column_names.push_back(AggregateLabel(item));
+        }
+    }
     for (const parser::ColumnName& col : stmt.projection) {
         auto ref = ResolveColumn(scope, col);
         if (!ref.ok()) return ref.status();
         chain.projection.push_back(ref.value());
         chain.column_names.push_back(col.qualified() ? col.qualifier + "." + col.name : col.name);
     }
-    if (stmt.projection.empty()) {
+    if (stmt.star()) {
         // `SELECT *`, which the grammar admits only for a single relation
         // (V06) - so it means every column of the one step, in schema
         // order. Left as an empty projection with names filled in, since
         // the executor emits the whole decoded row in that case.
+        //
+        // `star()`, not `projection.empty()`: an aggregated statement leaves
+        // the projection empty too, and labelling its output with the
+        // relation's columns would name a row it never emits.
         for (const auto& column : scope.relations[0].access->schema.columns) {
             chain.column_names.push_back(std::string(catalog::NameView(column.name)));
         }

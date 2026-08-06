@@ -356,6 +356,57 @@ enum class StatementClass : std::uint8_t {
 // silently changing what stored rows mean.
 std::uint8_t StoredStatementClass(StatementClass klass) noexcept;
 
+// ---- Aggregation (docs/feat-aggregate.md §4) -----------------------------
+//
+// **A property of the chain, never a step in it.** AG1 puts the fold
+// outside the executor: the dispatcher wraps its row sink, and the steps
+// compiled for `SELECT b, COUNT(*) FROM t GROUP BY b` are byte-identical to
+// those compiled for `SELECT b FROM t`. That identity is the whole reason
+// this feature needed no new access kind, no change to `IsTrailReplayable`,
+// and no second proof of anything already proved about a chain - trail
+// replay, Cabin probes, the scan/probe equivalence, "downgrading any step to
+// a scan cannot change the result". A spec that lived on a `Step` would have
+// forfeited every one of those.
+
+// One entry of the fold's output row, in written order.
+struct AggregateItem {
+    // False for a grouping column carried through to the output, which
+    // AG5 requires to appear in `group_keys` as well.
+    bool is_aggregate = false;
+
+    parser::AggFunc func = parser::AggFunc::kCount;
+
+    // `COUNT(*)` - the one form with no column to read, and the only one
+    // whose answer does not depend on a value being non-NULL.
+    bool star_arg = false;
+
+    // The word as written. `MIN`/`MAX` carry it and ignore it (spec §3.2
+    // `[PROPOSED]`), since an extreme of a set equals the extreme of its
+    // support.
+    bool distinct = false;
+
+    // The column read, resolved. Unset when `star_arg`.
+    ColumnRef ref;
+
+    // The referenced column's catalog `type_val`, carried so the fold can
+    // compare through `CompareValues` without asking the catalog per row -
+    // and so a `uint64` above `INT64_MAX` compares through its digit text
+    // rather than through a signed reading that cannot hold it.
+    std::uint32_t type_val = 0;
+};
+
+struct AggregateSpec {
+    // The output row, in written order. Empty is impossible: a statement
+    // with no items is not aggregated.
+    std::vector<AggregateItem> items;
+
+    // The GROUP BY list, resolved, in written order. **Empty means the
+    // global form** - one output row, even over empty input - which is a
+    // different shape rather than a degenerate one, and the fold keeps no
+    // map for it.
+    std::vector<ColumnRef> group_keys;
+};
+
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
 
@@ -381,7 +432,21 @@ struct StepChain {
     // its columns - they are never read on an execute path.
     std::vector<std::string> column_names;
 
-    bool star() const noexcept { return projection.empty(); }
+    // The fold this chain's rows are consumed by, or nothing (AG1). Set
+    // for exactly the statements `parser::SelectStmt::aggregated()` is true
+    // for, and read only by the dispatcher - no execute path looks at it.
+    std::optional<AggregateSpec> aggregate;
+
+    bool aggregated() const noexcept { return aggregate.has_value(); }
+
+    // Whether the statement was written `SELECT *`.
+    //
+    // **Projection empty *and* no aggregate.** An aggregated chain names its
+    // output and still leaves `projection` empty - the fold's items are what
+    // it emits, not a list of chain columns - so the old one-field test would
+    // have the dispatcher answer an aggregated statement with whole rows.
+    // The same trap `parser::SelectStmt::star()` has to avoid, one layer up.
+    bool star() const noexcept { return projection.empty() && !aggregated(); }
 };
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.
