@@ -41,15 +41,17 @@ workloads and licenses no comparison at all. These four keep the workload one
 workload; every one of them makes PostgreSQL look *worse* than it would if
 written idiomatically, and each is stated here so a quoted number carries it.
 
-1. **The four statements are not wrapped in BEGIN/COMMIT**, exactly as
-   stress_business.py leaves them unwrapped. PostgreSQL has had transactions
-   since before this repo existed, so this is not a limitation being matched -
-   it is the *statement count* being matched. Wrapping them would turn four
-   commits into one and roughly quarter the fsync bill, which would price a
-   feature ckdbs also has (docs/txn.md is built) rather than the statement
-   throughput both tools set out to measure. The tool counts partial
-   applications and prints them as `torn`, the same as the ckdbs side; here
-   they are a property of this tool alone.
+1. **The four statements are not wrapped in BEGIN/COMMIT by default**,
+   exactly as stress_business.py leaves them unwrapped, and `--txn` wraps
+   them on both sides. PostgreSQL has had transactions since before this repo
+   existed, so the default is not a limitation being matched - it is the
+   *statement count* being matched. Wrapping turns four commits into one and
+   roughly quarters the fsync bill, which prices a feature ckdbs also has
+   (docs/txn.md is built) rather than the statement throughput both tools set
+   out to measure - so it is a flag on both, off on both, and meaningful only
+   when set on both. Unwrapped, the tool counts partial applications and
+   prints them as `torn`, the same as the ckdbs side; wrapped, `torn` is zero
+   on both by construction.
 
 2. **Balances are computed client-side and sent as literals.** ckdbs's
    `UPDATE ... SET col = <val>` takes a literal, not an expression, so
@@ -198,6 +200,28 @@ SCHEMA = {
 # exactly this one, the same column `--cabin` gives a Cabin on the ckdbs side.
 INDEX_RELATION, INDEX_COLUMN = "accounts", "user_id"
 
+# ---- the foreign key ------------------------------------------------------
+#
+# `--fk` declares the same relationship the ckdbs run declares under its own
+# `--fk`: every trade leg names the account it was executed against.
+FK_CHILD, FK_COLUMN, FK_PARENT = "trades", "account_id", "accounts"
+
+# **Three differences from ckdbs worth knowing before comparing the two.**
+#
+#   - PostgreSQL's default action is NO ACTION, checked at the end of the
+#     statement; ckdbs checks immediately and calls it RESTRICT. On this
+#     workload - single-row inserts, no deferred constraints - they do the
+#     same work at the same moment.
+#   - PostgreSQL takes a `KEY SHARE` row lock on the parent for each check,
+#     so two traders inserting against one account serialize briefly on it.
+#     ckdbs takes no lock: a check that meets an in-flight writer fails fast
+#     and retryably (docs/impl-foreign-keys.md F3). This scenario gives each
+#     trader a disjoint account partition, so the lock is uncontended here -
+#     which is a property of the workload, not of either engine.
+#   - Neither engine indexes the *child* column for it. That only matters
+#     for the reverse check, which this workload never triggers: nothing
+#     deletes an account.
+
 # Field positions in a `SELECT * FROM accounts` row, counting the generated
 # id as 0. Named because both drivers depend on them and a schema edit that
 # moved a column would otherwise fail as a wrong number rather than as an
@@ -210,6 +234,34 @@ def abort(message, reply=None):
     if reply:
         print(f"  server said: {reply}", file=sys.stderr)
     sys.exit(1)
+
+
+# ---- --echo: every statement, as it is sent ------------------------------
+#
+# stress_business.py's, verbatim in behaviour, so a transcript from the two
+# engines can be diffed. Off by default and not free: a write per statement,
+# on a tool whose unit is statements per second.
+ECHO = False
+ECHO_TAG = "main"
+ECHO_REPLY_MAX = 96
+
+
+def set_echo(enabled, tag=None):
+    global ECHO, ECHO_TAG
+    if enabled is not None:
+        ECHO = bool(enabled)
+    if tag is not None:
+        ECHO_TAG = tag
+
+
+def echo_query(command, reply):
+    """One `<tag> <statement>  ->  <reply>` line on **stderr**, so the report
+    and --json stay pipeable with the transcript on."""
+    if not ECHO:
+        return
+    text = str(reply)
+    shown = text if len(text) <= ECHO_REPLY_MAX else text[:ECHO_REPLY_MAX] + "..."
+    print(f"[{ECHO_TAG}] {command}  ->  {shown}", file=sys.stderr, flush=True)
 
 
 class Client:
@@ -238,6 +290,7 @@ class Client:
 
     def __call__(self, command):
         reply = self._conn.send_command(command)
+        echo_query(command, reply)
         if reply.startswith("ERR"):
             self._note(command, reply)
         return reply
@@ -252,10 +305,16 @@ class Client:
     def rows(self, command):
         """Sends `command` and returns its rows as lists of raw column bytes,
         or None if the server answered with an error."""
+        # Unlike the ckdbs client this class has **three** send paths, not
+        # one - send_command, fetch and scalar - so --echo hooks each of
+        # them rather than one choke point. A path added later without the
+        # hook is a statement missing from the transcript.
         result, error = self._conn.fetch(command)
         if error is not None:
+            echo_query(command, f"ERR {error}")
             self._note(command, f"ERR {error}")
             return None
+        echo_query(command, f"ROWS {len(result)}")
         return result
 
     def timed_rows(self, command, phase):
@@ -267,10 +326,13 @@ class Client:
 
     def scalar(self, command):
         try:
-            return self._conn.scalar(command)
+            value = self._conn.scalar(command)
         except PgError as e:
+            echo_query(command, f"ERR {e}")
             self._note(command, f"ERR {e}")
             return None
+        echo_query(command, value)
+        return value
 
     def _note(self, command, reply):
         self.errors += 1
@@ -283,9 +345,16 @@ class Client:
 
 # ---- load ----------------------------------------------------------------
 
-def create_tables(client, suffix, want_index=False):
+def create_tables(client, suffix, want_index=False, fk=False):
+    # CREATE_ORDER puts `accounts` before `trades`, which the foreign key
+    # depends on rather than merely reads better: the parent has to exist
+    # before the child may reference it.
     for base in CREATE_ORDER:
         columns, clustered = SCHEMA[base]
+        if fk and base == FK_CHILD:
+            columns = columns.replace(
+                f"{FK_COLUMN} bigint",
+                f"{FK_COLUMN} bigint REFERENCES {FK_PARENT}_{suffix}(id)", 1)
         identity = "id bigint GENERATED ALWAYS AS IDENTITY"
         if clustered == "BTREE":
             identity += " PRIMARY KEY"
@@ -302,9 +371,10 @@ def create_tables(client, suffix, want_index=False):
 
 
 def drop_tables(client, suffix):
-    # Reverse creation order, though nothing declares a foreign key on either
-    # engine - referential integrity in this scenario is a property of how the
-    # driver generates ids.
+    # Reverse creation order, which `--fk` makes load-bearing: a parent may
+    # not be dropped while a child still references it. Without the flag,
+    # referential integrity here is a property of how the driver generates
+    # ids and nothing enforces it.
     for base in reversed(CREATE_ORDER):
         client(f"DROP TABLE IF EXISTS {base}_{suffix}")
 
@@ -426,9 +496,11 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
     in-memory balance authoritative: no other process updates these rows, so
     the driver's number and the stored number can only diverge through an
     error it saw, which is what --verify checks."""
+    set_echo(getattr(args, "echo", False), f"trader-{index}")
     rng = random.Random(args.seed + 1000 + index)
     trades = f"trades_{suffix}"
     accounts_table = f"accounts_{suffix}"
+    txn = bool(getattr(args, "txn", False))
 
     client = Client(args)
 
@@ -441,7 +513,7 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
     state = {aid: [OPENING_BALANCE, 0, 0] for aid, _ in accounts}
     ids = [aid for aid, _ in accounts]
 
-    committed = torn = rejected = 0
+    committed = torn = rejected = rolled_back = 0
     deadline = started_at + args.seconds
     started_running = time.perf_counter()
 
@@ -476,54 +548,74 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
             t0 = time.perf_counter()
             ok = True
 
-            # --- statement 1: the buy leg -----------------------------
-            reply = client.timed(
-                f"INSERT INTO {trades} (account_id, asset_id, side, qty, price, "
-                f"trade_day) VALUES ({buyer}, {asset}, {SIDE_BUY}, {qty}, "
-                f"{price}, {day})", insert_phase)
-            ok = ok and not reply.startswith("ERR")
-            legs_written = 1 if ok else 0
-
-            # --- statement 2: the sell leg ----------------------------
-            reply = client.timed(
-                f"INSERT INTO {trades} (account_id, asset_id, side, qty, price, "
-                f"trade_day) VALUES ({seller}, {asset}, {SIDE_SELL}, {qty}, "
-                f"{price}, {day})", insert_phase)
-            leg2 = not reply.startswith("ERR")
-            legs_written += 1 if leg2 else 0
-            ok = ok and leg2
-
-            # --- statements 3 and 4: the two balance moves ------------
-            #
-            # Literal values, not `balance = balance - <n>`: see fidelity note
-            # 2 in the module docstring. Applied to the in-memory state only
-            # after the server accepts the row, so a failed UPDATE leaves the
-            # driver's idea of the balance matching what is actually stored -
-            # which is what keeps --verify meaningful after an error rather
-            # than only before the first one.
+            # The two balance moves, computed before anything is sent.
+            # Literal values, not `balance = balance - <n>`: see fidelity
+            # note 2 in the module docstring.
             b_bal = state[buyer][0] - notional
             b_qty = state[buyer][1] + qty
             b_cnt = state[buyer][2] + 1
-            reply = client.timed(
-                f"UPDATE {accounts_table} SET balance = {b_bal}, "
-                f"asset_qty = {b_qty}, trade_count = {b_cnt} WHERE id = {buyer}",
-                update_phase)
-            if reply.startswith("ERR"):
-                ok = False
-            else:
-                state[buyer] = [b_bal, b_qty, b_cnt]
-
             s_bal = state[seller][0] + notional
             s_qty = state[seller][1] - qty
             s_cnt = state[seller][2] + 1
-            reply = client.timed(
-                f"UPDATE {accounts_table} SET balance = {s_bal}, "
-                f"asset_qty = {s_qty}, trade_count = {s_cnt} WHERE id = {seller}",
-                update_phase)
-            if reply.startswith("ERR"):
-                ok = False
-            else:
-                state[seller] = [s_bal, s_qty, s_cnt]
+
+            # (statement, phase, the in-memory effect it earns)
+            steps = (
+                (f"INSERT INTO {trades} (account_id, asset_id, side, qty, price, "
+                 f"trade_day) VALUES ({buyer}, {asset}, {SIDE_BUY}, {qty}, "
+                 f"{price}, {day})", insert_phase, None),
+                (f"INSERT INTO {trades} (account_id, asset_id, side, qty, price, "
+                 f"trade_day) VALUES ({seller}, {asset}, {SIDE_SELL}, {qty}, "
+                 f"{price}, {day})", insert_phase, None),
+                (f"UPDATE {accounts_table} SET balance = {b_bal}, "
+                 f"asset_qty = {b_qty}, trade_count = {b_cnt} WHERE id = {buyer}",
+                 update_phase, (buyer, [b_bal, b_qty, b_cnt])),
+                (f"UPDATE {accounts_table} SET balance = {s_bal}, "
+                 f"asset_qty = {s_qty}, trade_count = {s_cnt} WHERE id = {seller}",
+                 update_phase, (seller, [s_bal, s_qty, s_cnt])),
+            )
+
+            legs_written = 0
+            pending = []
+
+            # Untimed but inside the window, exactly as the ckdbs driver
+            # does it, so the two runs' per-statement phases stay
+            # comparable and the transaction latency carries the commit.
+            if txn:
+                client("BEGIN")
+
+            for index_of_step, (sql, phase, effect) in enumerate(steps):
+                reply = client.timed(sql, phase)
+                if reply.startswith("ERR"):
+                    ok = False
+                    if txn:
+                        # PostgreSQL aborts the whole transaction on the
+                        # first error (25P02: every later statement is
+                        # refused until ROLLBACK), the same shape ckdbs's
+                        # failed-transaction gate has.
+                        break
+                    continue
+                if index_of_step < 2:
+                    legs_written += 1
+                if effect is None:
+                    continue
+                if txn:
+                    # All or nothing: the driver's balance may only move
+                    # once the server has committed the move.
+                    pending.append(effect)
+                else:
+                    # Applied as each statement is accepted, so a failure
+                    # leaves the driver's balances matching what is stored.
+                    state[effect[0]] = effect[1]
+
+            if txn:
+                if ok:
+                    ok = not client("COMMIT").startswith("ERR")
+                if ok:
+                    for who, values in pending:
+                        state[who] = values
+                else:
+                    client("ROLLBACK")
+                    rolled_back += 1
 
             latency = time.perf_counter() - t0
             if ok:
@@ -535,11 +627,15 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
                 if progress is not None and target:
                     progress.value = min(1.0, committed / target)
                 txn_phase.record(latency, "OK")
+            elif txn:
+                # Nothing was applied: the server unwound it. A failed
+                # transaction, never a torn one.
+                txn_phase.record(latency, "ERR rolled back")
             else:
                 # A partial application. These four statements are four
-                # transactions as this tool sends them - fidelity note 1 - so
-                # there is nothing to roll back and the only honest thing to
-                # do is count it and keep going.
+                # transactions as this tool sends them by default - fidelity
+                # note 1 - so there is nothing to roll back and the only
+                # honest thing to do is count it and keep going.
                 if legs_written:
                     torn += 1
                 txn_phase.record(latency, "ERR partial")
@@ -566,6 +662,7 @@ def trader_process(index, args, suffix, accounts, asset_ids, started_at, result_
         "index": index,
         "committed": committed,
         "torn": torn,
+        "rolled_back": rolled_back,
         "rejected": rejected,
         "elapsed": elapsed,
         "target": target,
@@ -596,6 +693,7 @@ def profit_process(args, suffix, user_ids, started_at, result_q, stop_event=None
     `--profit-period-days` of simulated time. Wall-clock ticks
     (`--profit-interval`) only decide how often it checks whether a period
     boundary has been crossed."""
+    set_echo(getattr(args, "echo", False), "reporter")
     rng = random.Random(args.seed + 7777)
     accounts_table = f"accounts_{suffix}"
     profit_table = f"user_periodic_profit_{suffix}"
@@ -777,6 +875,7 @@ def print_scenario(meta, trader_results, profit_result, verify):
 
     committed = sum(r["committed"] for r in trader_results)
     torn = sum(r["torn"] for r in trader_results)
+    rolled_back = sum(r.get("rolled_back", 0) for r in trader_results)
     rejected = sum(r["rejected"] for r in trader_results)
     wall = meta["seconds"]
     tps = committed / wall if wall > 0 else 0.0
@@ -784,8 +883,13 @@ def print_scenario(meta, trader_results, profit_result, verify):
     print(f"  TPS                 {tps:>12,.1f}   committed transactions/sec")
     print(f"  statements/sec      {tps * 4:>12,.1f}   4 statements per transaction")
     print(f"  committed           {committed:>12,}")
-    print(f"  torn                {torn:>12,}   partially applied; the four statements "
-          f"are four transactions here")
+    if meta.get("txn"):
+        print(f"  rolled back         {rolled_back:>12,}   unwound whole; nothing was "
+              f"half-applied")
+        print(f"  torn                {torn:>12,}   zero by construction under --txn")
+    else:
+        print(f"  torn                {torn:>12,}   partially applied; the four "
+              f"statements are four transactions here (--txn groups them)")
     print(f"  underfunded         {rejected:>12,}   skipped before any statement was sent")
     if meta["traders"] > 1:
         per = "  ".join(f"#{r['index']}:{r['committed']:,}" for r in sorted(
@@ -875,6 +979,36 @@ def main():
                              "ceiling, and TPS is reported over the time the work "
                              "actually took")
 
+    parser.add_argument("--echo", dest="echo", action="store_true", default=False,
+                        help="print every statement this tool sends, and its reply, to "
+                             "stderr as `[<who>] <statement>  ->  <reply>`. The same "
+                             "flag and the same line format stress_business.py has, so "
+                             "the two transcripts can be diffed. Off by default: it "
+                             "costs a write per statement on a tool that measures "
+                             "statements per second")
+
+    parser.add_argument("--txn", dest="txn", action="store_true", default=False,
+                        help="wrap each business transaction's four statements in "
+                             "BEGIN/COMMIT instead of sending them as four autocommit "
+                             "statements. Default off, matching the ckdbs run's "
+                             "default. It drives `torn` to zero by construction, and "
+                             "it is the same lever on both engines: four commits "
+                             "become one")
+    parser.add_argument("--no-txn", dest="txn", action="store_false",
+                        help="the default; stated so a script can be explicit")
+
+    parser.add_argument("--fk", dest="fk", action="store_true", default=False,
+                        help=f"declare a foreign key on {FK_CHILD}.{FK_COLUMN} -> "
+                             f"{FK_PARENT}(id), the same relationship the ckdbs run's "
+                             f"--fk declares. Every trade leg then checks the account "
+                             f"it names before the row is written. Default off. Note "
+                             f"PostgreSQL takes a KEY SHARE row lock on the parent per "
+                             f"check where ckdbs takes none - see the note beside "
+                             f"FK_CHILD for the three differences that matter when "
+                             f"comparing the two runs")
+    parser.add_argument("--no-fk", dest="fk", action="store_false",
+                        help="the default; stated so a script can be explicit")
+
     parser.add_argument("--user-id-index", "--cabin", dest="user_id_index",
                         action="store_true", default=False,
                         help=f"create a btree index on {INDEX_RELATION}.{INDEX_COLUMN}: "
@@ -922,6 +1056,10 @@ def main():
                              "(./tools/pg_setup.sh timing on)")
     args = parser.parse_args()
 
+    # Before anything is sent, so the DDL and the load are in the transcript
+    # too. The trader and reporter processes inherit it and re-tag.
+    set_echo(args.echo, "loader")
+
     if args.traders < 1:
         abort("--traders must be at least 1")
     if args.days < 1:
@@ -939,9 +1077,11 @@ def main():
           f"accounts~{args.users * args.accounts_per_user:,}  "
           f"(tables suffixed _{suffix})"
           + (f"  [index on {INDEX_RELATION}.{INDEX_COLUMN}]"
-             if args.user_id_index else ""), flush=True)
+             if args.user_id_index else "")
+          + (f"  [fk {FK_CHILD}.{FK_COLUMN} -> {FK_PARENT}]" if args.fk else "")
+          + ("  [BEGIN/COMMIT per transaction]" if args.txn else ""), flush=True)
 
-    create_tables(loader, suffix, args.user_id_index)
+    create_tables(loader, suffix, args.user_id_index, args.fk)
 
     load_phases = []
     t_load = time.perf_counter()
@@ -1166,6 +1306,8 @@ def main():
         # The index, as a pair: what was asked for, and what the server says
         # the workload actually did with it.
         "user_id_index": bool(args.user_id_index),
+        "fk": bool(args.fk),
+        "txn": bool(args.txn),
         "index_column": f"{INDEX_RELATION}.{INDEX_COLUMN}",
         "index_state": index_state,
         "seed": args.seed,
