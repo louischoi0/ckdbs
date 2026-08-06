@@ -283,6 +283,45 @@ Decoding one integer column now costs **33 ns/row** where it cost 98, and
 relation width has almost stopped mattering to a statement that does not
 read the columns.
 
+### AP03, measured — and what the win actually was
+
+The fold's fixed cost per statement, measured as **server CPU** rather than
+client latency: over a socket a pk lookup is ~115 µs of which ~85% is the
+Python client, so `/proc/<pid>/stat` is the only instrument here that can
+see a few microseconds. Paired A/B, four rounds of 20,000 statements each,
+interleaved so drift cancels:
+
+| | fold − plain |
+|---|---:|
+| before AP03 | **+4.13 µs/stmt** |
+| after AP03 | **+1.88 µs/stmt** |
+
+A 54% cut in the fold's overhead on a pk lookup, from ~6.7% of the
+statement's server CPU to ~3.1%.
+
+**The win was not what AP03 predicted.** The task said the cost was
+constructing an `Aggregator` per statement, and hoisting it onto the
+dispatcher — the fix its own precedent pointed at — measured **no change at
+all**: still +4.13 µs after the hoist. What cost the time was
+`RunAggregated` building a **second `std::ostringstream`**: the caller
+already had one holding the column-heading line, called `.str()` on it,
+passed the copy by value, and the callee constructed a fresh stream and
+streamed the header back in. An `ostringstream` carries a `stringbuf` and a
+locale, and that was ~2.25 µs of the 4.13. Passing the caller's buffer by
+reference removes the stream, the copy and the parameter.
+
+The hoist is kept — it removes about five allocations per aggregated
+statement and mirrors `trail_scratch_` beside it — but it is **not** what
+made the number move, and this file does not credit it with that. Its
+plausible payoff is a repeated *grouped* fold, where `groups_` and the
+index keep their capacity across statements; a pk lookup founds one group
+and cannot see it, and no measurement here isolates it.
+
+What remains is real and is not setup: a grouped fold over 101 rows into 64
+groups costs **+31.9 µs** over its unaggregated twin, which is ~0.5 µs per
+group founded — the same per-group constant §"cost tracks group count"
+reports from the other direction.
+
 ## AG11's defaults
 
 **`aggregate_max_groups = 65,536` — ratified `[CONFIRMED]`.** Two reasons,

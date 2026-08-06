@@ -132,7 +132,11 @@ a parent, which is the honest shape of an insert-dominated OLTP run.
 scenario0 states: a declared Cabin observes on first selection, an
 engine-created one waits for the second. It is the best-shaped Cabin
 candidate in the repo — a small hot value set, probed by a non-pk equality,
-once per booking, on a relation nothing writes after load.
+once per booking, on a relation nothing writes after load. `S2-02` confirms
+the shape rather than its value: a short run reports **902 hits against 8
+misses** over 8 observed values, one miss per cargo type and every
+subsequent probe served. What that is worth in TPS is `S2-06`'s to measure,
+and the write hook — the half that costs — never fires here at all.
 
 ---
 
@@ -218,6 +222,12 @@ relation.
 I1 and I3 are what `--no-txn` is expected to **break** under concurrency and
 `--txn` is expected to hold. That contrast is the point of the flag, and it
 belongs in the results file as a table, not as a sentence.
+
+**`S2-02` cannot show that contrast and does not claim to.** One booker in
+one process has no concurrency, so `--no-txn` passes all four invariants
+exactly as `--txn` does — correctly, since a lost update needs a second
+writer. What `S2-02` establishes is that the checker is sound on a run known
+to be consistent; `S2-03` is what makes it capable of failing.
 
 ---
 
@@ -362,10 +372,12 @@ Each is a real limit as of 2026-08-06, not a preference:
 
 - **`--contend` default** (§5). Both numbers measured at `S2-03`, then settled
   here.
-- **Recipe match cap.** Whether a booking applies all matching recipes or caps
-  at N fees per freight. A cap bounds statement count per transaction and
-  therefore the variance of the TPS unit; no cap is more realistic. Settle at
-  `S2-02`.
+- ~~**Recipe match cap**~~ — **settled at `S2-02`: uncapped.** The generated
+  rule set bounds itself at 8 matches per booking (four route-agnostic rules,
+  at most three per cargo type, at most one route-specific), so a cap adds no
+  guarantee the rule set does not already give. `--max-fees N` exists to
+  *lower* the fan-out for a variance experiment and defaults to 0. A cap was
+  never needed to make the workload work — only to make it narrower.
 - ~~**Whether `GROUP BY` resolves a key on a joined chain**~~ — **answered
   2026-08-06 by `S2-01`'s probe: it does**, with correct values over real
   rows (§6). It was a capability question about the engine, not a choice.

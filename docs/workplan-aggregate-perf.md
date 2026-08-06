@@ -175,7 +175,7 @@ on, and they are not equivalent:
   is obviously right and the measurement does not yet justify either**, so
   this stays unbuilt pending a decision, not pending effort.
 
-## AP03 — Hoist the `Aggregator` onto the dispatcher
+## AP03 — Hoist the `Aggregator` onto the dispatcher — **DONE, and the premise was wrong again**
 
 Measured: a fold costs **+30.1%** on a pk point lookup — ~31 µs on a 103 µs
 statement — and that is almost all fixed setup, not per-row work. The
@@ -194,6 +194,26 @@ them per statement rather than at construction.
 *Done when:* the point-lookup fold overhead drops below 10%; an
 allocation-counting test shows a second aggregated statement allocating
 nothing the first did not.
+
+*What happened.* The overhead was **+4.13 µs/stmt of server CPU** on a pk
+lookup, re-measured before touching anything - the task's own +30.1% figure
+had expired, because AP01 and AP02 moved the denominator and the earlier
+number was taken over a client socket with 30 reps.
+
+**Hoisting the aggregator changed nothing measurable.** Still +4.13 µs
+after it. The cost was `RunAggregated` constructing a **second
+`std::ostringstream`** - the caller already had one holding the heading
+line, and the callee copied the header out of it and built a fresh stream.
+An `ostringstream` carries a `stringbuf` and a locale; passing the caller's
+buffer by reference took the overhead to **+1.88 µs**, a 54% cut.
+
+The hoist is kept, on its own smaller merits - five fewer allocations per
+aggregated statement, and it mirrors `trail_scratch_` - but it is not
+credited with the improvement. **Two tasks in a row have now had their
+stated cause disproved by measuring first** (AP02's was a column name, not
+an `AstValue`), which is worth stating as a rule rather than a coincidence:
+*re-measure the premise before building the fix, because the earlier number
+was taken against an engine that has since changed.*
 
 ## AP04 — DISTINCT without building a string per row (needs AP02)
 
