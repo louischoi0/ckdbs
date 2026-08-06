@@ -20,6 +20,16 @@ const char* StatementTypeName(const Statement& stmt) {
         stmt);
 }
 
+std::string_view AggFuncText(AggFunc func) noexcept {
+    switch (func) {
+        case AggFunc::kCount: return "count";
+        case AggFunc::kSum: return "sum";
+        case AggFunc::kMin: return "min";
+        case AggFunc::kMax: return "max";
+    }
+    return "?";
+}
+
 const char* CompareOpName(CompareOp op) {
     switch (op) {
         case CompareOp::kEq: return "=";

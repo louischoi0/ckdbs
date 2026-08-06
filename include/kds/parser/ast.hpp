@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -12,7 +13,8 @@
 //
 //   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE];
 //   INSERT INTO  <name> VALUES (<val> [, ...]);
-//   SELECT *     FROM   <rel> [<join>]* [WHERE <cond> [AND <cond>]*];
+//   SELECT <list> FROM  <rel> [<join>]* [WHERE <cond> [AND <cond>]*]
+//       [GROUP BY <col> [, ...]];
 //   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*];
 //   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
 //       OF <select>;
@@ -24,8 +26,11 @@
 //   <cond>  ::= <col> <op> <val>
 //   <op>    ::= = | != | < | <= | > | >=
 //   <val>   ::= integer literal | 'string literal' | NULL
+//   <list>  ::= * | <item> [, <item>]*
+//   <item>  ::= <col> | <agg> ( [DISTINCT] <col> | * )
+//   <agg>   ::= COUNT | SUM | MIN | MAX
 //
-// Deliberate limitations: no subqueries, GROUP BY, ORDER BY or aggregates;
+// Deliberate limitations: no subqueries, ORDER BY, HAVING or expressions;
 // WHERE is AND-only (no OR, NOT, or nesting) and its columns are still
 // unqualified; SELECT's column list is always * (no projection), which is
 // why a multi-relation SELECT is refused until V06 makes an explicit list
@@ -271,6 +276,49 @@ struct JoinClause {
     ColumnName right;  // always qualified
 };
 
+// The aggregate functions v1 folds (docs/feat-aggregate.md AG2).
+//
+// `AVG` is deliberately **not** here. It is recognized by the parser and
+// answers `Unsupported`, because `AstValue` has no decimal kind and an
+// average truncated to an integer is a wrong answer wearing a right
+// answer's type - so there is nothing for this enum to name until a
+// decimal type exists. Adding a value for a function that cannot be folded
+// would put the refusal somewhere it can be forgotten.
+enum class AggFunc : std::uint8_t { kCount, kSum, kMin, kMax };
+
+// The canonical lower-case spelling, for the column label a fold's output
+// carries (`count(*)`, `sum(distinct x)`).
+std::string_view AggFuncText(AggFunc func) noexcept;
+
+// One entry of a select list, aggregated or not.
+//
+// **Both shapes in one struct, not two**: the list is written in one order
+// and emitted in one order, and splitting it would put the output's column
+// order in a third place that has to be kept in step with the two.
+//
+// A non-aggregated statement's items never reach the AST at all - they
+// collapse back into `SelectStmt::projection` at the end of the parse - so
+// nothing downstream of a plain SELECT sees this type or changes shape
+// because it exists (workplan AG01).
+struct SelectItem {
+    bool is_aggregate = false;
+
+    // Valid when is_aggregate. `star_arg` is `COUNT(*)`, the one form with
+    // no column to name; `distinct` is the word as written, which
+    // `MIN`/`MAX` accept and ignore (spec §3.2 `[PROPOSED]`).
+    AggFunc func = AggFunc::kCount;
+    bool star_arg = false;
+    bool distinct = false;
+
+    // The aggregate's argument, or - for a plain item - the item itself.
+    // Unset when `star_arg`.
+    ColumnName column;
+
+    // The item's first byte, which is the function head for an aggregate
+    // and the column for a plain one. AG5's refusal points here.
+    std::uint32_t byte_offset = 0;
+};
+
 struct SelectStmt {
     // The select list, or empty for `SELECT *`. Star is refused once
     // there is more than one relation for it to be ambiguous across:
@@ -293,6 +341,24 @@ struct SelectStmt {
 
     std::vector<Condition> where;  // empty = no WHERE clause; AND-combined
 
+    // ---- Aggregation (docs/feat-aggregate.md) ---------------------------
+    //
+    // `agg_items` is the select list of an **aggregated** statement, in
+    // written order, and is empty for every other statement - including one
+    // whose list is entirely plain columns, whose items collapse into
+    // `projection` instead. So `aggregated()` is a property of the list and
+    // the GROUP BY together, decided once at the end of the parse rather
+    // than re-derived by each reader.
+    //
+    // A statement is aggregated when it writes an aggregate **or** a GROUP
+    // BY: `SELECT b FROM t GROUP BY b` names no function and is still a
+    // fold, because it emits one row per group rather than one per row.
+    std::vector<SelectItem> agg_items;
+
+    // The GROUP BY list in written order. Column references only (AG9) -
+    // the grammar has no expressions and GROUP BY does not grow one.
+    std::vector<ColumnName> group_by;
+
     // Every relation's binding is distinct - the parser refuses the
     // statement otherwise, rather than picking one silently. That refusal
     // is what makes a self-join expressible: `FROM t AS a JOIN t AS b` is
@@ -300,8 +366,18 @@ struct SelectStmt {
     // with no correct reading.
     std::size_t relation_count() const noexcept { return joins.size() + 1; }
 
+    // Whether a fold consumes this statement's rows.
+    bool aggregated() const noexcept { return !agg_items.empty(); }
+
     // Whether the statement was written `SELECT *`.
-    bool star() const noexcept { return projection.empty(); }
+    //
+    // **`projection.empty()` alone is not the question**, now that a select
+    // list can land somewhere other than `projection`: an aggregated
+    // statement names its columns and leaves `projection` empty, so a star
+    // test that read only that field would treat every aggregated statement
+    // as a star and emit whole rows for it (workplan AG01, and the same trap
+    // `StepChain::star()` has to avoid).
+    bool star() const noexcept { return projection.empty() && !aggregated(); }
 };
 
 struct Assignment {

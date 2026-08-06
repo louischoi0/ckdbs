@@ -97,9 +97,22 @@ private:
     StatusOr<ColumnName> ParseColumnName();
     StatusOr<ColumnName> ParseQualifiedColumn();
 
-    // `*`, or a comma-separated list of column names. Star leaves
-    // SelectStmt::projection empty (V06).
-    Status ParseSelectList(SelectStmt& stmt);
+    // `*`, or a comma-separated list of items. Sets `star` for `*` and
+    // otherwise appends one `SelectItem` per entry, aggregated or not
+    // (V06, AG01).
+    //
+    // **Items land in a caller-owned vector, not in the statement.** Where
+    // they finally go depends on whether a GROUP BY follows and whether any
+    // item is an aggregate - neither of which is known here - so the parse
+    // stages them and `ParseSelect` decides between `projection` and
+    // `agg_items` once both are in hand.
+    Status ParseSelectList(std::vector<SelectItem>& items, bool& star);
+
+    // One entry of a select list: a column, or `<agg>( [DISTINCT] col | * )`.
+    StatusOr<SelectItem> ParseSelectItem();
+
+    // `GROUP BY <col> [, ...]`, with the two words already consumed.
+    Status ParseGroupBy(SelectStmt& stmt);
 
     StatusOr<AstValue> ParseValue();
     StatusOr<CompareOp> ParseCompareOp();

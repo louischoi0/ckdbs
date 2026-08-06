@@ -22,6 +22,19 @@ std::string_view Describe(const Token& tok) {
                                         : tok.text;
 }
 
+// The aggregate `name` spells, or false if it spells none.
+//
+// **`AVG` is deliberately absent**, so it is not an AggFunc anywhere and
+// the one place that knows the word is the refusal that names it. A caller
+// that wants to recognize the head without folding it tests for it by name.
+bool AggFuncOf(std::string_view name, AggFunc& out) noexcept {
+    if (IEquals(name, "COUNT")) { out = AggFunc::kCount; return true; }
+    if (IEquals(name, "SUM")) { out = AggFunc::kSum; return true; }
+    if (IEquals(name, "MIN")) { out = AggFunc::kMin; return true; }
+    if (IEquals(name, "MAX")) { out = AggFunc::kMax; return true; }
+    return false;
+}
+
 }  // namespace
 
 Status Parser::ExpectKeyword(std::string_view keyword) {
@@ -782,19 +795,118 @@ StatusOr<ColumnName> Parser::ParseQualifiedColumn() {
     return col;
 }
 
-Status Parser::ParseSelectList(SelectStmt& stmt) {
-    // `SELECT *` leaves the projection empty. It stays available for a
-    // single relation, where it is unambiguous and is what almost every
-    // statement in the corpus says.
-    if (lexer_.Peek().type == TokenType::kStar) {
-        lexer_.Next();
-        return Status::OK();
+StatusOr<SelectItem> Parser::ParseSelectItem() {
+    SelectItem item;
+    item.byte_offset = lexer_.Peek().byte_offset;
+
+    // ---- Is this a function head? ---------------------------------------
+    //
+    // A head is an **unqualified name from the function set followed by
+    // `(`**, and both halves carry weight. No production in this grammar
+    // puts a paren after a column reference, so the paren is what makes the
+    // test unambiguous - which is why none of these words is reserved and
+    // why a column may still be named `count` (spec §2). Parsing the head as
+    // a column name first and checking the paren after is the one token of
+    // lookahead this needs.
+    auto col = ParseColumnName();
+    if (!col.ok()) return col.status();
+
+    AggFunc func = AggFunc::kCount;
+    const bool named_avg = !col.value().qualified() && IEquals(col.value().name, "AVG");
+    if (col.value().qualified() || lexer_.Peek().type != TokenType::kLParen ||
+        (!AggFuncOf(col.value().name, func) && !named_avg)) {
+        item.column = std::move(col.value());
+        return item;
     }
 
+    // `AVG` is a head this engine understands and declines. Refused here
+    // rather than at compile, because the reason is the type system and not
+    // the catalog: there is no decimal kind, and an average truncated to an
+    // integer is a wrong answer wearing a right answer's type.
+    if (named_avg) {
+        return Status::Unsupported(
+            "AVG is not supported (byte " + std::to_string(item.byte_offset) +
+            "); compute it from SUM and COUNT, which are exact");
+    }
+
+    item.is_aggregate = true;
+    item.func = func;
+    lexer_.Next();  // consume '('
+
+    // `DISTINCT`, unreserved like every other word here. `COUNT(distinct)`
+    // - the word used as the argument's name - therefore reads as the
+    // qualifier and then fails for a missing argument, which is the same
+    // reading standard SQL gives it.
+    if (const Token& maybe = lexer_.Peek();
+        maybe.type == TokenType::kIdent && IEquals(maybe.text, "DISTINCT")) {
+        lexer_.Next();
+        item.distinct = true;
+    }
+
+    if (lexer_.Peek().type == TokenType::kStar) {
+        const std::uint32_t star_at = lexer_.Peek().byte_offset;
+        lexer_.Next();
+        if (item.func != AggFunc::kCount) {
+            return Status::InvalidArgument(
+                std::string(AggFuncText(item.func)) + " takes a column, not '*' (byte " +
+                std::to_string(star_at) + "); '*' is only an argument of COUNT");
+        }
+        if (item.distinct) {
+            return Status::InvalidArgument(
+                "COUNT(DISTINCT *) is not a thing this engine can mean (byte " +
+                std::to_string(star_at) +
+                "); distinctness of whole rows was never written, name a column");
+        }
+        item.star_arg = true;
+    } else {
+        auto arg = ParseColumnName();
+        if (!arg.ok()) return arg.status();
+        item.column = std::move(arg.value());
+    }
+
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing an aggregate's argument");
+        !s.ok()) {
+        return s;
+    }
+    return item;
+}
+
+Status Parser::ParseSelectList(std::vector<SelectItem>& items, bool& star) {
+    // `SELECT *` produces no items at all. It stays available for a single
+    // relation, where it is unambiguous and is what almost every statement
+    // in the corpus says.
+    if (lexer_.Peek().type == TokenType::kStar) {
+        lexer_.Next();
+        star = true;
+        return Status::OK();
+    }
+    star = false;
+
+    for (;;) {
+        auto item = ParseSelectItem();
+        if (!item.ok()) return item.status();
+        items.push_back(std::move(item.value()));
+
+        if (lexer_.Peek().type != TokenType::kComma) return Status::OK();
+        lexer_.Next();
+    }
+}
+
+Status Parser::ParseGroupBy(SelectStmt& stmt) {
     for (;;) {
         auto col = ParseColumnName();
         if (!col.ok()) return col.status();
-        stmt.projection.push_back(std::move(col.value()));
+
+        // AG9: column references only. A paren here is the one shape that
+        // reads as an expression - `GROUP BY count(x)` - and refusing it by
+        // position beats letting `count` resolve as a column that does not
+        // exist and reporting that instead.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            return Status::Unsupported(
+                "GROUP BY takes column references only, not expressions (byte " +
+                std::to_string(col.value().byte_offset) + ")");
+        }
+        stmt.group_by.push_back(std::move(col.value()));
 
         if (lexer_.Peek().type != TokenType::kComma) return Status::OK();
         lexer_.Next();
@@ -886,7 +998,9 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     // known until the relations have been read, and the check waits until
     // both are in hand.
     const std::uint32_t star_at = lexer_.Peek().byte_offset;
-    if (Status s = ParseSelectList(stmt); !s.ok()) return s;
+    std::vector<SelectItem> items;
+    bool wrote_star = false;
+    if (Status s = ParseSelectList(items, wrote_star); !s.ok()) return s;
 
     if (Status s = ExpectKeyword("FROM"); !s.ok()) return s;
 
@@ -903,7 +1017,11 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     // exactly what makes that unanswerable here. Unsupported rather than
     // InvalidArgument: the statement is well-formed, and naming the
     // columns is the fix.
-    if (stmt.star() && stmt.relation_count() > 1) {
+    // `wrote_star`, not `stmt.star()`: the items are still staged in a
+    // local at this point, so the statement's own star test would read a
+    // named list as a star and refuse every multi-relation SELECT that
+    // spells its columns out.
+    if (wrote_star && stmt.relation_count() > 1) {
         return Status::Unsupported(
             "SELECT * is ambiguous across " + std::to_string(stmt.relation_count()) +
             " relations (byte " + std::to_string(star_at) +
@@ -913,6 +1031,89 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     auto where = ParseOptionalWhere(depth);
     if (!where.ok()) return where.status();
     stmt.where = std::move(where.value());
+
+    // ---- GROUP BY, and the three clauses that may follow it -------------
+    //
+    // `GROUP` is read as a clause head only *here*, past the WHERE, where
+    // no column reference can stand - which is what lets it stay
+    // unreserved, and a column stay named `group` (spec §2).
+    if (const Token& peek = lexer_.Peek();
+        peek.type == TokenType::kIdent && IEquals(peek.text, "GROUP")) {
+        lexer_.Next();
+        if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
+        if (Status s = ParseGroupBy(stmt); !s.ok()) return s;
+    }
+
+    // A statement is aggregated when it wrote an aggregate **or** a GROUP
+    // BY. The second half is not a technicality: `SELECT b FROM t GROUP BY
+    // b` names no function and still emits one row per group rather than
+    // one per row, which is a fold by every property that matters.
+    bool aggregated = false;
+    std::uint32_t agg_at = 0;
+    for (const SelectItem& item : items) {
+        if (!item.is_aggregate) continue;
+        aggregated = true;
+        agg_at = item.byte_offset;
+        break;
+    }
+    if (!stmt.group_by.empty()) {
+        if (!aggregated) agg_at = stmt.group_by.front().byte_offset;
+        aggregated = true;
+    }
+
+    // Which columns `*` folds - and in what order - was never written, and
+    // there is no reading of it that is not a guess. InvalidArgument rather
+    // than Unsupported: naming the columns is not a feature request.
+    if (wrote_star && aggregated) {
+        return Status::InvalidArgument(
+            "SELECT * cannot be combined with GROUP BY (byte " + std::to_string(star_at) +
+            "); name the grouping columns and the aggregates you want");
+    }
+
+    // HAVING is recognized by text exactly where it would be written, and
+    // refused with its own position - a truthful "not supported, here"
+    // instead of a syntax error pointing at whatever follows it (AG7).
+    if (const Token& having = lexer_.Peek();
+        having.type == TokenType::kIdent && IEquals(having.text, "HAVING")) {
+        return Status::Unsupported(
+            "HAVING is not supported (byte " + std::to_string(having.byte_offset) +
+            "); filter before the fold with WHERE, or filter the result client-side");
+    }
+
+    // ORDER BY over aggregated output, and only over aggregated output
+    // (spec §2 `[PROPOSED]`). A non-aggregated ORDER BY is not this
+    // clause's business and keeps the answer it has always had, which the
+    // corpus pins.
+    if (const Token& order = lexer_.Peek();
+        aggregated && order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
+        return Status::Unsupported(
+            "ORDER BY is not supported over an aggregated statement (byte " +
+            std::to_string(order.byte_offset) +
+            "); an aggregated statement's output rows are not chain rows, and sorting them "
+            "needs an output sort this engine does not have");
+    }
+
+    // AG8 / J2: a fold inside a sub-chain puts an aggregation boundary
+    // where the execution model has none. Refused with the position of
+    // whichever half made the block aggregated.
+    if (aggregated && depth > 0) {
+        return Status::Unsupported(
+            "an aggregate or GROUP BY inside a subquery is not supported (byte " +
+            std::to_string(agg_at) + "); aggregate in the outer statement instead");
+    }
+
+    // ---- Where the items land -------------------------------------------
+    //
+    // A statement that aggregates keeps them; every other statement's items
+    // are plain columns and collapse into `projection`, which is what makes
+    // this whole clause invisible to a plain SELECT - the same AST, the same
+    // compiled chain, the same fingerprint.
+    if (aggregated) {
+        stmt.agg_items = std::move(items);
+    } else {
+        stmt.projection.reserve(items.size());
+        for (SelectItem& item : items) stmt.projection.push_back(std::move(item.column));
+    }
 
     // Only the outermost block may be followed by a semicolon. A nested
     // one ends at its ')', and swallowing a ';' inside it would accept

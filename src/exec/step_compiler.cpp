@@ -505,6 +505,16 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                                     " is not supported");
     }
 
+    // **[AG01, removed by AG02]** The grammar takes aggregates now and the
+    // compiled form does not carry them yet. Refused rather than ignored:
+    // an aggregated statement leaves `projection` empty, which every reader
+    // downstream would take for `SELECT *` and answer with whole rows - a
+    // wrong answer wearing a right answer's shape, which is exactly what
+    // this feature is not allowed to produce even for one commit.
+    if (stmt.aggregated()) {
+        return Status::Unsupported("aggregation is not executable yet (docs/feat-aggregate.md)");
+    }
+
     // ---- 1. Bind every relation in written order --------------------------
     Scope scope;
     scope.parent = parent;

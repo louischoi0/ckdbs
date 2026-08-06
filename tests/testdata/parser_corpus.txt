@@ -171,8 +171,24 @@ InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 O
 # [V09] pagination.
 InvalidArgument	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
 InvalidArgument	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
-# Aggregates are I14, [OPEN] — this must keep failing until that decision.
-InvalidArgument	1dbdfb79bafd459e	cbf29ce484222325	SELECT COUNT(*) FROM t
+# [AG01] Aggregates. I14 is resolved by docs/feat-aggregate.md, so this
+# parses now — and the hash did not move, which is the whole of §2's
+# fingerprint argument: nothing was reserved and no token type was added,
+# so `count` lexes as the identifier it always was.
+ok	1dbdfb79bafd459e	cbf29ce484222325	SELECT COUNT(*) FROM t
+ok	e98a95e073db2017	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b
+ok	489356a113ef4e44	cbf29ce484222325	SELECT SUM(DISTINCT x) FROM t
+# A column may still be named `count` or `group`: a function head is a name
+# from the set *followed by a paren*, and no production puts a paren after a
+# column reference.
+ok	ff41a860584dc5e0	cbf29ce484222325	SELECT count FROM t
+ok	060af4ce805c88ca	b5d414774c8002cc	SELECT * FROM t WHERE group = 1
+# AVG is understood and declined: there is no decimal kind to hold one.
+Unsupported	91fa1130f96f7220	cbf29ce484222325	SELECT AVG(x) FROM t
+# HAVING and ORDER BY over aggregated output, each refused with its own
+# position (AG7, and §2's [PROPOSED] ORDER BY row).
+Unsupported	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
+Unsupported	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
 
 # ---- UPDATE — accepted -----------------------------------------------------
 ok	e11a9ee11c2d4d2e	b5d414774c8002cc	UPDATE t SET a = 1
@@ -298,13 +314,14 @@ InvalidArgument	e0208a3774f7afe5	cbf29ce484222325	SELECT * FROM t WHERE EXISTS (
 InvalidArgument	d91afc534d177df6	cbf29ce484222325	INSERT INTO t VALUES ((SELECT id FROM u))
 InvalidArgument	9964d7fce0f74496	cbf29ce484222325	UPDATE t SET a = (SELECT id FROM u)
 #
-# [I14 — OPEN] Aggregates. V07's done-condition asks for Unsupported with
-# a position on a subquery containing one; these give a bare syntax error
-# instead, and deliberately so: I14 has not decided whether aggregates are
-# excluded from the grammar or reserved-and-rejected, and either answer
-# here would pick one. Revisit with I14, not before.
-InvalidArgument	009742650befee6a	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)
-InvalidArgument	dd4d901ce6b336cc	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)
+# [AG01] Aggregates in a subquery. V07's done-condition asked for
+# Unsupported with a position on these and they used to give a bare syntax
+# error, because I14 had not decided whether aggregates were excluded from
+# the grammar or reserved-and-rejected. AG8 decides it: the forms parse and
+# are refused *as aggregation*, permanently for v1 — a fold inside a
+# sub-chain puts an aggregation boundary where the execution model has none.
+Unsupported	009742650befee6a	cbf29ce484222325	SELECT * FROM t WHERE id = (SELECT COUNT(*) FROM u)
+Unsupported	dd4d901ce6b336cc	cbf29ce484222325	SELECT * FROM t WHERE id IN (SELECT id FROM u GROUP BY id)
 
 # ---- Top level — rejected --------------------------------------------------
 InvalidArgument	-	-	\n
