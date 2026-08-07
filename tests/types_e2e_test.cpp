@@ -407,5 +407,130 @@ TEST(TypesEndToEnd, AnOutOfRangeInsertIsRefusedAndWritesNothing) {
     EXPECT_EQ(db.Run("SELECT COUNT(*) FROM trade"), before);
 }
 
+// ---- The wide decimal (spec-types.md TY2's int128 type, 2026-08-07) ------
+//
+// The same claim TY07's suite makes for the narrow types, made for the
+// 16-byte one: a width, a literal parser, a comparison and a rendering are
+// all anything consumes, so everything below runs with no subsystem taught
+// the type exists beyond those four.
+
+TEST(TypesEndToEnd, AWideDecimalDeclaresByPrecisionAndReadsBackExactly) {
+    Instance db;
+    // p = 24 selects the 16-byte type from the one fact the client
+    // declared; DESCRIBE renders the type it *got*.
+    ASSERT_EQ(db.Run("CREATE TABLE fund (id int64, nav decimal(24, 6))").substr(0, 7),
+              "CREATED");
+    const std::string described = db.Run("DESCRIBE fund");
+    EXPECT_NE(described.find("name=nav type=decimal128(24,6)"), std::string::npos) << described;
+
+    // Values no int64 can hold, both signs, and an exact read-back.
+    ASSERT_EQ(db.Run("INSERT INTO fund VALUES ('123456789012345678.123456')").substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO fund VALUES ('-999999999999999999.999999')").substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO fund VALUES (0.000001)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(db.Run("SELECT nav FROM fund"),
+              "nav\\n123456789012345678.123456\\n-999999999999999999.999999\\n0.000001");
+
+    // An UPDATE of another column re-encodes the wide value from its
+    // decoded form - the round trip most likely to lose the high half.
+    ASSERT_EQ(db.Run("CREATE TABLE fund2 (id int64, nav decimal(24, 6), note varchar)")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO fund2 VALUES ('123456789012345678.123456', 'a')")
+                  .substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(db.Run("UPDATE fund2 SET note = 'b' WHERE id = 1").substr(0, 7), "UPDATED");
+    EXPECT_EQ(db.Run("SELECT nav, note FROM fund2"),
+              "nav,note\\n123456789012345678.123456,b");
+}
+
+TEST(TypesEndToEnd, WideDecimalPredicatesCompareTheFullWidth) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE w (id int64, v decimal(20, 0))").substr(0, 7), "CREATED");
+    // Two values that agree in their low 64 bits and differ only in the
+    // high half: 2^64 is 18446744073709551616, and the second value is
+    // 2 * 2^64. A comparison that read only int_val would call them both
+    // equal to either literal.
+    ASSERT_EQ(db.Run("INSERT INTO w VALUES ('18446744073709551616')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO w VALUES ('36893488147419103232')").substr(0, 8), "INSERTED");
+
+    EXPECT_EQ(db.Run("SELECT id FROM w WHERE v = '18446744073709551616'"), "id\\n1");
+    EXPECT_EQ(db.Run("SELECT id FROM w WHERE v = 36893488147419103232"), "id\\n2");
+    EXPECT_EQ(db.Run("SELECT id FROM w WHERE v < '36893488147419103232'"), "id\\n1");
+    EXPECT_EQ(db.Run("SELECT id FROM w "
+                     "WHERE v BETWEEN '1' AND '20000000000000000000'"),
+              "id\\n1");
+
+    // A coercion failure names the byte, exactly as the narrow type's does.
+    const std::string bad = db.Run("SELECT id FROM w WHERE v = '1.5'");
+    EXPECT_EQ(bad.substr(0, 3), "ERR") << bad;
+    EXPECT_NE(bad.find("at byte"), std::string::npos) << bad;
+}
+
+TEST(TypesEndToEnd, AggregatesFoldTheWideDecimalExactly) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE w (id int64, grp int64, v decimal(24, 2))").substr(0, 7),
+              "CREATED");
+    // Each value is beyond int64 on its own, so the sum being right means
+    // the int128 accumulator carried it - and 30000000000000000000.01 is
+    // not representable in a double either, so a float sneaking in
+    // anywhere would visibly corrupt the digits.
+    ASSERT_EQ(db.Run("INSERT INTO w VALUES (1, '10000000000000000000.00')").substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO w VALUES (1, '20000000000000000000.01')").substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO w VALUES (2, '0.03')").substr(0, 8), "INSERTED");
+
+    EXPECT_EQ(db.Run("SELECT SUM(v), COUNT(*) FROM w"),
+              "sum(v),count(*)\\n30000000000000000000.04,3");
+    EXPECT_EQ(db.Run("SELECT MIN(v), MAX(v) FROM w"),
+              "min(v),max(v)\\n0.03,20000000000000000000.01");
+    // 30000000000000000000.04 / 3 = 10000000000000000000.013... -> .01 at
+    // scale 2, the wide divide rounding exactly as the narrow one.
+    EXPECT_EQ(db.Run("SELECT AVG(v) FROM w"), "avg(v)\\n10000000000000000000.01");
+    // Grouped, first-seen order on an int key.
+    EXPECT_EQ(db.Run("SELECT grp, SUM(v) FROM w GROUP BY grp"),
+              "grp,sum(v)\\n1,30000000000000000000.01\\n2,0.03");
+    // And a GROUP BY on the wide column itself keys on the full width.
+    EXPECT_EQ(db.Run("SELECT v, COUNT(*) FROM w GROUP BY v"),
+              "v,count(*)\\n10000000000000000000.00,1\\n20000000000000000000.01,1\\n0.03,1");
+}
+
+TEST(TypesEndToEnd, AnIntegerLiteralThatWrappedInt64IsRefusedNotMisread) {
+    // The lexer wraps an over-wide integer literal and always did
+    // (token.hpp); the wide decimal's tests forced the question of who
+    // downstream trusts `int_val`. Against a narrow decimal the wrapped
+    // `36893488147419103232` used to coerce as the 0 it wrapped to and
+    // *match* 0.00 - a silently wrong answer, now a refusal. Date and
+    // timestamp columns get the same guard.
+    Instance db;
+    Load(db);
+    ASSERT_EQ(db.Run("INSERT INTO trade VALUES (1, '2026-07-01', "
+                     "'2026-07-01 00:00:00', '0.00')")
+                  .substr(0, 8),
+              "INSERTED");
+    for (const char* sql : {"SELECT id FROM trade WHERE amt = 36893488147419103232",
+                            "SELECT id FROM trade WHERE settles = 36893488147419103232",
+                            "SELECT id FROM trade WHERE at = 36893488147419103232"}) {
+        const std::string reply = db.Run(sql);
+        EXPECT_EQ(reply.substr(0, 3), "ERR") << sql << " -> " << reply;
+    }
+}
+
+TEST(TypesEndToEnd, MixedWidthDecimalColumnsRefuseToCompare) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE n (id int64, m decimal(10, 2))").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("CREATE TABLE ww (id int64, m decimal(24, 2))").substr(0, 7), "CREATED");
+    // Same scale on both sides - the widths alone differ, and the refusal
+    // must come at compile, because at run time this pair is a kind
+    // mismatch that answers false per row: zero rows with a right answer's
+    // shape.
+    const std::string reply =
+        db.Run("SELECT a.id FROM n AS a JOIN ww AS b ON a.id = b.id WHERE a.m = b.m");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("width"), std::string::npos) << reply;
+}
+
 }  // namespace
 }  // namespace kds::server

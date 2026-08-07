@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "kds/base/int128.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/parser/ast.hpp"
@@ -209,5 +210,10 @@ StatusOr<std::vector<std::vector<DecodedField>>> DecodeRowBatch(std::vector<std:
 StatusOr<std::int64_t> DecodeInt(std::span<const std::byte> bytes);
 StatusOr<std::uint64_t> DecodeUint64(std::span<const std::byte> bytes);
 std::string_view DecodeText(std::span<const std::byte> bytes);
+
+// The 16-byte wide-decimal field: two LE halves, low first. The scale is
+// the row description's `type_mod`, not the field's, exactly as for the
+// 8-byte decimal.
+StatusOr<Int128> DecodeDecimalWide(std::span<const std::byte> bytes);
 
 }  // namespace kds::wire

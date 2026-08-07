@@ -1,8 +1,9 @@
 # Types — Workplan
 
 Work instructions, companion to `docs/spec-types.md` (TY1–TY9). Tasks
-`TY01`–`TY09`, **all built as of 2026-08-07**; `TY10` (TY3's phase 2,
-appended after closure) **built the same day**.
+`TY01`–`TY09`, **all built as of 2026-08-07**; `TY10` (TY3's phase 2)
+and `TY11` (TY2's wide decimal), appended after closure, **built the same
+day**.
 
 (This line said `docs/types.md` until TY09, and TY09's own line said
 `docs/aggregate.md`. Neither file has ever existed — see TY09's outcome.)
@@ -427,3 +428,57 @@ What phase 2 is *not*: scientific notation and leading-dot forms (spec
 built, and acceptance retired the error it would have decorated — recorded
 in §2 rather than silently, in this workplan's own tradition of noting
 where a task's description and the code disagreed.
+
+## TY11 — The wide decimal: int128 for p > 18 (needs TY01–TY09) — **DONE**
+
+TY2's "future separate type", built as specified: a different schema
+constant coexisting with the 8-byte type, never a widening of it. Spec
+§2a carries the decision record; this entry carries what building it
+found.
+
+*Done when:* `decimal(19..38, s)` declares, stores, reads back, compares,
+groups, folds and crosses the wire; the narrow type's contracts are
+byte-for-byte untouched; cross-width comparison is a compile-time refusal.
+
+*Outcome.* Six things worth knowing.
+
+**The declared precision selects the width at the one DDL site.**
+`decimal(p, s)` maps p ≤ 18 to type_val 7 and 19..38 to the new
+`kTypeValDecimalWide = 13`; `decimal128(p, s)` names the wide type
+directly and refuses p ≤ 18 toward the narrow spelling. One declaration,
+one type — and DESCRIBE renders the type a column got.
+
+**`kDecimalWide` is a `ValueType`, not a flag**, and that choice did the
+finding: every exhaustive switch was surfaced by the compiler
+(`MakeCabinKey`, the fold's key encoder), and every branch-style site was
+swept by hand (coercion, comparison, rendering, both row codecs). A width
+flag on `kDecimal` would have let each of those silently read the low 64
+bits.
+
+**One parser body serves both widths.** The digit walk was templated on
+its accumulator (int64 / Int128) with the cap as data - TY01's one-parser
+rule surviving the split - so scale overflow, precision overflow and
+malformed input answer identically at either width, pinned.
+
+**The int64 accumulator did not widen.** SUM/AVG over the wide type fold
+through an `Int128 sum_wide` beside the int64 `sum`, because §3.3's
+overflow point is a product contract; both merge unconditionally (the
+unused one adds zeros), the AVG divide is one template body at either
+width, and the DISTINCT merge decodes an entry's own tag to pick its
+accumulator.
+
+**Building it caught a live narrow-type bug.** An integer literal wider
+than int64 wraps in the lexer (documented, `token.hpp`), and
+`CoerceLiteralToColumn` read the wrapped `int_val`: against a narrow
+decimal, `= 36893488147419103232` coerced as 0 and **matched 0.00** - a
+silently wrong answer predating this task. The wide arm reads the
+preserved digit text; date, timestamp and narrow-decimal coercion now
+refuse a wrapped literal; uint64's digit-text path was already correct
+and is deliberately untouched.
+
+**Purely additive, again**: no format change, no version bump, one new
+`sys.types` row (`decimal128`, oid 33). A pre-wide data file renders an
+unknown type_val 13 only for columns it cannot contain. The wire carries
+16 LE bytes under the type's own type_oid with `(p, s)` in `type_mod` -
+exactly the shape the KWP DECIMAL decision reserved for it two commits
+earlier.

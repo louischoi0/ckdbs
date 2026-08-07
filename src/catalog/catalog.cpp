@@ -341,7 +341,7 @@ Status Catalog::Bootstrap() {
         std::uint32_t type_val;
         std::uint32_t len;
     };
-    static constexpr std::array<SysTypeBootstrap, 12> kTypes{{
+    static constexpr std::array<SysTypeBootstrap, 13> kTypes{{
         {kTypeInt8, "int8", kTypeValInt8, 1},
         {kTypeInt16, "int16", kTypeValInt16, 2},
         {kTypeInt32, "int32", kTypeValInt32, 4},
@@ -357,6 +357,11 @@ Status Catalog::Bootstrap() {
         // carries its own (p, s) elsewhere (TY9).
         {kTypeDate, "date", kTypeValDate, 4},
         {kTypeTimestamp, "timestamp", kTypeValTimestamp, 8},
+        // The wide decimal under its own name, so name->type_val stays a
+        // function: `decimal(p >= 19, s)` reaches it by promotion at the
+        // DDL site, `decimal128(p, s)` by this row directly, and DESCRIBE
+        // renders whichever a column's type_val says it is.
+        {kTypeDecimalWide, "decimal128", kTypeValDecimalWide, 16},
     }};
     for (const auto& t : kTypes) {
         if (Status s = InsertTypeRow(t.oid, t.name, t.type_val, t.len); !s.ok()) {

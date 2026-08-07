@@ -43,7 +43,8 @@ Status CheckDeclarableColumnTypes(const Schema& schema) {
         // packs the pair, so reaching here with an unset one means the
         // schema was built by neither - which is exactly the case a check
         // at the catalog's own door is for.
-        if (col.type_val == kTypeValDecimal && DecimalPrecisionOf(col.len) == 0) {
+        if ((col.type_val == kTypeValDecimal || col.type_val == kTypeValDecimalWide) &&
+            DecimalPrecisionOf(col.len) == 0) {
             return Status::InvalidArgument(
                 "column '" + std::string(NameView(col.name)) +
                 "' is decimal with no precision recorded (docs/spec-types.md TY2)");

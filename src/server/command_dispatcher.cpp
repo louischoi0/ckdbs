@@ -1228,9 +1228,19 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
         //
         // The pair replaces the type's default `len`, which for a decimal
         // was never read as a width - `RowLayout::ColumnWidth` gives every
-        // decimal 8 bytes from its `type_val` alone (catalog/rows.hpp says
-        // why the field was free).
-        if (row.type_val == catalog::kTypeValDecimal) {
+        // decimal its bytes from its `type_val` alone (catalog/rows.hpp
+        // says why the field was free).
+        //
+        // **The declared precision selects the width, here and only here.**
+        // `decimal(p, s)` with p <= 18 is the 8-byte type and with p >= 19
+        // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
+        // not a widening, so the promotion is a different type_val and a
+        // different schema constant, chosen from the one fact the client
+        // declared. Writing `decimal128(p, s)` names the wide type
+        // directly and its bounds refuse p <= 18 toward the narrow
+        // spelling, so either way one declaration selects exactly one type.
+        if (row.type_val == catalog::kTypeValDecimal ||
+            row.type_val == catalog::kTypeValDecimalWide) {
             if (!col.has_precision) {
                 // Unreachable through the parser, which refuses a bare
                 // `decimal`. Checked anyway: a schema can be built without
@@ -1239,8 +1249,15 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
                 return {"ERR column '" + col.name + "' is decimal with no precision or scale",
                         false};
             }
-            if (Status s = exec::CheckDecimalPrecisionScale(col.precision, col.scale); !s.ok()) {
-                return {"ERR " + s.message() + " (byte " +
+            if (row.type_val == catalog::kTypeValDecimal &&
+                col.precision >= exec::kMinDecimalPrecisionWide) {
+                row.type_val = catalog::kTypeValDecimalWide;
+            }
+            Status bounds = row.type_val == catalog::kTypeValDecimalWide
+                                ? exec::CheckDecimalWidePrecisionScale(col.precision, col.scale)
+                                : exec::CheckDecimalPrecisionScale(col.precision, col.scale);
+            if (!bounds.ok()) {
+                return {"ERR " + bounds.message() + " (byte " +
                             std::to_string(col.type_byte_offset) + ")",
                         false};
             }

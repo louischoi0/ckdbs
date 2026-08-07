@@ -29,7 +29,8 @@ StatusOr<std::uint32_t> RowLayout::ColumnWidth(const SysColumnRow& col,
         // type with no decided width cannot be part of one.
         case kTypeValDate: return 4;        // int32 epoch days
         case kTypeValTimestamp: return 8;   // int64 UTC micros
-        case kTypeValDecimal: return 8;     // int64 unscaled, 1 <= p <= 18
+        case kTypeValDecimal: return 8;      // int64 unscaled, 1 <= p <= 18
+        case kTypeValDecimalWide: return 16; // int128 unscaled, 19 <= p <= 38
         case kTypeValFloat:
             return Status::Unsupported(
                 "column '" + std::string(NameView(col.name)) +

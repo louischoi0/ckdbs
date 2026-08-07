@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 
+#include "kds/base/int128.hpp"
 #include "kds/base/status.hpp"
 
 // The text forms of `DATE`, `TIMESTAMP` and `DECIMAL(p,s)`
@@ -57,11 +58,19 @@ inline constexpr std::int64_t kMinEpochMicros =
 inline constexpr std::int64_t kMaxEpochMicros =
     (static_cast<std::int64_t>(kMaxEpochDay) + 1) * 86'400 * 1'000'000 - 1;
 
-// DECIMAL's bounds (TY2). `p > 18` is a *future separate type* carrying an
-// int128 - a different schema constant, so the two can coexist - and never
-// a widening of this one.
+// DECIMAL's bounds (TY2). `p > 18` is a *separate type* carrying an
+// int128 - a different schema constant, so the two coexist - and never a
+// widening of this one. Built 2026-08-07: `decimal(p, s)` with `p >= 19`
+// selects `kTypeValDecimalWide` at the one DDL site, and the wide bounds
+// below are exclusive of the narrow ones on purpose - one declaration
+// selects exactly one type, so `decimal128(10, 2)` is refused toward
+// `decimal(10, 2)` rather than stored twice as wide.
 inline constexpr std::uint8_t kMinDecimalPrecision = 1;
 inline constexpr std::uint8_t kMaxDecimalPrecision = 18;
+inline constexpr std::uint8_t kMinDecimalPrecisionWide = 19;
+// 38, because 10^38 - 1 < 2^127: every unscaled value of a p <= 38 column
+// fits the int128 with its sign, and 39 digits would not.
+inline constexpr std::uint8_t kMaxDecimalPrecisionWide = 38;
 
 // `YYYY-MM-DD` -> days since 1970-01-01.
 //
@@ -95,6 +104,15 @@ StatusOr<std::int64_t> ParseDecimalLiteral(std::string_view text, std::uint8_t p
 // the DDL checks it once per column and the literal parser assumes it.
 Status CheckDecimalPrecisionScale(std::uint32_t precision, std::uint32_t scale);
 
+// The wide siblings (TY2's separate type). One parser body serves both
+// widths - the digit walk is shared and only the accumulator and the cap
+// differ - which is TY01's one-parser rule holding across the width split:
+// a literal that stores and a literal that compares cannot drift, and
+// neither can the two widths' ideas of what a decimal string is.
+Status CheckDecimalWidePrecisionScale(std::uint32_t precision, std::uint32_t scale);
+StatusOr<Int128> ParseDecimalLiteralWide(std::string_view text, std::uint8_t precision,
+                                         std::uint8_t scale);
+
 // ---- Rendering (spec §3.3) ---------------------------------------------
 //
 // The inverse of the three parsers, exact for every value they accept -
@@ -102,5 +120,6 @@ Status CheckDecimalPrecisionScale(std::uint32_t precision, std::uint32_t scale);
 std::string FormatDate(std::int32_t epoch_day);
 std::string FormatTimestamp(std::int64_t epoch_micros);
 std::string FormatDecimal(std::int64_t unscaled, std::uint8_t scale);
+std::string FormatDecimalWide(Int128 unscaled, std::uint8_t scale);
 
 }  // namespace kds::exec

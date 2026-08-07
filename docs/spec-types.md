@@ -19,7 +19,7 @@ other side.)*
 | # | Decision | Choice |
 |---|---|---|
 | TY1 | v1 types | **`DATE`, `TIMESTAMP`, `DECIMAL(p,s)`** — all fixed-width, so invariant 13 is untouched. `FLOAT64` stays out (`Unsupported` at CREATE TABLE, reserved `kTypeValFloat = 6` unchanged): IEEE comparison and aggregation semantics conflict with the engine's exactness discipline, and nothing in it is needed to unblock the workloads that asked. `TIME`, `INTERVAL`, `timestamptz`: not reserved, not parsed |
-| TY2 | DECIMAL representation | **Scaled int64**: the unscaled value in 8 bytes, `1 ≤ p ≤ 18`, `0 ≤ s ≤ p`. Comparison, grouping and SUM reuse the checked-int64 machinery verbatim (AG3). A variable-width numeric violates invariant 13 by construction; `p > 18` is a *future separate type* (int128, 16 bytes — a different schema constant, so the two can coexist), never a widening of this one |
+| TY2 | DECIMAL representation | **Scaled int64**: the unscaled value in 8 bytes, `1 ≤ p ≤ 18`, `0 ≤ s ≤ p`. Comparison, grouping and SUM reuse the checked-int64 machinery verbatim (AG3). A variable-width numeric violates invariant 13 by construction; `p > 18` is a *separate type* (int128, 16 bytes — a different schema constant, so the two coexist), never a widening of this one — **and that type is built (2026-08-07, §2a)**: `decimal(p, s)` with `19 ≤ p ≤ 38` selects `kTypeValDecimalWide` at the one DDL site, also declarable as `decimal128(p, s)` |
 | TY3 | Literals | **Quoted string literals only** in v1: `'2026-08-06'`, `'12.34'`. The column's `type_val` decides the interpretation. **The lexer does not change** — no decimal-point token, no date token — so every previously-accepted statement lexes identically and the fingerprint argument is structural: `kFingerprintVersion` unmoved. ~~A bare `12.34` numeric token is phase 2, gated on its own fingerprint analysis~~ — **phase 2 built 2026-08-07**: the bare form is sugar for the quoted string of its spelling, the gating analysis is in §2 and `src/parser/fingerprint.cpp`, and the version still did not move |
 | TY4 | Time encoding | `DATE` = **days since 1970-01-01, int32** (4 bytes). `TIMESTAMP` = **microseconds since the epoch, UTC, int64** (8 bytes). **Storage is always UTC**; there is no session time zone, no conversion, no `timestamptz` — rendering what UTC means locally is the client's act, and this is a documented product constraint, not a gap |
 | TY5 | Value model | `DATE`/`TIMESTAMP` **reuse `AstValue` kInt** — the value *is* an integer; only its rendering differs, and rendering happens at the emission boundary (§4), not in the value. **`DECIMAL` alone adds a kind**: `kDecimal` carrying the unscaled int64 plus its scale. One new kind, not three, is what keeps every switch over `ValueType` from growing three arms that behave identically |
@@ -84,6 +84,40 @@ statements containing digit-dot-digit, which lexed but parsed in no
 production — fingerprintable yet unrecordable, so no stored `pattern_id`
 moves and **`kFingerprintVersion` stays 1**. Every pre-existing golden
 corpus line passes unchanged as the witness.
+
+## 2a. The wide decimal `[CONFIRMED 2026-08-07]`
+
+TY2's separate type, built. **A type is still four things**: width 16
+(int128, two LE uint64 halves via explicit helpers — invariant 6, never a
+memcpy of the builtin), the shared digit-walk parser at a 38-digit cap
+(`10^38 − 1 < 2^127`; one template body serves both widths, TY01's
+one-parser rule surviving the split), an int128 comparison behind the same
+equal-kind/equal-scale contract, and a hand-peeled rendering. Everything
+else is the narrow type's machinery observed to hold: coercion through
+`CoerceLiteralToColumn`, grouping/DISTINCT under a tag of its own,
+`SUM`/`AVG` through an int128 accumulator beside the int64 one (which is
+a product contract and does not widen), the Cabin key, and the wire's 16
+LE bytes with `(p, s)` in `type_mod` — the width §6's DECIMAL decision
+reserved.
+
+Four rules. **The declared precision selects the width at the one DDL
+site**: `decimal(p ≤ 18, s)` is the 8-byte type, `decimal(19 ≤ p ≤ 38, s)`
+the 16-byte one, and `decimal128(p, s)` names the wide type directly with
+bounds exclusive of the narrow ones — one declaration selects exactly one
+type, and DESCRIBE renders the type a column *got* (`decimal128(24,6)`).
+**Cross-width comparison is refused at compile** like cross-scale, and
+must be: at run time the pair is a kind mismatch answering false per row —
+zero rows wearing a right answer's shape. **`kDecimalWide` is a
+`ValueType` of its own**, not a width flag on `kDecimal`, so every
+consumer that reads `int_val` was surfaced by the compiler instead of
+silently truncating; the value is `Int128FromHalves(dec_hi, int_val)`.
+And **an integer literal that wrapped int64 is refused wherever `int_val`
+is the value** — building this type surfaced that `= 36893488147419103232`
+against a *narrow* decimal coerced as the 0 it wrapped to and matched
+0.00; the wide arm reads the preserved digit text, and date, timestamp
+and narrow-decimal coercion now refuse a wrapped literal outright.
+Purely additive: no format change, no version bump, one new `sys.types`
+row (`decimal128`, oid 33, type_val 13).
 
 ## 3. Semantics `[CONFIRMED]`
 
@@ -217,7 +251,8 @@ whole price.
 
 `FLOAT64` (TY1) · ~~bare numeric literals `12.34` (TY3, phase 2)~~ —
 **built 2026-08-07**, see §2 · time
-zones and `timestamptz` (TY4) · `p > 18` (TY2, future int128 type) ·
+zones and `timestamptz` (TY4) · ~~`p > 18` (TY2, future int128 type)~~ —
+**built 2026-08-07**, see §2a ·
 cross-scale DECIMAL comparison and rescaling (TY6) · date/decimal
 arithmetic and value functions (TY8) · `AVG` (§3.2 — unlocked in
 precondition, deliberately not decided here) · casts between the new types
@@ -273,4 +308,9 @@ and anything (`'2026-08-06'` into a varchar column stays a plain string).
   is not: scientific notation (`1e5` lexes as it always did — an integer
   and an identifier) and a leading-dot form (`.5`), both refused rather
   than guessed at.
-- int128 `DECIMAL` for `p > 18` (TY2).
+- ~~int128 `DECIMAL` for `p > 18` (TY2)~~ — **built 2026-08-07 (§2a)**:
+  `decimal(19 ≤ p ≤ 38, s)` / `decimal128(p, s)`, type_val 13, 16 bytes,
+  everything the narrow type does including SUM/AVG and the wire. What
+  remains out: `p > 38` (no representation), cross-width comparison
+  (refused with the cross-scale rule), and the narrow type's own contracts
+  are untouched — its int64 accumulator did not widen.

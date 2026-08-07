@@ -304,6 +304,35 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             PutLE(cell, static_cast<std::uint64_t>(unscaled), 8);
             return Status::OK();
         }
+        case catalog::kTypeValDecimalWide: {
+            // The 16-byte sibling: the same two accepted shapes, the same
+            // no-rescale rule, the wide parser. The int128 goes to the
+            // cell as two LE uint64 halves, low first - invariant 6's
+            // explicit encoding, never a memcpy of the builtin.
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            Int128 unscaled = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseDecimalLiteralWide(val.str_val, precision, scale);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                unscaled = parsed.value();
+            } else if (val.type == parser::ValueType::kDecimalWide) {
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column '" + NameOf() + "' has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                unscaled = Int128FromHalves(val.dec_hi, val.int_val);
+            } else {
+                return Status::InvalidArgument("column '" + NameOf() +
+                                                "' expects a decimal written as a string, "
+                                                "e.g. '12.34'");
+            }
+            PutLE(cell.subspan(0, 8), static_cast<std::uint64_t>(Int128Low(unscaled)), 8);
+            PutLE(cell.subspan(8, 8), static_cast<std::uint64_t>(Int128High(unscaled)), 8);
+            return Status::OK();
+        }
         default:
             return Status::InvalidArgument("column '" + NameOf() + "' has an unrecognized type_val");
     }
@@ -451,6 +480,18 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             out.str_val.clear();
             return Status::OK();
         }
+        case catalog::kTypeValDecimalWide: {
+            // Two LE halves back into the pair the AstValue carries - low
+            // into int_val, high into dec_hi - with no validation, per
+            // TY7: the bytes were proven at the encode gate.
+            out.type = parser::ValueType::kDecimalWide;
+            out.int_val = static_cast<std::int64_t>(GetLE(cell.subspan(0, 8), 8));
+            out.dec_hi = static_cast<std::int64_t>(GetLE(cell.subspan(8, 8), 8));
+            out.scale = catalog::DecimalScaleOf(col.len);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
         default:
             return Status::Corruption("column '" + NameOf() + "' has an unrecognized type_val");
     }
@@ -550,13 +591,27 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
         return Status::OK();
     }
 
+    // An integer literal wider than int64 **wrapped in the lexer**, which
+    // has always been the token's documented behaviour - `int_val` cannot
+    // be trusted for a range question, only `raw_int_text` can (token.hpp's
+    // digits() note). The three arms below that read `int_val` as the value
+    // must refuse a wrapped one, or `= 36893488147419103232` coerces as the
+    // 0 it wrapped to and matches rows the client never named. Scoped to
+    // those arms and not hoisted: a uint64 comparison legitimately carries
+    // its upper half in the digits (`ValueAsUint64`), and the wide-decimal
+    // arm reads the digits themselves.
+    const bool int_literal_wrapped =
+        val.type == parser::ValueType::kInt && !val.raw_int_text.empty() &&
+        val.raw_int_text != std::to_string(val.int_val);
+
     switch (col.type_val) {
         case catalog::kTypeValDate: {
             if (val.type == parser::ValueType::kInt) {
                 // Already an epoch day. Accepted, and range-checked to the
                 // same bounds the encoder applies - the two sides of the
                 // engine must agree on which integers are dates.
-                if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
+                if (int_literal_wrapped || val.int_val < kMinEpochDay ||
+                    val.int_val > kMaxEpochDay) {
                     return Status::OutOfRange("date is outside the supported range");
                 }
                 return Status::OK();
@@ -575,7 +630,8 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
 
         case catalog::kTypeValTimestamp: {
             if (val.type == parser::ValueType::kInt) {
-                if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
+                if (int_literal_wrapped || val.int_val < kMinEpochMicros ||
+                    val.int_val > kMaxEpochMicros) {
                     return Status::OutOfRange("timestamp is outside the supported range");
                 }
                 return Status::OK();
@@ -607,6 +663,13 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
                 return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
             }
+            if (int_literal_wrapped) {
+                // The true digits cannot fit any narrow decimal (p <= 18),
+                // so the precision check would refuse them anyway - but
+                // only if it sees them rather than the wrapped value.
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " has more digits than a decimal(p <= 18) can hold");
+            }
             const std::string text = val.type == parser::ValueType::kInt
                                          ? std::to_string(val.int_val)
                                          : val.str_val;
@@ -615,6 +678,36 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             if (!unscaled.ok()) return unscaled.status();
             val.type = parser::ValueType::kDecimal;
             val.int_val = unscaled.value();
+            val.scale = scale;
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
+
+        case catalog::kTypeValDecimalWide: {
+            // The wide sibling of the arm above: same two accepted kinds,
+            // same integer-rendered-to-text route, the wide parser. The
+            // result is the compile-time constant every per-row comparison
+            // then runs against, exactly as for the narrow type.
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
+            }
+            // The digit text when the literal carries one - `int_val`
+            // wraps past 64 bits and a wide column exists precisely for
+            // values past 64 bits, so the spelling is the value here.
+            const std::string text =
+                val.type == parser::ValueType::kInt
+                    ? (val.raw_int_text.empty() ? std::to_string(val.int_val)
+                                                : val.raw_int_text)
+                    : val.str_val;
+
+            auto unscaled = ParseDecimalLiteralWide(text, precision, scale);
+            if (!unscaled.ok()) return unscaled.status();
+            val.type = parser::ValueType::kDecimalWide;
+            val.int_val = Int128Low(unscaled.value());
+            val.dec_hi = Int128High(unscaled.value());
             val.scale = scale;
             val.str_val.clear();
             val.raw_int_text.clear();
@@ -895,6 +988,10 @@ std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value) {
         // it is holding.
         case parser::ValueType::kDecimal:
             return FormatDecimal(value.int_val, value.scale);
+        case parser::ValueType::kDecimalWide:
+            // Carries its own scale like the narrow kind, so it too
+            // ignores `type_val` and renders itself.
+            return FormatDecimalWide(Int128FromHalves(value.dec_hi, value.int_val), value.scale);
         // Rendered as written, sigil restored. Only a plan printed from a
         // declared pattern's body reaches this - no row ever holds one - and
         // printing `$flag` is what makes such a plan readable back against
@@ -949,6 +1046,25 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     if (lhs.type == parser::ValueType::kDecimal || rhs.type == parser::ValueType::kDecimal) {
         if (lhs.type != rhs.type || lhs.scale != rhs.scale) return false;
         return CompareInt(lhs.int_val, rhs.int_val, op);
+    }
+    // The wide decimal: the same equal-kind, equal-scale contract - and
+    // since a narrow and a wide column can never share a (p, s), a
+    // cross-width operand pair is a kind mismatch here by construction,
+    // answered as the non-match every other mismatch gets.
+    if (lhs.type == parser::ValueType::kDecimalWide ||
+        rhs.type == parser::ValueType::kDecimalWide) {
+        if (lhs.type != rhs.type || lhs.scale != rhs.scale) return false;
+        const Int128 a = Int128FromHalves(lhs.dec_hi, lhs.int_val);
+        const Int128 b = Int128FromHalves(rhs.dec_hi, rhs.int_val);
+        switch (op) {
+            case parser::CompareOp::kEq: return a == b;
+            case parser::CompareOp::kNeq: return a != b;
+            case parser::CompareOp::kLt: return a < b;
+            case parser::CompareOp::kLte: return a <= b;
+            case parser::CompareOp::kGt: return a > b;
+            case parser::CompareOp::kGte: return a >= b;
+        }
+        return false;
     }
     // DATE and TIMESTAMP arrive here as the integers they are - epoch days
     // and epoch microseconds - so they need no arm of their own. That is

@@ -98,6 +98,9 @@ std::int16_t WireTypeLen(std::uint32_t type_val) noexcept {
         // scale is in the description's type_mod, not in the value.
         case kTypeValTimestamp:
         case kTypeValDecimal: return 8;
+        // The wide decimal: the int128 unscaled value, 16 LE bytes - the
+        // "own type_oid and 16-byte width" §6's DECIMAL decision reserved.
+        case catalog::kTypeValDecimalWide: return 16;
         // char and varchar are both variable **on the wire**, whatever they
         // occupy in a tuple: a char column's stored width is a schema fact
         // and its value's length is not.
@@ -117,7 +120,9 @@ std::vector<FieldDescription> DescribeSchema(const catalog::Schema& schema) {
         // two readers (TY02's helpers), zero for every other type. Not
         // col.len unconditionally - a char column's len is a storage width,
         // which the header says this description deliberately does not leak.
-        if (col.type_val == kTypeValDecimal) f.type_mod = col.len;
+        if (col.type_val == kTypeValDecimal || col.type_val == catalog::kTypeValDecimalWide) {
+            f.type_mod = col.len;
+        }
         // Column 0 is the Keystone id on every user relation (invariant 11,
         // protocol.md §6), and it is the one field a client can rely on
         // without reading the schema.
@@ -190,6 +195,30 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
             }
             PutLE(out, static_cast<std::uint32_t>(8), 4);
             PutLE(out, value.int_val, 8);
+            return Status::OK();
+        }
+        case catalog::kTypeValDecimalWide: {
+            if (value.type == parser::ValueType::kParam) {
+                return Status::Unsupported(
+                    "wire row codec: parameter '$" + value.param_name() +
+                    "' has no value to encode; a declaration is not an execution");
+            }
+            if (value.type != parser::ValueType::kDecimalWide) {
+                return Status::InvalidArgument(
+                    "wire row codec: wide decimal column did not receive a wide decimal value");
+            }
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            if (value.scale != scale) {
+                return Status::InvalidArgument(
+                    "wire row codec: decimal value at scale " + std::to_string(value.scale) +
+                    " for a column of scale " + std::to_string(scale));
+            }
+            // Both halves, low first - 16 LE bytes, the value the tuple
+            // holds, with the scale in the description's type_mod exactly
+            // as the 8-byte type carries it.
+            PutLE(out, static_cast<std::uint32_t>(16), 4);
+            PutLE(out, value.int_val, 8);
+            PutLE(out, value.dec_hi, 8);
             return Status::OK();
         }
         case kTypeValUint64: {
@@ -375,6 +404,16 @@ StatusOr<std::uint64_t> DecodeUint64(std::span<const std::byte> bytes) {
 
 std::string_view DecodeText(std::span<const std::byte> bytes) {
     return std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
+StatusOr<Int128> DecodeDecimalWide(std::span<const std::byte> bytes) {
+    if (bytes.size() != 16) {
+        return Status::Corruption("wire row codec: wide decimal field of " +
+                                  std::to_string(bytes.size()) + " bytes");
+    }
+    const auto lo = static_cast<std::int64_t>(LoadLE(bytes.subspan(0, 8)));
+    const auto hi = static_cast<std::int64_t>(LoadLE(bytes.subspan(8, 8)));
+    return Int128FromHalves(hi, lo);
 }
 
 }  // namespace kds::wire

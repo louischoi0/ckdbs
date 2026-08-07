@@ -200,6 +200,56 @@ TEST(TypeLiteralsTest, TheWidestDecimalRoundTrips) {
     EXPECT_EQ(unscaled.value(), 999'999'999'999'999'999LL);
 }
 
+// ---- The wide decimal (TY2's separate int128 type, 2026-08-07) -----------
+
+TEST(TypeLiteralsTest, AWideDecimalParsesBeyondInt64AndRendersBack) {
+    // 24 significant digits - unrepresentable in the 8-byte type by
+    // construction - through the shared digit walk and back through the
+    // hand-peeled renderer.
+    auto unscaled = ParseDecimalLiteralWide("12345678901234567890.1234", 24, 4);
+    ASSERT_TRUE(unscaled.ok()) << unscaled.status().message();
+    EXPECT_EQ(FormatDecimalWide(unscaled.value(), 4), "12345678901234567890.1234");
+
+    auto negative = ParseDecimalLiteralWide("-0.0001", 24, 4);
+    ASSERT_TRUE(negative.ok());
+    EXPECT_EQ(FormatDecimalWide(negative.value(), 4), "-0.0001");
+}
+
+TEST(TypeLiteralsTest, TheWidestWideDecimalIs38Nines) {
+    // p = 38 because 10^38 - 1 < 2^127; one more digit does not fit and is
+    // refused by the digit cap, not by a wrapped value.
+    const std::string nines(38, '9');
+    auto unscaled = ParseDecimalLiteralWide(nines, 38, 0);
+    ASSERT_TRUE(unscaled.ok()) << unscaled.status().message();
+    EXPECT_EQ(FormatDecimalWide(unscaled.value(), 0), nines);
+    EXPECT_EQ(FormatDecimalWide(-unscaled.value(), 0), "-" + nines);
+
+    EXPECT_FALSE(ParseDecimalLiteralWide(std::string(39, '9'), 38, 0).ok());
+}
+
+TEST(TypeLiteralsTest, WideBoundsAreExclusiveOfTheNarrowOnes) {
+    // One declaration selects exactly one type: the wide checker refuses
+    // p <= 18 toward `decimal(p, s)` and p > 38 outright, and the scale
+    // rule is the same rule at either width.
+    EXPECT_FALSE(CheckDecimalWidePrecisionScale(18, 0).ok());
+    EXPECT_FALSE(CheckDecimalWidePrecisionScale(39, 0).ok());
+    EXPECT_FALSE(CheckDecimalWidePrecisionScale(24, 25).ok());
+    EXPECT_TRUE(CheckDecimalWidePrecisionScale(19, 0).ok());
+    EXPECT_TRUE(CheckDecimalWidePrecisionScale(38, 38).ok());
+}
+
+TEST(TypeLiteralsTest, TheWideParserSharesTheNarrowRules) {
+    // Same body, wider register: scale overflow, precision overflow and
+    // malformed input answer exactly as the narrow parser answers them.
+    EXPECT_FALSE(ParseDecimalLiteralWide("1.234", 24, 2).ok());   // scale
+    EXPECT_FALSE(ParseDecimalLiteralWide(std::string(25, '1'), 24, 0).ok());  // precision
+    EXPECT_FALSE(ParseDecimalLiteralWide("12.3.4", 24, 2).ok());  // malformed
+    // And a short literal scales up exactly.
+    auto scaled = ParseDecimalLiteralWide("5", 20, 3);
+    ASSERT_TRUE(scaled.ok());
+    EXPECT_EQ(FormatDecimalWide(scaled.value(), 3), "5.000");
+}
+
 }  // namespace
 }  // namespace kds::exec
 

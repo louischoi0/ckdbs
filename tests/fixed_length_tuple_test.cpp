@@ -349,11 +349,13 @@ TEST_F(FixedLengthTupleTest, TheThreeNewTypesRoundTripThroughTheCatalog) {
 }
 
 TEST_F(FixedLengthTupleTest, DecimalBoundsAreRefusedAtCreateTable) {
-    // TY2: 1 <= p <= 18, 0 <= s <= p. Beyond 18 is a future int128 type,
-    // never a widening of this one.
-    for (const char* decl : {"decimal(19, 0)", "decimal(0, 0)", "decimal(5, 6)"}) {
+    // TY2: 1 <= p <= 18 for the 8-byte type, 19 <= p <= 38 for the 16-byte
+    // one (its once-future int128 type, built 2026-08-07), 0 <= s <= p for
+    // both. `decimal(19, 0)` pinned the old ceiling and now *creates*; the
+    // refusals live at the edges that remain.
+    for (const char* decl : {"decimal(39, 0)", "decimal(0, 0)", "decimal(5, 6)"}) {
         const std::string sql =
-            std::string("CREATE TABLE bad_") + (decl[8] == '1' ? "a" : "b") +
+            std::string("CREATE TABLE bad_") + (decl[8] == '3' ? "a" : "b") +
             " (id int64, x " + decl + ")";
         const std::string reply = Run(sql);
         EXPECT_EQ(reply.substr(0, 3), "ERR") << decl << " -> " << reply;

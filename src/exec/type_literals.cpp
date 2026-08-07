@@ -189,9 +189,37 @@ Status CheckDecimalPrecisionScale(std::uint32_t precision, std::uint32_t scale) 
     return Status::OK();
 }
 
-StatusOr<std::int64_t> ParseDecimalLiteral(std::string_view text, std::uint8_t precision,
-                                            std::uint8_t scale) {
-    if (Status s = CheckDecimalPrecisionScale(precision, scale); !s.ok()) return s;
+Status CheckDecimalWidePrecisionScale(std::uint32_t precision, std::uint32_t scale) {
+    // Exclusive of the narrow bounds on purpose: one declaration selects
+    // exactly one type, so a `decimal128(10, 2)` is refused toward the
+    // 8-byte type rather than stored twice as wide.
+    if (precision < kMinDecimalPrecisionWide || precision > kMaxDecimalPrecisionWide) {
+        return Status::InvalidArgument(
+            "wide decimal precision " + std::to_string(precision) + " is outside " +
+            std::to_string(kMinDecimalPrecisionWide) + ".." +
+            std::to_string(kMaxDecimalPrecisionWide) + "; up to " +
+            std::to_string(kMaxDecimalPrecision) +
+            " digits is the 8-byte decimal(p, s), and beyond " +
+            std::to_string(kMaxDecimalPrecisionWide) + " digits exceeds an int128");
+    }
+    if (scale > precision) {
+        return Status::InvalidArgument("decimal scale " + std::to_string(scale) +
+                                        " exceeds its precision " + std::to_string(precision));
+    }
+    return Status::OK();
+}
+
+namespace {
+
+// The one digit walk, shared by both widths (TY01's one-parser rule
+// holding across the width split). `Acc` is the accumulator - int64 for
+// the 8-byte type, Int128 for the 16-byte one - and `digit_cap` the
+// representation's own ceiling, which backstops the column's `precision`
+// so the multiply below can never overflow: an Acc that holds 10^cap - 1
+// gains one decimal digit at a time and is range-checked before each.
+template <typename Acc>
+StatusOr<Acc> ParseDecimalInto(std::string_view text, std::uint8_t precision,
+                               std::uint8_t scale, std::uint8_t digit_cap) {
     if (text.empty()) return BadLiteral(text, "decimal");
 
     std::size_t at = 0;
@@ -219,7 +247,7 @@ StatusOr<std::int64_t> ParseDecimalLiteral(std::string_view text, std::uint8_t p
             "; this engine does not round a literal to make it fit");
     }
 
-    std::int64_t unscaled = 0;
+    Acc unscaled = 0;
     std::uint32_t digits = 0;
     const auto absorb = [&](std::string_view run) -> Status {
         for (char c : run) {
@@ -227,11 +255,10 @@ StatusOr<std::int64_t> ParseDecimalLiteral(std::string_view text, std::uint8_t p
             // Leading zeros are not significant, so `'0.05'` at scale 2 is
             // two digits and fits a decimal(2,2).
             if (digits != 0 || c != '0') ++digits;
-            if (digits > kMaxDecimalPrecision) {
+            if (digits > digit_cap) {
                 return Status::OutOfRange("'" + std::string(text) +
                                            "' has more significant digits than a decimal can "
-                                           "hold (max " + std::to_string(kMaxDecimalPrecision) +
-                                           ")");
+                                           "hold (max " + std::to_string(digit_cap) + ")");
             }
             unscaled = unscaled * 10 + (c - '0');
         }
@@ -253,6 +280,20 @@ StatusOr<std::int64_t> ParseDecimalLiteral(std::string_view text, std::uint8_t p
                                    std::to_string(precision));
     }
     return negative ? -unscaled : unscaled;
+}
+
+}  // namespace
+
+StatusOr<std::int64_t> ParseDecimalLiteral(std::string_view text, std::uint8_t precision,
+                                            std::uint8_t scale) {
+    if (Status s = CheckDecimalPrecisionScale(precision, scale); !s.ok()) return s;
+    return ParseDecimalInto<std::int64_t>(text, precision, scale, kMaxDecimalPrecision);
+}
+
+StatusOr<Int128> ParseDecimalLiteralWide(std::string_view text, std::uint8_t precision,
+                                         std::uint8_t scale) {
+    if (Status s = CheckDecimalWidePrecisionScale(precision, scale); !s.ok()) return s;
+    return ParseDecimalInto<Int128>(text, precision, scale, kMaxDecimalPrecisionWide);
 }
 
 std::string FormatDate(std::int32_t epoch_day) {
@@ -297,6 +338,30 @@ std::string FormatDecimal(std::int64_t unscaled, std::uint8_t scale) {
     // **Exactly `scale` fractional digits, trailing zeros included.** `12.30`
     // and `12.3` are the same number and not the same value here: the scale
     // is part of what the column declared.
+    digits.insert(digits.size() - scale, ".");
+    return negative ? "-" + digits : digits;
+}
+
+std::string FormatDecimalWide(Int128 unscaled, std::uint8_t scale) {
+    const bool negative = unscaled < 0;
+    // Through unsigned, so the minimum value does not overflow its own
+    // negation - the same trick the narrow formatter uses, one type wider.
+    unsigned __int128 magnitude = negative
+                                      ? (~static_cast<unsigned __int128>(unscaled) + 1)
+                                      : static_cast<unsigned __int128>(unscaled);
+    // std::to_string has no int128 overload, so the digits are peeled by
+    // hand - at most 39 of them, and rendering runs once per emitted value
+    // at the boundary, never per row scanned.
+    std::string digits;
+    do {
+        digits.insert(digits.begin(), static_cast<char>('0' + static_cast<int>(magnitude % 10)));
+        magnitude /= 10;
+    } while (magnitude != 0);
+
+    if (scale == 0) return negative ? "-" + digits : digits;
+    if (digits.size() <= scale) {
+        digits.insert(0, static_cast<std::size_t>(scale) + 1 - digits.size(), '0');
+    }
     digits.insert(digits.size() - scale, ".");
     return negative ? "-" + digits : digits;
 }

@@ -55,6 +55,18 @@ std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstVa
             key.str_val = std::to_string(value.scale);
             return key;
         }
+        case parser::ValueType::kDecimalWide: {
+            // The wide kind's high half joins the scale in the string
+            // field - `int_val` holds the low 64 bits and cannot carry
+            // both. The kind is part of the key, so a wide value can never
+            // collide with a narrow one whatever the strings say.
+            CabinKey key;
+            key.cabin_id = cabin_id;
+            key.type = value.type;
+            key.int_val = value.int_val;
+            key.str_val = std::to_string(value.scale) + "," + std::to_string(value.dec_hi);
+            return key;
+        }
         case parser::ValueType::kNull:
         case parser::ValueType::kParam:
             // Refused, for the reasons the header gives. Both are silent

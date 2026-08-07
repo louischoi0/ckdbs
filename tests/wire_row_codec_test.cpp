@@ -340,6 +340,53 @@ TEST(WireRowBatchTest, ADecimalWhoseScaleDisagreesWithItsColumnIsRefused) {
               StatusCode::kInvalidArgument);
 }
 
+TEST(WireRowBatchTest, AWideDecimalRoundTripsAsSixteenBytes) {
+    // TY2's separate 16-byte type on the wire: its own type_oid, its own
+    // width, the same type_mod convention - what §6's DECIMAL decision
+    // reserved for it, now real.
+    catalog::SysColumnRow col = Column(0, "nav", catalog::kTypeValDecimalWide);
+    col.len = catalog::PackDecimalLen(24, 2);
+    const auto schema = SchemaOf({col});
+
+    // 2^64 + 1 unscaled at scale 2 - a value with both halves non-zero -
+    // and a negative one.
+    parser::AstValue wide;
+    wide.type = parser::ValueType::kDecimalWide;
+    wide.dec_hi = 1;
+    wide.int_val = 1;
+    wide.scale = 2;
+    parser::AstValue negative;
+    negative.type = parser::ValueType::kDecimalWide;
+    negative.dec_hi = -1;
+    negative.int_val = -42;
+    negative.scale = 2;
+
+    RowBatchWriter writer;
+    ASSERT_TRUE(writer.AppendRow(schema, std::vector<parser::AstValue>{wide}).ok());
+    ASSERT_TRUE(writer.AppendRow(schema, std::vector<parser::AstValue>{negative}).ok());
+
+    const auto payload = writer.Finish();
+    auto rows = DecodeRowBatch(payload, 1);
+    ASSERT_TRUE(rows.ok()) << rows.status().message();
+    ASSERT_EQ(rows.value()[0][0].bytes.size(), 16u);
+
+    const Int128 a = DecodeDecimalWide(rows.value()[0][0].bytes).value();
+    EXPECT_EQ(Int128High(a), 1);
+    EXPECT_EQ(Int128Low(a), 1);
+    const Int128 b = DecodeDecimalWide(rows.value()[1][0].bytes).value();
+    EXPECT_EQ(b, static_cast<Int128>(-42));
+
+    // The description carries the wide type's (p, s) exactly as the
+    // narrow one's, and its 16-byte fixed width.
+    std::vector<std::byte> desc;
+    EncodeRowDescription(DescribeSchema(schema), desc);
+    auto fields = DecodeRowDescription(desc);
+    ASSERT_TRUE(fields.ok());
+    EXPECT_EQ(fields.value()[0].type_len, 16);
+    EXPECT_EQ(catalog::DecimalPrecisionOf(fields.value()[0].type_mod), 24);
+    EXPECT_EQ(catalog::DecimalScaleOf(fields.value()[0].type_mod), 2);
+}
+
 TEST(WireRowBatchTest, ADateAndATimestampRoundTripAsEpochIntegers) {
     // Both decode as kInt (spec-types.md TY5) and ride the int arm at
     // their storage widths. Rendering into a calendar is the client's act,

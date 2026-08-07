@@ -300,7 +300,7 @@ StatusOr<SysFkeyRow> SysFkeyRow::Decode(std::span<const std::byte> bytes) {
 }
 
 std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name) {
-    if (col.type_val == kTypeValDecimal) {
+    if (col.type_val == kTypeValDecimal || col.type_val == kTypeValDecimalWide) {
         return std::string(base_name) + "(" + std::to_string(DecimalPrecisionOf(col.len)) + "," +
                std::to_string(DecimalScaleOf(col.len)) + ")";
     }

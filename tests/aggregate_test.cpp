@@ -1114,6 +1114,92 @@ TEST(AggregateTest, AvgDistinctMergeCountsAValueInBothPartitionsOnce) {
     EXPECT_EQ(rows[0], (std::vector<std::string>{"20.00"}));
 }
 
+// ---- The wide decimal in the fold (spec-types.md TY2, 2026-08-07) --------
+
+parser::AstValue DecWideVal(std::int64_t hi, std::int64_t lo, std::uint8_t scale) {
+    parser::AstValue out;
+    out.type = parser::ValueType::kDecimalWide;
+    out.dec_hi = hi;
+    out.int_val = lo;
+    out.scale = scale;
+    return out;
+}
+
+AggregateItem WideItem(parser::AggFunc func, std::uint16_t col_pos, std::uint8_t scale,
+                       bool distinct = false) {
+    AggregateItem item = Agg(func, col_pos, catalog::kTypeValDecimalWide);
+    item.scale = scale;
+    item.distinct = distinct;
+    return item;
+}
+
+TEST(AggregateTest, WideSumFoldsThroughTheInt128Accumulator) {
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kSum, 0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    // Each addend is 2^64 - beyond any int64 - so the sum being 2^65 means
+    // the wide register carried it.
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 0, 0)}).ok());
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"36893488147419103232"}));
+}
+
+TEST(AggregateTest, WideSumOverflowFailsTheStatementLikeTheNarrowOne) {
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kSum, 0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    // int128 max is (hi = INT64_MAX, lo = all ones); twice exceeds it.
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(INT64_MAX, -1, 0)}).ok());
+    const Status overflowed = fold.Row(agg, {DecWideVal(INT64_MAX, -1, 0)});
+    ASSERT_FALSE(overflowed.ok());
+    EXPECT_EQ(overflowed.code(), StatusCode::kOutOfRange);
+    EXPECT_NE(overflowed.message().find("int128"), std::string::npos) << overflowed.message();
+}
+
+TEST(AggregateTest, WideAvgTiesRoundHalfToEvenBeyondInt64) {
+    // sum = 2^65 + 1, count 2: the exact quotient is 2^64 + 0.5, a tie
+    // whose even neighbor is 2^64 itself - only reachable through the wide
+    // divide, since every number involved exceeds int64.
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kAvg, 0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 1, 0)}).ok());
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"18446744073709551616"}));
+}
+
+TEST(AggregateTest, WideDistinctMergeCountsAValueInBothPartitionsOnce) {
+    // The union rule over 17-byte entries: the shared 2^64 contributes
+    // once, so AVG(DISTINCT) divides 2^64 + 2^65 by 2 - and both the
+    // decode and the accumulator have to be wide for that to come out.
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kAvg, 0, 0, /*distinct=*/true));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    ASSERT_TRUE(lfold.Row(left, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(rfold.Row(right, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(rfold.Row(right, {DecWideVal(2, 0, 0)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    // (2^64 + 2^65) / 2 = 3 * 2^63 = 27670116110564327424.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"27670116110564327424"}));
+}
+
 // ---- Malformed specs -----------------------------------------------------
 
 TEST(AggregateTest, ASpecSelectingANonGroupingColumnIsRefused) {

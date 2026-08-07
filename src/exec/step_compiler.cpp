@@ -139,15 +139,33 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t by
     // or invents them - TY6 defers that decision whole, and a residual is
     // the worst place to pre-empt it.
     const catalog::SysColumnRow& rhs = ColumnAt(scope, pred.rhs.column);
-    if (lhs.type_val == catalog::kTypeValDecimal && rhs.type_val == catalog::kTypeValDecimal &&
-        catalog::DecimalScaleOf(lhs.len) != catalog::DecimalScaleOf(rhs.len)) {
-        return Status::Unsupported(
-            "cannot compare decimal columns of different scale: '" +
-            std::string(catalog::NameView(lhs.name)) + "' has scale " +
-            std::to_string(catalog::DecimalScaleOf(lhs.len)) + " and '" +
-            std::string(catalog::NameView(rhs.name)) + "' has scale " +
-            std::to_string(catalog::DecimalScaleOf(rhs.len)) +
-            "; this engine does not rescale" + Position(byte_offset));
+    const auto is_decimal = [](std::uint32_t tv) {
+        return tv == catalog::kTypeValDecimal || tv == catalog::kTypeValDecimalWide;
+    };
+    if (is_decimal(lhs.type_val) && is_decimal(rhs.type_val)) {
+        // Different *widths* are refused before scales are even looked at:
+        // an 8-byte and a 16-byte decimal can never share a (p, s) - the
+        // width is a function of p - and letting the pair through would
+        // reach CompareValues as a kind mismatch, which answers false per
+        // row. A statement that can only ever answer no rows is a
+        // statement to refuse with a reason, not to run.
+        if (lhs.type_val != rhs.type_val) {
+            return Status::Unsupported(
+                "cannot compare decimal columns of different width: '" +
+                std::string(catalog::NameView(lhs.name)) + "' and '" +
+                std::string(catalog::NameView(rhs.name)) +
+                "' are on opposite sides of the 18-digit precision split; this engine does "
+                "not rescale" + Position(byte_offset));
+        }
+        if (catalog::DecimalScaleOf(lhs.len) != catalog::DecimalScaleOf(rhs.len)) {
+            return Status::Unsupported(
+                "cannot compare decimal columns of different scale: '" +
+                std::string(catalog::NameView(lhs.name)) + "' has scale " +
+                std::to_string(catalog::DecimalScaleOf(lhs.len)) + " and '" +
+                std::string(catalog::NameView(rhs.name)) + "' has scale " +
+                std::to_string(catalog::DecimalScaleOf(rhs.len)) +
+                "; this engine does not rescale" + Position(byte_offset));
+        }
     }
     return Status::OK();
 }
@@ -182,7 +200,7 @@ Status CheckAggregateArgType(const parser::SelectItem& item, std::uint32_t type_
                 "; it is SUM over one wearing a divide, and a sum of dates is a statement "
                 "nobody meant");
         }
-        if (type_val != catalog::kTypeValDecimal) {
+        if (type_val != catalog::kTypeValDecimal && type_val != catalog::kTypeValDecimalWide) {
             return Status::InvalidArgument(
                 "AVG requires a decimal column (" + label + ")" + Position(item.byte_offset) +
                 "; the answer is given at the column's declared scale, and this column "
@@ -214,7 +232,10 @@ Status CheckAggregateArgType(const parser::SelectItem& item, std::uint32_t type_
                                         "; MIN and MAX over one are exact and are what this "
                                         "engine offers");
     }
-    if (type_val != catalog::kTypeValDecimal && !catalog::IsIntegerTypeVal(type_val)) {
+    // The wide decimal sums too, through an int128 accumulator of its own
+    // (aggregate.cpp) - same checked-addition discipline, wider register.
+    if (type_val != catalog::kTypeValDecimal && type_val != catalog::kTypeValDecimalWide &&
+        !catalog::IsIntegerTypeVal(type_val)) {
         return Status::InvalidArgument("SUM requires a signed integer or decimal column (" +
                                         label + ")" + Position(item.byte_offset));
     }
@@ -264,7 +285,8 @@ StatusOr<AggregateSpec> CompileAggregate(const Scope& scope, const parser::Selec
         out.ref = ref.value();
         const catalog::SysColumnRow& arg = ColumnAt(scope, out.ref);
         out.type_val = arg.type_val;
-        if (arg.type_val == catalog::kTypeValDecimal) {
+        if (arg.type_val == catalog::kTypeValDecimal ||
+            arg.type_val == catalog::kTypeValDecimalWide) {
             out.scale = catalog::DecimalScaleOf(arg.len);
         }
 

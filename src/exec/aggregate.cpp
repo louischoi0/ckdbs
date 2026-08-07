@@ -23,6 +23,7 @@ constexpr char kTagNull = '\0';
 constexpr char kTagInt = '\1';
 constexpr char kTagStr = '\2';
 constexpr char kTagDecimal = '\3';
+constexpr char kTagDecimalWide = '\4';
 
 // Renders one group's key values for an error message.
 std::string DescribeGroup(const std::vector<parser::AstValue>& keys) {
@@ -145,6 +146,20 @@ Status Aggregator::EncodeValue(const parser::AstValue& value, std::string& out) 
             return Status::OK();
         }
 
+        case parser::ValueType::kDecimalWide: {
+            // The 16-byte kind: tag, scale, then both halves, low first -
+            // its own tag for the same reason the narrow decimal has one,
+            // and 16 value bytes so two wide values can never collide with
+            // anything narrower.
+            out.push_back(kTagDecimalWide);
+            out.push_back(static_cast<char>(value.scale));
+            char bytes[2 * sizeof(std::int64_t)];
+            std::memcpy(bytes, &value.int_val, sizeof(std::int64_t));
+            std::memcpy(bytes + sizeof(std::int64_t), &value.dec_hi, sizeof(std::int64_t));
+            out.append(bytes, sizeof(bytes));
+            return Status::OK();
+        }
+
         case parser::ValueType::kStr: {
             out.push_back(kTagStr);
             const std::uint32_t len = static_cast<std::uint32_t>(value.str_val.size());
@@ -259,7 +274,23 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
                 // its own: its `int_val` is the unscaled integer, every row
                 // of one column carries the same scale, and so the sum of
                 // the unscaled values is the unscaled sum (spec-types.md
-                // §3.2). The scale is re-attached once, in `Finish`.
+                // §3.2). The scale is re-attached once, in `Finish`. The
+                // wide decimal folds beside them into its own int128
+                // accumulator - the int64 one is a product contract and
+                // does not widen.
+                if (value.type == parser::ValueType::kDecimalWide) {
+                    if (__builtin_add_overflow(state.sum_wide,
+                                               Int128FromHalves(value.dec_hi, value.int_val),
+                                               &state.sum_wide)) {
+                        return Status::OutOfRange(
+                            "SUM overflow in " + LabelOf(i) + DescribeGroup(group.keys) +
+                            "; the accumulator is int128 and a wrapped sum is wrong in a way "
+                            "no reader can detect");
+                    }
+                    if (item.func == parser::AggFunc::kAvg) ++state.count;
+                    state.has_value = true;
+                    break;
+                }
                 if (value.type != parser::ValueType::kInt &&
                     value.type != parser::ValueType::kDecimal) {
                     return Status::InvalidArgument(LabelOf(i) + " read a non-numeric value");
@@ -377,6 +408,13 @@ Status Aggregator::Finish(const AggregateSink& emit) {
                     // accumulator holds unscaled integers throughout, so
                     // this is the one point where the answer stops being a
                     // running total and becomes a decimal again.
+                    if (item.type_val == catalog::kTypeValDecimalWide) {
+                        out.type = parser::ValueType::kDecimalWide;
+                        out.scale = item.scale;
+                        out.int_val = Int128Low(state.sum_wide);
+                        out.dec_hi = Int128High(state.sum_wide);
+                        break;
+                    }
                     if (item.type_val == catalog::kTypeValDecimal) {
                         out.type = parser::ValueType::kDecimal;
                         out.scale = item.scale;
@@ -402,24 +440,38 @@ Status Aggregator::Finish(const AggregateSink& emit) {
                     // be computed exactly here is that both operands are
                     // integers: no float touches the value at any point.
                     //
-                    // C++ integer division truncates toward zero and the
-                    // remainder carries the dividend's sign, so the
-                    // comparison runs on magnitudes and the correction is
-                    // applied in the sum's direction. `q` cannot overflow
-                    // on correction: a nonzero remainder needs count >= 2,
-                    // which bounds |q| at half the range.
+                    // Division truncates toward zero and the remainder
+                    // carries the dividend's sign, so the comparison runs
+                    // on magnitudes and the correction is applied in the
+                    // sum's direction. `q` cannot overflow on correction: a
+                    // nonzero remainder needs count >= 2, which bounds |q|
+                    // at half the range. One body, both widths - the
+                    // arithmetic is identical, only the register is wider.
                     const std::int64_t count = state.count;  // > 0: has_value
-                    std::int64_t q = state.sum / count;
-                    const std::int64_t r = state.sum % count;
-                    const std::uint64_t twice_r =
-                        2 * static_cast<std::uint64_t>(r < 0 ? -r : r);
-                    const std::uint64_t ucount = static_cast<std::uint64_t>(count);
-                    const std::int64_t away = state.sum < 0 ? -1 : 1;
-                    if (twice_r > ucount || (twice_r == ucount && (q % 2) != 0)) {
-                        q += away;
+                    const auto divide = [count](auto sum) {
+                        using Acc = decltype(sum);
+                        // The magnitude math runs unsigned and 128 bits
+                        // wide for both widths - |r| < count fits either
+                        // way, and one width of scratch is one case fewer.
+                        using UAcc = unsigned __int128;
+                        Acc q = sum / count;
+                        const Acc r = sum % count;
+                        const UAcc twice_r = 2 * static_cast<UAcc>(r < 0 ? -r : r);
+                        const UAcc ucount = static_cast<UAcc>(count);
+                        if (twice_r > ucount || (twice_r == ucount && (q % 2) != 0)) {
+                            q += sum < 0 ? -1 : 1;
+                        }
+                        return q;
+                    };
+                    if (item.type_val == catalog::kTypeValDecimalWide) {
+                        const Int128 q = divide(state.sum_wide);
+                        out.type = parser::ValueType::kDecimalWide;
+                        out.int_val = Int128Low(q);
+                        out.dec_hi = Int128High(q);
+                    } else {
+                        out.type = parser::ValueType::kDecimal;
+                        out.int_val = divide(state.sum);
                     }
-                    out.type = parser::ValueType::kDecimal;
-                    out.int_val = q;
                     out.scale = item.scale;
                     break;
                 }
@@ -461,6 +513,20 @@ bool DecodeInt(std::string_view encoded, std::int64_t& out) {
     return false;
 }
 
+// The wide entry: tag, scale byte, then both halves, low first - the
+// int128 the wide accumulator folds.
+bool DecodeInt128(std::string_view encoded, Int128& out) {
+    if (encoded.size() != 2 + 2 * sizeof(std::int64_t) || encoded[0] != kTagDecimalWide) {
+        return false;
+    }
+    std::int64_t lo = 0;
+    std::int64_t hi = 0;
+    std::memcpy(&lo, encoded.data() + 2, sizeof(lo));
+    std::memcpy(&hi, encoded.data() + 2 + sizeof(lo), sizeof(hi));
+    out = Int128FromHalves(hi, lo);
+    return true;
+}
+
 }  // namespace
 
 Status Aggregator::MergeGroup(Group& into, Group& from) {
@@ -498,15 +564,26 @@ Status Aggregator::MergeGroup(Group& into, Group& from) {
                     // SUM(DISTINCT) and AVG(DISTINCT) both fold the
                     // newcomer's value; AVG counts it too, because its
                     // divisor is the union's size and the union is being
-                    // built right here.
+                    // built right here. The entry's own tag says which
+                    // accumulator it belongs to, exactly as the fold's
+                    // value kind did.
                     std::int64_t value = 0;
-                    if (!DecodeInt(entry, value)) {
+                    Int128 wide = 0;
+                    if (DecodeInt(entry, value)) {
+                        if (__builtin_add_overflow(dst.sum, value, &dst.sum)) {
+                            return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
+                                                      DescribeGroup(into.keys) +
+                                                      " while merging");
+                        }
+                    } else if (DecodeInt128(entry, wide)) {
+                        if (__builtin_add_overflow(dst.sum_wide, wide, &dst.sum_wide)) {
+                            return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
+                                                      DescribeGroup(into.keys) +
+                                                      " while merging");
+                        }
+                    } else {
                         return Status::InvalidArgument(
                             "a DISTINCT merge met a non-integer value in " + LabelOf(i));
-                    }
-                    if (__builtin_add_overflow(dst.sum, value, &dst.sum)) {
-                        return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
-                                                  DescribeGroup(into.keys) + " while merging");
                     }
                     if (item.func == parser::AggFunc::kAvg) ++dst.count;
                 }
@@ -528,7 +605,11 @@ Status Aggregator::MergeGroup(Group& into, Group& from) {
                 dst.count += src.count;
                 [[fallthrough]];
             case parser::AggFunc::kSum:
-                if (__builtin_add_overflow(dst.sum, src.sum, &dst.sum)) {
+                if (__builtin_add_overflow(dst.sum, src.sum, &dst.sum) ||
+                    __builtin_add_overflow(dst.sum_wide, src.sum_wide, &dst.sum_wide)) {
+                    // Both accumulators merge unconditionally - the one the
+                    // item does not use is adding zeros - so this line does
+                    // not need to know the item's width.
                     return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
                                               DescribeGroup(into.keys) + " while merging");
                 }

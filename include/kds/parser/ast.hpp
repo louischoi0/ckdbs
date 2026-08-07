@@ -66,7 +66,14 @@ namespace kds::parser {
 // `kInt` and differ only in how they render, which happens at the emission
 // boundary and not in the value. A decimal cannot reuse it, because its
 // unscaled integer means nothing without the scale beside it.
-enum class ValueType { kInt, kStr, kNull, kParam, kDecimal };
+// `kDecimalWide` is the 16-byte decimal's kind (`decimal(p, s)`, p 19..38,
+// stored as int128 - docs/spec-types.md TY2's separate type, built
+// 2026-08-07). A kind of its own rather than a width flag on `kDecimal`,
+// deliberately: one kind hiding two widths would make every consumer that
+// reads `int_val` silently truncate a wide value, where a new enumerator
+// makes the compiler surface each switch that has to decide. The value is
+// `Int128FromHalves(dec_hi, int_val)`.
+enum class ValueType { kInt, kStr, kNull, kParam, kDecimal, kDecimalWide };
 
 struct AstValue {
     ValueType type = ValueType::kNull;
@@ -105,14 +112,23 @@ struct AstValue {
     // int_val is how that full range survives.
     std::string raw_int_text;
 
-    // kDecimal only: the scale its `int_val` is unscaled by, so `1234` at
-    // scale 2 is 12.34 (docs/spec-types.md TY2/TY5).
+    // kDecimal and kDecimalWide: the scale the unscaled value is scaled
+    // by, so `1234` at scale 2 is 12.34 (docs/spec-types.md TY2/TY5).
     //
     // A separate field rather than a second integer packed into `int_val`,
     // because the unscaled value needs the whole 64 bits - `p` may be 18 -
     // and because a value that carries its own scale is what lets
     // `CompareValues` assert the two sides agree instead of guessing.
     std::uint8_t scale = 0;
+
+    // kDecimalWide only: the high 64 bits of the int128 unscaled value,
+    // whose low 64 ride in `int_val` - `Int128FromHalves(dec_hi, int_val)`
+    // is the value, and `int128.hpp`'s helpers are the one spelling of
+    // which half is which. 8 bytes per AstValue that only the wide kind
+    // reads, paid on the same argument `scale` was: a chain frame holds
+    // one of these per column, and the alternative - a heap-allocated
+    // wide value - would cost an allocation per wide value per row.
+    std::int64_t dec_hi = 0;
 
     // The parameter name a kParam value names. Spelled out so no call site
     // has to know which field it borrows.

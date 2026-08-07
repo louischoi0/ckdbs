@@ -44,6 +44,12 @@ inline constexpr Oid kTypeInt64 = kTypeInt;
 inline constexpr Oid kTypeDate = 31;
 inline constexpr Oid kTypeTimestamp = 32;
 
+// The wide decimal (TY2's separate type, 2026-08-07). Appended like the
+// two above; a data file bootstrapped before it lacks the row, which
+// costs a "?type_val=13" rendering for a column such a file cannot
+// contain anyway - the same purely-additive stance TY9 took.
+inline constexpr Oid kTypeDecimalWide = 33;
+
 inline constexpr Oid kSysTypesTable = 100;
 inline constexpr Oid kSysObjectsTable = 110;
 inline constexpr Oid kSysColumnsTable = 111;
@@ -270,6 +276,16 @@ inline constexpr std::uint32_t kTypeValChar = 10;
 //                      bootstrap, given an encoding here)
 inline constexpr std::uint32_t kTypeValDate = 11;
 inline constexpr std::uint32_t kTypeValTimestamp = 12;
+
+// The wide decimal (docs/spec-types.md TY2's "future separate type",
+// built 2026-08-07): `decimal(p, s)` with `19 <= p <= 38`, stored as an
+// **int128 unscaled value in 16 LE bytes** - a different schema constant
+// coexisting with the 8-byte type, never a widening of it. Selected by
+// the declared precision at CREATE TABLE (the one DDL site), or declared
+// directly as `decimal128(p, s)`; `(p, s)` packs into `SysColumnRow::len`
+// exactly as the narrow type's does, and 38 fits the precision byte with
+// room to spare. 38 is the cap because 10^38 - 1 < 2^127.
+inline constexpr std::uint32_t kTypeValDecimalWide = 13;
 
 enum class ClusteredType : std::uint8_t {
     kHeap = 0,
