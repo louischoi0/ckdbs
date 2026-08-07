@@ -241,8 +241,12 @@ contract if spliced in unescaped.)
 wired up (`command_dispatcher.cpp`'s `HandleCreateTableSql`/`HandleInsert`/
 `HandleSelect`/`HandleUpdate`), using `sys.types` (via
 `Catalog::ResolveTypeByName()`) as a stand-in for the not-yet-built real
-type registry, and `src/exec/row_codec.cpp` as the (still narrow-scope)
-executor: no NULLs, no `float`/`decimal` values, single-page heaps only.
+type registry, and `src/exec/row_codec.cpp` as the executor. What it still
+does not do: **no NULLs**, and **no `float`** — the one type refused for
+its semantics rather than for want of work. Two limits that used to be on
+this list are gone: `decimal` values store, compare and aggregate exactly
+(`docs/spec-types.md`, alongside `date` and `timestamp`), and heaps are
+page chains rather than single pages.
 See the table above and `command_dispatcher.hpp`'s doc comment for exact
 behavior. `CREATE TABLE <name>` with no parens is the older bare-name form
 and now always errors: every relation's first column is its mandatory

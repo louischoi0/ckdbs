@@ -3,10 +3,16 @@
 **Status:** Official specification, decisions confirmed 2026-08-06 (TY1–TY9, §0).
 Lifts the CREATE TABLE refusal of `decimal` (`client-manual.md` §3) for the
 fixed-width form specified here; `float` stays refused. Companion tasks:
-`docs/types-workplan.md`. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`.
+`docs/workplan-types.md`. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`.
 Consistent with `docs/rule-fixed-length-tuple.md` (invariant 13),
-`docs/parser-v2.md`, `docs/aggregate.md` (AG-series), `docs/heap-and-tuple.md`,
-`docs/feat-cabin.md`.
+`docs/parser-v2.md`, `docs/feat-aggregate.md` (AG-series),
+`docs/heap-and-tuple.md`, `docs/feat-cabin.md`.
+
+*(Both filenames on the first two lines were wrong until TY09: this file
+cited `docs/types-workplan.md` for its own workplan, which is
+`docs/workplan-types.md`, and `docs/aggregate.md`, which has never
+existed. `docs/workplan-aggregate.md` records the same slip from the
+other side.)*
 
 ## 0. Decision Record `[CONFIRMED 2026-08-06]`
 
@@ -89,11 +95,21 @@ a sum of dates is a statement nobody meant; `MIN`/`MAX` over them are exact
 and useful. `COUNT` is type-blind as always.
 
 **AVG remains `Unsupported` and this spec deliberately does not lift it.**
-The stated reason in `docs/aggregate.md` — no decimal kind — is now false,
-so the refusal message drops that clause; but AVG's return scale, its
-rounding rule, and divide-semantics are one decision (`aggregate.md` §10
-gains the item), and deciding them as a side effect of a types spec is how
-two documents come to disagree.
+The stated reason — no decimal kind — is now false, so it is gone from
+every place that stated it; but AVG's return scale, its rounding rule and
+its divide semantics are one decision (`docs/feat-aggregate.md` §10, which
+now carries the item), and deciding them as a side effect of a types spec
+is how two documents come to disagree.
+
+*Closed at TY09.* The correct file is `docs/feat-aggregate.md`, not
+`docs/aggregate.md`, which does not exist and never did — this paragraph
+and the workplan both cited it, which is the kind of reference that
+survives precisely because nobody follows it. The refusal **message** was
+already clean: it says only "compute it from SUM and COUNT, which are
+exact". The stale clause lived in two code comments
+(`src/parser/parser.cpp`, `include/kds/parser/ast.hpp`), in
+`feat-aggregate.md`'s AG2 row and refusal table, and in `CLAUDE.md`; all
+five now give the reason that actually holds.
 
 ### 3.3 Rendering happens at the boundary
 
@@ -101,7 +117,10 @@ two documents come to disagree.
 `FormatValue(std::uint32_t type_val, const AstValue&)`, with `0` preserving
 today's behavior for every existing caller). A `DATE` renders
 `2026-08-06`, a `TIMESTAMP` renders `2026-08-06 09:15:00.250000` (always
-six fractional digits when non-zero, none when zero `[PROPOSED]`), a
+six fractional digits when non-zero, none when zero — **`[CONFIRMED
+2026-08-07]`**, TY09; pinned by `tests/types_contract_test.cpp` item 7,
+and by the round-trip corpus, which cannot reproduce a literal unless the
+rule is stable in both directions), a
 `DECIMAL(p,s)` renders with exactly `s` fractional digits (`12.30`, not
 `12.3` — the scale is part of the value's meaning). **Decode does not
 format**: a date's `AstValue` is its integer, `raw_int_text` stays empty,
@@ -190,8 +209,9 @@ and anything (`'2026-08-06'` into a varchar column stays a plain string).
 1. **Round trip**: for each type, encode → decode → format reproduces the
    literal exactly, across the range edges (`0001-01-01`? — no: the valid
    `DATE` range is **1900-01-01 .. 2999-12-31** and `TIMESTAMP` its
-   microsecond equivalent `[PROPOSED]`; outside is a positioned encode
-   error, and the round-trip corpus pins both edges).
+   microsecond equivalent — **`[CONFIRMED 2026-08-07]`**, TY09; outside is
+   a positioned encode error, and the round-trip corpus pins both edges
+   plus the two rejections just outside them).
 2. **Ordering**: btree clustering, `kRange` bounds, MIN/MAX and ORDER-less
    scans agree with integer order on all three types; `DECIMAL('12.30')`
    equals `DECIMAL('12.3')` at scale 2.
@@ -214,8 +234,21 @@ and anything (`'2026-08-06'` into a varchar column stays a plain string).
 
 ## 7. Open items — do not assume
 
-- `[PROPOSED]` valid ranges in §6.1 and the timestamp rendering rule in
-  §3.3 — ratify with the first client that cares.
-- AVG's return type, scale and rounding (`aggregate.md` §10).
+- ~~`[PROPOSED]` valid ranges in §6.1 and the timestamp rendering rule in
+  §3.3~~ — **ratified 2026-08-07 (TY09)**, not by a client but by the
+  contract suite: `tests/types_contract_test.cpp` pins both range edges,
+  the two rejections just outside them, and the fractional-digit rule, so
+  these numbers are load-bearing now and moving one is a decision with a
+  failing test attached rather than an adjustment. Widening the `DATE`
+  range stays cheap — the encoding is a signed epoch day with room to
+  spare; narrowing it is data-losing and needs a migration story.
+- **AVG's return type, scale and rounding** — `docs/feat-aggregate.md`
+  §10, which TY09 filled in. Note the refusal's *reason* changed here:
+  AVG was declined for want of a decimal kind, this spec supplied one
+  (TY04), and §3.2 deliberately did not lift the refusal, because the
+  return scale, the rounding rule and divide semantics are one decision
+  that belongs with the aggregate spec. The stale reason is gone from the
+  code comments and from `feat-aggregate.md`; the refusal message itself
+  never carried it.
 - Phase 2: bare numeric literals (TY3) and its fingerprint analysis.
 - int128 `DECIMAL` for `p > 18` (TY2).

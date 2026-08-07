@@ -1,7 +1,10 @@
 # Types — Workplan
 
-Work instructions, companion to `docs/types.md` (TY1–TY9). Tasks
-`TY01`–`TY09`.
+Work instructions, companion to `docs/spec-types.md` (TY1–TY9). Tasks
+`TY01`–`TY09`, **all built as of 2026-08-07**.
+
+(This line said `docs/types.md` until TY09, and TY09's own line said
+`docs/aggregate.md`. Neither file has ever existed — see TY09's outcome.)
 
 Execution rules:
 - Do tasks in numeric order unless "needs" says otherwise.
@@ -318,7 +321,7 @@ change and no version bump**, so there is no version message to pin and
 no behaviour change to observe. What is pinned instead is the property
 that made that choice safe — the packing survives a remount.
 
-## TY09 — Docs & spec closure (needs TY08)
+## TY09 — Docs & spec closure (needs TY08) — **DONE**
 
 `docs/aggregate.md`: AVG's refusal message drops the "no decimal kind"
 clause and §10 gains the AVG-return-type item (spec §3.2). `docs/types.md`:
@@ -327,3 +330,47 @@ tests forced, with the change cited.
 
 *Done when:* the two specs agree with the code and with each other; grep
 for the old refusal text finds nothing.
+
+*Outcome.* Six sites, and the task's own description was wrong about the
+first two.
+
+**The AVG refusal message never carried the stale clause.** It says only
+"compute it from SUM and COUNT, which are exact", and always did. The
+"no decimal kind" reason lived in two *code comments*
+(`src/parser/parser.cpp`, `include/kds/parser/ast.hpp`), in
+`feat-aggregate.md`'s AG2 row and its refusal table, and in `CLAUDE.md`.
+All five now give the reason that actually holds — and the refusal itself
+**stands**, which is the point worth being clear about: gaining a decimal
+kind removed AVG's *stated* obstacle without removing its real one.
+
+**`feat-aggregate.md` §10 gained the item**, written as a decision rather
+than a placeholder: the return scale of `AVG` over `DECIMAL(p,s)`, the
+rounding rule at that scale, and divide semantics over an integer column
+are three questions with one answer, and none of them follows from having
+a decimal type. Until they are settled, `SUM`/`COUNT` are exact and a
+client computing the quotient picks its own rounding — worse ergonomics
+and a better answer than picking one for them silently.
+
+**`docs/aggregate.md` does not exist and never did.** This workplan's
+TY09 line cited it, `spec-types.md` cited it twice (once in its
+related-documents header), and `workplan-aggregate.md` had already
+recorded the same slip from the other side. `spec-types.md` also cited
+`docs/types-workplan.md` for its own workplan, which is
+`docs/workplan-types.md`. Both are fixed, with a note saying so — a
+broken cross-reference survives precisely because nobody follows it.
+
+**The `[PROPOSED]` markers are ratified, by the contract suite rather
+than by a client.** §6.1's ranges and §3.3's fractional-digit rule are
+`[CONFIRMED 2026-08-07]`: TY08 pins both range edges, the two rejections
+just outside them, and the rendering rule, so these numbers are
+load-bearing now and moving one breaks a test on purpose. Widening the
+`DATE` range stays cheap (a signed epoch day has room); narrowing it is
+data-losing and needs a migration story.
+
+*Two things fixed that were outside the brief but wrong:* `CLAUDE.md` had
+**no types entry at all**, so a future agent reading it would not know
+these types exist — it now has one under Core Architecture and one under
+Documents, including the `CoerceLiteralToColumn` rule TY07's bug earned.
+And `client-manual.md` still told clients the executor supports "no
+`float`/`decimal` values, single-page heaps only"; both limits are gone,
+and only `float` and NULLs remain.

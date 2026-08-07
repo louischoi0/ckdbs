@@ -895,9 +895,19 @@ StatusOr<SelectItem> Parser::ParseSelectItem() {
     }
 
     // `AVG` is a head this engine understands and declines. Refused here
-    // rather than at compile, because the reason is the type system and not
-    // the catalog: there is no decimal kind, and an average truncated to an
-    // integer is a wrong answer wearing a right answer's type.
+    // rather than at compile, because the reason is the shape of the
+    // statement and not the catalog.
+    //
+    // **The reason changed at TY09 and the refusal did not.** It used to be
+    // that there was no decimal kind to return; there is one now
+    // (`ValueType::kDecimal`, docs/spec-types.md). What remains open is
+    // what an average *means* here - its return scale, its rounding rule
+    // and its divide semantics are one decision (feat-aggregate.md §10),
+    // and answering it as a side effect of having gained a decimal type is
+    // how two specs come to disagree. So the refusal stands on its own
+    // merits: `SUM` and `COUNT` are both exact, and a client that computes
+    // the quotient chooses the rounding this engine would otherwise have
+    // chosen for it silently.
     if (named_avg) {
         return Status::Unsupported(
             "AVG is not supported (byte " + std::to_string(item.byte_offset) +

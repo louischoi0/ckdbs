@@ -13,7 +13,7 @@ chains), `docs/rules.md`, `docs/waystone-concpets.md` (trail model),
 | # | Decision | Choice |
 |---|---|---|
 | AG1 | Placement | **A fold outside the executor.** The dispatcher wraps the statement's `RowSink` in an `Aggregator`; the compiled chain is byte-identical to the same statement without the fold. The executor never learns aggregation exists. **Invariant: every aggregate state is mergeable** (§1) — the cross-core partial-aggregation reservation |
-| AG2 | v1 functions | `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`, **with `DISTINCT`** (`COUNT(DISTINCT col)`, `SUM(DISTINCT col)`; `MIN`/`MAX` accept it as the standard's no-op `[PROPOSED]`). `AVG` is parsed and answers `Unsupported` — AstValue has no decimal kind, and an average truncated to an integer is a wrong answer wearing a right answer's type |
+| AG2 | v1 functions | `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`, **with `DISTINCT`** (`COUNT(DISTINCT col)`, `SUM(DISTINCT col)`; `MIN`/`MAX` accept it as the standard's no-op `[PROPOSED]`). `AVG` is parsed and answers `Unsupported` — see §10; the original reason (no decimal kind) expired at TY09 and the refusal now rests on AVG's undecided return scale and rounding |
 | AG3 | SUM arithmetic | **Checked int64.** Signed integer argument columns only; the fold uses overflow-checked addition and an overflow is a **statement error**, never a wrapped number. `SUM` over a `uint64` column is `Unsupported` (half its range does not fit the accumulator). Both are **documented product constraints** (§3.3) |
 | AG4 | NULL semantics | **SQL standard** (§3.1): aggregates skip NULLs; `COUNT(*)` counts rows; a group with no non-NULL argument yields NULL for `SUM`/`MIN`/`MAX`; NULL grouping keys form one group |
 | AG5 | Strict grouping | A bare column in an aggregated select list **must appear in GROUP BY**, or the statement is refused with the column's byte position. There is no "any row" mode: an answer that depends on scan order is an answer this engine refuses to give |
@@ -100,7 +100,7 @@ Refusals, each with an exact byte position:
 | `SELECT * … GROUP BY a` | `InvalidArgument` — which columns `*` folds was never written |
 | bare column not in GROUP BY | `InvalidArgument` (AG5) |
 | duplicate GROUP BY column | `InvalidArgument` — always a slip, and it doubles the key encoding for nothing |
-| `AVG(…)` | `Unsupported` — "compute it from SUM and COUNT, which are exact" |
+| `AVG(…)` | `Unsupported` — "compute it from SUM and COUNT, which are exact". The message is unchanged by TY09; only its *reason* moved (§10) |
 | `SUM(*)`, `MIN(*)`, `MAX(*)` | `InvalidArgument` — `*` is only an argument of COUNT |
 | `COUNT(DISTINCT *)` | `InvalidArgument` — distinctness of whole rows was never written |
 | `HAVING …` | `Unsupported` (AG7) |
@@ -279,6 +279,26 @@ statement and leaves nothing behind.
   1,048,576 entries is roughly 84 MB per statement, and settling it needs a
   workload with a genuinely high-cardinality `COUNT(DISTINCT)` measured for
   resident memory rather than latency.
+- **`AVG`'s return type, scale and rounding** — the decision the refusal
+  now rests on, and *the reason it was written down here rather than
+  settled in passing*. AG2 originally declined AVG because `AstValue` had
+  no decimal kind. **That reason expired on 2026-08-07**
+  (`docs/spec-types.md`, TY04): there is a `kDecimal` now, carrying an
+  unscaled int64 and a scale, and `SUM` over a `DECIMAL(p,s)` already
+  folds exactly at scale `s`. What is *not* decided is what an average
+  returns. Three questions, one answer, and none of them follows from
+  having a decimal type: the **return scale** of `AVG` over
+  `DECIMAL(p,s)` (`s`? a fixed wider scale? `p - s` spare digits?), the
+  **rounding rule** at that scale (half-up, half-even, truncate — a
+  financial engine's users will disagree, and each is defensible), and
+  **divide semantics** over an integer column (does `AVG` over `int64`
+  return an integer, a decimal, or refuse?). Settling these as a side
+  effect of a types spec is how two documents come to disagree, which is
+  why `spec-types.md` §3.2 deliberately declined to lift the refusal and
+  handed the item here instead. Until it is settled, `SUM`/`COUNT` are
+  both exact and a client computing the quotient chooses its own
+  rounding — which is a worse ergonomic and a better answer than choosing
+  one for them silently.
 - `MIN/MAX(DISTINCT)` accept-as-no-op vs refuse (§3.2 `[PROPOSED]`).
 - Lifting ORDER BY over aggregated output — needs an output sort; decide
   with HAVING, since both are post-fold consumers and should share the

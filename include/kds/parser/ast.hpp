@@ -322,11 +322,14 @@ struct JoinClause {
 // The aggregate functions v1 folds (docs/feat-aggregate.md AG2).
 //
 // `AVG` is deliberately **not** here. It is recognized by the parser and
-// answers `Unsupported`, because `AstValue` has no decimal kind and an
-// average truncated to an integer is a wrong answer wearing a right
-// answer's type - so there is nothing for this enum to name until a
-// decimal type exists. Adding a value for a function that cannot be folded
-// would put the refusal somewhere it can be forgotten.
+// answers `Unsupported`. The reason used to be that `AstValue` had no
+// decimal kind; it has one now (`kDecimal`, TY09), and the refusal stands
+// anyway on what replaced it: an average's **return scale, rounding rule
+// and divide semantics are one undecided question**
+// (docs/feat-aggregate.md §10), and `SUM`/`COUNT` are both exact, so a
+// client computing the quotient picks the rounding rather than having one
+// picked silently. Adding a value here for a function that cannot be
+// folded would put the refusal somewhere it can be forgotten.
 enum class AggFunc : std::uint8_t { kCount, kSum, kMin, kMax };
 
 // The canonical lower-case spelling, for the column label a fold's output
