@@ -279,13 +279,44 @@ replays byte-identically across three passes, and the refusals reach the
 wire with their positions. None of that needed engine code, which is §1's
 claim holding everywhere except the one place it did not.
 
-## TY08 — Contract suite (needs TY01–TY07)
+## TY08 — Contract suite (needs TY01–TY07) — **DONE**
 
 `tests/types_contract_test.cpp` collecting spec §6 items 1–8, regression-
 mandatory, byte-for-byte comparisons in the established contract-test
 style.
 
 *Done when:* all eight pinned and in the default test target.
+
+*Outcome.* `tests/types_contract_test.cpp`, one test per numbered item in
+§6's order, in `kds_tests` and so regression-mandatory. It is deliberately
+**not** a second copy of the unit tests: `types_predicate_test.cpp` checks
+*how* a statement compiles and `types_e2e_test.cpp` checks that no
+subsystem needed teaching, while this file checks the **product claims**
+at the boundary a client sees. Where they overlap the overlap is the
+point — a contract that holds only because some other file happens to
+cover it is not pinned.
+
+Three items needed more than transcription. **Item 2's ordering** is
+pinned with data whose text order and value order disagree (`2026-11-05`
+before `2026-02-09`, `9.90` before `100.00`), because a comparison that
+had regressed to string collation would pass any test whose data happened
+to sort the same way both times. **Item 4** wanted a *positioned*
+refusal and the mixed-scale error did not carry one — `CoercePredicate`
+now takes the byte offset, from the condition's column in a `WHERE` and
+from the `ON` clause's left column in a join, which is where a reader
+looks for the join they wrote. **Item 8's restart** re-mounts the same
+store through a fresh `Catalog`, so `(p, s)` is read back from the pages
+by something that never saw the `CREATE`; the test also writes and
+predicates *after* the remount, which a cached-but-wrong `(p, s)` would
+fail.
+
+*Item 8's second clause is vacuous by TY02's decision and is recorded as
+such rather than skipped:* "a pre-types data file opens and serves
+unchanged, or refuses with the version message". TY02 packed `(p, s)`
+into the existing `len` field precisely so there would be **no format
+change and no version bump**, so there is no version message to pin and
+no behaviour change to observe. What is pinned instead is the property
+that made that choice safe — the packing survives a remount.
 
 ## TY09 — Docs & spec closure (needs TY08)
 

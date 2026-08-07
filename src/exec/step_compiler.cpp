@@ -109,7 +109,7 @@ const catalog::SysColumnRow& ColumnAt(const Scope& scope, const ColumnRef& ref) 
 // Called from **both** lowering sites - the SELECT chain's and the write
 // filter's - because a literal that means one thing in a WHERE and another
 // in an UPDATE's WHERE is exactly the drift this is here to stop.
-Status CoercePredicate(const Scope& scope, StepPredicate& pred) {
+Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t byte_offset) {
     const catalog::SysColumnRow& lhs = ColumnAt(scope, pred.lhs);
 
     if (pred.rhs.kind == OperandKind::kLiteral) {
@@ -147,7 +147,7 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred) {
             std::to_string(catalog::DecimalScaleOf(lhs.len)) + " and '" +
             std::string(catalog::NameView(rhs.name)) + "' has scale " +
             std::to_string(catalog::DecimalScaleOf(rhs.len)) +
-            "; this engine does not rescale");
+            "; this engine does not rescale" + Position(byte_offset));
     }
     return Status::OK();
 }
@@ -712,7 +712,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             low.op = parser::CompareOp::kGte;
             low.rhs.kind = OperandKind::kLiteral;
             low.rhs.literal = cond.val;
-            if (Status s = CoercePredicate(scope, low); !s.ok()) return s;
+            if (Status s = CoercePredicate(scope, low, cond.col.byte_offset); !s.ok()) return s;
             out.residual.push_back(low);
 
             StepPredicate high;
@@ -720,7 +720,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             high.op = parser::CompareOp::kLte;
             high.rhs.kind = OperandKind::kLiteral;
             high.rhs.literal = cond.val_high;
-            if (Status s = CoercePredicate(scope, high); !s.ok()) return s;
+            if (Status s = CoercePredicate(scope, high, cond.col.byte_offset); !s.ok()) return s;
             out.residual.push_back(high);
             continue;
         }
@@ -737,7 +737,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             pred.rhs.kind = OperandKind::kLiteral;
             pred.rhs.literal = cond.val;
         }
-        if (Status s = CoercePredicate(scope, pred); !s.ok()) return s;
+        if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
         out.residual.push_back(pred);
     }
     // **kAllColumns, deliberately.** UPDATE and DELETE walk the relation
@@ -844,8 +844,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // A join on two decimal columns is subject to the same scale rule
         // as any other column-column comparison - joining `decimal(10,2)`
         // to `decimal(10,3)` on unscaled integers would match rows that
-        // are not equal.
-        if (Status s = CoercePredicate(scope, pred); !s.ok()) return s;
+        // are not equal. Positioned at the ON clause's left column, which
+        // is where a reader looks for the join it wrote.
+        if (Status s = CoercePredicate(scope, pred, join.left.byte_offset); !s.ok()) return s;
         predicates.push_back(pred);
     }
 
@@ -909,7 +910,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             low.op = parser::CompareOp::kGte;
             low.rhs.kind = OperandKind::kLiteral;
             low.rhs.literal = cond.val;
-            if (Status s = CoercePredicate(scope, low); !s.ok()) return s;
+            if (Status s = CoercePredicate(scope, low, cond.col.byte_offset); !s.ok()) return s;
             predicates.push_back(low);
 
             StepPredicate high;
@@ -917,7 +918,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             high.op = parser::CompareOp::kLte;
             high.rhs.kind = OperandKind::kLiteral;
             high.rhs.literal = cond.val_high;
-            if (Status s = CoercePredicate(scope, high); !s.ok()) return s;
+            if (Status s = CoercePredicate(scope, high, cond.col.byte_offset); !s.ok()) return s;
             predicates.push_back(high);
             continue;
         }
@@ -937,7 +938,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             pred.rhs.kind = OperandKind::kLiteral;
             pred.rhs.literal = cond.val;
         }
-        if (Status s = CoercePredicate(scope, pred); !s.ok()) return s;
+        if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
         predicates.push_back(pred);
     }
 
