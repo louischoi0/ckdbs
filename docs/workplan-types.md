@@ -56,7 +56,7 @@ required. The price is that `len` is no longer readable as a width without
 the type, so `sys.columns` and `DESCRIBE` render the declared type through
 one shared `ColumnTypeText` instead.
 
-## TY03 — DDL (needs TY01, TY02)
+## TY03 — DDL (needs TY01, TY02) — **DONE**
 
 The three type productions in CREATE TABLE, `DECIMAL(p, s)` with mandatory
 both-arguments and TY2's bounds, positioned errors, `client-manual.md` §3
@@ -66,6 +66,18 @@ refusal kept and now citing TY1).
 *Done when:* CREATE TABLE round-trips through the catalog for all three;
 `DECIMAL`, `DECIMAL(19,0)`, `DECIMAL(5,6)` are positioned errors; a column
 named `date` still works everywhere it did.
+
+*Note the state this ships in.* The three types are **declarable but not
+yet storable** — the codec arms are TY04's — so an INSERT into one is
+refused *by name*, citing TY04, rather than falling through to
+"unrecognized type_val" and reporting a corrupt catalog for a column the
+catalog is entirely right about. One test pins that message, so TY04 has to
+remove it deliberately.
+
+*Also:* type arguments are recognized by the **paren, not the type name**,
+so a type that takes none refuses them in one place rather than each name
+needing its own production — `int64(10, 2)` is an error rather than
+silently ignored arguments.
 
 ## TY04 — Codec (needs TY01, TY02)
 
