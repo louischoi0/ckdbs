@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
@@ -135,7 +136,31 @@ struct SysColumnRow {
     std::uint32_t pos;
     Name name;
     std::uint32_t type_val;
+
+    // What `len` means depends on the type, and only two types read it.
+    //
+    //   `char`     the declared width, which is what it has always meant.
+    //   `decimal`  the packed **(precision, scale)** pair - see
+    //              `PackDecimalLen` below.
+    //   anything else
+    //              the type's width, stored and **never consulted**:
+    //              `RowLayout::ColumnWidth` derives every other width from
+    //              `type_val` alone.
+    //
+    // The decimal reading is an **overload of an existing field, chosen
+    // over widening this row** (docs/spec-types.md TY9, workplan TY02).
+    // Widening it is a data-file format change: `SysColumnRow` has no spare
+    // byte, so `(p, s)` would have cost a superblock version bump and every
+    // pre-existing data file would stop mounting - which is what the last
+    // four bootstrap-relation additions each cost. `len` was already dead
+    // weight for a decimal column, so the pair rides in it for free.
+    //
+    // The price, stated so nobody has to find it: `len` is no longer
+    // readable as "a width" without knowing the type. Two display paths
+    // consulted it that way - `sys.columns` and `DESCRIBE` - and both now
+    // render the type instead.
     std::uint32_t len;
+
     bool notnull;
 
     // Whether this column may carry a Cabin, and on whose initiative
@@ -169,6 +194,37 @@ static_assert(offsetof(SysColumnRow, type_val) == SysColumnRow::kTypeValOffset);
 static_assert(offsetof(SysColumnRow, len) == SysColumnRow::kLenOffset);
 static_assert(offsetof(SysColumnRow, notnull) == SysColumnRow::kNotNullOffset);
 static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicyOffset);
+
+// ---- decimal(p, s) packed into `len` (docs/spec-types.md TY9) ----------
+//
+// Explicit shift and mask, never a compiler bitfield: invariant 6 forbids
+// one for any persisted format, because their layout is
+// implementation-defined and this engine must be architecture-portable.
+//
+// Precision in the high byte, scale in the low one. Both are bounded well
+// under 255 by TY2 (1 <= p <= 18, 0 <= s <= p), so sixteen of `len`'s
+// thirty-two bits are used and the rest stay zero and available.
+inline constexpr std::uint32_t PackDecimalLen(std::uint8_t precision,
+                                              std::uint8_t scale) noexcept {
+    return (static_cast<std::uint32_t>(precision) << 8) | static_cast<std::uint32_t>(scale);
+}
+
+inline constexpr std::uint8_t DecimalPrecisionOf(std::uint32_t len) noexcept {
+    return static_cast<std::uint8_t>((len >> 8) & 0xFF);
+}
+
+inline constexpr std::uint8_t DecimalScaleOf(std::uint32_t len) noexcept {
+    return static_cast<std::uint8_t>(len & 0xFF);
+}
+
+// How a column's declared type reads back to a client: `int64`, `varchar`,
+// `char(8)`, `decimal(10,2)`, `date`. `base_name` is the `sys.types` name
+// for the column's `type_val`, which the caller has already resolved.
+//
+// Here rather than at each display site because `len`'s meaning is this
+// header's to know, and two callers rendering it differently is how a
+// `DESCRIBE` and a `sys.columns` come to disagree about one column.
+std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name);
 
 // ---- Per-column cabin policy (docs/feat-cabin.md §8) -------------------
 //

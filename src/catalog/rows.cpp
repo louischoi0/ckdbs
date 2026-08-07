@@ -1,3 +1,4 @@
+#include <string>
 #include "kds/catalog/rows.hpp"
 
 #include <cstring>
@@ -296,6 +297,20 @@ StatusOr<SysFkeyRow> SysFkeyRow::Decode(std::span<const std::byte> bytes) {
     // whether the two oids name live relations is a question this function
     // has no catalog to ask.
     return row;
+}
+
+std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name) {
+    if (col.type_val == kTypeValDecimal) {
+        return std::string(base_name) + "(" + std::to_string(DecimalPrecisionOf(col.len)) + "," +
+               std::to_string(DecimalScaleOf(col.len)) + ")";
+    }
+    // `char` is the other type whose declared width is part of its name.
+    if (col.type_val == kTypeValChar) {
+        return std::string(base_name) + "(" + std::to_string(col.len) + ")";
+    }
+    // Every other type's width comes from its type_val, so `len` says
+    // nothing a reader wants and the bare name is the whole truth.
+    return std::string(base_name);
 }
 
 }  // namespace kds::catalog
