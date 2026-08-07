@@ -4,10 +4,10 @@
 The plan this implements is `docs/scenario2-freight.md`, tasks `S2-01`
 through `S2-03` of its §9: it builds the eight relations, loads the reference
 data, drives the eight-statement booking transaction from `--bookers`
-concurrent processes, and accounts for every outcome separately - committed,
-refused by the business, or lost to a write conflict and retried. The
-reporter process (`S2-04`) and the PostgreSQL twin (`S2-05`,
-`tools/pg_scenario2_freight.py`) are the parts that live elsewhere.
+concurrent processes, accounts for every outcome separately - committed,
+refused by the business, or lost to a write conflict and retried - and runs
+the analytic reporter (`--manifest`) beside them. The PostgreSQL twin
+(`S2-05`) is `tools/pg_scenario2_freight.py`.
 
 Where the other two scenarios sit:
 
@@ -1064,6 +1064,85 @@ def result_state_booked(state):
     return {k: v for k, v in state.booked_cbm.items() if v}
 
 
+# ---- the reporter (docs/scenario2-freight.md §6) -------------------------
+
+MANIFEST_PHASES = ("manifest-scan", "voyage-rollup", "customer-statement")
+
+
+def manifest_process(args, suffix, operations, orgs, stop_event, result_q):
+    """The analytic reader, in its own process, contending with the bookers.
+
+    This is the half of the workload that does not commit anything: every
+    `--manifest-interval` seconds it wakes, reads a sample of voyages and
+    customers, and goes back to sleep. Its three reads are deliberately the
+    three shapes the engine treats differently:
+
+      manifest-scan       SELECT * ... WHERE operation_id = n   FilterScan over
+                          a relation that is *growing under it* - the only
+                          read here whose cost rises as the run proceeds
+      voyage-rollup       the same walk with a GROUP BY folded over it, so the
+                          pair prices the fold against the walk it rides on
+      customer-statement  a two-step join chain with the fold on the *second*
+                          step's column - the shape S2-01 had to prove the
+                          engine would even compile
+
+    It counts rows as well as latency, because a FilterScan's cost is a
+    function of how much relation there is and a latency alone cannot say
+    whether a slow pass read more or read slower.
+
+    It never writes, so it can never conflict, and its latency is reported
+    beside TPS rather than inside it: a reporter that got slower while the
+    bookers got faster is the contention this scenario exists to create."""
+    try:
+        set_echo(getattr(args, "echo", False))
+        rng = random.Random(args.seed + 9000)
+        client = Client(args.host, args.port, args.timeout)
+        tables = {base: f"{base}_{suffix}" for base in CREATE_ORDER}
+        phases = {name: Phase(name) for name in MANIFEST_PHASES}
+        op_ids = [op for op, _s, _c, _o, _d in operations]
+        org_ids = [org for org, _limit in orgs]
+        passes = rows_read = 0
+
+        while not stop_event.is_set():
+            started = time.perf_counter()
+            for op_id in rng.sample(op_ids, min(args.manifest_voyages, len(op_ids))):
+                if stop_event.is_set():
+                    break
+                reply = send(client, phases["manifest-scan"],
+                             f"SELECT * FROM {tables['freights']} "
+                             f"WHERE operation_id = {op_id}")
+                rows = select_rows(reply)
+                rows_read += len(rows) if rows else 0
+                send(client, phases["voyage-rollup"],
+                     f"SELECT status, COUNT(*), SUM(cbm) FROM {tables['freights']} "
+                     f"WHERE operation_id = {op_id} GROUP BY status")
+            for org_id in rng.sample(org_ids, min(args.manifest_customers,
+                                                  len(org_ids))):
+                if stop_event.is_set():
+                    break
+                send(client, phases["customer-statement"],
+                     f"SELECT c.org_id, SUM(f.cbm) FROM {tables['freights']} AS f "
+                     f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
+                     f"WHERE c.org_id = {org_id} GROUP BY c.org_id")
+            passes += 1
+            # Sleep what is left of the interval, but wake at once when the
+            # bookers finish: a reporter still running after the measured
+            # work has stopped is reading an idle server and would flatter
+            # its own percentiles.
+            rest = args.manifest_interval - (time.perf_counter() - started)
+            if rest > 0:
+                stop_event.wait(rest)
+        client.close()
+    except Exception as e:                       # noqa: BLE001 - reported, not raised
+        result_q.put({"fatal": f"{type(e).__name__}: {e}"})
+        return
+    result_q.put({
+        "passes": passes, "rows_read": rows_read,
+        "phases": {name: (p.latencies, p.errors, p.first_error)
+                   for name, p in phases.items()},
+    })
+
+
 def merge_bookers(results, elapsed):
     """One run's worth of numbers out of N bookers' worth.
 
@@ -1300,6 +1379,15 @@ def print_bookings(result, args):
     else:
         print(f"  cargo pool left      {result['cargo_pool_left']}")
 
+    if result.get("manifest"):
+        m = result["manifest"]
+        reads = sum(len(m["phases"][name][0]) for name in MANIFEST_PHASES)
+        print()
+        print(f"  manifest reporter    {m['passes']} passes, {reads} reads, "
+              f"{m['rows_read']:,} freight rows scanned")
+        print(f"  {'':<20} latency is in the table above, beside the bookings "
+              f"it contended with")
+
     if "verify" in result:
         checks, failures, first = result["verify"]
         print()
@@ -1352,6 +1440,20 @@ def main():
                              "*and* customers, so no conflict is possible - "
                              "the baseline the contended run is measured "
                              "against")
+    parser.add_argument("--manifest", dest="manifest", action="store_true",
+                        default=True,
+                        help="run the analytic reporter process beside the "
+                             "bookers (default). It never writes, so it never "
+                             "conflicts; its latency is reported beside TPS, "
+                             "not inside it")
+    parser.add_argument("--no-manifest", dest="manifest", action="store_false",
+                        help="book with no concurrent reader")
+    parser.add_argument("--manifest-interval", type=float, default=1.0,
+                        help="seconds between reporter passes (default: 1.0)")
+    parser.add_argument("--manifest-voyages", type=int, default=20,
+                        help="voyages read per pass (default: 20)")
+    parser.add_argument("--manifest-customers", type=int, default=10,
+                        help="customer statements per pass (default: 10)")
     parser.add_argument("--seconds", type=float, default=60.0,
                         help="how long to book for (default: 60)")
     parser.add_argument("--bookings", type=int, default=0, metavar="N",
@@ -1510,13 +1612,33 @@ def main():
             args=(i, args, suffix, slices[i], fee_book, deadline_wall, target,
                   result_q))
             for i in range(args.bookers)]
+
+        stop_event = multiprocessing.Event()
+        manifest_q = multiprocessing.Queue()
+        reporter = None
+        if args.manifest:
+            reporter = multiprocessing.Process(
+                target=manifest_process,
+                args=(args, suffix, operations, orgs, stop_event, manifest_q))
+
         run_started = time.perf_counter()
+        if reporter is not None:
+            reporter.start()
         for w in workers:
             w.start()
         results = [result_q.get() for _ in workers]
         for w in workers:
             w.join()
         run_elapsed = time.perf_counter() - run_started
+        # The reporter stops when the measured work does, so its percentiles
+        # describe a contended server and not an idle one.
+        stop_event.set()
+        manifest = None
+        if reporter is not None:
+            manifest = manifest_q.get()
+            reporter.join(timeout=30)
+            if "fatal" in manifest:
+                abort(f"the manifest reporter died: {manifest['fatal']}")
 
         fatal = [r for r in results if "fatal" in r]
         if fatal:
@@ -1531,6 +1653,14 @@ def main():
             f"capacity={args.capacity_mode}, {args.bookers} booker"
             f"{'' if args.bookers == 1 else 's'}, "
             f"{'contended' if args.contend else 'partitioned'}")
+        if manifest is not None:
+            for name in MANIFEST_PHASES:
+                latencies, errors, first_error = manifest["phases"][name]
+                p = Phase(name)
+                p.latencies, p.errors, p.first_error = latencies, errors, first_error
+                p.elapsed = run_elapsed
+                phases.append(p)
+            result["manifest"] = manifest
         loaded["freights"] = result["counts"][COMMITTED]
         loaded["charges"] = sum(result["state"]["freight_charges"].values())
         if args.verify:
@@ -1549,6 +1679,17 @@ def main():
         "fk": args.fk, "cabin": args.cabin,
         "txn": args.txn, "capacity_mode": args.capacity_mode,
         "seed": args.seed,
+        # The workload identity, so compare_scenario2.py can refuse to diff
+        # two runs that did different work. One key per flag that changes
+        # what is loaded or what a booking does.
+        "organizations": args.organizations, "ships": args.ships,
+        "operations": args.operations, "cargos": args.cargos,
+        "capacity_headroom": args.capacity_headroom,
+        "credit_headroom": args.credit_headroom,
+        "hot_routes": args.hot_routes, "max_fees": args.max_fees,
+        "bookings": args.bookings, "bookers": args.bookers,
+        "contend": args.contend, "manifest": args.manifest,
+        "isolation": args.isolation or "server default",
     }
     if args.server_log:
         durability = read_durability(args.server_log)
@@ -1557,13 +1698,23 @@ def main():
     if result is not None:
         meta["outcomes"] = result["counts"]
         meta["retries"] = result["retries"]
+        meta["axes"] = result["axes"]
+        meta["abandoned"] = result["abandoned"]
         meta["tps"] = (result["counts"][COMMITTED] / result["elapsed"]
                        if result["elapsed"] > 0 else 0.0)
+        if "verify" in result:
+            checks, failures, first = result["verify"]
+            meta["verify"] = {"checks": checks, "failures": failures,
+                              "first": first}
+        if result.get("manifest"):
+            meta["manifest_passes"] = result["manifest"]["passes"]
+            meta["manifest_rows_read"] = result["manifest"]["rows_read"]
 
     report(phases, meta, footer=(
-        "S2-01..S2-03: this tool builds, loads and books, from --bookers",
-        "processes. The reporter process (S2-04) is not here; the PostgreSQL",
-        "twin is tools/pg_scenario2_freight.py.",
+        "S2-01..S2-05: builds, loads, books from --bookers processes, and",
+        "runs the analytic reporter beside them. The PostgreSQL twin is",
+        "tools/pg_scenario2_freight.py (single booker, reporter interleaved);",
+        "diff the two --json files with tools/compare_scenario2.py.",
     ))
     if result is not None:
         print_bookings(result, args)

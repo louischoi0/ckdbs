@@ -52,10 +52,10 @@ from scenario2_freight import (
     BASE_RATE_PER_CBM, CARGO_MAX_CBM, CARGO_MIN_CBM, CARGO_TYPES, COMMITTED,
     CONFLICTED, COUNTRIES, CREATE_ORDER, CREDIT_FLOOR, CREDIT_SPREAD,
     CAPACITY_FLOOR_CBM, CAPACITY_SPREAD, DAY0, DECLARED_MAX, DECLARED_MIN,
-    FAILED, FEES, HORIZON_DAYS, MILLI, ORG_TYPES, PORTS, RATE_JITTER,
-    REJECTED_CAPACITY, REJECTED_CREDIT, RULE_WINDOW_DAYS, SHIP_TYPES,
-    BookingState, charge_lines, demand_of, fees_by_id, print_bookings,
-    route_code)
+    FAILED, FEES, HORIZON_DAYS, MANIFEST_PHASES, MILLI, ORG_TYPES, PORTS,
+    RATE_JITTER, REJECTED_CAPACITY, REJECTED_CREDIT, RULE_WINDOW_DAYS,
+    SHIP_TYPES, BookingState, charge_lines, demand_of, fees_by_id,
+    print_bookings, route_code)
 
 # The same eight relations, in PostgreSQL's dialect. `bigserial` stands in
 # for the Keystone column and `integer`/`bigint` for the fixed-width types;
@@ -434,16 +434,62 @@ def book_once(client, tables, state, args, phases, rng, day):
     return COMMITTED
 
 
-def run_bookings(client, tables, state, args, phases, rng):
+# ---- the reporter (docs/scenario2-freight.md §6) -------------------------
+
+def make_manifest(args, operations, orgs):
+    """The reporter's state. The ckdbs driver runs its reporter in a second
+    process on its own connection; PostgreSQL's twin is one process on one
+    connection, so the same three reads interleave *between* bookings on the
+    same clock interval instead. Both read a ledger growing under them; what
+    differs — and what the comparison must label — is that here the reporter
+    displaces bookings rather than contending with them."""
+    return {
+        "phases": {name: Phase(name) for name in MANIFEST_PHASES},
+        "rng": random.Random(args.seed + 9000),
+        "op_ids": [op for op, _s, _c, _o, _d in operations],
+        "org_ids": [org for org, _limit in orgs],
+        "passes": 0, "rows_read": 0,
+    }
+
+
+def manifest_pass(client, tables, manifest, args):
+    """One reporter pass: the three §6 reads, verbatim from the ckdbs
+    driver's manifest_process, over the same sample sizes."""
+    rng, phases = manifest["rng"], manifest["phases"]
+    for op_id in rng.sample(manifest["op_ids"],
+                            min(args.manifest_voyages, len(manifest["op_ids"]))):
+        rows = rows_timed(client, phases["manifest-scan"],
+                          f"SELECT * FROM {tables['freights']} "
+                          f"WHERE operation_id = {op_id}")
+        manifest["rows_read"] += len(rows) if rows else 0
+        rows_timed(client, phases["voyage-rollup"],
+                   f"SELECT status, COUNT(*), SUM(cbm) FROM {tables['freights']} "
+                   f"WHERE operation_id = {op_id} GROUP BY status")
+    for org_id in rng.sample(manifest["org_ids"],
+                             min(args.manifest_customers,
+                                 len(manifest["org_ids"]))):
+        rows_timed(client, phases["customer-statement"],
+                   f"SELECT c.org_id, SUM(f.cbm) FROM {tables['freights']} AS f "
+                   f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
+                   f"WHERE c.org_id = {org_id} GROUP BY c.org_id")
+    manifest["passes"] += 1
+
+
+def run_bookings(client, tables, state, args, phases, rng, manifest=None):
     counts = {COMMITTED: 0, REJECTED_CAPACITY: 0, REJECTED_CREDIT: 0,
               CONFLICTED: 0, FAILED: 0}
     booking = phases["booking"]
     started = time.perf_counter()
     deadline = started + args.seconds
+    last_pass = started
     exhausted = False
     while time.perf_counter() < deadline:
         if args.bookings and counts[COMMITTED] >= args.bookings:
             break
+        if manifest is not None and \
+                time.perf_counter() - last_pass >= args.manifest_interval:
+            manifest_pass(client, tables, manifest, args)
+            last_pass = time.perf_counter()
         elapsed = time.perf_counter() - started
         day = DAY0 + min(HORIZON_DAYS - 1,
                          int(elapsed / max(args.seconds, 1e-9) * HORIZON_DAYS))
@@ -546,6 +592,17 @@ def main():
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--bookings", type=int, default=0)
     parser.add_argument("--capacity-mode", choices=("cached", "scan"), default="cached")
+    parser.add_argument("--manifest", dest="manifest", action="store_true",
+                        default=True,
+                        help="interleave the §6 reporter reads between bookings "
+                             "every --manifest-interval seconds (default). The "
+                             "ckdbs driver runs them in a second process; one "
+                             "connection cannot, so here they displace bookings "
+                             "instead of contending with them")
+    parser.add_argument("--no-manifest", dest="manifest", action="store_false")
+    parser.add_argument("--manifest-interval", type=float, default=1.0)
+    parser.add_argument("--manifest-voyages", type=int, default=20)
+    parser.add_argument("--manifest-customers", type=int, default=10)
     parser.add_argument("--txn", dest="txn", action="store_true", default=True)
     parser.add_argument("--no-txn", dest="txn", action="store_false")
     parser.add_argument("--max-fees", type=int, default=0)
@@ -557,6 +614,10 @@ def main():
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--json", metavar="PATH")
+    # The shared print_bookings reports these; the twin has exactly one
+    # booker with the whole space to itself, which is what a partitioned
+    # single slice is.
+    parser.set_defaults(bookers=1, contend=False)
     args = parser.parse_args()
 
     suffix = args.suffix or time.strftime("%H%M%S")
@@ -598,7 +659,21 @@ def main():
         f"{'BEGIN/COMMIT' if args.txn else 'autocommit'}, "
         f"capacity={args.capacity_mode}")
     state = BookingState(operations, orgs, cargos, fees_by_id(fees), rng)
-    result = run_bookings(client, tables, state, args, booking_phases, rng)
+    manifest = make_manifest(args, operations, orgs) if args.manifest else None
+    result = run_bookings(client, tables, state, args, booking_phases, rng,
+                          manifest)
+    if manifest is not None:
+        for name in MANIFEST_PHASES:
+            p = manifest["phases"][name]
+            p.elapsed = result["elapsed"]
+            phases.append(p)
+        # The tuple shape print_bookings expects, shared with the ckdbs
+        # driver's manifest_process result.
+        result["manifest"] = {
+            "passes": manifest["passes"], "rows_read": manifest["rows_read"],
+            "phases": {name: (p.latencies, p.errors, p.first_error)
+                       for name, p in manifest["phases"].items()},
+        }
     if args.verify:
         result["verify"] = verify(client, tables, state, args.verify, rng)
 
@@ -614,11 +689,27 @@ def main():
         "host": args.host, "port": args.port,
         "table": f"scenario2_{suffix}", "loaded": loaded,
         "txn": args.txn, "capacity_mode": args.capacity_mode, "seed": args.seed,
+        # The workload identity, so compare_scenario2.py can refuse to diff
+        # two runs that did different work. One key per flag that changes
+        # what is loaded or what a booking does.
+        "organizations": args.organizations, "ships": args.ships,
+        "operations": args.operations, "cargos": args.cargos,
+        "capacity_headroom": args.capacity_headroom,
+        "credit_headroom": args.credit_headroom,
+        "hot_routes": args.hot_routes, "max_fees": args.max_fees,
+        "bookings": args.bookings, "bookers": 1,
+        "manifest": args.manifest,
         "synchronous_commit": args.synchronous_commit or "on (default)",
         "outcomes": result["counts"], "retries": 0,
         "tps": (result["counts"][COMMITTED] / result["elapsed"]
                 if result["elapsed"] > 0 else 0.0),
     }
+    if "verify" in result:
+        checks, failures, first = result["verify"]
+        meta["verify"] = {"checks": checks, "failures": failures, "first": first}
+    if result.get("manifest"):
+        meta["manifest_passes"] = result["manifest"]["passes"]
+        meta["manifest_rows_read"] = result["manifest"]["rows_read"]
     report(phases, meta, footer=(
         "PostgreSQL twin of tools/scenario2_freight.py: same booking, same",
         "work target, same seed. freights and charges carry a pk index they",

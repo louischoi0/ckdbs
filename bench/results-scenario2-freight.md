@@ -312,6 +312,145 @@ moves trail volume by 2.75× without mentioning Waystone**: adding
 and tripled the file. Nothing in that schema decision looks like a Waystone
 decision.
 
+## Concurrency: throughput rises, and READ COMMITTED loses updates
+
+Everything above runs one booker. With several, two results appear that a
+single connection cannot produce — one about speed, one about correctness,
+and the second is the more important.
+
+| | |
+|---|---|
+| executed | **2026-08-07 02:04:08 → 02:06:32 UTC** |
+| branch / HEAD | `feat-additional-types` / `738fe6e` |
+| binary | unchanged — the same 23:47:41 build measured throughout |
+| work | 1,500 committed bookings per run, `--seed 1`, fresh server and file each |
+| noise | the two one-booker rows differ by 12%, so single-connection rows here are indicative only; the multi-booker rows were taken back to back |
+
+`--contend` shares the two rows a booking updates — the voyage and the
+customer. `--no-contend` gives each booker a disjoint slice of **both**
+voyages and customers, so no conflict is possible. Cargos are split in either
+mode: a cargo ships once, and two bookers holding the same one would be a
+driver defect rather than contention.
+
+| bookers | mode | isolation | TPS | conflicts | ops / orgs | **invariant failures** |
+|---:|---|---|---:|---:|---|---:|
+| 1 | partitioned | RC | 234.1 | 0 | — | 0 |
+| 1 | contended | RC | 263.2 | 0 | — | 0 |
+| 2 | partitioned | RC | 341.3 | 0 | — | 0 |
+| 2 | contended | RC | 359.9 | 1 | 0 / 1 | **1** |
+| 4 | partitioned | RC | 404.5 | 0 | — | 0 |
+| 4 | contended | RC | 404.4 | 3 | 2 / 1 | **2** |
+| 8 | partitioned | RC | 437.1 | 0 | — | 0 |
+| 8 | contended | RC | 430.5 | 4 | 3 / 1 | **3** |
+| 4 | contended | **RR** | 397.7 | 36 | 17 / 19 | **0** |
+| 8 | contended | **RR** | 421.3 | 80 | 25 / 55 | **0** |
+
+*(100 invariant checks per run; RC = READ COMMITTED, RR = REPEATABLE READ)*
+
+### Group commit is real, and it is worth 1.9×
+
+Throughput rises from 234 to 437 TPS as bookers go 1 to 8 — on a server that
+dispatches every statement on **one thread**, where no statement executes in
+parallel with any other. The engine is not doing more work per second; it is
+doing fewer fsyncs per booking. Durability class `group` batches the commits
+of concurrently open transactions into one flush, and `CLAUDE.md` records the
+consequence of never having tested it with more than one connection: "802
+inserts/s strict, 798 group (a batch of one is a batch)". With eight
+connections a batch is finally a batch.
+
+The latency table shows the trade exactly:
+
+| bookers | booking p0 | p25 | p50 | p95 | p99 | commit p50 | commit p99 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 878 | 2,971 | 3,840 | 7,376 | 11,575 | 2,122 | 6,258 |
+| 2 | 2,533 | 4,990 | 5,346 | 9,061 | 12,406 | 2,131 | 4,570 |
+| 4 | 1,302 | 8,402 | 9,553 | 13,286 | 15,978 | 2,218 | 4,489 |
+| 8 | 4,031 | 15,760 | 17,805 | 23,627 | 29,360 | 2,608 | 5,232 |
+
+*(µs, partitioned, RC)*
+
+A booking's p50 grows 4.6× while throughput grows 1.9× — the queue in front
+of a single-threaded dispatcher, priced. **The commit itself barely moves**:
+2,122 µs at one booker and 2,608 µs at eight, +23% while eight times the work
+flows through it. That is the whole mechanism in one row — the flush is being
+shared, so per-booking durability cost falls even as each booking waits
+longer to be served.
+
+### READ COMMITTED loses updates, silently, and the checker catches it
+
+This is the first time `--verify` has failed a run in this scenario, and it
+fails for a correct reason:
+
+```
+I1 operation 192: booked_cbm=993000, SUM(freights.cbm)=1362000
+I3 organization 7: outstanding=14360787, recomputed=14652399
+```
+
+Voyage 192 is carrying 1,362,000 milli-m³ of freight and its capacity counter
+says 993,000. The rows are all there; the counter that the capacity check
+reads is short by 369,000. Two bookers read the same `booked_cbm`, each added
+its own cargo, and each wrote back — the second overwrote the first. The
+capacity limit is now being enforced against a number that under-reports the
+ship's load, which is exactly the failure this workload was built to be able
+to detect.
+
+**The engine is not misbehaving.** `docs/txn.md` specifies first-updater-wins
+with no waiting: an `UPDATE` is refused when its target was written by a
+*concurrent uncommitted* transaction. Two read-modify-write transactions that
+overlap in time but commit in sequence are not that case, and under READ
+COMMITTED each statement takes a fresh read view, so the second transaction's
+read simply happened before the first one's write. This is the classic
+lost-update hazard of RC, and PostgreSQL at RC has it too.
+
+What is specific to KDS is **how little the workload can do about it**. There
+is no `SELECT ... FOR UPDATE`, and `UPDATE ... SET c = c + n` is not
+expressible — the grammar takes a literal on the right-hand side
+(`docs/client-manual.md`). So a running total cannot be incremented
+atomically at any isolation level; it can only be read, computed client-side,
+and written back. That leaves exactly one remedy available today, and it
+works:
+
+| 4 bookers, contended | RC | RR |
+|---|---:|---:|
+| conflicts raised | 3 | **36** |
+| conflicts on `operations` / `organizations` | 2 / 1 | 17 / 19 |
+| invariant failures | **2** | **0** |
+| TPS | 404.4 | 397.7 (**−1.7%**) |
+
+REPEATABLE READ fixes the transaction's read view at `BEGIN`, so a row
+written by anyone after that point makes the update conflict rather than
+overwrite. The losses become 36 retryable errors, every one retried and
+committed, and the invariants hold — for 1.7%. At eight bookers the same
+holds at −2.1% (80 conflicts, 0 failures).
+
+Note what the conflict counts say about the two axes. At RC the few conflicts
+that surface skew to `operations` (3 of 4 at eight bookers); under RR, where
+they are actually being detected, the balance inverts to `organizations`
+(55 of 80). 400 voyages against 200 customers means a customer is twice as
+likely to be shared, and only RR is sensitive enough to show it. **A conflict
+count that is not detecting everything is not just smaller — it is skewed**,
+and a per-axis split taken at RC would have pointed capacity work at the
+wrong relation.
+
+### What this means for the engine
+
+Three things, in descending order of how much they should change someone's
+plans.
+
+1. **A read-modify-write of one column has no correct spelling in this
+   engine at the default isolation level.** RR is a remedy, but it is a
+   heavier promise than the workload needs and it converts a data-loss bug
+   into a retry rate that grows with contention. The narrower fix — an atomic
+   `SET c = c + n`, or row locking — is a `docs/txn.md` decision, and this
+   run is the argument for having it.
+2. **`group` durability has never been exercised until now**, and it is worth
+   1.9× at eight connections. Any benchmark of this engine taken on one
+   connection understates commit-bound throughput by that factor, including
+   every other number in this document.
+3. **Cross-core is not what this workload needs next.** Eight bookers already
+   saturate a single-threaded dispatcher at 437 TPS with the commit shared
+   eight ways; the queue, not the core count, is what p50 is made of.
+
 ## A second core buys nothing, and costs an extent and a WAL stream
 
 `cores` is pinned into the superblock when a database is created and
@@ -393,14 +532,124 @@ Two operational consequences follow: raising `cores` raises the instance's
 **startup** disk requirement linearly, and a near-full volume degrades this
 engine's write path by an order of magnitude before it fails outright.
 
-## What this run does not answer
+## Read shapes versus PostgreSQL: the analytic reads invert the table
 
-- **What a conflict costs.** Zero occurred, by construction: one booker.
-  `S2-03` adds `--bookers` and `--contend`.
-- **Whether `--txn` and `--no-txn` differ in correctness.** They do not here
-  and cannot: with no second writer, `--no-txn` passed all 100 invariant
-  checks. The contrast `docs/scenario2-freight.md` §4 is written for needs
-  concurrency.
+Everything in "Versus PostgreSQL" above compares the eight statements a
+booking issues — point lookups, one filter scan, inserts, updates, a commit.
+What it could not compare is the reads the *reporter* issues, because the
+PostgreSQL twin had no reporter. `S2-04`/`S2-05` built both halves: the ckdbs
+driver runs the three §6 reads in a second process contending with the
+bookers, the twin interleaves the same three statements between bookings on
+its one connection, and `tools/compare_scenario2.py` diffs the two `--json`
+files after refusing any pair that did not run identical work.
+
+| | |
+|---|---|
+| executed | **2026-08-07 02:35:41 → 02:36:40 UTC**, four runs interleaved KDS/PG/KDS/PG |
+| branch / HEAD | `feat-additional-types` / `d99edcf`, driver changes uncommitted |
+| binary | unchanged — the same 23:47:41 build measured throughout this document |
+| work | 1,500 committed bookings per run, `--seed 1 --verify 25`, fresh KDS server and data file per round; scale as the head of this document |
+| reporter | on, 1 s interval, 20 voyages + 10 customers per pass — 6 passes on each engine |
+| repeatability | KDS 275.6 / 271.6 TPS across rounds (1.5%), PG 235.6 / 240.9 (2.2%); every per-statement number below reproduced within those spreads except where noted |
+| invariants | 100 checks, 0 failures, both engines, both rounds |
+
+One measured pair, every statement both engines ran, grouped by access case
+(round A; round B agrees except the one row flagged):
+
+| case | statement | KDS mean | PG mean | KDS p99 | PG p99 |
+|---|---|---:|---:|---:|---:|
+| point lookup (pk) | cargo-lookup | **143** | 235 | **270** | 420 |
+| | credit-lookup | **134** | 241 | **279** | 402 |
+| capacity read (derived column) | capacity-read | **132** | 215 | **270** | 334 |
+| non-pk equality, small relation | recipe-read | **152** | 307 | **283** | 512 |
+| non-pk equality, growing ledger | manifest-scan | 395 | **238** | 2,419 | **339** |
+| grouped aggregate over it | voyage-rollup | 342 | **258** | 2,312 | **377** |
+| join + aggregate | customer-statement | 871† | 967 | 4,139 | **1,235** |
+| insert | freight-insert | **125** | 242 | **265** | 404 |
+| | charge-insert | **114** | 185 | **248** | 294 |
+| update (pk) | operation-update | **120** | 221 | **232** | 339 |
+| | org-update | **120** | 232 | **268** | 358 |
+| durability | commit | 1,761 | **1,146** | 3,410 | **1,420** |
+| whole booking | booking | **3,598** | 4,147 | 6,478 | **5,546** |
+
+*(µs; † the join's KDS mean is the one unstable row — 871 in round A, 1,449
+in round B, on 60 operations contending with the writers, while PG's held at
+967/1,075. Its p99 gap, 3–4× in PostgreSQL's favour, is stable.)*
+
+**The booking statements say what the earlier section said** — KDS 1.6–1.9×
+faster on every one, protocol-loaded, commit 1.5× the other way. The new
+result is the three reporter rows, where the table inverts: on the two reads
+over the growing freight ledger PostgreSQL is 1.7–2× faster in the mean and
+**7× tighter at p99**, and it wins the join's tail 3×.
+
+The per-statement rows carry two wire protocols, so the honest form of that
+finding is each engine's costs as multiples of *its own* point lookup — the
+protocol divides out:
+
+| statement | KDS | PG |
+|---|---:|---:|
+| recipe-read (93-row relation) | 1.07× | 1.31× |
+| manifest-scan (growing ledger) | **2.77×** | **1.01×** |
+| voyage-rollup | 2.40× | 1.10× |
+| customer-statement | 6.1×† | 4.1× |
+| commit | 12.4× | 4.9× |
+
+The full distributions of the three reporter reads carry the mechanism that
+the means only hint at:
+
+| statement | engine | ops | mean | p0 | p25 | p50 | p95 | p99 | max |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| manifest-scan | KDS | 120 | 395 | **81** | 171 | 257 | 1,295 | **2,419** | 4,910 |
+| | PG | 120 | 238 | 181 | 210 | 231 | 312 | **339** | 350 |
+| voyage-rollup | KDS | 120 | 342 | 86 | 183 | 259 | 1,040 | 2,312 | 2,609 |
+| | PG | 120 | 258 | 211 | 236 | 248 | 313 | 377 | 556 |
+| customer-statement | KDS | 60 | 871 | 97 | 406 | 871 | 1,528 | 4,139 | 4,139 |
+| | PG | 60 | 967 | 787 | 910 | 950 | 1,122 | 1,235 | 1,235 |
+
+*(µs, round A)*
+
+KDS's p0 is *lower* than PostgreSQL's on every one of the three — 81 µs
+against 181 for the scan — because an early pass walks a nearly empty ledger
+and the walk of nothing is nearly free. Its p99 is then 30× its p0, because a
+late pass walks everything the run has written. PostgreSQL's entire
+distribution sits in a 1.9× band from p0 to max: an index probe costs the
+same at row 0 and row 1,500. These are not two engines with different speeds;
+they are a cost that grows with the relation against one that does not.
+
+PostgreSQL serves `WHERE operation_id = <n>` over the ledger at the price of
+a point lookup, flat for the whole run, because it has the
+`freights(operation_id)` index. KDS walks the relation — 2.77× its point
+lookup *on average over a run in which the ledger grew from 0 to 1,500 rows*,
+which is why its p99 is 7× its p50: the last pass costs what the mean of a
+longer run would. **This is the same verdict the derived-column section
+reached from the write side, measured from the read side**: the gap is not
+the fold and not the join machinery — `voyage-rollup` walks the same pages as
+`manifest-scan` and comes back cheaper (342 µs against 395), because folding
+a voyage's freights to one group row costs less than decoding and returning
+them — it is the absence of any secondary access path to a non-pk column on a
+relation that keeps growing. `recipe-read`, the same statement shape over a
+relation that never grows past 93 rows, stays at 1.07× — a FilterScan is only
+expensive when there is something to scan.
+
+Two smaller things the pair settles. The reporter costs the bookers nothing
+this driver can resolve — 275.6/271.6 TPS with it on, against 271.9/276.4 in
+the baseline rows above, all four inside the ±3.2% floor — so the earlier
+sections' numbers stand unrevised beside it. And the outcome accounting is
+engine-independent at this scale: both engines committed 1,500, rejected 2
+for capacity and 1 for credit, from the same seed — the business logic lives
+in the driver, and the identity check that demands it is what makes the rest
+of the table a comparison of engines rather than of workloads.
+
+## What these runs do not answer
+
+- **What `--no-txn` costs in correctness.** Not measured: the concurrency
+  section above runs every configuration with transactions on, and the
+  lost-update result it found is *inside* `--txn`. Autocommit under
+  contention would be strictly worse and has not been quantified.
+- **Whether the lost updates reproduce on PostgreSQL.** They should — this is
+  RC's documented behaviour on both engines — but the twin has no
+  `--bookers`, so it was not run. Building that is the honest way to show the
+  finding is about the isolation level and not about KDS.
 - **The Cabin and the foreign keys.** Both inside the noise floor. The Cabin
   served 1,496 probes against 8 misses over 8 observed values — the structure
   works; the recipe read is 4% of a booking, so serving it perfectly cannot
