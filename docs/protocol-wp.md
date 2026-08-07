@@ -50,8 +50,8 @@ Needs: P06–P07; parser exists today.
 
 **P09 — Row & type wire codecs.**
 Files: `src/wire/row_codec.cpp`, `tests/kwp_row_test.cpp`. v1 type table encoders/decoders (INT*, UINT64, FLOAT64, BOOL, TEXT, BYTES, TIMESTAMP), the `{i32 len | -1=NULL}` field convention shared by params and rows, `S_ROW_DESC` / `S_ROW_BATCH` builders with the ≤64 KiB batch target behind a constant.
-Tests: per-type round-trips incl. NULL; batch splitting at the size target; DECIMAL explicitly absent with a failing-by-design guard referencing the `[OPEN]`.
-Needs: P05. Parallel with P07–P08.
+Tests: per-type round-trips incl. NULL; batch splitting at the size target; ~~DECIMAL explicitly absent with a failing-by-design guard referencing the `[OPEN]`~~ — the `[OPEN]` was decided 2026-08-07 (§6: unscaled int64 LE, scale in `S_ROW_DESC.type_mod`) and the row codec already implements it with round-trip and layout pins (`tests/wire_row_codec_test.cpp`); the guard now covers `FLOAT64`, which remains specified-but-unstorable.
+Needs: P05. Parallel with P07–P08. Note the row-value half of this task predates it: `include/kds/wire/row_codec.hpp` was built 2026-08-05 as a crosscore prerequisite, so P09's remaining scope is the ≤64 KiB batch-splitting policy and the param decode, not the codec.
 
 **P10 — Portals & streaming.**
 Files: extend session + `tests/kwp_stream_test.cpp`. Portal registry, `max_rows` accounting, `S_PORTAL_SUSPENDED` / `C_CONTINUE`, portal-idle timeout via the injected clock (default behind a constant, `[OPEN]`), pin-release note enforced: destroying/timing out a portal releases its executor cursor through the seam.

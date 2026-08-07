@@ -10,10 +10,13 @@ namespace {
 
 using catalog::kTypeValBool;
 using catalog::kTypeValChar;
+using catalog::kTypeValDate;
+using catalog::kTypeValDecimal;
 using catalog::kTypeValInt16;
 using catalog::kTypeValInt32;
 using catalog::kTypeValInt64;
 using catalog::kTypeValInt8;
+using catalog::kTypeValTimestamp;
 using catalog::kTypeValUint64;
 using catalog::kTypeValVarchar;
 
@@ -85,9 +88,16 @@ std::int16_t WireTypeLen(std::uint32_t type_val) noexcept {
         case kTypeValInt8:
         case kTypeValBool: return 1;
         case kTypeValInt16: return 2;
-        case kTypeValInt32: return 4;
+        case kTypeValInt32:
+        // A date is its epoch-day int32, on the wire as in the tuple.
+        case kTypeValDate: return 4;
         case kTypeValInt64:
-        case kTypeValUint64: return 8;
+        case kTypeValUint64:
+        // Epoch microseconds, and the unscaled decimal - both the int64
+        // storage holds (well_known.hpp's TY1/TY9 table); the decimal's
+        // scale is in the description's type_mod, not in the value.
+        case kTypeValTimestamp:
+        case kTypeValDecimal: return 8;
         // char and varchar are both variable **on the wire**, whatever they
         // occupy in a tuple: a char column's stored width is a schema fact
         // and its value's length is not.
@@ -103,6 +113,11 @@ std::vector<FieldDescription> DescribeSchema(const catalog::Schema& schema) {
         f.name = std::string(catalog::NameView(col.name));
         f.type_oid = col.type_val;
         f.type_len = WireTypeLen(col.type_val);
+        // The catalog's packed (p, s) word, carried as-is: one packing,
+        // two readers (TY02's helpers), zero for every other type. Not
+        // col.len unconditionally - a char column's len is a storage width,
+        // which the header says this description deliberately does not leak.
+        if (col.type_val == kTypeValDecimal) f.type_mod = col.len;
         // Column 0 is the Keystone id on every user relation (invariant 11,
         // protocol.md §6), and it is the one field a client can rely on
         // without reading the schema.
@@ -121,11 +136,13 @@ void EncodeRowDescription(const std::vector<FieldDescription>& fields,
         PutLE(out, f.type_oid, 4);
         PutLE(out, static_cast<std::uint16_t>(f.type_len), 2);
         PutLE(out, f.flags, 2);
+        PutLE(out, f.type_mod, 4);
     }
 }
 
-Status EncodeValue(std::uint32_t type_val, const parser::AstValue& value,
+Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& value,
                    std::vector<std::byte>& out) {
+    const std::uint32_t type_val = col.type_val;
     if (value.type == parser::ValueType::kNull) {
         // -1, the one NULL convention (protocol.md §6). The engine cannot
         // store a NULL yet, so nothing produces this today - it is here
@@ -139,11 +156,40 @@ Status EncodeValue(std::uint32_t type_val, const parser::AstValue& value,
         case kTypeValInt8:
         case kTypeValInt16:
         case kTypeValInt32:
-        case kTypeValInt64: {
+        case kTypeValInt64:
+        // A date and a timestamp *are* integers (spec-types.md TY5): the
+        // decoder hands them over as kInt, and WireTypeLen already knows
+        // their widths, so the int arm is their arm.
+        case kTypeValDate:
+        case kTypeValTimestamp: {
             if (Status s = ExpectInt(value, "an integer"); !s.ok()) return s;
             const std::int16_t width = WireTypeLen(type_val);
             PutLE(out, static_cast<std::uint32_t>(width), 4);
             PutLE(out, value.int_val, width);
+            return Status::OK();
+        }
+        case kTypeValDecimal: {
+            if (value.type == parser::ValueType::kParam) {
+                return Status::Unsupported(
+                    "wire row codec: parameter '$" + value.param_name() +
+                    "' has no value to encode; a declaration is not an execution");
+            }
+            if (value.type != parser::ValueType::kDecimal) {
+                return Status::InvalidArgument(
+                    "wire row codec: decimal column did not receive a decimal value");
+            }
+            // The description declared this column's scale; an unscaled
+            // integer under any other scale is a different number wearing
+            // the right width, so a disagreement is refused, never
+            // rescaled - the same rule the storage codec applies (TY04).
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            if (value.scale != scale) {
+                return Status::InvalidArgument(
+                    "wire row codec: decimal value at scale " + std::to_string(value.scale) +
+                    " for a column of scale " + std::to_string(scale));
+            }
+            PutLE(out, static_cast<std::uint32_t>(8), 4);
+            PutLE(out, value.int_val, 8);
             return Status::OK();
         }
         case kTypeValUint64: {
@@ -176,9 +222,8 @@ Status EncodeValue(std::uint32_t type_val, const parser::AstValue& value,
             return Status::OK();
         }
         default:
-            // float and decimal land here and are refused rather than
-            // guessed: DECIMAL's encoding is [OPEN] in protocol.md §6, and
-            // neither is storable at all under the fixed-length rule - so a
+            // Only float and unknown type_vals land here now. float is not
+            // storable - refused at CREATE TABLE, encoding unsettled - so a
             // value of one arriving here is a defect upstream, not a gap.
             return Status::Unsupported("wire row codec: no wire encoding for type " +
                                        std::to_string(type_val));
@@ -214,7 +259,7 @@ Status RowBatchWriter::AppendRow(const catalog::Schema& schema,
     // already had.
     const std::size_t mark = buffer_.size();
     for (std::size_t i = 0; i < values.size(); ++i) {
-        if (Status s = EncodeValue(schema.columns[i].type_val, values[i], buffer_); !s.ok()) {
+        if (Status s = EncodeValue(schema.columns[i], values[i], buffer_); !s.ok()) {
             buffer_.resize(mark);
             return s;
         }
@@ -254,13 +299,15 @@ StatusOr<std::vector<FieldDescription>> DecodeRowDescription(std::span<const std
         f.name.assign(reinterpret_cast<const char*>(payload.data() + at), name_len);
         at += name_len;
 
-        if (!need(8)) return Status::Corruption("wire row description: truncated field trailer");
+        if (!need(12)) return Status::Corruption("wire row description: truncated field trailer");
         f.type_oid = static_cast<std::uint32_t>(LoadLE(payload.subspan(at, 4)));
         at += 4;
         f.type_len = static_cast<std::int16_t>(LoadLE(payload.subspan(at, 2)));
         at += 2;
         f.flags = static_cast<std::uint16_t>(LoadLE(payload.subspan(at, 2)));
         at += 2;
+        f.type_mod = static_cast<std::uint32_t>(LoadLE(payload.subspan(at, 4)));
+        at += 4;
         fields.push_back(std::move(f));
     }
     return fields;

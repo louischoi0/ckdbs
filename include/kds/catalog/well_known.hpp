@@ -237,11 +237,11 @@ static_assert(kFirstUserTrxId > kBootstrapXid);
 // sys.columns/sys.types `type_val` tags for the scalar types Bootstrap()
 // registers. Placeholder values (no external format they must match) but
 // named rather than left as magic numbers now that row_codec.cpp switches
-// on them to decide on-disk encoding - see that file's comment for which
-// of these are actually encodable today (kTypeValFloat/kTypeValDecimal
-// are declared but not yet given an on-disk encoding, a currently open
-// decision - see CLAUDE.md's KWP `DECIMAL` wire encoding open item, which
-// extends to storage until a type registry exists).
+// on them to decide on-disk encoding. kTypeValFloat is the one declared
+// type with no encoding anywhere - storage refuses it at CREATE TABLE and
+// the wire refuses it by fallthrough; kTypeValDecimal gained its storage
+// encoding at TY04 and its wire encoding on 2026-08-07 (protocol.md §6:
+// unscaled int64 LE, scale in the row description's type_mod).
 inline constexpr std::uint32_t kTypeValInt8 = 1;
 inline constexpr std::uint32_t kTypeValInt16 = 2;
 inline constexpr std::uint32_t kTypeValInt32 = 3;
