@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -227,6 +230,83 @@ struct TableAccess {
     const ForeignKeyRef* ForeignKeyOn(std::uint16_t col_pos) const noexcept {
         for (const ForeignKeyRef& fk : fkeys_out) {
             if (fk.column_no == col_pos) return &fk;
+        }
+        return nullptr;
+    }
+
+    // ---- Secondary indexes on this relation (docs/feat-index.md) --------
+    //
+    // One entry per index, everything a compiler or a write hook needs to
+    // reach the tree without going back to sys.indexes.
+    //
+    // **This is the one field on this struct that can move without DDL, and
+    // the exception is deliberate rather than overlooked.** A root split
+    // during an ordinary INSERT republishes `root_page_id` through
+    // `Catalog::UpdateIndexRoot()`, which bumps the catalog version and so
+    // drops this entry - meaning a caller **holding a `const TableAccess*`
+    // across an index insert that grows a level is holding a dangling
+    // pointer**. That is not a new hazard: `desc_page_id` has exactly the
+    // same property for a clustered btree, and `InsertInner` handles it by
+    // doing the relink last and using only plain ids afterwards, with a
+    // comment saying so. The index write hook (IX06) must do the same. The
+    // alternative - not caching the root - costs a sys.indexes scan per
+    // statement, which is what this whole struct exists to avoid.
+    struct IndexRef {
+        Oid index_oid = 0;
+        PageId root_page_id = kInvalidPageId;
+        // The index's schema constants: `key_width` is what
+        // exec::EncodeIndexKey produces, `entry_width` the whole leaf entry.
+        std::uint16_t key_width = 0;
+        std::uint16_t entry_width = 0;
+        std::uint8_t nkeys = 0;
+        std::uint8_t ncovered = 0;
+        // In **declared index order**, which is the order the key encoding
+        // concatenates them in - part of the format, not a presentation
+        // choice.
+        std::array<std::uint16_t, kMaxIndexKeyColumns> key_cols{};
+        std::array<std::uint16_t, kMaxIndexCoveredColumns> covered_cols{};
+
+        std::span<const std::uint16_t> keys() const noexcept {
+            return std::span<const std::uint16_t>(key_cols.data(), nkeys);
+        }
+        std::span<const std::uint16_t> covered() const noexcept {
+            return std::span<const std::uint16_t>(covered_cols.data(), ncovered);
+        }
+        // The only column an equality can enter this index by.
+        std::uint16_t leading_column() const noexcept { return key_cols[0]; }
+    };
+
+    // **Sorted by `index_oid`**, which is creation order. That is not
+    // tidiness: spec §9 breaks a tie between two equally-usable indexes by
+    // lowest oid, and a plan that depended on scan order would compile the
+    // same statement differently as rows moved on the catalog page - which
+    // is exactly what a recorded `pattern_id` must not do.
+    std::vector<IndexRef> indexes;
+
+    // A bit per **leading** key column, on the same argument `cabin_mask`
+    // makes: the compiler asks "could an equality on this column enter an
+    // index" once per equality per compile, and the answer is one bit.
+    //
+    // Leading only, and the distinction is the one `Catalog::
+    // FindIndexOnColumn` makes for the same reason: an index on `(a, b)`
+    // cannot serve an equality on `b`, so a bit for `b` would stop the
+    // compiler calling that step a filter scan while leaving it exactly as
+    // slow. Bit 0 is always clear - `CreateIndex` refuses the primary key,
+    // whose index is the clustered tree. A relation wider than 64 columns
+    // folds its high columns into no bit, which loses the acceleration and
+    // never a row.
+    std::uint64_t index_mask = 0;
+
+    // The index an equality on `col_pos` may enter, or nullptr. The
+    // lowest-oid one when several qualify, matching §9's tie-break.
+    //
+    // Linear over a list whose length is the number of indexes a relation
+    // declares - single digits - so nothing is built for it. A caller that
+    // needs the *longest matching prefix* rather than any match walks
+    // `indexes` itself; this answers the one-column question.
+    const IndexRef* IndexOn(std::uint16_t col_pos) const noexcept {
+        for (const IndexRef& ix : indexes) {
+            if (ix.nkeys > 0 && ix.leading_column() == col_pos) return &ix;
         }
         return nullptr;
     }

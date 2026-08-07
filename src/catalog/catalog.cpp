@@ -867,6 +867,45 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         }
     }
 
+    // The relation's secondary indexes, in one sys.indexes scan
+    // (docs/feat-index.md §12, workplan IX04).
+    //
+    // A failure here is fatal to opening the relation, and for the *fkeys*
+    // reason rather than the Cabin one. An index the compiler cannot see
+    // would only cost speed - but an index the **write hook** cannot see is
+    // an entry never appended, and an index missing an entry is a row lost
+    // to every later probe. Both halves read this one list, so it fails
+    // shut.
+    auto indexes = ListIndexes();
+    if (!indexes.ok()) return indexes.status();
+    for (const SysIndexRow& row : indexes.value()) {
+        if (row.table_oid != oid) continue;
+
+        TableAccess::IndexRef ref;
+        ref.index_oid = row.index_oid;
+        ref.root_page_id = row.root_page_id;
+        ref.key_width = row.key_width;
+        ref.entry_width = row.entry_width;
+        ref.nkeys = row.nkeys;
+        ref.ncovered = row.ncovered;
+        ref.key_cols = row.key_cols;
+        ref.covered_cols = row.covered_cols;
+        access.indexes.push_back(ref);
+
+        // Leading column only - schema.hpp says why "any indexed column"
+        // would be the wrong question.
+        const std::uint16_t leading = ref.leading_column();
+        if (ref.nkeys > 0 && leading > 0 && leading < 64) {
+            access.index_mask |= (std::uint64_t{1} << leading);
+        }
+    }
+    // Creation order, so §9's lowest-oid tie-break is a property of the list
+    // rather than of how the rows happened to land on the page.
+    std::sort(access.indexes.begin(), access.indexes.end(),
+              [](const TableAccess::IndexRef& a, const TableAccess::IndexRef& b) {
+                  return a.index_oid < b.index_oid;
+              });
+
     return cache_.PutTableAccess(std::move(access));
 }
 

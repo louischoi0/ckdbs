@@ -504,7 +504,31 @@ index leaks its tree until page reclamation exists.
 
 `TableAccess` gains `index_mask` plus a `std::vector<IndexRef>`, built at
 `InitTableAccess()` on the same pattern as `cabin_mask` / `cabin_ids` — the
-compiler needs the bit, the executor needs the root page and the widths.
+compiler needs the bit, the executor needs the root page and the widths. The
+list is **sorted by `index_oid`**, so §9's lowest-oid tie-break is a property
+of the list rather than of how rows happened to land on the catalog page. The
+mask names **leading** key columns only, for the reason `FindIndexOnColumn`
+does.
+
+> **IX12a — `IndexRef::root_page_id` is the one field on `TableAccess` that
+> can change without DDL, and holding a `const TableAccess*` across an index
+> insert that grows a level is holding a dangling pointer.**
+
+A root split republishes the root through `Catalog::UpdateIndexRoot()`, which
+bumps the catalog version and so drops the entry. That is not a new hazard —
+`desc_page_id` has had exactly this property for a clustered btree since
+btrees landed, and `InsertInner` handles it by doing the relink **last** and
+using only plain ids afterwards, with a comment saying so. The index write
+hook (IX06) does the same. It is written down here because the alternative
+that looks safer — not caching the root — costs a `sys.indexes` scan per
+statement, which is the entire thing `TableAccess` exists to avoid. This
+engine has already been bitten once by the general shape: the deleted
+per-relation Waystone dangled the pointer a running INSERT was holding.
+
+Building the list **fails shut**, on the foreign-key argument rather than the
+Cabin one: an index the *compiler* cannot see costs only speed, but an index
+the *write hook* cannot see is an entry never appended — and an index missing
+an entry is a row lost to every later probe. Both halves read this one list.
 
 **`Catalog::InsertIndexRow` must start bumping the version.** Its comment
 today reads *"No version bump: nothing cached is derived from sys.indexes"*,

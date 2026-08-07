@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX03 are built** (IX-M1, and
-the catalog row of IX-M2); nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX04 are built** (IX-M1, and
+the catalog half of IX-M2 bar its grammar); nothing else is.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,10 +13,10 @@ note.
 
 ## Where to pick this up
 
-**At `IX04`. IX01, IX02 and IX03 are built** (2026-08-07); the whole suite is
-green at 1,621 tests. An index can now be declared in the catalog and a tree
-can be built by hand — but no grammar reaches either, nothing maintains one,
-and no statement can use one.
+**At `IX05`. IX01-IX04 are built** (2026-08-07); the whole suite is green at
+1,627 tests. An index can be declared in the catalog, a tree built by hand,
+and a relation's indexes read off its cached `TableAccess` — but no grammar
+reaches any of it, nothing maintains an index, and no statement can use one.
 
 What building them added to the design, each folded back into the spec:
 
@@ -32,7 +32,15 @@ What building them added to the design, each folded back into the spec:
 - **`FindIndexOnColumn` answers for the *leading* key column only.** "Contains"
   would stop the compiler calling a step a filter scan while leaving it
   exactly as slow — a lie to the access statistics, which is the function's
-  only consumer today.
+  only consumer today. `TableAccess::index_mask` follows the same rule.
+- **`IndexRef::root_page_id` is the one field on `TableAccess` that can move
+  without DDL** (spec IX12a). A root split republishes it and bumps the
+  catalog version, so a caller holding a `const TableAccess*` across an index
+  insert that grows a level is holding a **dangling pointer**. `desc_page_id`
+  has had this property since btrees landed and `InsertInner` already handles
+  it by relinking last; IX06 must do the same. Not caching the root would
+  cost a sys.indexes scan per statement, which is what `TableAccess` exists
+  to avoid.
 
 - **The tree routes on `(key, pk)`, and a probe is zero-padded rather than
   shortened** (spec IX4b). A separator carrying only the key compares *equal*
@@ -166,14 +174,29 @@ already in use. It does **not** build the tree or check key column types -
 the root page is allocated and formatted by its caller, which keeps
 `catalog/` free of the index page format.
 
-### IX04 — `TableAccess::index_mask` and `IndexRef`
+### IX04 — `TableAccess::index_mask` and `IndexRef` — **built**
 
-Built at `InitTableAccess()`, same pattern as `cabin_mask` / `cabin_ids`.
-Carries root page id, key columns, covered columns, `key_width`,
-`entry_width`. The catalog-cache rule decides what may live here: *can the
-fact change without DDL?* Root page id cannot — it is allocated eagerly at
-`CREATE INDEX` and never moved by growth, the same argument that lets the
-var-heap root be cached.
+Built at `InitTableAccess()` in one `sys.indexes` scan, same pattern as
+`cabin_mask` / `cabin_ids`. Carries root page id, key columns, covered
+columns, `key_width`, `entry_width`; sorted by `index_oid` so §9's tie-break
+is a property of the list; mask over **leading** key columns only.
+
+**The plan's premise about the root was wrong, and the correction is the
+task's finding.** It read "root page id cannot change without DDL - it is
+allocated eagerly at CREATE INDEX and never moved by growth, the same
+argument that lets the var-heap root be cached." The var-heap root really is
+immutable; an index root is not - a split republishes it through
+`UpdateIndexRoot`, which is reached from an ordinary INSERT. It is cached
+anyway, because the bump that publishes it also drops the entry, and because
+the alternative costs a catalog scan per statement. What that buys has a
+price named in spec IX12a: **a `const TableAccess*` held across an index
+insert that grows a level is dangling.** `desc_page_id` has had exactly this
+property since btrees landed, and `InsertInner` handles it by relinking last;
+IX06 does the same.
+
+Building the list **fails shut** - the foreign-key argument, not the Cabin
+one: an index the compiler cannot see costs speed, but an index the write
+hook cannot see is a row lost to every later probe.
 
 ### IX05 — Grammar and DDL
 

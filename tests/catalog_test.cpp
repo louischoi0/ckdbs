@@ -410,6 +410,157 @@ TEST_F(CatalogTest, AnIndexRootMovesThroughTheCatalogAndBumpsTheVersion) {
     EXPECT_EQ(catalog_.UpdateIndexRoot(999999, 1).code(), StatusCode::kNotFound);
 }
 
+// ---- TableAccess::indexes / index_mask (workplan IX04) -----------------
+
+TEST_F(CatalogTest, TableAccessCarriesTheRelationsIndexesInCreationOrder) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    Catalog::IndexDef composite = SimpleIndex(table.value(), "composite", 1);
+    composite.key_cols = {2, 1};
+    composite.covered_cols = {1};
+    composite.root_page_id = 555;
+    composite.key_width = 18;
+    composite.entry_width = 34;
+    auto first = catalog_.CreateIndex(composite);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    auto second = catalog_.CreateIndex(SimpleIndex(table.value(), "single", 1));
+    ASSERT_TRUE(second.ok());
+
+    auto access = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    ASSERT_EQ(access.value()->indexes.size(), 2u);
+
+    // Sorted by index_oid, which is creation order - so §9's lowest-oid
+    // tie-break is a property of the list and not of how the rows happened
+    // to land on the catalog page.
+    EXPECT_EQ(access.value()->indexes[0].index_oid, first.value());
+    EXPECT_EQ(access.value()->indexes[1].index_oid, second.value());
+
+    const TableAccess::IndexRef& ix = access.value()->indexes[0];
+    EXPECT_EQ(ix.root_page_id, 555u);
+    EXPECT_EQ(ix.key_width, 18u);
+    EXPECT_EQ(ix.entry_width, 34u);
+    ASSERT_EQ(ix.keys().size(), 2u);
+    // Declared order, not sorted: it is the order the key encoding
+    // concatenates them in.
+    EXPECT_EQ(ix.keys()[0], 2u);
+    EXPECT_EQ(ix.keys()[1], 1u);
+    ASSERT_EQ(ix.covered().size(), 1u);
+    EXPECT_EQ(ix.covered()[0], 1u);
+}
+
+TEST_F(CatalogTest, TheIndexMaskNamesLeadingKeyColumnsOnly) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    Catalog::IndexDef def = SimpleIndex(table.value(), "composite", 1);
+    def.key_cols = {1, 2};
+    ASSERT_TRUE(catalog_.CreateIndex(def).ok());
+
+    auto access = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(access.ok());
+
+    // Column 1 leads the index; column 2 is in it and cannot be entered by
+    // an equality, so a bit for it would stop the compiler calling that
+    // step a filter scan while leaving it exactly as slow.
+    EXPECT_NE(access.value()->index_mask & (std::uint64_t{1} << 1), 0u);
+    EXPECT_EQ(access.value()->index_mask & (std::uint64_t{1} << 2), 0u);
+    // Bit 0 is always clear: CreateIndex refuses the primary key.
+    EXPECT_EQ(access.value()->index_mask & 1u, 0u);
+
+    ASSERT_NE(access.value()->IndexOn(1), nullptr);
+    EXPECT_EQ(NameView(catalog_.FindIndexByName("composite").value().name), "composite");
+    EXPECT_EQ(access.value()->IndexOn(2), nullptr);
+    EXPECT_EQ(access.value()->IndexOn(0), nullptr);
+}
+
+TEST_F(CatalogTest, IndexOnPicksTheLowestOidWhenTwoIndexesShareALeadingColumn) {
+    // Spec §9's tie-break, which exists so the same statement compiles the
+    // same way whatever the data did.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    auto first = catalog_.CreateIndex(SimpleIndex(table.value(), "one", 1));
+    ASSERT_TRUE(first.ok());
+    Catalog::IndexDef wider = SimpleIndex(table.value(), "two", 1);
+    wider.key_cols = {1, 2};
+    ASSERT_TRUE(catalog_.CreateIndex(wider).ok());
+
+    auto access = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(access.ok());
+    ASSERT_NE(access.value()->IndexOn(1), nullptr);
+    EXPECT_EQ(access.value()->IndexOn(1)->index_oid, first.value());
+}
+
+TEST_F(CatalogTest, ACachedTableAccessSeesAnIndexCreatedAfterItWasFilled) {
+    // The reason CreateIndex bumps: an index appearing stales index_mask on
+    // every held entry for the relation, and the compiler reads it.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    auto before = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(before.ok());
+    EXPECT_EQ(before.value()->index_mask, 0u);
+
+    ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1)).ok());
+
+    auto after = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(after.ok());
+    EXPECT_NE(after.value()->index_mask, 0u);
+
+    // ...and a root that moved. This is the one field on TableAccess that
+    // can change without DDL, which is why a caller holding the pointer
+    // across an index insert that grows a level is holding a dangling one.
+    auto oid = catalog_.FindIndexByName("ix");
+    ASSERT_TRUE(oid.ok());
+    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value().index_oid, 7777).ok());
+
+    auto relinked = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(relinked.ok());
+    ASSERT_EQ(relinked.value()->indexes.size(), 1u);
+    EXPECT_EQ(relinked.value()->indexes[0].root_page_id, 7777u);
+}
+
+TEST_F(CatalogTest, ADroppedIndexLeavesTheRelationWithNoneAgain) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+    auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
+    ASSERT_TRUE(oid.ok());
+    ASSERT_NE(catalog_.InitTableAccess(table.value()).value()->index_mask, 0u);
+
+    ASSERT_TRUE(catalog_.DropIndex(oid.value()).ok());
+
+    auto after = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(after.ok());
+    EXPECT_EQ(after.value()->index_mask, 0u);
+    EXPECT_TRUE(after.value()->indexes.empty());
+}
+
+TEST_F(CatalogTest, OneRelationsIndexesDoNotAppearOnAnother) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto a = catalog_.CreateTable(kNamespacePublic, "a", IndexableSchema(),
+                                  ClusteredType::kBtree);
+    auto b = catalog_.CreateTable(kNamespacePublic, "b", IndexableSchema(),
+                                  ClusteredType::kBtree);
+    ASSERT_TRUE(a.ok() && b.ok());
+    ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(a.value(), "a_ix", 1)).ok());
+
+    EXPECT_EQ(catalog_.InitTableAccess(a.value()).value()->indexes.size(), 1u);
+    EXPECT_TRUE(catalog_.InitTableAccess(b.value()).value()->indexes.empty());
+    EXPECT_EQ(catalog_.InitTableAccess(b.value()).value()->index_mask, 0u);
+}
+
 // Where InsertIndexRow() deliberately did not bump: that comment was true
 // while nothing cached anything derived from sys.indexes, and IX04 makes it
 // false.
