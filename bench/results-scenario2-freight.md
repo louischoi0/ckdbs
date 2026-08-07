@@ -640,6 +640,51 @@ for capacity and 1 for credit, from the same seed — the business logic lives
 in the driver, and the identity check that demands it is what makes the rest
 of the table a comparison of engines rather than of workloads.
 
+## The commit's second millisecond, found and removed
+
+The headline of this document — half a booking waits in one fsync, bimodal,
+1.6× slower than PostgreSQL's — is now historical. Tracing the live server
+(`strace -T` around 810 commits) found that a commit issues **exactly one
+fsync**, but that fsync had two populations: ~950 µs for the load phase's
+small appends and **~2,082 µs for every booking commit**. The difference was
+never the WAL design; it was two file-level choices at the durability point:
+
+- **`posix_fallocate` reserves *unwritten* extents**, so every commit's
+  write landed in space whose extents the following fsync had to convert —
+  a journal transaction inside the exact syscall a commit waits on.
+- **`fsync` rather than `fdatasync`** flushed timestamp metadata through the
+  xfs journal on every durability point, for nothing recovery could read.
+
+The fix is what PostgreSQL has always done: zero-fill a segment at creation
+(one sequential 64 MiB write, off every commit path) and sync data only
+(`FileLogDevice::Sync()` → `fdatasync`). Measured, interleaved
+baseline/patched/baseline/patched, fresh server and file per run, 1,500
+bookings each, 100 invariant checks passing in all four:
+
+| run | TPS | commit mean | p25 | p50 | p99 | booking p50 | p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline 1 | 270.9 | 1,814 | 1,051 | 2,100 | 3,624 | 3,814 | 6,171 |
+| **patched 1** | **333.2** | **1,128** | 1,034 | **1,070** | 2,357 | **2,883** | 5,848 |
+| baseline 2 | 270.2 | 1,788 | 1,048 | 2,088 | 3,443 | 3,831 | 6,600 |
+| **patched 2** | **344.5** | **1,076** | 1,030 | **1,064** | **1,335** | **2,859** | **3,690** |
+
+*(µs; 2026-08-07 04:50 UTC, both binaries built from the same tree, differing
+only in `src/wal/file_log_device.cpp`)*
+
+**Throughput +23–27%, commit p50 −49%, commit p99 −61%, and the bimodality
+is gone** — p25 to p50 is now 1,030 → 1,064 µs, one population sitting on
+the device's flush floor. Against PostgreSQL's commit (mean 1,146, p50
+1,122, p99 1,420 in the read-shape section above), KDS's durability point is
+now at parity in the middle and equal at the tail, while keeping its 1.6–1.9×
+statement advantage — the configuration this comparison always implied but
+never showed. The commit's share of a booking falls from ~50% to ~37%, so
+the wait-breakdown tables above should be read with that correction.
+
+What it costs: one segment-sized sequential write and fsync per
+`CreateSegment` — at startup and at each 64 MiB roll — instead of a bare
+reservation, and the no-ENOSPC-at-append promise is unchanged (the prewrite
+allocates for real even where `posix_fallocate` is unsupported).
+
 ## What these runs do not answer
 
 - **What `--no-txn` costs in correctness.** Not measured: the concurrency
@@ -659,7 +704,8 @@ of the table a comparison of engines rather than of workloads.
   comparison above covers `cores = 1` and `cores = 2`, which is this
   machine's ceiling, and the cross-core pipeline does not exist — so no
   configuration here executes a statement anywhere but core 0.
-- **Where the commit's second millisecond goes.** The bimodal fsync is the
-  largest single cost in this workload and this driver cannot see inside it.
-  That needs server-side instrumentation, which `docs/observability.md`
-  proposes and nothing implements.
+- ~~**Where the commit's second millisecond goes.**~~ Answered and removed —
+  see "The commit's second millisecond, found and removed" above. It was
+  unwritten-extent conversion plus timestamp metadata inside the commit-path
+  fsync, and it did not need `docs/observability.md`'s instrumentation to
+  find, only `strace -T` on the live server.
