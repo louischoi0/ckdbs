@@ -26,6 +26,7 @@ std::string_view AggFuncText(AggFunc func) noexcept {
         case AggFunc::kSum: return "sum";
         case AggFunc::kMin: return "min";
         case AggFunc::kMax: return "max";
+        case AggFunc::kAvg: return "avg";
     }
     return "?";
 }

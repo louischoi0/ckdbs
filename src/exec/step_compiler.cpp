@@ -165,6 +165,33 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred, std::uint32_t by
 // through a signed reading.
 Status CheckAggregateArgType(const parser::SelectItem& item, std::uint32_t type_val,
                              const std::string& label) {
+    // ---- AVG (feat-aggregate.md §3.4, decided 2026-08-07) ---------------
+    //
+    // One principle answers all three of §10's questions: **AVG never
+    // invents digits and never drops declared ones** - it answers at
+    // exactly the scale the schema declared, rounding half-even. A decimal
+    // column declared its scale, `DECIMAL(p, 0)` included, so it averages;
+    // an integer column declared none, so any fractional answer would
+    // manufacture a scale and a whole-number one would silently discard
+    // the remainder - refused, with the client's two honest options named.
+    if (item.func == parser::AggFunc::kAvg) {
+        if (type_val == catalog::kTypeValDate || type_val == catalog::kTypeValTimestamp) {
+            return Status::InvalidArgument(
+                "AVG over a date or timestamp column is not a value (" + label + ")" +
+                Position(item.byte_offset) +
+                "; it is SUM over one wearing a divide, and a sum of dates is a statement "
+                "nobody meant");
+        }
+        if (type_val != catalog::kTypeValDecimal) {
+            return Status::InvalidArgument(
+                "AVG requires a decimal column (" + label + ")" + Position(item.byte_offset) +
+                "; the answer is given at the column's declared scale, and this column "
+                "declares none - declare DECIMAL(p, s), or compute SUM and COUNT and choose "
+                "your own rounding");
+        }
+        return Status::OK();
+    }
+
     if (item.func != parser::AggFunc::kSum) return Status::OK();
 
     if (type_val == catalog::kTypeValUint64) {

@@ -233,13 +233,28 @@ TEST(ParserAggregateTest, StarWithGroupByIsRefused) {
     EXPECT_TRUE(MentionsByte(parsed.status(), 7));
 }
 
-TEST(ParserAggregateTest, AvgIsUnderstoodAndDeclined) {
+TEST(ParserAggregateTest, AvgParsesLikeAnyOtherAggregate) {
+    // This test's predecessor pinned the refusal; the flip is the AVG
+    // decision landing (feat-aggregate.md §3.4, 2026-08-07). The *grammar*
+    // half is now ordinary - the type half (decimal columns only) is the
+    // compiler's, tested where the other per-type rules are.
     const StatusOr<Statement> parsed = Parse("SELECT AVG(x) FROM t");
-    ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
-    EXPECT_TRUE(MentionsByte(parsed.status(), 7));
-    EXPECT_NE(parsed.status().message().find("SUM"), std::string::npos)
-        << "the refusal should say what to compute it from";
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto* sel = std::get_if<SelectStmt>(&parsed.value());
+    ASSERT_NE(sel, nullptr);
+    ASSERT_EQ(sel->agg_items.size(), 1u);
+    EXPECT_EQ(sel->agg_items[0].func, AggFunc::kAvg);
+    EXPECT_FALSE(sel->agg_items[0].distinct);
+    EXPECT_EQ(sel->agg_items[0].column.name, "x");
+
+    const StatusOr<Statement> distinct = Parse("SELECT AVG(DISTINCT x) FROM t");
+    ASSERT_TRUE(distinct.ok()) << distinct.status().message();
+    EXPECT_TRUE(std::get_if<SelectStmt>(&distinct.value())->agg_items[0].distinct);
+
+    // AVG(*) rides the same refusal every non-COUNT head has.
+    const StatusOr<Statement> star = Parse("SELECT AVG(*) FROM t");
+    ASSERT_FALSE(star.ok());
+    EXPECT_EQ(star.status().code(), StatusCode::kInvalidArgument);
 }
 
 TEST(ParserAggregateTest, StarIsOnlyAnArgumentOfCount) {

@@ -319,18 +319,18 @@ struct JoinClause {
     ColumnName right;  // always qualified
 };
 
-// The aggregate functions v1 folds (docs/feat-aggregate.md AG2).
+// The aggregate functions the fold computes (docs/feat-aggregate.md AG2).
 //
-// `AVG` is deliberately **not** here. It is recognized by the parser and
-// answers `Unsupported`. The reason used to be that `AstValue` had no
-// decimal kind; it has one now (`kDecimal`, TY09), and the refusal stands
-// anyway on what replaced it: an average's **return scale, rounding rule
-// and divide semantics are one undecided question**
-// (docs/feat-aggregate.md §10), and `SUM`/`COUNT` are both exact, so a
-// client computing the quotient picks the rounding rather than having one
-// picked silently. Adding a value here for a function that cannot be
-// folded would put the refusal somewhere it can be forgotten.
-enum class AggFunc : std::uint8_t { kCount, kSum, kMin, kMax };
+// `kAvg` joined on 2026-08-07, when §10's open question - return scale,
+// rounding rule, divide semantics, "three questions, one answer" - was
+// decided rather than expired: **AVG answers at exactly the scale the
+// schema declared, rounding half-even**, so `AVG(DECIMAL(p,s))` returns a
+// decimal of scale `s` and a column that declared no scale (the integer
+// types) is refused at compile - a fractional answer would invent digits
+// and a scale-0 one would silently drop them, and this engine's answer to
+// "which wrong number would you like" has always been neither. The state
+// is the `(sum, count)` pair AG-M mandated in advance.
+enum class AggFunc : std::uint8_t { kCount, kSum, kMin, kMax, kAvg };
 
 // The canonical lower-case spelling, for the column label a fold's output
 // carries (`count(*)`, `sum(distinct x)`).

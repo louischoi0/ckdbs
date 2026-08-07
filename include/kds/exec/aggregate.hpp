@@ -51,8 +51,10 @@
 // is what lets `docs/crosscore.md`'s step pipeline ship *partial
 // aggregates* - group count on the wire, not row count - without touching
 // the step VM, and a v1 that quietly broke it would take that option away
-// silently. `AVG`, when it lands, must be carried as a `(sum, count)` pair
-// for the same reason.
+// silently. `AVG` landed 2026-08-07 carried as the `(sum, count)` pair
+// this paragraph reserved for it: partial sums and counts merge by
+// addition and the divide waits for `Finish`, where merging two partial
+// quotients would have been unrecoverable rounding.
 
 namespace kds::exec {
 

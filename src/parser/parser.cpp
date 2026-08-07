@@ -24,14 +24,17 @@ std::string_view Describe(const Token& tok) {
 
 // The aggregate `name` spells, or false if it spells none.
 //
-// **`AVG` is deliberately absent**, so it is not an AggFunc anywhere and
-// the one place that knows the word is the refusal that names it. A caller
-// that wants to recognize the head without folding it tests for it by name.
+// `AVG` was deliberately absent until 2026-08-07, when feat-aggregate.md
+// §10's open question was decided (see AggFunc's note in ast.hpp); the
+// grammar half is now ordinary and the type half - decimal columns only -
+// is the compiler's `CheckAggregateArgType`, where every other per-type
+// aggregate rule already lives.
 bool AggFuncOf(std::string_view name, AggFunc& out) noexcept {
     if (IEquals(name, "COUNT")) { out = AggFunc::kCount; return true; }
     if (IEquals(name, "SUM")) { out = AggFunc::kSum; return true; }
     if (IEquals(name, "MIN")) { out = AggFunc::kMin; return true; }
     if (IEquals(name, "MAX")) { out = AggFunc::kMax; return true; }
+    if (IEquals(name, "AVG")) { out = AggFunc::kAvg; return true; }
     return false;
 }
 
@@ -903,31 +906,10 @@ StatusOr<SelectItem> Parser::ParseSelectItem() {
     if (!col.ok()) return col.status();
 
     AggFunc func = AggFunc::kCount;
-    const bool named_avg = !col.value().qualified() && IEquals(col.value().name, "AVG");
     if (col.value().qualified() || lexer_.Peek().type != TokenType::kLParen ||
-        (!AggFuncOf(col.value().name, func) && !named_avg)) {
+        !AggFuncOf(col.value().name, func)) {
         item.column = std::move(col.value());
         return item;
-    }
-
-    // `AVG` is a head this engine understands and declines. Refused here
-    // rather than at compile, because the reason is the shape of the
-    // statement and not the catalog.
-    //
-    // **The reason changed at TY09 and the refusal did not.** It used to be
-    // that there was no decimal kind to return; there is one now
-    // (`ValueType::kDecimal`, docs/spec-types.md). What remains open is
-    // what an average *means* here - its return scale, its rounding rule
-    // and its divide semantics are one decision (feat-aggregate.md §10),
-    // and answering it as a side effect of having gained a decimal type is
-    // how two specs come to disagree. So the refusal stands on its own
-    // merits: `SUM` and `COUNT` are both exact, and a client that computes
-    // the quotient chooses the rounding this engine would otherwise have
-    // chosen for it silently.
-    if (named_avg) {
-        return Status::Unsupported(
-            "AVG is not supported (byte " + std::to_string(item.byte_offset) +
-            "); compute it from SUM and COUNT, which are exact");
     }
 
     item.is_aggregate = true;

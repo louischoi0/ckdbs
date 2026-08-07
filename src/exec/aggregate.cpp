@@ -106,7 +106,10 @@ bool Aggregator::NeedsDistinct(const AggregateItem& item) noexcept {
     // a set equals the extreme of its support, so a set here would spend
     // memory and a cap budget to reach an identical answer. `COUNT(*)`
     // cannot carry it at all - the parser refuses `COUNT(DISTINCT *)`.
-    return item.func == parser::AggFunc::kCount || item.func == parser::AggFunc::kSum;
+    // `AVG(DISTINCT)` is `SUM(DISTINCT) / COUNT(DISTINCT)` over **one**
+    // set, which is exactly what one set on the pair state provides.
+    return item.func == parser::AggFunc::kCount || item.func == parser::AggFunc::kSum ||
+           item.func == parser::AggFunc::kAvg;
 }
 
 Status Aggregator::EncodeValue(const parser::AstValue& value, std::string& out) {
@@ -241,7 +244,12 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
                 state.has_value = true;
                 break;
 
-            case parser::AggFunc::kSum: {
+            case parser::AggFunc::kSum:
+            // AVG is the `(sum, count)` pair AG-M reserved the shape for:
+            // it folds exactly as SUM does, counts beside it, and the
+            // divide happens once, in `Finish`. One arm for both keeps the
+            // overflow discipline in one place.
+            case parser::AggFunc::kAvg: {
                 // AG3 restricted the argument to a signed integer column at
                 // compile, so `int_val` *is* the value - no conversion, and
                 // no digit-text path, which is exactly why `uint64` is
@@ -254,8 +262,7 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
                 // §3.2). The scale is re-attached once, in `Finish`.
                 if (value.type != parser::ValueType::kInt &&
                     value.type != parser::ValueType::kDecimal) {
-                    return Status::InvalidArgument("SUM read a non-numeric value in " +
-                                                    LabelOf(i));
+                    return Status::InvalidArgument(LabelOf(i) + " read a non-numeric value");
                 }
                 // Checked, always. A wrapped sum is the one output this
                 // feature must never produce: it is wrong in a way no
@@ -267,6 +274,7 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
                                               "; the accumulator is int64 and a wrapped sum is "
                                               "wrong in a way no reader can detect");
                 }
+                if (item.func == parser::AggFunc::kAvg) ++state.count;
                 state.has_value = true;
                 break;
             }
@@ -383,6 +391,38 @@ Status Aggregator::Finish(const AggregateSink& emit) {
                     if (!state.has_value) break;  // stays kNull
                     out = state.extreme;
                     break;
+
+                case parser::AggFunc::kAvg: {
+                    if (!state.has_value) break;  // stays kNull
+                    // The one divide (feat-aggregate.md §3.4): the exact
+                    // quotient of the unscaled sum by the count, **rounded
+                    // half to even at the column's own scale** - ties go to
+                    // the even neighbor, which is sign-symmetric and
+                    // bias-free under accumulation, and the reason it can
+                    // be computed exactly here is that both operands are
+                    // integers: no float touches the value at any point.
+                    //
+                    // C++ integer division truncates toward zero and the
+                    // remainder carries the dividend's sign, so the
+                    // comparison runs on magnitudes and the correction is
+                    // applied in the sum's direction. `q` cannot overflow
+                    // on correction: a nonzero remainder needs count >= 2,
+                    // which bounds |q| at half the range.
+                    const std::int64_t count = state.count;  // > 0: has_value
+                    std::int64_t q = state.sum / count;
+                    const std::int64_t r = state.sum % count;
+                    const std::uint64_t twice_r =
+                        2 * static_cast<std::uint64_t>(r < 0 ? -r : r);
+                    const std::uint64_t ucount = static_cast<std::uint64_t>(count);
+                    const std::int64_t away = state.sum < 0 ? -1 : 1;
+                    if (twice_r > ucount || (twice_r == ucount && (q % 2) != 0)) {
+                        q += away;
+                    }
+                    out.type = parser::ValueType::kDecimal;
+                    out.int_val = q;
+                    out.scale = item.scale;
+                    break;
+                }
             }
             out_scratch_.push_back(std::move(out));
         }
@@ -405,9 +445,20 @@ namespace {
 // the set stores encodings rather than encodings *and* values: the 8 bytes
 // per distinct entry a value copy would cost buys nothing on the hot path.
 bool DecodeInt(std::string_view encoded, std::int64_t& out) {
-    if (encoded.size() != 1 + sizeof(std::int64_t) || encoded[0] != kTagInt) return false;
-    std::memcpy(&out, encoded.data() + 1, sizeof(out));
-    return true;
+    if (encoded.size() == 1 + sizeof(std::int64_t) && encoded[0] == kTagInt) {
+        std::memcpy(&out, encoded.data() + 1, sizeof(out));
+        return true;
+    }
+    // A decimal entry: tag, scale byte, then the unscaled integer - which
+    // is exactly what the accumulator folds, so the scale byte is skipped
+    // rather than interpreted. This arm predates nothing: SUM(DISTINCT)
+    // over a decimal column always stored these entries, and a merge of one
+    // failed as "non-integer" until AVG's tests forced the question.
+    if (encoded.size() == 2 + sizeof(std::int64_t) && encoded[0] == kTagDecimal) {
+        std::memcpy(&out, encoded.data() + 2, sizeof(out));
+        return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -444,15 +495,20 @@ Status Aggregator::MergeGroup(Group& into, Group& from) {
                 if (item.func == parser::AggFunc::kCount) {
                     ++dst.count;
                 } else {
+                    // SUM(DISTINCT) and AVG(DISTINCT) both fold the
+                    // newcomer's value; AVG counts it too, because its
+                    // divisor is the union's size and the union is being
+                    // built right here.
                     std::int64_t value = 0;
                     if (!DecodeInt(entry, value)) {
                         return Status::InvalidArgument(
-                            "SUM(DISTINCT) merged a non-integer value in " + LabelOf(i));
+                            "a DISTINCT merge met a non-integer value in " + LabelOf(i));
                     }
                     if (__builtin_add_overflow(dst.sum, value, &dst.sum)) {
                         return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
                                                   DescribeGroup(into.keys) + " while merging");
                     }
+                    if (item.func == parser::AggFunc::kAvg) ++dst.count;
                 }
                 dst.has_value = true;
             }
@@ -464,6 +520,13 @@ Status Aggregator::MergeGroup(Group& into, Group& from) {
                 dst.count += src.count;
                 break;
 
+            // The pair state is why AVG merges at all (AG-M): two partial
+            // sums add, two partial counts add, and the divide waits for
+            // `Finish` - where merging two partial *quotients* would have
+            // been unrecoverable rounding.
+            case parser::AggFunc::kAvg:
+                dst.count += src.count;
+                [[fallthrough]];
             case parser::AggFunc::kSum:
                 if (__builtin_add_overflow(dst.sum, src.sum, &dst.sum)) {
                     return Status::OutOfRange("SUM overflow in " + LabelOf(i) +

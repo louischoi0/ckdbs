@@ -240,6 +240,40 @@ TEST(TypesEndToEnd, SumOverDecimalIsExactAtScale) {
     EXPECT_EQ(db.Run("SELECT SUM(amt) FROM trade"), "sum(amt)\\n1360.99");
 }
 
+TEST(TypesEndToEnd, AvgOverDecimalAnswersAtTheDeclaredScale) {
+    Instance db;
+    Load(db);
+    // 1360.99 / 5 = 272.198 -> 272.20 at the column's scale 2, half-even
+    // (feat-aggregate.md §3.4). No float touches the value: the quotient
+    // is computed on the unscaled integers.
+    EXPECT_EQ(db.Run("SELECT AVG(amt) FROM trade"), "avg(amt)\\n272.20");
+
+    // Grouped, beside the exact halves it is computed from.
+    EXPECT_EQ(db.Run("SELECT settles, AVG(amt), SUM(amt), COUNT(*) FROM trade "
+                     "GROUP BY settles"),
+              "settles,avg(amt),sum(amt),count(*)"
+              "\\n2026-03-02,103.67,311.00,3"
+              "\\n2026-01-15,50.00,50.00,1"
+              "\\n2026-06-30,999.99,999.99,1");
+}
+
+TEST(TypesEndToEnd, AvgOverAnIntegerColumnIsRefusedWithTheHonestOptions) {
+    Instance db;
+    Load(db);
+    // An integer column declared no scale, so there is no answer that
+    // neither invents digits nor drops them - the refusal names the two
+    // ways out (declare a DECIMAL, or compute SUM and COUNT).
+    const std::string reply = db.Run("SELECT AVG(acct_id) FROM trade");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("decimal"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("SUM"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("at byte"), std::string::npos) << reply;
+
+    const std::string date = db.Run("SELECT AVG(settles) FROM trade");
+    EXPECT_EQ(date.substr(0, 3), "ERR") << date;
+    EXPECT_NE(date.find("at byte"), std::string::npos) << date;
+}
+
 TEST(TypesEndToEnd, MinAndMaxOverEachNewTypeAreExact) {
     Instance db;
     Load(db);

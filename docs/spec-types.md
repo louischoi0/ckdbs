@@ -111,22 +111,23 @@ comparisons. `SUM` over `DATE`/`TIMESTAMP` is refused (`InvalidArgument`) —
 a sum of dates is a statement nobody meant; `MIN`/`MAX` over them are exact
 and useful. `COUNT` is type-blind as always.
 
-**AVG remains `Unsupported` and this spec deliberately does not lift it.**
-The stated reason — no decimal kind — is now false, so it is gone from
-every place that stated it; but AVG's return scale, its rounding rule and
-its divide semantics are one decision (`docs/feat-aggregate.md` §10, which
-now carries the item), and deciding them as a side effect of a types spec
-is how two documents come to disagree.
+**AVG folds since 2026-08-07** — decided in `docs/feat-aggregate.md` §3.4,
+the document this spec deliberately handed the item to rather than
+settling it in passing: the answer is at the argument column's declared
+scale, rounded half-even on the exact integer pair, and a column that
+declared no scale (the integer types) is refused at compile. The handoff
+worked as designed — the decision lives in one document and this one only
+points at it.
 
-*Closed at TY09.* The correct file is `docs/feat-aggregate.md`, not
-`docs/aggregate.md`, which does not exist and never did — this paragraph
-and the workplan both cited it, which is the kind of reference that
-survives precisely because nobody follows it. The refusal **message** was
-already clean: it says only "compute it from SUM and COUNT, which are
-exact". The stale clause lived in two code comments
-(`src/parser/parser.cpp`, `include/kds/parser/ast.hpp`), in
-`feat-aggregate.md`'s AG2 row and refusal table, and in `CLAUDE.md`; all
-five now give the reason that actually holds.
+*Closed at TY09, historical note.* The correct file is
+`docs/feat-aggregate.md`, not `docs/aggregate.md`, which does not exist
+and never did — this paragraph and the workplan both cited it, which is
+the kind of reference that survives precisely because nobody follows it.
+(TY09 also scrubbed the refusal's stale "no decimal kind" clause from two
+code comments, `feat-aggregate.md` and `CLAUDE.md`; the refusal itself,
+and its "compute it from SUM and COUNT" message, are gone entirely now
+that AVG folds — only a non-decimal argument still gets an error, the
+compile-time one above.)
 
 ### 3.3 Rendering happens at the boundary
 
@@ -260,14 +261,10 @@ and anything (`'2026-08-06'` into a varchar column stays a plain string).
   failing test attached rather than an adjustment. Widening the `DATE`
   range stays cheap — the encoding is a signed epoch day with room to
   spare; narrowing it is data-losing and needs a migration story.
-- **AVG's return type, scale and rounding** — `docs/feat-aggregate.md`
-  §10, which TY09 filled in. Note the refusal's *reason* changed here:
-  AVG was declined for want of a decimal kind, this spec supplied one
-  (TY04), and §3.2 deliberately did not lift the refusal, because the
-  return scale, the rounding rule and divide semantics are one decision
-  that belongs with the aggregate spec. The stale reason is gone from the
-  code comments and from `feat-aggregate.md`; the refusal message itself
-  never carried it.
+- ~~**AVG's return type, scale and rounding**~~ — **decided and built
+  2026-08-07** in `docs/feat-aggregate.md` §3.4, the document TY09 handed
+  the item to: declared scale, half-even, integer columns refused. §3.2
+  above now points at it.
 - ~~Phase 2: bare numeric literals (TY3) and its fingerprint analysis~~ —
   **built 2026-08-07 (TY10)**. The analysis it was gated on concluded no
   version bump: the fused token sequence appeared only in statements no

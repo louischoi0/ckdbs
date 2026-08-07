@@ -964,6 +964,156 @@ TEST(AggregateTest, AMergeThatOverflowsSumFails) {
     EXPECT_EQ(overflowed.code(), StatusCode::kOutOfRange);
 }
 
+// ---- AVG (feat-aggregate.md §3.4, decided 2026-08-07) --------------------
+//
+// One principle, three consequences: AVG answers at exactly the scale the
+// schema declared, rounding half to even. These tests pin the divide - the
+// one place the pair state stops being (sum, count) and becomes a value.
+
+parser::AstValue DecVal(std::int64_t unscaled, std::uint8_t scale) {
+    parser::AstValue out;
+    out.type = parser::ValueType::kDecimal;
+    out.int_val = unscaled;
+    out.scale = scale;
+    return out;
+}
+
+AggregateItem AvgItem(std::uint16_t col_pos, std::uint8_t scale, bool distinct = false) {
+    AggregateItem item = Agg(parser::AggFunc::kAvg, col_pos, catalog::kTypeValDecimal);
+    item.scale = scale;
+    item.distinct = distinct;
+    return item;
+}
+
+TEST(AggregateTest, AvgAnswersAtTheColumnsDeclaredScale) {
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    // 100.25 + 200.75 + 10.00 = 311.00; /3 = 103.666... -> 103.67. Not a
+    // tie - the ordinary round-up case, at the column's own scale.
+    for (std::int64_t v : {10025, 20075, 1000}) {
+        ASSERT_TRUE(fold.Row(agg, {DecVal(v, 2)}).ok());
+    }
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"103.67"}));
+}
+
+TEST(AggregateTest, AvgTiesRoundHalfToEven) {
+    // The pinned rounding rule, at its only interesting points. Each pair
+    // averages to an exact .5 at the result scale, and the answer goes to
+    // the even neighbor - in both signs, which half-up would get wrong on
+    // one side.
+    struct Case {
+        std::vector<std::int64_t> unscaled;
+        const char* expect;
+    };
+    const Case cases[] = {
+        {{1, 2}, "0.02"},    // 1.5 -> 2 (1 is odd)
+        {{2, 3}, "0.02"},    // 2.5 -> 2 (2 is even)
+        {{-1, -2}, "-0.02"}, // -1.5 -> -2
+        {{-2, -3}, "-0.02"}, // -2.5 -> -2
+    };
+    for (const Case& c : cases) {
+        AggregateSpec spec;
+        spec.items.push_back(AvgItem(0, 2));
+        Aggregator agg = Make(spec);
+        Fold fold(1);
+        for (std::int64_t v : c.unscaled) ASSERT_TRUE(fold.Row(agg, {DecVal(v, 2)}).ok());
+        const auto rows = Collect(agg);
+        ASSERT_EQ(rows.size(), 1u);
+        EXPECT_EQ(rows[0][0], c.expect);
+    }
+}
+
+TEST(AggregateTest, AvgOverADeclaredScaleZeroRoundsToWholeUnits) {
+    // DECIMAL(p, 0) averages - that scale was *declared*, which is the
+    // whole line the integer-column refusal draws. avg(1, 2) = 1.5 -> 2.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    for (std::int64_t v : {1, 2}) ASSERT_TRUE(fold.Row(agg, {DecVal(v, 0)}).ok());
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"2"}));
+}
+
+TEST(AggregateTest, AvgOverEmptyInputIsNullLikeSum) {
+    // The global form emits one row over no rows, and an average of
+    // nothing is an absence, not a zero - and never a divide by zero,
+    // because the divide only runs when a value was seen.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator agg = Make(spec);
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"NULL"}));
+}
+
+TEST(AggregateTest, AvgDistinctDividesByTheDistinctCount) {
+    // AVG(DISTINCT) is SUM(DISTINCT)/COUNT(DISTINCT) over one set: the
+    // repeated 10.00 contributes once to the sum *and* once to the count,
+    // or the two halves would disagree about which set they averaged.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2, /*distinct=*/true));
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    for (std::int64_t v : {1000, 1000, 2000}) {
+        ASSERT_TRUE(fold.Row(agg, {DecVal(v, 2)}).ok());
+    }
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    // Distinct: (10.00 + 20.00) / 2 = 15.00. Plain: 40.00 / 3 = 13.33.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"15.00", "13.33"}));
+}
+
+TEST(AggregateTest, AvgMergesAsSumAndCountPairsNotAsQuotients) {
+    // AG-M's reason made concrete: the partitions' true averages are 1.00
+    // and 3.00, whose naive mean is 2.00 - the pair state answers 2.33,
+    // which is the average of the *rows*. Merging quotients would be
+    // unrecoverable rounding; merging pairs is exact until the one divide.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    ASSERT_TRUE(lfold.Row(left, {DecVal(100, 2)}).ok());
+    for (std::int64_t v : {200, 400}) ASSERT_TRUE(rfold.Row(right, {DecVal(v, 2)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"2.33"}));
+}
+
+TEST(AggregateTest, AvgDistinctMergeCountsAValueInBothPartitionsOnce) {
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2, /*distinct=*/true));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    for (std::int64_t v : {1000, 2000}) ASSERT_TRUE(lfold.Row(left, {DecVal(v, 2)}).ok());
+    for (std::int64_t v : {1000, 3000}) ASSERT_TRUE(rfold.Row(right, {DecVal(v, 2)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    // The union is {10.00, 20.00, 30.00}: sum 60.00, count 3 - the shared
+    // 10.00 counted once in both halves of the pair.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"20.00"}));
+}
+
 // ---- Malformed specs -----------------------------------------------------
 
 TEST(AggregateTest, ASpecSelectingANonGroupingColumnIsRefused) {

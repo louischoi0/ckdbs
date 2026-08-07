@@ -189,8 +189,12 @@ ok	489356a113ef4e44	cbf29ce484222325	SELECT SUM(DISTINCT x) FROM t
 # column reference.
 ok	ff41a860584dc5e0	cbf29ce484222325	SELECT count FROM t
 ok	060af4ce805c88ca	b5d414774c8002cc	SELECT * FROM t WHERE group = 1
-# AVG is understood and declined: there is no decimal kind to hold one.
-Unsupported	91fa1130f96f7220	cbf29ce484222325	SELECT AVG(x) FROM t
+# AVG folds since 2026-08-07 (feat-aggregate.md §3.4): the verdict flipped
+# with its task, and the hash did not move - AVG was always an ordinary
+# identifier to the lexer, which is what the non-reservation rule buys.
+# The type rule (decimal columns only) is the compiler's, invisible here.
+ok	91fa1130f96f7220	cbf29ce484222325	SELECT AVG(x) FROM t
+ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
 # HAVING and ORDER BY over aggregated output, each refused with its own
 # position (AG7, and §2's [PROPOSED] ORDER BY row).
 Unsupported	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1

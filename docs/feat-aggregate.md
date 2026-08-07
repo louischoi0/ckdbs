@@ -13,7 +13,7 @@ chains), `docs/rules.md`, `docs/waystone-concpets.md` (trail model),
 | # | Decision | Choice |
 |---|---|---|
 | AG1 | Placement | **A fold outside the executor.** The dispatcher wraps the statement's `RowSink` in an `Aggregator`; the compiled chain is byte-identical to the same statement without the fold. The executor never learns aggregation exists. **Invariant: every aggregate state is mergeable** (§1) — the cross-core partial-aggregation reservation |
-| AG2 | v1 functions | `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`, **with `DISTINCT`** (`COUNT(DISTINCT col)`, `SUM(DISTINCT col)`; `MIN`/`MAX` accept it as the standard's no-op `[PROPOSED]`). `AVG` is parsed and answers `Unsupported` — see §10; the original reason (no decimal kind) expired at TY09 and the refusal now rests on AVG's undecided return scale and rounding |
+| AG2 | v1 functions | `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`, **with `DISTINCT`** (`COUNT(DISTINCT col)`, `SUM(DISTINCT col)`; `MIN`/`MAX` accept it as the standard's no-op `[PROPOSED]`). ~~`AVG` is parsed and answers `Unsupported`~~ — **`AVG(col)` folds since 2026-08-07**, §10's three questions decided as one rule (§3.4): the answer is at the argument column's declared scale, rounded half-even, so decimal columns only — an integer column is refused at compile. `AVG(DISTINCT col)` divides the distinct sum by the distinct count over one set |
 | AG3 | SUM arithmetic | **Checked int64.** Signed integer argument columns only; the fold uses overflow-checked addition and an overflow is a **statement error**, never a wrapped number. `SUM` over a `uint64` column is `Unsupported` (half its range does not fit the accumulator). Both are **documented product constraints** (§3.3) |
 | AG4 | NULL semantics | **SQL standard** (§3.1): aggregates skip NULLs; `COUNT(*)` counts rows; a group with no non-NULL argument yields NULL for `SUM`/`MIN`/`MAX`; NULL grouping keys form one group |
 | AG5 | Strict grouping | A bare column in an aggregated select list **must appear in GROUP BY**, or the statement is refused with the column's byte position. There is no "any row" mode: an answer that depends on scan order is an answer this engine refuses to give |
@@ -53,8 +53,9 @@ folding two disjoint partitions of it then merging yield the same output
 rows. `COUNT`/`SUM` merge by addition, `MIN`/`MAX` by comparison, `DISTINCT`
 by set union. This is not used in v1 and **must not be broken by v1**: it is
 what lets `docs/crosscore.md`'s step pipeline ship *partial aggregates* —
-group count, not row count, on the wire — without touching the step VM. AVG,
-when it lands, must be carried as a `(sum, count)` pair for the same reason.
+group count, not row count, on the wire — without touching the step VM. AVG
+landed (§3.4) carried as the `(sum, count)` pair this paragraph reserved
+for it: partial pairs merge by addition and the divide waits for `Finish`.
 Merge preserves the left operand's group order and appends the right's
 unseen groups in their own order, so first-seen determinism (AG6) survives a
 merge with a defined partition order.
@@ -76,7 +77,7 @@ agg         ::= COUNT ( [DISTINCT] column | * )
               | SUM   ( [DISTINCT] column )
               | MIN   ( [DISTINCT] column )
               | MAX   ( [DISTINCT] column )
-              | AVG   ( ... )                    -- parsed, Unsupported
+              | AVG   ( [DISTINCT] column )      -- decimal columns only (§3.4)
 column      ::= name | rel_binding . name
 ```
 
@@ -100,7 +101,7 @@ Refusals, each with an exact byte position:
 | `SELECT * … GROUP BY a` | `InvalidArgument` — which columns `*` folds was never written |
 | bare column not in GROUP BY | `InvalidArgument` (AG5) |
 | duplicate GROUP BY column | `InvalidArgument` — always a slip, and it doubles the key encoding for nothing |
-| `AVG(…)` | `Unsupported` — "compute it from SUM and COUNT, which are exact". The message is unchanged by TY09; only its *reason* moved (§10) |
+| `AVG(…)` over a non-decimal column | `InvalidArgument` at compile (§3.4) — the column declared no scale, and the refusal names the two honest options: declare `DECIMAL(p, s)`, or compute SUM and COUNT and choose your own rounding. The old parse-time `Unsupported` is gone — the grammar half is ordinary now |
 | `SUM(*)`, `MIN(*)`, `MAX(*)` | `InvalidArgument` — `*` is only an argument of COUNT |
 | `COUNT(DISTINCT *)` | `InvalidArgument` — distinctness of whole rows was never written |
 | `HAVING …` | `Unsupported` (AG7) |
@@ -156,6 +157,39 @@ ids is a statement nobody meant. `MIN`/`MAX` over `uint64` **are** exact:
 the item carries its catalog `type_val`, and comparison goes through the
 digit-text path `row_codec.cpp` already provides for values above
 `INT64_MAX`.
+
+### 3.4 AVG `[CONFIRMED 2026-08-07]`
+
+§10's three questions — return scale, rounding rule, divide semantics —
+answered by **one principle: AVG never invents digits and never drops
+declared ones.**
+
+- **Return scale.** `AVG(DECIMAL(p, s))` returns a decimal of scale `s` —
+  the answer in exactly the units the schema declared. No guard digits: a
+  wider answer would manufacture precision the column never claimed, and a
+  fixed widening constant would be a number the engine defends forever.
+- **Rounding.** **Half to even** at that scale, computed exactly on the
+  integer pair — the quotient of the unscaled sum by the count, ties to
+  the even neighbor. Sign-symmetric and bias-free under accumulation; no
+  float touches the value at any point. Pinned at the ties in both signs,
+  because half-up would agree everywhere else.
+- **Divide semantics / integer columns.** An integer column declared no
+  scale, so any fractional answer invents digits and a whole-number one
+  silently drops the remainder — **refused at compile**, naming the two
+  honest options (declare `DECIMAL(p, s)`, or compute `SUM` and `COUNT`
+  and choose your own rounding). `DECIMAL(p, 0)` **does** average — that
+  scale was declared — and rounds to whole units under the same rule.
+  `uint64`, dates, timestamps and text refuse as they do for SUM.
+
+The state is the `(sum, count)` pair §1 reserved: the sum rides the same
+checked adder as SUM (overflow is the same statement error), the divide
+runs **once, in `Finish`** — never per row, and never at merge, where
+averaging two partial *quotients* would be unrecoverable rounding. NULLs
+are skipped (AG4) and a group with no non-NULL argument answers NULL — an
+average of nothing is an absence, and the divide-by-zero cannot arise
+because the divide only runs when a value was seen. `AVG(DISTINCT col)`
+is `SUM(DISTINCT)/COUNT(DISTINCT)` over **one** set, so both halves agree
+about which values they averaged.
 
 ## 4. Compiled form `[CONFIRMED]`
 
@@ -241,7 +275,8 @@ like `durability`.
 
 ## 8. What v1 is not
 
-`HAVING` (AG7) · `AVG` (AG2) · ORDER BY over aggregated output (§2 table) ·
+`HAVING` (AG7) · ~~`AVG`~~ (built 2026-08-07, §3.4 — over decimal columns
+only) · ORDER BY over aggregated output (§2 table) ·
 expressions anywhere (AG9) · aggregates in subqueries (AG8) · aggregation
 over catalog views (AG12) · spill or partial answers (AG11) ·
 pre-aggregation below joins (§1) · cross-core partial aggregation (reserved
@@ -279,26 +314,16 @@ statement and leaves nothing behind.
   1,048,576 entries is roughly 84 MB per statement, and settling it needs a
   workload with a genuinely high-cardinality `COUNT(DISTINCT)` measured for
   resident memory rather than latency.
-- **`AVG`'s return type, scale and rounding** — the decision the refusal
-  now rests on, and *the reason it was written down here rather than
-  settled in passing*. AG2 originally declined AVG because `AstValue` had
-  no decimal kind. **That reason expired on 2026-08-07**
-  (`docs/spec-types.md`, TY04): there is a `kDecimal` now, carrying an
-  unscaled int64 and a scale, and `SUM` over a `DECIMAL(p,s)` already
-  folds exactly at scale `s`. What is *not* decided is what an average
-  returns. Three questions, one answer, and none of them follows from
-  having a decimal type: the **return scale** of `AVG` over
-  `DECIMAL(p,s)` (`s`? a fixed wider scale? `p - s` spare digits?), the
-  **rounding rule** at that scale (half-up, half-even, truncate — a
-  financial engine's users will disagree, and each is defensible), and
-  **divide semantics** over an integer column (does `AVG` over `int64`
-  return an integer, a decimal, or refuse?). Settling these as a side
-  effect of a types spec is how two documents come to disagree, which is
-  why `spec-types.md` §3.2 deliberately declined to lift the refusal and
-  handed the item here instead. Until it is settled, `SUM`/`COUNT` are
-  both exact and a client computing the quotient chooses its own
-  rounding — which is a worse ergonomic and a better answer than choosing
-  one for them silently.
+- ~~**`AVG`'s return type, scale and rounding**~~ — **decided 2026-08-07
+  and built (§3.4)**, in this document as the item demanded rather than as
+  a side effect of the types spec. The three questions took one answer —
+  the declared scale, half-even, refuse where no scale was declared — and
+  the two contestable halves (the rounding rule, and refusing integer
+  columns rather than answering at scale 0 or a manufactured wider one)
+  were ratified explicitly rather than defaulted. What §3.4 deliberately
+  leaves out: no widened return scale, ever, without a new decision here —
+  the "no guard digits" line is load-bearing, because a client that has
+  seen `avg(amt)` answer at scale `s` will parse it at scale `s` forever.
 - `MIN/MAX(DISTINCT)` accept-as-no-op vs refuse (§3.2 `[PROPOSED]`).
 - Lifting ORDER BY over aggregated output — needs an output sort; decide
   with HAVING, since both are post-fold consumers and should share the
