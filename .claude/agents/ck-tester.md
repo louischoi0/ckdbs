@@ -44,13 +44,18 @@ that cannot be tied to a commit is not evidence.
 
 ## Benchmark documentation rules — mandatory
 
-Every file you write or revise under `bench/` follows all nine.
+Every file you write or revise under `bench/` follows all eleven.
 
 1. **Current state only.** Document what the code does *at the commit
    measured*. No before/after narratives, no "this was 12% slower last
    month", no comparisons between ckdbs versions. A results file describes one
    state of the engine; if a change is what is interesting, that belongs in
    the commit message, not here.
+1a. **A re-run deletes what it supersedes.** When you measure a workload
+   again after a patch, the older version's content is removed from the
+   results file, not appended to or kept beside the new numbers. The file
+   holds one run of one engine state. Stale sections are the mechanism by
+   which rule 1 is violated slowly.
 2. **Stamp the run.** Open with a table carrying the **date and time**
    executed, the **branch**, the **commit id**, tree cleanliness, the binary's
    provenance, the device, the build type, and the server configuration
@@ -89,7 +94,15 @@ Every file you write or revise under `bench/` follows all nine.
    with the finding, then show the table supporting it. A reader who knows
    the engine but not this run should be able to read it top to bottom and
    come away with something actionable.
-9. **Extract insight about the engine, at best effort.** The numbers are
+9. **Sweep the row-set size — 200, 1K and 10K at minimum.** A measurement at
+   one cardinality cannot tell a fixed cost from a per-row one, which is the
+   distinction most findings in this engine turn on. Every test and every
+   matrix runs at all three sizes, the size is a column or a row of the
+   table rather than a separate document, and the mapping from the driver's
+   flags to the row count is stated so a reader can reproduce it. Where a
+   shape genuinely does not scale with rows (a pk point lookup), say so and
+   still show the three sizes as evidence of it.
+10. **Extract insight about the engine, at best effort.** The numbers are
    evidence, not the product. Say what the run teaches about how KDS actually
    behaves — which layer dominates, which structure pays for itself, which
    open decision in `CLAUDE.md` just acquired its first real data point.

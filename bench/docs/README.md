@@ -53,21 +53,56 @@ Key flags: `--traders N`, `--seconds`, `--txn` / `--no-txn`,
 
 ### `scenario1_backtest.py` — a read workload, in QPS
 
-Thirty years of daily bars across seven relations, walked forward by eight
-strategies. Produces a QPS matrix over every read shape the workload issues,
-priced cold, warm, with a Cabin and after dropping it, plus write sweeps
-against transaction batch size and connection count.
+Daily bars across seven relations, walked forward by eight strategies. Produces
+a QPS matrix over every read shape the workload issues, priced cold, warm, with
+a Cabin and after dropping it, plus sweeps against transaction batch size and
+connection count. Results at `bench/results-scenario1-vs-pg.md`.
+
+**The row count is `--years × 252 × --symbols`** (252 trading days a year), and
+it sets the length of the load as well as the size of every relation the read
+shapes walk: `daily_stats` gets one feature row per bar, and `sessions` gets
+`--years × 252` rows. That arithmetic is the knob to reach for when sweeping
+size — e.g. `--symbols 1` with `--years 1 / 4 / 40` gives 252 / 1,008 / 10,080
+bars while holding every result set the same size.
 
 ```bash
-./tools/scenario1_backtest.py --years 30 --symbols 200 --sweep
-./tools/pg_scenario1_backtest.py --port 15433 --database bench --years 30
+# one size, both engines, sequentially — never at the same time
+./tools/scenario1_backtest.py --port 15432 --symbols 1 --years 40 \
+    --seed 1 --verify --json ck.json
+./tools/pg_scenario1_backtest.py --port 15433 --database bench \
+    --symbols 1 --years 40 --seed 1 --verify --json pg.json
 ./tools/compare_scenario1.py ck.json pg.json      # side by side
 ```
 
-Key flags: `--years`, `--symbols`, `--rebalance`, `--top-k`,
-`--bars-clustered`, `--sweep` / `--no-sweep`, `--write-sweep`,
-`--connections`, `--aggregates` (the `agg-*` phases), `--cabin`, `--fk`,
-`--analyze`, `--verify`, `--json`.
+**Pass the same `--years`, `--symbols`, `--rebalance`, `--top-k` and `--seed` to
+both sides.** `compare_scenario1.py` refuses two files whose parameters or model
+P&L disagree, which is what stops a comparison of two different workloads.
+
+| flag | default | what it does |
+|---|---|---|
+| `--years`, `--symbols` | 30 / 8 | the size ladder: bars = `years × 252 × symbols` |
+| `--exchanges`, `--start-year` | 2 / 1995 | the lookup relations |
+| `--rebalance`, `--top-k` | 21 / 3 | sessions between rebalances (each is one 3-relation join + 8 result inserts), and positions per model |
+| `--bars-clustered` | `btree` | storage for `daily_bars`. `heap` is what a missing pk index costs: the join's `Probe` has nothing to descend and walks the chain |
+| `--batch` / `--no-load-txn` | 200 / — | rows per `BEGIN`/`COMMIT` during the load; 0 is one durability point per row |
+| `--ops` | 200 | operations per `read-*` phase; the whole-relation ones run a twentieth of it |
+| `--replay`, `--compare-rounds` | 1 / 4 | extra passes of the cross-section join and of the per-model read. **Both matter under `--cabin`**: a value is observed on its first read and can only be served on the second |
+| `--sweep` / `--no-sweep` | **on** | the QPS matrix — 7 shapes × {cold, warm, cabin, dropped}. **Mutually exclusive with `--cabin`**: the sweep creates and drops its own Cabins |
+| `--qps-ops`, `--warm-keys` | 100 / 8 | statements per matrix cell, and distinct arguments cycled in the warm/cabin/dropped cells. A shape with fewer distinct arguments than `--qps-ops` reports a shorter `cold` run rather than repeating one |
+| `--aggregates` / `--no-aggregates` | **on** | the `agg-*` phases. Off is needed against a server predating `GROUP BY` |
+| `--write-sweep`, `--write-batches`, `--write-ops` | on / `1,10,100,1000` / 2000 | INSERT rows·s⁻¹ against transaction batch size, on a relation of the sweep's own |
+| `--connections`, `--conn-ops` | `1,2,4,8` / 200 | aggregate QPS of the join by connection count; empty `--connections` skips it |
+| `--cabin` | off | declare Cabins on `daily_stats.session_no` and `model_results.model_id` up front (needs `--no-sweep`) |
+| `--fk` | off | declare the four foreign keys. Requires `--bars-clustered btree` |
+| `--analyze` | off | print each read shape's step chain and examined-row count — how a `Probe` that became a chain scan shows up |
+| `--verify` / `--no-verify` | **on** | every model's P&L, read back through the comparison join, against the driver's running total |
+| `--suffix` | `<epoch>_<rand>` | relation-name suffix. There is no `DROP TABLE`, and a run spends 49 columns, so prefer a scratch data file per run over sharing one |
+| `--seed`, `--json`, `--echo`, `--sync`, `--timeout`, `--show-models`, `--server-log` | | as the other scenarios; `--server-log` needs the server at `--log-level debug` and adds per-statement server-side microseconds |
+
+The twin takes the same flags except `--cabin`, `--fk`, `--bars-clustered`,
+`--analyze`, `--echo`, `--sync` and `--server-log`, which have no PostgreSQL
+meaning; it adds `--user`, `--database`, `--explain` and `--keep`, and its
+sweep's third column is a btree `index` where ckdbs's is a `cabin`.
 
 ### `scenario2_freight.py` — a contended write workload, in TPS
 
@@ -165,3 +200,8 @@ not a baseline.
    run on one file is not a repeat of the first.
 4. Did `--verify` pass? A throughput number over a workload that lost writes
    is a measurement of nothing.
+5. Was it measured at more than one row-set size? A single cardinality cannot
+   separate a per-statement fixed cost from a per-row one, and in this engine
+   they point in opposite directions — see the fit table in
+   `bench/results-scenario1-vs-pg.md`, where the same shape reads 1.43× faster
+   than PostgreSQL at 252 rows and 1.16× slower at 10,080.
