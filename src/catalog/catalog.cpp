@@ -341,7 +341,7 @@ Status Catalog::Bootstrap() {
         std::uint32_t type_val;
         std::uint32_t len;
     };
-    static constexpr std::array<SysTypeBootstrap, 10> kTypes{{
+    static constexpr std::array<SysTypeBootstrap, 12> kTypes{{
         {kTypeInt8, "int8", kTypeValInt8, 1},
         {kTypeInt16, "int16", kTypeValInt16, 2},
         {kTypeInt32, "int32", kTypeValInt32, 4},
@@ -352,6 +352,11 @@ Status Catalog::Bootstrap() {
         {kTypeBool, "bool", kTypeValBool, 1},
         {kTypeVarchar, "varchar", kTypeValVarchar, 0},
         {kTypeChar, "char", kTypeValChar, 1},
+        // docs/spec-types.md TY1. `len` here is the type's *width*, which
+        // is what sys.types has always meant by it - a DECIMAL column
+        // carries its own (p, s) elsewhere (TY9).
+        {kTypeDate, "date", kTypeValDate, 4},
+        {kTypeTimestamp, "timestamp", kTypeValTimestamp, 8},
     }};
     for (const auto& t : kTypes) {
         if (Status s = InsertTypeRow(t.oid, t.name, t.type_val, t.len); !s.ok()) {
@@ -585,6 +590,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
     if (Status s = CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
     // size is a schema constant, so if it cannot be computed - a column

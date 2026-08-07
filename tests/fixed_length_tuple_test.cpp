@@ -314,16 +314,23 @@ TEST_F(FixedLengthTupleTest, AValueTooLongToInlineSpillsAndStillRoundTrips) {
     }
 }
 
-TEST_F(FixedLengthTupleTest, AFloatOrDecimalColumnIsRefusedAtCreateTable) {
-    // A column with no decided on-disk width cannot be part of a schema
-    // constant, so the table is refused at definition time rather than at
-    // the first INSERT (catalog/schema.hpp).
-    for (const char* type : {"float", "decimal"}) {
-        const std::string reply =
-            Run(std::string("CREATE TABLE bad_") + type + " (id int64, x " + type + ")");
-        EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
-        EXPECT_NE(reply.find("float/decimal"), std::string::npos) << reply;
-    }
+TEST_F(FixedLengthTupleTest, AFloatColumnIsRefusedAtCreateTable) {
+    // Refused at definition time rather than at the first INSERT, and now
+    // on the merits rather than for want of a width: IEEE semantics
+    // conflict with this engine's exactness discipline (spec-types.md TY1).
+    const std::string reply = Run("CREATE TABLE bad_float (id int64, x float)");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("float"), std::string::npos) << reply;
+}
+
+TEST_F(FixedLengthTupleTest, ABareDecimalColumnIsRefusedUntilItCanCarryScale) {
+    // `decimal` has a width now (TY2's scaled int64), so the refusal moved
+    // from RowLayout to the column-type check - and its *reason* moved with
+    // it. A bare `decimal` says nothing about scale, and a default scale is
+    // a silent decision about someone's money (spec-types.md §2).
+    const std::string reply = Run("CREATE TABLE bad_dec (id int64, x decimal)");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("precision"), std::string::npos) << reply;
 }
 
 // ---- The same, on a clustered B+ tree ------------------------------------

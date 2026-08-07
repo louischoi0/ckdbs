@@ -38,6 +38,12 @@ inline constexpr Oid kTypeDecimal = 29;
 inline constexpr Oid kTypeUint64 = 30;
 inline constexpr Oid kTypeInt64 = kTypeInt;
 
+// docs/spec-types.md TY1. Appended rather than inserted, like every oid
+// above them: these are seeded into `sys.types` at bootstrap and a moved
+// oid would change what an existing catalog row means.
+inline constexpr Oid kTypeDate = 31;
+inline constexpr Oid kTypeTimestamp = 32;
+
 inline constexpr Oid kSysTypesTable = 100;
 inline constexpr Oid kSysObjectsTable = 110;
 inline constexpr Oid kSysColumnsTable = 111;
@@ -246,6 +252,24 @@ inline constexpr std::uint32_t kTypeValDecimal = 7;
 inline constexpr std::uint32_t kTypeValBool = 8;
 inline constexpr std::uint32_t kTypeValVarchar = 9;
 inline constexpr std::uint32_t kTypeValChar = 10;
+
+// ---- docs/spec-types.md TY1 / TY9 --------------------------------------
+//
+// **Purely additive**, and that is the whole migration story: no existing
+// `type_val` changes meaning, so no existing relation does either.
+//
+// All three are fixed-width and compare as signed integers, which is the
+// selection criterion TY2 and TY4 applied rather than a coincidence - it
+// is what lets every ordered structure in the engine take them unmodified:
+// a btree's clustering, a `kRange`'s bounds, MIN/MAX's int arm, and the
+// fold's first-seen group key encoding.
+//
+//   kTypeValDate       int32 LE, days since 1970-01-01
+//   kTypeValTimestamp  int64 LE, microseconds since the epoch, **UTC**
+//   kTypeValDecimal    int64 LE, the unscaled value (reserved since
+//                      bootstrap, given an encoding here)
+inline constexpr std::uint32_t kTypeValDate = 11;
+inline constexpr std::uint32_t kTypeValTimestamp = 12;
 
 enum class ClusteredType : std::uint8_t {
     kHeap = 0,

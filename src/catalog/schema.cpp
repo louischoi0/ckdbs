@@ -36,6 +36,28 @@ bool SchemaCanSpill(const Schema& schema) noexcept {
     return false;
 }
 
+Status CheckDeclarableColumnTypes(const Schema& schema) {
+    for (const auto& col : schema.columns) {
+        // **[TY01, removed by TY03]** `decimal` has a width now, so
+        // `RowLayout` accepts it - but its declared form is `decimal(p, s)`
+        // and there is nowhere yet to put the pair (TY02) and no codec arm
+        // to read it back (TY04). Accepting a bare `decimal` here would
+        // create a column that no INSERT can fill, which is a table that
+        // exists and cannot be used.
+        //
+        // The refusal is therefore unchanged in effect and different in
+        // reason, and the reason is the one a client can act on.
+        if (col.type_val == kTypeValDecimal) {
+            return Status::Unsupported(
+                "column '" + std::string(NameView(col.name)) +
+                "' is declared `decimal`, which needs a precision and a scale - "
+                "`decimal(p, s)` - and that form is not accepted yet "
+                "(docs/spec-types.md TY2, workplan TY03)");
+        }
+    }
+    return Status::OK();
+}
+
 Status CheckKeystoneColumn(const Schema& schema) {
     if (schema.columns.empty()) {
         return Status::InvalidArgument(

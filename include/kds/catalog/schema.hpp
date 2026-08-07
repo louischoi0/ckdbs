@@ -30,6 +30,18 @@ bool IsIntegerTypeVal(std::uint32_t type_val) noexcept;
 // itself, checked at CREATE TABLE rather than at the first INSERT.
 Status CheckKeystoneColumn(const Schema& schema);
 
+// Refuses a column whose declared type this build cannot yet complete.
+//
+// Separate from CheckKeystoneColumn because it asks a different question:
+// that one is about the *relation's* shape (invariant 11), this one about
+// whether each column's type is finished. `RowLayout::ColumnWidth` answers
+// "how wide", which a type can have before it has an encoding - and a
+// column that is sized but not encodable is a column no INSERT can fill.
+//
+// Checked at CREATE TABLE only. A relation already on disk was accepted by
+// the build that created it.
+Status CheckDeclarableColumnTypes(const Schema& schema);
+
 // ---- RowLayout -----------------------------------------------------------
 //
 // The per-relation row-size constant and its column offsets - invariant 13
