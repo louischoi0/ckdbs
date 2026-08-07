@@ -144,6 +144,25 @@ public:
     void UpdatePatternOrigin(std::uint64_t pattern_id, std::uint8_t origin,
                              std::uint16_t flags) noexcept;
 
+    // Points a cached relation's index at a new root page, in place.
+    //
+    // **The third in-place update, and the one that had to exist.** An index
+    // root moves when a split grows the tree, which happens inside an
+    // ordinary INSERT - so a global drop here would dangle the
+    // `const TableAccess*` the running statement is holding, and a
+    // multi-row UPDATE would be holding it across every later row. That is
+    // precisely the collateral damage the deleted per-relation Waystone
+    // caused, and the reason the two updates above exist.
+    //
+    // The fact qualifies by the same test they do: a root belongs to one
+    // index and is read by nothing else, so dropping every cached relation
+    // to publish it would be damage for nothing.
+    //
+    // A no-op when the relation is not cached: there is nothing stale to
+    // fix, and filling the entry here would cache a fact the caller may
+    // never ask for.
+    void UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId root) noexcept;
+
     // ---- sys.types (bootstrap-immutable) --------------------------------
 
     // nullptr means "not loaded yet, scan the page"; a non-null empty

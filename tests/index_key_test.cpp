@@ -302,6 +302,43 @@ TEST(IndexKeyTest, AnUncoercedLiteralIsRefusedRatherThanParsed) {
     EXPECT_EQ(StatusCode::kInvalidArgument, s.code());
 }
 
+TEST(IndexKeyTest, CoercionIsIdempotentSoAWriteHookMayReCoerceADecodedRow) {
+    // Found by workplan IX06, and wider than the index. The date and
+    // timestamp arms of CoerceLiteralToColumn have always accepted a value
+    // already in storage form; the two decimal arms refused one.
+    //
+    // A write hook re-coerces a *decoded* row - an UPDATE carries one - so a
+    // decimal column arrived as kDecimal and was rejected. The Cabin's hook
+    // absorbs a coercion failure by un-observing, so a Cabin on a decimal
+    // column was silently destroyed by the first UPDATE touching its
+    // relation. The index hook cannot absorb and would have failed the
+    // statement.
+    const auto narrow = MakeColumn(kTypeValDecimal, catalog::PackDecimalLen(10, 2));
+    parser::AstValue value = Dec(1234, 2);
+    ASSERT_TRUE(CoerceLiteralToColumn(narrow, value).ok());
+    EXPECT_EQ(value.type, parser::ValueType::kDecimal);
+    EXPECT_EQ(value.int_val, 1234);
+    EXPECT_EQ(value.scale, 2);
+
+    const auto wide = MakeColumn(kTypeValDecimalWide, catalog::PackDecimalLen(30, 4));
+    parser::AstValue wide_value = WideDec(1, 2, 4);
+    ASSERT_TRUE(CoerceLiteralToColumn(wide, wide_value).ok());
+    EXPECT_EQ(wide_value.type, parser::ValueType::kDecimalWide);
+    EXPECT_EQ(wide_value.dec_hi, 1);
+    EXPECT_EQ(wide_value.int_val, 2);
+
+    // The date arm's behaviour, unchanged and now matched by the two above.
+    const auto date = MakeColumn(kTypeValDate);
+    parser::AstValue day = Int(20672);
+    ASSERT_TRUE(CoerceLiteralToColumn(date, day).ok());
+    EXPECT_EQ(day.int_val, 20672);
+
+    // Idempotent, not permissive: a scale that disagrees is still refused
+    // rather than rescaled.
+    parser::AstValue wrong = Dec(1234, 3);
+    EXPECT_FALSE(CoerceLiteralToColumn(narrow, wrong).ok());
+}
+
 TEST(IndexKeyTest, ADecimalCarryingTheWrongScaleIsRefusedNeverRescaled) {
     const auto col = MakeColumn(kTypeValDecimal, catalog::PackDecimalLen(10, 2));
     std::vector<std::byte> out(IndexKeyColumnWidth(col).value());

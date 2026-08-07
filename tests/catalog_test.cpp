@@ -388,9 +388,18 @@ TEST_F(CatalogTest, ADroppedIndexIsRetiredSoTheNameIsFreeAgain) {
     EXPECT_EQ(catalog_.DropIndex(999999).code(), StatusCode::kNotFound);
 }
 
-TEST_F(CatalogTest, AnIndexRootMovesThroughTheCatalogAndBumpsTheVersion) {
+TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
     // A root split reports a new root and someone above the storage layer
-    // records it - the counterpart of UpdateRelationDescPage.
+    // records it - the counterpart of UpdateRelationDescPage, but *not* the
+    // counterpart of its invalidation.
+    //
+    // This asserted a version bump when IX04 landed, and IX06 changed it
+    // deliberately. A split happens inside an ordinary INSERT, so a global
+    // drop would dangle the `const TableAccess*` the running statement
+    // holds - and a multi-row UPDATE would be holding it across every later
+    // row. The fact belongs to one index and is read by nothing else, which
+    // is the same test the two pattern in-place updates pass
+    // (catalog_cache.hpp).
     ASSERT_TRUE(catalog_.Bootstrap().ok());
     auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
                                       ClusteredType::kBtree);
@@ -398,14 +407,23 @@ TEST_F(CatalogTest, AnIndexRootMovesThroughTheCatalogAndBumpsTheVersion) {
     auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
     ASSERT_TRUE(oid.ok());
 
+    // The pointer a caller would be holding across an index insert.
+    auto held = catalog_.InitTableAccess(table.value());
+    ASSERT_TRUE(held.ok());
+    const catalog::TableAccess* ta = held.value();
+    ASSERT_EQ(ta->indexes.size(), 1u);
+
     const std::uint64_t before = catalog_.catalog_version();
     ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value(), 4242).ok());
-    EXPECT_GT(catalog_.catalog_version(), before);
+    EXPECT_EQ(catalog_.catalog_version(), before) << "a root move must not drop the cache";
+
+    // Still valid, and already showing the new root.
+    EXPECT_EQ(ta->indexes[0].root_page_id, 4242u);
 
     auto row = catalog_.FindIndexByName("ix");
     ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().root_page_id, 4242u);
-    EXPECT_EQ(row.value().key_cols[0], 1u);  // the rest of the row survived
+    EXPECT_EQ(row.value().root_page_id, 4242u);  // durable half
+    EXPECT_EQ(row.value().key_cols[0], 1u);      // the rest of the row survived
 
     EXPECT_EQ(catalog_.UpdateIndexRoot(999999, 1).code(), StatusCode::kNotFound);
 }

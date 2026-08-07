@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX05 are built** (IX-M1 and
-IX-M2); nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX06 are built** (IX-M1, IX-M2
+and the write hook of IX-M3); nothing else is.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,16 +13,35 @@ note.
 
 ## Where to pick this up
 
-**At `IX06`. IX01-IX05 are built** (2026-08-07); the whole suite is green at
-1,643 tests. `CREATE INDEX ... COVERING`, `DROP INDEX` and `SHOW INDEXES` all
-work end to end — but **nothing maintains an index and no statement can use
-one**, so every index is empty by construction.
+**At `IX08`** (or `IX09`; both are independent of the read path). IX01-IX06
+are built as of 2026-08-07 and the whole suite is green at **1,654 tests**.
+An index is now declared *and maintained* — every INSERT and every qualifying
+UPDATE appends — but **no statement can use one**, which is IX10/IX11.
 
-That is why `CREATE INDEX` **refuses a relation that has ever held a row**,
-with a message naming IX09. It is a real refusal and not an assumption: once
-the read path lands, an index built over existing rows would answer "no rows"
-authoritatively for every value. IX09 is what lifts it, and the refusal
-cannot rot in the meantime.
+`CREATE INDEX` still **refuses a relation that has ever held a row**, naming
+IX09. Maintenance existing does not lift it: an index over rows written
+before it was declared is still missing them.
+
+What building IX06 changed, folded back into the spec:
+
+- **IX12a is corrected, not merely qualified.** `Catalog::UpdateIndexRoot`
+  updates the cached entry **in place** instead of bumping the catalog
+  version. A split republishes a root from inside an ordinary INSERT, so a
+  global drop would dangle the `const TableAccess*` the statement is holding
+  — and a multi-row UPDATE holds one across every later row. The fact
+  qualifies by the same test `catalog_cache.hpp`'s two pattern updates pass:
+  a root belongs to one index and is read by nothing else. `desc_page_id`
+  keeps the older, harsher arrangement, because changing it is a change to
+  the clustered tree's contract rather than this feature's.
+- **`CoerceLiteralToColumn` was not idempotent, and that was a live bug
+  wider than the index.** Its date and timestamp arms have always accepted a
+  value already in storage form; the two decimal arms refused one. A write
+  hook re-coerces a *decoded* row — an UPDATE carries one — so a decimal
+  column arrived as `kDecimal` and was rejected. **The Cabin's hook absorbs a
+  coercion failure by un-observing, so a Cabin on a decimal column was
+  silently destroyed by the first UPDATE that touched its relation.** Fixed
+  at the one coercion site; the scale check is unchanged, so it is idempotent
+  and not permissive.
 
 What building them added to the design, each folded back into the spec:
 
@@ -239,29 +258,45 @@ but dropping it is the operator's call.
 
 Ends with an index that is complete and that nothing reads.
 
-### IX06 — The write hook
+### IX06 — The write hook — **built**
 
 `include/kds/exec/index_maintain.hpp`, one implementation, called from
-`InsertInner`, `UpdateInner` and `DeleteInner` in `command_dispatcher.cpp` —
-the same three doors `fk_check.hpp` uses, for the same reason.
+`InsertInner` and `UpdateInner` in `command_dispatcher.cpp`, beside the Cabin
+witness and **before the log** — a Cabin that missed an append can be
+un-observed; an index that missed one has lost a row.
 
-- INSERT: one entry per index.
-- UPDATE: append for the new key **only if the SET list touches a key or
-  covered column**. This is the rule that decides whether the feature is
-  usable; test it before the happy path.
-- DELETE: nothing.
+`DeleteInner` deliberately does **not** call it, and says so in a comment
+rather than calling it with nothing to do: maintenance there would be a
+defect, not a no-op.
 
-A failed append **fails the statement** (spec §2.1). This is the one place an
-index is not a Cabin: un-observing is not available, because an index missing
-an entry is wrong rather than slow.
+The touched-column rule is tested first, as planned
+(`AnUpdateThatTouchesNoIndexedColumnAppendsNothing`), and its 900-row sibling
+found the rule firing for real — a statement-wide `SET owner = 1` appends 899
+entries over 900 rows, because one row already carried the value.
 
-### IX07 — Spilled key values on the write path
+**Two ways a value reaches the hook, and both are deliberate.** Key columns
+come from the statement's values, coerced through `CoerceLiteralToColumn` —
+the one path from a written literal to a value the engine keys on. Covered
+columns come from the **encoded tuple**, sliced at the layout's offsets, so
+they are byte-identical to the page by construction, spill pointer included.
 
-A string key whose cell is `kSpilled` has no inline bytes: resolve through
-`varheap::Fetch` to take the prefix. Do it **after** the row's page span is
-released — `parser-v2.md` I15's R1 forbids a page fetch under a live span,
-and `DecodeRowInto`'s pending-spill/`ResolveSpills` split is the existing
-shape to follow, not to reinvent.
+**IX07 turned out to be already satisfied**: the INSERT path holds the
+literal and the UPDATE path calls `ResolveSpills` before the hook runs, so a
+spilled key column's full value is in hand on both. No var-heap read was
+needed on the write path.
+
+### IX07 — Spilled key values on the write path — **built by IX06, and it
+needed no code**
+
+The premise was that a `kSpilled` key cell has no inline bytes and the hook
+would have to fetch through `varheap::Fetch`. It does not: the hook takes
+*values*, not cells, and both callers already hold resolved ones — INSERT has
+the literal as written, and UPDATE calls `ResolveSpills` on its decoded row
+well before the write. `AKeyLongerThanThePrefixIsStoredTruncatedAndStill
+Maintained` covers a 200-byte value that spills.
+
+Re-open this only if a caller appears that maintains an index from a tuple
+rather than from values; the R1 warning above is the right one for it.
 
 ### IX08 — WAL records
 

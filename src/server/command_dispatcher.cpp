@@ -21,6 +21,7 @@
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/fk_check.hpp"
 #include "kds/exec/index_ddl.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
@@ -1796,6 +1797,28 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     NoteCabinWrite(ta, stmt.values, /*first_col_pos=*/1, id.value(), placed.value().page_id,
                    placed.value().slot);
 
+    // ---- Index maintenance (docs/feat-index.md §2) ----------------------
+    //
+    // Beside the Cabin witness and before the log, for the same reason and a
+    // stronger one: a Cabin that missed an append can be un-observed, and an
+    // index that missed one has lost a row to every later probe. So this
+    // **fails the statement** where the hook above absorbs.
+    //
+    // `ta` survives this call even when a split republishes an index root:
+    // Catalog::UpdateIndexRoot updates the cached entry in place rather than
+    // invalidating it (catalog_cache.hpp), which is exactly what the
+    // desc-page relink below does *not* do.
+    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, stmt.values,
+                                          /*first_col_pos=*/1, encoded.value(), id.value());
+        !s.ok()) {
+        if (logging(LogLevel::kError)) {
+            log_->Error("index", "maintaining the indexes of table oid " +
+                                     std::to_string(oid.value()) + " for id " +
+                                     std::to_string(id.value()) + " failed: " + s.message());
+        }
+        return {"ERR " + s.message(), false};
+    }
+
     // ---- The rollback trail (docs/txn.md section 3.6) -------------------
     //
     // An insert writes **no undo record**: a tuple with undo_ptr == 0 whose
@@ -2835,8 +2858,12 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // when this relation has a Cabin - it is what tells the write hook
         // whether a key column actually moved (§5's third row). A relation
         // with no Cabin copies nothing.
+        // ...and what tells the index hook the same thing (feat-index.md §2).
+        // A relation with neither copies nothing.
         std::vector<parser::AstValue> previous;
-        if (cabins_ != nullptr && ta.cabin_mask != 0) previous = row.value();
+        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty()) {
+            previous = row.value();
+        }
 
         for (const auto& assignment : stmt.assignments) {
             for (std::size_t c = 0; c < ta.schema.columns.size(); ++c) {
@@ -2956,6 +2983,16 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
         NoteCabinWrite(ta, row.value(), /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+
+        // The index half. `previous` is what makes §2's rule work: an UPDATE
+        // that moved no key and no covered column appends nothing, which is
+        // what keeps an index from growing by an entry per write forever.
+        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row.value(),
+                                              /*first_col_pos=*/0, encoded.value(), id.value(),
+                                              previous);
+            !s.ok()) {
+            return s;
+        }
 
         ++updated;
         if (page_id != last_page) {
@@ -3374,11 +3411,16 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
         }
 
-        // No Cabin write hook: removal is forbidden (feat-cabin.md section
-        // 5), because an older snapshot may still match this row through
-        // the undo chain. The entry stays and the read-time check subtracts
-        // it - which is now the visibility predicate as well as the key
-        // re-check.
+        // No Cabin write hook, and no index one either: removal is
+        // forbidden (feat-cabin.md section 5, feat-index.md IX2), because an
+        // older snapshot may still match this row through the undo chain.
+        // The entry stays and the read-time check subtracts it - which is
+        // the visibility predicate as well as the key re-check.
+        //
+        // Stated rather than left as an omission: a DELETE calling
+        // MaintainIndexes with nothing to do would read as maintenance that
+        // happens to be empty, when the truth is that maintenance here would
+        // be a defect.
 
         ++deleted;
         return Status::OK();

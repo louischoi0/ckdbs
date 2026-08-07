@@ -660,6 +660,32 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             // drift TY01's one-parser rule exists to prevent. So it is
             // rendered and handed to that parser instead: one small string
             // per predicate at *compile*, never per row.
+            // **Already in storage form: accept it and change nothing.**
+            // The date and timestamp arms above have always done this - an
+            // epoch integer coerces to itself - and this arm not doing so
+            // made the function non-idempotent for exactly two types.
+            //
+            // That is not academic. A write hook re-coerces a *decoded* row
+            // (an UPDATE carries one), so a decimal column reached here as
+            // kDecimal and was refused. The Cabin's hook absorbs a coercion
+            // failure by un-observing, so a Cabin on a decimal column was
+            // silently destroyed by the first UPDATE that touched its
+            // relation; the index hook, which cannot absorb, would have
+            // failed the statement. Found by workplan IX06.
+            //
+            // The scale still has to agree, and a disagreement is refused
+            // rather than rescaled - the same answer EncodeOneValue gives,
+            // for the same reason: rescaling either drops digits or invents
+            // them.
+            if (val.type == parser::ValueType::kDecimal) {
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                return Status::OK();
+            }
             if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
                 return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
             }
@@ -691,6 +717,16 @@ Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue&
             // then runs against, exactly as for the narrow type.
             const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
             const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            // Idempotent for the same reason the narrow arm above is.
+            if (val.type == parser::ValueType::kDecimalWide) {
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                return Status::OK();
+            }
             if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
                 return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
             }

@@ -1,6 +1,8 @@
 # Secondary indexes: multi-column and covering
 
-Status: **specification only. Nothing here is built.**
+Status: **IX01-IX06 built** (the storage layer, the catalog, the grammar and
+the write hook). An index is declared and maintained; **no statement can use
+one yet** - that is IX10/IX11.
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
@@ -524,19 +526,25 @@ mask names **leading** key columns only, for the reason `FindIndexOnColumn`
 does.
 
 > **IX12a — `IndexRef::root_page_id` is the one field on `TableAccess` that
-> can change without DDL, and holding a `const TableAccess*` across an index
-> insert that grows a level is holding a dangling pointer.**
+> changes without DDL, so `Catalog::UpdateIndexRoot` updates the cached entry
+> **in place** rather than invalidating it.**
 
-A root split republishes the root through `Catalog::UpdateIndexRoot()`, which
-bumps the catalog version and so drops the entry. That is not a new hazard —
-`desc_page_id` has had exactly this property for a clustered btree since
-btrees landed, and `InsertInner` handles it by doing the relink **last** and
-using only plain ids afterwards, with a comment saying so. The index write
-hook (IX06) does the same. It is written down here because the alternative
-that looks safer — not caching the root — costs a `sys.indexes` scan per
-statement, which is the entire thing `TableAccess` exists to avoid. This
-engine has already been bitten once by the general shape: the deleted
-per-relation Waystone dangled the pointer a running INSERT was holding.
+A root split republishes the root from inside an ordinary INSERT. Bumping the
+catalog version there would drop every cached relation and dangle the
+`const TableAccess*` the running statement is holding — and a multi-row
+UPDATE would be holding it across every later row. That is not hypothetical:
+it is exactly the collateral damage the deleted per-relation Waystone caused,
+and the reason `catalog_cache.hpp` already has two in-place updates.
+
+The fact qualifies by the same test those two pass: **a root belongs to one
+index and is read by nothing else**, so a global drop would be damage for
+nothing. So the pointer stays valid across the write hook, and every holder
+sees the new root immediately.
+
+`desc_page_id` still has the older, harsher arrangement — a relation's root
+move *does* bump — and `InsertInner` handles it by relinking last and using
+only plain ids afterwards. Left alone here because changing it is a change to
+the clustered tree's contract, not this feature's.
 
 Building the list **fails shut**, on the foreign-key argument rather than the
 Cabin one: an index the *compiler* cannot see costs only speed, but an index

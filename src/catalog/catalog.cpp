@@ -1623,16 +1623,24 @@ Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root) {
         [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.index_oid != index_oid) return false;
+            const Oid rel_oid = row.table_oid;
             row.root_page_id = new_root;
             const auto encoded = row.Encode();
             if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
                 return s;
             }
-            // A root move stales `TableAccess::index_mask`'s cached root, and
-            // reading a stale one descends into a page that is no longer the
-            // top of the tree - a wrong answer, not a slow one.
-            BumpVersion("sys.indexes root");
+            // **Updated in place, not bumped**, which is this catalog's
+            // third departure from "drop everything at one choke point" and
+            // the one that had to exist. A root moves when a split grows the
+            // tree, which happens inside an ordinary INSERT - so a global
+            // drop would dangle the `const TableAccess*` the running
+            // statement holds, and a multi-row UPDATE would be holding it
+            // across every later row.
+            //
+            // It qualifies by the same test the two pattern updates do: a
+            // root belongs to one index and is read by nothing else.
+            cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
             return true;
         });
     if (!acted.ok()) return acted.status();

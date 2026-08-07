@@ -95,6 +95,7 @@ add_library(kds
     src/exec/pattern_ddl.cpp
     src/exec/cabin_ddl.cpp
     src/exec/index_ddl.cpp
+    src/exec/index_maintain.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/coro.cpp
