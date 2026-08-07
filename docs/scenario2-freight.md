@@ -364,7 +364,25 @@ Each is a real limit as of 2026-08-06, not a preference:
 | `S2-03` | `--bookers`, `--contend`, the retry loop and its per-axis counters | conflicts are observed and retried, not counted as errors; §5's `[OPEN]` default is settled with both numbers measured |
 | `S2-04` | the `--manifest` reporter process | reporter latency reported beside TPS, as scenario0 does |
 | `S2-05` | `pg_scenario2_freight.py`, `compare_scenario2.py` | same schema, same transaction, same phase names; the two tools' JSON is diffable |
-| `S2-06` | `bench/results-scenario2-freight.md` | `--txn` vs `--no-txn` invariant table, capacity-mode gap, conflict cost, `--fk` and `--cabin` deltas, PostgreSQL side by side |
+| `S2-06` | `bench/results-scenario2-freight.md` | `--txn` vs `--no-txn` invariant table, capacity-mode gap **at two ledger sizes**, conflict cost, `--fk` and `--cabin` deltas, PostgreSQL side by side |
+
+`bench/results-scenario2-freight.md` exists already, written from `S2-02`'s
+six-configuration matrix. It prices the transaction, not the workload, and
+`S2-06` supersedes it once there is contention to measure. Three results from
+it change what later tasks should expect:
+
+- **A booking's commit is half its cost** (1,811 µs of 3,635 µs), so
+  `--no-txn` is 3.5× *slower*, not faster — explicit transactions are the
+  fast path as well as the correct one.
+- **The noise floor is ±2%** on this driver, established by an accidental
+  control: `--isolation repeatable-read`, which cannot change a
+  single-connection run's behaviour, measured +2.1%. Any `S2-03`+ claim
+  smaller than that needs more than one run.
+- **Waystone state was 71% of the data file** in the default configuration
+  (562 trail pages against 230 data pages), and switching `--capacity-mode`
+  from `cached` to `scan` cut it to 204 — because the derived column makes
+  the capacity check lookup-class and therefore recorded. A schema decision
+  moved trail volume 2.75×.
 
 ---
 
