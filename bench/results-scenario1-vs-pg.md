@@ -274,7 +274,9 @@ table had the ckdbs file on tmpfs and is withdrawn; its autocommit figure of
 **On equal media the two engines are the same speed at autocommit** - 684
 against 717 rows/s, a 5% difference that is inside this harness's noise.
 Both are paying one `fsync` per row on the same device, and that `fsync`
-dominates everything either engine does around it.
+dominates everything either engine does around it. *(Revised 2026-08-07:
+the WAL durability-point fix moved ckdbs to ~1.08× ahead at autocommit —
+see the re-measurement below.)*
 
 ckdbs's advantage is entirely in how well it amortises: **13.42× from
 batching against PostgreSQL's 7.33×**, which is what a WAL with a
@@ -284,6 +286,41 @@ per second at 1,000 rows a transaction. Neither cluster was tuned, on the
 principle that a baseline tuned by hand is not a baseline - so this is a
 comparison of two defaults, and PostgreSQL's default is the more
 conservative one.
+
+### Re-measured 2026-08-07, after the WAL durability-point fix
+
+The commit-path fix found by scenario2 (`bench/results-scenario2-freight.md`,
+"The commit's second millisecond") — WAL segments zero-filled at creation so
+no commit writes into unwritten extents, and `Sync()` on `fdatasync` — was
+A/B'd here too: four interleaved full runs, two per binary, the binaries
+differing only in `src/wal/file_log_device.cpp`, fresh server and data file
+per run, at `c440746`.
+
+| rows/txn | base A | base B | **patched A** | **patched B** | pg (2026-08-06) |
+|---|---:|---:|---:|---:|---:|
+| 1 (autocommit) | 670 | 687 | **748** | **780** | 707–717 |
+| 10 | 3,661 | 3,555 | 3,864 | 4,301 | 3,144 |
+| 100 | 7,762 | 7,964 | 7,260 | 8,227 | 5,012 |
+| 1,000 | 9,086 | 9,114 | 8,115 | 9,142 | 5,259 |
+
+**Autocommit is +12–13% and the two populations do not overlap** — both
+patched runs above both baselines. That revises this document's "same speed
+at autocommit" verdict: ckdbs now writes single-row transactions ~1.08×
+ahead of PostgreSQL's 707–717 (the pg column is carried from the 2026-08-06
+run — a ckdbs-binary change cannot move it, and it was not re-run).
+
+**The batched rows are a non-result in this window, stated as such.** The
+load average sat at 1.3–2.0 throughout — well above the 0.29 the rest of
+this document was measured at — and patched run A's dip at 100/1,000 came
+with its own *read* controls wobbling ±12% (`bar-lookup` 8,577 against
+7,575–7,690 elsewhere; base A's `bar-range` 1,689 against 2,296–2,332), so
+it is ambient noise, not the change. One real new property does belong here:
+the fix moves extent-conversion cost out of every fsync and into segment
+creation, so a 64 MiB roll is now a one-time sequential write that lands
+inside whichever cell is running when the log rolls over — a cost that used
+to be smeared invisibly across every commit and is now visible and rare.
+A claim that batching got faster or slower needs a quiet-machine repeat;
+the autocommit claim does not.
 
 ## Concurrency — the weakest row, and not a defect
 
