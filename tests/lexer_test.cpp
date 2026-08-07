@@ -147,17 +147,67 @@ TEST(LexerTest, QualifiedNameLexesAsThreeTokens) {
     EXPECT_EQ(toks[2].text, "x");
 }
 
-TEST(LexerTest, ADotAfterDigitsDoesNotSplitAnIntegerLiteral) {
-    // There is no float type, so `1.5` is not one token. It is an integer,
-    // a dot and an integer - which will fail to parse, and should, rather
-    // than being silently truncated to 1.
+TEST(LexerTest, DigitsAroundADotAreOneNumericLiteral) {
+    // TY3 phase 2. This test's predecessor pinned the opposite - `1.5` as
+    // int, dot, int - and lifting that is this change's whole point, so
+    // the pin flips deliberately. The spelling survives on `text`, sign
+    // and point included, because the spelling *is* the value: the parser
+    // hands it on as the string `'1.5'` would have been.
     auto toks = LexAll("1.5");
+    ASSERT_EQ(toks.size(), 2u);
+    EXPECT_EQ(toks[0].type, TokenType::kNumLit);
+    EXPECT_EQ(toks[0].text, "1.5");
+
+    auto neg = LexAll("-12.34");
+    ASSERT_EQ(neg.size(), 2u);
+    EXPECT_EQ(neg[0].type, TokenType::kNumLit);
+    EXPECT_EQ(neg[0].text, "-12.34");
+}
+
+TEST(LexerTest, ANumericLiteralNeedsDigitsOnBothSidesOfTheDot) {
+    // `12.` - the dot is not consumed; an integer and a dot, exactly as
+    // before the numeric token existed. This is what keeps `t.x`-style
+    // grammar (and every statement that parsed before) token-identical.
+    auto trailing = LexAll("12.");
+    ASSERT_EQ(trailing.size(), 3u);
+    EXPECT_EQ(trailing[0].type, TokenType::kIntLit);
+    EXPECT_EQ(trailing[0].int_val, 12);
+    EXPECT_EQ(trailing[1].type, TokenType::kDot);
+
+    // `.5` - a leading dot starts nothing.
+    auto leading = LexAll(".5");
+    ASSERT_EQ(leading.size(), 3u);
+    EXPECT_EQ(leading[0].type, TokenType::kDot);
+    EXPECT_EQ(leading[1].type, TokenType::kIntLit);
+    EXPECT_EQ(leading[1].int_val, 5);
+
+    // `1.b` - a digit run, a qualifier dot, an identifier. Unchanged.
+    auto qual = LexAll("1.b");
+    ASSERT_EQ(qual.size(), 4u);
+    EXPECT_EQ(qual[0].type, TokenType::kIntLit);
+    EXPECT_EQ(qual[1].type, TokenType::kDot);
+    EXPECT_EQ(qual[2].type, TokenType::kIdent);
+}
+
+TEST(LexerTest, ASecondDotEndsTheNumericLiteral) {
+    // `1.2.3` is a numeric literal, a dot and an integer - which fails to
+    // parse, and should, rather than guessing which two dots to keep.
+    auto toks = LexAll("1.2.3");
     ASSERT_EQ(toks.size(), 4u);
-    EXPECT_EQ(toks[0].type, TokenType::kIntLit);
-    EXPECT_EQ(toks[0].int_val, 1);
+    EXPECT_EQ(toks[0].type, TokenType::kNumLit);
+    EXPECT_EQ(toks[0].text, "1.2");
     EXPECT_EQ(toks[1].type, TokenType::kDot);
     EXPECT_EQ(toks[2].type, TokenType::kIntLit);
-    EXPECT_EQ(toks[2].int_val, 5);
+    EXPECT_EQ(toks[2].int_val, 3);
+}
+
+TEST(LexerTest, ANumericLiteralCarriesItsExactByteRange) {
+    //                              0123456789012345678
+    auto toks = LexAll("WHERE amt = 12.34");
+    ASSERT_EQ(toks.size(), 5u);
+    EXPECT_EQ(toks[3].type, TokenType::kNumLit);
+    EXPECT_EQ(toks[3].byte_offset, 12u);
+    EXPECT_EQ(toks[3].length, 5u);
 }
 
 TEST(LexerTest, EveryTokenCarriesItsExactByteRange) {

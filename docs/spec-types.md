@@ -20,7 +20,7 @@ other side.)*
 |---|---|---|
 | TY1 | v1 types | **`DATE`, `TIMESTAMP`, `DECIMAL(p,s)`** — all fixed-width, so invariant 13 is untouched. `FLOAT64` stays out (`Unsupported` at CREATE TABLE, reserved `kTypeValFloat = 6` unchanged): IEEE comparison and aggregation semantics conflict with the engine's exactness discipline, and nothing in it is needed to unblock the workloads that asked. `TIME`, `INTERVAL`, `timestamptz`: not reserved, not parsed |
 | TY2 | DECIMAL representation | **Scaled int64**: the unscaled value in 8 bytes, `1 ≤ p ≤ 18`, `0 ≤ s ≤ p`. Comparison, grouping and SUM reuse the checked-int64 machinery verbatim (AG3). A variable-width numeric violates invariant 13 by construction; `p > 18` is a *future separate type* (int128, 16 bytes — a different schema constant, so the two can coexist), never a widening of this one |
-| TY3 | Literals | **Quoted string literals only** in v1: `'2026-08-06'`, `'12.34'`. The column's `type_val` decides the interpretation. **The lexer does not change** — no decimal-point token, no date token — so every previously-accepted statement lexes identically and the fingerprint argument is structural: `kFingerprintVersion` unmoved. A bare `12.34` numeric token is phase 2, gated on its own fingerprint analysis |
+| TY3 | Literals | **Quoted string literals only** in v1: `'2026-08-06'`, `'12.34'`. The column's `type_val` decides the interpretation. **The lexer does not change** — no decimal-point token, no date token — so every previously-accepted statement lexes identically and the fingerprint argument is structural: `kFingerprintVersion` unmoved. ~~A bare `12.34` numeric token is phase 2, gated on its own fingerprint analysis~~ — **phase 2 built 2026-08-07**: the bare form is sugar for the quoted string of its spelling, the gating analysis is in §2 and `src/parser/fingerprint.cpp`, and the version still did not move |
 | TY4 | Time encoding | `DATE` = **days since 1970-01-01, int32** (4 bytes). `TIMESTAMP` = **microseconds since the epoch, UTC, int64** (8 bytes). **Storage is always UTC**; there is no session time zone, no conversion, no `timestamptz` — rendering what UTC means locally is the client's act, and this is a documented product constraint, not a gap |
 | TY5 | Value model | `DATE`/`TIMESTAMP` **reuse `AstValue` kInt** — the value *is* an integer; only its rendering differs, and rendering happens at the emission boundary (§4), not in the value. **`DECIMAL` alone adds a kind**: `kDecimal` carrying the unscaled int64 plus its scale. One new kind, not three, is what keeps every switch over `ValueType` from growing three arms that behave identically |
 | TY6 | Mixed-scale comparison | Column–literal: the literal is normalized **to the column's scale at compile time**, and digits beyond `s` are a positioned statement error — rounding a literal to make it match is a silent wrong answer. Column–column (a join residual): **same `(p, s)` only**; differing scales answer `Unsupported`. Rescaling under overflow semantics is deferred whole, not half-shipped |
@@ -64,9 +64,26 @@ remain legal. `DECIMAL(p, s)` requires both arguments (no `DECIMAL`, no
 `DECIMAL(p)` — a default scale is a silent decision about someone's money);
 `p` and `s` outside TY2's bounds are positioned errors at CREATE TABLE.
 
-Value positions take **string literals** (TY3). An unquoted `12.34` remains
-what it is today — a parse error — and the error message gains a hint:
-`decimal values are written as strings: '12.34'`.
+Value positions take **string literals** (TY3), and — since phase 2,
+**built 2026-08-07** — a bare `12.34` as well. The phase-2 rule is one
+sentence: **a bare numeric literal is the quoted string of its spelling,
+exactly** — the lexer fuses `digits . digits` (both sides mandatory; `12.`
+and `.5` stay the errors they were) into one token, the parser produces
+the AstValue `'12.34'` would, and the fingerprint hashes the same argument
+bytes, so the two spellings are one statement everywhere: one pattern_id,
+one arg_hash, one meaning, one set of errors. No new `ValueType`, no new
+coercion path, no carve-outs — a bare `1.5` into a varchar column stores
+the string `1.5`, as the quoted form always did. The v1 line promised the
+parse error "gains a hint" naming the quoted form; the hint was never
+built, and acceptance retired the message it would have decorated.
+
+The fingerprint analysis phase 2 was gated on, in brief (in full:
+`src/parser/fingerprint.cpp` at kNumLit, pinned by `fingerprint_test.cpp`
+and the golden corpus): fusing the tokens moves the hash only of
+statements containing digit-dot-digit, which lexed but parsed in no
+production — fingerprintable yet unrecordable, so no stored `pattern_id`
+moves and **`kFingerprintVersion` stays 1**. Every pre-existing golden
+corpus line passes unchanged as the witness.
 
 ## 3. Semantics `[CONFIRMED]`
 
@@ -197,7 +214,8 @@ whole price.
 
 ## 5. What v1 is not
 
-`FLOAT64` (TY1) · bare numeric literals `12.34` (TY3, phase 2) · time
+`FLOAT64` (TY1) · ~~bare numeric literals `12.34` (TY3, phase 2)~~ —
+**built 2026-08-07**, see §2 · time
 zones and `timestamptz` (TY4) · `p > 18` (TY2, future int128 type) ·
 cross-scale DECIMAL comparison and rescaling (TY6) · date/decimal
 arithmetic and value functions (TY8) · `AVG` (§3.2 — unlocked in
@@ -250,5 +268,12 @@ and anything (`'2026-08-06'` into a varchar column stays a plain string).
   that belongs with the aggregate spec. The stale reason is gone from the
   code comments and from `feat-aggregate.md`; the refusal message itself
   never carried it.
-- Phase 2: bare numeric literals (TY3) and its fingerprint analysis.
+- ~~Phase 2: bare numeric literals (TY3) and its fingerprint analysis~~ —
+  **built 2026-08-07 (TY10)**. The analysis it was gated on concluded no
+  version bump: the fused token sequence appeared only in statements no
+  production parsed, so the moved hashes were never storable. §2 carries
+  the rule; `docs/workplan-types.md` TY10 the outcome. What phase 2 still
+  is not: scientific notation (`1e5` lexes as it always did — an integer
+  and an identifier) and a leading-dot form (`.5`), both refused rather
+  than guessed at.
 - int128 `DECIMAL` for `p > 18` (TY2).

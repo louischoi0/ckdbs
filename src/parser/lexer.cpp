@@ -131,6 +131,27 @@ Token Lexer::ScanToken() {
         while (pos_ < src_.size() && std::isdigit(static_cast<unsigned char>(src_[pos_]))) {
             ++pos_;
         }
+
+        // A '.' with a digit after it extends this into one numeric
+        // literal: `12.34` is a kNumLit, not int-dot-int. The digit
+        // requirement on *both* sides is what keeps everything else where
+        // it was: `12.` stays an integer followed by a dot, `.5` never
+        // reaches here, and `a.b` has no digits at all. No statement that
+        // parsed before this token existed contains the fused sequence, so
+        // no stored pattern_id moves (see the analysis in fingerprint.cpp).
+        if (pos_ + 1 < src_.size() && src_[pos_] == '.' &&
+            std::isdigit(static_cast<unsigned char>(src_[pos_ + 1]))) {
+            ++pos_;  // the point
+            while (pos_ < src_.size() && std::isdigit(static_cast<unsigned char>(src_[pos_]))) {
+                ++pos_;
+            }
+            tok.text = src_.substr(start, pos_ - start);
+            tok.type = TokenType::kNumLit;
+            // `int_val` and `negative` stay unset: the spelling is the
+            // value here, and every consumer reads `text`.
+            return tok;
+        }
+
         tok.text = src_.substr(start, pos_ - start);
         tok.type = TokenType::kIntLit;
 
@@ -214,10 +235,10 @@ Token Lexer::ScanToken() {
         case ',': tok.type = TokenType::kComma; break;
         case ';': tok.type = TokenType::kSemicolon; break;
         case '*': tok.type = TokenType::kStar; break;
-        // Reached only when the '.' does not follow a digit: an integer
-        // literal consumes its own run above, and this grammar has no
-        // floating-point type for `1.5` to become. So a '.' here is always
-        // a qualifier separator.
+        // Reached only when the '.' neither follows a digit run nor starts
+        // a numeric literal: `1.5` is consumed whole as a kNumLit above,
+        // and `12.` leaves its dot here. So a '.' here is a qualifier
+        // separator, or a syntax error the parser will report.
         case '.': tok.type = TokenType::kDot; break;
         case '=': tok.type = TokenType::kEq; break;
         case '<': tok.type = TokenType::kLt; break;

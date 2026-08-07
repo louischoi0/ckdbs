@@ -345,5 +345,43 @@ TEST(FingerprintTest, TheParamTokenNeededNoFingerprintVersionBump) {
     EXPECT_FALSE(FingerprintOf("SELECT * FROM t WHERE id = $ 1").has_value());
 }
 
+// ---- The bare numeric literal (TY3 phase 2) -------------------------------
+
+TEST(FingerprintTest, ABareNumericIsTheQuotedStringOfItsSpelling) {
+    // Not a shape-only convergence like int-versus-string: the two
+    // spellings produce one AST, so they are one statement, and both
+    // halves of the fingerprint must agree - pattern_id via the shared
+    // kValue marker, arg_hash because the argument stream hashes the same
+    // tag and the same bytes for both.
+    const Fingerprint bare = Must("SELECT * FROM t WHERE amt = 12.34");
+    const Fingerprint quoted = Must("SELECT * FROM t WHERE amt = '12.34'");
+
+    EXPECT_EQ(bare.pattern_id, quoted.pattern_id);
+    EXPECT_EQ(bare.arg_hash, quoted.arg_hash);
+    EXPECT_EQ(bare.literal_count, 1u);
+
+    // And the value hole is the same hole `?` leaves.
+    const Fingerprint bound = Must("SELECT * FROM t WHERE amt = ?");
+    EXPECT_EQ(bare.pattern_id, bound.pattern_id);
+
+    // A different spelling of the same number is a different argument -
+    // the text is hashed, not the value, exactly as `42` vs `042`.
+    const Fingerprint padded = Must("SELECT * FROM t WHERE amt = 12.340");
+    EXPECT_EQ(bare.pattern_id, padded.pattern_id);
+    EXPECT_NE(bare.arg_hash, padded.arg_hash);
+}
+
+TEST(FingerprintTest, TheNumericTokenNeededNoFingerprintVersionBump) {
+    // The subtler case of the bump rule, argued in fingerprint.cpp:
+    // `12.34` *did* lex before this token (int, dot, int), so its
+    // statement was fingerprintable and its hash has now moved. No bump,
+    // because that hash was never storable - int-dot-int parses in no
+    // production, and only statements that execute are recorded. The
+    // golden corpus pins every pre-existing statement's hash unchanged;
+    // this pins the version those pins are relative to.
+    EXPECT_EQ(kFingerprintVersion, 1u);
+    EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
+}
+
 }  // namespace
 }  // namespace kds::parser

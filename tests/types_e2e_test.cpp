@@ -150,6 +150,57 @@ TEST(TypesEndToEnd, ADecimalPredicateMatchesOnTheScaledValue) {
     EXPECT_EQ(db.Run("SELECT id FROM trade WHERE amt = 50"), "id\\n3");
 }
 
+// ---- Bare numeric literals (TY3 phase 2) --------------------------------
+
+TEST(TypesEndToEnd, ABareNumericLiteralBehavesAsItsQuotedSpelling) {
+    Instance db;
+    Load(db);
+    // The sugar rule, observed at the wire: every spelling of 50.00 finds
+    // the same row, because the parser hands the compiler the same value.
+    EXPECT_EQ(db.Run("SELECT id FROM trade WHERE amt = 50.00"), "id\\n3");
+    EXPECT_EQ(db.Run("SELECT id FROM trade WHERE amt = 50.0"), "id\\n3");
+
+    // INSERT and UPDATE take the bare form through the same encode gate.
+    ASSERT_EQ(db.Run("INSERT INTO trade VALUES (2, '2026-07-01', "
+                     "'2026-07-01 00:00:00', 12.34)")
+                  .substr(0, 8),
+              "INSERTED");
+    EXPECT_EQ(db.Run("SELECT amt FROM trade WHERE settles = '2026-07-01'"), "amt\\n12.34");
+    ASSERT_EQ(db.Run("UPDATE trade SET amt = 43.21 WHERE settles = '2026-07-01'").substr(0, 7),
+              "UPDATED");
+    EXPECT_EQ(db.Run("SELECT amt FROM trade WHERE settles = '2026-07-01'"), "amt\\n43.21");
+
+    // A BETWEEN carries both bounds through the same coercion (the high
+    // bound is the one a single-site fix misses - TY05's lesson).
+    EXPECT_EQ(db.Run("SELECT id FROM trade WHERE amt BETWEEN 100.00 AND 300.00"), "id\\n1\\n2");
+}
+
+TEST(TypesEndToEnd, ABareNumericIsRefusedWhereItsQuotedSpellingWouldBe) {
+    Instance db;
+    Load(db);
+    // Scale overflow is the same positioned compile error the quoted form
+    // gets - one parser, whichever way the literal was spelled.
+    const std::string overflow = db.Run("SELECT id FROM trade WHERE amt = 12.345");
+    EXPECT_EQ(overflow.substr(0, 3), "ERR") << overflow;
+    EXPECT_NE(overflow.find("12.345"), std::string::npos) << overflow;
+
+    // Against an integer column, encode refuses it exactly as it refuses
+    // the quoted string.
+    const std::string bad = db.Run(
+        "INSERT INTO trade VALUES (1.5, '2026-07-01', '2026-07-01 00:00:00', 12.34)");
+    EXPECT_EQ(bad.substr(0, 3), "ERR") << bad;
+    EXPECT_NE(bad.find("integer"), std::string::npos) << bad;
+
+    // Against a varchar column it *stores the string* - the sugar rule has
+    // no carve-out, and `'1.5'` into a varchar was always a plain string.
+    ASSERT_EQ(db.Run("INSERT INTO acct VALUES (1.5)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(db.Run("SELECT name FROM acct WHERE name = '1.5'"), "name\\n1.5");
+
+    // Against a DATE column, the shared date parser rejects the spelling.
+    const std::string date = db.Run("SELECT id FROM trade WHERE settles = 1.5");
+    EXPECT_EQ(date.substr(0, 3), "ERR") << date;
+}
+
 // ---- JOIN ---------------------------------------------------------------
 
 TEST(TypesEndToEnd, AJoinCarriesTypedColumnsThroughTheFrame) {

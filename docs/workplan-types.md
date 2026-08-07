@@ -1,7 +1,8 @@
 # Types — Workplan
 
 Work instructions, companion to `docs/spec-types.md` (TY1–TY9). Tasks
-`TY01`–`TY09`, **all built as of 2026-08-07**.
+`TY01`–`TY09`, **all built as of 2026-08-07**; `TY10` (TY3's phase 2,
+appended after closure) **built the same day**.
 
 (This line said `docs/types.md` until TY09, and TY09's own line said
 `docs/aggregate.md`. Neither file has ever existed — see TY09's outcome.)
@@ -374,3 +375,55 @@ Documents, including the `CoerceLiteralToColumn` rule TY07's bug earned.
 And `client-manual.md` still told clients the executor supports "no
 `float`/`decimal` values, single-page heaps only"; both limits are gone,
 and only `float` and NULLs remain.
+
+## TY10 — Bare numeric literals (TY3 phase 2; needs TY01–TY09) — **DONE**
+
+The one spec item TY09's closure left explicitly open and gated: a bare
+`12.34` token, admissible only with its own fingerprint analysis. This is
+the sanctioned exception to this workplan's lexer-off-limits rule — the
+rule forbade touching the lexer *in service of TY01–TY09*, and phase 2 is
+by definition the task that touches it.
+
+*Done when:* `12.34` parses everywhere `'12.34'` does and means the same
+thing; the fingerprint analysis is written where it is load-bearing; the
+golden corpus passes unchanged for every pre-existing line;
+`kFingerprintVersion` is unmoved or the bump is argued.
+
+*Outcome.* Built as **one sentence with no case analysis: a bare numeric
+literal is the quoted string of its spelling, exactly.** The lexer fuses
+`digits . digits` into one `kNumLit` (both sides mandatory — `12.` and
+`.5` lex as they always did, which is what keeps qualified-name grammar
+and every previously-parsing statement token-identical); the parser's
+`ParseValue` produces the kStr value the quoted form produces; the
+fingerprint tags it `ShapeTag::kValue` and hashes `ArgTag::kStr` over the
+same bytes. So `= 12.34` and `= '12.34'` share a pattern_id *and* an
+arg_hash — one statement, not a collision — and every downstream stage
+(coercion, encode, Cabin keys, trails) has exactly one case, which is how
+TY07's two-keys bug class is kept structurally impossible here.
+
+**The fingerprint analysis found the subtle case and it is the reason
+this was gated.** `12.34` *lexed* before this token — int, dot, int, all
+valid — so statements containing it were fingerprintable and their hashes
+moved. No bump: those hashes were never *storable*, because int-dot-int
+parses in no production, only executed statements are recorded, and a
+CREATE PATTERN body must itself parse. That refinement — "already
+fingerprintable" means "already storable" — is now written into
+`fingerprint.hpp`'s bump rule, argued at the kNumLit case in
+`fingerprint.cpp`, and pinned three ways: the golden corpus (every
+pre-existing line unchanged, nine new lines including the bare/quoted
+hash-equality pair), `fingerprint_test.cpp`'s two new tests, and the
+corpus header's newly named second permitted transition.
+
+**No carve-outs, verified where it surprises**: a bare `1.5` into a
+varchar column stores the string `1.5` — the e2e suite first wrote that
+case expecting an error and the engine was right, because `'1.5'` into a
+varchar was always a plain string and a carve-out would be a second
+meaning for one token. Refusals ride the existing gates: scale overflow
+and date/integer mismatches surface with the same positions and texts as
+the quoted form, pinned end to end.
+
+What phase 2 is *not*: scientific notation and leading-dot forms (spec
+§7). The v1 hint message the spec promised for the parse error was never
+built, and acceptance retired the error it would have decorated — recorded
+in §2 rather than silently, in this workplan's own tradition of noting
+where a task's description and the code disagreed.

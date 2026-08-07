@@ -72,6 +72,23 @@ enum class TokenType {
     kIdent,    // table/column name, or an unreserved keyword
     kIntLit,   // 42, -7
     kStrLit,   // 'hello' (quotes stripped)
+
+    // A bare numeric literal with a decimal point: `12.34`, `-0.5`. Both
+    // sides of the point must have digits - `12.` and `.5` lex as they
+    // always did (an integer and a dot; a dot and an integer), so a
+    // qualified name's grammar does not move.
+    //
+    // **A bare numeric is sugar for the quoted string of its spelling,
+    // exactly** (docs/spec-types.md TY3 phase 2): the parser produces the
+    // same AstValue `'12.34'` produces, and the fingerprint hashes the same
+    // argument bytes, so `= 12.34` and `= '12.34'` are one statement
+    // everywhere - one pattern, one arg_hash, one meaning. The column's
+    // type decides the interpretation at the same single gate the quoted
+    // form goes through (`CoerceLiteralToColumn` / `EncodeOneValue`), which
+    // is what keeps this a lexer convenience rather than a type-system
+    // event. `text` is the full spelling, sign and point included;
+    // `int_val` and `digits()` are meaningless for it and stay unset.
+    kNumLit,
     kNullLit,  // NULL
 
     // A reserved word (see Keyword above); which one is in Token::kw.

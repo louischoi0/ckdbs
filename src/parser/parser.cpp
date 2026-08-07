@@ -121,6 +121,22 @@ StatusOr<AstValue> Parser::ParseValue() {
             v.byte_offset = tok.byte_offset;
             return v;
         }
+        case TokenType::kNumLit: {
+            // Deliberately the kStrLit arm's value, byte for byte: a bare
+            // numeric is sugar for the quoted string of its spelling
+            // (token.hpp), so `= 12.34` and `= '12.34'` produce one AST and
+            // every stage past this line has exactly one case to be right
+            // about. The column's type gives it meaning at the same gate
+            // the quoted form goes through - `CoerceLiteralToColumn` for a
+            // predicate, `EncodeOneValue` for an INSERT - and a column no
+            // string satisfies (an integer one) refuses or misses exactly
+            // as it would the quoted form.
+            AstValue v;
+            v.type = ValueType::kStr;
+            v.str_val = std::string(tok.text);
+            v.byte_offset = tok.byte_offset;
+            return v;
+        }
         case TokenType::kNullLit: {
             AstValue v;
             v.type = ValueType::kNull;
@@ -149,7 +165,7 @@ StatusOr<AstValue> Parser::ParseValue() {
         }
         default:
             return Status::InvalidArgument(
-                "expected value (integer, 'string', or NULL), got '" +
+                "expected value (integer, number, 'string', or NULL), got '" +
                 std::string(Describe(tok)) + "'");
     }
 }
