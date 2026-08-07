@@ -202,3 +202,93 @@ TEST(TypeLiteralsTest, TheWidestDecimalRoundTrips) {
 
 }  // namespace
 }  // namespace kds::exec
+
+// ---- TY03: the DDL -------------------------------------------------------
+
+#include <variant>
+
+#include "kds/parser/parser.hpp"
+
+namespace kds::parser {
+namespace {
+
+const ColumnDef& ColumnOf(const StatusOr<Statement>& parsed, std::size_t at) {
+    static const ColumnDef kEmpty;
+    if (!parsed.ok()) return kEmpty;
+    const auto& ct = std::get<CreateTableStmt>(parsed.value());
+    if (at >= ct.columns.size()) return kEmpty;
+    return ct.columns[at];
+}
+
+TEST(TypeDdlTest, TheThreeTypeNamesParse) {
+    for (const char* type : {"date", "timestamp"}) {
+        const std::string sql = std::string("CREATE TABLE t (id int64, x ") + type + ")";
+        auto parsed = Parse(sql);
+        ASSERT_TRUE(parsed.ok()) << sql << ": " << parsed.status().message();
+        EXPECT_EQ(ColumnOf(parsed, 1).type_name, type);
+        EXPECT_FALSE(ColumnOf(parsed, 1).has_precision);
+    }
+}
+
+TEST(TypeDdlTest, DecimalCarriesItsPrecisionAndScale) {
+    auto parsed = Parse("CREATE TABLE t (id int64, price decimal(10, 2))");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const ColumnDef& col = ColumnOf(parsed, 1);
+    EXPECT_TRUE(col.has_precision);
+    EXPECT_EQ(col.precision, 10u);
+    EXPECT_EQ(col.scale, 2u);
+}
+
+TEST(TypeDdlTest, ABareDecimalIsRefusedWithItsPosition) {
+    // **Never defaulted.** A default scale is a silent decision about what
+    // a stored value means, and the parser is the last layer that can tell
+    // "said nothing" from "said zero".
+    auto parsed = Parse("CREATE TABLE t (id int64, price decimal)");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(parsed.status().message().find("byte 32"), std::string::npos)
+        << parsed.status().message();
+    EXPECT_NE(parsed.status().message().find("no default scale"), std::string::npos)
+        << parsed.status().message();
+}
+
+TEST(TypeDdlTest, AHalfWrittenDecimalIsASyntaxError) {
+    for (const char* sql : {"CREATE TABLE t (id int64, p decimal(10))",
+                            "CREATE TABLE t (id int64, p decimal(10,))",
+                            "CREATE TABLE t (id int64, p decimal(,2))",
+                            "CREATE TABLE t (id int64, p decimal(10 2))",
+                            "CREATE TABLE t (id int64, p decimal(-1, 2))",
+                            "CREATE TABLE t (id int64, p decimal('a', 2))"}) {
+        EXPECT_FALSE(Parse(sql).ok()) << sql;
+    }
+}
+
+TEST(TypeDdlTest, ATypeThatTakesNoArgumentsRefusesThem) {
+    auto parsed = Parse("CREATE TABLE t (id int64, x int64(10, 2))");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_NE(parsed.status().message().find("takes no arguments"), std::string::npos)
+        << parsed.status().message();
+}
+
+TEST(TypeDdlTest, AColumnMayStillBeNamedDate) {
+    // The type names are unreserved, like every keyword this parser matches
+    // by text - so `date` stays available as a column name everywhere it
+    // was, which is the same argument the aggregate grammar rests on.
+    auto parsed = Parse("CREATE TABLE t (id int64, date varchar, timestamp int64)");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    EXPECT_EQ(ColumnOf(parsed, 1).name, "date");
+    EXPECT_EQ(ColumnOf(parsed, 2).name, "timestamp");
+
+    EXPECT_TRUE(Parse("SELECT date FROM t WHERE date = 'x'").ok());
+    EXPECT_TRUE(Parse("SELECT COUNT(*) FROM t GROUP BY date").ok());
+}
+
+TEST(TypeDdlTest, ADecimalColumnMayBeNamedDecimal) {
+    auto parsed = Parse("CREATE TABLE t (id int64, decimal decimal(4, 1))");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    EXPECT_EQ(ColumnOf(parsed, 1).name, "decimal");
+    EXPECT_EQ(ColumnOf(parsed, 1).precision, 4u);
+}
+
+}  // namespace
+}  // namespace kds::parser

@@ -18,6 +18,8 @@ namespace {
 
 using catalog::kTypeValBool;
 using catalog::kTypeValChar;
+using catalog::kTypeValDate;
+using catalog::kTypeValTimestamp;
 using catalog::kTypeValDecimal;
 using catalog::kTypeValFloat;
 using catalog::kTypeValInt16;
@@ -217,14 +219,25 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                 .WithContext("column '" + NameOf() + "'");
         }
         case kTypeValFloat:
-        case kTypeValDecimal:
             // Unreachable through a catalog-built layout: RowLayout::Build()
-            // refuses these columns at CREATE TABLE (schema.hpp). Kept as a
+            // refuses a float column at CREATE TABLE, and TY1 makes that a
+            // product decision rather than an undecided encoding. Kept as a
             // failure rather than an assert for a hand-built schema.
             return Status::Unsupported(
                 "column '" + NameOf() +
-                "' has type float/decimal - no on-disk encoding exists yet (open decision, see "
-                "catalog/schema.hpp)");
+                "' has type float, which this engine does not store (docs/spec-types.md TY1)");
+        // **[TY03, removed by TY04]** These three are declarable now and
+        // have widths, so a relation can carry one - but the codec arms
+        // that read and write them are TY04's. Refused by name rather than
+        // left to the `default` below, which reports an unrecognized
+        // type_val for a column the catalog is entirely right about.
+        case kTypeValDecimal:
+        case kTypeValDate:
+        case kTypeValTimestamp:
+            return Status::Unsupported(
+                "column '" + NameOf() +
+                "' has type date/timestamp/decimal, which this build can declare but not yet "
+                "store (docs/workplan-types.md TY04)");
         default:
             return Status::InvalidArgument("column '" + NameOf() + "' has an unrecognized type_val");
     }
@@ -333,11 +346,22 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::OK();
         }
         case kTypeValFloat:
-        case kTypeValDecimal:
             return Status::Corruption(
                 "column '" + NameOf() +
-                "' has type float/decimal, which no row this codec wrote should ever contain "
+                "' has type float, which no row this codec wrote should ever contain "
                 "(see row_codec.hpp)");
+        // **[TY03, removed by TY04]** These three are declarable now and
+        // have widths, so a relation can carry one - but the codec arms
+        // that read and write them are TY04's. Refused by name rather than
+        // left to the `default` below, which would report a corrupt catalog
+        // for a column the catalog is entirely right about.
+        case kTypeValDecimal:
+        case kTypeValDate:
+        case kTypeValTimestamp:
+            return Status::Unsupported(
+                "column '" + NameOf() +
+                "' has type date/timestamp/decimal, which this build can declare but not yet "
+                "store (docs/workplan-types.md TY04)");
         default:
             return Status::Corruption("column '" + NameOf() + "' has an unrecognized type_val");
     }

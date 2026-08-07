@@ -120,6 +120,11 @@ private:
     StatusOr<std::vector<Condition>> ParseOptionalWhere(std::uint32_t depth);
 
     StatusOr<std::string> ParseIdent();
+
+    // One argument of a parameterized type - `decimal(10, 2)`'s 10 and 2.
+    // `what` names it in the error, so a client is told which of the two
+    // was wrong rather than that "a type argument" was.
+    StatusOr<std::uint32_t> ParseTypeArgument(std::string_view what);
     Status ExpectKeyword(std::string_view keyword);
     Status ExpectToken(TokenType type, std::string_view desc);
     void ConsumeOptionalSemicolon();

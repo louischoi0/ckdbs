@@ -190,6 +190,24 @@ struct ColumnDef {
     std::string name;
     std::string type_name;  // unresolved - see file comment
 
+    // `DECIMAL(p, s)`'s two arguments, as written (docs/spec-types.md TY2).
+    //
+    // **Both are mandatory and neither is defaulted here.** A bare
+    // `decimal` is refused at parse rather than given a scale, because a
+    // default scale is a silent decision about someone's money - and a
+    // parser that supplied one would make the refusal impossible to state
+    // later. `has_precision` is what distinguishes "written `decimal(10,2)`"
+    // from "written `decimal`", which the zero values cannot.
+    //
+    // Left unresolved like `type_name` beside them: the bounds check
+    // belongs with the type registry, not in a syntax layer.
+    bool has_precision = false;
+    std::uint32_t precision = 0;
+    std::uint32_t scale = 0;
+
+    // Where the type name was written, for a refusal that can point at it.
+    std::uint32_t type_byte_offset = 0;
+
     // The column's cabin policy (docs/feat-cabin.md), one of
     // `catalog::kCabinPolicy*`. Written as an optional suffix on the column:
     //

@@ -312,6 +312,87 @@ moves trail volume by 2.75× without mentioning Waystone**: adding
 and tripled the file. Nothing in that schema decision looks like a Waystone
 decision.
 
+## A second core buys nothing, and costs an extent and a WAL stream
+
+`cores` is pinned into the superblock when a database is created and
+validated at every mount, so each value needs its own data file. This
+comparison is six runs interleaved `1, 2, 1, 2` in one two-minute window, on
+the same binary as every table above.
+
+| | |
+|---|---|
+| executed | **2026-08-07 01:18:48 → 01:20:48 UTC** |
+| branch / HEAD | `feat-additional-types` / `738fe6e` |
+| binary | unchanged — the same 23:47:41 build measured throughout this document |
+| machine | 2 physical cores (`nproc = 2`), so `cores = 2` is the ceiling the server will accept |
+| noise floor | **±0.5%** — the two `cores = 1` runs differ by 0.18%, the two `cores = 2` runs by 0.5% |
+
+| configuration | TPS | vs `cores = 1` | server CPU | pages |
+|---|---:|---:|---:|---:|
+| `cores = 1`, run A | 281.1 | — | 2.47 s | 792 |
+| `cores = 1`, run B | 280.6 | — | 2.46 s | 792 |
+| `cores = 2`, run A | 280.9 | −0.1% | 2.66 s | 856 |
+| `cores = 2`, run B | 279.5 | −0.4% | 2.65 s | 856 |
+| `cores = 1`, `--no-txn` | 85.0 | — | 3.03 s | 792 |
+| `cores = 2`, `--no-txn` | 84.9 | −0.1% | 3.40 s | 856 |
+
+Throughput is unchanged inside the floor, in both the transactional and the
+autocommit configuration. The per-statement distributions say the same thing
+— nothing moves outside its own run-to-run variation:
+
+| statement | `cores = 1` p50 | `cores = 2` p50 | `cores = 1` p99 | `cores = 2` p99 |
+|---|---:|---:|---:|---:|
+| cargo-lookup | 136 | 136 | 212 | 231 |
+| recipe-read | 145 | 148 | 230 | 270 |
+| freight-insert | 117 | 119 | 181 | 197 |
+| org-update | 116 | 119 | 198 | 195 |
+| commit | 2,087 | 2,081 | 2,677 | 2,483 |
+| whole booking | 3,785 | 3,786 | 4,701 | 4,874 |
+
+*(µs, 1,500 bookings each, 8,425 charge rows each)*
+
+The wait breakdown is likewise flat — durability 49.6% of a booking at one
+core and 48.6% at two — which is the expected result and worth stating as
+such: `kds.conf.sample` says core 0 still serves every statement, that a peer
+cannot resolve a relation until the per-core catalog work of `P6` lands, and
+that raising `cores` today "buys parallel WAL streams and nothing else". The
+measurement agrees with the documentation.
+
+What it does cost is visible in the two right-hand columns:
+
+- **+0.19 s of server CPU** for the same 1,500 bookings, +7.7%. Over a ~5.3 s
+  run that is about 3.6% of one core, which tells you the idle peer reactor
+  **parks rather than busy-loops** — a pinned never-blocking reactor spinning
+  flat out would have shown ~5 s. Under `--no-txn` the gap is +12.2%, on a
+  longer run, in the same proportion.
+- **+64 pages of data file**, exactly `storage::kDefaultExtentPages`. That is
+  the peer core's page-id lease: a leased store takes a run of ids up front
+  and never touches the free map, so a second core costs one extent whether
+  or not it ever writes to it.
+- **+64 MiB of WAL.** Each core preallocates its own segment
+  (`wal-<core>-0.log`) with `posix_fallocate` at startup, so `cores = N`
+  reserves N × 64 MiB before serving anything.
+
+### The WAL preallocation is a hard startup dependency
+
+That last cost is not a footnote. A first attempt at this comparison ran with
+130 MB free on the volume, and `cores = 2` **failed to start**:
+
+```
+server stopped: FileLogDevice: posix_fallocate on
+  /home/ec2-user/s2cores.db.wal/wal-1-0.log: No space left on device
+```
+
+Core 0's 64 MiB segment succeeded and core 1's did not, so the server bound
+its port, accepted nothing, and exited. The paired run that did start, on a
+volume at 99%, delivered **29.7 TPS against 281** — a 9× collapse, with
+server CPU 9× higher, produced entirely by allocating under a nearly full
+filesystem. Both numbers were discarded and the comparison re-run with 640 MB
+free; they are recorded here only because the failure mode is worth knowing.
+Two operational consequences follow: raising `cores` raises the instance's
+**startup** disk requirement linearly, and a near-full volume degrades this
+engine's write path by an order of magnitude before it fails outright.
+
 ## What this run does not answer
 
 - **What a conflict costs.** Zero occurred, by construction: one booker.
@@ -325,8 +406,10 @@ decision.
   works; the recipe read is 4% of a booking, so serving it perfectly cannot
   show up in throughput. Pricing it needs a workload that reads recipes far
   more often than it commits.
-- **How any of this scales.** One ledger size, one core, one connection.
-  `cores = 1` throughout, and the cross-core pipeline does not exist.
+- **How any of this scales.** One ledger size, one connection. The cores
+  comparison above covers `cores = 1` and `cores = 2`, which is this
+  machine's ceiling, and the cross-core pipeline does not exist — so no
+  configuration here executes a statement anywhere but core 0.
 - **Where the commit's second millisecond goes.** The bimodal fsync is the
   largest single cost in this workload and this driver cannot see inside it.
   That needs server-side instrumentation, which `docs/observability.md`

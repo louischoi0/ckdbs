@@ -1,5 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include "kds/exec/type_literals.hpp"
+
 #include "kds/stats/pattern_defs.hpp"
 #include "kds/stats/trail_store.hpp"
 
@@ -1221,6 +1223,38 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
         row.len = type_row.value().len;
         row.notnull = true;  // no NULL support yet - see row_codec.hpp
         row.cabin_policy = col.cabin_policy;
+
+        // ---- decimal(p, s) (docs/spec-types.md TY2, TY9) ----------------
+        //
+        // The pair replaces the type's default `len`, which for a decimal
+        // was never read as a width - `RowLayout::ColumnWidth` gives every
+        // decimal 8 bytes from its `type_val` alone (catalog/rows.hpp says
+        // why the field was free).
+        if (row.type_val == catalog::kTypeValDecimal) {
+            if (!col.has_precision) {
+                // Unreachable through the parser, which refuses a bare
+                // `decimal`. Checked anyway: a schema can be built without
+                // one, and a decimal with no scale stored is a column whose
+                // values have no defined meaning.
+                return {"ERR column '" + col.name + "' is decimal with no precision or scale",
+                        false};
+            }
+            if (Status s = exec::CheckDecimalPrecisionScale(col.precision, col.scale); !s.ok()) {
+                return {"ERR " + s.message() + " (byte " +
+                            std::to_string(col.type_byte_offset) + ")",
+                        false};
+            }
+            row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
+                                              static_cast<std::uint8_t>(col.scale));
+        } else if (col.has_precision) {
+            // Unreachable through the parser too, and refused rather than
+            // ignored: silently dropping the arguments would leave an
+            // operator believing they had said something.
+            return {"ERR type '" + col.type_name + "' takes no precision or scale (byte " +
+                        std::to_string(col.type_byte_offset) + ")",
+                    false};
+        }
+
         schema.columns.push_back(row);
     }
 

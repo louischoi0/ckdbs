@@ -323,14 +323,52 @@ TEST_F(FixedLengthTupleTest, AFloatColumnIsRefusedAtCreateTable) {
     EXPECT_NE(reply.find("float"), std::string::npos) << reply;
 }
 
-TEST_F(FixedLengthTupleTest, ABareDecimalColumnIsRefusedUntilItCanCarryScale) {
-    // `decimal` has a width now (TY2's scaled int64), so the refusal moved
-    // from RowLayout to the column-type check - and its *reason* moved with
-    // it. A bare `decimal` says nothing about scale, and a default scale is
-    // a silent decision about someone's money (spec-types.md §2).
+TEST_F(FixedLengthTupleTest, ABareDecimalColumnIsRefusedForWantOfAScale) {
+    // A bare `decimal` says nothing about scale, and a default scale is a
+    // silent decision about someone's money (spec-types.md §2). Refused at
+    // parse, so the position is the type's own.
     const std::string reply = Run("CREATE TABLE bad_dec (id int64, x decimal)");
     EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
-    EXPECT_NE(reply.find("precision"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("no default scale"), std::string::npos) << reply;
+}
+
+TEST_F(FixedLengthTupleTest, TheThreeNewTypesRoundTripThroughTheCatalog) {
+    // TY03's done-when. The row size is the sum of the declared widths
+    // (TY1's table), which is invariant 13 holding for the new types
+    // exactly as it does for the old ones.
+    ASSERT_EQ(Run("CREATE TABLE ty (id int64, d date, ts timestamp, price decimal(10, 2))")
+                  .substr(0, 7),
+              "CREATED");
+
+    const std::string described = Run("DESCRIBE ty");
+    EXPECT_NE(described.find("name=d type=date"), std::string::npos) << described;
+    EXPECT_NE(described.find("name=ts type=timestamp"), std::string::npos) << described;
+    // The declared form, parameters included - which is what TY02's
+    // packing made necessary and `ColumnTypeText` makes uniform.
+    EXPECT_NE(described.find("name=price type=decimal(10,2)"), std::string::npos) << described;
+}
+
+TEST_F(FixedLengthTupleTest, DecimalBoundsAreRefusedAtCreateTable) {
+    // TY2: 1 <= p <= 18, 0 <= s <= p. Beyond 18 is a future int128 type,
+    // never a widening of this one.
+    for (const char* decl : {"decimal(19, 0)", "decimal(0, 0)", "decimal(5, 6)"}) {
+        const std::string sql =
+            std::string("CREATE TABLE bad_") + (decl[8] == '1' ? "a" : "b") +
+            " (id int64, x " + decl + ")";
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.substr(0, 3), "ERR") << decl << " -> " << reply;
+        EXPECT_NE(reply.find("byte "), std::string::npos) << decl << " -> " << reply;
+    }
+}
+
+TEST_F(FixedLengthTupleTest, TheNewTypesAreDeclarableButNotYetStorable) {
+    // The intermediate state TY03 ships in, stated rather than left to be
+    // discovered: the codec arms are TY04's, so an INSERT is refused by
+    // name instead of falling through to "unrecognized type_val".
+    ASSERT_EQ(Run("CREATE TABLE ty2 (id int64, d date)").substr(0, 7), "CREATED");
+    const std::string reply = Run("INSERT INTO ty2 VALUES ('2026-08-07')");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("TY04"), std::string::npos) << reply;
 }
 
 // ---- The same, on a clustered B+ tree ------------------------------------

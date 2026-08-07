@@ -67,6 +67,23 @@ StatusOr<std::string> Parser::ParseIdent() {
     return std::string(tok.text);
 }
 
+StatusOr<std::uint32_t> Parser::ParseTypeArgument(std::string_view what) {
+    const Token tok = lexer_.Next();
+    if (tok.type != TokenType::kIntLit || tok.negative) {
+        return Status::InvalidArgument("expected a non-negative integer " + std::string(what) +
+                                        ", got '" + std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
+    }
+    // The *bounds* are the type registry's business (TY2), not this
+    // layer's; what a syntax layer can say is that the digits fit at all.
+    if (tok.int_val < 0 || tok.int_val > 0xFFFF) {
+        return Status::InvalidArgument(std::string(what) + " " + std::to_string(tok.int_val) +
+                                        " is implausible at byte " +
+                                        std::to_string(tok.byte_offset));
+    }
+    return static_cast<std::uint32_t>(tok.int_val);
+}
+
 void Parser::ConsumeOptionalSemicolon() {
     if (lexer_.Peek().type == TokenType::kSemicolon) {
         lexer_.Next();
@@ -345,9 +362,52 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         if (!col_name.ok()) return col_name.status();
         col.name = std::move(col_name.value());
 
+        col.type_byte_offset = lexer_.Peek().byte_offset;
         auto type_name = ParseIdent();
         if (!type_name.ok()) return type_name.status();
         col.type_name = std::move(type_name.value());
+
+        // `DECIMAL(p, s)` - the one type whose declaration carries
+        // arguments (docs/spec-types.md §2). Recognized by the paren rather
+        // than by the name, so a type that takes no arguments refuses them
+        // here instead of each type name needing its own production.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            const std::uint32_t paren_at = lexer_.Peek().byte_offset;
+            if (!IEquals(col.type_name, "DECIMAL")) {
+                return Status::InvalidArgument("type '" + col.type_name +
+                                                "' takes no arguments (byte " +
+                                                std::to_string(paren_at) + ")");
+            }
+            lexer_.Next();  // consume '('
+
+            auto precision = ParseTypeArgument("precision");
+            if (!precision.ok()) return precision.status();
+            if (Status s = ExpectToken(TokenType::kComma,
+                                       "',' between a decimal's precision and scale");
+                !s.ok()) {
+                return s;
+            }
+            auto scale = ParseTypeArgument("scale");
+            if (!scale.ok()) return scale.status();
+            if (Status s = ExpectToken(TokenType::kRParen, "')' after a decimal's scale");
+                !s.ok()) {
+                return s;
+            }
+
+            col.has_precision = true;
+            col.precision = precision.value();
+            col.scale = scale.value();
+        } else if (IEquals(col.type_name, "DECIMAL")) {
+            // **A bare `decimal` is refused, never defaulted.** A default
+            // scale is a silent decision about someone's money, and the
+            // parser is the only layer that can still tell the difference
+            // between "said nothing" and "said zero".
+            return Status::InvalidArgument(
+                "column '" + col.name + "' needs a precision and a scale - `decimal(p, s)` - "
+                "at byte " + std::to_string(col.type_byte_offset) +
+                "; there is no default scale, because one would be a silent decision about "
+                "what a stored value means");
+        }
 
         // Optional `REFERENCES <table>` (docs/impl-foreign-keys.md §1).
         // Peeked like the cabin clause below it, and written *before* it

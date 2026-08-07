@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Freight and cargo: the schema and reference data for scenario 2.
 
-The plan this implements is `docs/scenario2-freight.md`. **This file is task
-`S2-01` of its §9 and nothing beyond it**: it builds the eight relations,
-loads the reference data, and probes the three reads the reporter will need.
-The measured booking transaction (`S2-02`), the contention model (`S2-03`)
-and the reporter process (`S2-04`) are not here yet, and this tool prints no
-TPS number because it drives no business transaction.
+The plan this implements is `docs/scenario2-freight.md`, tasks `S2-01`
+through `S2-03` of its §9: it builds the eight relations, loads the reference
+data, drives the eight-statement booking transaction from `--bookers`
+concurrent processes, and accounts for every outcome separately - committed,
+refused by the business, or lost to a write conflict and retried. The
+reporter process (`S2-04`) and the PostgreSQL twin (`S2-05`,
+`tools/pg_scenario2_freight.py`) are the parts that live elsewhere.
 
 Where the other two scenarios sit:
 
@@ -58,6 +59,7 @@ Usage:
 
 import argparse
 import datetime
+import multiprocessing
 import random
 import re
 import sys
@@ -606,8 +608,25 @@ def route_code(origin, destination):
 # mean to measure.
 HORIZON_DAYS = 180
 
+# The phases every booker records, in report order.
+BOOKING_PHASES = ("booking", "cargo-lookup", "credit-lookup", "capacity-read",
+                  "recipe-read", "freight-insert", "charge-insert",
+                  "operation-update", "org-update", "commit")
+
 COMMITTED, REJECTED_CAPACITY, REJECTED_CREDIT, CONFLICTED, FAILED = (
     "committed", "rejected-capacity", "rejected-credit", "conflicted", "failed")
+
+# **Which row two bookers collided on.** A single "conflicts" count cannot be
+# acted on: the two updates are on different relations, contended by
+# different things - the voyage by bookers loading the same ship, the
+# customer by bookers carrying the same shipper's cargo - and a workload can
+# be heavy on one and free of the other. `read` covers a conflict raised
+# before either update, which today means only a foreign-key check meeting an
+# in-flight writer (docs/impl-foreign-keys.md reuses kTxnConflict for it);
+# `commit` covers one raised by COMMIT itself.
+AXIS_OPERATIONS, AXIS_ORGANIZATIONS = "operations", "organizations"
+AXIS_READ, AXIS_COMMIT = "read", "commit"
+CONFLICT_AXES = (AXIS_OPERATIONS, AXIS_ORGANIZATIONS, AXIS_READ, AXIS_COMMIT)
 
 
 def select_rows(reply):
@@ -719,12 +738,13 @@ class BookingState:
         self.pool.append(index)
 
 
-def book_once(client, tables, state, args, phases, rng, day):
+def book_once(client, tables, state, args, phases, rng, day, axes):
     """One booking attempt. Returns one of the five outcome constants.
 
     A `conflicted` return means the caller should retry: nothing was
     written, the transaction is rolled back, and every value this attempt
-    read is by definition stale."""
+    read is by definition stale. `axes` is the per-axis conflict tally the
+    attempt adds to on its way out."""
     index = state.take_cargo()
     if index is None:
         return None
@@ -746,6 +766,10 @@ def book_once(client, tables, state, args, phases, rng, day):
             state.give_back(index)
         return outcome
 
+    def conflict(axis):
+        axes[axis] = axes.get(axis, 0) + 1
+        return CONFLICTED
+
     opened = False
     if args.txn:
         if client("BEGIN").startswith("ERR"):
@@ -760,7 +784,7 @@ def book_once(client, tables, state, args, phases, rng, day):
                  f"FROM {tables['cargos']} WHERE id = {cargo_id}")
     rows = select_rows(reply)
     if rows is None:
-        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
     if not rows:
         return finish(FAILED, opened)
     org_id = int(rows[0][0])
@@ -772,7 +796,7 @@ def book_once(client, tables, state, args, phases, rng, day):
                  f"{tables['organizations']} WHERE id = {org_id}")
     rows = select_rows(reply)
     if rows is None:
-        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
     if not rows:
         return finish(FAILED, opened)
     credit_limit, outstanding = int(rows[0][0]), int(rows[0][1])
@@ -782,21 +806,35 @@ def book_once(client, tables, state, args, phases, rng, day):
     #    outcomes, very different cost - the gap is what the derived column
     #    is worth (S2-7).
     if args.capacity_mode == "cached":
+        # Two columns, one statement. `revenue` is read rather than
+        # remembered because a second booker may have moved it since this
+        # one last looked - the engine has no `SET revenue = revenue + n`,
+        # so a running total can only be maintained by reading it in the
+        # transaction that writes it.
         reply = send(client, phases["capacity-read"],
-                     f"SELECT booked_cbm FROM {tables['operations']} "
+                     f"SELECT booked_cbm, revenue FROM {tables['operations']} "
                      f"WHERE id = {op_id}")
         rows = select_rows(reply)
         if rows is None:
-            return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+            return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
         booked = int(rows[0][0]) if rows else 0
+        revenue = int(rows[0][1]) if rows else 0
     else:
         reply = send(client, phases["capacity-read"],
                      f"SELECT SUM(cbm) FROM {tables['freights']} "
                      f"WHERE operation_id = {op_id}")
         rows = select_rows(reply)
         if rows is None:
-            return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+            return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
         booked = sum_value(rows)
+        # `scan` mode never reads the operations row, so it has no value to
+        # add to and **does not maintain `revenue` at all**. That is the
+        # honest shape of the mode rather than a gap in it: maintaining a
+        # money total requires reading it, and reading it is precisely the
+        # pk lookup this mode exists to avoid. The derived column's real
+        # cost is that it forces the read; its real benefit is that having
+        # read it, a second derived value is free.
+        revenue = None
 
     # 4. the pricing rules for this cargo type - a non-pk equality, so a
     #    FilterScan, and the statement `--cabin` serves.
@@ -805,7 +843,7 @@ def book_once(client, tables, state, args, phases, rng, day):
                  f"FROM {tables['recipes']} WHERE cargo_type = {cargo_type}")
     rows = select_rows(reply)
     if rows is None:
-        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
     recipe_rows = [(int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4]))
                    for r in rows]
 
@@ -831,7 +869,7 @@ def book_once(client, tables, state, args, phases, rng, day):
                  f"({op_id}, {ship_id}, {cargo_id}, {cbm}, {rate}, {day}, 0)")
     freight_id = inserted_id(reply)
     if freight_id is None:
-        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
 
     # 6. what it was charged.
     for fee_id, charged in lines:
@@ -839,15 +877,20 @@ def book_once(client, tables, state, args, phases, rng, day):
                      f"INSERT INTO {tables['charges']} VALUES "
                      f"({freight_id}, {fee_id}, {charged}, {day})")
         if reply.startswith("ERR"):
-            return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+            return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
 
     # 7. the voyage. The value written depends on the value read at step 3,
-    #    which is exactly the lost-update shape.
+    #    which is exactly the lost-update shape - and is the first of the two
+    #    rows two concurrent bookers collide on.
+    sets = f"booked_cbm = {booked + cbm}"
+    if revenue is not None:
+        sets += f", revenue = {revenue + total}"
     reply = send(client, phases["operation-update"],
-                 f"UPDATE {tables['operations']} SET booked_cbm = {booked + cbm}, "
-                 f"revenue = {state.revenue[op_id] + total} WHERE id = {op_id}")
+                 f"UPDATE {tables['operations']} SET {sets} WHERE id = {op_id}")
     if reply.startswith("ERR"):
-        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        if is_conflict(reply):
+            return finish(conflict(AXIS_OPERATIONS), opened)
+        return finish(FAILED, opened)
 
     # 8. the customer. Same shape, different axis - two bookers collide here
     #    when they carry one customer's cargo, and at step 7 when they load
@@ -856,40 +899,54 @@ def book_once(client, tables, state, args, phases, rng, day):
                  f"UPDATE {tables['organizations']} SET "
                  f"outstanding = {outstanding + total} WHERE id = {org_id}")
     if reply.startswith("ERR"):
-        return finish(CONFLICTED if is_conflict(reply) else FAILED, opened)
+        if is_conflict(reply):
+            return finish(conflict(AXIS_ORGANIZATIONS), opened)
+        return finish(FAILED, opened)
 
     if opened:
         reply = send(client, phases["commit"], "COMMIT")
         if reply.startswith("ERR"):
             client("ROLLBACK")
             state.give_back(index)
-            return CONFLICTED if is_conflict(reply) else FAILED
+            if is_conflict(reply):
+                axes[AXIS_COMMIT] = axes.get(AXIS_COMMIT, 0) + 1
+                return CONFLICTED
+            return FAILED
 
     state.booked_cbm[op_id] = booked + cbm
-    state.revenue[op_id] = state.revenue[op_id] + total
+    if revenue is not None:
+        state.revenue[op_id] = revenue + total
     state.outstanding[org_id] = outstanding + total
     state.freight_total[freight_id] = total
     state.freight_charges[freight_id] = len(lines)
     return COMMITTED
 
 
-def run_bookings(client, tables, state, args, phases, rng):
-    """Drives bookings until `--seconds` or `--bookings` runs out.
+def run_bookings(client, tables, state, args, phases, rng, target, deadline_wall):
+    """Drives bookings until `target` commits or `deadline_wall` passes.
 
-    One booker in-process: `S2-03` is what makes this several processes, and
-    until it does, no conflict can occur - the retry loop below is built and
-    counted here so that when contention arrives it is measured rather than
-    discovered."""
+    `target` is this booker's own share of `--bookings`, not the run's total,
+    and `deadline_wall` is a `time.time()` value shared by every booker so
+    they stop together rather than each measuring from its own start.
+
+    **A retry is not an error and a conflicted attempt is not a booking.**
+    Each `TXN_CONFLICT` is counted, on the axis it happened on, and the whole
+    transaction is re-driven from its first read - every value the failed
+    attempt held is stale by definition. Only a terminal outcome is charged
+    to the `booking` phase, so the latency of a booking that took three
+    attempts is the latency of all three, which is what a client actually
+    waits."""
     counts = {COMMITTED: 0, REJECTED_CAPACITY: 0, REJECTED_CREDIT: 0,
               CONFLICTED: 0, FAILED: 0}
+    axes = {axis: 0 for axis in CONFLICT_AXES}
     retries = 0
+    abandoned = 0
     exhausted = False
     booking = phases["booking"]
     started = time.perf_counter()
-    deadline = started + args.seconds
 
-    while time.perf_counter() < deadline:
-        if args.bookings and counts[COMMITTED] >= args.bookings:
+    while time.time() < deadline_wall:
+        if target and counts[COMMITTED] >= target:
             break
         elapsed = time.perf_counter() - started
         day = DAY0 + min(HORIZON_DAYS - 1,
@@ -899,31 +956,158 @@ def run_bookings(client, tables, state, args, phases, rng):
         for attempt in range(args.max_retries + 1):
             if attempt:
                 retries += 1
-            outcome = book_once(client, tables, state, args, phases, rng, day)
+            outcome = book_once(client, tables, state, args, phases, rng, day, axes)
             if outcome != CONFLICTED:
                 break
             counts[CONFLICTED] += 1
         if outcome is None:
             exhausted = True
             break
-        # A conflict that exhausted its retries is charged to the conflict
-        # count already; only a terminal outcome is charged to the unit.
-        if outcome != CONFLICTED:
-            counts[outcome] += 1
-            booking.record(time.perf_counter() - t0, "" if outcome != FAILED else "ERR")
+        if outcome == CONFLICTED:
+            # Out of retries. The booking never happened, and saying so is
+            # the difference between a retry budget that is generous and one
+            # that is silently too small.
+            abandoned += 1
+            continue
+        counts[outcome] += 1
+        booking.record(time.perf_counter() - t0, "" if outcome != FAILED else "ERR")
 
     return {
         "counts": counts,
+        "axes": axes,
         "retries": retries,
+        "abandoned": abandoned,
         "elapsed": time.perf_counter() - started,
         "cargo_pool_exhausted": exhausted,
         "cargo_pool_left": len(state.pool),
     }
 
 
+# ---- several bookers (docs/scenario2-freight.md §5) ----------------------
+
+def partition(operations, orgs, cargos, bookers, contend):
+    """One (operations, orgs, cargos) slice per booker.
+
+    **Cargos are split in both modes**, and that is not what `--contend`
+    means. A cargo is shipped once; two bookers holding the same cargo would
+    book it onto two voyages, which is not contention but a driver that lost
+    track of its own pool. What `--contend` shares is the two rows a booking
+    *updates* - the voyage and the customer - because those are the conflict
+    axes.
+
+    Under `--contend` every booker draws from every voyage and every
+    customer, so two may load the same ship or carry the same shipper.
+
+    Under `--no-contend` the slices are **disjoint on both axes at once**:
+    voyages round-robin, customers round-robin, and a booker takes only the
+    cargos its own customers own. Partitioning voyages alone would not do it,
+    because a cargo's customer is a property of the cargo, so two bookers on
+    different ships would still collide on `organizations`. With both split,
+    no conflict is possible - which is what makes it the baseline the
+    contended run is measured against."""
+    if contend:
+        return [(operations, orgs, cargos[i::bookers]) for i in range(bookers)]
+    slices = []
+    for i in range(bookers):
+        orgs_i = orgs[i::bookers]
+        owned = {org for org, _limit in orgs_i}
+        slices.append((operations[i::bookers], orgs_i,
+                       [c for c in cargos if c[1] in owned]))
+    return slices
+
+
+def booker_process(index, args, suffix, slice_, fee_book, deadline_wall,
+                   target, result_q):
+    """One booker: its own connection, its own RNG, its own slice.
+
+    Everything it needs is passed in rather than shared, because the point of
+    several bookers is that they contend **in the database** and nowhere
+    else. What comes back is the outcome tally, the per-axis conflict tally,
+    the latencies for every phase, and the belief state `--verify` needs."""
+    try:
+        set_echo(getattr(args, "echo", False))
+        rng = random.Random(args.seed + 1000 + index)
+        operations, orgs, cargos = slice_
+        client = Client(args.host, args.port, args.timeout)
+        if args.isolation:
+            client(f"SET ISOLATION LEVEL {args.isolation.replace('-', ' ').upper()}")
+        tables = {base: f"{base}_{suffix}" for base in CREATE_ORDER}
+        phases = {name: Phase(name) for name in BOOKING_PHASES}
+        state = BookingState(operations, orgs, cargos, fee_book, rng)
+        result = run_bookings(client, tables, state, args, phases, rng,
+                              target, deadline_wall)
+        client.close()
+    except Exception as e:                       # noqa: BLE001 - reported, not raised
+        result_q.put({"index": index, "fatal": f"{type(e).__name__}: {e}"})
+        return
+    result_q.put({
+        "index": index,
+        "counts": result["counts"], "axes": result["axes"],
+        "retries": result["retries"], "abandoned": result["abandoned"],
+        "elapsed": result["elapsed"],
+        "cargo_pool_exhausted": result["cargo_pool_exhausted"],
+        "cargo_pool_left": result["cargo_pool_left"],
+        "phases": {name: (p.latencies, p.errors, p.first_error)
+                   for name, p in phases.items()},
+        # The belief half of --verify. booked_cbm and outstanding are only
+        # authoritative when the slices are disjoint; freight_charges always
+        # is, because one freight is written by exactly one booker.
+        "booked_cbm": result_state_booked(state),
+        "outstanding": {k: v for k, v in state.outstanding.items() if v},
+        "freight_charges": state.freight_charges,
+        "voyage": state.voyage,
+        "errors": client.errors if hasattr(client, "errors") else 0,
+    })
+
+
+def result_state_booked(state):
+    return {k: v for k, v in state.booked_cbm.items() if v}
+
+
+def merge_bookers(results, elapsed):
+    """One run's worth of numbers out of N bookers' worth.
+
+    `elapsed` is the run's wall clock, not the sum of the contributors': the
+    throughput being reported is aggregate, so dividing by any one booker's
+    elapsed time would multiply it by N."""
+    counts = {COMMITTED: 0, REJECTED_CAPACITY: 0, REJECTED_CREDIT: 0,
+              CONFLICTED: 0, FAILED: 0}
+    axes = {axis: 0 for axis in CONFLICT_AXES}
+    merged = {"retries": 0, "abandoned": 0, "cargo_pool_left": 0,
+              "cargo_pool_exhausted": False}
+    phases = {name: Phase(name) for name in BOOKING_PHASES}
+    state = {"booked_cbm": {}, "outstanding": {}, "freight_charges": {},
+             "voyage": {}}
+    for r in results:
+        for k, v in r["counts"].items():
+            counts[k] += v
+        for k, v in r["axes"].items():
+            axes[k] += v
+        merged["retries"] += r["retries"]
+        merged["abandoned"] += r["abandoned"]
+        merged["cargo_pool_left"] += r["cargo_pool_left"]
+        merged["cargo_pool_exhausted"] |= r["cargo_pool_exhausted"]
+        for name, (latencies, errors, first_error) in r["phases"].items():
+            p = phases[name]
+            p.latencies.extend(latencies)
+            p.errors += errors
+            if p.first_error is None:
+                p.first_error = first_error
+        state["booked_cbm"].update(r["booked_cbm"])
+        state["outstanding"].update(r["outstanding"])
+        state["freight_charges"].update(r["freight_charges"])
+        state["voyage"].update(r["voyage"])
+    for p in phases.values():
+        p.elapsed = elapsed
+    merged.update({"counts": counts, "axes": axes, "elapsed": elapsed,
+                   "phases": phases, "state": state,
+                   "per_booker": [r["counts"][COMMITTED] for r in results]})
+    return merged
+
+
 # ---- verification (docs/scenario2-freight.md §4) -------------------------
 
-def verify(client, tables, state, sample, rng):
+def verify(client, tables, state, sample, rng, trust_belief=True):
     """I1-I4, on a sample. Returns (checks, failures, first).
 
     What is being asked is not "is the arithmetic right" - the driver did
@@ -941,7 +1125,7 @@ def verify(client, tables, state, sample, rng):
         if first is None:
             first = message
 
-    booked = [op for op, total in state.booked_cbm.items() if total > 0]
+    booked = [op for op, total in state["booked_cbm"].items() if total > 0]
     for op_id in rng.sample(booked, min(sample, len(booked))):
         rows = select_rows(client(f"SELECT SUM(cbm) FROM {tables['freights']} "
                                   f"WHERE operation_id = {op_id}"))
@@ -956,16 +1140,20 @@ def verify(client, tables, state, sample, rng):
         if ledger != column:
             fail(f"I1 operation {op_id}: booked_cbm={column}, "
                  f"SUM(freights.cbm)={ledger}")
-        elif column != state.booked_cbm[op_id]:
+        elif trust_belief and column != state["booked_cbm"].get(op_id):
+            # Only asked when the bookers' slices are disjoint. Under
+            # --contend a voyage is written by several bookers and no single
+            # one of them knows what the total should be, so the driver-side
+            # arm of I1 is not a question that has an answer.
             fail(f"I1 operation {op_id}: stored {column}, driver wrote "
-                 f"{state.booked_cbm[op_id]} - a write was lost")
+                 f"{state['booked_cbm'].get(op_id)} - a write was lost")
         # I2: and neither of them past what the ship can carry.
-        _ship, capacity, _route = state.voyage[op_id]
+        _ship, capacity, _route = state["voyage"][op_id]
         checks += 1
         if column > capacity:
             fail(f"I2 operation {op_id}: booked_cbm={column} over capacity {capacity}")
 
-    owing = [org for org, total in state.outstanding.items() if total > 0]
+    owing = [org for org, total in state["outstanding"].items() if total > 0]
     for org_id in rng.sample(owing, min(sample, len(owing))):
         rows = select_rows(
             client(f"SELECT f.id, f.cbm, f.price_per_cbm FROM {tables['freights']} AS f "
@@ -989,16 +1177,16 @@ def verify(client, tables, state, sample, rng):
                  f"recomputed from its freights and charges={recomputed}")
 
     # I4: a freight's charge rows against the rule set replayed for it.
-    written = list(state.freight_charges)
+    written = list(state["freight_charges"])
     for freight_id in rng.sample(written, min(sample, len(written))):
         rows = select_rows(client(f"SELECT id FROM {tables['charges']} "
                                   f"WHERE freight_id = {freight_id}"))
         if rows is None:
             continue
         checks += 1
-        if len(rows) != state.freight_charges[freight_id]:
+        if len(rows) != state["freight_charges"][freight_id]:
             fail(f"I4 freight {freight_id}: {len(rows)} charge rows stored, "
-                 f"{state.freight_charges[freight_id]} written")
+                 f"{state['freight_charges'][freight_id]} written")
 
     return checks, failures, first
 
@@ -1079,6 +1267,20 @@ def print_bookings(result, args):
         print(f"  {name:<20}{counts[name]:>10}{share:>11.1f}% of attempts")
     print(f"  {'conflicted':<20}{counts[CONFLICTED]:>10}"
           f"{result['retries']:>11} retries")
+    axes = result.get("axes") or {}
+    if counts[CONFLICTED]:
+        # Which row they collided on. A single conflict count cannot be
+        # acted on; these can - one says the fleet is the contended
+        # resource, the other says the customer book is.
+        for axis in CONFLICT_AXES:
+            if axes.get(axis):
+                share = 100.0 * axes[axis] / counts[CONFLICTED]
+                print(f"    on {axis:<16}{axes[axis]:>10}{share:>11.1f}% of conflicts")
+        per_commit = result["retries"] / committed if committed else 0.0
+        print(f"    {'retries/booking':<18}{per_commit:>10.2f}")
+    if result.get("abandoned"):
+        print(f"  {'abandoned':<20}{result['abandoned']:>10}"
+              f"  <- out of retries after --max-retries {args.max_retries}")
     if counts[FAILED]:
         print(f"  {'failed':<20}{counts[FAILED]:>10}"
               f"  <- not a rejection: an ERR this driver did not expect")
@@ -1086,6 +1288,11 @@ def print_bookings(result, args):
     print(f"  mode                 {'BEGIN/COMMIT' if args.txn else 'autocommit'}, "
           f"capacity={args.capacity_mode}, max_fees="
           f"{args.max_fees or 'uncapped'}")
+    print(f"  bookers              {args.bookers}, "
+          f"{'contended (shared voyages and customers)' if args.contend else 'partitioned (disjoint slices, no conflict possible)'}")
+    if result.get("per_booker") and len(result["per_booker"]) > 1:
+        spread = "  ".join(f"#{i}:{n}" for i, n in enumerate(result["per_booker"]))
+        print(f"  per booker           {spread}")
     if result["cargo_pool_exhausted"]:
         print(f"  the cargo pool ran out before --seconds did: every cargo was "
               f"booked.\n  Raise --cargos, or read the TPS as an average over a "
@@ -1132,6 +1339,19 @@ def main():
     parser.add_argument("--cargos", type=int, default=200000,
                         help="the bulk relation, and most of the load's wall "
                              "clock (default: 200000)")
+    parser.add_argument("--bookers", type=int, default=1, metavar="N",
+                        help="booker processes, each with its own connection "
+                             "(default: 1)")
+    parser.add_argument("--contend", dest="contend", action="store_true",
+                        default=True,
+                        help="every booker draws from every voyage and every "
+                             "customer, so two can collide on either of the "
+                             "rows a booking updates (default)")
+    parser.add_argument("--no-contend", dest="contend", action="store_false",
+                        help="give each booker a disjoint slice of voyages "
+                             "*and* customers, so no conflict is possible - "
+                             "the baseline the contended run is measured "
+                             "against")
     parser.add_argument("--seconds", type=float, default=60.0,
                         help="how long to book for (default: 60)")
     parser.add_argument("--bookings", type=int, default=0, metavar="N",
@@ -1268,20 +1488,55 @@ def main():
             reply = client(f"SET ISOLATION LEVEL {level}")
             if reply.startswith("ERR"):
                 abort(f"--isolation {args.isolation}", reply)
-        booking_phases = {
-            name: phase(name) for name in (
-                "booking", "cargo-lookup", "credit-lookup", "capacity-read",
-                "recipe-read", "freight-insert", "charge-insert",
-                "operation-update", "org-update", "commit")}
-        booking_phases["booking"].detail = (
+
+        slices = partition(operations, orgs, cargos, args.bookers, args.contend)
+        empty = [i for i, (ops, orgs_i, cg) in enumerate(slices)
+                 if not ops or not orgs_i or not cg]
+        if empty:
+            abort(f"--bookers {args.bookers} --no-contend leaves booker(s) "
+                  f"{empty} with no voyages, no customers or no cargo.\n"
+                  f"  Disjoint slices need at least one of each per booker: "
+                  f"raise --operations/--organizations/--cargos, or lower "
+                  f"--bookers.")
+
+        # One shared wall-clock deadline and one share of the target each, so
+        # the bookers stop together and their sum is the run's target.
+        target = -(-args.bookings // args.bookers) if args.bookings else 0
+        deadline_wall = time.time() + args.seconds
+        fee_book = fees_by_id(fees)
+        result_q = multiprocessing.Queue()
+        workers = [multiprocessing.Process(
+            target=booker_process,
+            args=(i, args, suffix, slices[i], fee_book, deadline_wall, target,
+                  result_q))
+            for i in range(args.bookers)]
+        run_started = time.perf_counter()
+        for w in workers:
+            w.start()
+        results = [result_q.get() for _ in workers]
+        for w in workers:
+            w.join()
+        run_elapsed = time.perf_counter() - run_started
+
+        fatal = [r for r in results if "fatal" in r]
+        if fatal:
+            abort(f"booker {fatal[0]['index']} died: {fatal[0]['fatal']}")
+
+        result = merge_bookers(results, run_elapsed)
+        for name in BOOKING_PHASES:
+            p = result["phases"][name]
+            phases.append(p)
+        result["phases"]["booking"].detail = (
             f"{'BEGIN/COMMIT' if args.txn else 'autocommit'}, "
-            f"capacity={args.capacity_mode}")
-        state = BookingState(operations, orgs, cargos, fees_by_id(fees), rng)
-        result = run_bookings(client, tables, state, args, booking_phases, rng)
+            f"capacity={args.capacity_mode}, {args.bookers} booker"
+            f"{'' if args.bookers == 1 else 's'}, "
+            f"{'contended' if args.contend else 'partitioned'}")
         loaded["freights"] = result["counts"][COMMITTED]
-        loaded["charges"] = sum(state.freight_charges.values())
+        loaded["charges"] = sum(result["state"]["freight_charges"].values())
         if args.verify:
-            result["verify"] = verify(client, tables, state, args.verify, rng)
+            result["verify"] = verify(client, tables, result["state"],
+                                      args.verify, rng,
+                                      trust_belief=not args.contend)
 
     meta = {
         "engine": "ckdbs",
@@ -1306,9 +1561,9 @@ def main():
                        if result["elapsed"] > 0 else 0.0)
 
     report(phases, meta, footer=(
-        "S2-01/S2-02: this tool builds, loads and books. The reporter",
-        "process (S2-04) and the PostgreSQL twin (S2-05) are not here, and",
-        "one booker cannot conflict - see docs/scenario2-freight.md §9.",
+        "S2-01..S2-03: this tool builds, loads and books, from --bookers",
+        "processes. The reporter process (S2-04) is not here; the PostgreSQL",
+        "twin is tools/pg_scenario2_freight.py.",
     ))
     if result is not None:
         print_bookings(result, args)
