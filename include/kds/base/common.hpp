@@ -77,10 +77,29 @@ enum class PageType : std::uint8_t {
     // Also relayout-exempt by construction: its values are immutable per
     // version, so the physical optimizer never has a reason to move one.
     kVarHeap = 10,
+
+    // A secondary index (docs/feat-index.md §4): the internal nodes that
+    // route a descent, and the leaves that hold the entries.
+    //
+    // **Not kBtreeInternal/kBtreeLeaf, and the distinction is the design.**
+    // Those two are the *clustered* tree - a relation's storage, whose
+    // leaves are heap pages holding tuples, and whose split deliberately
+    // never divides a page's contents because doing so would decide the
+    // open heap page split policy. A secondary key is not monotonic, so a
+    // dividing split is mandatory here; giving these their own classes is
+    // what lets that split decide nothing beyond itself. An index page
+    // holds entries rather than tuples, has no min_key, and contains no
+    // Keystone id, so invariants 2 and 3 have nothing to be about in it.
+    //
+    // Headered and checksummed like any authoritative class: an index is
+    // maintained on every write and a missing entry is a lost row, not a
+    // lost hint. Advisory rules do not apply.
+    kIndexInternal = 11,
+    kIndexLeaf = 12,
 };
 
 // Highest value currently assigned above; anything greater read off disk
 // was written by a newer build. Bump when appending to the enum.
-inline constexpr std::uint8_t kMaxAssignedPageType = 10;
+inline constexpr std::uint8_t kMaxAssignedPageType = 12;
 
 }  // namespace kds

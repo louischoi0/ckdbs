@@ -22,6 +22,8 @@ add_executable(kds_tests
     txn_session_test.cpp
     heap_chain_test.cpp
     btree_test.cpp
+    index_key_test.cpp
+    index_tree_test.cpp
     superblock_test.cpp
     extent_lease_test.cpp
     extent_lease_service_test.cpp

@@ -25,6 +25,8 @@ add_library(kds
     src/storage/heap/heap_chain.cpp
     src/storage/btree/btree_page.cpp
     src/storage/btree/btree.cpp
+    src/storage/index/index_page.cpp
+    src/storage/index/index_tree.cpp
     src/storage/free_map.cpp
     src/storage/extent_lease.cpp
     src/txn/undo_page.cpp
@@ -78,6 +80,7 @@ add_library(kds
     src/wal/file_log_device.cpp
     src/wal/writer.cpp
     src/exec/row_codec.cpp
+    src/exec/index_key.cpp
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
     src/exec/step_compiler.cpp
