@@ -86,8 +86,8 @@ TEST(RowCodecKeystoneTest, RoundTripsWithThePrimaryKeyFirst) {
     auto row = DecodeRow(TwoColumnSchema(), LayoutFor(TwoColumnSchema()), encoded.value());
     ASSERT_TRUE(row.ok()) << row.status().message();
     ASSERT_EQ(row.value().size(), 2u);
-    EXPECT_EQ(FormatValue(row.value()[0]), "42");
-    EXPECT_EQ(FormatValue(row.value()[1]), "bob");
+    EXPECT_EQ(FormatValue(/*type_val=*/0, row.value()[0]), "42");
+    EXPECT_EQ(FormatValue(/*type_val=*/0, row.value()[1]), "bob");
 }
 
 TEST(RowCodecKeystoneTest, ValueListCoversEveryColumnButThePrimaryKey) {
@@ -169,7 +169,7 @@ TEST(RowCodecKeystoneTest, ThePrimaryKeyIsNotConstrainedByItsDeclaredWidth) {
 
     auto row = DecodeRow(schema, LayoutFor(schema), encoded.value());
     ASSERT_TRUE(row.ok());
-    EXPECT_EQ(FormatValue(row.value()[0]), "100000");
+    EXPECT_EQ(FormatValue(/*type_val=*/0, row.value()[0]), "100000");
 }
 
 // ---- CompareValues over a uint64 column ---------------------------------

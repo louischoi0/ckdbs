@@ -30,7 +30,9 @@ std::string DescribeGroup(const std::vector<parser::AstValue>& keys) {
     std::string out = " for group (";
     for (std::size_t i = 0; i < keys.size(); ++i) {
         if (i != 0) out += ", ";
-        out += FormatValue(keys[i]);
+        // type_val 0: a group label in an error message, where the
+        // keys are whatever they are and no column type is at hand.
+        out += FormatValue(/*type_val=*/0, keys[i]);
     }
     out += ')';
     return out;

@@ -374,15 +374,14 @@ TEST_F(FixedLengthTupleTest, TheNewTypesStoreAndReadBackAsWritten) {
             .substr(0, 8),
         "INSERTED");
 
-    // **What TY04 delivers, and no more.** A date reads back as its epoch
-    // day and a timestamp as its microseconds, because that is what they
-    // *are* (TY5) - rendering them as `2026-08-07` needs the column's
-    // type_val at the emission boundary, which is TY06's `FormatValue`
-    // parameter. A decimal already renders, because it is the one kind
-    // that carries enough to describe itself.
+    // **Read back as written** - which is TY06's doing, not TY04's. The
+    // stored value is still the epoch integer and decode still produces
+    // one; the column's `type_val` turns it back into a date at the
+    // emission boundary and nowhere earlier, so a scan that rejects a row
+    // builds no text for it.
     const std::string read = Run("SELECT * FROM ty2");
-    EXPECT_NE(read.find("20672"), std::string::npos) << read;            // 2026-08-07
-    EXPECT_NE(read.find("1786094100250000"), std::string::npos) << read; // its micros
+    EXPECT_NE(read.find("2026-08-07"), std::string::npos) << read;
+    EXPECT_NE(read.find("2026-08-07 09:15:00.250000"), std::string::npos) << read;
     EXPECT_NE(read.find("12.34"), std::string::npos) << read;
 }
 

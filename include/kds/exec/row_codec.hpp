@@ -217,7 +217,26 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
 // Renders one decoded value for display in a SELECT response line.
 // Prefers AstValue::raw_int_text when set (exact literal/uint64 text),
 // falling back to int_val otherwise.
-std::string FormatValue(const parser::AstValue& value);
+//
+// `type_val` is the **column's** catalog type, and rendering is the one
+// place it is needed (docs/spec-types.md §3.3). A `DATE` and a
+// `TIMESTAMP` decode to the integers they are - epoch days and epoch
+// microseconds - so the value alone cannot say which, or that either is a
+// date at all. That is deliberate: decode does not format, and the string
+// exists only for rows actually emitted, which is what keeps a scan from
+// building text for every row it rejects.
+//
+// **Pass 0 when there is no column type**, which renders exactly as this
+// function did before types existed: a plan's compiled literal, a
+// catalog view's value, an aggregate's group label. There is no
+// single-argument overload on purpose - the sweep that added the
+// parameter has to be complete, and a defaulted one would let a caller
+// that *should* pass a type silently keep rendering an epoch day as
+// `20672`.
+//
+// A `DECIMAL` needs no `type_val`: it is the one kind whose value carries
+// its own scale, so `12.30` renders from the value alone.
+std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value);
 
 // The unsigned reading of a decoded integer value.
 //

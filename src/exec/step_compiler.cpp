@@ -1210,6 +1210,10 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         if (!ref.ok()) return ref.status();
         chain.projection.push_back(ref.value());
         chain.column_names.push_back(col.qualified() ? col.qualifier + "." + col.name : col.name);
+        // Resolved here so the emission boundary never asks the catalog
+        // per row (TY06). Same list, same order, same lifetime as the
+        // names beside it.
+        chain.projection_types.push_back(ColumnAt(scope, ref.value()).type_val);
     }
     if (stmt.star()) {
         // `SELECT *`, which the grammar admits only for a single relation

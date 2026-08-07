@@ -477,6 +477,15 @@ struct StepChain {
     // its columns - they are never read on an execute path.
     std::vector<std::string> column_names;
 
+    // The catalog `type_val` of each projected column, in the same order,
+    // resolved at compile for the same reason `column_names` is: the
+    // emission boundary renders a `DATE` as a date rather than an epoch
+    // day (docs/spec-types.md §3.3), and asking the catalog for the type
+    // once per column per *row* is exactly the per-row cost decode was
+    // kept free of. Empty for `SELECT *`, which renders from the schema
+    // the dispatcher already resolves. Never read on an execute path.
+    std::vector<std::uint32_t> projection_types;
+
     // The fold this chain's rows are consumed by, or nothing (AG1). Set
     // for exactly the statements `parser::SelectStmt::aggregated()` is true
     // for, and read only by the dispatcher - no execute path looks at it.

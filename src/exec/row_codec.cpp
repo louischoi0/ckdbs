@@ -764,17 +764,34 @@ StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value) {
     return static_cast<std::uint64_t>(value.int_val);
 }
 
-std::string FormatValue(const parser::AstValue& value) {
+std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value) {
     switch (value.type) {
         case parser::ValueType::kInt:
+            // **The one place the column's type is consulted** (TY06). A
+            // date and a timestamp are integers everywhere else in the
+            // engine, and this is the boundary where they stop being one.
+            //
+            // Guarded on the value being an integer as well as on the
+            // column's type, so a caller that passes a `type_val` not
+            // matching the value it holds gets the value rendered rather
+            // than a nonsense date - the same fall-through discipline
+            // CompareValues uses for an operand that does not fit its
+            // column.
+            if (type_val == catalog::kTypeValDate) {
+                return FormatDate(static_cast<std::int32_t>(value.int_val));
+            }
+            if (type_val == catalog::kTypeValTimestamp) {
+                return FormatTimestamp(value.int_val);
+            }
             return !value.raw_int_text.empty() ? value.raw_int_text : std::to_string(value.int_val);
         case parser::ValueType::kStr:
             return value.str_val;
         // The scale is part of the value's meaning, so `12.30` and not
         // `12.3` (docs/spec-types.md §3.3). This is the one kind that
-        // carries enough to render itself; `DATE` and `TIMESTAMP` are
-        // integers here and need their column's `type_val`, which is why
-        // §3.3 gives FormatValue that parameter at TY06.
+        // carries enough to render itself, so it ignores `type_val`
+        // entirely - a decimal read out of a column and a decimal folded
+        // by SUM render the same way with no caller having to know which
+        // it is holding.
         case parser::ValueType::kDecimal:
             return FormatDecimal(value.int_val, value.scale);
         // Rendered as written, sigil restored. Only a plan printed from a

@@ -101,9 +101,13 @@ std::string FormatOperand(const Operand& operand) {
     // they compare differently (row_codec.hpp's CompareValues), and a plan
     // that hid the difference would hide the reason for a wrong answer.
     if (operand.literal.type == parser::ValueType::kStr) {
-        return "'" + FormatValue(operand.literal) + "'";
+        // type_val 0: a plan shows the **compiled** form, and a date
+        // literal is an epoch integer by the time a chain exists (TY05).
+        // Rendering it back as a date would show something the chain does
+        // not contain.
+        return "'" + FormatValue(/*type_val=*/0, operand.literal) + "'";
     }
-    return FormatValue(operand.literal);
+    return FormatValue(/*type_val=*/0, operand.literal);
 }
 
 std::string FormatPredicate(const StepPredicate& pred) {
@@ -123,7 +127,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     }
     if (step.cabin.has_value()) {
         os << " cabin=" << step.cabin->cabin_id << " on=col" << step.cabin->col_pos
-           << " value=" << FormatValue(step.cabin->value);
+           << " value=" << FormatValue(/*type_val=*/0, step.cabin->value);
     }
     os << '\n';
 

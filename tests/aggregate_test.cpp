@@ -132,7 +132,7 @@ std::vector<std::vector<std::string>> Collect(Aggregator& agg) {
     Status s = agg.Finish([&](std::span<const parser::AstValue> row) {
         std::vector<std::string> out;
         for (const parser::AstValue& v : row) {
-            out.push_back(v.type == parser::ValueType::kNull ? "NULL" : FormatValue(v));
+            out.push_back(v.type == parser::ValueType::kNull ? "NULL" : FormatValue(/*type_val=*/0, v));
         }
         rows.push_back(std::move(out));
         return Status::OK();

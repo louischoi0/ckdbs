@@ -285,6 +285,132 @@ TEST_F(TypesPredicateTest, MinAndMaxOverEveryNewTypeCompile) {
     }
 }
 
+// ---- TY06: rendering happens at the boundary ----------------------------
+//
+// §3.3 and contract item 7. Two things are being pinned: the formats
+// themselves, and that `type_val = 0` renders exactly as `FormatValue`
+// did before the parameter existed - the compatibility half, which is
+// what every non-column caller (a plan's literal, a catalog view, a
+// group label in an error) depends on.
+
+TEST_F(TypesPredicateTest, ADateRendersAsItsLiteralAndNotItsEpochDay) {
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-08-07', '2026-08-07 09:15:00.250000', '12.34')")
+                  .substr(0, 8),
+              "INSERTED");
+
+    const std::string read = Run("SELECT d, ts, amt FROM ev");
+    EXPECT_NE(read.find("2026-08-07"), std::string::npos) << read;
+    EXPECT_NE(read.find("2026-08-07 09:15:00.250000"), std::string::npos) << read;
+    EXPECT_NE(read.find("12.34"), std::string::npos) << read;
+    // The stored form must not leak through anywhere in the reply.
+    EXPECT_EQ(read.find("20672"), std::string::npos) << read;
+}
+
+TEST_F(TypesPredicateTest, StarRendersTheNewTypesToo) {
+    // A different code path from a named projection: `SELECT *` has no
+    // `projection_types` and renders from the schema the dispatcher
+    // already resolved. Both paths have to agree.
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-08-07', '2026-08-07 09:15:00.250000', '12.34')")
+                  .substr(0, 8),
+              "INSERTED");
+    const std::string star = Run("SELECT * FROM ev");
+    EXPECT_NE(star.find("2026-08-07 09:15:00.250000"), std::string::npos) << star;
+    EXPECT_EQ(star.find("20672"), std::string::npos) << star;
+}
+
+TEST_F(TypesPredicateTest, ATimestampWithNoFractionShowsNone) {
+    // §3.3's `[PROPOSED]` rule: six fractional digits when non-zero, none
+    // when zero. Pinned so that changing it is a decision rather than a
+    // drift.
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-08-07', '2026-08-07 09:15:00', '1.00')")
+                  .substr(0, 8),
+              "INSERTED");
+    const std::string read = Run("SELECT ts FROM ev");
+    EXPECT_NE(read.find("2026-08-07 09:15:00"), std::string::npos) << read;
+    EXPECT_EQ(read.find("09:15:00."), std::string::npos) << read;
+}
+
+TEST_F(TypesPredicateTest, ADecimalKeepsItsTrailingZeros) {
+    // `12.30`, not `12.3` - the scale is part of the value's meaning, and
+    // a client that declared two places asked for two places.
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-08-07', '2026-08-07 09:15:00', '12.30')")
+                  .substr(0, 8),
+              "INSERTED");
+    const std::string read = Run("SELECT amt FROM ev");
+    EXPECT_NE(read.find("12.30"), std::string::npos) << read;
+}
+
+TEST_F(TypesPredicateTest, AggregatedOutputRendersThroughItsItemType) {
+    // The fold's output goes out through a different site than a
+    // projection's, so it is its own chance to render an epoch day.
+    // MIN(d) is a date; COUNT(*) is a plain integer beside it.
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-08-07', '2026-08-07 09:15:00', '1.00')")
+                  .substr(0, 8),
+              "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO ev VALUES ('2026-01-01', '2026-01-01 00:00:00', '2.50')")
+                  .substr(0, 8),
+              "INSERTED");
+
+    // The whole row, not four independent substring hits: `find("2")` for
+    // the count would match inside `2026` and pin nothing.
+    const std::string read = Run("SELECT MIN(d), MAX(d), COUNT(*), SUM(amt) FROM ev");
+    EXPECT_NE(read.find("2026-01-01,2026-08-07,2,3.50"), std::string::npos) << read;
+}
+
+TEST_F(TypesPredicateTest, TypeValZeroRendersAsItAlwaysDid) {
+    // The compatibility half of the sweep. Every caller that has no column
+    // type passes 0, and 0 must mean "what this function did before types
+    // existed" for every kind that predates them.
+    parser::AstValue i;
+    i.type = parser::ValueType::kInt;
+    i.int_val = 20672;
+    EXPECT_EQ(FormatValue(0, i), "20672");
+
+    parser::AstValue s;
+    s.type = parser::ValueType::kStr;
+    s.str_val = "alice";
+    EXPECT_EQ(FormatValue(0, s), "alice");
+
+    parser::AstValue n;
+    n.type = parser::ValueType::kNull;
+    EXPECT_EQ(FormatValue(0, n), "NULL");
+
+    parser::AstValue p;
+    p.type = parser::ValueType::kParam;
+    p.str_val = "flag";
+    EXPECT_EQ(FormatValue(0, p), "$flag");
+
+    // A uint64 above INT64_MAX keeps its digit text, which is the rule
+    // `raw_int_text` exists for and the one most easily broken by a
+    // rewrite of this function.
+    parser::AstValue big;
+    big.type = parser::ValueType::kInt;
+    big.raw_int_text = "18446744073709551615";
+    EXPECT_EQ(FormatValue(0, big), "18446744073709551615");
+}
+
+TEST_F(TypesPredicateTest, ADecimalRendersWithoutAnyColumnType) {
+    // The one kind that ignores `type_val` entirely, which is what lets a
+    // SUM's folded output and a column read render identically without
+    // the caller knowing which it holds.
+    parser::AstValue d;
+    d.type = parser::ValueType::kDecimal;
+    d.int_val = 1230;
+    d.scale = 2;
+    EXPECT_EQ(FormatValue(0, d), "12.30");
+    EXPECT_EQ(FormatValue(catalog::kTypeValDecimal, d), "12.30");
+}
+
+TEST_F(TypesPredicateTest, AValueThatIsNotAnIntegerIgnoresADateColumnType) {
+    // Guarded on the value as well as the column, so a caller passing a
+    // type_val that does not match what it holds gets the value rather
+    // than a nonsense date.
+    parser::AstValue s;
+    s.type = parser::ValueType::kStr;
+    s.str_val = "not a date";
+    EXPECT_EQ(FormatValue(catalog::kTypeValDate, s), "not a date");
+}
+
 }  // namespace
 }  // namespace kds::exec
 

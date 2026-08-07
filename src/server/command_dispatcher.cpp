@@ -1952,7 +1952,10 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         bool first_val = true;
         for (std::size_t index : project) {
             if (!first_val) os << ',';
-            os << exec::FormatValue(row[index]);
+            // type_val 0, for the reason the CompareValues call above
+            // gives: a catalog view's values carry their own kind, and none
+            // of them is a DATE or TIMESTAMP column.
+            os << exec::FormatValue(/*type_val=*/0, row[index]);
             first_val = false;
         }
     }
@@ -2023,9 +2026,16 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         [&](std::span<const parser::AstValue> row) -> Status {
             os << "\\n";
             bool first = true;
-            for (const parser::AstValue& value : row) {
+            for (std::size_t i = 0; i < row.size(); ++i) {
                 if (!first) os << ',';
-                os << exec::FormatValue(value);
+                // One item per output value, in written order - the fold
+                // emits `spec.items` and nothing else - so the item's
+                // `type_val` is this value's column type. `MIN(d)` renders
+                // as a date; `COUNT(*)` carries type_val 0 and renders as
+                // the integer it is.
+                const std::uint32_t type_val =
+                    i < chain.aggregate->items.size() ? chain.aggregate->items[i].type_val : 0;
+                os << exec::FormatValue(type_val, row[i]);
                 first = false;
             }
             return Status::OK();
@@ -2337,14 +2347,18 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                 if (!access.ok()) return access.status();
                 for (std::size_t i = 0; i < access.value()->schema.columns.size(); ++i) {
                     if (!first_val) os << ',';
+                    // `SELECT *` renders from the schema it already holds,
+                    // which is why the chain carries no types for it.
                     os << exec::FormatValue(
+                        access.value()->schema.columns[i].type_val,
                         frame.Get(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)}));
                     first_val = false;
                 }
             } else {
-                for (const exec::ColumnRef& ref : compiled.projection) {
+                for (std::size_t i = 0; i < compiled.projection.size(); ++i) {
                     if (!first_val) os << ',';
-                    os << exec::FormatValue(frame.Get(ref));
+                    os << exec::FormatValue(compiled.projection_types[i],
+                                            frame.Get(compiled.projection[i]));
                     first_val = false;
                 }
             }

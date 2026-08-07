@@ -62,7 +62,7 @@ protected:
                 std::string row;
                 for (const ColumnRef& ref : chain.value().projection) {
                     if (!row.empty()) row += ',';
-                    row += FormatValue(frame.Get(ref));
+                    row += FormatValue(/*type_val=*/0, frame.Get(ref));
                 }
                 out.rows.push_back(row);
                 return storage::VisitControl::kContinue;

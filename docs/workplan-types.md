@@ -184,7 +184,7 @@ with tens of thousands of pages free, and reproduces with three plain
 statements against the real server all succeed — so it is a limitation of
 the test store, not of the engine.
 
-## TY06 — Rendering (needs TY04)
+## TY06 — Rendering (needs TY04) — **DONE**
 
 `FormatValue(type_val, value)` per §3.3, `0` preserving every existing
 call site (mechanical sweep, no behavior change for existing types).
@@ -192,6 +192,39 @@ call site (mechanical sweep, no behavior change for existing types).
 *Done when:* §6.7's pinned formats pass; the sweep is provably complete
 (no remaining single-argument caller); scale-faithful trailing zeros
 (`12.30`) and the timestamp fractional rule are pinned as `[PROPOSED]`.
+
+*Outcome.* `SELECT` on a date column shows `2026-08-07` where it showed
+`20672`. The stored form did not move and neither did decode - the
+integer becomes a date at the emission boundary and nowhere earlier,
+which is what keeps a scan from building text for rows it rejects.
+
+**The single-argument overload is deleted, not defaulted**, which is how
+"the sweep is provably complete" became a compiler check rather than a
+grep. A defaulted parameter would let a caller that *should* pass a
+column type go on rendering an epoch day silently; without one, every
+call site had to be visited, and the ones with no column type say
+`/*type_val=*/0` where that is the answer: a plan's literal (which is an
+epoch integer by TY05, so rendering it as a date would show something the
+chain does not contain), a catalog view's values, a group label in an
+error message.
+
+**`StepChain::projection_types`** carries the projected columns' types,
+resolved at compile beside `column_names` and for the same reason - the
+emission boundary must not ask the catalog once per column per row, which
+is the per-row cost decode was kept free of. `SELECT *` carries none and
+renders from the schema the dispatcher already resolved; the two paths
+are pinned to agree. The fold's output renders through its own
+`AggregateItem::type_val`, so `MIN(d)` is a date and the `COUNT(*)`
+beside it is an integer.
+
+**A `DECIMAL` ignores `type_val` entirely** - it is the one kind carrying
+its own scale - which is what lets a column read and a `SUM`'s folded
+output render identically with no caller knowing which it holds.
+
+*Verified end to end on the real server*, not only through the test
+store: `SELECT *`, a named projection, a `BETWEEN` over dates, and
+`MIN/MAX/COUNT/SUM` all render as written, `SUM(d)` is refused with its
+position, and a bad literal names its byte.
 
 ## TY07 — End to end through the dispatcher (needs TY03–TY06)
 
