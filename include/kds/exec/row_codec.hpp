@@ -130,6 +130,28 @@ struct VarHeapSink {
 Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>& spills,
                      std::span<parser::AstValue> out);
 
+// Rewrites a literal into the storage form of `col`'s type, in place
+// (docs/spec-types.md §3.1).
+//
+// A `'2026-08-07'` against a `DATE` column becomes the epoch integer
+// 20672; a `'12.34'` against a `DECIMAL(10,2)` becomes the unscaled 1234
+// carrying scale 2. Every other column type leaves the value untouched.
+// Errors carry **no byte position** - this has no idea where the literal
+// was written - so a caller holding an offset adds it with
+// `Status::WithContext`.
+//
+// **There is exactly one of these because there were once two.** The step
+// compiler coerced a predicate's literal here; the Cabin's write hook
+// keyed on the *raw* literal it got from the statement. So a read of a
+// DATE column keyed on 20672 and a write keyed on the string
+// `"2026-08-07"`, the two never met, and an observed value silently
+// stopped seeing rows inserted after it was observed - a Cabin returning
+// fewer rows than exist, which is the one failure mode
+// `docs/feat-cabin.md` §5 calls out as invisible without a baseline to
+// compare against. Any path that turns a written literal into a value the
+// engine compares or keys on must come through here.
+Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);
+
 // Rejects a schema that cannot carry a Keystone word: no columns at all,
 // or a first column whose declared type is not an integer one. Exposed so
 // CREATE TABLE can refuse such a table at definition time rather than at

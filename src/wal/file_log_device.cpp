@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -14,6 +15,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace kds::wal {
 namespace {
@@ -81,6 +83,44 @@ std::optional<std::uint64_t> ParseSegmentNo(const std::string& name, const std::
         value = value * 10 + digit;
     }
     return value;
+}
+
+// Zero-fills a freshly allocated segment so its extents are *written*, not
+// merely reserved. posix_fallocate hands back unwritten extents, and the
+// first write into each of those costs an extent-conversion journal
+// transaction inside the very fsync a commit is waiting on - measured as
+// the difference between a ~950us flush and a ~2,100us one on xfs over EBS
+// (bench/results-scenario2-freight.md). Paying the whole conversion here,
+// once per segment and off every commit path, is what PostgreSQL's
+// wal_init_zero does and for the same reason.
+Status Prewrite(int fd, std::uint64_t size) {
+    // 1 MiB per write: large enough that a 64 MiB segment is 64 syscalls,
+    // small enough not to be a resident buffer anyone notices.
+    static constexpr std::size_t kChunk = std::size_t{1} << 20;
+    const std::vector<std::byte> zeros(kChunk, std::byte{0});
+    std::uint64_t at = 0;
+    while (at < size) {
+        const std::size_t want =
+            static_cast<std::size_t>(std::min<std::uint64_t>(kChunk, size - at));
+        const ::ssize_t n = ::pwrite(fd, zeros.data(), want, static_cast<::off_t>(at));
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return ErrnoStatus("FileLogDevice: prewrite at offset " + std::to_string(at), errno);
+        }
+        at += static_cast<std::uint64_t>(n);
+    }
+    // fsync, not fdatasync: this is the one sync that must also persist the
+    // file's metadata (its size, its now-written extents), so that every
+    // later commit-path sync has only data to flush.
+    while (::fsync(fd) != 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        return ErrnoStatus("FileLogDevice: fsync after prewrite", errno);
+    }
+    return Status::OK();
 }
 
 StatusOr<FileDescriptor> OpenSegmentFile(const std::string& path, bool create_exclusive) {
@@ -225,14 +265,21 @@ Status FileLogDevice::CreateSegment(std::uint64_t segment_no) {
             return ErrnoStatus("FileLogDevice: posix_fallocate on " + path, rc);
         }
         // Filesystems that cannot preallocate still get a correctly sized
-        // sparse file; the ENOSPC-at-append risk this call removes comes
-        // back, and that is the best the filesystem offers.
+        // sparse file; the prewrite below then allocates the blocks for
+        // real, which restores the no-ENOSPC-at-append promise by another
+        // route.
         if (::ftruncate(fd.value().get(), static_cast<::off_t>(segment_size_)) != 0) {
             const int err = errno;
             std::error_code remove_ec;
             std::filesystem::remove(path, remove_ec);
             return ErrnoStatus("FileLogDevice: ftruncate on " + path, err);
         }
+    }
+
+    if (Status s = Prewrite(fd.value().get(), segment_size_); !s.ok()) {
+        std::error_code remove_ec;
+        std::filesystem::remove(path, remove_ec);
+        return s;
     }
 
     // Directory metadata is synced here, not in Sync(): a crash right after
@@ -334,12 +381,17 @@ Status FileLogDevice::Sync() {
         for (const FileDescriptor& fd : segments_) raw.push_back(fd.get());
     }
 
+    // fdatasync, not fsync: a segment is prewritten at creation, so its
+    // size and extents are already durable and the only thing a commit-path
+    // sync has left to flush is data. fsync would add a timestamp-metadata
+    // journal commit to every durability point for nothing a recovery could
+    // ever read.
     for (std::size_t i = 0; i < raw.size(); ++i) {
-        while (::fsync(raw[i]) != 0) {
+        while (::fdatasync(raw[i]) != 0) {
             if (errno == EINTR) {
                 continue;
             }
-            return ErrnoStatus("FileLogDevice: fsync segment " + std::to_string(i), errno);
+            return ErrnoStatus("FileLogDevice: fdatasync segment " + std::to_string(i), errno);
         }
     }
     return Status::OK();

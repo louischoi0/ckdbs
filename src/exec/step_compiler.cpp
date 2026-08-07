@@ -7,7 +7,12 @@
 #include <string_view>
 #include <vector>
 
-#include "kds/exec/type_literals.hpp"
+// For `CoerceLiteralToColumn`. The literal parsers themselves are no
+// longer reached from here: the compiler asks the codec to coerce, and the
+// codec owns which parser that means - which is what keeps the value a
+// predicate compares and the value a write keys on identical by
+// construction rather than by two call sites agreeing.
+#include "kds/exec/row_codec.hpp"
 
 namespace kds::exec {
 
@@ -99,110 +104,6 @@ const catalog::SysColumnRow& ColumnAt(const Scope& scope, const ColumnRef& ref) 
     return s->relations[ref.rel_slot].access->schema.columns[ref.col_pos];
 }
 
-// ---- TY05: literal coercion is a compile-time act -----------------------
-//
-// `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to a
-// comparison whose right side is **already the scaled integer 1234**
-// (docs/spec-types.md §3.1). The string is parsed once, here, by the same
-// routines `EncodeOneValue` calls - one parser, two callers, zero drift -
-// so a literal that stores and a literal that compares can never come to
-// disagree about what it means.
-//
-// Two properties follow, and both are the point rather than side effects.
-// Per-row evaluation stays an **int64 comparison**, which keeps the
-// residual path on the cost profile the scan attribution work demands. And
-// a literal that does not parse is a **positioned compile error**, not a
-// row-by-row false: `WHERE d = '2026-02-30'` is a statement that cannot be
-// satisfied by any row, and answering it with zero rows would hide the
-// typo behind a plausible-looking empty result.
-Status CoerceLiteralTo(const catalog::SysColumnRow& col, parser::AstValue& val) {
-    // A parameter is never evaluated - a declared pattern's body is
-    // type-checked and fingerprinted, never run - and NULL matches nothing
-    // whatever its type. Neither has a value to coerce.
-    if (val.type == parser::ValueType::kParam || val.type == parser::ValueType::kNull) {
-        return Status::OK();
-    }
-
-    const std::string at = Position(val.byte_offset);
-
-    switch (col.type_val) {
-        case catalog::kTypeValDate: {
-            if (val.type == parser::ValueType::kInt) {
-                // Already an epoch day. Accepted, and range-checked to the
-                // same bounds the encoder applies - the two sides of the
-                // engine must agree on which integers are dates.
-                if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
-                    return Status::OutOfRange("date is outside the supported range" + at);
-                }
-                return Status::OK();
-            }
-            if (val.type != parser::ValueType::kStr) {
-                return Status::InvalidArgument("a date is written as a string, 'YYYY-MM-DD'" + at);
-            }
-            auto days = ParseDateLiteral(val.str_val);
-            if (!days.ok()) return days.status().WithContext("literal" + at);
-            val.type = parser::ValueType::kInt;
-            val.int_val = days.value();
-            val.str_val.clear();
-            val.raw_int_text.clear();
-            return Status::OK();
-        }
-
-        case catalog::kTypeValTimestamp: {
-            if (val.type == parser::ValueType::kInt) {
-                if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
-                    return Status::OutOfRange("timestamp is outside the supported range" + at);
-                }
-                return Status::OK();
-            }
-            if (val.type != parser::ValueType::kStr) {
-                return Status::InvalidArgument(
-                    "a timestamp is written as a string, 'YYYY-MM-DD HH:MM:SS[.ffffff]'" + at);
-            }
-            auto micros = ParseTimestampLiteral(val.str_val);
-            if (!micros.ok()) return micros.status().WithContext("literal" + at);
-            val.type = parser::ValueType::kInt;
-            val.int_val = micros.value();
-            val.str_val.clear();
-            val.raw_int_text.clear();
-            return Status::OK();
-        }
-
-        case catalog::kTypeValDecimal: {
-            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
-            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
-
-            // An integer literal against a decimal column - `price = 12` -
-            // is exact and worth accepting, but scaling it here would be a
-            // second implementation of the range and precision rules
-            // `ParseDecimalLiteral` already owns, which is precisely the
-            // drift TY01's one-parser rule exists to prevent. So it is
-            // rendered and handed to that parser instead: one small string
-            // per predicate at *compile*, never per row.
-            const std::string text = val.type == parser::ValueType::kInt
-                                         ? std::to_string(val.int_val)
-                                         : val.str_val;
-            if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
-                return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'" +
-                                                at);
-            }
-
-            auto unscaled = ParseDecimalLiteral(text, precision, scale);
-            if (!unscaled.ok()) return unscaled.status().WithContext("literal" + at);
-            val.type = parser::ValueType::kDecimal;
-            val.int_val = unscaled.value();
-            val.scale = scale;
-            val.str_val.clear();
-            val.raw_int_text.clear();
-            return Status::OK();
-        }
-
-        default:
-            // Every other type keeps the behaviour it had before this task.
-            return Status::OK();
-    }
-}
-
 // The whole right-hand side of one lowered conjunct, coerced or refused.
 //
 // Called from **both** lowering sites - the SELECT chain's and the write
@@ -212,9 +113,20 @@ Status CoercePredicate(const Scope& scope, StepPredicate& pred) {
     const catalog::SysColumnRow& lhs = ColumnAt(scope, pred.lhs);
 
     if (pred.rhs.kind == OperandKind::kLiteral) {
-        Status s = CoerceLiteralTo(lhs, pred.rhs.literal);
+        // The shared coercion (row_codec.hpp), so the value a predicate
+        // compares and the value the write path keys a Cabin on are
+        // produced by one routine. They were not, once: the Cabin's write
+        // hook keyed on the raw literal while the read path keyed on the
+        // coerced one, and an observed date silently stopped seeing new
+        // rows.
+        //
+        // Errors come back unpositioned - the parsers have no idea where a
+        // literal was written - so the position is added here, where the
+        // offset is.
+        Status s = CoerceLiteralToColumn(lhs, pred.rhs.literal);
         if (!s.ok()) {
-            return s.WithContext("column '" + std::string(catalog::NameView(lhs.name)) + "'");
+            return s.WithContext("column '" + std::string(catalog::NameView(lhs.name)) +
+                                 "' literal" + Position(pred.rhs.literal.byte_offset));
         }
         return Status::OK();
     }

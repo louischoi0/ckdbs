@@ -2408,6 +2408,34 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         const std::size_t at = static_cast<std::size_t>(col - first_col_pos);
         if (at >= values.size()) continue;
 
+        // **Coerced first, and this is load-bearing.** `values` holds the
+        // literals as written, so a DATE column's value here is still the
+        // string `'2026-08-07'` while everything that *reads* this Cabin
+        // keys on the epoch integer the compiler produced. Keying on the
+        // raw literal put the append under a key no read ever looks up:
+        // the value stayed observed, its set stopped growing, and queries
+        // returned rows that existed before the observation and silently
+        // dropped every row inserted after it.
+        //
+        // Through the codec's shared coercion, so the write key and the
+        // read key are produced by one routine rather than by two that
+        // agree today.
+        const catalog::SysColumnRow& column = access.schema.columns[col];
+        parser::AstValue value = values[at];
+        if (Status s = exec::CoerceLiteralToColumn(column, value); !s.ok()) {
+            // Unreachable: encode is the only gate (spec §7) and it already
+            // accepted this row, so a literal that reaches here parses. If
+            // that ever stops being true, un-observing is the right answer
+            // and always legal (feat-cabin.md §1) - a set that might have
+            // missed an append is not a superset, and serving it would lose
+            // a row.
+            if (auto stale = stats::MakeCabinKey(access.CabinOn(col).id, values[at]);
+                stale.has_value()) {
+                cabins_->Unobserve(*stale);
+            }
+            continue;
+        }
+
         // **§5's third row: an UPDATE that did not touch the key column does
         // nothing.** Appending anyway would still be *correct* - the entry
         // set stays a superset, and the read dedupes - but it is unbounded:
@@ -2417,13 +2445,17 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         // very relation it was declared for. Correct and useless is still a
         // defect, so the comparison is made here rather than left to the
         // cap.
+        //
+        // The comparison uses the column's own `type_val` and the coerced
+        // value: against the raw literal a decoded date never compared
+        // equal to the string it was written as, so this check silently
+        // never fired for a typed column and every write appended.
         if (at < previous.size() &&
-            exec::CompareValues(/*type_val=*/0, previous[at], values[at],
-                                parser::CompareOp::kEq)) {
+            exec::CompareValues(column.type_val, previous[at], value, parser::CompareOp::kEq)) {
             continue;
         }
 
-        auto key = stats::MakeCabinKey(access.CabinOn(col).id, values[at]);
+        auto key = stats::MakeCabinKey(access.CabinOn(col).id, value);
         // A value that can never be observed - NULL, an unbound param -
         // cannot have a set to append to either, so there is nothing to
         // witness. Silent, exactly as it is on the read path.

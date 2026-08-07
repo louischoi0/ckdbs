@@ -42,16 +42,17 @@ protected:
                       .substr(0, 7),
                   "CREATED");
         // Decimal columns of matching and differing scale, for the
-        // column-column rule. All in one relation, so no join is needed to
-        // compare them - and, more pressingly, because **a fixture on
-        // `InMemoryPageStore` gets two relations**: the third `CREATE
-        // TABLE` fails with "page id already in use", at any bootstrap page
-        // count, with tens of thousands of pages free. It reproduces with
-        // three plain `int64` tables, so it has nothing to do with types,
-        // and it does *not* reproduce on `DevicePageStore` - the same four
-        // statements against the real server all succeed. So it is a
-        // limitation of the test store rather than of the engine, which is
-        // why this is a comment and not a bug being worked around.
+        // column-column rule - in one relation, so comparing them needs no
+        // join.
+        //
+        // Note the store above is constructed with `kFirstUserPageId`, not
+        // defaulted. `InMemoryPageStore`'s default first page is 1, which
+        // is inside the catalog's fixed pages (0..13) and the reserved
+        // catalog-overflow range (14..127), so allocation hands out ids
+        // already in use and the *third* `CREATE TABLE` fails with "page id
+        // already in use" - at any bootstrap page count, with the whole
+        // store free. Every other dispatcher-level fixture passes the
+        // constant; this one did not, which is the entire bug.
         ASSERT_EQ(Run("CREATE TABLE money (id int64, two decimal(10, 2), "
                       "alsotwo decimal(10, 2), three decimal(10, 3))")
                       .substr(0, 7),
@@ -82,7 +83,7 @@ protected:
         return chain.steps[0].residual[0];
     }
 
-    storage::InMemoryPageStore store_;
+    storage::InMemoryPageStore store_{server::kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
 };
 

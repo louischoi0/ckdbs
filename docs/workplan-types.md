@@ -176,13 +176,19 @@ outside the executor with no catalog to ask when it re-attaches the scale
 in `Finish`. The merge path (AG-M) needed nothing: both partitions carry
 the same item, so the same scale.
 
-*Unrelated finding, recorded because it bounds what a test may assume:* a
-fixture on `InMemoryPageStore` gets **two** relations. The third `CREATE
-TABLE` fails with "page id already in use" at any bootstrap page count,
-with tens of thousands of pages free, and reproduces with three plain
-`int64` tables. It does **not** reproduce on `DevicePageStore` — the same
-statements against the real server all succeed — so it is a limitation of
-the test store, not of the engine.
+*A self-inflicted detour worth writing down, since the wrong diagnosis
+was recorded twice before the right one.* This task's fixture could not
+create a third table — "page id already in use", at any bootstrap page
+count, with the whole store free. It was called an engine defect, then a
+limitation of `InMemoryPageStore`, and it is **neither**:
+`InMemoryPageStore`'s default `first_new_page_id` is 1, which sits inside
+the catalog's fixed pages (0..13) and the reserved catalog-overflow range
+(14..127), so allocation re-issues ids already in use. Every other
+dispatcher-level fixture constructs it with `server::kFirstUserPageId`;
+this one did not. The lesson is the one AP02 and AP03 already paid for in
+the aggregate workplan — **re-measure the premise before believing it** —
+and the tell was there in the first probe: the failure was insensitive to
+page count, which exhaustion never is.
 
 ## TY06 — Rendering (needs TY04) — **DONE**
 
@@ -226,7 +232,7 @@ store: `SELECT *`, a named projection, a `BETWEEN` over dates, and
 `MIN/MAX/COUNT/SUM` all render as written, `SUM(d)` is refused with its
 position, and a bad literal names its byte.
 
-## TY07 — End to end through the dispatcher (needs TY03–TY06)
+## TY07 — End to end through the dispatcher (needs TY03–TY06) — **DONE**
 
 INSERT / SELECT / UPDATE / JOIN / GROUP BY / Cabin / Waystone over the new
 types, wired and tested at the dispatcher level. Nothing here should need
@@ -237,6 +243,41 @@ type primitives are all anything consumes.
 on a DATE column records, serves and drops per its contract test pattern;
 a trail over a decimal-residual probe chain replays; SUM-over-DATE and
 mixed-scale refusals surface through the wire with positions.
+
+*Outcome: the task did the job it was written to do — it failed.*
+`tests/types_e2e_test.cpp` caught a **row-losing bug in the Cabin write
+hook**, which is the one failure mode `feat-cabin.md` §5 singles out as
+invisible without a baseline to compare against: an observed value served
+*fewer* rows than existed and looked entirely plausible doing it.
+
+**The cause was TY05's, not the Cabin's.** TY05 made the step compiler
+coerce a predicate's literal to its column's storage form, so a read of a
+`DATE` column keys on the epoch integer 20514. The write hook was left
+keying on `values[at]` — the literal **as written**, still the string
+`'2026-03-02'`. The two keys never met. The value stayed observed, its
+entry set stopped growing, and every row inserted after the observation
+was dropped from the answer. Rows written *before* it were still served,
+which is what made the result look sane.
+
+The same root cause silently disabled §5's third row: the "did this
+UPDATE touch the key column?" check compared a decoded integer against
+the string it was written as, never compared equal, and so every write
+appended — the unbounded growth that check exists to prevent.
+
+**The fix is structural, not a second call site.** The coercion moved out
+of `step_compiler.cpp` into `exec::CoerceLiteralToColumn`
+(`row_codec.hpp`), beside the encoder whose parsers it shares, and both
+paths now call it. The rule to keep: *any path that turns a written
+literal into a value the engine compares or keys on goes through that one
+function.* Two call sites that agree today are what this bug was.
+
+*What the rest of the suite confirms* — the fold groups a `DATE` key
+first-seen and renders it as a date, `SUM` over `DECIMAL` is exact at
+scale through the unscaled accumulator, a join carries typed columns
+through a chain frame at a non-zero slot, a trail over a decimal residual
+replays byte-identically across three passes, and the refusals reach the
+wire with their positions. None of that needed engine code, which is §1's
+claim holding everywhere except the one place it did not.
 
 ## TY08 — Contract suite (needs TY01–TY07)
 
