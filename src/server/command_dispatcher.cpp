@@ -779,16 +779,21 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
         // a reason to fail the whole DESCRIBE - report it in place, since
         // seeing *which* column is broken is the point of the command.
         auto type_row = catalog_.ResolveTypeByVal(col.type_val);
-        const std::string type_name = type_row.ok()
+        const std::string base_name = type_row.ok()
                                           ? std::string(catalog::NameView(type_row.value().name))
                                           : "?type_val=" + std::to_string(col.type_val);
+        // The declared form - `decimal(10,2)`, `char(8)`, `int64` - rather
+        // than a bare name beside a `len` a reader would have to interpret.
+        // For a decimal `len` is the packed (p, s) pair, so printing it as
+        // a width would be actively misleading (catalog/rows.hpp).
+        const std::string type_name = catalog::ColumnTypeText(col, base_name);
 
         // Column 0 is the Keystone primary key by construction, not by a
         // stored flag - heap-and-tuple.md section 4 makes it positional.
         const bool is_pk = i == 0;
         os << "\\n"
            << "pos=" << col.pos << " name=" << catalog::NameView(col.name) << " type=" << type_name
-           << " len=" << col.len << " notnull=" << (col.notnull ? "yes" : "no")
+           << " notnull=" << (col.notnull ? "yes" : "no")
            << " pk=" << (is_pk ? "yes" : "no")
            << " autoincrement=" << (is_pk ? "yes" : "no");
 

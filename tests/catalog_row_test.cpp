@@ -335,5 +335,76 @@ TEST(CorePlacementTest, TheRotationIsNotPerformedWhileDdlOwnsAllocation) {
     EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 2), kSystemCore);
 }
 
+// ---- decimal(p, s) packed into `len` (TY02) -----------------------------
+//
+// The packing exists so that adding DECIMAL cost **no data-file format
+// change**: `SysColumnRow` has no spare byte, so widening it would have
+// meant a superblock version bump and every pre-existing file refusing to
+// mount. `len` was already dead weight for a decimal column - only `char`
+// reads it as a width - so the pair rides in it.
+
+TEST(SysColumnRowDecimalTest, PrecisionAndScaleRoundTripThroughLen) {
+    for (std::uint8_t p = 1; p <= 18; ++p) {
+        for (std::uint8_t s = 0; s <= p; ++s) {
+            const std::uint32_t packed = PackDecimalLen(p, s);
+            EXPECT_EQ(DecimalPrecisionOf(packed), p) << int(p) << "," << int(s);
+            EXPECT_EQ(DecimalScaleOf(packed), s) << int(p) << "," << int(s);
+        }
+    }
+}
+
+TEST(SysColumnRowDecimalTest, ThePackingSurvivesTheRowsOwnEncoding) {
+    // The point of the whole exercise: it goes to disk in a field that
+    // already existed, so it round-trips through Encode/Decode unchanged
+    // and no format version moved.
+    SysColumnRow row{};
+    row.oid = 7;
+    row.rel_id = 4000;
+    row.pos = 2;
+    SetName(row.name, "price");
+    row.type_val = kTypeValDecimal;
+    row.len = PackDecimalLen(10, 2);
+    row.notnull = true;
+
+    auto decoded = SysColumnRow::Decode(row.Encode());
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().len, row.len);
+    EXPECT_EQ(DecimalPrecisionOf(decoded.value().len), 10);
+    EXPECT_EQ(DecimalScaleOf(decoded.value().len), 2);
+}
+
+TEST(SysColumnRowDecimalTest, TheUnusedHighBitsStayZero) {
+    // Sixteen of len's thirty-two bits are used, and the rest are left
+    // available rather than filled with anything - which is what makes a
+    // future third field in here possible without a format event.
+    EXPECT_EQ(PackDecimalLen(18, 18) >> 16, 0u);
+}
+
+TEST(SysColumnRowDecimalTest, ColumnTypeTextRendersTheDeclaredForm) {
+    // The client-visible half: `len` is no longer readable as a width
+    // without knowing the type, so the two display paths render the type.
+    SysColumnRow dec{};
+    dec.type_val = kTypeValDecimal;
+    dec.len = PackDecimalLen(10, 2);
+    EXPECT_EQ(ColumnTypeText(dec, "decimal"), "decimal(10,2)");
+
+    SysColumnRow chr{};
+    chr.type_val = kTypeValChar;
+    chr.len = 8;
+    EXPECT_EQ(ColumnTypeText(chr, "char"), "char(8)");
+
+    // Every other type's width comes from its type_val, so the bare name
+    // is the whole truth and `len` says nothing a reader wants.
+    SysColumnRow i64{};
+    i64.type_val = kTypeValInt64;
+    i64.len = 8;
+    EXPECT_EQ(ColumnTypeText(i64, "int64"), "int64");
+
+    SysColumnRow date{};
+    date.type_val = kTypeValDate;
+    date.len = 4;
+    EXPECT_EQ(ColumnTypeText(date, "date"), "date");
+}
+
 }  // namespace
 }  // namespace kds::catalog

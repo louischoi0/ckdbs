@@ -164,7 +164,7 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
     EXPECT_NE(out.response.find("name=id type=int32"), std::string::npos) << out.response;
     EXPECT_NE(out.response.find("name=name type=varchar"), std::string::npos) << out.response;
     // Column 0 is the Keystone pk; nothing else is.
-    EXPECT_NE(out.response.find("name=id type=int32 len=4 notnull=yes pk=yes autoincrement=yes"),
+    EXPECT_NE(out.response.find("name=id type=int32 notnull=yes pk=yes autoincrement=yes"),
               std::string::npos)
         << out.response;
     EXPECT_NE(out.response.find("pk=no autoincrement=no"), std::string::npos) << out.response;

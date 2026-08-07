@@ -510,15 +510,15 @@ TEST(CabinContractTest, ColumnPolicyDecidesWhoMayCreateACabin) {
 
     // And DESCRIBE reports the effective policy per column.
     const std::string described = db.Run("DESCRIBE p");
-    EXPECT_NE(described.find("name=a type=varchar len=0 notnull=yes pk=no autoincrement=no "
+    EXPECT_NE(described.find("name=a type=varchar notnull=yes pk=no autoincrement=no "
                              "cabin=yes"),
               std::string::npos)
         << described;
-    EXPECT_NE(described.find("name=b type=varchar len=0 notnull=yes pk=no autoincrement=no "
+    EXPECT_NE(described.find("name=b type=varchar notnull=yes pk=no autoincrement=no "
                              "cabin=no"),
               std::string::npos)
         << described;
-    EXPECT_NE(described.find("name=c type=varchar len=0 notnull=yes pk=no autoincrement=no "
+    EXPECT_NE(described.find("name=c type=varchar notnull=yes pk=no autoincrement=no "
                              "cabin=auto"),
               std::string::npos)
         << described;

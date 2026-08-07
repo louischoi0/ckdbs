@@ -20,7 +20,7 @@ Consistent with `docs/rule-fixed-length-tuple.md` (invariant 13),
 | TY6 | Mixed-scale comparison | Column–literal: the literal is normalized **to the column's scale at compile time**, and digits beyond `s` are a positioned statement error — rounding a literal to make it match is a silent wrong answer. Column–column (a join residual): **same `(p, s)` only**; differing scales answer `Unsupported`. Rescaling under overflow semantics is deferred whole, not half-shipped |
 | TY7 | Validation | `EncodeOneValue` is the **only gate**: it parses `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS[.ffffff]` and decimal strings, rejects out-of-range and malformed input as a positioned statement error, and range-checks against the type's width. Decode never re-validates — stored bytes were proven at the gate, same principle the codec already runs on |
 | TY8 | Value functions | `NOW()`, `CURRENT_DATE`, arithmetic on dates: **not in v1**. A value function imports an evaluation-time question (once per statement? per row?) that "the query is the plan" has no slot for. Clients send literals |
-| TY9 | Catalog & migration | Purely additive `type_val`s: `kTypeValDate = 11`, `kTypeValTimestamp = 12` `[PROPOSED numbers]`; DECIMAL reuses the reserved `kTypeValDecimal = 7`. No existing relation changes meaning. `(p, s)` must persist per column — **in a reserved/spare field of `SysColumnRow` if one exists; if none does, this is a catalog format change and must be gated behind a bootstrap version bump** (workplan TY02 decides which, and flags before deciding) |
+| TY9 | Catalog & migration | Purely additive `type_val`s: `kTypeValDate = 11`, `kTypeValTimestamp = 12`; DECIMAL reuses the reserved `kTypeValDecimal = 7`. No existing relation changes meaning. `(p, s)` persists **packed into `SysColumnRow::len`** — **`[CONFIRMED 2026-08-07]`, see §7a**: no format change, no version bump, every pre-existing data file still mounts |
 
 ---
 
@@ -143,6 +143,38 @@ Not changed, stated so a diff can be checked against it: the tuple layout
 rules, the WAL and undo formats (rows stay fixed-size), the step VM, the
 Waystone and Cabin trust models, `kFingerprintVersion`, and every existing
 `type_val`'s meaning.
+
+## 4a. TY9 settled: `(p, s)` rides in `len` `[CONFIRMED 2026-08-07]`
+
+TY9 left this gated: a spare `SysColumnRow` field if one exists, otherwise a
+catalog format change behind a bootstrap version bump. Workplan TY02 was
+told to flag before deciding. It flagged, and the answer is better than
+either branch anticipated.
+
+**There is no *reserved* field** — `SysColumnRow` is exactly packed, and
+`kOnDiskSize` is the sum of its members. But `len` is **dead weight for
+every type but two**: `RowLayout::ColumnWidth` reads it only for `char`, and
+derives every other width from `type_val` alone. Its remaining readers were
+display-only.
+
+So `(p, s)` — two values bounded by 18 — pack into `len`'s low sixteen bits,
+precision high and scale low, with explicit shift/mask helpers
+(`PackDecimalLen`, `DecimalPrecisionOf`, `DecimalScaleOf` in
+`catalog/rows.hpp`; invariant 6 forbids a compiler bitfield for a persisted
+format). Sixteen bits stay zero and available.
+
+**What this bought:** no superblock version bump, so no pre-existing data
+file stops mounting. The last four bootstrap-relation additions each cost
+exactly that, and the fkey one is the most recent.
+
+**What it cost, stated so nobody has to rediscover it:** `len` is no longer
+readable as "a width" without knowing the column's type. Two paths read it
+that way — `sys.columns` and `DESCRIBE` — and both now render the *declared
+type* instead (`decimal(10,2)`, `char(8)`, `date`) through one function,
+`ColumnTypeText`, so they cannot come to disagree. `sys.columns`'s `len`
+column is replaced by `type`; `DESCRIBE` drops `len=` and its `type=` now
+carries the parameters. Both are client-visible surface changes and are the
+whole price.
 
 ## 5. What v1 is not
 

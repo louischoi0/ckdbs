@@ -32,7 +32,7 @@ coercion and storage cannot drift.
 `[PROPOSED]` range edges, leap years, `'2026-02-30'`-class rejections, and
 scale-overflow (`'12.345'` at s=2) — all with positions.
 
-## TY02 — Catalog: persisting `(p, s)` (needs TY01)
+## TY02 — Catalog: persisting `(p, s)` (needs TY01) — **DONE**
 
 Find where a column's `(p, s)` lives. **First** check `SysColumnRow` for a
 reserved/spare field wide enough for two uint8s; if one exists, pack there
@@ -45,6 +45,16 @@ gated decision, not this task's.
 faithfully (`decimal(10,2)`, `date`); a pre-types data file behaves per
 whichever gate was decided — and the flag, if raised, is in the spec
 before the code lands.
+
+*Outcome:* the flag was raised and answered — **`len`**, which
+`RowLayout::ColumnWidth` reads only for `char` and which was dead weight
+for every other type. Packed precision-high/scale-low with explicit
+shift/mask helpers (invariant 6). **No format change and no version bump**,
+where widening the row would have stopped every pre-existing data file from
+mounting. Recorded in spec §4a before the code landed, as this task
+required. The price is that `len` is no longer readable as a width without
+the type, so `sys.columns` and `DESCRIBE` render the declared type through
+one shared `ColumnTypeText` instead.
 
 ## TY03 — DDL (needs TY01, TY02)
 
