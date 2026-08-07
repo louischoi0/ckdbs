@@ -361,14 +361,61 @@ TEST_F(FixedLengthTupleTest, DecimalBoundsAreRefusedAtCreateTable) {
     }
 }
 
-TEST_F(FixedLengthTupleTest, TheNewTypesAreDeclarableButNotYetStorable) {
-    // The intermediate state TY03 ships in, stated rather than left to be
-    // discovered: the codec arms are TY04's, so an INSERT is refused by
-    // name instead of falling through to "unrecognized type_val".
-    ASSERT_EQ(Run("CREATE TABLE ty2 (id int64, d date)").substr(0, 7), "CREATED");
-    const std::string reply = Run("INSERT INTO ty2 VALUES ('2026-08-07')");
-    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
-    EXPECT_NE(reply.find("TY04"), std::string::npos) << reply;
+TEST_F(FixedLengthTupleTest, TheNewTypesStoreAndReadBackAsWritten) {
+    // TY03 shipped these declarable-but-not-storable and pinned the
+    // refusal so TY04 would have to remove it deliberately. This is that
+    // removal: the same statement now stores, and reads back the literal
+    // it was given.
+    ASSERT_EQ(Run("CREATE TABLE ty2 (id int64, d date, ts timestamp, p decimal(10, 2))")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(
+        Run("INSERT INTO ty2 VALUES ('2026-08-07', '2026-08-07 09:15:00.250000', '12.34')")
+            .substr(0, 8),
+        "INSERTED");
+
+    // **What TY04 delivers, and no more.** A date reads back as its epoch
+    // day and a timestamp as its microseconds, because that is what they
+    // *are* (TY5) - rendering them as `2026-08-07` needs the column's
+    // type_val at the emission boundary, which is TY06's `FormatValue`
+    // parameter. A decimal already renders, because it is the one kind
+    // that carries enough to describe itself.
+    const std::string read = Run("SELECT * FROM ty2");
+    EXPECT_NE(read.find("20672"), std::string::npos) << read;            // 2026-08-07
+    EXPECT_NE(read.find("1786094100250000"), std::string::npos) << read; // its micros
+    EXPECT_NE(read.find("12.34"), std::string::npos) << read;
+}
+
+TEST_F(FixedLengthTupleTest, AStoredValueSurvivesAnUpdateOfAnotherColumn) {
+    // The round trip that matters most in practice: an UPDATE re-encodes
+    // every column its SET list did not touch, from the *decoded* form. So
+    // encode has to accept what decode produces - an epoch integer for a
+    // date, a (unscaled, scale) pair for a decimal - or an untouched column
+    // silently changes when a neighbour is written.
+    ASSERT_EQ(Run("CREATE TABLE ty4 (id int64, d date, p decimal(8, 3), n int64)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO ty4 VALUES ('2026-08-07', '1.500', 1)").substr(0, 8), "INSERTED");
+
+    const std::string before = Run("SELECT d, p FROM ty4");
+    ASSERT_EQ(Run("UPDATE ty4 SET n = 2 WHERE id = 1").substr(0, 7), "UPDATED");
+    EXPECT_EQ(Run("SELECT d, p FROM ty4"), before) << "an untouched column moved";
+}
+
+TEST_F(FixedLengthTupleTest, AMalformedLiteralIsRefusedAtTheGate) {
+    // TY7: encode is the only gate, so a bad value is refused at INSERT
+    // and never reaches a page - which is what lets decode skip
+    // re-validating.
+    ASSERT_EQ(Run("CREATE TABLE ty3 (id int64, d date, p decimal(6, 2))").substr(0, 7),
+              "CREATED");
+    for (const char* values : {"'2026-02-30', '1.00'",   // not a real day
+                               "'not a date', '1.00'",
+                               "'2026-08-07', '1.234'",  // more digits than the scale
+                               "'2026-08-07', '99999.99'"}) {
+        const std::string reply = Run(std::string("INSERT INTO ty3 VALUES (") + values + ")");
+        EXPECT_EQ(reply.substr(0, 3), "ERR") << values << " -> " << reply;
+    }
+    // Nothing was written by any of them.
+    EXPECT_NE(Run("SELECT COUNT(*) FROM ty3").find("\\n0"), std::string::npos);
 }
 
 // ---- The same, on a clustered B+ tree ------------------------------------

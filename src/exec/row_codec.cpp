@@ -1,5 +1,7 @@
 #include "kds/exec/row_codec.hpp"
 
+#include "kds/exec/type_literals.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <charconv>
@@ -226,18 +228,82 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             return Status::Unsupported(
                 "column '" + NameOf() +
                 "' has type float, which this engine does not store (docs/spec-types.md TY1)");
-        // **[TY03, removed by TY04]** These three are declarable now and
-        // have widths, so a relation can carry one - but the codec arms
-        // that read and write them are TY04's. Refused by name rather than
-        // left to the `default` below, which reports an unrecognized
-        // type_val for a column the catalog is entirely right about.
-        case kTypeValDecimal:
-        case kTypeValDate:
-        case kTypeValTimestamp:
-            return Status::Unsupported(
-                "column '" + NameOf() +
-                "' has type date/timestamp/decimal, which this build can declare but not yet "
-                "store (docs/workplan-types.md TY04)");
+        // ---- DATE / TIMESTAMP / DECIMAL (docs/spec-types.md TY7) -------
+        //
+        // **This is the only gate.** Each accepts two shapes and no others:
+        // the *literal* a client wrote, as a string, which is parsed and
+        // range-checked here; and the *decoded* form of a value already
+        // stored, which an UPDATE carries back for every column its SET
+        // list did not touch. A third shape would be a way for an
+        // unvalidated value to reach the disk.
+        case kTypeValDate: {
+            std::int32_t days = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseDateLiteral(val.str_val);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                days = parsed.value();
+            } else if (val.type == parser::ValueType::kInt) {
+                if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
+                    return Status::OutOfRange("column '" + NameOf() +
+                                              "' date is outside the supported range");
+                }
+                days = static_cast<std::int32_t>(val.int_val);
+            } else {
+                return Status::InvalidArgument("column '" + NameOf() +
+                                                "' expects a date written as a string, "
+                                                "'YYYY-MM-DD'");
+            }
+            PutLE(cell, static_cast<std::uint64_t>(static_cast<std::uint32_t>(days)), 4);
+            return Status::OK();
+        }
+        case kTypeValTimestamp: {
+            std::int64_t micros = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseTimestampLiteral(val.str_val);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                micros = parsed.value();
+            } else if (val.type == parser::ValueType::kInt) {
+                if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
+                    return Status::OutOfRange("column '" + NameOf() +
+                                              "' timestamp is outside the supported range");
+                }
+                micros = val.int_val;
+            } else {
+                return Status::InvalidArgument(
+                    "column '" + NameOf() +
+                    "' expects a timestamp written as a string, "
+                    "'YYYY-MM-DD HH:MM:SS[.ffffff]'");
+            }
+            PutLE(cell, static_cast<std::uint64_t>(micros), 8);
+            return Status::OK();
+        }
+        case kTypeValDecimal: {
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            std::int64_t unscaled = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseDecimalLiteral(val.str_val, precision, scale);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                unscaled = parsed.value();
+            } else if (val.type == parser::ValueType::kDecimal) {
+                // **The scale must match, not be converted.** Rescaling
+                // here would either lose digits or invent them, and TY6
+                // defers cross-scale work whole rather than shipping half.
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column '" + NameOf() + "' has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                unscaled = val.int_val;
+            } else {
+                return Status::InvalidArgument("column '" + NameOf() +
+                                                "' expects a decimal written as a string, "
+                                                "e.g. '12.34'");
+            }
+            PutLE(cell, static_cast<std::uint64_t>(unscaled), 8);
+            return Status::OK();
+        }
         default:
             return Status::InvalidArgument("column '" + NameOf() + "' has an unrecognized type_val");
     }
@@ -350,18 +416,41 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
                 "column '" + NameOf() +
                 "' has type float, which no row this codec wrote should ever contain "
                 "(see row_codec.hpp)");
-        // **[TY03, removed by TY04]** These three are declarable now and
-        // have widths, so a relation can carry one - but the codec arms
-        // that read and write them are TY04's. Refused by name rather than
-        // left to the `default` below, which would report a corrupt catalog
-        // for a column the catalog is entirely right about.
-        case kTypeValDecimal:
-        case kTypeValDate:
-        case kTypeValTimestamp:
-            return Status::Unsupported(
-                "column '" + NameOf() +
-                "' has type date/timestamp/decimal, which this build can declare but not yet "
-                "store (docs/workplan-types.md TY04)");
+        // ---- DATE / TIMESTAMP / DECIMAL -------------------------------
+        //
+        // **Integers out, no strings, no formatting** (TY5, workplan TY04).
+        // A date's value *is* its epoch day, and rendering it is the
+        // emission boundary's job - so nothing here allocates, exactly as
+        // the int arm above documents, and a scan that never emits a row
+        // never builds a single character of text.
+        //
+        // No re-validation either: these bytes were proven by
+        // EncodeOneValue, which is the only gate (TY7).
+        case kTypeValDate: {
+            out.type = parser::ValueType::kInt;
+            out.int_val = SignExtend(GetLE(cell, 4), 4);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
+        case kTypeValTimestamp: {
+            out.type = parser::ValueType::kInt;
+            out.int_val = SignExtend(GetLE(cell, 8), 8);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
+        case kTypeValDecimal: {
+            // The one kind that carries something besides the integer: its
+            // scale, without which the unscaled value means nothing. Taken
+            // from the column, which is where the schema keeps it.
+            out.type = parser::ValueType::kDecimal;
+            out.int_val = SignExtend(GetLE(cell, 8), 8);
+            out.scale = catalog::DecimalScaleOf(col.len);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
         default:
             return Status::Corruption("column '" + NameOf() + "' has an unrecognized type_val");
     }
@@ -681,6 +770,13 @@ std::string FormatValue(const parser::AstValue& value) {
             return !value.raw_int_text.empty() ? value.raw_int_text : std::to_string(value.int_val);
         case parser::ValueType::kStr:
             return value.str_val;
+        // The scale is part of the value's meaning, so `12.30` and not
+        // `12.3` (docs/spec-types.md §3.3). This is the one kind that
+        // carries enough to render itself; `DATE` and `TIMESTAMP` are
+        // integers here and need their column's `type_val`, which is why
+        // §3.3 gives FormatValue that parameter at TY06.
+        case parser::ValueType::kDecimal:
+            return FormatDecimal(value.int_val, value.scale);
         // Rendered as written, sigil restored. Only a plan printed from a
         // declared pattern's body reaches this - no row ever holds one - and
         // printing `$flag` is what makes such a plan readable back against

@@ -1,13 +1,12 @@
 #include "kds/exec/aggregate.hpp"
 
 #include <algorithm>
-#include <cstdlib>
-#include <new>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "alloc_counter.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/row_codec.hpp"
 
@@ -33,38 +32,10 @@ namespace {
 
 // ---- An allocation counter ----------------------------------------------
 //
-// Replaces the global operators for the whole test binary, and counts only
-// while `counting` is set - so every other test in the binary pays one
-// predicate per allocation and nothing else.
-std::size_t g_allocations = 0;
-bool g_counting = false;
-
-struct CountAllocations {
-    CountAllocations() {
-        g_allocations = 0;
-        g_counting = true;
-    }
-    ~CountAllocations() { g_counting = false; }
-    std::size_t count() const { return g_allocations; }
-};
-
-}  // namespace
-}  // namespace kds::exec
-
-void* operator new(std::size_t size) {
-    if (kds::exec::g_counting) ++kds::exec::g_allocations;
-    void* p = std::malloc(size == 0 ? 1 : size);
-    if (p == nullptr) throw std::bad_alloc();
-    return p;
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
-
-namespace kds::exec {
-namespace {
+// Shared with the row codec's own zero-allocation test - one counter,
+// because it replaces the global operators and there can only be one set of
+// those in a binary. See tests/alloc_counter.hpp.
+using test_support::CountAllocations;
 
 parser::AstValue IntVal(std::int64_t v) {
     parser::AstValue out;

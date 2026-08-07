@@ -2,11 +2,14 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "alloc_counter.hpp"
 #include "kds/catalog/well_known.hpp"
+#include "kds/exec/type_literals.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/tagged_cell.hpp"
 
@@ -223,6 +226,188 @@ TEST(RowCodecCompareTest, ANegativeOperandAgainstAUint64IsANonMatch) {
     // function, and a negative literal is not a uint64.
     EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(-1), Int(5), parser::CompareOp::kLt));
     EXPECT_FALSE(CompareValues(catalog::kTypeValUint64, Int(-1), Int(5), parser::CompareOp::kGt));
+}
+
+// ---- TY04: the three new types through the codec ------------------------
+//
+// TY7 makes encode the **only gate**, so the property to pin is that what
+// comes back is bit-exactly what went in - decode does no validation and
+// would not catch a discrepancy.
+
+namespace {
+
+// A Keystone id plus the one column under test. Going through EncodeRow /
+// DecodeRow rather than reaching for the per-column arms directly is
+// deliberate: those are file-static, and a test-only export of them would
+// be a second way into the codec - which is the thing TY7's single gate
+// exists to prevent.
+catalog::Schema TypedSchema(std::uint32_t type_val, std::uint32_t len) {
+    catalog::Schema schema;
+    schema.columns.push_back(Col(0, "id", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(Col(1, "v", type_val, len));
+    return schema;
+}
+
+// Encodes one value as a row and reads it straight back.
+parser::AstValue RoundTrip(const catalog::Schema& schema, const parser::AstValue& in,
+                           Status& status) {
+    parser::AstValue out;
+    const catalog::RowLayout layout = LayoutFor(schema);
+
+    auto encoded = EncodeRow(schema, layout, /*id=*/1, {in});
+    status = encoded.status();
+    if (!status.ok()) return out;
+
+    auto row = DecodeRow(schema, layout, encoded.value());
+    status = row.status();
+    if (!status.ok()) return out;
+    // [0] is the pk carried by the Keystone word; [1] is the value.
+    return row.value()[1];
+}
+
+}  // namespace
+
+TEST(RowCodecTypesTest, ADateRoundTripsBitExactlyAcrossTheRange) {
+    const catalog::Schema schema = TypedSchema(catalog::kTypeValDate, 4);
+    for (const char* text : {"1900-01-01", "1969-12-31", "1970-01-01", "2026-08-07",
+                             "2999-12-31"}) {
+        parser::AstValue in;
+        in.type = parser::ValueType::kStr;
+        in.str_val = text;
+
+        Status s;
+        const parser::AstValue out = RoundTrip(schema, in, s);
+        ASSERT_TRUE(s.ok()) << text << ": " << s.message();
+        // Decoded as an *integer*, not a rendered string (TY5).
+        EXPECT_EQ(out.type, parser::ValueType::kInt) << text;
+        EXPECT_TRUE(out.raw_int_text.empty()) << text;
+        EXPECT_EQ(FormatDate(static_cast<std::int32_t>(out.int_val)), text);
+    }
+}
+
+TEST(RowCodecTypesTest, ATimestampRoundTripsBitExactly) {
+    const catalog::Schema schema = TypedSchema(catalog::kTypeValTimestamp, 8);
+    for (const char* text : {"1900-01-01 00:00:00", "1969-12-31 23:59:59.999999",
+                             "1970-01-01 00:00:00", "2026-08-07 09:15:00.250000",
+                             "2999-12-31 23:59:59.999999"}) {
+        parser::AstValue in;
+        in.type = parser::ValueType::kStr;
+        in.str_val = text;
+
+        Status s;
+        const parser::AstValue out = RoundTrip(schema, in, s);
+        ASSERT_TRUE(s.ok()) << text << ": " << s.message();
+        EXPECT_EQ(out.type, parser::ValueType::kInt) << text;
+        EXPECT_EQ(FormatTimestamp(out.int_val), text);
+    }
+}
+
+TEST(RowCodecTypesTest, ADecimalRoundTripsWithItsScale) {
+    const catalog::Schema schema =
+        TypedSchema(catalog::kTypeValDecimal, catalog::PackDecimalLen(10, 2));
+    for (const char* text : {"12.34", "-12.34", "0.05", "0.00", "99999999.99"}) {
+        parser::AstValue in;
+        in.type = parser::ValueType::kStr;
+        in.str_val = text;
+
+        Status s;
+        const parser::AstValue out = RoundTrip(schema, in, s);
+        ASSERT_TRUE(s.ok()) << text << ": " << s.message();
+        // The one kind that gains a ValueType, because the unscaled integer
+        // means nothing without the scale beside it (TY5).
+        EXPECT_EQ(out.type, parser::ValueType::kDecimal) << text;
+        EXPECT_EQ(out.scale, 2) << text;
+        EXPECT_EQ(FormatDecimal(out.int_val, out.scale), text);
+    }
+}
+
+TEST(RowCodecTypesTest, ADecodedValueReEncodesUnchanged) {
+    // What an UPDATE does to every column its SET list did not touch. If
+    // encode did not accept decode's output, an untouched column would
+    // change when a neighbour was written.
+    const catalog::Schema date = TypedSchema(catalog::kTypeValDate, 4);
+    const catalog::Schema ts = TypedSchema(catalog::kTypeValTimestamp, 8);
+    const catalog::Schema dec =
+        TypedSchema(catalog::kTypeValDecimal, catalog::PackDecimalLen(10, 2));
+
+    for (const auto& [schema, text] : {std::pair{date, "2026-08-07"},
+                                       std::pair{ts, "2026-08-07 09:15:00.250000"},
+                                       std::pair{dec, "12.34"}}) {
+        parser::AstValue in;
+        in.type = parser::ValueType::kStr;
+        in.str_val = text;
+
+        Status s;
+        const parser::AstValue once = RoundTrip(schema, in, s);
+        ASSERT_TRUE(s.ok()) << text << ": " << s.message();
+        const parser::AstValue twice = RoundTrip(schema, once, s);
+        ASSERT_TRUE(s.ok()) << text << " (re-encode): " << s.message();
+        EXPECT_EQ(twice.int_val, once.int_val) << text;
+        EXPECT_EQ(twice.type, once.type) << text;
+        EXPECT_EQ(twice.scale, once.scale) << text;
+    }
+}
+
+TEST(RowCodecTypesTest, DecodingTheNewTypesAllocatesNothing) {
+    // TY5's int-only decode, asserted rather than described. A date's value
+    // *is* its epoch day, so decoding one must cost no more than decoding
+    // an `int32` - the moment an arm here renders text, every rejected row
+    // of a scan pays for a string it never emits, which is the regression
+    // the int decoder's own comment documents.
+    //
+    // Decoded into slots the caller already owns (DecodeRowInto), because
+    // that is what a chain scan does; DecodeRow allocates its result vector
+    // by construction and would measure that instead.
+    struct Case {
+        const char* what;
+        catalog::Schema schema;
+        const char* literal;
+    };
+    const std::vector<Case> cases = {
+        {"date", TypedSchema(catalog::kTypeValDate, 4), "2026-08-07"},
+        {"timestamp", TypedSchema(catalog::kTypeValTimestamp, 8), "2026-08-07 09:15:00.250000"},
+        {"decimal", TypedSchema(catalog::kTypeValDecimal, catalog::PackDecimalLen(10, 2)),
+         "12.34"},
+    };
+
+    for (const Case& c : cases) {
+        const catalog::RowLayout layout = LayoutFor(c.schema);
+        parser::AstValue in;
+        in.type = parser::ValueType::kStr;
+        in.str_val = c.literal;
+
+        auto encoded = EncodeRow(c.schema, layout, /*id=*/1, {in});
+        ASSERT_TRUE(encoded.ok()) << c.what << ": " << encoded.status().message();
+
+        // Decode once outside the counter: the slots are reused across
+        // rows in a real scan, so the first row's growth is a per-statement
+        // cost and not a per-row one.
+        std::vector<parser::AstValue> out(c.schema.columns.size());
+        ASSERT_TRUE(DecodeRowInto(c.schema, layout, encoded.value(), out).ok()) << c.what;
+
+        test_support::CountAllocations counter;
+        const Status s = DecodeRowInto(c.schema, layout, encoded.value(), out);
+        const std::size_t allocations = counter.count();
+
+        ASSERT_TRUE(s.ok()) << c.what << ": " << s.message();
+        EXPECT_EQ(allocations, 0u) << c.what << " decode allocated";
+    }
+}
+
+TEST(RowCodecTypesTest, ADecimalWithTheWrongScaleIsRefusedRatherThanRescaled) {
+    // TY6 defers cross-scale work whole. Rescaling here would either lose
+    // digits or invent them.
+    const catalog::Schema schema =
+        TypedSchema(catalog::kTypeValDecimal, catalog::PackDecimalLen(10, 2));
+    parser::AstValue in;
+    in.type = parser::ValueType::kDecimal;
+    in.int_val = 1234;
+    in.scale = 3;
+
+    Status s;
+    RoundTrip(schema, in, s);
+    ASSERT_FALSE(s.ok());
+    EXPECT_NE(s.message().find("rescale"), std::string::npos) << s.message();
 }
 
 }  // namespace

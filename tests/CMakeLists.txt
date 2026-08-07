@@ -2,6 +2,7 @@ find_package(GTest REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(kds_tests
+    alloc_counter.cpp
     status_test.cpp
     crc32c_test.cpp
     page_header_test.cpp

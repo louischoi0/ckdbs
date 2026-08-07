@@ -22,6 +22,7 @@ namespace {
 constexpr char kTagNull = '\0';
 constexpr char kTagInt = '\1';
 constexpr char kTagStr = '\2';
+constexpr char kTagDecimal = '\3';
 
 // Renders one group's key values for an error message.
 std::string DescribeGroup(const std::vector<parser::AstValue>& keys) {
@@ -119,6 +120,20 @@ Status Aggregator::EncodeValue(const parser::AstValue& value, std::string& out) 
             // bit pattern, not a colliding one - so this is identity
             // without a string conversion per value per row.
             out.push_back(kTagInt);
+            char bytes[sizeof(std::int64_t)];
+            std::memcpy(bytes, &value.int_val, sizeof(bytes));
+            out.append(bytes, sizeof(bytes));
+            return Status::OK();
+        }
+
+        case parser::ValueType::kDecimal: {
+            // Its own tag, and the scale encoded with it. A decimal shares
+            // `int_val` with an integer but is not one: grouping them
+            // together would merge a `decimal(10,2)` 12.34 with a plain
+            // 1234, which the tag byte exists to prevent - the same reason
+            // NULL and the empty string have different tags.
+            out.push_back(kTagDecimal);
+            out.push_back(static_cast<char>(value.scale));
             char bytes[sizeof(std::int64_t)];
             std::memcpy(bytes, &value.int_val, sizeof(bytes));
             out.append(bytes, sizeof(bytes));

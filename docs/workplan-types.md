@@ -79,7 +79,7 @@ so a type that takes none refuses them in one place rather than each name
 needing its own production — `int64(10, 2)` is an error rather than
 silently ignored arguments.
 
-## TY04 — Codec (needs TY01, TY02)
+## TY04 — Codec (needs TY01, TY02) — **DONE**
 
 `EncodeOneValue`: three arms, TY7's single-gate validation, range checks.
 `DecodeOneValueInto`: three arms — **int-only, no formatting, no strings**
@@ -91,6 +91,38 @@ comment documents is a rule here, not an accident). `kDecimal` in
 corpus; an allocation counter shows decode of the new types allocates
 nothing; invariant-13 checks still hold (row size unchanged by NULLs,
 padding zero-filled).
+
+*Outcome.* TY03's declarable-but-not-storable refusal is gone, and the
+test that pinned it is now the test that stores. Four things to know.
+
+**Encode accepts exactly two shapes per type and no third.** The literal a
+client wrote, as a string, parsed and range-checked through TY01's
+parsers; and the *decoded* form of a value already stored, which an UPDATE
+carries back for every column its SET list did not touch. A third shape
+would be a route for an unvalidated value to reach a page, which is what
+TY7's single gate exists to prevent — so `AStoredValueSurvivesAnUpdateOf
+AnotherColumn` and `ADecodedValueReEncodesUnchanged` pin the second shape
+from both ends, at the dispatcher and at the codec.
+
+**A decimal whose scale disagrees with its column is refused, not
+rescaled** — rescaling would either drop digits or invent them, and TY6
+defers cross-scale work whole rather than shipping half of it.
+
+**`kDecimal` is the one `ValueType` this adds, and DATE/TIMESTAMP add
+none**: a date *is* days since the epoch and a timestamp microseconds
+since it, so both decode as `kInt` and differ only in rendering — which
+happens at the emission boundary, and is why `SELECT` on a date column
+currently shows `20672` rather than `2026-08-07`. That is TY06's
+`FormatValue(type_val, value)` parameter, not a gap in this task. A
+decimal renders correctly already, because it is the one kind carrying
+enough to describe itself.
+
+*Also:* the zero-allocation requirement needed a counter, and one already
+existed inside `aggregate_test.cpp` — replacing the global `operator new`,
+so a second copy would have been a duplicate symbol rather than a second
+counter. It is `tests/alloc_counter.hpp` now, shared by both, with the
+aggregate suite's existing `EXPECT_LT(without, withd)` serving as the
+positive control that keeps the counter from silently measuring nothing.
 
 ## TY05 — Comparison & compile-time coercion (needs TY04)
 

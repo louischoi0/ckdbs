@@ -60,7 +60,13 @@ namespace kds::parser {
 // type-checked and fingerprinted, never run. Every path that would consume a
 // value refuses it explicitly (exec/row_codec.cpp, exec/step_vm.cpp) rather
 // than treating it as a missing string.
-enum class ValueType { kInt, kStr, kNull, kParam };
+// `kDecimal` is the **one** kind the type work added, and TY5 is explicit
+// that it is one rather than three: a `DATE` *is* an integer - days since
+// the epoch - and a `TIMESTAMP` is microseconds since it, so both reuse
+// `kInt` and differ only in how they render, which happens at the emission
+// boundary and not in the value. A decimal cannot reuse it, because its
+// unscaled integer means nothing without the scale beside it.
+enum class ValueType { kInt, kStr, kNull, kParam, kDecimal };
 
 struct AstValue {
     ValueType type = ValueType::kNull;
@@ -88,6 +94,15 @@ struct AstValue {
     // encoding a uint64 column from this raw text rather than from
     // int_val is how that full range survives.
     std::string raw_int_text;
+
+    // kDecimal only: the scale its `int_val` is unscaled by, so `1234` at
+    // scale 2 is 12.34 (docs/spec-types.md TY2/TY5).
+    //
+    // A separate field rather than a second integer packed into `int_val`,
+    // because the unscaled value needs the whole 64 bits - `p` may be 18 -
+    // and because a value that carries its own scale is what lets
+    // `CompareValues` assert the two sides agree instead of guessing.
+    std::uint8_t scale = 0;
 
     // The parameter name a kParam value names. Spelled out so no call site
     // has to know which field it borrows.
