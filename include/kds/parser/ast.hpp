@@ -574,8 +574,39 @@ struct CabinStmt {
     bool drop = false;
 };
 
+// One column named in an index declaration, with where it was written -
+// which is what lets "this relation has no column x" carry a position.
+struct IndexColumnRef {
+    std::string name;
+    std::uint32_t byte_offset = 0;
+};
+
+// `CREATE INDEX <name> ON <table>(<col>, ...) [COVERING (<col>, ...)]` and
+// `DROP INDEX <name>` (docs/feat-index.md §10).
+//
+// **A secondary index is named**, where a Cabin is not, and the difference
+// is not a style choice: `(relation, column)` identifies a Cabin uniquely
+// because C3 keeps it to one column, while two indexes on one relation may
+// share a leading column and differ after it. So there has to be something
+// to point `DROP` at.
+//
+// One struct for both statements, for CabinStmt's reason: they share the
+// name resolution and differ only in which catalog call they reach. `DROP`
+// fills `index_name` alone - an index's name is unique instance-wide, so
+// naming its relation again would be a second identity to keep in step.
+struct IndexStmt {
+    std::string index_name;
+    std::string table_name;
+    std::vector<IndexColumnRef> key_columns;
+    std::vector<IndexColumnRef> covered_columns;
+    std::uint32_t byte_offset = 0;        // of the index name
+    std::uint32_t table_byte_offset = 0;
+    bool drop = false;
+};
+
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
-                               DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt>;
+                               DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt,
+                               IndexStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

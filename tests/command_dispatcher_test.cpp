@@ -207,12 +207,15 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // DROP TABLE, and naming what DROP does take beats a generic refusal
     // that leaves a client unsure whether the word was recognized. The list
     // in the message is the whole of what exists, so it grows with the
-    // targets: CABIN joined it with the Cabin feature (docs/feat-cabin.md).
+    // targets: CABIN joined it with the Cabin feature (docs/feat-cabin.md),
+    // INDEX with the index grammar (docs/feat-index.md §10). This test is
+    // meant to be edited when one is added - that is what pins the list to
+    // reality rather than to whatever it happened to say.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
-              "ERR only DROP PATTERN and DROP CABIN are supported");
+              "ERR only DROP PATTERN, DROP CABIN and DROP INDEX are supported");
     EXPECT_EQ(d.Dispatch("DROP TABLE t").response,
-              "ERR only DROP PATTERN and DROP CABIN are supported");
+              "ERR only DROP PATTERN, DROP CABIN and DROP INDEX are supported");
 }
 
 TEST_F(CommandDispatcherTest, EmptyLineIsError) {

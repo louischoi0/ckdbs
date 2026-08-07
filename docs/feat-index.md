@@ -404,6 +404,19 @@ DDL is not transactional (`docs/txn.md` §7): index catalog rows are stamped
 `kBootstrapXid` and `CREATE INDEX` inside a transaction is not rolled back.
 Unchanged by this work, restated so it is not assumed away.
 
+An index's **name is unique instance-wide**, so `DROP INDEX` names only it.
+That is where an index and a Cabin differ and why: `(relation, column)`
+identifies a Cabin uniquely because C3 keeps it to one column, while two
+indexes on one relation may share a leading column and differ after it — so
+there has to be something to point `DROP` at.
+
+`SHOW INDEXES` prints the declared column order, not a sorted set: that order
+*is* what §5 concatenates, so a probe must match a prefix of what is printed.
+It also prints `height` and `entries`, walked from the tree, because the
+catalog can say an index exists and never what is in it — and prints `-` for
+both rather than zeros when the tree cannot be walked, since an unreadable
+tree is unknown and zeros would read as "empty".
+
 ### 10.1 Building over existing rows
 
 `CREATE INDEX` on a populated relation backfills, and the backfill has one

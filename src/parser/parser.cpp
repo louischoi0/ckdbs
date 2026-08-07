@@ -759,6 +759,98 @@ StatusOr<CabinStmt> Parser::ParseCabin(bool drop) {
     return stmt;
 }
 
+Status Parser::ParseIndexColumnList(std::vector<IndexColumnRef>& out, const char* what,
+                                    std::size_t cap) {
+    if (Status s = ExpectToken(TokenType::kLParen,
+                                (std::string("'(' before the ") + what).c_str());
+        !s.ok()) {
+        return s;
+    }
+
+    for (;;) {
+        IndexColumnRef col;
+        col.byte_offset = lexer_.Peek().byte_offset;
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        col.name = std::move(name.value());
+
+        // **The cap is refused here, with a position, and again in the
+        // catalog without one.** Not a duplicated check: this is the only
+        // layer that knows *where* the offending column was written, and
+        // `Catalog::CreateIndex` is the door every non-parser caller comes
+        // through. A cap refuses and never truncates (spec §11) - a
+        // truncated index declared complete is a wrong answer with a right
+        // answer's shape.
+        if (out.size() == cap) {
+            return Status::Unsupported("an index takes at most " + std::to_string(cap) + " " +
+                                        what + " (byte " + std::to_string(col.byte_offset) + ")");
+        }
+        out.push_back(std::move(col));
+
+        if (lexer_.Peek().type != TokenType::kComma) break;
+        lexer_.Next();
+    }
+
+    return ExpectToken(TokenType::kRParen, (std::string("')' after the ") + what).c_str());
+}
+
+StatusOr<IndexStmt> Parser::ParseIndex(bool drop) {
+    IndexStmt stmt;
+    stmt.drop = drop;
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.index_name = std::move(name.value());
+
+    // An index's name is unique instance-wide, so DROP names nothing else.
+    // Naming its relation again would be a second identity to keep in step
+    // with the first.
+    if (drop) {
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
+
+    // `ON` is a reserved keyword (it joins), so it arrives as a keyword
+    // token and ExpectKeyword cannot be used for it - the same wrinkle
+    // ParseCabin has.
+    const Token& on = lexer_.Peek();
+    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) {
+        return Status::InvalidArgument(
+            "CREATE INDEX names the relation it is on: `CREATE INDEX <name> ON "
+            "<table>(<column>, ...)` (byte " +
+            std::to_string(on.byte_offset) + ")");
+    }
+    lexer_.Next();
+
+    stmt.table_byte_offset = lexer_.Peek().byte_offset;
+    auto table = ParseIdent();
+    if (!table.ok()) return table.status();
+    stmt.table_name = std::move(table.value());
+
+    if (Status s = ParseIndexColumnList(stmt.key_columns, "index key columns",
+                                        catalog::kMaxIndexKeyColumns);
+        !s.ok()) {
+        return s;
+    }
+
+    // `COVERING` is optional and peeked, exactly as the cabin policy clause
+    // is: an index without one is the ordinary case and must not have to
+    // spell anything.
+    const Token& covering = lexer_.Peek();
+    if (covering.type == TokenType::kIdent && IEquals(covering.text, "COVERING")) {
+        lexer_.Next();
+        if (Status s = ParseIndexColumnList(stmt.covered_columns, "covered columns",
+                                            catalog::kMaxIndexCoveredColumns);
+            !s.ok()) {
+            return s;
+        }
+    }
+
+    ConsumeOptionalSemicolon();
+    return stmt;
+}
+
 StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ExpectKeyword("INTO"); !s.ok()) return s;
 
@@ -1286,10 +1378,24 @@ StatusOr<Statement> Parser::Parse() {
 
     if (IEquals(tok.text, "CREATE")) {
         // One token of lookahead picks the object. `TABLE` still goes
-        // through ParseCreateTable's own ExpectKeyword, so the error a
-        // client gets for `CREATE INDEX` is unchanged.
+        // through ParseCreateTable's own ExpectKeyword.
         const Token& what = lexer_.Peek();
-        if (what.type == TokenType::kIdent && IEquals(what.text, "PATTERN")) {
+        if (what.type == TokenType::kIdent && IEquals(what.text, "INDEX")) {
+            lexer_.Next();
+            auto s = ParseIndex(/*drop=*/false);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "UNIQUE")) {
+            // Refused here rather than parsed and rejected later, because
+            // the position that matters is this word's. Enforcing
+            // uniqueness makes the index a *constraint*, which needs a
+            // second write-conflict path and would let an index failure
+            // abort a write (docs/feat-index.md IX11).
+            return Status::Unsupported(
+                "UNIQUE indexes are not supported (byte " + std::to_string(what.byte_offset) +
+                "); v1 is a read accelerator that cannot fail a write for a reason of its own "
+                "(docs/feat-index.md IX11)");
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "PATTERN")) {
             lexer_.Next();
             auto s = ParseCreatePattern();
             if (!s.ok()) return s.status();
@@ -1305,11 +1411,17 @@ StatusOr<Statement> Parser::Parse() {
             stmt = std::move(s.value());
         }
     } else if (IEquals(tok.text, "DROP")) {
-        // Patterns and cabins can be dropped. There is still no DROP TABLE,
-        // and saying so here beats a syntax error that points at the table
-        // name - the list in the message is the whole of what exists.
+        // Patterns, cabins and indexes can be dropped. There is still no
+        // DROP TABLE, and saying so here beats a syntax error that points at
+        // the table name - the list in the message is the whole of what
+        // exists.
         const Token& what = lexer_.Peek();
-        if (what.type == TokenType::kIdent && IEquals(what.text, "CABIN")) {
+        if (what.type == TokenType::kIdent && IEquals(what.text, "INDEX")) {
+            lexer_.Next();
+            auto s = ParseIndex(/*drop=*/true);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "CABIN")) {
             lexer_.Next();
             auto s = ParseCabin(/*drop=*/true);
             if (!s.ok()) return s.status();
@@ -1320,7 +1432,8 @@ StatusOr<Statement> Parser::Parse() {
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
         } else {
-            return Status::Unsupported("only DROP PATTERN and DROP CABIN are supported (byte " +
+            return Status::Unsupported(
+                "only DROP PATTERN, DROP CABIN and DROP INDEX are supported (byte " +
                                         std::to_string(what.byte_offset) + ")");
         }
     } else if (IEquals(tok.text, "INSERT")) {

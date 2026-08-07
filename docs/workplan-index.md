@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX04 are built** (IX-M1, and
-the catalog half of IX-M2 bar its grammar); nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX05 are built** (IX-M1 and
+IX-M2); nothing else is.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,10 +13,16 @@ note.
 
 ## Where to pick this up
 
-**At `IX05`. IX01-IX04 are built** (2026-08-07); the whole suite is green at
-1,627 tests. An index can be declared in the catalog, a tree built by hand,
-and a relation's indexes read off its cached `TableAccess` — but no grammar
-reaches any of it, nothing maintains an index, and no statement can use one.
+**At `IX06`. IX01-IX05 are built** (2026-08-07); the whole suite is green at
+1,643 tests. `CREATE INDEX ... COVERING`, `DROP INDEX` and `SHOW INDEXES` all
+work end to end — but **nothing maintains an index and no statement can use
+one**, so every index is empty by construction.
+
+That is why `CREATE INDEX` **refuses a relation that has ever held a row**,
+with a message naming IX09. It is a real refusal and not an assumption: once
+the read path lands, an index built over existing rows would answer "no rows"
+authoritatively for every value. IX09 is what lifts it, and the refusal
+cannot rot in the meantime.
 
 What building them added to the design, each folded back into the spec:
 
@@ -198,16 +204,34 @@ Building the list **fails shut** - the foreign-key argument, not the Cabin
 one: an index the compiler cannot see costs speed, but an index the write
 hook cannot see is a row lost to every later probe.
 
-### IX05 — Grammar and DDL
+### IX05 — Grammar and DDL — **built**
 
-`CREATE INDEX ... ON ... (...) [COVERING (...)]`, `DROP INDEX`, `SHOW INDEXES`.
-Refusals with exact positions per spec §11: `UNIQUE`, a heap-clustered
-relation, the primary key, over-cap column counts.
+`CREATE INDEX <name> ON <table> (...) [COVERING (...)]`, `DROP INDEX <name>`,
+`SHOW INDEXES`, plus `exec/index_ddl.hpp` under them - which is where the
+widths are computed and the root page formatted, because `catalog/` may know
+neither the key encoding nor the page format.
 
-Done when: **the golden corpus passes with every pre-existing line unchanged
-and `kFingerprintVersion` at its current value.** If a hash moves, the
-keyword-versus-identifier argument in spec §10 is wrong and the work stops
-until it is understood — that is what the corpus is for.
+**Done, and the corpus is the evidence: 26 lines added, 0 modified, and
+`kFingerprintVersion` still 1.** `index`, `covering` and `unique` reach the
+lexer as ordinary identifiers, exactly as the aggregate function names did,
+so a column may still be named any of them - which the corpus now pins with
+`SELECT index FROM t WHERE covering = 1`.
+
+Refusals, each at the earliest layer that can name the byte. The parser
+answers for `UNIQUE` (at that word's own offset) and for the over-cap column
+lists; the catalog answers for the heap relation, the pk, the absent or
+repeated column and the duplicate name, **passed through unrestated** so
+there is one answer to "why not". The cap check exists in both, and that is
+not duplication: only the parser knows where the column was written, and
+`Catalog::CreateIndex` is the door every non-parser caller comes through.
+
+Two decisions inside it. The **root page is allocated and formatted before
+the catalog row that names it**, so a row can never point at a page that does
+not exist - the reverse leak, an unreachable page, is the bargain every
+allocation in this engine already strikes. And an index on a **cabined
+column warns without refusing**: an index is complete where a Cabin is
+authoritative only for observed values, so the Cabin becomes dead weight -
+but dropping it is the operator's call.
 
 ---
 

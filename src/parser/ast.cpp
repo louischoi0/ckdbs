@@ -16,6 +16,9 @@ const char* StatementTypeName(const Statement& stmt) {
             if constexpr (std::is_same_v<T, CabinStmt>) {
                 return s.drop ? "DROP CABIN" : "CREATE CABIN";
             }
+            if constexpr (std::is_same_v<T, IndexStmt>) {
+                return s.drop ? "DROP INDEX" : "CREATE INDEX";
+            }
         },
         stmt);
 }

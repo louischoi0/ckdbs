@@ -474,6 +474,12 @@ private:
     // Cabin exists but has never been probed" visible.
     DispatchOutcome HandleShowCabins();
 
+    // `CREATE INDEX` / `DROP INDEX` (docs/feat-index.md §10). One handler
+    // for both, for HandleCabin's reason: they share a parse and a reply
+    // shape and differ only in which catalog call they reach.
+    DispatchOutcome HandleIndex(std::string_view line);
+    DispatchOutcome HandleShowIndexes();
+
     // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
     //
     // The write paths' three entry points. They live here rather than in

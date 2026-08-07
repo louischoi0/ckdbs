@@ -68,6 +68,11 @@ private:
     // words already consumed. One production for both, since they differ
     // only in `drop` - see CabinStmt (ast.hpp).
     StatusOr<CabinStmt> ParseCabin(bool drop);
+    StatusOr<IndexStmt> ParseIndex(bool drop);
+    // A parenthesised comma-separated column list, as both halves of a
+    // CREATE INDEX declaration are. `what` names the list in every error.
+    Status ParseIndexColumnList(std::vector<IndexColumnRef>& out, const char* what,
+                                std::size_t cap);
 
     // The two bracketed lists of a declaration, split out only because
     // ParseCreatePattern is otherwise three loops in a row.

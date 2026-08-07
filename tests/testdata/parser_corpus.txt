@@ -427,3 +427,29 @@ ok	ae34f9ce9d472ac9	46ac44ad760bc8f1	UPDATE t SET c = 12.34 WHERE id = 1
 InvalidArgument	0758626484394051	183c9cbf54792c5d	SELECT * FROM t WHERE amt = 12.
 InvalidArgument	0765f6648444c629	b5d410774c7ffc00	SELECT * FROM t WHERE amt = .5
 InvalidArgument	b46f83ccad484d09	ae5e91f4b62d26a6	SELECT * FROM t WHERE amt = 1.2.3
+
+# ---- CREATE INDEX / DROP INDEX (docs/feat-index.md §10) --------------------
+#
+# Every line here is new, and not one pre-existing line moved: `index`,
+# `covering` and `unique` reach the lexer as ordinary identifiers, exactly as
+# the aggregate function names did, so no token sequence changed meaning and
+# kFingerprintVersion did not move. A column may still be named any of them,
+# which the line below the refusals pins.
+ok	-	-	CREATE INDEX by_owner ON accounts (owner)
+ok	-	-	CREATE INDEX ix ON t (b, a, c)
+ok	-	-	CREATE INDEX ix ON t (a) COVERING (b, c)
+ok	-	-	CREATE INDEX ix ON t (a) covering (b)
+ok	-	-	CREATE INDEX ix ON t (a);
+ok	-	-	DROP INDEX by_owner
+ok	-	-	CREATE INDEX unique ON t (index) COVERING (covering)
+ok	98c09327562a9560	b5d414774c8002cc	SELECT index FROM t WHERE covering = 1
+# UNIQUE is refused at its own byte: enforcing uniqueness makes the index a
+# constraint, which would let an index failure abort a write (IX11).
+Unsupported	-	-	CREATE UNIQUE INDEX ix ON t (a)
+# A cap refuses and never truncates (spec §11), with the offending column's
+# position - which is the one thing only this layer knows.
+Unsupported	-	-	CREATE INDEX ix ON t (a, b, c, d, e)
+Unsupported	-	-	CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)
+InvalidArgument	-	-	CREATE INDEX ix (a)
+InvalidArgument	-	-	CREATE INDEX ix ON t
+InvalidArgument	-	-	DROP INDEX

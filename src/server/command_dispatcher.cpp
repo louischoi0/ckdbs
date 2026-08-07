@@ -20,9 +20,11 @@
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/fk_check.hpp"
+#include "kds/exec/index_ddl.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
@@ -258,6 +260,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
         if (IEquals(sub, "BUDGET")) return HandleShowBudget();
         if (IEquals(sub, "CABINS")) return HandleShowCabins();
+        if (IEquals(sub, "INDEXES")) return HandleShowIndexes();
         if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
         return {"ERR unknown SHOW target", false};
     }
@@ -271,6 +274,12 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         }
         if (IEquals(sub, "CABIN")) {
             return HandleCabin(Trim(line));
+        }
+        // `UNIQUE` routes here too, so its refusal comes from the parser
+        // with the byte offset of the word itself rather than from this
+        // layer as "unknown CREATE target".
+        if (IEquals(sub, "INDEX") || IEquals(sub, "UNIQUE")) {
+            return HandleIndex(Trim(line));
         }
         if (IEquals(sub, "TABLE")) {
             // Disambiguate the bare-name form ("CREATE TABLE foo")
@@ -288,17 +297,20 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
-        // Patterns and cabins can be dropped - there is still no DROP TABLE,
-        // and the catalog is append-only apart from these two paths. Routed
-        // by name so `DROP TABLE t` gets the parser's truthful refusal with a
-        // position rather than "unknown DROP target".
+        // Patterns, cabins and indexes can be dropped - there is still no
+        // DROP TABLE, and the catalog is append-only apart from these three
+        // paths. Routed by name so `DROP TABLE t` gets the parser's truthful
+        // refusal with a position rather than "unknown DROP target".
         if (IEquals(sub, "PATTERN")) {
             return HandleDropPattern(Trim(line));
         }
         if (IEquals(sub, "CABIN")) {
             return HandleCabin(Trim(line));
         }
-        return {"ERR only DROP PATTERN and DROP CABIN are supported", false};
+        if (IEquals(sub, "INDEX")) {
+            return HandleIndex(Trim(line));
+        }
+        return {"ERR only DROP PATTERN, DROP CABIN and DROP INDEX are supported", false};
     }
     if (IEquals(cmd, "INSERT")) {
         return HandleInsert(Trim(line), session);
@@ -888,6 +900,127 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
        << pattern_id.value() << std::dec;
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "dropped pattern '" + stmt.name + "'");
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line) {
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
+        return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
+    }
+    const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
+
+    if (stmt.drop) {
+        auto index_oid = exec::DropIndex(catalog_, stmt);
+        if (!index_oid.ok()) {
+            return {"ERR " + index_oid.status().message(), false};
+        }
+        std::ostringstream os;
+        os << "DROPPED INDEX name=" << stmt.index_name << " index_oid=" << index_oid.value();
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped index '" + stmt.index_name + "'");
+        }
+        return {os.str(), false};
+    }
+
+    auto result = exec::CreateIndex(catalog_, page_store_, stmt);
+    if (!result.ok()) {
+        return {"ERR " + result.status().message(), false};
+    }
+
+    std::ostringstream os;
+    // `entries=0` is printed for the reason `observed=0` is on a fresh
+    // Cabin: it is the thing most likely to be misunderstood. Creating an
+    // index over an empty relation indexes nothing, and only the rows
+    // written after it exist in it.
+    os << "CREATED INDEX name=" << stmt.index_name << " on=" << stmt.table_name
+       << " index_oid=" << result.value().index_oid
+       << " root_page=" << result.value().root_page_id
+       << " key_width=" << result.value().key_width
+       << " entry_width=" << result.value().entry_width << " entries=0";
+    for (const std::string& warning : result.value().warnings) {
+        os << "\\n" << "WARN " << warning;
+    }
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowIndexes() {
+    auto rows = catalog_.ListIndexes();
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    std::ostringstream os;
+    os << "indexes=" << rows.value().size();
+
+    for (const catalog::SysIndexRow& row : rows.value()) {
+        os << "\\n";
+        os << "index_oid=" << row.index_oid << " name=" << catalog::NameView(row.name);
+
+        // Names resolved here rather than stored, exactly as SHOW CABINS and
+        // SHOW ACCESS do: the row holds oids so it stays fixed width, and an
+        // inspection surface can afford the lookup.
+        auto access = catalog_.InitTableAccess(row.table_oid);
+        os << " rel=";
+        bool named = false;
+        if (auto tables = catalog_.ListTables(); tables.ok()) {
+            for (const catalog::SysObjectRow& obj : tables.value()) {
+                if (obj.oid != row.table_oid) continue;
+                os << catalog::NameView(obj.name);
+                named = true;
+                break;
+            }
+        }
+        if (!named) os << "oid=" << row.table_oid;
+
+        const auto write_columns = [&](const char* label, const std::uint16_t* cols,
+                                       std::size_t n) {
+            os << ' ' << label << "=(";
+            for (std::size_t i = 0; i < n; ++i) {
+                if (i > 0) os << ',';
+                if (access.ok() && cols[i] < access.value()->schema.columns.size()) {
+                    os << catalog::NameView(access.value()->schema.columns[cols[i]].name);
+                } else {
+                    os << cols[i];
+                }
+            }
+            os << ')';
+        };
+        // Declared order, which is the order the key encoding concatenates
+        // them in - so what is printed is what a probe must match a prefix
+        // of, not a sorted set.
+        write_columns("keys", row.key_cols.data(), row.nkeys);
+        if (row.ncovered > 0) {
+            write_columns("covering", row.covered_cols.data(), row.ncovered);
+        }
+
+        os << " root_page=" << row.root_page_id << " key_width=" << row.key_width
+           << " entry_width=" << row.entry_width;
+
+        // The physical half. Height and entry count are what say whether an
+        // index is worth its write hook, and the catalog cannot answer
+        // either: it stores that an index exists, never what is in it.
+        const index::IndexLayout layout{row.key_width,
+                                        static_cast<std::uint16_t>(row.entry_width -
+                                                                   row.key_width -
+                                                                   index::kIndexPkWidth)};
+        auto height = index::IndexHeight(page_store_, row.root_page_id, layout);
+        auto entries = index::IndexEntryCount(page_store_, row.root_page_id, layout);
+        if (height.ok() && entries.ok()) {
+            os << " height=" << height.value() << " entries=" << entries.value();
+        } else {
+            // Not zeros: an unreadable tree is unknown, and printing zeros
+            // would read as "empty" when the truth is "could not be walked".
+            os << " height=- entries=-";
+        }
     }
     return {os.str(), false};
 }
