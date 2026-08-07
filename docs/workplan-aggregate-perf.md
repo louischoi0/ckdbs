@@ -12,6 +12,60 @@ groups — so the fold's own scaling is already better than a HashAggregate's.
 What is 2.7× behind is the walk underneath it, and most of that walk is
 spent decoding columns nothing reads.
 
+## Where to pick this up — state as of 2026-08-07
+
+**Built: AP01, AP02 (partly), AP03.** Next: **AP05**, which is the largest
+measured item left. AP04 and AP06 are still open; AP02's remaining half is
+open and is a *decision*, not effort.
+
+| task | state | what it got |
+|---|---|---|
+| AP01 | **done** (`8ab989f`) | 3.21× on `COUNT(*)` over 12 columns; 1.70× on a plain projection |
+| AP02 | **partly** (`91d5c73`, `b0d461b`) | 7-9% from a lazy column name, then 19-35% from the decode-call fixes |
+| AP03 | **done** (`8e0f8d5` + the `wip` before it) | fold overhead per statement +4.13 µs → +1.88 µs |
+| AP04 | open | DISTINCT was +27.4% per row *before* AP02; **re-measure first** |
+| AP05 | open, **next** | ~0.5 µs per group founded; +31.9 µs on a 64-group fold |
+| AP06 | open | re-run the benches and the PostgreSQL comparison |
+
+Cumulative against the state before any of it, Release build, 20,000 rows:
+`SELECT COUNT(*) FROM wide` **3.95×**, `SELECT SUM(a) FROM wide` **3.08×**,
+`SELECT a FROM wide` **2.59×**.
+
+### The rule this workplan earned the hard way
+
+**Re-measure the premise before building the fix.** Two tasks running had
+their stated cause disproved by doing so:
+
+- **AP02** blamed `AstValue` construction. It was `DecodeOneValueInto`
+  building a `std::string` of the column's *name*, per column per row, for
+  errors nobody reads.
+- **AP03** blamed constructing an `Aggregator` per statement. Hoisting it
+  changed **nothing measurable**; the cost was `RunAggregated` building a
+  second `std::ostringstream`.
+
+Both stated causes were plausible and both were wrong, because each was
+written against an engine that the previous task had already changed. AP04's
++27.4% and AP05's ~0.5 µs are both pre-AP02 numbers and should be assumed
+stale until re-taken.
+
+### How to measure here
+
+Two instruments, and the wrong one hides everything:
+
+- **Client latency** (`tools/aggregate_benchmark.py`) for whole-scan work,
+  where the engine dominates. Useless below ~20 µs: a pk lookup is ~115 µs
+  end to end and ~85% of that is the Python client.
+- **Server CPU** (`/proc/<pid>/stat`, fields 13-14) for per-statement fixed
+  costs. Run paired A/B **interleaved**, four rounds of 20,000 statements;
+  a non-interleaved pair drifts enough between server restarts to invent a
+  result, which is exactly how AP03's hoist first looked like a 18% win.
+
+And: **`./build` is Debug.** `CMakeLists.txt` defaults `CMAKE_BUILD_TYPE`
+that way, and a Debug measurement is wrong in both directions - see the
+header of `bench/results-aggregate.md`. Use `build-release`.
+
+---
+
 Execution rules, the same ones `docs/workplan-aggregate.md` states:
 - Do tasks in numeric order unless "needs" says otherwise.
 - Each task ships with its tests in the same change.
