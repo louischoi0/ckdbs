@@ -71,9 +71,19 @@ enum class ValueType { kInt, kStr, kNull, kParam, kDecimal };
 struct AstValue {
     ValueType type = ValueType::kNull;
 
-    // Where the value sits in the statement text. Set for kParam, where an
-    // error message has to be able to point at the offending `$x`; other
-    // kinds may leave it 0.
+    // Where the value sits in the statement text.
+    //
+    // Set for every literal the parser produces, and for kParam. It was
+    // kParam only until TY05, when a literal became something a *later*
+    // stage can reject: the step compiler coerces one against its column's
+    // type (docs/spec-types.md §3.1), so `WHERE d = '2026-02-30'` fails
+    // long after the token is gone, and without the offset that failure
+    // can name the column but not the byte.
+    //
+    // **Nothing compares it.** Chain identity renders operand values, not
+    // offsets; Cabin keys are built from the value's kind and contents; the
+    // fingerprint is folded from tokens. A value constructed by anything
+    // other than the parser - a decoded row, a test - leaves it 0.
     std::uint32_t byte_offset = 0;
 
     std::int64_t int_val = 0;  // valid when type == kInt

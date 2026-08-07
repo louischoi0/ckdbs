@@ -816,6 +816,27 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         if (!a.ok() || !b.ok()) return false;
         return CompareUint(a.value(), b.value(), op);
     }
+    // ---- DECIMAL (docs/spec-types.md §3.1, TY05) -----------------------
+    //
+    // Unscaled integers, compared directly - which is only valid because
+    // **the scales are equal**, and they are equal because the compiler
+    // made them so: a string literal is parsed to the column's scale at
+    // compile (`CoerceLiteralTo`), and a column-column residual whose two
+    // scales differ is refused there rather than reaching this line.
+    //
+    // So a disagreement here is not a case to handle, it is a compiler bug
+    // - and the answer is a non-match rather than a rescale, because
+    // rescaling would either drop digits or invent them, and doing it
+    // per-row inside a predicate is the worst possible place to decide it.
+    if (lhs.type == parser::ValueType::kDecimal || rhs.type == parser::ValueType::kDecimal) {
+        if (lhs.type != rhs.type || lhs.scale != rhs.scale) return false;
+        return CompareInt(lhs.int_val, rhs.int_val, op);
+    }
+    // DATE and TIMESTAMP arrive here as the integers they are - epoch days
+    // and epoch microseconds - so they need no arm of their own. That is
+    // the whole reason TY5 reused kInt for them instead of giving each a
+    // ValueType: an ordering on the encoded integer *is* the ordering on
+    // the value, for both.
     if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
         return CompareInt(lhs.int_val, rhs.int_val, op);
     }

@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "kds/exec/type_literals.hpp"
+
 namespace kds::exec {
 
 namespace {
@@ -97,6 +99,147 @@ const catalog::SysColumnRow& ColumnAt(const Scope& scope, const ColumnRef& ref) 
     return s->relations[ref.rel_slot].access->schema.columns[ref.col_pos];
 }
 
+// ---- TY05: literal coercion is a compile-time act -----------------------
+//
+// `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to a
+// comparison whose right side is **already the scaled integer 1234**
+// (docs/spec-types.md §3.1). The string is parsed once, here, by the same
+// routines `EncodeOneValue` calls - one parser, two callers, zero drift -
+// so a literal that stores and a literal that compares can never come to
+// disagree about what it means.
+//
+// Two properties follow, and both are the point rather than side effects.
+// Per-row evaluation stays an **int64 comparison**, which keeps the
+// residual path on the cost profile the scan attribution work demands. And
+// a literal that does not parse is a **positioned compile error**, not a
+// row-by-row false: `WHERE d = '2026-02-30'` is a statement that cannot be
+// satisfied by any row, and answering it with zero rows would hide the
+// typo behind a plausible-looking empty result.
+Status CoerceLiteralTo(const catalog::SysColumnRow& col, parser::AstValue& val) {
+    // A parameter is never evaluated - a declared pattern's body is
+    // type-checked and fingerprinted, never run - and NULL matches nothing
+    // whatever its type. Neither has a value to coerce.
+    if (val.type == parser::ValueType::kParam || val.type == parser::ValueType::kNull) {
+        return Status::OK();
+    }
+
+    const std::string at = Position(val.byte_offset);
+
+    switch (col.type_val) {
+        case catalog::kTypeValDate: {
+            if (val.type == parser::ValueType::kInt) {
+                // Already an epoch day. Accepted, and range-checked to the
+                // same bounds the encoder applies - the two sides of the
+                // engine must agree on which integers are dates.
+                if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
+                    return Status::OutOfRange("date is outside the supported range" + at);
+                }
+                return Status::OK();
+            }
+            if (val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument("a date is written as a string, 'YYYY-MM-DD'" + at);
+            }
+            auto days = ParseDateLiteral(val.str_val);
+            if (!days.ok()) return days.status().WithContext("literal" + at);
+            val.type = parser::ValueType::kInt;
+            val.int_val = days.value();
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
+
+        case catalog::kTypeValTimestamp: {
+            if (val.type == parser::ValueType::kInt) {
+                if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
+                    return Status::OutOfRange("timestamp is outside the supported range" + at);
+                }
+                return Status::OK();
+            }
+            if (val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument(
+                    "a timestamp is written as a string, 'YYYY-MM-DD HH:MM:SS[.ffffff]'" + at);
+            }
+            auto micros = ParseTimestampLiteral(val.str_val);
+            if (!micros.ok()) return micros.status().WithContext("literal" + at);
+            val.type = parser::ValueType::kInt;
+            val.int_val = micros.value();
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
+
+        case catalog::kTypeValDecimal: {
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+
+            // An integer literal against a decimal column - `price = 12` -
+            // is exact and worth accepting, but scaling it here would be a
+            // second implementation of the range and precision rules
+            // `ParseDecimalLiteral` already owns, which is precisely the
+            // drift TY01's one-parser rule exists to prevent. So it is
+            // rendered and handed to that parser instead: one small string
+            // per predicate at *compile*, never per row.
+            const std::string text = val.type == parser::ValueType::kInt
+                                         ? std::to_string(val.int_val)
+                                         : val.str_val;
+            if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'" +
+                                                at);
+            }
+
+            auto unscaled = ParseDecimalLiteral(text, precision, scale);
+            if (!unscaled.ok()) return unscaled.status().WithContext("literal" + at);
+            val.type = parser::ValueType::kDecimal;
+            val.int_val = unscaled.value();
+            val.scale = scale;
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
+
+        default:
+            // Every other type keeps the behaviour it had before this task.
+            return Status::OK();
+    }
+}
+
+// The whole right-hand side of one lowered conjunct, coerced or refused.
+//
+// Called from **both** lowering sites - the SELECT chain's and the write
+// filter's - because a literal that means one thing in a WHERE and another
+// in an UPDATE's WHERE is exactly the drift this is here to stop.
+Status CoercePredicate(const Scope& scope, StepPredicate& pred) {
+    const catalog::SysColumnRow& lhs = ColumnAt(scope, pred.lhs);
+
+    if (pred.rhs.kind == OperandKind::kLiteral) {
+        Status s = CoerceLiteralTo(lhs, pred.rhs.literal);
+        if (!s.ok()) {
+            return s.WithContext("column '" + std::string(catalog::NameView(lhs.name)) + "'");
+        }
+        return Status::OK();
+    }
+
+    // Column against column. Only one thing is checked here, and it is the
+    // one the runtime cannot recover from: two DECIMALs of different scale
+    // compare unscaled integers that mean different things, so `1.50` would
+    // equal `1.500`'s stored 1500 only by accident of digits. Refused at
+    // compile rather than rescaled, because rescaling either drops digits
+    // or invents them - TY6 defers that decision whole, and a residual is
+    // the worst place to pre-empt it.
+    const catalog::SysColumnRow& rhs = ColumnAt(scope, pred.rhs.column);
+    if (lhs.type_val == catalog::kTypeValDecimal && rhs.type_val == catalog::kTypeValDecimal &&
+        catalog::DecimalScaleOf(lhs.len) != catalog::DecimalScaleOf(rhs.len)) {
+        return Status::Unsupported(
+            "cannot compare decimal columns of different scale: '" +
+            std::string(catalog::NameView(lhs.name)) + "' has scale " +
+            std::to_string(catalog::DecimalScaleOf(lhs.len)) + " and '" +
+            std::string(catalog::NameView(rhs.name)) + "' has scale " +
+            std::to_string(catalog::DecimalScaleOf(rhs.len)) +
+            "; this engine does not rescale");
+    }
+    return Status::OK();
+}
+
 // AG3's arithmetic constraints, stated as product facts rather than
 // discovered at execute time (spec §3.3).
 //
@@ -119,9 +262,22 @@ Status CheckAggregateArgType(const parser::SelectItem& item, std::uint32_t type_
             "; half its range does not fit the int64 accumulator, and a wrapped sum is wrong "
             "in a way no reader can detect");
     }
-    if (!catalog::IsIntegerTypeVal(type_val)) {
-        return Status::InvalidArgument("SUM requires a signed integer column (" + label + ")" +
-                                        Position(item.byte_offset));
+    // TY05 / spec-types.md §3.2. A `DECIMAL` sums: its unscaled int64 goes
+    // through the same checked adder, and the answer's scale is the
+    // column's, so nothing about the accumulator changes. A `DATE` or
+    // `TIMESTAMP` does not - both are integers underneath, so summing one
+    // would *work* and produce a number that is not a date, a time, or an
+    // interval. A sum of dates is a statement nobody meant, and this is
+    // the one chance to say so.
+    if (type_val == catalog::kTypeValDate || type_val == catalog::kTypeValTimestamp) {
+        return Status::InvalidArgument("SUM over a date or timestamp column is not a value (" +
+                                        label + ")" + Position(item.byte_offset) +
+                                        "; MIN and MAX over one are exact and are what this "
+                                        "engine offers");
+    }
+    if (type_val != catalog::kTypeValDecimal && !catalog::IsIntegerTypeVal(type_val)) {
+        return Status::InvalidArgument("SUM requires a signed integer or decimal column (" +
+                                        label + ")" + Position(item.byte_offset));
     }
     return Status::OK();
 }
@@ -167,7 +323,11 @@ StatusOr<AggregateSpec> CompileAggregate(const Scope& scope, const parser::Selec
         auto ref = ResolveColumn(scope, item.column);
         if (!ref.ok()) return ref.status();
         out.ref = ref.value();
-        out.type_val = ColumnAt(scope, out.ref).type_val;
+        const catalog::SysColumnRow& arg = ColumnAt(scope, out.ref);
+        out.type_val = arg.type_val;
+        if (arg.type_val == catalog::kTypeValDecimal) {
+            out.scale = catalog::DecimalScaleOf(arg.len);
+        }
 
         if (item.is_aggregate) {
             if (Status s = CheckAggregateArgType(item, out.type_val, AggregateLabel(item));
@@ -640,6 +800,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             low.op = parser::CompareOp::kGte;
             low.rhs.kind = OperandKind::kLiteral;
             low.rhs.literal = cond.val;
+            if (Status s = CoercePredicate(scope, low); !s.ok()) return s;
             out.residual.push_back(low);
 
             StepPredicate high;
@@ -647,6 +808,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             high.op = parser::CompareOp::kLte;
             high.rhs.kind = OperandKind::kLiteral;
             high.rhs.literal = cond.val_high;
+            if (Status s = CoercePredicate(scope, high); !s.ok()) return s;
             out.residual.push_back(high);
             continue;
         }
@@ -663,6 +825,7 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
             pred.rhs.kind = OperandKind::kLiteral;
             pred.rhs.literal = cond.val;
         }
+        if (Status s = CoercePredicate(scope, pred); !s.ok()) return s;
         out.residual.push_back(pred);
     }
     // **kAllColumns, deliberately.** UPDATE and DELETE walk the relation
@@ -766,6 +929,11 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         pred.op = parser::CompareOp::kEq;
         pred.rhs.kind = OperandKind::kColumn;
         pred.rhs.column = rhs.value();
+        // A join on two decimal columns is subject to the same scale rule
+        // as any other column-column comparison - joining `decimal(10,2)`
+        // to `decimal(10,3)` on unscaled integers would match rows that
+        // are not equal.
+        if (Status s = CoercePredicate(scope, pred); !s.ok()) return s;
         predicates.push_back(pred);
     }
 
@@ -829,6 +997,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             low.op = parser::CompareOp::kGte;
             low.rhs.kind = OperandKind::kLiteral;
             low.rhs.literal = cond.val;
+            if (Status s = CoercePredicate(scope, low); !s.ok()) return s;
             predicates.push_back(low);
 
             StepPredicate high;
@@ -836,6 +1005,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             high.op = parser::CompareOp::kLte;
             high.rhs.kind = OperandKind::kLiteral;
             high.rhs.literal = cond.val_high;
+            if (Status s = CoercePredicate(scope, high); !s.ok()) return s;
             predicates.push_back(high);
             continue;
         }
@@ -855,6 +1025,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             pred.rhs.kind = OperandKind::kLiteral;
             pred.rhs.literal = cond.val;
         }
+        if (Status s = CoercePredicate(scope, pred); !s.ok()) return s;
         predicates.push_back(pred);
     }
 

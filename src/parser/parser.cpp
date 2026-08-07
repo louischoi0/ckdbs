@@ -93,23 +93,38 @@ void Parser::ConsumeOptionalSemicolon() {
 StatusOr<AstValue> Parser::ParseValue() {
     Token tok = lexer_.Next();
 
+    // Every literal carries where it was written, not just `$param`.
+    // A literal is now something a *later* stage can reject - the step
+    // compiler coerces one against its column's type (spec-types.md §3.1),
+    // and `WHERE d = '2026-02-30'` fails there, long after the token is
+    // gone. Without the offset that failure can only say which column it
+    // was about; with it, it can point at the byte.
+    //
+    // Nothing downstream compares it: chain identity renders operand
+    // *values* (the aggregate contract suite's RenderOperand), Cabin keys
+    // are built from the value's kind and contents, and the fingerprint is
+    // folded from tokens. So this adds a fact to error messages and
+    // changes no plan, no `pattern_id`, and no comparison.
     switch (tok.type) {
         case TokenType::kIntLit: {
             AstValue v;
             v.type = ValueType::kInt;
             v.int_val = tok.int_val;
             v.raw_int_text = std::string(tok.text);  // full-range digits; see ast.hpp
+            v.byte_offset = tok.byte_offset;
             return v;
         }
         case TokenType::kStrLit: {
             AstValue v;
             v.type = ValueType::kStr;
             v.str_val = std::string(tok.text);
+            v.byte_offset = tok.byte_offset;
             return v;
         }
         case TokenType::kNullLit: {
             AstValue v;
             v.type = ValueType::kNull;
+            v.byte_offset = tok.byte_offset;
             return v;
         }
         case TokenType::kNamedParam: {

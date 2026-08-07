@@ -124,7 +124,7 @@ counter. It is `tests/alloc_counter.hpp` now, shared by both, with the
 aggregate suite's existing `EXPECT_LT(without, withd)` serving as the
 positive control that keeps the counter from silently measuring nothing.
 
-## TY05 — Comparison & compile-time coercion (needs TY04)
+## TY05 — Comparison & compile-time coercion (needs TY04) — **DONE**
 
 `CompareValues` dispatch for the three type_vals (int arm); the step
 compiler coerces string literals against typed columns via TY01's parsers
@@ -136,6 +136,53 @@ all three types against string literals; the compiled predicate's rhs is
 the scaled/epoch integer (asserted via plan or spec inspection, not
 inferred); mixed-scale refusal is pinned; a coercion failure names the
 byte of the literal.
+
+*Outcome.* `tests/types_predicate_test.cpp` inspects the **compiled
+chain**, not the rows that come back, because those are different
+assertions: a statement that returned the right rows while re-parsing its
+literal per row would pass an end-to-end test and fail this one, and §3.1
+is a claim about cost as much as about meaning.
+
+**One coercion helper, called from both lowering sites.** The SELECT
+chain and the write filter build predicates separately, so a literal
+meaning one thing in a `WHERE` and another in an `UPDATE`'s `WHERE` was a
+live possibility rather than a hypothetical. `BETWEEN` is two chances to
+forget in each of them, and the high bound is what a single-site fix
+misses — pinned.
+
+**An integer literal against a decimal column is scaled, through
+`ParseDecimalLiteral`.** `amt = 12` means 12.00 and is exact, but scaling
+it inline would be a second implementation of the precision and range
+rules that parser already owns — the drift TY01's one-parser rule exists
+to prevent. So the integer is rendered to text and handed to it: one
+small string per predicate at *compile*, never per row.
+
+**Column-column checks scale and nothing else.** Two `DECIMAL`s of
+differing scale compare unscaled integers that mean different things, so
+it is `Unsupported` at compile — including on a join's `ON`, which is the
+same comparison. Broader cross-type checking was left alone; it is not
+this task's, and no existing behaviour depended on it.
+
+*Two things this needed that the task description did not name.*
+`AstValue::byte_offset` was set for `$param` **only**, so "name the byte
+of the literal" was unbuildable until the parser filled it in for every
+literal — safe because nothing compares the field: chain identity renders
+operand *values* (the aggregate contract suite's `RenderOperand`), Cabin
+keys are built from kind and contents, and the fingerprint folds from
+tokens. `kFingerprintVersion` did not move and the golden corpus passes
+unchanged. And `AggregateItem` gained a `scale`, resolved at compile,
+because `SUM` over a `DECIMAL` folds unscaled integers and the fold sits
+outside the executor with no catalog to ask when it re-attaches the scale
+in `Finish`. The merge path (AG-M) needed nothing: both partitions carry
+the same item, so the same scale.
+
+*Unrelated finding, recorded because it bounds what a test may assume:* a
+fixture on `InMemoryPageStore` gets **two** relations. The third `CREATE
+TABLE` fails with "page id already in use" at any bootstrap page count,
+with tens of thousands of pages free, and reproduces with three plain
+`int64` tables. It does **not** reproduce on `DevicePageStore` — the same
+statements against the real server all succeed — so it is a limitation of
+the test store, not of the engine.
 
 ## TY06 — Rendering (needs TY04)
 

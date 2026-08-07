@@ -244,8 +244,15 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
                 // compile, so `int_val` *is* the value - no conversion, and
                 // no digit-text path, which is exactly why `uint64` is
                 // refused up there rather than approximated down here.
-                if (value.type != parser::ValueType::kInt) {
-                    return Status::InvalidArgument("SUM read a non-integer value in " +
+                //
+                // A `DECIMAL` joins on the same terms and needs no arm of
+                // its own: its `int_val` is the unscaled integer, every row
+                // of one column carries the same scale, and so the sum of
+                // the unscaled values is the unscaled sum (spec-types.md
+                // §3.2). The scale is re-attached once, in `Finish`.
+                if (value.type != parser::ValueType::kInt &&
+                    value.type != parser::ValueType::kDecimal) {
+                    return Status::InvalidArgument("SUM read a non-numeric value in " +
                                                     LabelOf(i));
                 }
                 // Checked, always. A wrapped sum is the one output this
@@ -356,7 +363,16 @@ Status Aggregator::Finish(const AggregateSink& emit) {
 
                 case parser::AggFunc::kSum:
                     if (!state.has_value) break;  // stays kNull
-                    out.type = parser::ValueType::kInt;
+                    // The scale is re-attached here and nowhere else: the
+                    // accumulator holds unscaled integers throughout, so
+                    // this is the one point where the answer stops being a
+                    // running total and becomes a decimal again.
+                    if (item.type_val == catalog::kTypeValDecimal) {
+                        out.type = parser::ValueType::kDecimal;
+                        out.scale = item.scale;
+                    } else {
+                        out.type = parser::ValueType::kInt;
+                    }
                     out.int_val = state.sum;
                     break;
 

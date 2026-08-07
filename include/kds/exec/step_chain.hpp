@@ -431,6 +431,13 @@ struct AggregateItem {
     // and so a `uint64` above `INT64_MAX` compares through its digit text
     // rather than through a signed reading that cannot hold it.
     std::uint32_t type_val = 0;
+
+    // A `DECIMAL` column's scale, resolved at compile for the same reason
+    // `type_val` is (spec-types.md §3.2). `SUM` folds unscaled int64 and
+    // the answer's scale is the column's, so `Finish` needs the number and
+    // must not have to ask the catalog for it - the fold sits outside the
+    // executor and has no catalog to ask. Zero for every other type.
+    std::uint8_t scale = 0;
 };
 
 struct AggregateSpec {

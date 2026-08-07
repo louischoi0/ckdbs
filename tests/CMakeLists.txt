@@ -33,6 +33,7 @@ add_executable(kds_tests
     sim_ring_transport_test.cpp
     send_retry_test.cpp
     row_codec_test.cpp
+    types_predicate_test.cpp
     row_layout_test.cpp
     tagged_cell_test.cpp
     analyze_test.cpp
