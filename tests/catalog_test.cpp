@@ -227,32 +227,206 @@ TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
     EXPECT_EQ(NameView(after.value().name), "movable");
 }
 
+// ---- Secondary indexes (docs/feat-index.md §12, workplan IX03) ----------
+
+// Three columns, so an index can be declared on something that is neither
+// the primary key nor the only other column.
+Schema IndexableSchema() {
+    Schema schema = MinimalPkSchema();
+    for (const char* name : {"owner", "amount"}) {
+        SysColumnRow col{};
+        col.pos = static_cast<std::uint32_t>(schema.columns.size());
+        SetName(col.name, name);
+        col.type_val = kTypeValInt64;
+        col.len = 8;
+        schema.columns.push_back(col);
+    }
+    return schema;
+}
+
+Catalog::IndexDef SimpleIndex(Oid table_oid, std::string name, std::uint16_t col) {
+    Catalog::IndexDef def;
+    def.table_oid = table_oid;
+    def.name = std::move(name);
+    def.root_page_id = 1000;
+    def.key_width = 9;
+    def.entry_width = 17;
+    def.key_cols = {col};
+    return def;
+}
+
 TEST_F(CatalogTest, IndexRowsRoundTripAndFilterByTable) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
-    Oid table_a = catalog_.GenerateUserOid();
-    Oid table_b = catalog_.GenerateUserOid();
+    auto table_a = catalog_.CreateTable(kNamespacePublic, "a", IndexableSchema(),
+                                        ClusteredType::kBtree);
+    ASSERT_TRUE(table_a.ok()) << table_a.status().message();
+    auto table_b = catalog_.CreateTable(kNamespacePublic, "b", IndexableSchema(),
+                                        ClusteredType::kBtree);
+    ASSERT_TRUE(table_b.ok());
 
-    ASSERT_TRUE(catalog_.InsertIndexRow(catalog_.GenerateUserOid(), table_a, 0, 5,
-                                        kIndexFlagUnique)
-                    .ok());
-    ASSERT_TRUE(catalog_.InsertIndexRow(catalog_.GenerateUserOid(), table_a, 1, 9, 0).ok());
-    ASSERT_TRUE(catalog_.InsertIndexRow(catalog_.GenerateUserOid(), table_b, 0, 5,
-                                        kIndexFlagUnique)
-                    .ok());
+    auto by_owner = catalog_.CreateIndex(SimpleIndex(table_a.value(), "a_owner", 1));
+    ASSERT_TRUE(by_owner.ok()) << by_owner.status().message();
+    ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table_a.value(), "a_amount", 2)).ok());
+    ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table_b.value(), "b_owner", 1)).ok());
 
-    auto for_a = catalog_.FindIndexesForTable(table_a);
+    auto for_a = catalog_.FindIndexesForTable(table_a.value());
     ASSERT_TRUE(for_a.ok());
     EXPECT_EQ(for_a.value().size(), 2u);
 
-    auto on_col0 = catalog_.FindIndexOnColumn(table_a, 0);
-    ASSERT_TRUE(on_col0.ok());
-    EXPECT_EQ(on_col0.value().col_type, 5u);
-    EXPECT_EQ(on_col0.value().flags, kIndexFlagUnique);
+    auto by_name = catalog_.FindIndexByName("a_owner");
+    ASSERT_TRUE(by_name.ok());
+    EXPECT_EQ(by_name.value().index_oid, by_owner.value());
+    EXPECT_EQ(by_name.value().table_oid, table_a.value());
+    EXPECT_EQ(by_name.value().nkeys, 1u);
+    EXPECT_EQ(by_name.value().key_cols[0], 1u);
 
-    auto missing = catalog_.FindIndexOnColumn(table_a, 2);
+    auto on_col1 = catalog_.FindIndexOnColumn(table_a.value(), 1);
+    ASSERT_TRUE(on_col1.ok());
+    EXPECT_EQ(NameView(on_col1.value().name), "a_owner");
+
+    auto missing = catalog_.FindIndexOnColumn(table_a.value(), 99);
     EXPECT_FALSE(missing.ok());
     EXPECT_EQ(missing.status().code(), StatusCode::kNotFound);
+}
+
+// "Leading", not "contains". An index on (a, b) can serve an equality on a
+// and cannot serve one on b, so answering yes for b would stop the compiler
+// calling that step a filter scan while leaving it exactly as slow.
+TEST_F(CatalogTest, FindIndexOnColumnAnswersForTheLeadingKeyColumnOnly) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    Catalog::IndexDef def = SimpleIndex(table.value(), "composite", 1);
+    def.key_cols = {1, 2};
+    ASSERT_TRUE(catalog_.CreateIndex(def).ok());
+
+    EXPECT_TRUE(catalog_.FindIndexOnColumn(table.value(), 1).ok());
+    EXPECT_FALSE(catalog_.FindIndexOnColumn(table.value(), 2).ok());
+}
+
+TEST_F(CatalogTest, AHeapClusteredRelationTakesNoIndex) {
+    // Spec IX3: an entry resolves through the primary key, which a heap
+    // relation has no index for - so every probe would be a chain scan.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "h", IndexableSchema(),
+                                      ClusteredType::kHeap);
+    ASSERT_TRUE(table.ok());
+
+    auto created = catalog_.CreateIndex(SimpleIndex(table.value(), "h_owner", 1));
+    EXPECT_FALSE(created.ok());
+    EXPECT_NE(created.status().message().find("heap-clustered"), std::string::npos);
+}
+
+TEST_F(CatalogTest, CreateIndexRefusesRatherThanTruncatingOrGuessing) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    // The primary key: the clustered tree already indexes it.
+    EXPECT_FALSE(catalog_.CreateIndex(SimpleIndex(table.value(), "on_pk", 0)).ok());
+
+    // A column the relation does not have.
+    EXPECT_FALSE(catalog_.CreateIndex(SimpleIndex(table.value(), "off_end", 7)).ok());
+
+    // An empty key.
+    Catalog::IndexDef empty = SimpleIndex(table.value(), "empty", 1);
+    empty.key_cols.clear();
+    EXPECT_FALSE(catalog_.CreateIndex(empty).ok());
+
+    // The same column twice - two encodings of one value, ordered against
+    // itself.
+    Catalog::IndexDef repeated = SimpleIndex(table.value(), "repeated", 1);
+    repeated.key_cols = {1, 1};
+    EXPECT_FALSE(catalog_.CreateIndex(repeated).ok());
+
+    // Over the cap. A cap refuses and never truncates (spec §11): a
+    // truncated index declared complete is a wrong answer with a right
+    // answer's shape.
+    Catalog::IndexDef too_wide = SimpleIndex(table.value(), "too_wide", 1);
+    too_wide.key_cols.assign(kMaxIndexKeyColumns + 1, 1);
+    EXPECT_FALSE(catalog_.CreateIndex(too_wide).ok());
+    Catalog::IndexDef too_covered = SimpleIndex(table.value(), "too_covered", 1);
+    too_covered.covered_cols.assign(kMaxIndexCoveredColumns + 1, 2);
+    EXPECT_FALSE(catalog_.CreateIndex(too_covered).ok());
+
+    // UNIQUE (spec IX11): v1 is a read accelerator that cannot fail a write
+    // for a reason of its own.
+    Catalog::IndexDef unique = SimpleIndex(table.value(), "unique", 1);
+    unique.flags = kIndexFlagUnique;
+    auto refused = catalog_.CreateIndex(unique);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kUnsupported);
+
+    // A name already in use.
+    ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table.value(), "taken", 1)).ok());
+    auto again = catalog_.CreateIndex(SimpleIndex(table.value(), "taken", 2));
+    EXPECT_FALSE(again.ok());
+    EXPECT_EQ(again.status().code(), StatusCode::kAlreadyExists);
+}
+
+TEST_F(CatalogTest, ADroppedIndexIsRetiredSoTheNameIsFreeAgain) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
+    ASSERT_TRUE(oid.ok());
+    ASSERT_TRUE(catalog_.DropIndex(oid.value()).ok());
+
+    EXPECT_FALSE(catalog_.FindIndexByName("ix").ok());
+    EXPECT_TRUE(catalog_.FindIndexesForTable(table.value()).value().empty());
+
+    // Retired rather than delete-marked, so a re-creation does not collide
+    // with a row nobody can see (DropCabin's argument).
+    EXPECT_TRUE(catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1)).ok());
+
+    EXPECT_EQ(catalog_.DropIndex(999999).code(), StatusCode::kNotFound);
+}
+
+TEST_F(CatalogTest, AnIndexRootMovesThroughTheCatalogAndBumpsTheVersion) {
+    // A root split reports a new root and someone above the storage layer
+    // records it - the counterpart of UpdateRelationDescPage.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+    auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
+    ASSERT_TRUE(oid.ok());
+
+    const std::uint64_t before = catalog_.catalog_version();
+    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value(), 4242).ok());
+    EXPECT_GT(catalog_.catalog_version(), before);
+
+    auto row = catalog_.FindIndexByName("ix");
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().root_page_id, 4242u);
+    EXPECT_EQ(row.value().key_cols[0], 1u);  // the rest of the row survived
+
+    EXPECT_EQ(catalog_.UpdateIndexRoot(999999, 1).code(), StatusCode::kNotFound);
+}
+
+// Where InsertIndexRow() deliberately did not bump: that comment was true
+// while nothing cached anything derived from sys.indexes, and IX04 makes it
+// false.
+TEST_F(CatalogTest, CreatingAndDroppingAnIndexBumpsTheCatalogVersion) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto table = catalog_.CreateTable(kNamespacePublic, "t", IndexableSchema(),
+                                      ClusteredType::kBtree);
+    ASSERT_TRUE(table.ok());
+
+    const std::uint64_t before_create = catalog_.catalog_version();
+    auto oid = catalog_.CreateIndex(SimpleIndex(table.value(), "ix", 1));
+    ASSERT_TRUE(oid.ok());
+    const std::uint64_t after_create = catalog_.catalog_version();
+    EXPECT_GT(after_create, before_create);
+
+    ASSERT_TRUE(catalog_.DropIndex(oid.value()).ok());
+    EXPECT_GT(catalog_.catalog_version(), after_create);
 }
 
 // The version counter parser.md I5 / PR20 stamp bound statements with. Its

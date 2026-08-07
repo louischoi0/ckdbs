@@ -458,24 +458,49 @@ Also refused, each naming the reason:
 > **IX12 — `SysIndexRow` grows, so the superblock format version goes
 > `11 → 12` and every pre-existing data file stops mounting.**
 
-The current row is `{index_oid, table_oid, col_pos, col_type, flags}` — one
-column, no root page, no name — and nothing writes it. A catalog row format
-change without a version bump gives a file that mounts and then fails
-opaquely on its first catalog read, which `CLAUDE.md` already records from
-the var-heap's V4 → V5 break. So the bump is mandatory, not a judgement call.
+The old row was `{index_oid, table_oid, col_pos, col_type, flags}` — one
+column, no root page, no name — and nothing ever wrote it.
 
-New row:
+**The reason for the bump is not the reason the four before it had**, and
+building IX03 is what made the difference visible. Those protected an
+existing file from a build that would misparse it. This one cannot: with no
+pre-existing sys.indexes row anywhere, a version-11 file would in fact mount
+and run correctly. What the bump protects is the **other direction** — an
+older binary opening a *newer* file, which finds rows whose size its `Decode`
+rejects and fails on every SELECT compile, because `HasUnindexedEqualityFilter`
+asks sys.indexes per statement. Turning that into a refusal naming both
+version numbers is what a version is for.
+
+The price is unchanged by any of that: every pre-existing data file stops
+mounting.
+
+New row (116 bytes, `include/kds/catalog/rows.hpp`):
 
 ```
-index_oid, table_oid, root_page_id, name[kCatalogNameMax],
-nkeys, ncovered,
-key_cols[kMaxIndexKeyColumns], covered_cols[kMaxIndexCoveredColumns],
-key_width, entry_width, flags
+index_oid, table_oid, root_page_id, key_width, entry_width,
+name[kCatalogNameMax], nkeys, ncovered, flags, reserved0,
+key_cols[kMaxIndexKeyColumns], covered_cols[kMaxIndexCoveredColumns]
 ```
 
 `kMaxIndexKeyColumns = 4` and `kMaxIndexCoveredColumns = 8` `[PROPOSED]`,
 chosen to keep the row inside one catalog slot; both are refusals, never
-truncations (§11).
+truncations (§11). The column arrays are in **declared index order**, which
+is the order §5 concatenates them in — part of the format, not a
+presentation detail. `Decode` refuses a count past its array, so one corrupt
+byte cannot make every later reader index out of bounds.
+
+`Catalog::FindIndexOnColumn` answers for an index's **leading** key column
+only. Not "contains": an index on `(a, b)` can serve an equality on `a` and
+cannot serve one on `b`, so answering yes for `b` would stop the compiler
+calling that step a filter scan while leaving it exactly as slow — a lie to
+the access statistics, which is that function's only consumer today.
+
+`Catalog::UpdateIndexRoot` is how a root split is recorded, the counterpart
+of `UpdateRelationDescPage` and for the same reason: the storage layer has no
+catalog, so it reports a new root and something above it writes one down.
+`DropIndex` **retires** the row rather than delete-marking it (a catalog read
+has no snapshot to filter a mark against) and **frees no page**, so a dropped
+index leaks its tree until page reclamation exists.
 
 `TableAccess` gains `index_mask` plus a `std::vector<IndexRef>`, built at
 `InitTableAccess()` on the same pattern as `cabin_mask` / `cabin_ids` — the

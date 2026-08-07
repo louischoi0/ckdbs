@@ -101,7 +101,24 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // fail to find the relation that records the constraint, and - once FK-M2
 // lands - every write path would read an empty foreign-key list and enforce
 // nothing. A constraint that silently does not run is not a degraded mode.
-inline constexpr std::uint32_t kSuperBlockVersion = 11;
+// 11 -> 12: `SysIndexRow` was rewritten for multi-column and covering
+// indexes (docs/feat-index.md §12, workplan IX03) - a root page, a name, and
+// two column arrays where there had been one `col_pos`.
+//
+// **The reason here is not the reason the four bumps above had, and the
+// difference is worth stating so the next one is argued rather than copied.**
+// Those protected an existing file from a build that would misparse it. This
+// one cannot: nothing ever wrote a sys.indexes row, so no pre-existing file
+// has one to misparse, and a version-11 file would in fact mount and run
+// correctly. What the bump protects is the **other direction** - an older
+// binary opening a *newer* file. It would find rows whose size its `Decode`
+// rejects and fail on every SELECT compile (`HasUnindexedEqualityFilter`
+// asks sys.indexes per statement), which is the opaque failure a version
+// exists to turn into a refusal that names both numbers.
+//
+// The price is the usual one and is not reduced by any of that: every
+// pre-existing data file stops mounting.
+inline constexpr std::uint32_t kSuperBlockVersion = 12;
 
 // ---- On-disk field layout ----------------------------------------------
 

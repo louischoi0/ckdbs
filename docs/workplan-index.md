@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01 and IX02 are built** (IX-M1);
-nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX03 are built** (IX-M1, and
+the catalog row of IX-M2); nothing else is.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,12 +13,26 @@ note.
 
 ## Where to pick this up
 
-**At `IX03`. IX01 and IX02 are built** (2026-08-07); the whole suite is green
-at 1,611 tests. Nothing above the storage layer knows they exist yet — no
-catalog row, no grammar, no maintenance, no access kind — which is exactly
-what IX-M1 was scoped to.
+**At `IX04`. IX01, IX02 and IX03 are built** (2026-08-07); the whole suite is
+green at 1,621 tests. An index can now be declared in the catalog and a tree
+can be built by hand — but no grammar reaches either, nothing maintains one,
+and no statement can use one.
 
 What building them added to the design, each folded back into the spec:
+
+- **The superblock bump 11 → 12 is justified, but not by the reason the spec
+  gave.** The four bumps before it protected an existing file from a build
+  that would misparse it; this one cannot, because nothing ever wrote a
+  sys.indexes row, so a version-11 file would mount and run correctly. What
+  it protects is an **older binary opening a newer file** — which finds rows
+  its `Decode` rejects and fails on every SELECT compile, since
+  `HasUnindexedEqualityFilter` asks sys.indexes per statement. The action did
+  not change; the argument did, and the next bump should be argued rather
+  than copied.
+- **`FindIndexOnColumn` answers for the *leading* key column only.** "Contains"
+  would stop the compiler calling a step a filter scan while leaving it
+  exactly as slow — a lie to the access statistics, which is the function's
+  only consumer today.
 
 - **The tree routes on `(key, pk)`, and a probe is zero-padded rather than
   shortened** (spec IX4b). A separator carrying only the key compares *equal*
@@ -131,14 +145,26 @@ descent - each `Corruption` rather than a reinterpretation.
 Ends with `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES` declaring an index
 that no statement uses and no write maintains.
 
-### IX03 — `SysIndexRow` and the format bump
+### IX03 — `SysIndexRow` and the format bump — **built**
 
-Rewrite the row per spec §12. `kSuperBlockVersion` 11 → 12, with the
-mount-time check naming both values. **Every pre-existing data file stops
-mounting** — the fifth such break; say so in the commit message.
+The row rewritten per spec §12 (116 bytes, both column arrays packed at their
+declared stride, a count past its array refused as `Corruption`).
+`kSuperBlockVersion` 11 → 12, with the mount-time check naming both values -
+**every pre-existing data file stops mounting**, the fifth such break, and the
+one whose *reason* differs from its predecessors (see above).
 
-`Catalog::CreateIndex` / `DropIndex` / `FindIndexesForTable`, both mutators
-through `BumpVersion()`, and the "no version bump" comment corrected.
+`Catalog::CreateIndex` / `DropIndex` / `UpdateIndexRoot` / `ListIndexes` /
+`FindIndexesForTable` / `FindIndexByName` / `FindIndexOnColumn`. All three
+mutators go through `BumpVersion()`, and `InsertIndexRow` - whose comment
+said "no version bump: nothing cached is derived from sys.indexes" - is gone,
+since IX04 makes that false.
+
+`CreateIndex` refuses, each naming the reason: a heap-clustered relation
+(IX3), the primary key, a column the relation has not got, a repeated column,
+an empty key, an over-cap key or covered list, `UNIQUE` (IX11), and a name
+already in use. It does **not** build the tree or check key column types -
+the root page is allocated and formatted by its caller, which keeps
+`catalog/` free of the index page format.
 
 ### IX04 — `TableAccess::index_mask` and `IndexRef`
 

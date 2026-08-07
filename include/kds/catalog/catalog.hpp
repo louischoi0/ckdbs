@@ -485,10 +485,68 @@ public:
                               PageId varheap_page_id,
                               std::uint32_t owner_core = kSystemCore);
 
-    Status InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_pos,
-                           std::uint32_t col_type, std::uint8_t flags);
+    // ---- Secondary indexes (docs/feat-index.md §12) --------------------
+
+    // What CREATE INDEX has settled by the time it reaches the catalog.
+    // The widths are computed by the caller from the key columns
+    // (exec::IndexKeyWidth) rather than here, because deriving them needs
+    // the key encoding and `catalog/` sits below `exec/`.
+    struct IndexDef {
+        Oid table_oid = 0;
+        std::string name;
+        PageId root_page_id = kInvalidPageId;
+        std::uint16_t key_width = 0;
+        std::uint16_t entry_width = 0;
+        std::vector<std::uint16_t> key_cols;      // declared order; part of the format
+        std::vector<std::uint16_t> covered_cols;  // declared order
+        std::uint8_t flags = 0;
+    };
+
+    // Writes the sys.indexes row and returns its `index_oid`.
+    //
+    // Refuses, each naming the reason: a name already in use, an empty or
+    // over-cap column list (a cap **refuses**, never truncates - spec §11),
+    // a duplicate or out-of-range column position, an index on the primary
+    // key (the clustered tree already is one), a heap-clustered relation
+    // (spec IX3 - there is no pk descent to resolve an entry through), and
+    // `kIndexFlagUnique` (spec IX11).
+    //
+    // It does **not** build the tree or check the key columns' types: the
+    // root page is allocated and formatted by the caller, which is what
+    // keeps the catalog free of the index page format.
+    StatusOr<Oid> CreateIndex(const IndexDef& def);
+
+    // Retires the row. Retired rather than delete-marked, for DropCabin()'s
+    // reason: a catalog read has no snapshot to filter a mark against, so a
+    // marked row would still be found by every lookup.
+    //
+    // The index's **pages are not freed** - nothing frees a page in this
+    // engine yet - so a dropped index leaks its tree until page reclamation
+    // exists, exactly as a dropped Cabin's memory and a superseded var-heap
+    // value do.
+    Status DropIndex(Oid index_oid);
+
+    StatusOr<std::vector<SysIndexRow>> ListIndexes();
     StatusOr<std::vector<SysIndexRow>> FindIndexesForTable(Oid table_oid);
+    StatusOr<SysIndexRow> FindIndexByName(std::string_view name);
+
+    // An index whose **leading** key column is `col_pos`.
+    //
+    // Leading, not "contains", and the distinction is load-bearing: an index
+    // on `(a, b)` can serve an equality on `a` and cannot serve one on `b`,
+    // so answering yes for `b` would stop the compiler calling that step a
+    // filter scan while leaving it exactly as slow - a lie to the access
+    // statistics, which is the one consumer that exists today.
+    //
+    // NotFound is the ordinary answer and is never cached
+    // (catalog_cache.hpp's absence rule).
     StatusOr<SysIndexRow> FindIndexOnColumn(Oid table_oid, std::uint32_t col_pos);
+
+    // Republishes an index's root after a split grew the tree a level.
+    // The counterpart of UpdateRelationDescPage(), and it exists for the
+    // same reason: the storage layer has no catalog, so it reports a new
+    // root and someone above it records one.
+    Status UpdateIndexRoot(Oid index_oid, PageId new_root);
 
     const SysObjectRegistry& sys_objects() const noexcept { return sys_objects_; }
 

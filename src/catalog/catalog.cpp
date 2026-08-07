@@ -576,19 +576,6 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
     return s;
 }
 
-// No version bump: nothing cached is derived from sys.indexes (see
-// catalog_cache.hpp - index rows have no production reader yet).
-Status Catalog::InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_pos,
-                                std::uint32_t col_type, std::uint8_t flags) {
-    SysIndexRow row{};
-    row.index_oid = index_oid;
-    row.table_oid = table_oid;
-    row.col_pos = col_pos;
-    row.col_type = col_type;
-    row.flags = flags;
-    return InsertRow(store_, kCatalogPageIndexes, row, kBootstrapXid);
-}
-
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                     ClusteredType clustered_type) {
     // Refused at definition time rather than at the first INSERT: a table
@@ -1461,23 +1448,191 @@ StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
     return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats);
 }
 
+StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
+    if (def.key_cols.empty()) {
+        return Status::InvalidArgument("catalog: an index needs at least one key column");
+    }
+    // A cap **refuses** and never truncates (spec §11): a truncated index
+    // declared complete is a wrong answer with a right answer's shape. That
+    // is the opposite of a Cabin cap, which may decline because a Cabin is
+    // only ever a shortcut.
+    if (def.key_cols.size() > kMaxIndexKeyColumns) {
+        return Status::InvalidArgument("catalog: an index takes at most " +
+                                        std::to_string(kMaxIndexKeyColumns) +
+                                        " key columns, this one declares " +
+                                        std::to_string(def.key_cols.size()));
+    }
+    if (def.covered_cols.size() > kMaxIndexCoveredColumns) {
+        return Status::InvalidArgument("catalog: an index covers at most " +
+                                        std::to_string(kMaxIndexCoveredColumns) +
+                                        " columns, this one declares " +
+                                        std::to_string(def.covered_cols.size()));
+    }
+    if ((def.flags & kIndexFlagUnique) != 0) {
+        return Status::Unsupported(
+            "catalog: UNIQUE indexes are not supported (docs/feat-index.md IX11); v1 is a read "
+            "accelerator that cannot fail a write for a reason of its own");
+    }
+
+    auto access = InitTableAccess(def.table_oid);
+    if (!access.ok()) return access.status();
+    const Schema& schema = access.value()->schema;
+
+    // A heap relation has no pk index, so resolving an entry's pk would be a
+    // chain scan and an index over it would turn one full scan into N
+    // partial ones. The same rule and the same argument as
+    // impl-foreign-keys.md F1's refusal of a heap parent.
+    if (access.value()->clustered_type != ClusteredType::kBtree) {
+        return Status::InvalidArgument(
+            "catalog: relation oid " + std::to_string(def.table_oid) +
+            " is heap-clustered; a secondary index resolves an entry through the primary key, "
+            "which a heap relation has no index for (docs/feat-index.md IX3)");
+    }
+
+    const auto check_column = [&](std::uint16_t pos, const char* role) -> Status {
+        if (pos >= schema.columns.size()) {
+            return Status::InvalidArgument("catalog: " + std::string(role) + " column position " +
+                                            std::to_string(pos) + " is past the relation's " +
+                                            std::to_string(schema.columns.size()) + " columns");
+        }
+        return Status::OK();
+    };
+    for (std::size_t i = 0; i < def.key_cols.size(); ++i) {
+        if (Status s = check_column(def.key_cols[i], "key"); !s.ok()) return s;
+        // The pk is carried only by the Keystone word and the clustered tree
+        // already indexes it; a second copy would be maintained forever to
+        // answer questions the descent answers faster.
+        if (def.key_cols[i] == 0) {
+            return Status::InvalidArgument(
+                "catalog: the primary key already has an index - the clustered tree is it");
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (def.key_cols[j] == def.key_cols[i]) {
+                return Status::InvalidArgument("catalog: column " +
+                                                std::to_string(def.key_cols[i]) +
+                                                " appears twice in the index key");
+            }
+        }
+    }
+    for (std::uint16_t pos : def.covered_cols) {
+        if (Status s = check_column(pos, "covered"); !s.ok()) return s;
+    }
+
+    if (FindIndexByName(def.name).ok()) {
+        return Status::AlreadyExists("catalog: an index named '" + def.name + "' already exists");
+    }
+
+    auto index_oid = AllocateRowId(kSysIndexesTable);
+    if (!index_oid.ok()) return index_oid.status();
+
+    SysIndexRow row{};
+    row.index_oid = index_oid.value();
+    row.table_oid = def.table_oid;
+    row.root_page_id = def.root_page_id;
+    row.key_width = def.key_width;
+    row.entry_width = def.entry_width;
+    SetName(row.name, def.name);
+    row.nkeys = static_cast<std::uint8_t>(def.key_cols.size());
+    row.ncovered = static_cast<std::uint8_t>(def.covered_cols.size());
+    row.flags = def.flags;
+    row.reserved0 = 0;
+    for (std::size_t i = 0; i < def.key_cols.size(); ++i) row.key_cols[i] = def.key_cols[i];
+    for (std::size_t i = 0; i < def.covered_cols.size(); ++i) {
+        row.covered_cols[i] = def.covered_cols[i];
+    }
+
+    if (Status s = InsertRow(store_, kCatalogPageIndexes, row, kBootstrapXid); !s.ok()) return s;
+
+    // **Bumped**, where InsertIndexRow() deliberately did not. That comment
+    // was true while nothing cached anything derived from sys.indexes; an
+    // index appearing now stales `TableAccess::index_mask` on every held
+    // entry for this relation (IX04), which is a fact the compiler reads.
+    BumpVersion("sys.indexes create");
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("catalog", "created index " + def.name + " (oid " +
+                                  std::to_string(row.index_oid) + ") on relation oid " +
+                                  std::to_string(def.table_oid));
+    }
+    return row.index_oid;
+}
+
+Status Catalog::DropIndex(Oid index_oid) {
+    auto acted = ForFirstRow<SysIndexRow>(
+        store_, kCatalogPageIndexes,
+        [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple&) -> StatusOr<bool> {
+            if (row.index_oid != index_oid) return false;
+
+            // Retired, not delete-marked - DropCabin() and RetirePattern()
+            // state the argument, and it is the same one here.
+            if (Status s = page.RetireSlot(i); !s.ok()) return s;
+
+            BumpVersion("sys.indexes drop");
+            if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+                log_->Info("catalog", "dropped index oid " + std::to_string(index_oid));
+            }
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+    return Status::OK();
+}
+
+Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root) {
+    auto acted = ForFirstRow<SysIndexRow>(
+        store_, kCatalogPageIndexes,
+        [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.index_oid != index_oid) return false;
+            row.root_page_id = new_root;
+            const auto encoded = row.Encode();
+            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            // A root move stales `TableAccess::index_mask`'s cached root, and
+            // reading a stale one descends into a page that is no longer the
+            // top of the tree - a wrong answer, not a slow one.
+            BumpVersion("sys.indexes root");
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+    return Status::OK();
+}
+
+StatusOr<std::vector<SysIndexRow>> Catalog::ListIndexes() {
+    return ScanAll<SysIndexRow>(store_, kCatalogPageIndexes);
+}
+
 StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {
-    auto rows = ScanAll<SysIndexRow>(store_, kCatalogPageIndexes);
+    auto rows = ListIndexes();
     if (!rows.ok()) return rows.status();
 
     std::vector<SysIndexRow> out;
-    for (const auto& row : rows.value()) {
+    for (const SysIndexRow& row : rows.value()) {
         if (row.table_oid == table_oid) out.push_back(row);
     }
     return out;
 }
 
+StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name) {
+    auto rows = ListIndexes();
+    if (!rows.ok()) return rows.status();
+    for (const SysIndexRow& row : rows.value()) {
+        if (NameView(row.name) == name) return row;
+    }
+    return Status::NotFound("no index by that name");
+}
+
 StatusOr<SysIndexRow> Catalog::FindIndexOnColumn(Oid table_oid, std::uint32_t col_pos) {
-    auto rows = ScanAll<SysIndexRow>(store_, kCatalogPageIndexes);
+    auto rows = ListIndexes();
     if (!rows.ok()) return rows.status();
 
-    for (const auto& row : rows.value()) {
-        if (row.table_oid == table_oid && row.col_pos == col_pos) return row;
+    for (const SysIndexRow& row : rows.value()) {
+        // `key_cols[0]` only - see the header for why "contains" would be
+        // the wrong question.
+        if (row.table_oid == table_oid && row.key_cols[0] == col_pos) return row;
     }
     return Status::NotFound("no index on this column");
 }
