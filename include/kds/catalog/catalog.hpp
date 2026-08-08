@@ -516,6 +516,16 @@ public:
     // keeps the catalog free of the index page format.
     StatusOr<Oid> CreateIndex(const IndexDef& def);
 
+    // Every refusal `CreateIndex` makes, without writing anything.
+    //
+    // `CreateIndex` is this plus the write, so there is still exactly one
+    // implementation of each refusal. It is public because the DDL layer
+    // **backfills before it publishes** (docs/feat-index.md §10a) - and a
+    // declaration that could never work should be refused by name before it
+    // walks a relation, not after, and certainly not as a page-type error
+    // from inside the build.
+    Status CheckIndexDef(const IndexDef& def);
+
     // Retires the row. Retired rather than delete-marked, for DropCabin()'s
     // reason: a catalog read has no snapshot to filter a mark against, so a
     // marked row would still be found by every lookup.

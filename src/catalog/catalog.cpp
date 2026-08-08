@@ -1487,7 +1487,7 @@ StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
     return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats);
 }
 
-StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
+Status Catalog::CheckIndexDef(const IndexDef& def) {
     if (def.key_cols.empty()) {
         return Status::InvalidArgument("catalog: an index needs at least one key column");
     }
@@ -1560,6 +1560,14 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
     if (FindIndexByName(def.name).ok()) {
         return Status::AlreadyExists("catalog: an index named '" + def.name + "' already exists");
     }
+    return Status::OK();
+}
+
+StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
+    // Re-checked here even when the caller already asked: this is the door
+    // every non-DDL caller comes through, and a check that only runs when
+    // someone remembers to ask is not a check.
+    if (Status s = CheckIndexDef(def); !s.ok()) return s;
 
     auto index_oid = AllocateRowId(kSysIndexesTable);
     if (!index_oid.ok()) return index_oid.status();

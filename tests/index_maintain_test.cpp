@@ -8,6 +8,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/txn/manager.hpp"
 
 // The secondary-index write hook (docs/feat-index.md §2, workplan IX06).
 //
@@ -32,12 +33,22 @@ protected:
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
+
+        // A real transaction manager, because without one no undo record is
+        // written and the backfill's version walk would have nothing to
+        // find - it would pass by describing an engine that keeps no
+        // history. The unlogged path is fine; what is under test is the
+        // version chain, not what reaches the platter.
+        ids_.emplace(boot_->superblock);
+        undo_.emplace(store_, /*wal=*/nullptr);
+        mgr_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr);
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                            /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
+                            exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            /*access_statistics=*/false, /*cabins=*/nullptr, &*mgr_);
     }
 
-    std::string Run(const std::string& sql) {
-        server::CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
-        return d.Dispatch(sql).response;
-    }
+    std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
 
     void Ok(const std::string& sql) {
         const std::string out = Run(sql);
@@ -58,6 +69,10 @@ protected:
 
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
     std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<txn::TrxIdSequence> ids_;
+    std::optional<txn::UndoLog> undo_;
+    std::optional<txn::TransactionManager> mgr_;
+    std::optional<server::CommandDispatcher> dispatcher_;
 };
 
 // ---- The rule the feature stands on -------------------------------------
@@ -210,6 +225,100 @@ TEST_F(IndexMaintainTest, ARelationWithNoIndexIsUnaffected) {
     EXPECT_NE(Run("SHOW INDEXES").find("indexes=0"), std::string::npos);
 }
 
+// ---- The backfill (docs/feat-index.md §10a, workplan IX09) --------------
+
+// **Written first**, as the workplan asks: omitting the undo-chain walk
+// makes an old-snapshot read return fewer rows with no error - the failure
+// `feat-cabin.md` §5 calls invisible without a baseline.
+TEST_F(IndexMaintainTest, TheBackfillIndexesEveryVersionAndNotJustTheCurrentOne) {
+    Ok("CREATE TABLE t (id int64, owner int64) BTREE");
+    Ok("INSERT INTO t VALUES (7)");
+    Ok("INSERT INTO t VALUES (8)");
+
+    // Three versions of row 1: owner 7 -> 9 -> 10. A reader on an older
+    // snapshot is entitled to match through any of them, and DDL is not
+    // transactional, so the index becomes visible to all of them at once.
+    Ok("UPDATE t SET owner = 9 WHERE id = 1");
+    Ok("UPDATE t SET owner = 10 WHERE id = 1");
+
+    Ok("CREATE INDEX by_owner ON t (owner)");
+    // Two rows, four distinct (key, pk) pairs: (7,1) (9,1) (10,1) (8,2).
+    EXPECT_EQ(Entries("by_owner"), 4);
+}
+
+TEST_F(IndexMaintainTest, ABackfilledIndexIsIndistinguishableFromAMaintainedOne) {
+    // The property that matters: building over existing rows and building
+    // first then writing must reach the same tree.
+    Ok("CREATE TABLE built (id int64, a int64) BTREE");
+    Ok("CREATE TABLE grown (id int64, a int64) BTREE");
+    Ok("CREATE INDEX grown_ix ON grown (a)");
+
+    for (int i = 0; i < 300; ++i) {
+        const std::string v = std::to_string((i * 7919) % 300);
+        Ok("INSERT INTO built VALUES (" + v + ")");
+        Ok("INSERT INTO grown VALUES (" + v + ")");
+    }
+    Ok("CREATE INDEX built_ix ON built (a)");
+
+    EXPECT_EQ(Entries("built_ix"), 300);
+    EXPECT_EQ(Entries("grown_ix"), 300);
+
+    const std::string shown = Run("SHOW INDEXES");
+    const std::size_t built = shown.find("name=built_ix");
+    const std::size_t grown = shown.find("name=grown_ix");
+    ASSERT_NE(built, std::string::npos);
+    ASSERT_NE(grown, std::string::npos);
+    // Same height too, which is what says the tree has the same shape and
+    // not merely the same count.
+    EXPECT_EQ(shown.substr(built, 200).find("height=1") != std::string::npos,
+              shown.substr(grown, 200).find("height=1") != std::string::npos)
+        << shown;
+}
+
+TEST_F(IndexMaintainTest, ADeletedRowIsStillBackfilled) {
+    // Gone for newer readers, still there for older ones - which is exactly
+    // the case the undo chain exists for, and the reason a backfill cannot
+    // index only what a fresh snapshot can see.
+    Ok("CREATE TABLE t (id int64, owner int64) BTREE");
+    Ok("INSERT INTO t VALUES (7)");
+    Ok("DELETE FROM t WHERE id = 1");
+    Ok("CREATE INDEX by_owner ON t (owner)");
+    EXPECT_EQ(Entries("by_owner"), 1);
+}
+
+TEST_F(IndexMaintainTest, ABackfillSpanningManyPagesSplitsAndKeepsEveryRow) {
+    // Two phases per leaf - copy out, drop the span, then append - because
+    // appending fetches pages and I15's R1 forbids one under a live span.
+    // Enough rows here to cross many leaves in both trees.
+    Ok("CREATE TABLE t (id int64, owner int64) BTREE");
+    constexpr int kRows = 1200;
+    for (int i = 0; i < kRows; ++i) {
+        Ok("INSERT INTO t VALUES (" + std::to_string((i * 7919) % kRows) + ")");
+    }
+    Ok("CREATE INDEX by_owner ON t (owner)");
+    EXPECT_EQ(Entries("by_owner"), kRows);
+
+    // And it keeps being maintained afterwards.
+    Ok("INSERT INTO t VALUES (999999)");
+    EXPECT_EQ(Entries("by_owner"), kRows + 1);
+}
+
+TEST_F(IndexMaintainTest, ABackfillOverTypedAndSpillingColumnsWorks) {
+    Ok("CREATE TABLE t (id int64, d date, amt decimal(10,2), name varchar) BTREE");
+    Ok("INSERT INTO t VALUES ('2026-08-07', '12.34', '" + std::string(200, 'x') + "')");
+    Ok("INSERT INTO t VALUES ('2026-08-08', '99.99', 'short')");
+    Ok("UPDATE t SET amt = '1.00' WHERE id = 1");
+
+    Ok("CREATE INDEX by_d ON t (d)");
+    Ok("CREATE INDEX by_amt ON t (amt)");
+    Ok("CREATE INDEX by_name ON t (name)");
+
+    EXPECT_EQ(Entries("by_d"), 2);
+    // Two versions of row 1's amount, plus row 2's.
+    EXPECT_EQ(Entries("by_amt"), 3);
+    EXPECT_EQ(Entries("by_name"), 2);
+}
+
 TEST_F(IndexMaintainTest, ADroppedIndexStopsBeingMaintained) {
     Ok("CREATE TABLE t (id int64, a int64) BTREE");
     Ok("CREATE INDEX ix ON t (a)");
@@ -219,10 +328,11 @@ TEST_F(IndexMaintainTest, ADroppedIndexStopsBeingMaintained) {
     Ok("DROP INDEX ix");
     Ok("INSERT INTO t VALUES (2)");  // must not fail looking for a gone index
 
-    // And a replacement cannot be created over a relation that has held
-    // rows - refused until IX09, which is what keeps a complete-looking
-    // empty index impossible.
-    EXPECT_EQ(Run("CREATE INDEX ix2 ON t (a)").rfind("ERR", 0), 0u);
+    // A replacement is built over what is already there - two rows by now -
+    // rather than starting empty. That refusal was IX05's placeholder and
+    // IX09 lifted it.
+    Ok("CREATE INDEX ix2 ON t (a)");
+    EXPECT_EQ(Entries("ix2"), 2);
 }
 
 }  // namespace

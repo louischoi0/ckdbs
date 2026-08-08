@@ -1,8 +1,8 @@
 # Secondary indexes: multi-column and covering
 
-Status: **IX01-IX06 built** (the storage layer, the catalog, the grammar and
-the write hook). An index is declared and maintained; **no statement can use
-one yet** - that is IX10/IX11.
+Status: **IX01-IX09 built** (the storage layer, the catalog, the grammar, the
+write hook and the backfill). An index is declared, built over what is
+already there, and maintained; **no statement can use one yet** - IX10/IX11.
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
@@ -426,14 +426,37 @@ non-obvious requirement:
 
 > **IX10a — the backfill walks each tuple's undo chain and appends an entry
 > per distinct key value across its versions**, not merely for the current
-> one.
+> one — and it runs **before** the `sys.indexes` row exists.
 
 Because the index becomes visible to every reader at once (DDL is not
 transactional), a reader holding an older snapshot must find its version
 through the new index. Every version of a logical tuple shares one pk, so the
 walk is bounded by the chain and the entries are the same shape. Omitting it
 would make an old-snapshot read silently return fewer rows — the failure
-`feat-cabin.md` §5 calls invisible without a baseline.
+`feat-cabin.md` §5 calls invisible without a baseline. A **delete-marked** row
+is walked like any other: gone for newer readers, still there for older ones,
+which is exactly the case the undo chain exists for.
+
+*Distinct* needs no bookkeeping: a version that did not move the key produces
+a byte-identical entry, and `IndexInsert` already reports one rather than
+storing it twice (IX4b).
+
+Building before publishing is what makes an index **complete or absent, never
+partial** — a failed build leaves an unreachable tree and no catalog row,
+where the reverse order leaves a declared index missing rows, which is a wrong
+answer with a right answer's shape. Nothing can observe the half-built tree:
+DDL is one statement on one cooperative thread. A split during the build moves
+the root, so the root written into the catalog row is the one the build ended
+at, not the page first allocated.
+
+Two consequences worth stating. The walk runs **two phases per leaf** — copy
+the page's tuples out, drop the span, then append — because appending fetches
+pages and `parser-v2.md` I15's R1 forbids a fetch under a live span; that also
+bounds the memory at one page rather than at one relation. And every refusal
+runs **before** the walk, through `Catalog::CheckIndexDef` — the same checks
+`CreateIndex` makes, factored out rather than copied, so a heap relation is
+refused by name instead of surfacing as a page-type error from inside the
+build.
 
 ---
 

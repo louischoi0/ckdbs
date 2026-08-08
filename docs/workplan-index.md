@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX06 are built** (IX-M1, IX-M2
-and the write hook of IX-M3); nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX07 and IX09 are built**
+(IX-M1, IX-M2, and IX-M3 bar its WAL records); nothing else is.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,16 +13,31 @@ note.
 
 ## Where to pick this up
 
-**At `IX08`** (or `IX09`; both are independent of the read path). IX01-IX06
-are built as of 2026-08-07 and the whole suite is green at **1,654 tests**.
-An index is now declared *and maintained* — every INSERT and every qualifying
-UPDATE appends — but **no statement can use one**, which is IX10/IX11.
+**At `IX10`** — the read path — with `IX08` (WAL records) outstanding beside
+it. IX01-IX07 and IX09 are built as of 2026-08-08 and the whole suite is green
+at **1,659 tests**. An index is declared, **built over whatever the relation
+already holds**, and maintained on every write; **no statement can use one**.
 
-`CREATE INDEX` still **refuses a relation that has ever held a row**, naming
-IX09. Maintenance existing does not lift it: an index over rows written
-before it was declared is still missing them.
+What building IX06 and IX09 changed, folded back into the spec:
 
-What building IX06 changed, folded back into the spec:
+- **The backfill runs before the catalog row, not after** (spec §10a). An
+  index is then complete or absent, never partial: a failed build leaves an
+  unreachable tree and no row. It also means the root written into the row is
+  the one the build *ended* at, since a split moves it.
+- **`Catalog::CheckIndexDef` was factored out of `CreateIndex`.** Building
+  before publishing put the walk ahead of every refusal, so a heap relation
+  failed as `page 129 has page_type 1, expected 2` from inside the build.
+  One implementation, two callers - the DDL layer checks before it walks, and
+  `CreateIndex` re-checks at the write because that is the door every other
+  caller comes through.
+- **`AppendIndexEntry` was extracted from `MaintainIndexes`.** The backfill
+  builds a tree with no `sys.indexes` row, so it cannot go through the
+  catalog-aware loop - and writing the append twice is how a backfilled entry
+  and a written one come to disagree about what an entry is.
+- **A test fixture without a `TransactionManager` writes no undo records**,
+  so the version walk had nothing to find and the first backfill test passed
+  by describing an engine that keeps no history. `IndexMaintainTest` now wires
+  one; the IX06 tests gained real undo along with it and still pass.
 
 - **IX12a is corrected, not merely qualified.** `Catalog::UpdateIndexRoot`
   updates the cached entry **in place** instead of bumping the catalog
@@ -308,12 +323,27 @@ rather than from values; the R1 warning above is the right one for it.
 Nothing reads the log back, so this task is verified by asserting the emitted
 record sequence, not by recovering.
 
-### IX09 — Backfill
+### IX09 — Backfill — **built**
 
-`CREATE INDEX` on a populated relation, per spec §10a: walk each tuple **and
-its undo chain**, appending one entry per distinct key value across the
-versions. Omitting the chain walk makes an old-snapshot read return fewer rows
-with no error — write the test that would catch it *first*.
+`CREATE INDEX` on a populated relation, per spec §10a, and it runs **before**
+the `sys.indexes` row exists - so an index is complete or absent, never
+partial.
+
+The test that would catch the omission was written first, as planned, and
+**it failed for a reason worth recording**: the fixture had no
+`TransactionManager`, so no undo record was ever written and the version walk
+had nothing to find. A test that passes because the engine kept no history is
+not a test of the walk.
+
+The walk is **two phases per leaf** - copy the tuples out, drop the span, then
+append - because appending fetches pages and I15's R1 forbids a fetch under a
+live span. That bounds memory at one page rather than one relation.
+
+Distinctness needs no bookkeeping: a version that did not move the key encodes
+byte-identically and `IndexInsert` already deduplicates one (IX4b). A
+delete-marked row is walked like any other, and a delete-mark's own undo
+record carries an empty image - the version it supersedes is the one already
+appended - so it is skipped.
 
 ---
 

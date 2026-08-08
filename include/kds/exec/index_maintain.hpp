@@ -84,4 +84,24 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        std::span<const std::byte> row, std::uint64_t pk,
                        std::span<const parser::AstValue> previous = {});
 
+// The same append, for **one** index and with no catalog.
+//
+// It exists because the backfill (IX09) builds a tree that has no
+// `sys.indexes` row yet, so it cannot go through `MaintainIndexes` - and
+// writing the append twice is how the backfill and the write path come to
+// disagree about what an entry is. `MaintainIndexes` is a loop over this.
+//
+// Returns the index's **new root** when a split grew the tree, and
+// `kInvalidPageId` otherwise - which also covers "the write touched nothing
+// this index cares about", since both mean there is nothing to republish.
+// Reporting rather than republishing is what lets the backfill hold its root
+// in a local while the index is still unpublished.
+StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
+                                  const catalog::TableAccess& access,
+                                  const catalog::TableAccess::IndexRef& ix,
+                                  std::span<const parser::AstValue> values,
+                                  std::uint16_t first_col_pos, std::span<const std::byte> row,
+                                  std::uint64_t pk,
+                                  std::span<const parser::AstValue> previous = {});
+
 }  // namespace kds::exec

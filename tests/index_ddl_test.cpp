@@ -201,19 +201,21 @@ TEST_F(IndexDdlTest, ThePrimaryKeyAndAnUnknownColumnAreBothRefused) {
     EXPECT_EQ(no_rel.substr(0, 3), "ERR") << no_rel;
 }
 
-TEST_F(IndexDdlTest, ARelationThatHasHeldRowsIsRefusedUntilTheBackfillExists) {
-    // Not a limitation to route around: IX06 and IX09 are not built, so an
-    // index created over existing rows would be empty and complete-looking,
-    // and once the read path lands it would answer "no rows" authoritatively
-    // for every value.
+TEST_F(IndexDdlTest, ARelationThatHasHeldRowsIsBackfilledRatherThanRefused) {
+    // IX05 refused this outright, because an index created over existing
+    // rows would have been empty and complete-looking. IX09 built the
+    // backfill, so the refusal is lifted and the index arrives populated -
+    // the coverage is index_maintain_test.cpp's, which has the transaction
+    // manager the version walk needs.
     ASSERT_EQ(Run("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3),
               "CRE");
-    ASSERT_EQ(Run("INSERT INTO t VALUES (5)").response.substr(0, 3), "INS")
-        << Run("INSERT INTO t VALUES (5)").response;
+    ASSERT_EQ(Run("INSERT INTO t VALUES (5)").response.substr(0, 3), "INS");
+    ASSERT_EQ(Run("INSERT INTO t VALUES (6)").response.substr(0, 3), "INS");
 
     const std::string out = Run("CREATE INDEX ix ON t (owner)").response;
-    EXPECT_EQ(out.substr(0, 3), "ERR") << out;
-    EXPECT_NE(out.find("IX09"), std::string::npos) << out;
+    EXPECT_NE(out.find("CREATED INDEX"), std::string::npos) << out;
+    EXPECT_NE(Run("SHOW INDEXES").response.find("entries=2"), std::string::npos)
+        << Run("SHOW INDEXES").response;
 }
 
 TEST_F(IndexDdlTest, AFloatlessTypeSetMeansEveryDeclarableColumnCanBeAKey) {
