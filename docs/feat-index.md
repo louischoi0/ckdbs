@@ -1,8 +1,9 @@
 # Secondary indexes: multi-column and covering
 
-Status: **IX01-IX09 built** (the storage layer, the catalog, the grammar, the
-write hook and the backfill). An index is declared, built over what is
-already there, and maintained; **no statement can use one yet** - IX10/IX11.
+Status: **IX-M1 to IX-M3 built** (`IX01`-`IX09`): the storage layer, the
+catalog, the grammar, the write hook, its WAL records and the backfill. An
+index is declared, built over what is already there, maintained and logged;
+**no statement can use one yet** - IX10/IX11.
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
@@ -581,22 +582,39 @@ through `BumpVersion()`.
 
 ### 12.1 WAL
 
-Two record types: `kIndexInsert = 17` and `kIndexPageInit = 18`, with
-`kMaxAssignedRecordType` bumped to 18. A split is covered by a
-`kFullPageImage` of each page it rewrites — same instrument chain growth uses
-for the predecessor's `next_page_id`, and for the same reason: no record type
-describes an entry-array division, and inventing one before recovery exists
-would be designing against an unwritten reader.
+**One record type, `kIndexInsert = 17`**, carrying the entry's slot and its
+bytes. The record's `page_id` names the leaf and the leaf's own header carries
+the widths, so redo needs neither the index's oid nor its layout — there is no
+second place for either to be wrong.
 
-> **IX13 — `INDEX_INSERT` is logged *before* the `HEAP_INSERT` it points
-> at.**
+> **IX13 — `INDEX_INSERT` is logged *before* the `HEAP_INSERT` or
+> `HEAP_OVERWRITE` it points at.**
 
-The direction is forced, not stylistic. If the index record is durable and
-the heap record is not, redo produces a **dangling entry**, which
-verification drops on sight (IX1) — harmless. The reverse produces a row with
-no index entry, which is a **lost row** the moment anything probes for it.
-Same reasoning that puts `kVarHeapAppend` before its `HEAP_INSERT`, arriving
-at the same order from the opposite pointer direction.
+The direction is forced, not stylistic. If the index record is durable and the
+row's is not, redo produces a **dangling entry**, which verification drops on
+sight (IX1) — harmless. The reverse produces a row with no index entry, which
+is a **lost row** the moment anything probes for it. Same reasoning that puts
+`kVarHeapAppend` before its `HEAP_INSERT`, arriving at the same order from the
+opposite pointer direction.
+
+> **§12.1's proposed `INDEX_PAGE_INIT` is not assigned, and will not be.**
+
+The proposal assumed a new index page could be described by its header the way
+a new heap page is, with the following record filling it. A **dividing** split
+does not work that way: the new sibling leaves the operation already holding
+half the entries, so only a full page image describes it. So a split takes a
+`kFullPageImage` per page it created or rewrote — exactly what the clustered
+tree's internal nodes already do, and for the identical reason (no record type
+describes an entry-array division).
+
+That gives one rule with no exceptions: **an append that split nothing logs an
+`INDEX_INSERT`; an append that split logs images and no `INDEX_INSERT`.** The
+images are taken after the entry is in, so emitting both would apply it twice.
+
+The hook **reports** its writes and the dispatcher emits them, which is
+`btree.cpp`'s division ("it mutates pages; it does not know about the WAL").
+Collection happens only when there is a log to write to, so the unlogged path
+is the code it always was.
 
 Recovery still does not exist. This fixes the record set so that when it does,
 the order is already right.

@@ -11,6 +11,11 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/command_dispatcher.hpp"
+
+#include <algorithm>
+#include <cstring>
+
+#include "kds/storage/index/index_page.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -503,6 +508,106 @@ TEST(DurabilityClassNames, EveryClassRoundTripsThroughItsName) {
                                          wal::DurabilityClass::kRelaxed}) {
         EXPECT_EQ(wal::ParseDurabilityClass(wal::DurabilityClassName(c)).value(), c);
     }
+}
+
+
+// ---- INDEX_INSERT (docs/feat-index.md §12.1, workplan IX08) --------------
+
+TEST_F(InsertWalTest, AnIndexEntryIsLoggedBeforeTheRowItPointsAt) {
+    // The direction is forced, not stylistic: if the index record is durable
+    // and the row's is not, redo produces a dangling entry that verification
+    // drops on sight. The reverse produces a row no probe can find.
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3),
+              "CRE");
+    ASSERT_NE(d.Dispatch("CREATE INDEX ix ON t (owner)").response.find("CREATED"),
+              std::string::npos);
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (42)").response.substr(0, 3), "INS");
+
+    const std::vector<wal::RecordType> types = RecordTypes();
+    ASSERT_EQ(CountOf(types, wal::RecordType::kIndexInsert), 1u);
+    ASSERT_EQ(CountOf(types, wal::RecordType::kHeapInsert), 1u);
+
+    const auto index_at = std::find(types.begin(), types.end(), wal::RecordType::kIndexInsert);
+    const auto heap_at = std::find(types.begin(), types.end(), wal::RecordType::kHeapInsert);
+    EXPECT_LT(index_at - types.begin(), heap_at - types.begin())
+        << "INDEX_INSERT must precede the HEAP_INSERT it points at";
+}
+
+TEST_F(InsertWalTest, AnIndexEntrysRecordCarriesTheBytesThatLandedOnThePage) {
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3),
+              "CRE");
+    ASSERT_NE(d.Dispatch("CREATE INDEX ix ON t (owner)").response.find("CREATED"),
+              std::string::npos);
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (42)").response.substr(0, 3), "INS");
+
+    std::vector<std::vector<std::byte>> storage;
+    for (const wal::DecodedRecord& record : DeviceRecords(storage)) {
+        if (record.type() != wal::RecordType::kIndexInsert) continue;
+
+        auto decoded = wal::DecodeIndexInsert(record.payload);
+        ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+
+        // The record names the leaf, and the leaf's own header carries the
+        // widths - so what is logged can be checked against what is stored
+        // with nothing else in hand.
+        auto page = store_->Get(record.header.page_id);
+        ASSERT_TRUE(page.ok());
+        index::IndexLeafView leaf(page.value());
+        auto stored = leaf.Entry(decoded.value().fields.slot);
+        ASSERT_TRUE(stored.ok()) << stored.status().message();
+        ASSERT_EQ(stored.value().size(), decoded.value().entry.size());
+        EXPECT_EQ(std::memcmp(stored.value().data(), decoded.value().entry.data(),
+                              stored.value().size()),
+                  0);
+        return;
+    }
+    FAIL() << "no INDEX_INSERT record was written";
+}
+
+TEST_F(InsertWalTest, ARelationWithNoIndexLogsNoIndexRecords) {
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, owner int64) BTREE").response.substr(0, 3),
+              "CRE");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (42)").response.substr(0, 3), "INS");
+    EXPECT_EQ(CountOf(RecordTypes(), wal::RecordType::kIndexInsert), 0u);
+}
+
+TEST_F(InsertWalTest, ASplitTakesFullPageImagesAndNoIndexInsert) {
+    // The images are taken after the entry is in, so emitting an
+    // INDEX_INSERT as well would apply it twice. One rule, and this is what
+    // pins it: the count of INDEX_INSERT records is the count of appends
+    // that split nothing.
+    //
+    // Relaxed durability with one flush at the end rather than kStrict: the
+    // records only have to reach the device once, and syncing per row turned
+    // this into an 18-second test.
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kRelaxed);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, owner varchar) BTREE").response.substr(0, 3),
+              "CRE");
+    ASSERT_NE(d.Dispatch("CREATE INDEX ix ON t (owner)").response.find("CREATED"),
+              std::string::npos);
+
+    // A varchar key spends kIndexStringKeyBytes + 1 on the key and 8 on the
+    // pk, so a leaf holds 8144 / 41 = 198 entries - enough inserts here to
+    // divide one without paying for thousands of rows.
+    constexpr int kRows = 400;
+    for (int i = 0; i < kRows; ++i) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('v" + std::to_string((i * 7919) % kRows) +
+                             "')")
+                      .response.substr(0, 3),
+                  "INS")
+            << i;
+    }
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    const std::vector<wal::RecordType> types = RecordTypes();
+    EXPECT_EQ(CountOf(types, wal::RecordType::kHeapInsert), static_cast<std::size_t>(kRows));
+    // Fewer than one per row, because the appends that split took images
+    // instead - and at least one image was taken.
+    EXPECT_LT(CountOf(types, wal::RecordType::kIndexInsert), static_cast<std::size_t>(kRows));
+    EXPECT_GT(CountOf(types, wal::RecordType::kFullPageImage), 0u);
 }
 
 }  // namespace

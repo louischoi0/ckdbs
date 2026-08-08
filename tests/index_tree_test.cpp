@@ -384,12 +384,17 @@ TEST(IndexTreeTest, TheClusteredTreesPagesAreNotThisTrees) {
 
 // ---- What the WAL will be told ------------------------------------------
 
-TEST(IndexTreeTest, AnOrdinaryInsertTouchesOnePageAndASplitReportsBoth) {
+TEST(IndexTreeTest, AnOrdinaryInsertReportsNoStructureAndASplitReportsBoth) {
+    // `changes()` names pages **no record type describes**, so a plain
+    // append reports none: the entry bytes describe it completely and the
+    // caller logs one small INDEX_INSERT instead of an 8 KB page image
+    // (wal/record.hpp). This asserted the opposite when IX02 landed, before
+    // there was a record type to describe an entry.
     Fixture f;
     auto first = IndexInsert(f.store, f.root, f.layout, Key(1), 1, {});
     ASSERT_TRUE(first.ok());
-    ASSERT_EQ(1u, first.value().changes().size());
-    EXPECT_FALSE(first.value().changes()[0].is_new_page);
+    EXPECT_FALSE(first.value().restructured());
+    EXPECT_TRUE(first.value().changes().empty());
 
     // Fill the root leaf, then one more.
     const std::uint16_t per_leaf = MaxLeafEntries(f.layout);

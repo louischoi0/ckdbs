@@ -196,7 +196,9 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     if (auto slot = leaf.InsertEntry(entry); slot.ok()) {
         out.page_id = leaf_id;
         out.slot = slot.value();
-        out.Record(leaf_id, /*is_new_page=*/false);
+        // Nothing recorded: the entry alone describes what changed, which is
+        // what lets the caller log one small INDEX_INSERT instead of an 8 KB
+        // page image. `changes()` is for pages no record type describes.
         return out;  // the common case: one page touched
     } else if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();

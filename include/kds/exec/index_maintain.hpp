@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
@@ -59,6 +60,30 @@
 
 namespace kds::exec {
 
+// One index mutation, reported back so the caller can log it.
+//
+// **Reported, not logged here.** `exec/` has no WAL, exactly as
+// `storage/btree/btree.cpp` has none - "an insert reports every page it
+// created or restructured and the caller emits the records" is the division
+// this follows. The bytes are *copied* for `AppendedSpill`'s reason: the
+// caller writes the record after the append returns, by which time the stack
+// buffer the entry was encoded into is gone.
+//
+// **`restructured` empty is the common case and means "log an INDEX_INSERT".**
+// Non-empty means the append split something, and then the caller logs a
+// full page image of each named page and **no** INDEX_INSERT - the images are
+// taken after the entry is in, so emitting both would apply it twice
+// (wal/record.hpp).
+//
+// Collected only when there is a log to write to: a null sink costs the write
+// path nothing, which is what keeps the unlogged path the code it always was.
+struct IndexWrite {
+    PageId page_id = kInvalidPageId;
+    std::uint16_t slot = 0;
+    std::vector<std::byte> entry;
+    std::vector<PageId> restructured;
+};
+
 // Appends this row's entries to every index on `access` that the write
 // touched.
 //
@@ -82,7 +107,8 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        const catalog::TableAccess& access,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                        std::span<const std::byte> row, std::uint64_t pk,
-                       std::span<const parser::AstValue> previous = {});
+                       std::span<const parser::AstValue> previous = {},
+                       std::vector<IndexWrite>* logged = nullptr);
 
 // The same append, for **one** index and with no catalog.
 //
@@ -102,6 +128,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::span<const parser::AstValue> values,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
                                   std::uint64_t pk,
-                                  std::span<const parser::AstValue> previous = {});
+                                  std::span<const parser::AstValue> previous = {},
+                                  std::vector<IndexWrite>* logged = nullptr);
 
 }  // namespace kds::exec

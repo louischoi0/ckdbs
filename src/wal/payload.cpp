@@ -195,6 +195,41 @@ StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in
     return decoded;
 }
 
+// ---- INDEX_INSERT --------------------------------------------------------
+
+StatusOr<std::size_t> EncodeIndexInsert(std::span<std::byte> out,
+                                         const IndexInsertPayload& fields,
+                                         std::span<const std::byte> entry) {
+    if (entry.empty() || entry.size() > 0xFFFFull) {
+        return Status::InvalidArgument(
+            "wal payload: INDEX_INSERT entry is empty or longer than a uint16 length");
+    }
+    const std::size_t total = kIndexInsertFixedSize + entry.size();
+    if (Status s = CheckOutputSize(out, total, "INDEX_INSERT"); !s.ok()) return s;
+
+    Store<std::uint16_t>(out, kIndexInsertSlotOffset, fields.slot);
+    // From the span, never the caller's field, so the length on disk and the
+    // bytes on disk cannot disagree.
+    Store<std::uint16_t>(out, kIndexInsertEntryLenOffset,
+                         static_cast<std::uint16_t>(entry.size()));
+    std::memcpy(out.data() + kIndexInsertFixedSize, entry.data(), entry.size());
+    return total;
+}
+
+StatusOr<DecodedIndexInsert> DecodeIndexInsert(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kIndexInsertFixedSize, "INDEX_INSERT"); !s.ok()) return s;
+
+    DecodedIndexInsert decoded{};
+    decoded.fields.slot = Load<std::uint16_t>(in, kIndexInsertSlotOffset);
+    decoded.fields.entry_len = Load<std::uint16_t>(in, kIndexInsertEntryLenOffset);
+
+    if (in.size() - kIndexInsertFixedSize < decoded.fields.entry_len) {
+        return Status::Corruption("wal payload: INDEX_INSERT entry_len runs past the payload");
+    }
+    decoded.entry = in.subspan(kIndexInsertFixedSize, decoded.fields.entry_len);
+    return decoded;
+}
+
 // ---- HEAP_DELETE_MARK ----------------------------------------------------
 
 StatusOr<std::size_t> EncodeHeapDeleteMark(std::span<std::byte> out,

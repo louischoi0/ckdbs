@@ -17,6 +17,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/pattern_ddl.hpp"
 #include "kds/exec/cabin_ddl.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/stats/access_stats.hpp"
 #include "kds/stats/cabin_store.hpp"
@@ -477,6 +478,13 @@ private:
     // `CREATE INDEX` / `DROP INDEX` (docs/feat-index.md §10). One handler
     // for both, for HandleCabin's reason: they share a parse and a reply
     // shape and differ only in which catalog call they reach.
+    // Emits one INDEX_INSERT per index mutation, or a full page image per
+    // page a split restructured. Called **before** the HEAP_INSERT or
+    // HEAP_OVERWRITE the entries point at (docs/feat-index.md §12.1): a
+    // dangling entry is dropped by verification, a row with no entry is
+    // lost.
+    Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
+
     DispatchOutcome HandleIndex(std::string_view line);
     DispatchOutcome HandleShowIndexes();
 
@@ -718,6 +726,7 @@ private:
     Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      const std::vector<exec::AppendedSpill>& spills = {},
+                     const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
 
     // What a `WHERE id = <const>` statement should do instead of scanning.

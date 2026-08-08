@@ -1522,9 +1522,52 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
     return {created.str(), false};
 }
 
+Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& writes,
+                                         std::uint64_t txn_id) {
+    if (wal_ == nullptr) return Status::OK();
+
+    for (const exec::IndexWrite& write : writes) {
+        // A split's pages take full page images and **no** INDEX_INSERT: the
+        // images are taken after the entry is in, so emitting both would
+        // apply it twice. Same instrument the clustered tree's internal
+        // nodes take, and for the same reason - no record type describes an
+        // entry-array division (wal/record.hpp).
+        if (!write.restructured.empty()) {
+            for (PageId page_id : write.restructured) {
+                auto bytes = page_store_.Get(page_id);
+                if (!bytes.ok()) return bytes.status();
+                std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+                if (auto n = wal::EncodeFullPageImage(
+                        image, std::span<const std::byte, kPageSize>(bytes.value()));
+                    !n.ok()) {
+                    return n.status();
+                }
+                auto fpi = wal_->Append(
+                    wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id}, image);
+                if (!fpi.ok()) return fpi.status();
+                if (Status s = page_store_.StampPageLsn(page_id, fpi.value()); !s.ok()) return s;
+            }
+            continue;
+        }
+
+        std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
+        const wal::IndexInsertPayload fields{write.slot,
+                                             static_cast<std::uint16_t>(write.entry.size())};
+        if (auto n = wal::EncodeIndexInsert(buf, fields, write.entry); !n.ok()) {
+            return n.status();
+        }
+        auto rec = wal_->Append(
+            wal::RecordSpec{wal::RecordType::kIndexInsert, txn_id, write.page_id}, buf);
+        if (!rec.ok()) return rec.status();
+        if (Status s = page_store_.StampPageLsn(write.page_id, rec.value()); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
                                     const std::vector<exec::AppendedSpill>& spills,
+                                    const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
     if (wal_ == nullptr) return Status::OK();
 
@@ -1599,6 +1642,12 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
             return s;
         }
     }
+
+    // The index entries this row is now reachable through, before the row
+    // itself (docs/feat-index.md §12.1). Same direction as the var-heap
+    // above, reached from the opposite pointer: a dangling entry is dropped
+    // by verification, a row with no entry is lost.
+    if (Status s = LogIndexWrites(index_writes, txn_id); !s.ok()) return s;
 
     // undo_ptr 0: an insert supersedes no version, so its undo chain ends
     // at itself (wal.md section 5.1).
@@ -1808,8 +1857,13 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // Catalog::UpdateIndexRoot updates the cached entry in place rather than
     // invalidating it (catalog_cache.hpp), which is exactly what the
     // desc-page relink below does *not* do.
+    // Collected only when there is a log to write to, so the unlogged path
+    // stays the code it always was.
+    std::vector<exec::IndexWrite> index_writes;
     if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, stmt.values,
-                                          /*first_col_pos=*/1, encoded.value(), id.value());
+                                          /*first_col_pos=*/1, encoded.value(), id.value(),
+                                          /*previous=*/{},
+                                          wal_ != nullptr ? &index_writes : nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("index", "maintaining the indexes of table oid " +
@@ -1835,7 +1889,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // here and what would break it.
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded.value(),
-                             WriterId(scope), spills,
+                             WriterId(scope), spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
@@ -2948,28 +3002,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             return s;
         }
 
-        // ---- HEAP_OVERWRITE (wal.md section 5.2) -----------------------
-        //
-        // UPDATE was unlogged **entirely** before this: it mutated a page
-        // and told the log nothing, so a crash lost the change with no
-        // record that it had happened. Logged now, after the undo record
-        // it points at - the ordering the var-heap already uses, and for
-        // the same reason: a replay must never reach a tuple whose pointer
-        // resolves to nothing.
-        if (wal_ != nullptr && scope.txn != nullptr) {
-            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());
-            const wal::HeapWritePayload fields{
-                new_trx_id, new_undo_ptr, slot,
-                static_cast<std::uint16_t>(encoded.value().size())};
-            if (auto n = wal::EncodeHeapWrite(buf, fields, encoded.value()); !n.ok()) {
-                return n.status();
-            }
-            auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapOverwrite, scope.txn->id(), page_id}, buf);
-            if (!rec.ok()) return rec.status();
-            if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
-        }
-
         // ---- The Cabin witness, UPDATE half (docs/feat-cabin.md §5) -----
         //
         // `row.value()` now holds the **new** values, so this appends the pk
@@ -2987,11 +3019,39 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // The index half. `previous` is what makes §2's rule work: an UPDATE
         // that moved no key and no covered column appends nothing, which is
         // what keeps an index from growing by an entry per write forever.
+        std::vector<exec::IndexWrite> index_writes;
         if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row.value(),
                                               /*first_col_pos=*/0, encoded.value(), id.value(),
-                                              previous);
+                                              previous,
+                                              wal_ != nullptr ? &index_writes : nullptr);
             !s.ok()) {
             return s;
+        }
+
+        // ---- HEAP_OVERWRITE (wal.md section 5.2) -----------------------
+        //
+        // UPDATE was unlogged **entirely** before this: it mutated a page
+        // and told the log nothing, so a crash lost the change with no
+        // record that it had happened. Logged now, after the undo record it
+        // points at *and* after the index entries that reach the new
+        // version - both for the same reason the var-heap has: a replay must
+        // never reach a pointer that resolves to nothing, and a version no
+        // index entry names is a row a probe cannot find
+        // (docs/feat-index.md §12.1).
+        if (wal_ != nullptr && scope.txn != nullptr) {
+            if (Status s = LogIndexWrites(index_writes, scope.txn->id()); !s.ok()) return s;
+
+            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());
+            const wal::HeapWritePayload fields{
+                new_trx_id, new_undo_ptr, slot,
+                static_cast<std::uint16_t>(encoded.value().size())};
+            if (auto n = wal::EncodeHeapWrite(buf, fields, encoded.value()); !n.ok()) {
+                return n.status();
+            }
+            auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kHeapOverwrite, scope.txn->id(), page_id}, buf);
+            if (!rec.ok()) return rec.status();
+            if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
         }
 
         ++updated;

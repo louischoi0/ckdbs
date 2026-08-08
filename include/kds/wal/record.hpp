@@ -68,14 +68,38 @@ enum class RecordType : std::uint8_t {
     // value, not a hint - which is what separates this page class from the
     // advisory waystone family.
     kVarHeapAppend = 16,
+    // A secondary-index entry appended to a leaf: the slot it landed in and
+    // its bytes (docs/feat-index.md §12.1). Logged because an index is
+    // maintained on every write and a missing entry is a **lost row**, not a
+    // lost hint - the same argument that makes the var-heap authoritative.
+    //
+    // Emitted **before** the HEAP_INSERT or HEAP_OVERWRITE it points at, and
+    // the direction is forced rather than stylistic: if the index record is
+    // durable and the row's is not, redo produces a dangling entry, which
+    // verification drops on sight; the reverse produces a row no probe can
+    // find. Same reasoning that puts VARHEAP_APPEND first, reached from the
+    // opposite pointer direction.
+    //
+    // **Only for an append that split nothing.** A split's pages take full
+    // page images, and those images are taken after the entry is in - so
+    // emitting this as well would apply it twice.
+    kIndexInsert = 17,
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
     // there is no B+ tree page format to describe, and a number reserved
     // for a payload nobody can encode is a number that gets used wrong.
     // Appending them later is exactly what this enum's append-only rule is
     // for.
+    //
+    // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
+    // The proposal assumed a new index page could be described by its header
+    // the way a new heap page is, with the following record filling it. A
+    // dividing split does not work that way: the new sibling leaves the
+    // operation holding half the entries, so only a full page image
+    // describes it - which is exactly what the clustered tree's internal
+    // nodes already do. A record type nothing can write is worse than none.
 };
 
-inline constexpr std::uint8_t kMaxAssignedRecordType = 16;
+inline constexpr std::uint8_t kMaxAssignedRecordType = 17;
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

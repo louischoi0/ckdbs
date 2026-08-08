@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX07 and IX09 are built**
-(IX-M1, IX-M2, and IX-M3 bar its WAL records); nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX09 are built** (IX-M1,
+IX-M2 and IX-M3 in full); nothing else is.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,10 +13,11 @@ note.
 
 ## Where to pick this up
 
-**At `IX10`** — the read path — with `IX08` (WAL records) outstanding beside
-it. IX01-IX07 and IX09 are built as of 2026-08-08 and the whole suite is green
-at **1,659 tests**. An index is declared, **built over whatever the relation
-already holds**, and maintained on every write; **no statement can use one**.
+**At `IX10`** — the read path, and the first task that makes the feature
+visible to a query. IX01-IX09 are built as of 2026-08-08 and the whole suite is
+green at **1,665 tests**. An index is declared, **built over whatever the
+relation already holds**, maintained on every write and logged; **no statement
+can use one**.
 
 What building IX06 and IX09 changed, folded back into the spec:
 
@@ -313,15 +314,38 @@ Maintained` covers a 200-byte value that spills.
 Re-open this only if a caller appears that maintains an index from a tuple
 rather than from values; the R1 warning above is the right one for it.
 
-### IX08 — WAL records
+### IX08 — WAL records — **built**
 
-`RecordType::kIndexInsert = 17`, `kIndexPageInit = 18`,
-`kMaxAssignedRecordType` → 18. `INDEX_INSERT` is emitted **before** the
-`HEAP_INSERT` it points at (spec §13, with the argument). A split emits a
-`kFullPageImage` per rewritten page.
+`RecordType::kIndexInsert = 17`, `kMaxAssignedRecordType` → 17, emitted
+**before** the `HEAP_INSERT` or `HEAP_OVERWRITE` it points at (spec §12.1,
+with the argument).
 
-Nothing reads the log back, so this task is verified by asserting the emitted
-record sequence, not by recovering.
+**`kIndexPageInit` was not assigned, and the plan was wrong to reserve it.**
+It assumed a new index page could be described by its header the way a new
+heap page is, with the following record filling it. A dividing split does not
+work that way - the new sibling leaves the operation already holding half the
+entries - so only a full page image describes it, which is what the clustered
+tree's internal nodes already take. A record type nothing can write is worse
+than none.
+
+That leaves one rule with no exceptions: **an append that split nothing logs
+an `INDEX_INSERT`; an append that split logs images and no `INDEX_INSERT`**,
+because the images are taken after the entry is in.
+
+Two things it changed. `IndexInsert` now records **nothing** structural in the
+no-split case - `changes()` is for pages no record type describes, and the
+entry bytes describe a plain append completely, so a caller logs 4 bytes plus
+an entry instead of an 8 KB image. And the UPDATE path's `HEAP_OVERWRITE`
+moved to *after* the index hook, so the entries reaching the new version
+precede it.
+
+The hook **reports**, the dispatcher emits - `btree.cpp`'s division - and
+collection happens only when `wal_` is non-null, so the unlogged path is
+unchanged.
+
+Verified by asserting the record sequence, as planned: `insert_wal_test.cpp`
+checks the ordering, that the logged bytes match what landed on the page, that
+a relation with no index logs nothing, and that a split takes images instead.
 
 ### IX09 — Backfill — **built**
 

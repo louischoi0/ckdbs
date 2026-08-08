@@ -25,7 +25,7 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-re
 
 ---
 
-## The three scenarios
+## The four scenarios
 
 Each scenario is a whole workload rather than a statement mix, and each has a
 PostgreSQL twin beside it that drives the same work through `pg_wire.py`. The
@@ -146,6 +146,76 @@ updates. Documented in full at `docs/scenario2-freight.md`; results at
 
 The twin takes the same flags plus `--synchronous-commit`, and connects with
 `--port 15433 --database bench`.
+
+### `scenario3_library.py` — a read workload against a secondary index
+
+A library circulation system: four relations (`users`, `books`,
+`reservations`, `loans`) and ten read shapes, built to ask one narrow
+question — **what does a non-primary-key equality cost, and what can be done
+about it?** KDS answers it three ways, in three different trust classes: a
+`FilterScan` walks the chain, a **Cabin** is authoritative only for values
+queries have observed, and a **secondary index** is authoritative for every
+value. PostgreSQL answers it one way, with a btree index, which is what makes
+it a clean baseline here rather than a second pile of numbers.
+
+> **The index read path is not built.** `docs/workplan-index.md` has
+> `IX01`-`IX07` and `IX09` — key encoding, page format, catalog row, grammar,
+> write hook, backfill — and stops at `IX10`/`IX11`, which are what would make
+> the compiler emit `kIndexProbe`/`kIndexRange` and the step VM run them. So
+> today `CREATE INDEX` succeeds and backfills, `SHOW INDEXES` reports a real
+> tree, every INSERT and UPDATE pays the index's maintenance, and **no SELECT
+> can use it**. Running `--index-mode single` against `--index-mode none` is
+> therefore a measurement of what an index *costs* with its benefit still
+> switched off. That is a real number and the driver reports it as such; when
+> `IX10`/`IX11` land, the identical invocation measures the benefit.
+> `--assert-index-reads` fails the run if the read shapes did not improve, so
+> a later run cannot quietly report "no change" as a result.
+
+```bash
+# the row-set sweep the documentation rules require
+for n in 200 1000 10000; do
+  ./tools/scenario3_library.py --loans $n --index-mode none   --json ck-none-$n.json
+  ./tools/scenario3_library.py --loans $n --index-mode single --json ck-idx-$n.json
+  ./tools/scenario3_library.py --loans $n --index-mode none --cabin --json ck-cab-$n.json
+done
+
+# the baseline, run separately — never alongside, each would measure the other
+for n in 200 1000 10000; do
+  ./tools/pg_scenario3_library.py --port 15433 --database bench \
+      --loans $n --index-mode none   --json pg-none-$n.json
+  ./tools/pg_scenario3_library.py --port 15433 --database bench \
+      --loans $n --index-mode single --json pg-idx-$n.json
+done
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `--loans N` | 1000 | the bulk relation and the row-set axis; the documented sweep is **200 / 1000 / 10000** |
+| `--matches N` | 5 | rows per key for the equality shapes. `users` and `books` are scaled as `loans / matches`, which holds selectivity constant across the sweep — see below |
+| `--index-mode` | `none` | `none`, `single` (one per hot equality column), `composite` (multi-column keys), `covering` (`COVERING (...)`), `all` |
+| `--index-when` | `after` | `after` declares the indexes on loaded relations, exercising and timing the `IX09` backfill; `before` declares them empty so the `IX06` write hook maintains them, moving the cost into the load phase |
+| `--cabin` | off | declare a Cabin on `loans.user_id` — the other accelerator for a non-pk equality, and the one with no PostgreSQL twin |
+| `--ops N` | 200 | operations per read shape |
+| `--verify N` | 25 | three invariants, including that a `WHERE user_id = ?` answer equals a client-side-filtered full scan — the check that would catch an index serving an incomplete set |
+| `--assert-index-reads` | off | fail if `--index-mode` did not improve the equality shapes |
+| `--suffix`, `--seed`, `--json`, `--echo` | | as the other scenarios |
+
+**Why `users` and `books` scale with `loans`.** If they did not, a bigger
+relation would also mean a *less selective* predicate, and the three sizes
+would move two variables at once. Holding matches-per-key at 5 while the
+relation grows 200 → 10,000 is exactly the axis on which a scan (O(rows)) and
+an index probe (O(log rows + matches)) diverge. `books-by-genre` is the
+deliberate counter-case: genre cardinality is fixed at 16, so its match count
+*does* grow with the relation, and it is where an index should pay least.
+
+The twin adds `--synchronous-commit` and `--no-analyze`. **`ANALYZE` is on by
+default and is not tuning**: without statistics PostgreSQL may not choose its
+index at all, which would make the baseline a coin toss rather than a
+baseline. The twin also runs `EXPLAIN` on three shapes and prints the plans,
+because a declared index is not necessarily a used one — KDS has no `EXPLAIN`,
+which is itself worth recording. There is **no Cabin equivalent** on the
+PostgreSQL side and the twin does not invent one; a `--cabin` run simply has
+no twin column in the comparison.
 
 ---
 

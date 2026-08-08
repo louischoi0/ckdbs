@@ -106,6 +106,10 @@ struct IndexInsertResult {
     // then name that entry and nothing was written.
     bool already_present = false;
 
+    // Pages the append **restructured**, which no record type describes -
+    // so a caller logs a full page image of each. Empty for the
+    // overwhelmingly common insert that just filled a slot, which the entry
+    // bytes describe completely.
     std::array<IndexChange, kMaxIndexChanges> structural{};
     std::uint8_t n_structural = 0;
 
