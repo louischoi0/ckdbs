@@ -41,6 +41,12 @@ std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
         // sys.access_stats, so a value here may never change meaning and a
         // new kind takes the next free one however the enum is ordered.
         case AccessKind::kCabinProbe: return 6;
+        // Appended, and the numbers are what `sys.access_stats` stores - so
+        // this mapping is explicit rather than the enum's own values,
+        // precisely so a kind can be inserted where it reads best without
+        // silently re-labelling every row already on disk.
+        case AccessKind::kIndexProbe: return 7;
+        case AccessKind::kIndexRange: return 8;
     }
     return catalog::kAccessKindUnset;
 }
@@ -53,6 +59,8 @@ std::optional<AccessKind> AccessKindOfStored(std::uint8_t stored) noexcept {
         case 4: return AccessKind::kFilterScan;
         case 5: return AccessKind::kScan;
         case 6: return AccessKind::kCabinProbe;
+        case 7: return AccessKind::kIndexProbe;
+        case 8: return AccessKind::kIndexRange;
         default: return std::nullopt;
     }
 }
@@ -169,6 +177,8 @@ const char* AccessKindName(AccessKind kind) noexcept {
         case AccessKind::kFilterScan: return "FilterScan";
         case AccessKind::kScan: return "Scan";
         case AccessKind::kCabinProbe: return "CabinProbe";
+        case AccessKind::kIndexProbe: return "IndexProbe";
+        case AccessKind::kIndexRange: return "IndexRange";
     }
     return "?";
 }

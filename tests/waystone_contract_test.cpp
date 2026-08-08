@@ -74,6 +74,11 @@ void Load(Instance& db) {
     ASSERT_EQ(db.Run("CREATE TABLE h (id int64, v int64, label varchar)").substr(0, 7),
               "CREATED");
     ASSERT_EQ(db.Run("CREATE TABLE j (id int64, w int64) BTREE").substr(0, 7), "CREATED");
+    // Declared before the rows, so the write hook fills it rather than the
+    // backfill - which is the shape ordinary traffic produces. An index is
+    // catalog state, so every configuration below gets it and a difference
+    // between them would mean the index changed an answer.
+    ASSERT_EQ(db.Run("CREATE INDEX b_by_v ON b (v)").substr(0, 7), "CREATED");
     for (int i = 1; i <= 8; ++i) {
         const std::string v = std::to_string(i * 10);
         const std::string label = "'row" + std::to_string(i) + "'";
@@ -125,6 +130,24 @@ const std::vector<std::string>& Queries() {
         "SELECT COUNT(DISTINCT label) FROM h",
         "SELECT COUNT(*), SUM(c.w) FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
         "SELECT a.label, COUNT(*) FROM h AS a JOIN j AS c ON a.id = c.id GROUP BY a.label",
+
+        // ---- Indexed statements (docs/feat-index.md §8) ----------------
+        //
+        // Here for the aggregates' reason, one step further along: an index
+        // probe is search-class, so a trail may prefetch for it and must
+        // never replace it. That claim is exactly what these five
+        // configurations test, and adding lines to a list is cheaper than a
+        // second suite that would have to re-derive them.
+        //
+        // `b.v` carries an index in every configuration below - the index
+        // is catalog state, so it is created for the reference instance
+        // too, and a difference between them would mean the *index* changed
+        // an answer.
+        "SELECT * FROM b WHERE v = 50",
+        "SELECT * FROM b WHERE v = 999",
+        "SELECT id FROM b WHERE v = 50",
+        "SELECT COUNT(*) FROM b WHERE v = 50",
+        "SELECT a.label FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.v = 50",
     };
     return kQueries;
 }
@@ -281,10 +304,34 @@ TEST(WaystoneContractTest, ANonPkPredicateStillSearchesAndSaysSo) {
     for (int i = 0; i < 4; ++i) db.Run(search);
 
     const std::string analyzed = db.Run("ANALYZE " + search);
-    EXPECT_NE(analyzed.find("Scan"), std::string::npos) << analyzed;
+    // **The kind is not the claim; being search-class is.** This asserted
+    // the word "Scan" until `b.v` gained an index, and the statement now
+    // compiles to an IndexProbe - which is authoritative, faster, and still
+    // a *search*. Reading the trust line off `IsTrailReplayable` rather than
+    // off a rendered kind name is what keeps this test about invariant 9
+    // instead of about whichever accelerator exists this month.
+    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexProbe));
+    EXPECT_NE(analyzed.find("IndexProbe"), std::string::npos) << analyzed;
     EXPECT_EQ(analyzed.find("replays="), std::string::npos)
         << "a search was served from a trail, which invariant 9 forbids: " << analyzed;
-    // And it really did read the relation rather than short-circuit.
+    // And it really did read the relation rather than short-circuit. Still
+    // every row, because the read path is IX11's and this step walks today.
+    EXPECT_NE(analyzed.find("examined=8"), std::string::npos) << analyzed;
+}
+
+TEST(WaystoneContractTest, AnUnindexedNonPkPredicateStillScans) {
+    // The control the test above used to be. `h.v` carries no index, so the
+    // same predicate is a filter scan - which is the shape that proves the
+    // index above changed the *kind* and not the trust class.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+
+    const std::string search = "SELECT * FROM h WHERE v = 50";
+    for (int i = 0; i < 4; ++i) db.Run(search);
+
+    const std::string analyzed = db.Run("ANALYZE " + search);
+    EXPECT_NE(analyzed.find("Scan"), std::string::npos) << analyzed;
+    EXPECT_EQ(analyzed.find("replays="), std::string::npos) << analyzed;
     EXPECT_NE(analyzed.find("examined=8"), std::string::npos) << analyzed;
 }
 

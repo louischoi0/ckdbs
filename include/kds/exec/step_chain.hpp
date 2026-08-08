@@ -95,6 +95,32 @@ enum class AccessKind : std::uint8_t {
     // a *value* has been observed is runtime state, and it steers only the
     // branch taken inside this kind, never the kind itself.
     kCabinProbe,
+    // An equality on a **prefix of a secondary index's key**
+    // (docs/feat-index.md §8): descend the index, walk its entries while the
+    // prefix matches, resolve each pk through the clustered tree.
+    //
+    // The second entry in the first trust class: an index is authoritative
+    // for **every** key value, where a Cabin is authoritative only for the
+    // ones queries have observed. So it is tried ahead of `kCabinProbe`,
+    // which is tried ahead of `kFilterScan`, and each is the reason the next
+    // one is not needed.
+    //
+    // Like every kind here it is **catalog** state - which columns carry an
+    // index - so the plan stays `f(shape, catalog)` and no property of the
+    // data influences it.
+    kIndexProbe,
+    // The same, narrowed further by an inclusive range on the key column
+    // after the matched equality prefix - or a range on the first key column
+    // with no equality before it.
+    //
+    // **Executes identically to `kIndexProbe`**: both walk the entries
+    // between two encoded bounds, and the compiler has already written both
+    // bounds into `IndexProbe`. The split is a *statistics* distinction, the
+    // same one `kFilterScan` draws against `kScan` - an equality names a
+    // point the workload asked for, a range names a span - and if a branch
+    // between them ever appears in the executor, the "same rows either way"
+    // tests are what should stop it.
+    kIndexRange,
     // A walk **driven by a filter**: at least one equality against a
     // literal on a non-pk column with no index.
     //
@@ -138,6 +164,13 @@ enum class AccessKind : std::uint8_t {
 constexpr bool IsTrailReplayable(AccessKind kind) noexcept {
     return kind == AccessKind::kLookup || kind == AccessKind::kProbe;
 }
+// **Unchanged by kIndexProbe and kIndexRange either**, and for the reason
+// stated above rather than a new one. An index is authoritative, exactly as
+// a Cabin is - and invariant 9's line is *lookup versus search*, not
+// authoritative versus advisory. An index probe answers with a **set**, and
+// a trail's stored set has no witness for a row inserted since it was
+// recorded, which no per-tuple validation can detect. So a trail may
+// prefetch for an index step and may never replace one.
 
 // The inclusive pk bounds a kRange step walks between.
 //
@@ -185,6 +218,53 @@ struct CabinProbe {
     // evidence that waiting exists to gather, so asking traffic to prove it
     // again asks a question that was answered.
     bool declared = false;
+};
+
+// What a kIndexProbe / kIndexRange step reads, resolved at compile time.
+//
+// A **hint on top of the residual**, exactly as `RangeBounds` and
+// `CabinProbe` are: the equalities and bounds this was derived from stay in
+// `Step::residual`, so downgrading the step to a plain kScan still cannot
+// change the result. Here that property carries the whole trust argument -
+// an index's entry set for a key is a *superset* of the qualifying visible
+// pks (docs/feat-index.md §1), and the surplus is subtracted by re-checking
+// the predicate against the resolved version. That re-check is not extra
+// code; it is the residual the compiler already attached.
+struct IndexProbe {
+    catalog::Oid index_oid = 0;
+
+    // The tree. Copied off the cached `TableAccess::IndexRef`, which is the
+    // one field on that struct a split can move - and it is republished in
+    // place rather than by invalidation (feat-index.md §12a), so a chain
+    // compiled before a split still names a page that is *a* page of the
+    // tree. IX11 re-reads it from the catalog rather than trusting this
+    // across a write.
+    PageId root_page_id = kInvalidPageId;
+    std::uint16_t key_width = 0;
+    std::uint16_t entry_width = 0;
+
+    // How many leading key columns the statement pinned by equality, and
+    // whether a range on the next one narrows it further. Together they are
+    // what separates the two kinds - and nothing else does.
+    std::uint8_t eq_prefix = 0;
+    bool ranged = false;
+
+    // The inclusive sort-key bounds the walk runs between, both a full
+    // `key_width + 8` bytes.
+    //
+    // **Encoded here, at compile time.** Coercion is a compile-time act
+    // (docs/spec-types.md §3.1) and so is the encoding that follows it, so
+    // no per-row key building happens on the read path. `low` pads the
+    // unpinned tail with 0x00 and `high` with 0xFF, which are the true
+    // bounds because a key column's leading discriminator byte is 1 for
+    // every value that exists (storage/index/index_page.hpp).
+    std::vector<std::byte> low;
+    std::vector<std::byte> high;
+
+    // The index's key columns in declared order, and its covered columns.
+    // Carried for the access statistics and for IX11's entry-side filtering.
+    std::vector<std::uint16_t> key_cols;
+    std::vector<std::uint16_t> covered_cols;
 };
 
 // The right-hand side of a compiled predicate: a value the statement
@@ -276,6 +356,10 @@ struct Step {
 
     // The Cabin and the value, for kCabinProbe. Empty for every other kind.
     std::optional<CabinProbe> cabin;
+
+    // The index and its bounds, for kIndexProbe and kIndexRange. Empty for
+    // every other kind.
+    std::optional<IndexProbe> index;
 
     // The columns this step's kind was assigned for, in schema order:
     // the filtered columns for kFilterScan, the pk for kLookup/kProbe/

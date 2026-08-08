@@ -12,6 +12,7 @@
 // codec owns which parser that means - which is what keeps the value a
 // predicate compares and the value a write keys on identical by
 // construction rather than by two call sites agreeing.
+#include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
 
 namespace kds::exec {
@@ -439,21 +440,156 @@ std::optional<RangeBounds> PkRangeOf(const Step& step, std::uint16_t slot) {
 // Whether this step has at least one equality against a literal on a
 // non-pk column that carries no index - the thing kFilterScan names.
 //
-// The index check is `Catalog::FindIndexOnColumn`, which until now had no
-// production reader at all. Nothing creates an index today, so the answer
-// is always "unindexed" - but asking makes the kind mean what it says, so
-// the day index scans land this stops classifying an indexed column as a
-// filter scan without anyone having to remember to come back.
-bool HasUnindexedEqualityFilter(catalog::Catalog& catalog, const Step& step,
+// **Asks the cached `index_mask`, not the catalog.** It called
+// `Catalog::FindIndexOnColumn` when nothing created indexes and the answer
+// was always "unindexed"; that was a `sys.indexes` scan per equality per
+// compile, and IX04 put the same fact on the relation's cache entry as one
+// bit. The mask names an index's **leading** key column only, which is
+// exactly the right question: an index on (a, b) cannot be entered by an
+// equality on `b`, so such an equality really is an unindexed filter.
+//
+// Reached only after `IndexProbeOf` declined, so the two cannot disagree
+// about a usable index - they can only disagree about one this step's
+// literals could not be encoded into, and then calling it a filter scan is
+// the truthful answer: the walk is what will happen.
+bool HasUnindexedEqualityFilter(const catalog::TableAccess& access, const Step& step,
                                 std::uint16_t slot) {
     for (const StepPredicate& pred : step.residual) {
         if (pred.op != parser::CompareOp::kEq) continue;
         if (pred.rhs.kind != OperandKind::kLiteral) continue;
         if (!IsOwnColumn(pred.lhs, slot) || IsPrimaryKey(pred.lhs)) continue;
-        if (catalog.FindIndexOnColumn(step.rel_oid, pred.lhs.col_pos).ok()) continue;
+        if (access.IndexOn(pred.lhs.col_pos) != nullptr) continue;
         return true;
     }
     return false;
+}
+
+// ---- Index selection (docs/feat-index.md §9) ----------------------------
+//
+// **`f(shape, catalog)`, and nothing else.** No statistics, no cardinality
+// estimate, no property of the data - because a recorded pattern must not
+// compile differently as the rows change, or `pattern_id` stops naming a
+// plan. Same argument `CabinProbeOf` gives for taking the *first* cabined
+// equality rather than the most selective one.
+
+// The inclusive literal bounds the residual pins `col_pos` between, if any.
+// `BETWEEN` lowers to `>=` and `<=`, which is the only form the grammar can
+// produce, so only those two are read.
+struct ColumnBounds {
+    const parser::AstValue* low = nullptr;
+    const parser::AstValue* high = nullptr;
+};
+
+ColumnBounds BoundsOnColumn(const Step& step, std::uint16_t slot, std::uint16_t col_pos) {
+    ColumnBounds out;
+    for (const StepPredicate& pred : step.residual) {
+        if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != col_pos) continue;
+        if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
+        if (pred.op == parser::CompareOp::kGte) out.low = &pred.rhs.literal;
+        if (pred.op == parser::CompareOp::kLte) out.high = &pred.rhs.literal;
+    }
+    return out;
+}
+
+// The equality literal the residual pins `col_pos` to, or nullptr.
+const parser::AstValue* EqualityOnColumn(const Step& step, std::uint16_t slot,
+                                          std::uint16_t col_pos) {
+    for (const StepPredicate& pred : step.residual) {
+        if (pred.op != parser::CompareOp::kEq) continue;
+        if (pred.rhs.kind != OperandKind::kLiteral) continue;
+        if (!IsOwnColumn(pred.lhs, slot) || pred.lhs.col_pos != col_pos) continue;
+        // A `$param` never enters an index, for the reason CabinProbeOf
+        // declines one: a declared pattern's body is compiled to be
+        // type-checked and fingerprinted, never run, so there is no value to
+        // encode a key from - and nothing is lost, since these kinds are
+        // search-class and the replayability verdict is the same either way.
+        if (pred.rhs.literal.type == parser::ValueType::kParam) continue;
+        return &pred.rhs.literal;
+    }
+    return nullptr;
+}
+
+// The index this step should enter, or nullopt.
+//
+// Picks the **longest usable key prefix**, ties broken by lowest
+// `index_oid` - which is free, because `TableAccess::indexes` is sorted by
+// it and this keeps the first index to reach a given score.
+std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const Step& step,
+                                       std::uint16_t slot) {
+    if (access.indexes.empty()) return std::nullopt;
+
+    std::optional<IndexProbe> best;
+    int best_score = 0;
+
+    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        // How many leading key columns carry an equality, in the index's
+        // declared order. Stops at the first that does not: an index on
+        // (a, b) cannot be entered by `b` alone.
+        std::uint8_t eq = 0;
+        while (eq < ix.nkeys && EqualityOnColumn(step, slot, ix.keys()[eq]) != nullptr) ++eq;
+
+        ColumnBounds bounds;
+        const bool ranged =
+            eq < ix.nkeys &&
+            (bounds = BoundsOnColumn(step, slot, ix.keys()[eq])).low != nullptr &&
+            bounds.high != nullptr;
+
+        // An equality is worth more than a range on the same column, and a
+        // longer prefix more than a shorter one.
+        const int score = static_cast<int>(eq) * 2 + (ranged ? 1 : 0);
+        if (score == 0 || score <= best_score) continue;
+
+        IndexProbe probe;
+        probe.index_oid = ix.index_oid;
+        probe.root_page_id = ix.root_page_id;
+        probe.key_width = ix.key_width;
+        probe.entry_width = ix.entry_width;
+        probe.eq_prefix = eq;
+        probe.ranged = ranged;
+        probe.key_cols.assign(ix.keys().begin(), ix.keys().end());
+        probe.covered_cols.assign(ix.covered().begin(), ix.covered().end());
+
+        // The two bounds, encoded now. `low` pads its unpinned tail with
+        // 0x00 and `high` with 0xFF - the true bounds, because a key
+        // column's discriminator byte is 1 for every value that exists.
+        const std::size_t sort_key_width = static_cast<std::size_t>(ix.key_width) + 8;
+        probe.low.assign(sort_key_width, std::byte{0x00});
+        probe.high.assign(sort_key_width, std::byte{0xFF});
+
+        std::size_t at = 0;
+        bool encoded = true;
+        for (std::uint8_t i = 0; i < eq + (ranged ? 1 : 0) && encoded; ++i) {
+            const catalog::SysColumnRow& col = access.schema.columns[ix.keys()[i]];
+            auto width = IndexKeyColumnWidth(col);
+            if (!width.ok() || at + width.value() > ix.key_width) {
+                encoded = false;
+                break;
+            }
+            const parser::AstValue* low_value =
+                i < eq ? EqualityOnColumn(step, slot, ix.keys()[i]) : bounds.low;
+            const parser::AstValue* high_value =
+                i < eq ? low_value : bounds.high;
+            // A value the key encoder refuses - an integer wider than its
+            // column, say - means this index cannot be entered for it. The
+            // step falls through to the walk, which returns the identical
+            // rows because the residual is untouched.
+            encoded = EncodeIndexKeyColumn(col, *low_value,
+                                            std::span<std::byte>(probe.low).subspan(
+                                                at, width.value()))
+                          .ok() &&
+                      EncodeIndexKeyColumn(col, *high_value,
+                                            std::span<std::byte>(probe.high).subspan(
+                                                at, width.value()))
+                          .ok();
+            at += width.value();
+        }
+        if (!encoded) continue;
+
+        best = std::move(probe);
+        best_score = score;
+    }
+    return best;
 }
 
 // The Cabin this step can probe, or nullopt.
@@ -514,6 +650,22 @@ std::vector<std::uint16_t> AccessColumnsOf(const Step& step, std::uint16_t slot)
             // All three address the relation by its pk and nothing else.
             out.push_back(0);
             return out;
+        case AccessKind::kIndexProbe:
+        case AccessKind::kIndexRange:
+            // The key columns the index was entered by, and only those. The
+            // rest of the index's key is not what the statement addressed
+            // it on, and the residual's other columns are residual whatever
+            // the kind - reporting them would merge this shape with the
+            // filter scan below and lose the distinction the statistics
+            // exist to draw.
+            if (step.index.has_value()) {
+                const std::size_t pinned = static_cast<std::size_t>(step.index->eq_prefix) +
+                                           (step.index->ranged ? 1 : 0);
+                for (std::size_t i = 0; i < pinned && i < step.index->key_cols.size(); ++i) {
+                    out.push_back(step.index->key_cols[i]);
+                }
+            }
+            break;
         case AccessKind::kCabinProbe:
             // The cabined column alone, not every filtered column: the
             // access was assigned *for* that one, and the rest are residual
@@ -1130,6 +1282,16 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 bounds.has_value()) {
                 step.kind = AccessKind::kRange;
                 step.range = bounds;
+            } else if (auto ix = IndexProbeOf(*scope.relations[i].access, step,
+                                               static_cast<std::uint16_t>(i));
+                       ix.has_value()) {
+                // Ahead of the Cabin, per spec §9: an index is complete for
+                // every key value where a Cabin is authoritative only for
+                // the observed ones, so a cabined column that also carries
+                // an index is served by the index and the Cabin becomes
+                // dead weight the operator may drop.
+                step.kind = ix->ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
+                step.index = std::move(ix);
             } else if (auto probe = CabinProbeOf(*scope.relations[i].access, step,
                                                   static_cast<std::uint16_t>(i));
                        probe.has_value()) {
@@ -1138,7 +1300,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // names, and the Cabin is the reason it need not be one.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(probe);
-            } else if (HasUnindexedEqualityFilter(catalog, step,
+            } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
                                                    static_cast<std::uint16_t>(i))) {
                 step.kind = AccessKind::kFilterScan;
             }

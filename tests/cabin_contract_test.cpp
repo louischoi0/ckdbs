@@ -462,6 +462,12 @@ TEST(CabinContractTest, ACabinIsNotTrailReplayable) {
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kFilterScan));
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kRange));
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kScan));
+    // A secondary index is authoritative too, and lands on the same side of
+    // the line for the same reason (docs/feat-index.md §8): an index probe
+    // answers with a *set*, and a trail has no witness for a row inserted
+    // since it was recorded.
+    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexProbe));
+    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexRange));
     EXPECT_TRUE(exec::IsTrailReplayable(exec::AccessKind::kLookup));
     EXPECT_TRUE(exec::IsTrailReplayable(exec::AccessKind::kProbe));
 }

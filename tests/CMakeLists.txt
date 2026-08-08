@@ -26,6 +26,7 @@ add_executable(kds_tests
     index_tree_test.cpp
     index_ddl_test.cpp
     index_maintain_test.cpp
+    index_compile_test.cpp
     superblock_test.cpp
     extent_lease_test.cpp
     extent_lease_service_test.cpp

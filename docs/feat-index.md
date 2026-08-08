@@ -1,9 +1,10 @@
 # Secondary indexes: multi-column and covering
 
-Status: **IX-M1 to IX-M3 built** (`IX01`-`IX09`): the storage layer, the
-catalog, the grammar, the write hook, its WAL records and the backfill. An
-index is declared, built over what is already there, maintained and logged;
-**no statement can use one yet** - IX10/IX11.
+Status: **`IX01`-`IX10` built**: the storage layer, the catalog, the grammar,
+the write hook, its WAL records, the backfill, and the compiler. A statement
+on an indexed column now compiles to `kIndexProbe`/`kIndexRange` - and the
+step VM still *walks* it (`IX11` is the descent), which is safe because
+downgrading any step to a scan cannot change the result.
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
@@ -380,10 +381,26 @@ Two rules that keep every existing proof standing:
   INDEX` does not drop an existing Cabin — the Cabin simply stops being
   probed and its memory is the operator's to reclaim with `DROP CABIN`.
 
-`HasUnindexedEqualityFilter` in `src/exec/step_compiler.cpp` already calls
-`Catalog::FindIndexOnColumn` and already stops classifying an indexed column
-as a filter scan. It was written for this and has had no production reader
-until now; it needs widening to a multi-column check, not inventing.
+`HasUnindexedEqualityFilter` in `src/exec/step_compiler.cpp` was written for
+this and had no production reader until now. It needed no widening — it needed
+the opposite: it asked `Catalog::FindIndexOnColumn`, a `sys.indexes` scan per
+equality per compile, and now reads the cached `index_mask` IX04 put on the
+relation. The mask names an index's **leading** key column only, which is
+exactly the right question.
+
+The two kinds **execute identically** — both walk the entries between two
+encoded bounds — so the split is a statistics distinction, the same one
+`kFilterScan` draws against `kScan`. The bounds are encoded **at compile
+time**: coercion is a compile-time act (`spec-types.md` §3.1) and so is the
+encoding that follows it, so no per-row key building happens on the read path.
+`low` pads its unpinned tail with `0x00` and `high` with `0xFF`, which are the
+true bounds because a key column's discriminator byte is 1 for every value
+that exists.
+
+A value the key encoder refuses — an integer wider than its column, a `$param`
+in a declared pattern's body — **declines the index** rather than failing: the
+step falls through to the walk, which returns the identical rows because the
+residual is untouched.
 
 ---
 

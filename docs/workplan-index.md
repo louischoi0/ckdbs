@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX09 are built** (IX-M1,
-IX-M2 and IX-M3 in full); nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX10 are built** (IX-M1 to
+IX-M3 in full, plus the compiler half of IX-M4); nothing else is.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,11 +13,17 @@ note.
 
 ## Where to pick this up
 
-**At `IX10`** — the read path, and the first task that makes the feature
-visible to a query. IX01-IX09 are built as of 2026-08-08 and the whole suite is
-green at **1,665 tests**. An index is declared, **built over whatever the
-relation already holds**, maintained on every write and logged; **no statement
-can use one**.
+**At `IX11`** — `RunIndexStep`, which makes an index step *descend* rather
+than walk. IX01-IX10 are built as of 2026-08-08 and the whole suite is green at
+**1,678 tests**.
+
+A statement on an indexed column now compiles to `kIndexProbe`/`kIndexRange`
+with both bounds already encoded — and **the step VM still walks it**, because
+its dispatch falls through to `RunWalkStep` for any kind it does not name.
+That is a correct intermediate state rather than a gap: the key equalities
+stay in the residual, so a walk returns the identical rows, which is the
+"downgrading any step to a scan cannot change the result" property doing
+exactly the job it exists for. What is missing is the speed, not the answer.
 
 What building IX06 and IX09 changed, folded back into the spec:
 
@@ -375,21 +381,44 @@ appended - so it is skipped.
 
 Ends with the feature doing something.
 
-### IX10 — `kIndexProbe` / `kIndexRange` in the compiler
+### IX10 — `kIndexProbe` / `kIndexRange` in the compiler — **built**
 
-`AccessKind` gains both. Selection per spec §9: longest usable key prefix,
-tie broken by lowest `index_oid`, catalog only.
+`AccessKind` gained both, placed after `kCabinProbe` and before
+`kFilterScan` - the accelerated non-pk kinds together. The persisted numbers
+(7 and 8) come from `StoredAccessKind`'s explicit mapping, which is why a kind
+could be inserted where it reads best without re-labelling any
+`sys.access_stats` row already on disk.
 
-**Key equalities stay in `Step::residual`.** That is not an optimization to
-revisit — it is what keeps "downgrading any step to a plain `kScan` cannot
-change the result" true, and what makes the surplus subtraction of IX1 free.
+Selection is `IndexProbeOf`: longest usable key prefix, ties broken by lowest
+`index_oid` - free, because `TableAccess::indexes` is sorted by it and the
+scan keeps the first index to reach a score. Tried **after** the pk kinds and
+**before** the Cabin, each for a stated reason.
 
-`IsTrailReplayable` **must not move**, and `HasReplayableStep` with it.
-Widen `HasUnindexedEqualityFilter` to ask about a multi-column index.
+`IsTrailReplayable` did not move, and `cabin_contract_test.cpp` now asserts
+both new kinds against it - an index is authoritative, like a Cabin, and
+invariant 9's line is lookup versus search.
 
-Done when: the contract test asserting the chain shape covers indexed and
-unindexed forms, and the `waystone_contract_test.cpp` query set gains indexed
-statements so all five of its configurations cover them.
+Three things worth knowing.
+
+**The plan's instruction about `HasUnindexedEqualityFilter` was backwards.**
+It said to widen it to a multi-column check. `FindIndexOnColumn` had already
+been widened by IX03; what the function needed was to stop asking the catalog
+at all - it was a `sys.indexes` scan per equality per compile - and read the
+cached `index_mask` IX04 put on the relation.
+
+**The bounds are encoded at compile time**, not per row: coercion is a
+compile-time act and so is the encoding that follows it. A value the encoder
+refuses declines the index rather than failing the statement, and the walk
+returns identical rows.
+
+**`waystone_contract_test.cpp` gained an index in its shared `Load`**, so all
+five configurations cover indexed statements. That moved one existing test:
+`ANonPkPredicateStillSearchesAndSaysSo` asserted the literal word "Scan", and
+`b.v` now compiles to an IndexProbe - which is authoritative, faster, and
+still a *search*. It reads the trust line off `IsTrailReplayable` now, which
+is what keeps it a test about invariant 9 rather than about whichever
+accelerator exists this month; its old form survives as
+`AnUnindexedNonPkPredicateStillScans` over the un-indexed heap relation.
 
 ### IX11 — `RunIndexStep` in the step VM
 
