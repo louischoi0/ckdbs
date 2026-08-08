@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX14 are built** (IX-M1 to
-IX-M4 in full, plus the switch and the benchmark); IX15 and IX16 remain.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX15 are built**; only IX16
+remains.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,9 +13,10 @@ note.
 
 ## Where to pick this up
 
-**At `IX15`** — the documentation sweep. IX01-IX14 are built as of 2026-08-08,
-the whole suite is green at **1,694 tests**, and the feature is measured in
-`bench/results-index.md`.
+**At `IX16`** — access statistics, which should be free if IX10 was done right
+and is worth *verifying* rather than assuming. IX01-IX15 are built as of
+2026-08-08, the whole suite is green at **1,694 tests**, the feature is
+measured in `bench/results-index.md`, and it is documented.
 
 The headline: **9.7× on a selective equality over 10,000 rows**, 1.9× over
 1,000, 1.11× over 200 — and an **11% loss** on a range at 200 rows, which is
@@ -564,12 +565,28 @@ tuple ids before heap access. That is the same reordering IX8a mandates here,
 arrived at independently for a locality reason where this engine needs it for
 a correctness one.
 
-### IX15 — Documentation
+### IX15 — Documentation — **built**
 
-`CLAUDE.md` gains a Core Architecture entry and loses the index items from
-Open Decisions that this settles; §13's list moves in as the ones it does not.
-`docs/client-manual.md` gains the three statements and the `indexes` key.
-`docs/heap-and-tuple.md` §7's access-statistics note gains the two new kinds.
+`CLAUDE.md` gained a **Core Architecture** entry (the substance) and its
+Documents line shrank to a pointer in the style of the others - it had grown
+into a single paragraph carrying the whole feature, which is not what that
+section is for. Its Open Decisions gained a **Secondary indexes** subsection
+carrying §13's list.
+
+`docs/client-manual.md` gained the three statements, the `indexes` config key,
+and - a pre-existing gap found while there - `CabinProbe` in `SHOW ACCESS`'s
+kind list, which had been missing since the Cabin landed.
+
+`docs/heap-and-tuple.md` §7 records what the two new kinds add to the
+statistics: a relation's history now distinguishes "searched every row for a
+few" from "descended an index for them", and a `kFilterScan` beside a
+`kIndexProbe` on one relation names two columns with different treatment -
+the first shape a physical optimizer could act on that §7 did not already
+describe.
+
+One thing worth stating in the manual and now is: **`SHOW INDEXES`' `entries`
+counts index entries, not live rows.** Maintenance is append-only, so a count
+well above the row count is the design working rather than a leak.
 
 ### IX16 — Access statistics
 
