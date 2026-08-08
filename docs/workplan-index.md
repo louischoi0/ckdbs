@@ -1,8 +1,7 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX15 are built**; only IX16
-remains.
+Tasks `IX01`-`IX16`, in five milestones. **All built** (2026-08-07/08).
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,10 +12,16 @@ note.
 
 ## Where to pick this up
 
-**At `IX16`** — access statistics, which should be free if IX10 was done right
-and is worth *verifying* rather than assuming. IX01-IX15 are built as of
-2026-08-08, the whole suite is green at **1,694 tests**, the feature is
-measured in `bench/results-index.md`, and it is documented.
+**Nothing.** Every task in this plan is built as of 2026-08-08, the whole
+suite is green at **1,699 tests**, the feature is measured in
+`bench/results-index.md` and documented in `CLAUDE.md`, the client manual and
+`heap-and-tuple.md` §7.
+
+What to read before extending it: `feat-index.md` §13 is the list of what the
+spec deliberately does not settle, and `CLAUDE.md`'s Open Decisions carries the
+same items. The one that came from measurement rather than design is **the
+crossover** — an index is an 11% loss at 200 rows and a 9.7× win at 10,000,
+and IX9 refuses to see it on purpose.
 
 The headline: **9.7× on a selective equality over 10,000 rows**, 1.9× over
 1,000, 1.11× over 200 — and an **11% loss** on a range at 200 rows, which is
@@ -588,24 +593,29 @@ One thing worth stating in the manual and now is: **`SHOW INDEXES`' `entries`
 counts index entries, not live rows.** Maintenance is append-only, so a count
 well above the row count is the design working rather than a leak.
 
-### IX16 — Access statistics
+### IX16 — Access statistics — **built, and it was free**
 
-`kIndexProbe` and `kIndexRange` are recorded through the same single call with
-no per-kind branch, so the numbers stay comparable across kinds. Free if IX10
-is done right; listed so it is checked rather than assumed.
+`kIndexProbe` and `kIndexRange` reach `sys.access_stats` through the same
+`catalog.RecordAccess(StoredAccessKind(kind), rel_oid, ColumnMaskOf(step))`
+every other kind does, with no per-kind branch - which is what IX10 bought by
+filling `StoredAccessKind`, `AccessKindOfStored`, `AccessKindName` and
+`AccessColumnsOf` when the compiler surfaced them.
 
----
+**No engine code changed. Tests only** - and writing them was the point,
+because "free" is a claim and the plan said to check it. A mutation removing
+the two numbers from `StoredAccessKind` **compiles cleanly** (the switch falls
+through to `kAccessKindUnset`) and fails five of them; without the tests, both
+kinds would have recorded as the unset kind and merged with every other
+unmapped access, silently.
 
-## Sequencing notes
+Two gaps closed while there. `TheStoredKindIsNeverZeroAndRoundTrips`
+enumerates kinds by hand and had been missing **`kCabinProbe` since the day it
+landed** - that list is now written to be extended, and says so. And the
+stored number and the rendered name are two mappings that can disagree, so
+`ShowAccessNamesTheIndexKinds` asserts `SHOW ACCESS` prints neither `?` nor a
+missing kind.
 
-- `IX01` and `IX02` are independent of everything above the storage layer and
-  can land alone.
-- `IX03`'s format bump is the disruptive one. Land it early in a session, not
-  late — every existing data file dies with it, and discovering that at the
-  end of a day of work is avoidable.
-- `IX06` before `IX10`. An index the compiler emits and the write path does
-  not maintain returns **wrong answers**, and it is the only ordering in this
-  plan where the wrong sequence is dangerous rather than merely awkward.
-- `IX09` (backfill) can trail `IX10` only if `CREATE INDEX` refuses a
-  non-empty relation in the meantime, and that refusal must be a real refusal
-  rather than an unchecked assumption.
+The shape records the **pinned key columns and no others** - the columns the
+access was assigned for, not every column the residual filters - which is the
+rule `kCabinProbe` already follows and the reason an index probe and a filter
+scan on one relation stay two shapes rather than merging into one.

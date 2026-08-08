@@ -1,12 +1,12 @@
 # Secondary indexes: multi-column and covering
 
-Status: **`IX01`-`IX15` built**: the storage layer, the catalog,
+Status: **built** (`IX01`-`IX16`, every milestone): the storage layer, the catalog,
 the grammar, the write hook, its WAL records, the backfill, the compiler, the
 read path and the `indexes` switch. A statement on an indexed column
 **descends the index**, and `tests/index_contract_test.cpp` is the suite that
 keeps it honest. Measured in `bench/results-index.md` and documented in `CLAUDE.md`,
-`docs/client-manual.md` and `docs/heap-and-tuple.md` §7. **IX16** (access
-statistics) is all that remains.
+`docs/client-manual.md` and `docs/heap-and-tuple.md` §7. §13 lists what this
+spec deliberately does **not** settle.
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
