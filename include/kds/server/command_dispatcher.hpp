@@ -186,7 +186,7 @@ public:
                        txn::TransactionManager* txn = nullptr,
                        txn::IsolationLevel isolation =
                            txn::IsolationLevel::kReadCommitted,
-                       std::uint32_t core_id = 0) noexcept
+                       std::uint32_t core_id = 0, bool indexes = true) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -202,7 +202,8 @@ public:
           txn_(txn),
           default_isolation_(isolation),
           autocommit_session_(isolation),
-          core_id_(core_id) {}
+          core_id_(core_id),
+          indexes_enabled_(indexes) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -885,6 +886,11 @@ private:
     // §6 asks for. 0 is the system core and the only value a single-core
     // build ever has, so every pre-multicore construction site is unchanged.
     std::uint32_t core_id_ = 0;
+
+    // The read-path index switch (`indexes`, default on). Read-path only:
+    // maintenance is not switchable, because an index that stops being
+    // maintained is wrong rather than slow.
+    bool indexes_enabled_ = true;
     CrossCoreWriteCounters cross_core_writes_;
 
     // Refuses a write to a relation this core may not write, and binds the

@@ -149,10 +149,10 @@ public:
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-                const txn::Snapshot* snapshot)
+                const txn::Snapshot* snapshot, bool indexes)
         : catalog_(catalog), store_(store), sink_(sink), depth_(depth), parent_(parent),
           stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins),
-          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything) {}
+          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes) {}
 
     Status Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
@@ -284,7 +284,7 @@ public:
         // step reading a relation through a different view than its outer
         // step would make one statement see two databases.
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_, cabins_, &snapshot_);
+                          trail_, replay_, cabins_, &snapshot_, indexes_);
         Status ran = inner.Run(sub.steps);
         if (!ran.ok()) return ran;
 
@@ -605,7 +605,12 @@ private:
         // Any reason to decline takes the walk, which is what the step would
         // have compiled to had the index not existed - and returns the
         // identical rows, because the equalities are still in the residual.
-        if (!step.index.has_value()) return RunWalkStep(steps, index, step, access);
+        // `indexes = off`: take the walk the step would have taken had the
+        // index not existed. The chain is **unchanged** - the kind is still
+        // kIndexProbe and ANALYZE still says so - which is what keeps the
+        // plan `f(shape, catalog)` and makes the A/B comparison compare
+        // execution rather than compilation.
+        if (!indexes_ || !step.index.has_value()) return RunWalkStep(steps, index, step, access);
         const IndexProbe& probe = *step.index;
 
         // The **live** root, not the one compiled in: a split republishes it
@@ -1399,6 +1404,7 @@ private:
     std::vector<const catalog::Schema*> schemas_;
     ChainFrame frame_;
     bool stopped_ = false;
+    bool indexes_ = true;
 };
 
 // The highest step_id anywhere under `step`/`chain`, sub-chains included.
@@ -1502,7 +1508,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     // conjuncts for UPDATE, which is not a chain execution and has no trail
     // of its own to contribute to.
     ChainRunner runner(catalog, store, kUnused, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr, snapshot);
+                       /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr, snapshot, /*indexes=*/true);
 
     for (const SubChain& sub : step.sub_chains) {
         auto value = runner.EvaluateSubChain(sub, frame);
@@ -1516,7 +1522,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot) {
+               const txn::Snapshot* snapshot, bool indexes) {
     if (chain.steps.empty()) {
         return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -1539,7 +1545,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     Budget spend(budget.limit());
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay, cabins, snapshot);
+                       trail, replay, cabins, snapshot, indexes);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by

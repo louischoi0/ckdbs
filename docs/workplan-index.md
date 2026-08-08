@@ -1,8 +1,9 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX11 are built** (IX-M1 to
-IX-M3 in full, and the read path of IX-M4); IX12-IX16 remain.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX11 and IX13 are built**
+(IX-M1 to IX-M3 in full, the read path of IX-M4, and the switch); IX12, IX14,
+IX15 and IX16 remain.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,8 +14,9 @@ note.
 
 ## Where to pick this up
 
-**At `IX12`** — the equivalence suite. IX01-IX11 are built as of 2026-08-08
-and the whole suite is green at **1,684 tests**.
+**At `IX12`** — the equivalence suite, which now has the switch it needed to
+flip. IX01-IX11 and IX13 are built as of 2026-08-08 and the whole suite is
+green at **1,686 tests**.
 
 **The feature works end to end.** A probe over a 60-row relation examines 10;
 a `BETWEEN` over 100 rows examines 10 and stops; a `COVERING` clause drops 30
@@ -471,12 +473,25 @@ forced off, compared **byte for byte** — rows and order. Plus:
 
 ## Milestone IX-M5 — measurement and documentation
 
-### IX13 — Switches
+### IX13 — Switches — **built**
 
-`indexes` (default on) as the read-path switch, so IX12's A/B comparison has
-something to flip. Maintenance is **not** switchable: an index that stops
-being maintained is wrong, not slow, and a config key that can produce a wrong
-answer is not a config key.
+`indexes`, default on, a **read-path** switch: off makes an index step take
+the walk it would have taken had the index not existed.
+
+**It does not change the compiled chain**, and that is the whole design. The
+kind stays `kIndexProbe` and ANALYZE still says so; the switch steers the
+branch inside `RunIndexStep`, exactly as `cabins` steers the branch inside
+`RunCabinStep`. That keeps the plan `f(shape, catalog)` - and it makes the A/B
+comparison sharper than a compiler switch would, because it holds the plan
+fixed and varies only the work.
+
+Maintenance is **not** switchable, as planned: an index that stops being
+maintained is wrong rather than slow, and turning the write cost off is a
+catalog act (`DROP INDEX`).
+
+`IndexSwitchTest` is the pair the switch exists for - one instance on, one
+off, replies compared byte for byte over probes, ranges, covering, an updated
+key, a deleted row, an aggregate and a miss.
 
 ### IX14 — Benchmark
 

@@ -239,11 +239,22 @@ struct ExecStats {
 // precisely what the engine did before MVCC: every row carried
 // kBootstrapXid and every row was visible. So a caller that passes nothing
 // gets byte-identical results to the pre-transactional executor.
+// `indexes` is the read-path switch (`indexes`, default on). Off makes an
+// index step take the walk it would have taken had the index not existed -
+// **the compiled chain is unchanged either way**, exactly as `cabins` leaves
+// a `kCabinProbe` step compiled and steers only the branch inside it. That is
+// what keeps the plan `f(shape, catalog)`, and it makes the A/B comparison a
+// sharper test than a compiler switch would: identical plan, identical rows,
+// different work.
+//
+// There is deliberately no switch for index **maintenance**. An index that
+// stops being maintained is *wrong* rather than slow, and a config key that
+// can produce a wrong answer is not a config key.
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
-               const txn::Snapshot* snapshot = nullptr);
+               const txn::Snapshot* snapshot = nullptr, bool indexes = true);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

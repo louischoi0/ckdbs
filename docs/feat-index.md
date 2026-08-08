@@ -1,9 +1,10 @@
 # Secondary indexes: multi-column and covering
 
-Status: **`IX01`-`IX11` built**: the storage layer, the catalog, the grammar,
-the write hook, its WAL records, the backfill, the compiler and the read path.
-A statement on an indexed column **descends the index**. What remains is
-IX12-IX16: the equivalence suite, the switch, the benchmark and the docs.
+Status: **`IX01`-`IX11` and `IX13` built**: the storage layer, the catalog,
+the grammar, the write hook, its WAL records, the backfill, the compiler, the
+read path and the `indexes` switch. A statement on an indexed column
+**descends the index**. What remains is IX12 (the equivalence suite), IX14
+(the benchmark), IX15 (docs) and IX16 (access statistics).
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
@@ -668,6 +669,24 @@ the order is already right.
 > no owner field, so `crosscore.md` M1's co-location rule is structural here
 > exactly as it is for the Cabin, the var-heap and Waystone pages. A peer core
 > cannot `CREATE INDEX` for the same reason it cannot `CREATE TABLE`.
+
+---
+
+## 12.3 The switch
+
+`indexes` (default on) is a **read-path** switch. Off makes an index step take
+the walk it would have taken had the index not existed, and **the compiled
+chain is unchanged either way** — the kind is still `kIndexProbe` and `ANALYZE`
+still says so. That is the same arrangement `cabins` has, and it keeps the plan
+`f(shape, catalog)`: the switch steers the branch inside a kind, never which
+kind was compiled. It also makes the A/B comparison sharper than a compiler
+switch would — identical plan, identical rows, different work.
+
+> **There is deliberately no switch for index maintenance.**
+
+An index that stops being maintained is *wrong* rather than slow, and a config
+key that can produce a wrong answer is not a config key. Turning the write cost
+off is a catalog act: `DROP INDEX`.
 
 ---
 

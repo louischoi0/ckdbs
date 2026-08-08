@@ -182,6 +182,21 @@ public:
         // able to check it on their own data.
         bool cabins = true;
 
+        // Whether a secondary index may be *read* (`indexes`, default on).
+        //
+        // A read-path switch only. Off makes an index step take the walk it
+        // would have taken had the index not existed, and the compiled chain
+        // is unchanged either way - so "identical replies with indexes on
+        // and off" compares execution rather than compilation, which is the
+        // sharper of the two tests.
+        //
+        // **There is deliberately no switch for maintenance.** An index that
+        // stops being maintained is *wrong* rather than slow, and a config
+        // key that can produce a wrong answer is not a config key. It is
+        // also why `DROP INDEX` exists: turning the cost off is a catalog
+        // act, not a configuration one.
+        bool indexes = true;
+
         // §8's budget, which the spec leaves `[OPEN]`. Both `[PROPOSED]`,
         // both held here rather than compiled in so that every option the
         // spec lists stays viable. Nothing may depend on either number; what

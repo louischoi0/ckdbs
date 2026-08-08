@@ -309,5 +309,85 @@ TEST_F(IndexCompileTest, ATypedKeyColumnCompilesItsLiteralOnce) {
     EXPECT_EQ(Run("SELECT * FROM t WHERE d = '2026-02-30'").rfind("ERR", 0), 0u);
 }
 
+// ---- The read-path switch (workplan IX13) -------------------------------
+
+// One database at a chosen setting of `indexes`. A plain struct rather than
+// a second fixture, because the A/B test needs *two* of them at once and a
+// gtest fixture cannot be instantiated.
+struct Instance {
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
+    std::optional<bootstrap::BootstrapResult> boot;
+    std::optional<server::CommandDispatcher> dispatcher;
+
+    explicit Instance(bool indexes) {
+        auto booted = bootstrap::BootstrapDatabase(store, 1000);
+        EXPECT_TRUE(booted.ok()) << booted.status().message();
+        boot.emplace(std::move(booted.value()));
+        dispatcher.emplace(boot->superblock, boot->catalog, store, /*log=*/nullptr,
+                           /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
+                           Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                           /*access_statistics=*/true, /*cabins=*/nullptr, /*txn=*/nullptr,
+                           txn::IsolationLevel::kReadCommitted, /*core_id=*/0, indexes);
+    }
+
+    std::string Run(const std::string& sql) { return dispatcher->Dispatch(sql).response; }
+    void Ok(const std::string& sql) {
+        const std::string out = Run(sql);
+        EXPECT_NE(out.rfind("ERR", 0), 0u) << sql << " -> " << out;
+    }
+    std::string Plan(const std::string& sql) { return Run("ANALYZE " + sql); }
+};
+
+TEST(IndexSwitchTest, TheChainIsTheSameAndTheStepWalks) {
+    // `indexes = off` steers the branch inside an index step, never which
+    // step was compiled - which is what keeps the plan `f(shape, catalog)`
+    // and makes this comparison one of execution rather than planning.
+    Instance off(/*indexes=*/false);
+    off.Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    off.Ok("CREATE INDEX ix ON t (a)");
+    for (int i = 0; i < 30; ++i) {
+        off.Ok("INSERT INTO t VALUES (" + std::to_string(i % 3) + ")");
+    }
+
+    const std::string plan = off.Plan("SELECT id FROM t WHERE a = 1");
+    EXPECT_NE(plan.find("IndexProbe"), std::string::npos)
+        << "the switch changed the compiled chain: " << plan;
+    // ...and it walked: every row read, no index counters.
+    EXPECT_NE(plan.find("examined=30"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("index_scanned="), std::string::npos) << plan;
+}
+
+TEST(IndexSwitchTest, TheRowsAreByteIdenticalEitherWay) {
+    // The property the switch exists to check, and the reason IX8a's sort
+    // had to happen: an accelerator may cost performance and must never
+    // change a query result.
+    Instance on(/*indexes=*/true);
+    Instance off(/*indexes=*/false);
+
+    const auto load = [](Instance& db) {
+        db.Ok("CREATE TABLE t (id int64, a int64, b int64) BTREE");
+        db.Ok("CREATE INDEX ix ON t (a) COVERING (b)");
+        for (int i = 0; i < 40; ++i) {
+            db.Ok("INSERT INTO t VALUES (" + std::to_string(i % 5) + ", " +
+                  std::to_string(i % 4) + ")");
+        }
+        db.Ok("UPDATE t SET a = 9 WHERE id = 3");
+        db.Ok("DELETE FROM t WHERE id = 7");
+    };
+    load(on);
+    load(off);
+
+    for (const char* sql : {"SELECT id FROM t WHERE a = 1",
+                            "SELECT id FROM t WHERE a = 9",
+                            "SELECT id FROM t WHERE a = 1 AND b = 2",
+                            "SELECT id FROM t WHERE a BETWEEN 1 AND 3",
+                            "SELECT id, a, b FROM t WHERE a = 0",
+                            "SELECT COUNT(*) FROM t WHERE a = 2",
+                            "SELECT a, COUNT(*) FROM t GROUP BY a",
+                            "SELECT id FROM t WHERE a = 99"}) {
+        EXPECT_EQ(off.Run(sql), on.Run(sql)) << sql;
+    }
+}
+
 }  // namespace
 }  // namespace kds::exec

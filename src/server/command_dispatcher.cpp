@@ -2240,7 +2240,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
             if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay, cabins_, &snapshot);
+        /*stats=*/nullptr, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
         // path has it: a statement that stopped part way through touched
@@ -2322,7 +2322,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
             }
             return storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay, cabins_, &snapshot);
+        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
         return {"ERR " + ran.message(), false};
     }
@@ -2591,7 +2591,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             }
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_, &snapshot.value());
+        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_, &snapshot.value(), indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
