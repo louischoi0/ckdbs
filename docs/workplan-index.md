@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX13 are built** (IX-M1 to
-IX-M4 in full, plus the switch); IX14, IX15 and IX16 remain.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX14 are built** (IX-M1 to
+IX-M4 in full, plus the switch and the benchmark); IX15 and IX16 remain.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,9 +13,15 @@ note.
 
 ## Where to pick this up
 
-**At `IX14`** — the benchmark, which goes through `bench/`'s owner and wants a
-Release build. IX01-IX13 are built as of 2026-08-08 and the whole suite is
-green at **1,694 tests**.
+**At `IX15`** — the documentation sweep. IX01-IX14 are built as of 2026-08-08,
+the whole suite is green at **1,694 tests**, and the feature is measured in
+`bench/results-index.md`.
+
+The headline: **9.7× on a selective equality over 10,000 rows**, 1.9× over
+1,000, 1.11× over 200 — and an **11% loss** on a range at 200 rows, which is
+the crossover IX9's `f(shape, catalog)` rule deliberately cannot see. §7's
+covering claim survived in both directions, and the *absence* of an index-only
+scan was measured rather than assumed.
 
 `tests/index_contract_test.cpp` is what keeps the feature honest, and it was
 **mutation-tested rather than assumed**: deleting IX8a's pk-order sort fails
@@ -523,19 +529,40 @@ catalog act (`DROP INDEX`).
 off, replies compared byte for byte over probes, ranges, covering, an updated
 key, a deleted row, an aggregate and a miss.
 
-### IX14 — Benchmark
+### IX14 — Benchmark — **built**
 
-Via `bench/`'s owner. Wanted, and named here so the run is not a data dump:
+`bench/results-index.md`, from `tools/index_benchmark.py` and its PostgreSQL
+twin `tools/pg_index_benchmark.py` (which imports its schema, row generator
+and shape list from the ckdbs driver, so the two cannot drift into measuring
+different questions). Release build, NVMe, data files under `$HOME`, twelve
+runs, `--verify` comparing every indexed reply against the unindexed walk row
+for row and in order.
 
-- a selective secondary equality, indexed against `kFilterScan`, at 200 / 1K /
-  10K rows;
-- the same with and without `COVERING`, to price spec §7's claim that covering
-  buys the *avoided* descents and nothing else;
-- the write-path cost per index on INSERT and on a key-moving UPDATE;
-- a PostgreSQL comparison on the same shapes.
+What it settled, beyond the headline:
 
-Release build (`build-release`); a Debug measurement here is wrong in both
-directions, which `workplan-aggregate-perf.md` established twice.
+- **A base descent costs 0.58-0.76 µs**, rising with relation size. That makes
+  `index_filtered × ~0.7 µs` the price of a COVERING clause, reported by
+  `ANALYZE` before anyone commits to the write cost.
+- **The marginal index costs half the first one** - +4.5 µs for the first,
+  +2.5 for the second, flat across a 50× row range at `relaxed` durability.
+  Two hypotheses fit (a per-index difference, or a fixed cost of entering the
+  hook) and this run separates neither; the document says so.
+- **IX2's rule is confirmed by a counter, not a latency.** After 10,000
+  inserts and 600 updates, the index on the un-updated column holds exactly
+  10,000 entries. A violation would cost ~2.5 µs - inside the harness floor -
+  so latency could never have caught it.
+- **`indexes = off` is a faithful proxy for no index** (+0.4% at the small
+  sizes, straddling zero at 10K), which is what licenses the contract suite's
+  A/B.
+
+Two things worth carrying forward. **The write cost is 0.9% of a default
+INSERT only because a batch of one is a batch**: the run is single-connection,
+so the fsync does not amortize, and under concurrency 4.5 µs becomes visible.
+That measurement does not exist. And **PostgreSQL never chose a plain
+`Index Scan`** on these shapes - it preferred `Bitmap Heap Scan`, which sorts
+tuple ids before heap access. That is the same reordering IX8a mandates here,
+arrived at independently for a locality reason where this engine needs it for
+a correctness one.
 
 ### IX15 — Documentation
 

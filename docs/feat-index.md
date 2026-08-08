@@ -1,10 +1,10 @@
 # Secondary indexes: multi-column and covering
 
-Status: **`IX01`-`IX13` built**: the storage layer, the catalog,
+Status: **`IX01`-`IX14` built**: the storage layer, the catalog,
 the grammar, the write hook, its WAL records, the backfill, the compiler, the
 read path and the `indexes` switch. A statement on an indexed column
 **descends the index**, and `tests/index_contract_test.cpp` is the suite that
-keeps it honest. What remains is IX14 (the benchmark), IX15 (docs) and IX16
+keeps it honest. Measured in `bench/results-index.md`. What remains is IX15 (docs) and IX16
 (access statistics).
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
@@ -332,6 +332,19 @@ On a probe returning 10 rows from 10,000 entries, that is the whole cost.
 columns avoided, and nothing else. If it is zero, a `COVERING` clause bought
 exactly the write cost it added.
 
+**Confirmed in both directions** (`bench/results-index.md`). Six configurations
+where `index_filtered = 0` came out +0.4, −0.2, −2.6, +0.7, +1.3, +0.2 % —
+straddling zero with no consistent sign. Where it filtered 60 of 69 entries the
+shape ran **21% faster**. A base descent prices out at **0.58–0.76 µs**, so
+covering's value is `index_filtered × ~0.7 µs` and `ANALYZE` reports it before
+anyone commits to the write cost.
+
+The absence of an index-only scan is measured rather than merely asserted:
+`COUNT(*)` over an indexed relation costs the same as fetching the rows (2.5%,
+inside the noise floor), where PostgreSQL's `Index Only Scan` with
+`Heap Fetches: 0` is 10% cheaper. That 10% is what a visibility witness would
+be worth here.
+
 The entry-side test is **conservative by construction**: it answers "drop
 this row" only when a residual predicate the entry's own values can decide
 says so. A predicate on an uncovered column, an operand that is not a
@@ -397,6 +410,15 @@ Deterministic and stable is not a preference here: a recorded pattern must
 not compile differently as the data changes, or `pattern_id` stops naming a
 plan. It is the same argument `CabinProbeOf` gives for taking the *first*
 cabined equality rather than the most selective one.
+
+**What it costs, measured** (`bench/results-index.md`): there is a crossover
+this rule cannot see, and below it the index is a loss. A selective equality
+is 9.7× faster at 10,000 rows, 1.9× at 1,000, 1.11× at 200 — and a *range* at
+200 rows is **11% slower** with the index than without it. PostgreSQL declines
+its own index on the same shape at that size; KDS cannot, because declining
+needs the cardinality estimate IX9 refuses. That is the price of a stable
+plan, and it is small and bounded: the loss is one page's worth of rows, and
+the win grows without limit.
 
 Two rules that keep every existing proof standing:
 

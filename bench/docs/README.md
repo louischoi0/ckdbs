@@ -25,12 +25,17 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-re
 
 ---
 
-## The four scenarios
+## The scenarios
 
 Each scenario is a whole workload rather than a statement mix, and each has a
 PostgreSQL twin beside it that drives the same work through `pg_wire.py`. The
 twins import their schema and their business logic from the ckdbs driver, so
 the two cannot drift into measuring different questions.
+
+The four `scenarioN_*.py` drivers are workloads. `index_benchmark.py` at the
+end of this section is the one exception — a feature matrix rather than a
+workload — and it is here rather than under the statement-level tools because
+it has a twin and follows the same conventions.
 
 ### `scenario0_stockmarket.py` — a write workload, in TPS
 
@@ -158,18 +163,13 @@ queries have observed, and a **secondary index** is authoritative for every
 value. PostgreSQL answers it one way, with a btree index, which is what makes
 it a clean baseline here rather than a second pile of numbers.
 
-> **The index read path is not built.** `docs/workplan-index.md` has
-> `IX01`-`IX07` and `IX09` — key encoding, page format, catalog row, grammar,
-> write hook, backfill — and stops at `IX10`/`IX11`, which are what would make
-> the compiler emit `kIndexProbe`/`kIndexRange` and the step VM run them. So
-> today `CREATE INDEX` succeeds and backfills, `SHOW INDEXES` reports a real
-> tree, every INSERT and UPDATE pays the index's maintenance, and **no SELECT
-> can use it**. Running `--index-mode single` against `--index-mode none` is
-> therefore a measurement of what an index *costs* with its benefit still
-> switched off. That is a real number and the driver reports it as such; when
-> `IX10`/`IX11` land, the identical invocation measures the benefit.
-> `--assert-index-reads` fails the run if the read shapes did not improve, so
-> a later run cannot quietly report "no change" as a result.
+> **The index read path is built** as of `IX01`-`IX13`, so `--index-mode`
+> now measures an index's benefit as well as its cost: a statement with an
+> equality or `BETWEEN` on an indexed column compiles to `kIndexProbe` /
+> `kIndexRange` and descends. The driver's own docstring and its
+> `--assert-index-reads` flag still describe the pre-`IX10` engine and have
+> not been re-run since; use `index_benchmark.py` below for the index
+> question and this scenario for the whole-workload one.
 
 ```bash
 # the row-set sweep the documentation rules require
@@ -216,6 +216,74 @@ because a declared index is not necessarily a used one — KDS has no `EXPLAIN`,
 which is itself worth recording. There is **no Cabin equivalent** on the
 PostgreSQL side and the twin does not invent one; a `--cabin` run simply has
 no twin column in the comparison.
+
+### `index_benchmark.py` — secondary indexes, priced
+
+The four questions `docs/workplan-index.md` IX14 asks, answered in one process
+against one server so they are comparable: a selective non-pk equality indexed
+against the walk that replaces it; the same statement with and without
+`COVERING`; INSERT with 0, 1 and 2 indexes and an UPDATE that moves an indexed
+key against one that does not; and a PostgreSQL twin on the same shapes.
+Results at `bench/results-index.md`.
+
+Three read relations (`ord_none`, `ord_idx`, `ord_cov`) hold **byte-identical
+contents** and differ only in what is declared over them, and three write
+relations (`w0`, `w1`, `w2`) carry 0, 1 and 2 indexes. Every shape is driven
+with the **same argument against every relation inside one operation**, so a
+table's columns are one comparison rather than three runs, and a machine that
+gets busier partway through costs all of them equally.
+
+```bash
+# one size, one server, one fresh data file; sweep by repeating
+for n in 200 1000 10000; do
+  rm -rf ~/bench-index/idx-$n.db*
+  ./build-release/kds_server ~/bench-index/idx-$n.db --port 15461 &
+  ./tools/index_benchmark.py --port 15461 --suffix s$n --rows $n \
+      --ops 300 --write-ops $n --update-ops 300 --verify 20 \
+      --expect-indexes on --json ck-$n.json
+done
+
+# the baseline, run separately - never alongside
+./tools/pg_index_benchmark.py --port 15433 --database bench \
+    --rows 10000 --ops 300 --write-ops 10000 --update-ops 300 --json pg-10000.json
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `--rows N` | 1000 | rows in each read relation, and the row-set axis. The documented sweep is **200 / 1000 / 10000** |
+| `--matches N` | 6 | rows per `cust_id`; customers are scaled as `rows / matches`, which holds selectivity constant across the sweep. The range shapes span a fixed 10 customers, so their answer stays ~60-69 rows at every size |
+| `--ops N` | 200 | operations per read shape **per relation** — seven shapes × three relations |
+| `--write-ops N` | 400 | autocommit INSERTs per write relation. Set it to `--rows` to sweep the write test on the same axis |
+| `--update-ops N` | 200 | UPDATEs per shape per write relation, capped at the rows inserted |
+| `--batch N` | 200 | rows per transaction during the **load**; the measured insert phase is always autocommit |
+| `--expect-indexes on\|off` | — | fail the run unless the server behaved as that setting. Read out of `ANALYZE`'s `index_scanned` counter, **not** the config: the compiled chain is identical either way by design (`feat-index.md` §12.3), so only the work done can answer it |
+| `--no-writes` | off | skip the INSERT/UPDATE phases — what the `indexes = off` side of the A/B wants, since maintenance is not switchable |
+| `--verify N` | 20 | argument draws for the equivalence checks: every shape's reply from each indexed relation must equal the unindexed one's **row for row and in order** (which is what IX8a's pk-order rule needs), and the two indexed write relations must answer a `region` equality identically to `w0`'s walk |
+| `--suffix`, `--seed`, `--json`, `--echo` | | as the other drivers. Relation names must be valid identifiers, so a suffix cannot contain `-` |
+
+The `indexes` key is a **startup** setting with no runtime `SET`, so the
+cleanest A/B — same compiled plan, same rows, different work — is two server
+processes over two freshly loaded data files, `--expect-indexes on` against
+`--expect-indexes off`. Note that the driver also measures a `FilterScan` and
+an index probe **inside one run**, and that in-run form is what
+`bench/results-index.md` reports: the same workload drifted 6.4% between two
+server processes minutes apart, which is 3.5× the in-run noise floor.
+
+Every run carries a `PING` phase (`SELECT 1` on the PostgreSQL side): the
+client and socket round trip with no engine work behind it, which is what
+makes "engine time" a subtraction rather than a guess. `eq` is also executed
+twice per relation, as `eq` and `eq-again`, which is the run's own noise floor.
+
+The twin takes the same flags plus `--user`, `--database`, `--keep`,
+`--synchronous-commit` and `--no-analyze`, and imports the schema, the row
+generator, the shape list and the sizing arithmetic from the ckdbs driver, so
+the two cannot drift. `VACUUM ANALYZE` is on by default and **is not tuning**:
+without statistics PostgreSQL may not choose its index at all, and without the
+vacuum the visibility map is empty so an index-only scan cannot happen even
+where it is the right plan. The twin also records which scan node PostgreSQL
+chose per shape — `Index Only Scan` is the plan `feat-index.md` §7 says KDS
+structurally cannot produce, so seeing where PostgreSQL uses one is what
+prices the missing visibility witness.
 
 ---
 
