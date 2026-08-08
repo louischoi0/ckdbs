@@ -413,7 +413,9 @@ plan. It is the same argument `CabinProbeOf` gives for taking the *first*
 cabined equality rather than the most selective one.
 
 **What it costs, measured** (`bench/results-index.md`): there is a crossover
-this rule cannot see, and below it the index is a loss. A selective equality
+this rule cannot see, and below it the index is a loss. It is **not a tuning
+problem** — §1a records a phase-2 leaf memo that removed 95% of the descents
+at 200 rows without moving the latency, and cost 42% at 10,000 rows. A selective equality
 is 9.7× faster at 10,000 rows, 1.9× at 1,000, 1.11× at 200 — and a *range* at
 200 rows is **11% slower** with the index than without it. PostgreSQL declines
 its own index on the same shape at that size; KDS cannot, because declining

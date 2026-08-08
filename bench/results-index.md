@@ -138,6 +138,42 @@ and it says the compiler's `f(shape, catalog)` selection rule (`feat-index.md`
 The engine has no mechanism to decline one and, by IX9's deliberate design,
 no data with which to.
 
+### 1a. One attempt to tune it anyway, and why it failed
+
+**Tested and reverted 2026-08-08.** The 19 µs gap looks like it should be the
+sixty `BtreeLookup` calls: each descends from the root, and IX8a already sorts
+those pks into primary-key order, which on a btree relation *is* leaf order —
+so a one-leaf memo in phase 2 should collapse a run of them into one descent.
+It was built (`BtreeLookupInLeaf` plus a memo, ~40 lines) and measured. Both
+halves of the hypothesis were wrong:
+
+| | 200 rows | 10,000 rows |
+|---|---:|---:|
+| descents avoided | **57 of 60** | **11 of 69** |
+| `range` p50, with memo | 202.9 µs | 355.4 µs |
+| `range` p50, without | 183.4 µs | **250.2 µs** |
+
+At 200 rows the memo removed 95% of the descents and **the latency did not
+move** — the relation is one leaf, so a descent was already "fetch this page
+and search it", which is exactly what the memo replaced it with. At 10,000
+rows it is a **42% regression**: a secondary index's matching pks are
+*scattered across the relation by construction*, so the hit rate collapses to
+16% and each of the other 84% pays a wasted page fetch and leaf search before
+descending anyway.
+
+What the 19 µs actually is, with the client subtracted: the walk costs
+**0.46 µs per row examined** and the index **1.85 µs per row resolved**. At
+60 matches in 200 rows — 30% selectivity — reading everything sequentially
+inside one already-fetched page beats resolving each row through the tree.
+That is the ordinary shape of the result rather than an artifact, and it is
+why PostgreSQL's planner picks a `Seq Scan` on the same shape at the same
+size.
+
+The lesson is `workplan-aggregate-perf.md`'s, earned a third time: **the
+stated cause was plausible, cheap to test, and wrong.** Anyone reaching for
+this again should measure the memo's hit rate at the size they care about
+first — it is one `ANALYZE` line, and it is 16%.
+
 ---
 
 ## 2. The `indexes` switch is a faithful proxy for not having an index
