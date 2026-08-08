@@ -337,7 +337,14 @@ def read_phases(client, tables, users, books, args, rng):
 def explain_shapes(client, tables, users):
     """`EXPLAIN` for the equality shapes, so the document can state whether
     PostgreSQL actually used the index rather than assuming a declared index
-    is a used one. KDS has no EXPLAIN, which is itself worth recording."""
+    is a used one.
+
+    The ckdbs side has the same capability under a different name:
+    `ANALYZE <statement>` names each step's access kind (`IndexProbe`,
+    `IndexRange`, `FilterScan`, `Scan`) and an index step's `index_scanned`
+    / `index_resolved` counts. Both drivers print their plans, so a
+    comparison table can say what each engine actually did rather than what
+    it was configured to do."""
     out = []
     probes = (
         ("loans-by-user",

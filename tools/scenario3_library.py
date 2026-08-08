@@ -21,29 +21,29 @@ against each other says something a single-structure benchmark cannot:
 PostgreSQL answers it exactly one way, with a btree index, which is what
 makes it a clean baseline here rather than a second set of numbers.
 
----- READ THIS BEFORE INTERPRETING ANY READ NUMBER ------------------------
+---- The two ways to switch the index off ---------------------------------
 
-**The index read path is not built.** `docs/workplan-index.md` has IX01-IX07
-and IX09 built - the key encoding, the page format, the catalog row, the
-grammar, the write hook and the backfill - and stops at IX10 (`kIndexProbe`
-/ `kIndexRange` in the compiler) and IX11 (`RunIndexStep` in the step VM).
-So on today's engine:
+The index read path is **built** (`docs/workplan-index.md` IX10-IX16), so a
+statement with an equality or `BETWEEN` on an indexed column compiles to
+`kIndexProbe` / `kIndexRange` and descends. There are two different A/B
+levers and they answer different questions:
 
-  * `CREATE INDEX` succeeds, backfills, and `SHOW INDEXES` reports a tree
-    with real height and entry counts;
-  * every INSERT and UPDATE pays that index's maintenance (IX06);
-  * and **no SELECT can use it**. A `WHERE user_id = ?` compiles to a
-    FilterScan with an index declared exactly as it does without one.
+  * `--index-mode none` declares **no index at all**. The comparison
+    against `single` therefore prices the index's *whole* cost - the
+    backfill, the per-write maintenance (IX06) and the space - against its
+    read benefit.
+  * `--server-indexes off` leaves the indexes declared and maintained, and
+    turns off only the read path (the `indexes` config key, IX13). Because
+    the compiled chain is identical either way, this isolates the *read*
+    benefit with every write-side cost still being paid.
 
-That is not a defect in this driver and the driver does not route around it.
-It measures it: `--index-mode single` against `--index-mode none` is, right
-now, a measurement of what an index *costs* with the read benefit still
-switched off, which is a real and reportable number. When IX10/IX11 land,
-the same invocation measures the benefit, and the two runs are directly
-comparable because nothing else in the driver moves.
+Reporting only the first would credit the index for a saving whose cost is
+in a phase the table does not show; reporting only the second would hide
+that cost entirely. The matrix runs both.
 
-`--assert-index-reads` fails the run if the read shapes do not improve, so a
-future run cannot quietly report "no change" as a result.
+`--assert-index-reads` fails the run if the equality shapes did not improve
+under an index, so a regression in the read path cannot be reported as a
+flat result.
 
 ---- Row-set sizes --------------------------------------------------------
 
@@ -255,27 +255,27 @@ def inserted_id(reply):
 def select_rows(reply):
     """The data rows of a SELECT reply, as lists of field strings.
 
+    The wire form is CSV with a **header line first** - `count(*)\\n200` for
+    a fold, `user_id,book_id\\n2,19\\n...` for a projection - so the header is
+    dropped and the rest split on commas. This driver's generated values
+    contain no commas by construction (member codes, ISBNs and titles are
+    alphanumeric), which is what makes a split legitimate instead of a
+    parser.
+
     An error reply and a genuinely empty result must not look alike here:
     the caller checks `ERR` itself, and this returns [] for both, which is
     why every read phase counts errors through the Phase rather than by
     inspecting the row list."""
     if reply.startswith("ERR"):
         return []
-    rows = []
-    for line in reply.splitlines():
-        line = line.strip()
-        if not line or line.startswith("(") or line.startswith("-"):
-            continue
-        if line.upper().startswith("OK"):
-            continue
-        rows.append([f.strip() for f in line.split("|")])
-    return rows
+    lines = [line for line in reply.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return []
+    return [[f.strip() for f in line.split(",")] for line in lines[1:]]
 
 
 def row_count(reply):
-    """The `(N rows)` trailer, when the server prints one."""
-    got = ROW_COUNT.search(reply)
-    return int(got.group(1)) if got else len(select_rows(reply))
+    return len(select_rows(reply))
 
 
 # ---- DDL -----------------------------------------------------------------
@@ -368,6 +368,66 @@ def explain_index_failure(stmt, reply):
               f"predates it: re-run with --index-when before, which declares "
               f"the index on an empty relation and lets the write hook "
               f"maintain it.", reply)
+
+
+ANALYZE_STEP = re.compile(r"^step \d+ (\w+) ", re.M)
+
+
+def analyze_shapes(exec_, tables, users, books):
+    """`ANALYZE <statement>` for the shapes an index is supposed to serve.
+
+    This is KDS's EXPLAIN, and it is what makes `--assert-index-reads` a
+    check on the *plan* rather than a guess from latency: the reply names
+    the access kind per step (`IndexProbe`, `IndexRange`, `FilterScan`,
+    `Lookup`) and, for an index step, `index_scanned` / `index_resolved`.
+    A latency-based assertion would pass a plan that regressed to a scan on
+    a small enough relation."""
+    probes = (
+        ("loans-by-user",
+         f"SELECT book_id FROM {tables['loans']} WHERE user_id = {users[0]}"),
+        ("loans-by-book",
+         f"SELECT user_id FROM {tables['loans']} WHERE book_id = {books[0]}"),
+        ("resv-by-user",
+         f"SELECT book_id FROM {tables['reservations']} "
+         f"WHERE user_id = {users[0]}"),
+        ("books-by-author",
+         f"SELECT title FROM {tables['books']} WHERE author_id = 0"),
+        ("books-by-genre",
+         f"SELECT title FROM {tables['books']} WHERE genre = 3"),
+        ("loans-by-daterange",
+         f"SELECT user_id FROM {tables['loans']} "
+         f"WHERE loaned_day BETWEEN {DAY0 - 300} AND {DAY0 - 270}"),
+        ("overdue",
+         f"SELECT user_id FROM {tables['loans']} "
+         f"WHERE status = {STATUS_OVERDUE} "
+         f"AND due_day BETWEEN {DAY0 - 300} AND {DAY0}"),
+    )
+    out = {}
+    for name, stmt in probes:
+        reply = exec_(f"ANALYZE {stmt}")
+        # ANALYZE prints each step twice - once in the plan, once again in
+        # the per-step statistics line - so the same kind appears twice for
+        # a one-step chain. Dedupe in order rather than with a set, because
+        # a two-step chain's order is the execution order and is the thing
+        # worth reading.
+        kinds = []
+        for kind in ANALYZE_STEP.findall(reply):
+            if not kinds or kinds[-1] != kind:
+                kinds.append(kind)
+        out[name] = {
+            "kinds": kinds,
+            "line": " ".join(reply.split("\n")[0:1]),
+            "raw": reply,
+        }
+    return out
+
+
+# The shapes whose predicate column `--index-mode single` indexes. Only
+# these are expected to reach an index; the others are here as the control
+# that says a plan did not change for a reason unrelated to the index.
+INDEXED_BY_SINGLE = ("loans-by-user", "loans-by-book", "resv-by-user",
+                     "books-by-author", "books-by-genre")
+INDEXED_BY_COMPOSITE = ("overdue",)
 
 
 def show_indexes(exec_):
@@ -687,11 +747,19 @@ def main():
                         help="check the three invariants over a sample of N; "
                              "0 disables (default: 25)")
     parser.add_argument("--assert-index-reads", action="store_true",
-                        help="fail the run if --index-mode did not improve "
-                             "the equality shapes. Off by default because "
-                             "the index read path (IX10/IX11) is not built, "
-                             "and a run that correctly reports no change is "
-                             "not a failed run today.")
+                        help="fail the run if the shapes this --index-mode "
+                             "indexes did not compile to IndexProbe / "
+                             "IndexRange. Checks the plan through ANALYZE, "
+                             "not the latency, so a regression to a scan "
+                             "cannot pass on a small relation.")
+    parser.add_argument("--server-indexes", default="unknown",
+                        choices=("on", "off", "unknown"),
+                        help="**a label, not a switch.** The `indexes` "
+                             "config key is read at server start and there "
+                             "is no runtime SET for it, so the caller starts "
+                             "the server with `indexes = off` and records "
+                             "that here. It lands in the JSON so a matrix "
+                             "cell cannot lose which engine it ran against.")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--echo", action="store_true")
@@ -732,6 +800,8 @@ def main():
         phases.append(index_phase)
     phases.extend(read_phases(client, tables, users, books, args, rng))
 
+    plans = analyze_shapes(client, tables, users, books)
+
     problems = []
     if args.verify:
         problems = verify(client, tables, sizes, users, args.verify, rng)
@@ -748,6 +818,7 @@ def main():
         "sizes": sizes,
         "index_mode": args.index_mode,
         "index_when": args.index_when,
+        "server_indexes": args.server_indexes,
         "cabin": args.cabin,
         "matches_per_key": args.matches,
         "ops_per_shape": args.ops,
@@ -755,21 +826,23 @@ def main():
         "started_utc": started.isoformat(timespec="seconds"),
         "git": git_stamp(),
         "server_meta": server_meta(client),
+        "plans": {k: v["kinds"] for k, v in plans.items()},
         "verify_problems": problems,
     }
 
     footer = [
         f"index mode {args.index_mode} ({args.index_when} load), "
-        f"cabin {'on' if args.cabin else 'off'}",
-        f"sizes: " + ", ".join(f"{k}={v}" for k, v in sizes.items()),
+        f"cabin {'on' if args.cabin else 'off'}, "
+        f"server indexes {args.server_indexes}",
+        "sizes: " + ", ".join(f"{k}={v}" for k, v in sizes.items()),
+        "ANALYZE (the access kind each shape compiled to):",
     ]
+    for name, got in plans.items():
+        footer.append(f"    {name}: {', '.join(got['kinds']) or '-'}")
     if args.index_mode != "none":
         footer.append("SHOW INDEXES:")
         for line in show_indexes(client).splitlines():
             footer.append(f"    {line}")
-        footer.append(
-            "the index read path (IX10/IX11) is not built: a declared index "
-            "is maintained and cannot yet serve a SELECT")
     if problems:
         footer.append(f"VERIFY FAILED - {len(problems)} problem(s):")
         for line in problems[:10]:
@@ -787,9 +860,22 @@ def main():
     if problems:
         sys.exit(2)
     if args.assert_index_reads and args.index_mode != "none":
-        abort("--assert-index-reads: the index read path is not built "
-              "(workplan-index.md IX10/IX11), so no read shape can improve. "
-              "Drop the flag, or re-run once IX10/IX11 land.")
+        expected = []
+        if args.index_mode in ("single", "all"):
+            expected.extend(INDEXED_BY_SINGLE)
+        if args.index_mode in ("composite", "all"):
+            expected.extend(INDEXED_BY_COMPOSITE)
+        if args.index_mode == "covering":
+            expected.append("loans-by-user")
+        missed = [name for name in expected
+                  if not any(k.startswith("Index")
+                             for k in plans.get(name, {}).get("kinds", ()))]
+        if missed:
+            abort("--assert-index-reads: these shapes have an index on "
+                  "their predicate column and did not compile to an index "
+                  "step: " + ", ".join(missed) +
+                  "\n  ANALYZE says: " +
+                  "; ".join(f"{n}={plans[n]['kinds']}" for n in missed))
     if client.errors:
         sys.exit(1)
 

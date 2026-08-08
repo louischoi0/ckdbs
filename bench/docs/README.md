@@ -163,13 +163,35 @@ queries have observed, and a **secondary index** is authoritative for every
 value. PostgreSQL answers it one way, with a btree index, which is what makes
 it a clean baseline here rather than a second pile of numbers.
 
-> **The index read path is built** as of `IX01`-`IX13`, so `--index-mode`
-> now measures an index's benefit as well as its cost: a statement with an
+> **The index read path is built** as of `IX01`-`IX16`, so `--index-mode`
+> measures an index's benefit as well as its cost: a statement with an
 > equality or `BETWEEN` on an indexed column compiles to `kIndexProbe` /
-> `kIndexRange` and descends. The driver's own docstring and its
-> `--assert-index-reads` flag still describe the pre-`IX10` engine and have
-> not been re-run since; use `index_benchmark.py` below for the index
-> question and this scenario for the whole-workload one.
+> `kIndexRange` and descends. Use `index_benchmark.py` below for the
+> narrow index question and this scenario for the whole-workload one.
+
+**Two different ways to switch the index off, and the document needs both.**
+`--index-mode none` declares no index at all, so comparing it against
+`single` prices the index's *whole* cost — the backfill, the per-write
+maintenance and the space — against its read benefit. Starting the server
+with `indexes = off` (the `IX13` config key) leaves the index declared and
+maintained and disables only the read path, which isolates the read benefit
+with every write-side cost still being paid. Reporting only the first
+credits the index for a saving whose cost sits in a phase the table does not
+show. There is **no runtime `SET`** for that key — it is read at server
+start — so the driver's `--server-indexes` is a *label* that records which
+server a cell ran against, not a switch that changes one.
+
+**`ANALYZE <statement>` is this engine's `EXPLAIN`.** It names each step's
+access kind (`IndexProbe`, `IndexRange`, `FilterScan`, `Scan`, `Lookup`) and
+an index step's `index_scanned` / `index_resolved` counts. The driver runs it
+on seven shapes every run and prints the result, and `--assert-index-reads`
+checks *that* rather than latency — so a plan that regressed to a scan fails
+the run instead of passing quietly on a relation small enough to hide it.
+The twin prints PostgreSQL's `EXPLAIN` beside it, which matters more than it
+sounds: at 200 rows PostgreSQL **declines its own index** and picks a
+`Seq Scan`, because its cost model says the relation is too small, while KDS
+descends an index whenever one is declared. A latency table without the plan
+next to it cannot tell "the index was slower" from "the index was not used".
 
 ```bash
 # the row-set sweep the documentation rules require
