@@ -381,6 +381,11 @@ Status Catalog::Bootstrap() {
     // types by the type_val tags phase 4 just registered.
     if (Status s = BootstrapPatternDefs(); !s.ok()) return s;
 
+    // Phase 6: sys.assertions, the second relation of that kind and for the
+    // same reason - it stores a declaration's text verbatim (AS10), which is
+    // what lets an assertion's GROUP BY list have no cap at all.
+    if (Status s = BootstrapAssertions(); !s.ok()) return s;
+
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size() + 1) +
                                   " system tables and " + std::to_string(kTypes.size()) +
@@ -475,6 +480,106 @@ Status Catalog::BootstrapPatternDefs() {
     for (const auto& col : schema.columns) {
         if (Status s = InsertColumnRow(col.oid, kSysPatternDefsTable, col.pos,
                                         NameView(col.name), col.type_val, col.len, col.notnull);
+            !s.ok()) {
+            return s;
+        }
+    }
+    return Status::OK();
+}
+
+namespace {
+
+Schema AssertionsSchema() {
+    // Six columns, and the shape is §8.2's table with one addition and one
+    // subtraction, both forced.
+    //
+    // Added: `id`, the Keystone pk, because every relation stored in user
+    // tuple format has one (invariant 11). It **is** §8.2's `assertion_id` -
+    // engine-issued, unique, never reused (K1) - rather than a second
+    // sequence beside it, because a second sequence is a second thing to keep
+    // monotonic and there is nothing the first cannot say.
+    //
+    // Subtracted: nothing stores the parsed declaration. The group columns,
+    // the aggregate, the operator and the bound are all recoverable from
+    // `source_text` by re-parsing it, which is the sys.pattern_defs model
+    // AS10 names - and it is what lets the GROUP BY list be uncapped, since a
+    // longer list costs text rather than a wider row. A decoded sibling table
+    // would be a second copy that can drift from the canon.
+    //
+    // `cabin_root` is the Bound Cabin anchor and is written kInvalidPageId
+    // here: AST04 builds the structure, AST06 fills the field in. Reserved
+    // now rather than added later because it is in §8.2's table and because
+    // adding a catalog column costs the same superblock bump this relation
+    // already cost - paying it twice would be paying it for nothing.
+    //
+    // `name` and `source_text` are varchar, so the relation can spill and
+    // gets a var-heap chain. A declaration longer than one var-heap page is
+    // refused rather than chained: the spilled-value size cap is open and
+    // this does not settle it.
+    Schema schema;
+    auto column = [](Oid oid, std::uint32_t pos, std::string_view name, std::uint32_t type_val,
+                     std::uint32_t len) {
+        SysColumnRow col{};
+        col.oid = oid;
+        col.rel_id = kSysAssertionsTable;
+        col.pos = pos;
+        SetName(col.name, name);
+        col.type_val = type_val;
+        col.len = len;
+        col.notnull = true;
+        return col;
+    };
+    schema.columns.push_back(column(kSysAssertionsColumnOidBase + 0, 0, "id", kTypeValInt64, 8));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 1, 1, "target_oid", kTypeValInt32, 4));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 2, 2, "cabin_root", kTypeValInt64, 8));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 3, 3, "flags", kTypeValInt32, 4));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 4, 4, "name", kTypeValVarchar, 0));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 5, 5, "source_text", kTypeValVarchar, 0));
+    return schema;
+}
+
+}  // namespace
+
+Status Catalog::BootstrapAssertions() {
+    const Schema schema = AssertionsSchema();
+
+    // Refused at bootstrap rather than at the first CREATE ASSERTION, for
+    // BootstrapPatternDefs()' reason: a relation whose row size cannot be
+    // computed is one no row could ever be written to, and it also proves the
+    // schema is expressible under whatever inline_cell_width this instance
+    // pinned.
+    if (auto layout = RowLayout::Build(schema, inline_cell_width_); !layout.ok()) {
+        return layout.status();
+    }
+
+    auto created = store_.CreateAt(kCatalogPageAssertions);
+    if (!created.ok()) return created.status();
+    // min_key 0: scanned in full, by name or by target_oid, never by key
+    // range - like every other catalog page.
+    auto root = heap::PageView::CreateEmpty(created.value(), 0);
+    if (!root.ok()) return root.status();
+
+    auto varheap_root = varheap::CreateChain(store_);
+    if (!varheap_root.ok()) return varheap_root.status();
+
+    if (Status s = InsertObjectRow(kSysAssertionsTable, kNamespaceSys, kTypeTable, "assertions");
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = InsertRelationRow(kSysAssertionsTable, kNamespaceSys, "assertions",
+                                      kCatalogPageAssertions, ClusteredType::kHeap,
+                                      varheap_root.value());
+        !s.ok()) {
+        return s;
+    }
+    for (const auto& col : schema.columns) {
+        if (Status s = InsertColumnRow(col.oid, kSysAssertionsTable, col.pos, NameView(col.name),
+                                        col.type_val, col.len, col.notnull);
             !s.ok()) {
             return s;
         }

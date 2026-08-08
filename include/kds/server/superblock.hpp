@@ -118,7 +118,28 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 //
 // The price is the usual one and is not reduced by any of that: every
 // pre-existing data file stops mounting.
-inline constexpr std::uint32_t kSuperBlockVersion = 12;
+// 12 -> 13: bootstrap gained `sys.assertions` (docs/feat-assertion.md §8.2,
+// workplan AST03) on fixed page 14 - the **fifth repeat of the 5 -> 6
+// shape**, and it carries a second break the four before it did not.
+//
+// The first half is the familiar one: a version-12 file has no page 14, so
+// `CREATE ASSERTION` would fail to find the relation that records the
+// declaration, and it would fail *opaquely* - the file mounts cleanly and
+// then names a table every build after this one creates at bootstrap.
+//
+// The second half is new and is the reason this one could not have been
+// avoided by picking a different page id. Page 14 was the **first id of the
+// catalog overflow range** (`kCatalogOverflowFirst`), which is where a
+// catalog relation's chain grows when its root page fills. A version-12 file
+// that ever outgrew one of its nine catalog roots put a `sys.columns` or
+// `sys.tables` overflow page at id 14 - and this build would create
+// sys.assertions on top of it. That is not a missing relation, it is a
+// silently overwritten one, which is the worst failure any bump on this list
+// has protected against. The range now starts at 15.
+//
+// The price is the usual one and, here, exactly what is wanted: every
+// pre-existing data file stops mounting.
+inline constexpr std::uint32_t kSuperBlockVersion = 13;
 
 // ---- On-disk field layout ----------------------------------------------
 

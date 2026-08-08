@@ -489,6 +489,28 @@ private:
     DispatchOutcome HandleIndex(std::string_view line);
     DispatchOutcome HandleShowIndexes();
 
+    // `CREATE ASSERTION` / `DROP ASSERTION` (docs/feat-assertion.md §3,
+    // workplan AST03). One handler for both, for HandleCabin's reason.
+    //
+    // **This is the catalog half only.** It validates the declaration
+    // against the catalog - the relation exists, every GROUP BY column
+    // exists, the SUM column exists and is int64, the name is free (§3.1) -
+    // and records it. It builds no Bound Cabin (AST04), enforces nothing
+    // (AST07) and scans nothing (AST06), so an assertion recorded today
+    // constrains no write. Saying so in the reply is deliberate: a
+    // constraint that silently does not run is not a degraded mode.
+    DispatchOutcome HandleAssertion(std::string_view line);
+
+    // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
+    // on and its declaration verbatim.
+    //
+    // The `SHOW` surface rather than `SELECT * FROM sys.assertions`, for the
+    // reason `sys.pattern_defs` has no view either: a catalog *view* is read
+    // through `catalog::Catalog` alone, and a row-codec relation's rows need
+    // a `PageStore` to resolve their var-heap spills. Both row-codec catalog
+    // relations are therefore surfaced by `SHOW`, which has one.
+    DispatchOutcome HandleShowAssertions();
+
     // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
     //
     // The write paths' three entry points. They live here rather than in

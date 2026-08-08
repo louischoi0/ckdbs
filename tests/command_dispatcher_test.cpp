@@ -208,14 +208,19 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // that leaves a client unsure whether the word was recognized. The list
     // in the message is the whole of what exists, so it grows with the
     // targets: CABIN joined it with the Cabin feature (docs/feat-cabin.md),
-    // INDEX with the index grammar (docs/feat-index.md §10). This test is
-    // meant to be edited when one is added - that is what pins the list to
+    // INDEX with the index grammar (docs/feat-index.md §10), ASSERTION with
+    // the assertion catalog (docs/feat-assertion.md §8.3, AST03). This test
+    // is meant to be edited when one is added - that is what pins the list to
     // reality rather than to whatever it happened to say.
+    //
+    // `DROP TABLE` is still in the second case and still refused, which is
+    // also why AST03 could not wire its RESTRICT hook: the statement that
+    // would consult it does not exist.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
-              "ERR only DROP PATTERN, DROP CABIN and DROP INDEX are supported");
+              "ERR only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported");
     EXPECT_EQ(d.Dispatch("DROP TABLE t").response,
-              "ERR only DROP PATTERN, DROP CABIN and DROP INDEX are supported");
+              "ERR only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported");
 }
 
 TEST_F(CommandDispatcherTest, EmptyLineIsError) {

@@ -25,6 +25,8 @@ add_executable(kds_tests
     index_key_test.cpp
     index_tree_test.cpp
     index_ddl_test.cpp
+    assertion_ddl_test.cpp
+    assertion_catalog_test.cpp
     index_maintain_test.cpp
     index_compile_test.cpp
     index_contract_test.cpp

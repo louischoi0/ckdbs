@@ -89,6 +89,30 @@ inline constexpr Oid kSysPatternDefsTable = 115;
 // boot, and these rows are persisted.
 inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
 
+// sys.assertions (docs/feat-assertion.md §8.2, workplan AST03): one row per
+// declared assertion - a group-level upper-bound constraint over one
+// relation.
+//
+// **The second catalog relation stored in ordinary user tuple format**, and
+// for sys.pattern_defs' reason rather than a new one: it stores the
+// declaration's `source_text` verbatim (AS10), and the fixed-length rule
+// already answers where an arbitrary-length value goes. That choice is what
+// lets the `GROUP BY` list have no cap at all - the columns are recovered by
+// re-parsing the stored text, so a longer list costs text and not a widened
+// row - and it is why there is no sibling relation for them, exactly as
+// there is none for a pattern's parameters.
+//
+// Its readers therefore cannot live in `catalog/` either: decoding needs
+// `exec::DecodeRowInto`, and `exec/` depends on `catalog/`. They are
+// `include/kds/exec/assertion_catalog.hpp`.
+inline constexpr Oid kSysAssertionsTable = 116;
+
+// Fixed oids for sys.assertions' six sys.columns rows, one per schema
+// position - fixed rather than from GenerateUserOid() for the reason
+// kSysPatternDefsColumnOidBase gives: that counter is in-memory, restarts
+// every boot, and these rows are persisted.
+inline constexpr Oid kSysAssertionsColumnOidBase = 140;
+
 // sys.access_stats (docs/heap-and-tuple.md §7): one row per access *shape*
 // - `(kind, rel_id, column_mask)` - with how often it ran and when it last
 // ran. A fixed-offset typed row like its neighbours, not a row-codec
@@ -152,6 +176,12 @@ inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
 
+// Root heap page of sys.assertions. Fixed like the nine above, and - like
+// sys.pattern_defs, the other row-codec catalog relation - its *var-heap*
+// root is not: that one is allocated by CreateNew() and recorded in
+// sys.tables, where it is DDL-immutable and therefore cacheable.
+inline constexpr PageId kCatalogPageAssertions = 14;
+
 // Every catalog relation's **root** page, in id order.
 //
 // One list, because two places now need "all of them at once" and a
@@ -169,7 +199,7 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,     kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,     kCatalogPagePatterns,
     kCatalogPagePatternDefs, kCatalogPageAccessStats, kCatalogPageCabins,
-    kCatalogPageFkeys,
+    kCatalogPageFkeys,       kCatalogPageAssertions,
 };
 
 // ---- Where a catalog chain grows into ------------------------------------
@@ -194,14 +224,20 @@ inline constexpr PageId kAllCatalogPages[] = {
 // columns to ~7,800. It is a ceiling and not "unbounded" - saying so is the
 // point, because the previous ceiling was also unstated until something hit
 // it.
-inline constexpr PageId kCatalogOverflowFirst = 14;
+// Moved 14 -> 15 when sys.assertions claimed page 14 (AST03). The range is
+// "whatever is left of the reserved low pages after the roots", so it walks
+// up by one with every new bootstrap relation, and the ceiling it implies
+// drops by ~68 columns each time. Both facts ride on the same superblock
+// version bump the new relation needed anyway: an existing file could have
+// put a catalog overflow page at id 14, and that file no longer mounts.
+inline constexpr PageId kCatalogOverflowFirst = 15;
 
 // One past the last id a catalog chain may take. Must equal
 // kds::server::kFirstUserPageId; the static_assert lives in catalog.cpp,
 // which is free to include both headers.
 inline constexpr PageId kCatalogOverflowLimit = 128;
 
-static_assert(kCatalogOverflowFirst > kCatalogPageFkeys,
+static_assert(kCatalogOverflowFirst > kCatalogPageAssertions,
               "the overflow range must start past every fixed root");
 
 // Every page a catalog relation can occupy: the roots, then the whole

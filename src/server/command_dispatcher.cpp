@@ -20,6 +20,7 @@
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/fk_check.hpp"
+#include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/index_ddl.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -263,6 +264,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "CABINS")) return HandleShowCabins();
         if (IEquals(sub, "INDEXES")) return HandleShowIndexes();
         if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
+        if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -275,6 +277,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         }
         if (IEquals(sub, "CABIN")) {
             return HandleCabin(Trim(line));
+        }
+        if (IEquals(sub, "ASSERTION")) {
+            return HandleAssertion(Trim(line));
         }
         // `UNIQUE` routes here too, so its refusal comes from the parser
         // with the byte offset of the word itself rather than from this
@@ -311,7 +316,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "INDEX")) {
             return HandleIndex(Trim(line));
         }
-        return {"ERR only DROP PATTERN, DROP CABIN and DROP INDEX are supported", false};
+        if (IEquals(sub, "ASSERTION")) {
+            return HandleAssertion(Trim(line));
+        }
+        return {"ERR only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported",
+                false};
     }
     if (IEquals(cmd, "INSERT")) {
         return HandleInsert(Trim(line), session);
@@ -1075,6 +1084,88 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     }
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "created cabin on " + stmt.table_name + "." + stmt.column_name);
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::AssertionStmt>(parsed.value())) {
+        return {"ERR expected a CREATE ASSERTION or DROP ASSERTION statement", false};
+    }
+    const auto& stmt = std::get<parser::AssertionStmt>(parsed.value());
+
+    if (stmt.drop) {
+        auto id = exec::DropAssertion(catalog_, page_store_, stmt);
+        if (!id.ok()) {
+            return {"ERR " + id.status().message(), false};
+        }
+        std::ostringstream os;
+        os << "DROPPED ASSERTION name=" << stmt.name << " assertion_id=" << id.value();
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped assertion '" + stmt.name + "'");
+        }
+        return {os.str(), false};
+    }
+
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt);
+    if (!created.ok()) {
+        return {"ERR " + created.status().message(), false};
+    }
+
+    // **`enforcing=0` is the whole point of this reply.** AST03 records a
+    // declaration; the structure that would enforce it is AST04's and the
+    // write-path check is AST07's. A constraint that silently does not run is
+    // not a degraded mode, so the statement that creates one says which it
+    // is, in a field a client can read rather than in a comment.
+    std::ostringstream os;
+    os << "CREATED ASSERTION name=" << stmt.name
+       << " assertion_id=" << created.value().assertion_id << " on=" << stmt.table_name
+       << " enforcing=0";
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "declared assertion '" + stmt.name + "' on '" + stmt.table_name +
+                              "' (not yet enforced)");
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowAssertions() {
+    auto rows = exec::ListAssertions(catalog_, page_store_);
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    std::ostringstream os;
+    os << "assertions=" << rows.value().size();
+
+    for (const exec::AssertionDef& def : rows.value()) {
+        os << "\\n";
+        os << "assertion_id=" << def.id << " name=" << def.name;
+
+        // The relation's name, resolved here rather than stored - exactly as
+        // SHOW CABINS and SHOW INDEXES do. The row holds an oid so it stays
+        // narrow, and an inspection surface can afford the lookup.
+        os << " rel=";
+        bool named = false;
+        if (auto tables = catalog_.ListTables(); tables.ok()) {
+            for (const catalog::SysObjectRow& obj : tables.value()) {
+                if (obj.oid != def.target_oid) continue;
+                os << catalog::NameView(obj.name);
+                named = true;
+                break;
+            }
+        }
+        if (!named) os << "oid=" << def.target_oid;
+
+        // Reported rather than derived: `cabin_root` is what AST06 will fill
+        // in, so an unset one is the honest statement that nothing enforces
+        // this yet.
+        os << " enforcing=" << (def.cabin_root == kInvalidPageId ? 0 : 1);
+        os << " def=" << def.source_text;
     }
     return {os.str(), false};
 }

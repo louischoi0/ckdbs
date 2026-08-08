@@ -350,3 +350,114 @@ promotion pipeline (§7). Details deferred to a workplan.
 - Entry-set page layout details and directory persistence format —
   workplan (the 24 B CabinEntry of §3 is fixed; its packing into
   pages is not).
+
+---
+
+## 12. Cabin classes — Observational and Bound (rev. 2026-08-08, AST01)
+
+This section is the revision `docs/feat-assertion.md` §5 requires (AS6's
+prerequisite), and it is **normative for the class boundary only**. Its
+authority is derived: where this section and `feat-assertion.md` §5 disagree
+on any property in the table below, the assertion spec wins and this file is
+wrong — the two are meant to be readable as one.
+
+**One sentence: a Bound Cabin is a Cabin that is required to have observed
+everything, forever.** The same relationship `feat-index.md` IX1 already
+states for a secondary index ("an index is a Cabin that observed everything"),
+with two properties added that an index does not have — the coverage is
+*pinned* rather than merely maintained, and each group carries a **running
+aggregate** that a check reads instead of iterating the set. The page format
+and the lookup machinery are shared; the **lifecycle contracts are not**.
+
+### 12.1 The class table
+
+| Property | Observational Cabin (existing, unchanged) | Bound Cabin (new, AST04) |
+|---|---|---|
+| Population | Lazy — observed values only (§5's witness, n=2/n=1) | Eager — full coverage of the group-column combination, built at `CREATE ASSERTION` |
+| Coverage contract | Partial by design; a value is either observed or it is not | 100% of the target relation's live rows, with no per-value opt-out |
+| Eviction | Allowed — §1's corollary, un-observing is always legal | **Forbidden.** Pages are pinned; un-observing is unavailable |
+| Failure response | Un-observe and fall back to the scan: a performance event | **Fail the statement.** Same line `feat-index.md` draws for index maintenance, and for the same reason: a Bound Cabin missing an entry is *wrong*, not slow |
+| Durability | Unlogged authoritative (§9); memory-resident in v1; rebuilt by traffic after a restart | **Logged, headered authority class** (var-heap V3 / unique-index U5 tier): WAL-before-data, checksummed, crash-consistent, enforceable at restart with no rebuild scan |
+| Role | Advisory acceleration — chooses where to look | Authoritative constraint substrate — decides whether a write is admitted |
+| Entry size | 24 B (`stats::CabinEntry`, C6) | **32 B** — the same fields plus the row's aggregate value inline |
+| Key | One non-pk column's value, held by value | The `GROUP BY` column list, hashed into a group directory |
+| Instances | One per `(relation, column)` | One per **assertion** (§5.3); never shared in v1 |
+
+**Observational Cabin semantics are untouched by this revision.** Every
+property §§1-11 of this document states — the superset invariant, append-only
+maintenance, "removal is forbidden", read-time verification by MVCC plus the
+key re-check, caps that refuse to observe and never truncate, un-observing as
+the response to any failure, dangling entries droppable on sight (K1), and the
+`[PROPOSED]` numbers in §11 — continues to hold verbatim for the observational
+class, and no observational code path may consult the class table above. In
+particular §11's open item on **persistence of the entry sets** stays open: a
+Bound Cabin being logged decides nothing about `PageType::kCabin`, because the
+two classes' durability follows from their coverage contracts, not from a
+shared implementation choice.
+
+### 12.2 Entry layouts
+
+Observational, 24 B — unchanged, `include/kds/stats/cabin_store.hpp`, pinned
+by its own `static_assert`: `pk` (u64) | `page_id` (u32) | `page_epoch` (u32)
+| `slot` (u16) | `flags` (u16) | `reserved` (u32).
+
+Bound, 32 B — the observational layout plus one 64-bit field:
+
+| Field | Width | Notes |
+|---|---|---|
+| pk | 40 bit of a u64 | Keystone id. **Authoritative**, under K1: it may dangle, it can never mis-attribute |
+| flags | 8 bit | includes the `RESERVED` bit for an in-flight entry (assertion §6) |
+| reserved | 16 bit | written 0, ignored |
+| location hint (page id / epoch / slot) | 64 bit | **advisory**, verified through the one verifier `exec/tuple_verify.hpp`; on failure fall back to a pk descent and heal in place |
+| aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For a `COUNT(*)` assertion it is written **1** |
+
+The normative facts are: **fixed 32 B, pk authoritative, hint advisory, value
+inline.** The exact bit packing is AST04's, and is bound by the engine's
+on-disk rules — `static_assert` on size and offsets, fixed-width integers,
+explicit shift/mask serialization, no compiler bitfields. Whether the class is
+a new `PageType::kCabinBound` or a subtype flag on `PageType::kCabin` is
+likewise AST04's decision, to be recorded here when it is made; nothing in
+this section depends on the answer.
+
+### 12.3 Group directory and group header
+
+A Bound Cabin is keyed by a **group** — a tuple of values over the assertion's
+`GROUP BY` column list — where an observational Cabin is keyed by one column's
+value. The directory maps `group_key_hash → group header`, and a group header
+holds:
+
+- `count` (int64) — committed **plus reserved** cardinality of the group;
+- `sum` (int64, checked arithmetic) — committed plus reserved sum, for a `SUM`
+  assertion. Overflow is a statement error, never wraparound (AG3);
+- the entry-list linkage into this Cabin's headered pages.
+
+Two consequences worth stating because they are what the structure is for.
+**An admission check reads only the group header: O(1), no entry iteration** —
+entries exist for violation diagnostics, for re-summation against the header
+during verification, and for the abort path, and are not on the check hot
+path. And **the running aggregate is not a separate store** (AS5): it is a
+field of this header, restored by WAL replay and checkable against the entry
+list, so there is exactly one number per group and no reconciliation problem
+between two.
+
+A group-key hash collision must isolate the colliding groups — a header is
+found by hash and then confirmed against the stored group key, never trusted
+on the hash alone. A Cabin's answer is authoritative here, so the
+value-held-by-value rule §3 gives for the observational class carries over
+with the group key in place of the value.
+
+### 12.4 Lifecycle contracts
+
+| Phase | Observational | Bound |
+|---|---|---|
+| Creation | A value becomes observed by the witness on the read path (n=2), or by `CREATE CABIN` (n=1) | `CREATE ASSERTION` full-scans the relation, builds every group, and **fails the CREATE** on any pre-existing violation, discarding the partial build (AS7) |
+| Steady state | Append-only; a cap refuses to observe a new value | Append-only for entries plus a header delta; admission may **refuse the write** |
+| In-flight | No notion — a Cabin never gates a statement | An entry may be `RESERVED`; commit clears the flag, abort removes the entry and subtracts its delta through the undo chain |
+| Removal | Any failure, cap, or pressure may un-observe a value at any time | Only `DROP ASSERTION` removes one, which tears the structure down and unpins its pages (`ASSERT_DROP`). `DROP TABLE` on a relation carrying an assertion is `Restrict` |
+| Restart | Every value reads as unobserved; traffic rebuilds | Replay restores headers and entries exactly; the constraint is enforceable immediately, with **no enforcement gap** |
+
+`DELETE` calls neither class's write hook: for the observational class because
+removal is forbidden (§5 — an older snapshot may still match through the undo
+chain), for the bound class because v1 constrains upper bounds only and a
+deletion is strictly decreasing (AS11). The two reasons are unrelated and
+neither may be cited for the other.

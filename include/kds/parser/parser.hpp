@@ -69,10 +69,23 @@ private:
     // only in `drop` - see CabinStmt (ast.hpp).
     StatusOr<CabinStmt> ParseCabin(bool drop);
     StatusOr<IndexStmt> ParseIndex(bool drop);
+
+    // `{CREATE | DROP} ASSERTION ...` (docs/feat-assertion.md §3), with the
+    // leading two words already consumed. One production for both, for
+    // ParseCabin's reason - see AssertionStmt (ast.hpp).
+    StatusOr<AssertionStmt> ParseAssertion(bool drop);
+
     // A parenthesised comma-separated column list, as both halves of a
-    // CREATE INDEX declaration are. `what` names the list in every error.
-    Status ParseIndexColumnList(std::vector<IndexColumnRef>& out, const char* what,
-                                std::size_t cap);
+    // CREATE INDEX declaration and an assertion's GROUP BY list are. `what`
+    // names the list in every error.
+    //
+    // `cap == 0` means **no cap**, which is what an assertion's GROUP BY list
+    // takes: `feat-assertion.md` §3 declares no ceiling on it, and inventing
+    // one here would settle a number nothing has measured. An index's lists
+    // pass their own `[PROPOSED]` caps, which are refusals and never
+    // truncations (docs/feat-index.md §13).
+    Status ParseDeclaredColumnList(std::vector<IndexColumnRef>& out, const char* what,
+                                   std::size_t cap);
 
     // The two bracketed lists of a declaration, split out only because
     // ParseCreatePattern is otherwise three loops in a row.

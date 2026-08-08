@@ -584,6 +584,13 @@ private:
     // it into Bootstrap() would bury the reason it differs.
     Status BootstrapPatternDefs();
 
+    // Phase 6 of Bootstrap(): creates sys.assertions, the *second* row-codec
+    // catalog relation (docs/feat-assertion.md §8.2, workplan AST03). Same
+    // shape as the phase above it and for the same reason - it stores the
+    // declaration's text verbatim - so the two read as one pattern rather
+    // than as a special case and a copy of it.
+    Status BootstrapAssertions();
+
     // `cabin_policy` is one of the `kCabinPolicy*` values (rows.hpp) and
     // defaults to unset, which every reader treats as `auto`. It is a
     // parameter rather than read off a struct because this function is the

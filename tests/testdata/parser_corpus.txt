@@ -453,3 +453,54 @@ Unsupported	-	-	CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)
 InvalidArgument	-	-	CREATE INDEX ix (a)
 InvalidArgument	-	-	CREATE INDEX ix ON t
 InvalidArgument	-	-	DROP INDEX
+
+# ---- CREATE ASSERTION / DROP ASSERTION (docs/feat-assertion.md §3) ---------
+#
+# Every line here is "-  -": assertion DDL carries no pattern, because its
+# leading word is CREATE. The point of the block is the *verdicts*, and that
+# every pre-existing line in this file passed unchanged - which is the whole
+# evidence AST02 owes for "DML fingerprints are unaffected".
+#
+# `assertion`, `check` and `group` are matched by text and are not keywords,
+# so they are still usable as names; the fourth line is that, and the DML
+# lines below it are the half that actually carries a hash.
+ok	-	-	CREATE ASSERTION lim ON purchases GROUP BY (user_id, product_id) CHECK COUNT(*) <= 5
+ok	-	-	CREATE ASSERTION credit ON orders GROUP BY (user_id) CHECK SUM(amount) < 1000
+ok	-	-	create assertion a on t group by (x) check count(*) = 1;
+ok	-	-	CREATE ASSERTION assertion ON check GROUP BY (assertion, check) CHECK COUNT(*) <= 1
+ok	-	-	CREATE ASSERTION a ON t GROUP BY (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) CHECK COUNT(*) <= 1
+ok	-	-	DROP ASSERTION lim
+
+# Reserved and refused: a form this engine understands and declines, each at
+# its own byte. AS11 (a lower bound would have to be checked on DELETE),
+# AS3/AS7 (timing clauses), §10 (aggregates that are not incrementally
+# maintainable, or are not bounds at all).
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 DEFERRABLE
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT DEFERRABLE
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT VALID
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK MIN(v) <= 1
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1
+
+# Wrong rather than reserved: no ceiling in any direction, a bound that is not
+# a non-negative integer literal, a predicate that could never admit a row
+# (§3.1 - a group holds at least one row, so COUNT(*) = 0 is unsatisfiable),
+# and a missing mandatory clause.
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= -1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1.5
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK TOTAL(v) <= 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t CHECK COUNT(*) <= 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x)
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY () CHECK COUNT(*) <= 1
+InvalidArgument	-	-	DROP ASSERTION
+
+# A SUM bound of zero is *not* degenerate: an int64 column may hold negative
+# values, so no non-negative bound is provably unsatisfiable.
+ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 0

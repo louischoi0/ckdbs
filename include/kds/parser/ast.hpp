@@ -574,8 +574,14 @@ struct CabinStmt {
     bool drop = false;
 };
 
-// One column named in an index declaration, with where it was written -
-// which is what lets "this relation has no column x" carry a position.
+// One column named in a *declaration's* column list, with where it was
+// written - which is what lets "this relation has no column x" carry a
+// position.
+//
+// Named for the index because that is what first needed it; it serves any
+// declaration's parenthesised list, and an assertion's `GROUP BY (...)`
+// reuses it rather than declaring a second two-field struct. There is one
+// production for all of them (`Parser::ParseDeclaredColumnList`).
 struct IndexColumnRef {
     std::string name;
     std::uint32_t byte_offset = 0;
@@ -604,9 +610,78 @@ struct IndexStmt {
     bool drop = false;
 };
 
+// `CREATE ASSERTION <name> ON <rel> GROUP BY (<col>, ...)
+//     CHECK COUNT(*) <op> <N> | SUM(<col>) <op> <N>` and
+// `DROP ASSERTION <name>` (docs/feat-assertion.md §3, AS2).
+//
+// **The grammar encodes the supported class** (AS2), which is the whole
+// reason this is not SQL-92's free-form `CHECK (<search condition>)`. There
+// is no predicate tree here and no expression to evaluate: an assertion is
+// four facts - a relation, a group-column list, one of two aggregates, and
+// an integer upper bound - and anything outside that shape is refused by the
+// parser with a position rather than accepted and then found unenforceable.
+// That is what makes the check O(1) against a group header (§5.2) instead of
+// a re-evaluation of arbitrary SQL.
+//
+// One struct for both statements, for IndexStmt's reason: they share the
+// name resolution and differ only in which catalog call they reach. `DROP`
+// fills `name` alone - an assertion's name is unique instance-wide (§3), so
+// naming its relation again would be a second identity to keep in step.
+struct AssertionStmt {
+    std::string name;
+    std::uint32_t byte_offset = 0;  // of the assertion name
+
+    bool drop = false;
+
+    // Everything below is CREATE-only and stays empty for a DROP.
+    std::string table_name;
+    std::uint32_t table_byte_offset = 0;
+
+    std::vector<IndexColumnRef> group_columns;
+
+    // `kCount` or `kSum`, and nothing else: AggFunc is the shared enum, but
+    // this grammar admits two of its five members (§10 - MIN/MAX are not
+    // incrementally maintainable under deletion, and AVG is not a bound).
+    // The other three are refused by name at the paren.
+    AggFunc func = AggFunc::kCount;
+
+    // The `SUM` column, empty for a `COUNT(*)` assertion. Carried as a
+    // declared-column ref so the "no such column" error can name its byte
+    // exactly as a group column's can.
+    IndexColumnRef sum_column;
+
+    // `<`, `<=` or `=` (AS11). `>` and `>=` parse and are refused as
+    // `Unsupported`: a lower bound would have to be checked on DELETE and on
+    // every decreasing UPDATE, which is the whole reason v1 can leave DELETE
+    // uninstrumented.
+    CompareOp op = CompareOp::kLte;
+
+    // The declared bound: a non-negative integer literal (§3.1 - literals
+    // only, no expressions, per TY3 conservatism).
+    std::int64_t bound = 0;
+    std::uint32_t bound_byte_offset = 0;
+
+    // The whole declaration, verbatim, for `sys.assertions.source_text` -
+    // the `sys.pattern_defs` model (AS10), where the stored text is the
+    // canon and the catalog row carries no per-column table beside it. It is
+    // also what makes an unbounded `GROUP BY` list storable in a fixed-width
+    // row: the columns are recovered by re-parsing this, not by widening a
+    // catalog array.
+    std::string source_text;
+
+    // The enforced ceiling, which is **not** always `bound`: §3.1 fixes the
+    // enforced invariant at `aggregate <= this` for all three operators, so
+    // `< N` means `<= N - 1` and `= N` means `<= N`. Computed once here so no
+    // later stage re-derives it and no two stages disagree about what `<`
+    // meant.
+    std::int64_t enforced_max() const noexcept {
+        return op == CompareOp::kLt ? bound - 1 : bound;
+    }
+};
+
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt,
-                               IndexStmt>;
+                               IndexStmt, AssertionStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);
