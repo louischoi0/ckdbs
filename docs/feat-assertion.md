@@ -53,7 +53,7 @@ and correct.
 | AS8 | v1 assertions target exactly one relation. Multi-relation assertions: `Unsupported` (blocked on cross-core write / 2PC, which is itself reserved). |
 | AS9 | A violation is a **statement error** (transaction survives), consistent with AG3 overflow semantics. New Status code `AssertionViolation`; the error carries the assertion name and the violating group key. |
 | AS10 | Catalog: `sys.assertions` storing the full declaration `source_text` (same model as `sys.pattern_defs`). `DROP ASSERTION` supported. Dropping a relation referenced by an assertion is `RESTRICT`. ANALYZE reports per-statement assertion check counts and reservation failures. |
-| AS11 | v1 supports **upper-bound constraints only**: comparison operators `<`, `<=`, `=`. Lower bounds (`>`, `>=`) are `Unsupported` in v1 — they would require checking on DELETE and on decreasing UPDATE paths. Consequently DELETE never requires an assertion check in v1. |
+| AS11 | **Revised 2026-08-08.** v1 supports **upper-bound constraints only**: comparison operators `<` and `<=`. Lower bounds (`>`, `>=`) are `Unsupported` — they would require checking on DELETE and on decreasing UPDATE paths. **`=` is `Unsupported` with them**, having briefly been accepted as meaning `aggregate <= N`: that reinterpreted what the operator wrote, and enforcing real equality needs the lower-bound half anyway, so `=` costs exactly what `>=` costs. Consequently DELETE never requires an assertion check in v1. |
 
 ---
 
@@ -64,13 +64,13 @@ CREATE ASSERTION <name>
   ON <relation>
   GROUP BY ( <column> [, <column> ...] )
   CHECK COUNT(*)      <op> <int_literal>
-      | SUM(<column>) <op> <int_literal> ;
+      | SUM(<column>) <op> <int_literal> ;      -- <op> is < or <=
 
 DROP ASSERTION <name> ;
 ```
 
-- `<op>` ∈ { `<`, `<=`, `=` } (AS11). `>` and `>=` parse but return
-  `Unsupported`.
+- `<op>` ∈ { `<`, `<=` } (AS11 as revised). `>`, `>=` and `=` parse but
+  return `Unsupported`.
 - `DEFERRABLE` / `NOT DEFERRABLE` and `NOT VALID` are reserved tokens: they
   parse and return `Unsupported` (AS3, AS7).
 - Assertion names live in the same namespace as other schema objects and must
@@ -89,14 +89,36 @@ DROP ASSERTION <name> ;
 - the bound literal is not a non-negative integer literal (v1: literals only,
   no expressions, consistent with TY3 conservatism);
 - a duplicate assertion name exists;
-- semantically degenerate forms: `CHECK COUNT(*) = 0` style predicates that
-  can never admit a row are rejected at create time.
+- semantically degenerate forms: `CHECK COUNT(*) <= 0` and `CHECK COUNT(*) <
+  1` can never admit a row and are rejected at create time. A group exists
+  only because it holds at least one row, so any ceiling below 1 declares a
+  relation that may never be written to again. The same argument deliberately
+  does **not** extend to `SUM`, whose column may hold negative values, so no
+  non-negative bound is provably unsatisfiable.
 
-The `=` operator is admitted as an upper-bound-style constraint: a write that
-would move a group's aggregate **above** the bound fails. Writes that leave
-the aggregate at or below the bound succeed. (Formally: the enforced
-invariant for `=` is `aggregate <= N`; the operator is accepted for syntax
-familiarity and documented as such.)
+### 3.1a Why `=` is refused (AS11, revised 2026-08-08)
+
+`=` was originally admitted as an upper-bound-style constraint: the enforced
+invariant would have been `aggregate <= N`, and the operator was accepted "for
+syntax familiarity and documented as such".
+
+**That is withdrawn.** Documenting the reinterpretation does not make it
+honest: the engine would enforce something other than what the operator wrote,
+and a client reading `CHECK COUNT(*) = 5` would reasonably expect a group of
+three rows to be a violation. A constraint that quietly means less than it
+says is worse than one that is refused, because the refusal is visible at
+`CREATE` and the reinterpretation is visible nowhere.
+
+Enforcing the operator as written is not a cheaper option either. True
+equality implies a **lower** bound, which is checked on DELETE and on every
+decreasing UPDATE — exactly the write-path expansion AS11 exists to exclude.
+So `=` costs what `>=` costs, and is refused beside it. Both remaining
+operators map onto a ceiling exactly, reinterpreting nothing:
+
+```
+CHECK COUNT(*) <= 5   ->  count <= 5
+CHECK COUNT(*) <  5   ->  count <= 4
+```
 
 ### 3.2 Example
 
@@ -293,9 +315,50 @@ assertion on a relation.
 4. If any group violates the bound ⇒ CREATE fails with `AssertionViolation`
    naming the first violating group; the partial build is discarded.
 5. Writes to the relation admitted during the build are handled by the
-   builder's cutover protocol (AST06 defines the exact scheme; the normative
-   requirement is: at success, the Bound Cabin exactly reflects all admitted
-   rows, and enforcement begins atomically at cutover).
+   builder's cutover protocol. The normative requirement is unchanged — at
+   success the Bound Cabin exactly reflects all admitted rows, and enforcement
+   begins atomically at cutover — and the scheme is now decided (§8.1a).
+
+### 8.1a Cutover: the membership-check protocol (decided 2026-08-08)
+
+**A row counts as incorporated if and only if its pk is present in the Bound
+Cabin.** Not inferred from pk ordering, not from scan position, not from a
+watermark. The Cabin is the sole source of truth about its own contents.
+
+*What this replaces.* The earlier sketch was a pk watermark: the builder
+advances a high-water mark as it scans, and a concurrent write decides
+"already scanned" by testing `pk <= watermark`. That predicate is invalid
+here. It needs Keystone pk issuance to be monotonic in a way the engine
+refuses to promise — `keystoneid-invariant.md` K3 is titled "No density
+promise" and states that ordering is *provided but not promised*, precisely so
+that no correctness argument may be built on it. A cutover resting on it would
+be a fifth subsystem depending on a property K3 exists to withhold.
+
+*Why membership is stronger than a fix.* It removes the external assumption
+rather than repairing it. Correctness reduces to **check-then-apply
+atomicity** — classify the row, then apply its delta, with nothing in between
+— and the home core's cooperative event loop provides that for free: both
+happen inside one uninterruptible step, which is the same property AS4's
+admission protocol already rests on (§6.1). No new mechanism is introduced.
+
+*What follows from it.*
+
+- **Builder scan order becomes correctness-irrelevant.** Plain page order is
+  enough; the builder needs no ordering guarantee from the storage layer and
+  imposes none.
+- **Build-time write deltas apply at commit time**, which keeps undo
+  integration out of the build phase entirely — the abort path during a build
+  is the ordinary one, not a second protocol.
+- **Membership lookups cost something, but only while building.** For a
+  `COUNT` assertion the per-group entry set is bounded by the assertion's own
+  bound, so the lookup is small by construction. For a `SUM` assertion it is
+  not bounded, and a build-scoped temporary pk hash set is the obvious
+  remedy — **reserved as a measured optimization, not a v1 default.** Do not
+  build it before there is a measurement that asks for it.
+- **Publish stays the single commit point.** Final validation, the
+  `sys.assertions` row and plan-cache invalidation happen in one step, so no
+  crash timing can leave an assertion partially enforced: either it is
+  published and enforcing, or it does not exist.
 
 ### 8.2 Catalog
 

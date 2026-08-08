@@ -98,10 +98,14 @@ TEST(AssertionDdlTest, ASumAssertionCarriesTheColumnItSums) {
 }
 
 // The one piece of arithmetic in the grammar, and it is here rather than in
-// three later stages: §3.1 fixes the enforced invariant at `aggregate <= N`
-// for **all three** operators, so `<` and `=` are not two more cases for the
-// write path to be right about. Getting this wrong by one is the difference
-// between a bound of 5 admitting five rows and admitting four.
+// two later stages: the enforced invariant is `aggregate <= N` for both
+// accepted operators, so `<` is not one more case for the write path to be
+// right about. Getting this wrong by one is the difference between a bound of
+// 5 admitting five rows and admitting four.
+//
+// Both mappings are exact - neither reinterprets what was written. That is
+// the property `=` could not have, and why AS11 was revised to refuse it
+// rather than fold it in here as a third row of this table.
 TEST(AssertionDdlTest, EveryOperatorReducesToOneEnforcedCeiling) {
     struct Case {
         const char* sql;
@@ -111,7 +115,6 @@ TEST(AssertionDdlTest, EveryOperatorReducesToOneEnforcedCeiling) {
     const Case cases[] = {
         {"CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 5", CompareOp::kLte, 5},
         {"CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 5", CompareOp::kLt, 4},
-        {"CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5", CompareOp::kEq, 5},
     };
     for (const Case& c : cases) {
         auto parsed = ParseSql(c.sql);
@@ -237,6 +240,25 @@ TEST(AssertionDdlTest, AssertionDdlIsNotFingerprintedAndTheVersionDidNotMove) {
 
 // ---- Reserved and refused (AS11, AS3, AS7, §10) -------------------------
 
+// **AS11 as revised 2026-08-08.** `=` parsed and was documented as meaning
+// `aggregate <= N`, for syntactic familiarity. It is refused now, and the
+// reason is truthfulness rather than cost: the engine would have enforced
+// something other than what the operator wrote. Enforcing real equality means
+// enforcing the lower-bound half, which is the DELETE and decreasing-UPDATE
+// write path v1 excludes - so `=` costs exactly what `>=` costs.
+TEST(AssertionDdlTest, EqualityIsUnsupportedBecauseReadingItAsAnUpperBoundWouldLie) {
+    ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5",
+                  StatusCode::kUnsupported, "equality assertions (=)");
+    ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100",
+                  StatusCode::kUnsupported, "enforcing a lower bound");
+
+    // Refused at the operator, before the bound is even read - so the
+    // degenerate-predicate check below never sees an `=`, and `= 0` is now
+    // answered by this rule rather than by that one.
+    ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0",
+                  StatusCode::kUnsupported, "equality assertions (=)");
+}
+
 TEST(AssertionDdlTest, ALowerBoundIsUnsupportedAtItsOwnOperator) {
     // AS11, and the one refusal that pays for a whole write path: a lower
     // bound has to be re-checked on DELETE and on every decreasing UPDATE,
@@ -258,6 +280,11 @@ TEST(AssertionDdlTest, InequalityIsNotABoundAtAll) {
     // `!=` names no ceiling in any direction, so it is simply wrong.
     ExpectRefusal("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5",
                   StatusCode::kInvalidArgument, "not a bound");
+    // And the message names only what v1 takes, which is now two operators.
+    auto parsed = ParseSql("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_NE(parsed.status().message().find("is < or <="), std::string::npos)
+        << parsed.status().message();
 }
 
 TEST(AssertionDdlTest, ConstraintTimingClausesAreReservedAndRefused) {
@@ -330,8 +357,10 @@ TEST(AssertionDdlTest, ADegenerateCountBoundCanNeverAdmitARowAndIsRefused) {
     // §3.1's named case, and its two spellings. A group *exists* only because
     // it holds at least one row, so its count is at least 1 and any ceiling
     // below 1 declares a relation that may never be written to again.
+    // `= 0`, the spelling §3.1 named, is now refused one step earlier by the
+    // operator itself - see the equality test above. What is left is the two
+    // spellings an accepted operator can still produce.
     for (std::string_view sql : {
-             "CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0",
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 0",
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 1",
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 0",
@@ -342,7 +371,6 @@ TEST(AssertionDdlTest, ADegenerateCountBoundCanNeverAdmitARowAndIsRefused) {
     // One above each is the smallest legal bound, and is accepted.
     EXPECT_TRUE(ParseSql("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1").ok());
     EXPECT_TRUE(ParseSql("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 2").ok());
-    EXPECT_TRUE(ParseSql("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 1").ok());
 }
 
 TEST(AssertionDdlTest, ASumBoundOfZeroIsNotDegenerateBecauseIntegersGoNegative) {
@@ -351,7 +379,6 @@ TEST(AssertionDdlTest, ASumBoundOfZeroIsNotDegenerateBecauseIntegersGoNegative) 
     // non-negative bound is provably unsatisfiable, and refusing one would be
     // inventing a restriction the spec does not state.
     for (std::string_view sql : {
-             "CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 0",
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0",
              "CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) < 0",
          }) {

@@ -650,10 +650,19 @@ struct AssertionStmt {
     // exactly as a group column's can.
     IndexColumnRef sum_column;
 
-    // `<`, `<=` or `=` (AS11). `>` and `>=` parse and are refused as
-    // `Unsupported`: a lower bound would have to be checked on DELETE and on
-    // every decreasing UPDATE, which is the whole reason v1 can leave DELETE
-    // uninstrumented.
+    // `<` or `<=`, and nothing else (AS11 as revised 2026-08-08).
+    //
+    // `>` and `>=` parse and are refused as `Unsupported`: a lower bound
+    // would have to be checked on DELETE and on every decreasing UPDATE,
+    // which is the whole reason v1 can leave DELETE uninstrumented.
+    //
+    // **`=` is refused for the same reason, and that is the revision.** It
+    // was briefly accepted and documented as meaning `aggregate <= N`, on
+    // the grounds of syntactic familiarity. That was a truthfulness
+    // violation: the engine would have enforced something other than what
+    // the operator wrote, and a constraint that quietly means less than it
+    // says is worse than one that is refused. Enforcing real equality needs
+    // the lower-bound half, so `=` costs exactly what `>=` costs.
     CompareOp op = CompareOp::kLte;
 
     // The declared bound: a non-negative integer literal (§3.1 - literals
@@ -669,11 +678,14 @@ struct AssertionStmt {
     // catalog array.
     std::string source_text;
 
-    // The enforced ceiling, which is **not** always `bound`: §3.1 fixes the
-    // enforced invariant at `aggregate <= this` for all three operators, so
-    // `< N` means `<= N - 1` and `= N` means `<= N`. Computed once here so no
-    // later stage re-derives it and no two stages disagree about what `<`
-    // meant.
+    // The enforced ceiling, which is **not** always `bound`: the enforced
+    // invariant is `aggregate <= this`, so `< N` means `<= N - 1` and `<= N`
+    // means itself. Computed once here so no later stage re-derives it and
+    // no two stages can disagree about what `<` meant.
+    //
+    // Both accepted operators map onto a ceiling *without reinterpreting
+    // anything* - which is what `=` could not do, and why it is now refused
+    // rather than folded in here.
     std::int64_t enforced_max() const noexcept {
         return op == CompareOp::kLt ? bound - 1 : bound;
     }

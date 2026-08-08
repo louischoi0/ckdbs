@@ -1028,8 +1028,22 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     switch (op.value()) {
         case CompareOp::kLt:
         case CompareOp::kLte:
-        case CompareOp::kEq:
             break;
+        case CompareOp::kEq:
+            // **AS11 as revised 2026-08-08.** `=` was briefly accepted and
+            // documented as meaning `aggregate <= N`. That is refused now,
+            // and the reason is truthfulness rather than cost: the engine
+            // would have enforced something other than what the operator
+            // wrote, and a constraint that quietly means less than it says is
+            // worse than one that is refused outright. Enforcing real
+            // equality means enforcing a *lower* bound too, which is the
+            // DELETE and decreasing-UPDATE write path v1 excludes - so `=`
+            // costs exactly what `>=` costs, and is refused beside it.
+            return Status::Unsupported(
+                "equality assertions (=) are not supported (byte " + std::to_string(op_at) +
+                "); enforcing = means enforcing a lower bound, which v1 excludes, and reading "
+                "it as <= would enforce something other than what was written "
+                "(docs/feat-assertion.md AS11)");
         case CompareOp::kGt:
         case CompareOp::kGte:
             // AS11, and the one refusal that pays for a whole write path:
@@ -1042,9 +1056,13 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
                 "); v1 enforces upper bounds only, which is what makes DELETE check-free "
                 "(docs/feat-assertion.md AS11)");
         case CompareOp::kNeq:
+            // Distinct from `=` and from `>`: those name a constraint this
+            // engine understands and declines, so they say which decision
+            // they wait on. `!=` names no ceiling in any direction, so there
+            // is no decision pending and it is simply wrong.
             return Status::InvalidArgument(
                 "'!=' is not a bound (byte " + std::to_string(op_at) +
-                "); an assertion's comparison is one of <, <= or =");
+                "); an assertion's comparison is < or <=");
     }
     stmt.op = op.value();
 
@@ -1065,11 +1083,12 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     //
     // Only for COUNT, and the asymmetry is a proof rather than an oversight:
     // a group *exists* only because it holds at least one row, so its count is
-    // at least 1 and any ceiling below 1 admits nothing - `COUNT(*) = 0`,
-    // `<= 0` and `< 1` all declare a relation that may never be written to
-    // again. A SUM has no such floor, because an int64 column may hold
-    // negative values, so no non-negative bound is provably unsatisfiable and
-    // refusing one would be inventing a restriction.
+    // at least 1 and any ceiling below 1 admits nothing - `COUNT(*) <= 0` and
+    // `COUNT(*) < 1` both declare a relation that may never be written to
+    // again. (`= 0`, the spelling §3.1 named, is now refused one step earlier
+    // by the operator itself.) A SUM has no such floor, because an int64
+    // column may hold negative values, so no non-negative bound is provably
+    // unsatisfiable and refusing one would be inventing a restriction.
     if (stmt.func == AggFunc::kCount && stmt.enforced_max() < 1) {
         return Status::InvalidArgument(
             "assertion \"" + stmt.name + "\" can never admit a row: COUNT(*) " +

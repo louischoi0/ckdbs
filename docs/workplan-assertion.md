@@ -38,8 +38,9 @@ precedent — do not wait for the blueprint parser).
 **Deliverables.**
 - `CREATE ASSERTION name ON rel GROUP BY (cols) CHECK COUNT(*)|SUM(col) op N`
 - `DROP ASSERTION name`
-- Reserved-and-rejected: `>` / `>=` (Unsupported, AS11), `DEFERRABLE`,
-  `NOT VALID`.
+- Reserved-and-rejected: `>` / `>=` **and `=`** (Unsupported, AS11 as revised
+  2026-08-08 - `=` was briefly accepted as meaning `aggregate <= N`, which
+  enforced something other than what was written), `DEFERRABLE`, `NOT VALID`.
 - Create-time validation, maximized (spec §3.1): relation/column existence,
   SUM column int64, operator set, non-negative integer literal bound,
   duplicate name, degenerate predicates.
@@ -128,14 +129,22 @@ background scheduling group, cooperative yielding.
   `ASSERT_BUILD` WAL.
 - Violation during build ⇒ CREATE fails with `AssertionViolation` naming the
   first violating group; partial build discarded (WAL'd teardown).
-- Cutover protocol for writes admitted during the build. Simplest correct
-  v1 scheme (recommended): because builder and writers share the home core's
-  event loop, run the build as a cooperative task and have concurrent write
-  steps against the relation *also* apply their deltas to the under-build
-  structure once their group has been scanned, or queue them for the builder
-  otherwise; enforcement begins atomically when the builder publishes the
-  catalog row. The chosen scheme must satisfy the normative requirement of
-  spec §8.1(5) and be documented in code comments + a short design note.
+- Cutover protocol for writes admitted during the build. **Decided
+  2026-08-08: the membership-check protocol** (spec §8.1a). A row counts as
+  incorporated iff its pk is present in the Bound Cabin - never inferred from
+  pk ordering or scan position. The pk-watermark scheme this replaces was
+  invalidated by an engine fact: `keystoneid-invariant.md` K3 withholds any
+  promise about pk ordering on purpose, so `pk <= watermark ⇒ already scanned`
+  is not a predicate this engine supports. Correctness reduces to
+  check-then-apply atomicity, which the home core's cooperative event loop
+  already provides - no new mechanism.
+  Consequences to honour when building it: scan order is correctness-
+  irrelevant (page order suffices); build-time write deltas apply at **commit**
+  time, so undo integration stays out of the build phase; publish is the single
+  commit point (validation + catalog row + plan-cache invalidation in one
+  step). A build-scoped temporary pk hash set for unbounded SUM groups is
+  **reserved as a measured optimization, not a v1 default** - do not build it
+  without a measurement asking for it.
 
 **Acceptance.** Tests: build over pre-populated relation (violating and
 non-violating); interleaved writes during build land in the final structure
@@ -169,6 +178,29 @@ isolation checker. **[S-3 dependency GATED as in testing-workplan.]**
 ---
 
 ## AST08 — Error semantics: `AssertionViolation`
+
+**Status (2026-08-08): NOT STARTED — selected as the next unblocked task, then the
+agent's budget ran out before any code. Tree untouched, no baseline run observed.**
+Selection reasoning, so the next agent spends nothing re-deriving it: AST04 is
+blocked on the frame-reclamation Open Decision; AST05→AST06→AST07→AST10 chain
+behind it; AST09's acceptance needs AST07's scenarios. AST08 is the dependency
+graph's only remaining unblocked item. Notes for the implementer:
+- Follow the `kFkViolation` precedent (status code, non-retryable, `ERR ... retryable=0`
+  wire spelling on the newline protocol). KWP has no caller yet — the "KWP error
+  frame / KDS Studio" deliverable cannot be done and should be recorded as deferred,
+  not faked.
+- Message format is spec §4.4 / AS9:
+  `assertion "<name>" group (<col>=<val>, ...): <AGG> would exceed bound <N>`.
+- AS9 says the violation is a **statement error (transaction survives)**. That
+  conflicts with the engine's per-transaction failure atomicity (a failing statement
+  inside an explicit txn sets the failed-txn flag — see txn docs). Resolve by reading
+  how AG3's SUM-overflow statement error behaves today and match it; if they truly
+  conflict, that is an operator question, not a silent pick.
+- Group-key rendering must go through the existing `FormatValue(type_val, value)`
+  two-argument form (single-argument is deleted, deliberately).
+- Nothing enforces yet (AST07), so the code + a formatting helper + golden-message
+  tests are the shippable unit; the "leaves transaction open" test needs a caller
+  and may have to be a unit test of the Status path only.
 
 **Scope.** Status catalog addition per spec §4.4 (D9 error-code coherence).
 

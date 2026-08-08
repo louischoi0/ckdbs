@@ -466,7 +466,7 @@ InvalidArgument	-	-	DROP INDEX
 # lines below it are the half that actually carries a hash.
 ok	-	-	CREATE ASSERTION lim ON purchases GROUP BY (user_id, product_id) CHECK COUNT(*) <= 5
 ok	-	-	CREATE ASSERTION credit ON orders GROUP BY (user_id) CHECK SUM(amount) < 1000
-ok	-	-	create assertion a on t group by (x) check count(*) = 1;
+ok	-	-	create assertion a on t group by (x) check count(*) <= 1;
 ok	-	-	CREATE ASSERTION assertion ON check GROUP BY (assertion, check) CHECK COUNT(*) <= 1
 ok	-	-	CREATE ASSERTION a ON t GROUP BY (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) CHECK COUNT(*) <= 1
 ok	-	-	DROP ASSERTION lim
@@ -492,7 +492,7 @@ Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= -1
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1.5
-InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 1
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1
 InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK TOTAL(v) <= 1
@@ -503,4 +503,11 @@ InvalidArgument	-	-	DROP ASSERTION
 
 # A SUM bound of zero is *not* degenerate: an int64 column may hold negative
 # values, so no non-negative bound is provably unsatisfiable.
-ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 0
+ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
+
+# [AS11 rev. 2026-08-08] `=` moved from ok to Unsupported. It parsed and was
+# documented as meaning `aggregate <= N`; that reinterpreted what the operator
+# wrote, and enforcing real equality needs the lower-bound half v1 excludes.
+# A verdict moving with the task that owns it, which is what this column is for.
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
