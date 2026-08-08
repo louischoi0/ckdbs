@@ -325,7 +325,8 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.relation_opens == 0 && counters.rows_examined == 0 &&
             counters.sub_chain_runs == 0 && counters.trail_replays == 0 &&
             counters.trail_misses == 0 && counters.range_pages_pruned == 0 &&
-            counters.cabin_hits == 0 && counters.cabin_misses == 0) {
+            counters.cabin_hits == 0 && counters.cabin_misses == 0 &&
+            counters.index_entries_scanned == 0) {
             continue;
         }
 
@@ -372,6 +373,21 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.cabin_hint_hits > 0) os << " hint_hits=" << counters.cabin_hint_hits;
         if (counters.cabin_hint_misses > 0) os << " hint_misses=" << counters.cabin_hint_misses;
         if (counters.cabin_recordings > 0) os << " cabin_recorded=" << counters.cabin_recordings;
+
+        // The index's three numbers (docs/feat-index.md §7). The gap between
+        // `index_scanned` and `index_resolved` is what the layer saved, and
+        // `index_filtered` is the part of that gap a COVERING clause bought -
+        // the only honest price for one, since a covered column saves a
+        // base *descent* and never a base read.
+        if (counters.index_entries_scanned > 0) {
+            os << " index_scanned=" << counters.index_entries_scanned;
+        }
+        if (counters.index_entries_filtered > 0) {
+            os << " index_filtered=" << counters.index_entries_filtered;
+        }
+        if (counters.index_rows_resolved > 0) {
+            os << " index_resolved=" << counters.index_rows_resolved;
+        }
     }
     return os.str();
 }

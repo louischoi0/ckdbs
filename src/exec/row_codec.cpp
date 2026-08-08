@@ -338,9 +338,84 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
     }
 }
 
+
+// A layout is only meaningful for the schema it was built from. Checked at
+// every entry point rather than trusted, because the failure mode of a
+// mismatched pair is not an error but a *wrong row*: offsets that address
+// the right bytes for a different relation.
+Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayout& layout) {
+    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
+        return Status::InvalidArgument(
+            "row layout has " + std::to_string(layout.offsets.size()) +
+            " column offset(s) for a schema of " + std::to_string(schema.columns.size()) +
+            " column(s)");
+    }
+    return Status::OK();
+}
+
+// The span of `payload` column `i` occupies: from its offset to the next
+// column's, or to the end of the row for the last one.
+std::span<const std::byte> CellOf(const catalog::RowLayout& layout,
+                                   std::span<const std::byte> payload, std::size_t i) {
+    const std::size_t begin = layout.offsets[i];
+    const std::size_t end =
+        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
+    return payload.subspan(begin, end - begin);
+}
+
+std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<std::byte> payload,
+                                    std::size_t i) {
+    const std::size_t begin = layout.offsets[i];
+    const std::size_t end =
+        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
+    return payload.subspan(begin, end - begin);
+}
+
+bool CompareInt(std::int64_t a, std::int64_t b, parser::CompareOp op) {
+    switch (op) {
+        case parser::CompareOp::kEq: return a == b;
+        case parser::CompareOp::kNeq: return a != b;
+        case parser::CompareOp::kLt: return a < b;
+        case parser::CompareOp::kLte: return a <= b;
+        case parser::CompareOp::kGt: return a > b;
+        case parser::CompareOp::kGte: return a >= b;
+    }
+    return false;
+}
+
+bool CompareUint(std::uint64_t a, std::uint64_t b, parser::CompareOp op) {
+    switch (op) {
+        case parser::CompareOp::kEq: return a == b;
+        case parser::CompareOp::kNeq: return a != b;
+        case parser::CompareOp::kLt: return a < b;
+        case parser::CompareOp::kLte: return a <= b;
+        case parser::CompareOp::kGt: return a > b;
+        case parser::CompareOp::kGte: return a >= b;
+    }
+    return false;
+}
+
+bool CompareStr(std::string_view a, std::string_view b, parser::CompareOp op) {
+    switch (op) {
+        case parser::CompareOp::kEq: return a == b;
+        case parser::CompareOp::kNeq: return a != b;
+        case parser::CompareOp::kLt: return a < b;
+        case parser::CompareOp::kLte: return a <= b;
+        case parser::CompareOp::kGt: return a > b;
+        case parser::CompareOp::kGte: return a >= b;
+    }
+    return false;
+}
+
+}  // namespace
+
 // Decodes one column from its cell into a slot the caller already owns.
 // Assigning rather than appending is what lets a chain frame reuse its
 // buffer for every row instead of allocating one per row per step (V16).
+//
+// Declared in the header since IX11: a secondary index entry carries covered
+// columns concatenated in the index's order, so the entry-side filter locates
+// its own cells and needs exactly this.
 Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std::byte> cell,
                            std::size_t column_index, parser::AstValue& out,
                            std::vector<PendingSpill>* spills) {
@@ -496,76 +571,6 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::Corruption("column '" + NameOf() + "' has an unrecognized type_val");
     }
 }
-
-// A layout is only meaningful for the schema it was built from. Checked at
-// every entry point rather than trusted, because the failure mode of a
-// mismatched pair is not an error but a *wrong row*: offsets that address
-// the right bytes for a different relation.
-Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayout& layout) {
-    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
-        return Status::InvalidArgument(
-            "row layout has " + std::to_string(layout.offsets.size()) +
-            " column offset(s) for a schema of " + std::to_string(schema.columns.size()) +
-            " column(s)");
-    }
-    return Status::OK();
-}
-
-// The span of `payload` column `i` occupies: from its offset to the next
-// column's, or to the end of the row for the last one.
-std::span<const std::byte> CellOf(const catalog::RowLayout& layout,
-                                   std::span<const std::byte> payload, std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end =
-        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
-    return payload.subspan(begin, end - begin);
-}
-
-std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<std::byte> payload,
-                                    std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end =
-        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
-    return payload.subspan(begin, end - begin);
-}
-
-bool CompareInt(std::int64_t a, std::int64_t b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
-    }
-    return false;
-}
-
-bool CompareUint(std::uint64_t a, std::uint64_t b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
-    }
-    return false;
-}
-
-bool CompareStr(std::string_view a, std::string_view b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
-    }
-    return false;
-}
-
-}  // namespace
 
 // ---- Literal coercion (TY05, moved here at TY07) ------------------------
 //

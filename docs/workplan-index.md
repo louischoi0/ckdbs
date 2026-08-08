@@ -1,8 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX10 are built** (IX-M1 to
-IX-M3 in full, plus the compiler half of IX-M4); nothing else is.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX11 are built** (IX-M1 to
+IX-M3 in full, and the read path of IX-M4); IX12-IX16 remain.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -13,17 +13,21 @@ note.
 
 ## Where to pick this up
 
-**At `IX11`** — `RunIndexStep`, which makes an index step *descend* rather
-than walk. IX01-IX10 are built as of 2026-08-08 and the whole suite is green at
-**1,678 tests**.
+**At `IX12`** — the equivalence suite. IX01-IX11 are built as of 2026-08-08
+and the whole suite is green at **1,684 tests**.
 
-A statement on an indexed column now compiles to `kIndexProbe`/`kIndexRange`
-with both bounds already encoded — and **the step VM still walks it**, because
-its dispatch falls through to `RunWalkStep` for any kind it does not name.
-That is a correct intermediate state rather than a gap: the key equalities
-stay in the residual, so a walk returns the identical rows, which is the
-"downgrading any step to a scan cannot change the result" property doing
-exactly the job it exists for. What is missing is the speed, not the answer.
+**The feature works end to end.** A probe over a 60-row relation examines 10;
+a `BETWEEN` over 100 rows examines 10 and stops; a `COVERING` clause drops 30
+of 40 descents before touching the base relation. `ANALYZE` reports all three
+as `index_scanned` / `index_filtered` / `index_resolved`.
+
+The finding that mattered, now spec **IX8a**: **an index step must emit in
+primary-key order.** The walk collects pks in *index key* order and a scan
+emits them in pk order, so without a sort between the two phases, creating an
+index reorders a reply. "An accelerator may cost performance and must never
+change a query result" is invariant 8's standard for Waystone, and an
+authoritative structure does not get to fall below it. The byte-for-byte
+equivalence test is what caught it.
 
 What building IX06 and IX09 changed, folded back into the spec:
 
@@ -420,17 +424,37 @@ is what keeps it a test about invariant 9 rather than about whichever
 accelerator exists this month; its old form survives as
 `AnUnindexedNonPkPredicateStillScans` over the un-indexed heap relation.
 
-### IX11 — `RunIndexStep` in the step VM
+### IX11 — `RunIndexStep` in the step VM — **built**
 
-Descend, walk entries while the key prefix matches, and for each: evaluate
-covered-column residuals from the entry, then `BtreeLookup` the pk, then
-`AcceptTupleAt`.
+Two phases, as `ServeFromCabin` is and for a related reason: phase 1 walks the
+index between the compiler's bounds and collects pks; phase 2 resolves each
+through the clustered tree and emits. `AcceptTupleAt` descends into the next
+step and anything below it may fetch, so an index-leaf span held across
+emission is exactly the span I15's R1 forbids.
 
-Two things this must not do. It must not decide visibility itself — the
-predicate lives at exactly one site and this is not it. And it must not skip
-the base fetch for a surviving row, because there is no visibility witness
-outside the tuple (spec §7); the covered columns are a **filter**, not a
-projection source.
+It does neither of the two things the plan warned about. It does not decide
+visibility - every located row goes through `AcceptTupleAt` like any other
+kind - and it does not emit from an entry, because there is no visibility
+witness outside the tuple.
+
+**Spec IX8a came out of this task**: the phase-1 pks are **sorted** before
+resolution, because the walk collects them in index-key order while a scan
+emits in pk order, and an index that reorders a reply fails the standard
+invariant 8 sets. It buys leaf locality too.
+
+Three smaller things. A **dropped or redefined** index between compile and
+execution takes the walk - the chain is stale, not wrong. The **live** root
+is read off the cached `IndexRef` rather than the compiled copy, since a
+split republishes it in place. And `DecodeOneValueInto` moved out of
+`row_codec.cpp`'s anonymous namespace and into the header: an entry carries
+covered columns concatenated in the index's order rather than at the row
+layout's offsets, and re-deriving what a cell means would have been a second
+decoder for the same bytes.
+
+The covered-column filter is **conservative by construction** - a predicate
+it cannot decide keeps the row, including a spilled covered value, because
+resolving one would be a page fetch under the leaf's span. Wrong in that
+direction costs a wasted descent; wrong in the other costs a row.
 
 ### IX12 — Equivalence tests
 

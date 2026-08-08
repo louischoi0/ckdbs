@@ -314,9 +314,11 @@ TEST(WaystoneContractTest, ANonPkPredicateStillSearchesAndSaysSo) {
     EXPECT_NE(analyzed.find("IndexProbe"), std::string::npos) << analyzed;
     EXPECT_EQ(analyzed.find("replays="), std::string::npos)
         << "a search was served from a trail, which invariant 9 forbids: " << analyzed;
-    // And it really did read the relation rather than short-circuit. Still
-    // every row, because the read path is IX11's and this step walks today.
-    EXPECT_NE(analyzed.find("examined=8"), std::string::npos) << analyzed;
+    // It reads fewer rows than the relation holds now - that is the index
+    // working - so the evidence that no trail served it is `replays=`
+    // being absent, not the row count. The unindexed control below is what
+    // still checks a search reads everything.
+    EXPECT_NE(analyzed.find("matched=1"), std::string::npos) << analyzed;
 }
 
 TEST(WaystoneContractTest, AnUnindexedNonPkPredicateStillScans) {

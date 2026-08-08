@@ -1,10 +1,9 @@
 # Secondary indexes: multi-column and covering
 
-Status: **`IX01`-`IX10` built**: the storage layer, the catalog, the grammar,
-the write hook, its WAL records, the backfill, and the compiler. A statement
-on an indexed column now compiles to `kIndexProbe`/`kIndexRange` - and the
-step VM still *walks* it (`IX11` is the descent), which is safe because
-downgrading any step to a scan cannot change the result.
+Status: **`IX01`-`IX11` built**: the storage layer, the catalog, the grammar,
+the write hook, its WAL records, the backfill, the compiler and the read path.
+A statement on an indexed column **descends the index**. What remains is
+IX12-IX16: the equivalence suite, the switch, the benchmark and the docs.
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
@@ -327,6 +326,19 @@ statement: **residual predicates on covered columns are evaluated from the
 entry**, so a row that will not survive the filter never costs a pk descent.
 On a probe returning 10 rows from 10,000 entries, that is the whole cost.
 
+`ANALYZE` prices it directly: `index_filtered` counts descents the covered
+columns avoided, and nothing else. If it is zero, a `COVERING` clause bought
+exactly the write cost it added.
+
+The entry-side test is **conservative by construction**: it answers "drop
+this row" only when a residual predicate the entry's own values can decide
+says so. A predicate on an uncovered column, an operand that is not a
+literal, or a **spilled** covered value all keep the row and let the base
+read filter it — the last because resolving a spill would be a page fetch
+under the index leaf's span, which `parser-v2.md` I15's R1 forbids. Getting
+that direction wrong is the difference between a lost row and a wasted
+descent.
+
 Stated here so a benchmark does not have to discover it, and so nobody builds
 toward an index-only scan without first building the witness it needs. That
 witness is listed in §12.
@@ -341,6 +353,20 @@ witness is listed in §12.
 - `kIndexProbe` — equalities covering a prefix of the index's key columns.
 - `kIndexRange` — equalities covering a prefix, plus an inclusive range on
   the next key column; or a range on the first.
+
+> **IX8a — an index step emits its rows in primary-key order.**
+
+The walk collects pks in *index key* order; a scan of the same relation emits
+them in pk order. Without a sort between the two phases, creating an index
+would **reorder a reply** — and "an accelerator may cost performance and must
+never change a query result" is the standard invariant 8 holds Waystone to,
+which an authoritative structure does not get to fall below. Found by the
+equivalence test, which compares byte for byte precisely so it could not be
+missed.
+
+It costs one sort of the matched set against one descent per element of it,
+and it buys locality as well: on a btree relation pk order *is* leaf order,
+so the descents walk the tree forwards instead of jumping.
 
 Invariant 9's line is **lookup versus search**, not authoritative versus
 advisory. An index probe returns a *set*, and a set missing a row inserted

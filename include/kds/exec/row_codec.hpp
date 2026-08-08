@@ -236,6 +236,20 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
                      std::vector<PendingSpill>* spills = nullptr);
 
+// One column, from a cell the caller located itself.
+//
+// The two above find their cells at the row layout's offsets. This one takes
+// the cell directly, because a secondary index entry carries its covered
+// columns **concatenated in the index's declared order** rather than at the
+// relation's offsets (docs/feat-index.md §7) - and re-deriving what a cell
+// means from an entry would be a second decoder for the same bytes.
+//
+// `column_index` is only what a reported spill names, so an entry-side caller
+// passes the covered column's schema position.
+Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std::byte> cell,
+                          std::size_t column_index, parser::AstValue& out,
+                          std::vector<PendingSpill>* spills);
+
 // Renders one decoded value for display in a SELECT response line.
 // Prefers AstValue::raw_int_text when set (exact literal/uint64 text),
 // falling back to int_val otherwise.

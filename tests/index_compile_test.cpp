@@ -187,6 +187,105 @@ TEST_F(IndexCompileTest, AnIndexedStatementReturnsTheRowsTheUnindexedOneDoes) {
     }
 }
 
+// ---- The descent actually happens (workplan IX11) -----------------------
+
+TEST_F(IndexCompileTest, AnIndexProbeReadsTheMatchingRowsAndNotTheRelation) {
+    // The claim the feature exists for, and the one nothing before IX11
+    // could make: a probe examines the rows it returns, not every row.
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    for (int i = 0; i < 60; ++i) Ok("INSERT INTO t VALUES (" + std::to_string(i % 6) + ")");
+
+    const std::string probe = Plan("SELECT id FROM t WHERE a = 3");
+    EXPECT_NE(probe.find("IndexProbe"), std::string::npos) << probe;
+    EXPECT_NE(probe.find("examined=10"), std::string::npos)
+        << "the probe read the relation instead of the index: " << probe;
+    EXPECT_NE(probe.find("index_scanned=10"), std::string::npos) << probe;
+
+    // The unindexed sibling still reads all 60, which is what says the
+    // number above is the index and not the data.
+    Ok("CREATE TABLE u (id int64, a int64) BTREE");
+    for (int i = 0; i < 60; ++i) Ok("INSERT INTO u VALUES (" + std::to_string(i % 6) + ")");
+    EXPECT_NE(Plan("SELECT id FROM u WHERE a = 3").find("examined=60"), std::string::npos);
+}
+
+TEST_F(IndexCompileTest, ARangeStopsAtItsHighBound) {
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    for (int i = 0; i < 100; ++i) Ok("INSERT INTO t VALUES (" + std::to_string(i) + ")");
+
+    const std::string plan = Plan("SELECT id FROM t WHERE a BETWEEN 10 AND 19");
+    EXPECT_NE(plan.find("IndexRange"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("examined=10"), std::string::npos) << plan;
+}
+
+TEST_F(IndexCompileTest, AnUpdatedKeyIsFoundUnderItsNewValueAndNotItsOld) {
+    // Maintenance is append-only, so the old entry is still there. The row
+    // must come back under the new key and not the old one - which is the
+    // read-time key re-check subtracting the surplus (spec §1).
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    Ok("INSERT INTO t VALUES (5)");
+    Ok("UPDATE t SET a = 6 WHERE id = 1");
+
+    EXPECT_EQ(Run("SELECT id FROM t WHERE a = 5"), Run("SELECT id FROM t WHERE id = 999"))
+        << "the stale entry served a row the predicate no longer matches";
+    EXPECT_NE(Run("SELECT id FROM t WHERE a = 6").find('1'), std::string::npos);
+}
+
+TEST_F(IndexCompileTest, ARoundTrippedKeyEmitsItsRowOnce) {
+    // v -> v' -> v leaves two entries naming one pk under append-only
+    // maintenance, and resolving both would emit the row twice.
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    Ok("INSERT INTO t VALUES (5)");
+    Ok("UPDATE t SET a = 6 WHERE id = 1");
+    Ok("UPDATE t SET a = 5 WHERE id = 1");
+
+    EXPECT_EQ(Run("SELECT id FROM t WHERE a = 5"), "id\\n1");
+}
+
+TEST_F(IndexCompileTest, ADeletedRowIsNotServedFromItsSurvivingEntry) {
+    // DELETE leaves the entry (removal is forbidden), so the only thing
+    // keeping the row out of the answer is the visibility predicate at
+    // AcceptTupleAt - which this step goes through like every other kind.
+    Ok("CREATE TABLE t (id int64, a int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a)");
+    Ok("INSERT INTO t VALUES (5)");
+    Ok("INSERT INTO t VALUES (5)");
+    Ok("DELETE FROM t WHERE id = 1");
+
+    EXPECT_EQ(Run("SELECT id FROM t WHERE a = 5"), "id\\n2");
+}
+
+TEST_F(IndexCompileTest, ACoveredColumnFiltersBeforeTheBaseDescent) {
+    // What covering buys, and the only thing it buys: a row the entry
+    // already disqualifies never costs a descent. It does *not* skip the
+    // base read for a row that survives - there is no visibility witness
+    // outside the tuple (spec §7).
+    Ok("CREATE TABLE t (id int64, a int64, b int64) BTREE");
+    Ok("CREATE INDEX ix ON t (a) COVERING (b)");
+    for (int i = 0; i < 40; ++i) {
+        Ok("INSERT INTO t VALUES (1, " + std::to_string(i % 4) + ")");
+    }
+
+    const std::string plan = Plan("SELECT id FROM t WHERE a = 1 AND b = 2");
+    EXPECT_NE(plan.find("IndexProbe"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("index_scanned=40"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("index_filtered=30"), std::string::npos)
+        << "the covered column did not filter: " << plan;
+    EXPECT_NE(plan.find("examined=10"), std::string::npos) << plan;
+
+    // And the rows are the ones the uncovered index would have returned.
+    Ok("CREATE TABLE u (id int64, a int64, b int64) BTREE");
+    Ok("CREATE INDEX ux ON u (a)");
+    for (int i = 0; i < 40; ++i) {
+        Ok("INSERT INTO u VALUES (1, " + std::to_string(i % 4) + ")");
+    }
+    EXPECT_EQ(Run("SELECT id FROM t WHERE a = 1 AND b = 2"),
+              Run("SELECT id FROM u WHERE a = 1 AND b = 2"));
+}
+
 TEST_F(IndexCompileTest, AParamNeverEntersAnIndex) {
     // A declared pattern's body is compiled to be type-checked and
     // fingerprinted, never run, so there is no value to encode a key from -

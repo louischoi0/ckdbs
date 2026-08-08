@@ -117,6 +117,26 @@ struct StepStats {
     // was pruned, and `rows_examined` is what tells those apart.
     std::uint64_t range_pages_pruned = 0;
 
+    // Secondary index (docs/feat-index.md §§1, 7).
+    //
+    // `index_entries_scanned` counts entries the walk read between its two
+    // bounds; `index_rows_resolved` counts the pks it then descended for.
+    // The gap between them is what the layer actually saved, and it has two
+    // sources the third counter separates: a duplicate pk (maintenance is
+    // append-only, so a key round trip leaves two entries naming one row)
+    // and `index_entries_filtered`, a row a **covered** column already
+    // disqualified.
+    //
+    // That last one is the only number that prices covering, and it prices
+    // it honestly: a covered column saves a base *descent*, never a base
+    // read, because visibility still requires the tuple (spec §7). So
+    // `index_entries_filtered` counts descents avoided and nothing else -
+    // if it is zero, a COVERING clause bought exactly the write cost it
+    // added.
+    std::uint64_t index_entries_scanned = 0;
+    std::uint64_t index_entries_filtered = 0;
+    std::uint64_t index_rows_resolved = 0;
+
     // Cabin (docs/feat-cabin.md §7's "ANALYZE narrates all three").
     //
     // `cabin_hits` counts probes served from an observed value's entry set -
