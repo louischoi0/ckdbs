@@ -112,26 +112,23 @@ SELECT user_id, product_id, COUNT(*), SUM(amount) FROM purchases GROUP BY user_i
 
 
 -- ---------------------------------------------------------------------------
--- 3. Three operators, one enforced ceiling
+-- 3. Two operators, one enforced ceiling
 --
--- `<`, `<=` and `=` are all accepted, and all three mean **`aggregate <= N`**
--- for some N (§3.1). `= N` is admitted for syntactic familiarity and is
--- documented as an upper bound, not an equality: a write that would take the
--- group *above* N fails, and a group sitting below N is fine.
---
--- The reduction happens once, in the parser, so no later stage re-derives it
--- and no two stages can disagree about what `<` meant:
+-- `<` and `<=` are the whole of it (AS11 as revised 2026-08-08), and both map
+-- onto `aggregate <= N` **exactly** — neither reinterprets what was written:
 --
 --     CHECK COUNT(*) <= 5   ->  count <= 5
 --     CHECK COUNT(*) <  5   ->  count <= 4
---     CHECK COUNT(*) =  5   ->  count <= 5
+--
+-- The reduction happens once, in the parser, so no later stage re-derives it
+-- and no two stages can disagree about what `<` meant.
+--
+-- `=` used to be here, accepted as a third spelling of `count <= N` "for
+-- syntactic familiarity". It is refused now — see §4.
 -- ---------------------------------------------------------------------------
 
 CREATE ASSERTION strictly_under ON purchases GROUP BY (product_id) CHECK COUNT(*) < 5;
-CREATE ASSERTION exactly_five   ON purchases GROUP BY (note)       CHECK COUNT(*) = 5;
-
 DROP ASSERTION strictly_under;
-DROP ASSERTION exactly_five;
 
 
 -- ---------------------------------------------------------------------------
@@ -148,6 +145,15 @@ DROP ASSERTION exactly_five;
 -- is exactly why v1 leaves DELETE with no assertion check at all.
 -- EXPECT: ERR lower-bound assertions (>) are not supported
 CREATE ASSERTION lower ON purchases GROUP BY (user_id) CHECK COUNT(*) > 5;
+
+-- AS11 as revised 2026-08-08, and the most interesting refusal in this file.
+-- `=` parsed, and was documented as meaning `aggregate <= N`. That is
+-- withdrawn: documenting a reinterpretation does not make it honest, and a
+-- client reading `CHECK COUNT(*) = 5` would reasonably expect a group of
+-- three rows to be a violation. Enforcing it as written needs the lower-bound
+-- half, so `=` costs exactly what `>=` costs and is refused beside it.
+-- EXPECT: ERR equality assertions (=) are not supported
+CREATE ASSERTION exactly ON purchases GROUP BY (user_id) CHECK COUNT(*) = 5;
 
 -- EXPECT: ERR lower-bound assertions (>=) are not supported
 CREATE ASSERTION lower2 ON purchases GROUP BY (user_id) CHECK SUM(amount) >= 5;
@@ -193,15 +199,17 @@ CREATE ASSERTION dis ON purchases GROUP BY (user_id) CHECK COUNT(DISTINCT amount
 -- ---------------------------------------------------------------------------
 
 -- `!=` names no ceiling in either direction.
+-- `!=` names no ceiling in either direction. Distinct from `=` and `>`, which
+-- name a constraint the engine understands and declines — there is no decision
+-- pending here.
 -- EXPECT: ERR '!=' is not a bound
 CREATE ASSERTION neq ON purchases GROUP BY (user_id) CHECK COUNT(*) != 5;
 
 -- Degenerate (§3.1). A group *exists* only because it holds at least one row,
 -- so its count is at least 1 and any ceiling below 1 declares a relation that
--- may never be written to again. All three spellings are caught, because all
--- three reduce to the same ceiling.
--- EXPECT: ERR can never admit a row
-CREATE ASSERTION zero1 ON purchases GROUP BY (user_id) CHECK COUNT(*) = 0;
+-- may never be written to again. Both spellings an accepted operator can
+-- still produce are caught. (`= 0`, the spelling the spec named, is now
+-- refused one step earlier — by the operator itself.)
 -- EXPECT: ERR can never admit a row
 CREATE ASSERTION zero2 ON purchases GROUP BY (user_id) CHECK COUNT(*) <= 0;
 -- EXPECT: ERR can never admit a row
@@ -211,7 +219,7 @@ CREATE ASSERTION zero3 ON purchases GROUP BY (user_id) CHECK COUNT(*) < 1;
 -- may hold negative values, so no non-negative bound is provably
 -- unsatisfiable, and refusing one would be inventing a restriction the spec
 -- does not state. This is accepted.
-CREATE ASSERTION sum_zero ON purchases GROUP BY (user_id) CHECK SUM(amount) = 0;
+CREATE ASSERTION sum_zero ON purchases GROUP BY (user_id) CHECK SUM(amount) <= 0;
 DROP ASSERTION sum_zero;
 
 -- Literals only, non-negative (§3.1, TY3 conservatism). One predicate answers
@@ -299,8 +307,11 @@ DROP ASSERTION assertion;
 --   * **`CREATE ASSERTION` does not scan the relation**, so a declaration
 --     made over already-violating data succeeds today. AS7 says it must fail;
 --     that is AST06.
---   * **Upper bounds only** (AS11), which is what makes DELETE check-free.
---     `>` and `>=` are reserved, not pending-with-a-date.
+--   * **Upper bounds only** (AS11 as revised), which is what makes DELETE
+--     check-free. `>`, `>=` and `=` are all reserved, not
+--     pending-with-a-date; `=` is refused because reading it as `<=` would
+--     enforce something other than what was written, and enforcing it as
+--     written needs the lower-bound half.
 --   * **One relation per assertion** (AS8). Multi-relation assertions are
 --     blocked on the cross-core commit protocol, which is itself reserved.
 --   * **No WHERE-scoped or HAVING-style assertions**, no `AVG`/`MIN`/`MAX`
