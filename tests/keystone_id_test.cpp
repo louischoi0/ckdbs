@@ -448,21 +448,48 @@ TEST_F(KeystoneIdWalCrashTest, ASyncedShutdownLeavesTheSequenceAboveEveryLoggedI
 // purpose. What is new is that `docs/keystoneid-invariant.md` builds a
 // stated guarantee on top of it without naming it. Same posture as the WAL
 // test above: green, and pinning a bug.
-TEST_F(KeystoneIdCrashTest, ObjectOidsAreReissuedAcrossABootAndCollide) {
-    catalog::Oid first = 0;
+TEST_F(KeystoneIdCrashTest, ObjectOidsAreUniqueAcrossABoot) {
+    // **Inverted 2026-08-08.** This test used to pin the bug
+    // docs/keystoneid-k0-findings.md §6 describes - `GenerateUserOid()` was
+    // an in-memory counter seeded at kUserOidStart and never read back, so a
+    // clean restart plus one CREATE TABLE produced two relations sharing an
+    // oid, and resolving that oid returned the *first* row carrying it. Both
+    // assertions below carried an "invert this test" message. This is that
+    // inversion.
+    //
+    // The fix recovers the counter from the catalog's own rows on first use
+    // rather than persisting it, so no format changed and an existing data
+    // file is fixed by being opened. What makes that sound is that the rows
+    // *are* the counter: a crash between issuing an oid and writing its row
+    // loses the oid instead of duplicating it, and a lost oid is free (K3 -
+    // no density promise).
+    catalog::Oid a_oid = 0;
+    catalog::Oid a_high_column = 0;
     Boot([&](CommandDispatcher& d, catalog::Catalog& cat, storage::PageStore& store) {
         ASSERT_EQ(d.Dispatch("CREATE TABLE a (id int64, v int64)").response.substr(0, 7),
                   "CREATED");
         ASSERT_EQ(d.Dispatch("INSERT INTO a VALUES (11)").response.substr(0, 8), "INSERTED");
         auto oid = cat.FindTableOidByName("a");
         ASSERT_TRUE(oid.ok());
-        first = oid.value();
-        EXPECT_EQ(first, catalog::kUserOidStart);
+        a_oid = oid.value();
+        EXPECT_EQ(a_oid, catalog::kUserOidStart);
+
+        // Columns come from the same counter as relations, which is why the
+        // recovery has to read sys.columns as well as sys.objects: the
+        // high-water mark after a CREATE TABLE sits on a *column*, not on
+        // the table. Two columns, so 4001 and 4002 are taken.
+        auto schema = cat.BuildSchemaFromColumns(a_oid);
+        ASSERT_TRUE(schema.ok()) << schema.status().message();
+        for (const catalog::SysColumnRow& col : schema.value().columns) {
+            if (col.oid > a_high_column) a_high_column = col.oid;
+        }
+        EXPECT_GT(a_high_column, a_oid) << "a column holds the high-water mark";
+
         ASSERT_TRUE(store.Sync().ok());
     });
 
     // A clean restart. Nothing crashed, nothing was lost.
-    Boot([&](CommandDispatcher& d, catalog::Catalog& cat, storage::PageStore&) {
+    Boot([&](CommandDispatcher& d, catalog::Catalog& cat, storage::PageStore& store) {
         ASSERT_NE(d.Dispatch("SELECT v FROM a").response.find("11"), std::string::npos)
             << "relation a survived the restart";
 
@@ -471,21 +498,46 @@ TEST_F(KeystoneIdCrashTest, ObjectOidsAreReissuedAcrossABootAndCollide) {
         auto c_oid = cat.FindTableOidByName("c");
         ASSERT_TRUE(c_oid.ok());
 
-        // Two relations, one oid. Everything keyed on (oid, pk) - the
-        // access statistics, any future trail entry, any change feed - now
-        // merges two relations silently.
-        EXPECT_EQ(c_oid.value(), first)
-            << "object oids are unique across boots - invert this test, it is pinning a bug";
+        // The property §1.2 of docs/keystoneid-invariant.md claims and could
+        // not previously deliver: an oid names one object for the life of the
+        // database. Everything keyed on (oid, pk) - the access statistics,
+        // trail entries, any future change feed - depends on it.
+        EXPECT_NE(c_oid.value(), a_oid);
 
-        // And the consequence, which is worse than a merged statistic:
-        // resolving the oid back to a relation takes the *first* sys.tables
-        // row carrying it, so 'c' resolves to 'a'.
+        // And specifically it clears the *columns* too, not just the table.
+        // Resuming at a_oid + 1 would collide with a's first column, which is
+        // the failure mode a sys.objects-only recovery would have.
+        EXPECT_GT(c_oid.value(), a_high_column);
+
+        // The consequence that used to be worse than a merged statistic:
+        // resolving the oid took the first sys.tables row carrying it, so 'c'
+        // resolved to 'a'. Now each resolves to itself.
         auto row = cat.GetSysTableRow(c_oid.value());
         ASSERT_TRUE(row.ok()) << row.status().message();
-        EXPECT_EQ(std::string(catalog::NameView(row.value().name)), "a")
-            << "the oid resolves to its own relation - invert this test too";
+        EXPECT_EQ(std::string(catalog::NameView(row.value().name)), "c");
+
+        auto a_row = cat.GetSysTableRow(a_oid);
+        ASSERT_TRUE(a_row.ok()) << a_row.status().message();
+        EXPECT_EQ(std::string(catalog::NameView(a_row.value().name)), "a");
+
+        ASSERT_TRUE(store.Sync().ok());
+    });
+
+    // A third boot, to pin that the recovery is not a one-shot migration:
+    // it reads the catalog every process, so it keeps working as the
+    // catalog grows.
+    Boot([&](CommandDispatcher& d, catalog::Catalog& cat, storage::PageStore&) {
+        ASSERT_EQ(d.Dispatch("CREATE TABLE e (id int64, v int64)").response.substr(0, 7),
+                  "CREATED");
+        auto e_oid = cat.FindTableOidByName("e");
+        ASSERT_TRUE(e_oid.ok());
+        auto c_oid = cat.FindTableOidByName("c");
+        ASSERT_TRUE(c_oid.ok());
+        EXPECT_GT(e_oid.value(), c_oid.value());
+        EXPECT_NE(e_oid.value(), a_oid);
     });
 }
+
 
 }  // namespace
 }  // namespace kds::server

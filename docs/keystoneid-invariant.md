@@ -50,28 +50,29 @@ What this buys, engine-wide:
    snapshot is entitled to. Issue-once deletes the hazard structurally
    instead of gating it behind a purge-horizon rule that every future
    feature would have to re-prove.
-2. **(oid, pk) becomes a forever-unique key — once the oid half holds.**
+2. **(oid, pk) becomes a forever-unique key — once the pk half holds.**
    Every structure keyed on it — the statistics primitives, waystone
    trail entries, in-memory canonical caches, any future replication or
    change feed — would get identity for free: a stored (oid, pk) can
    dangle, but it could never mis-attribute, making "dangling ⇒ skip" a
    universally sound rule.
 
-   **This does not hold today, and not because of the pk.**
-   `Catalog::GenerateUserOid()` is an in-memory counter seeded at
-   `kUserOidStart` and never read back from the catalog, so **every boot
-   re-issues the same object oids** — no crash required, a clean restart
-   plus one `CREATE TABLE` collides, and the new relation's oid resolves
-   through `GetSysTableRow` to the *old* relation. The gap is documented
-   at `catalog.hpp`'s header and `well_known.hpp`'s `kUserOidStart`, and
-   `sys.patterns` rows take a persistent sequence specifically to dodge
-   it. Demonstrated by `ObjectOidsAreReissuedAcrossABootAndCollide`.
+   **The oid half holds as of 2026-08-08.** It did not before:
+   `Catalog::GenerateUserOid()` was an in-memory counter seeded at
+   `kUserOidStart` and never read back, so every boot re-issued the same
+   object oids — no crash required, a clean restart plus one
+   `CREATE TABLE` collided, and the new relation's oid resolved through
+   `GetSysTableRow` to the *old* relation. It now recovers its position on
+   first use from the highest oid `sys.objects` and `sys.columns` carry,
+   and `ObjectOidsAreUniqueAcrossABoot` — the inversion of the test that
+   used to demonstrate the collision — pins it.
 
-   So this bullet states an *objective*, not a current property. K1 is
-   necessary for it and not sufficient: persisting the oid counter — seed
-   it from the catalog at load, or add a superblock field — belongs to the
-   catalog rather than to this document, but nothing keyed on (oid, pk)
-   may be called collision-free until it lands.
+   **So this bullet still states an objective, and the remaining half is
+   the pk.** K1 is what is missing now, in the direction §1.1 describes:
+   the durable `next_id` can fall behind the log after a crash (K-M2a).
+   Nothing keyed on (oid, pk) may be called collision-free until that
+   lands — but the failure mode is now a crash rather than a clean
+   restart, which is a different and much narrower window.
 3. **Audit posture.** For the finance-adjacent positioning: "a row's
    identifier never changes and is never reissued" is a compliance
    sentence, not just an implementation detail. Immutable, unique-for-

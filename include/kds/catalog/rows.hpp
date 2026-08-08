@@ -343,7 +343,7 @@ inline constexpr std::uint8_t kIndexFlagUnique = 0x1;
 struct SysIndexRow {
     // From AllocateRowId(kSysIndexesTable) - this relation's own persistent
     // sequence, like a cabin_id or an fk_id, and not GenerateUserOid(),
-    // which restarts every boot.
+    // which counts objects rather than rows of this relation.
     Oid index_oid;
     Oid table_oid;
 
@@ -667,7 +667,7 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 struct SysCabinRow {
     // From AllocateRowId(kSysCabinsTable) - the persistent sequence in
     // sys.cabins' own sys.tables row, for the reason RegisterPattern()
-    // records: GenerateUserOid() restarts at kUserOidStart every boot, and
+    // records: GenerateUserOid() numbers *objects*, not this relation's rows, and
     // this row is persisted.
     std::uint64_t cabin_id;
 
@@ -766,7 +766,7 @@ constexpr bool IsCabinServing(const SysCabinRow& row) noexcept {
 struct SysFkeyRow {
     // From AllocateRowId(kSysFkeysTable) - the persistent sequence in
     // sys.fkeys' own sys.tables row, for the reason SysCabinRow records:
-    // GenerateUserOid() restarts at kUserOidStart every boot and this row
+    // GenerateUserOid() numbers objects rather than this relation's rows, and this row
     // is persisted.
     std::uint64_t fk_id;
 

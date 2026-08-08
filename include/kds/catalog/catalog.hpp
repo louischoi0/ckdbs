@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -27,9 +28,13 @@
 //     (heap_chain.hpp vs btree.hpp).
 //   - No transaction manager exists yet, so every row written here is
 //     stamped kBootstrapXid, which is visible to every read view.
-//   - Object oid generation (GenerateUserOid()) is in-memory only and
-//     resets on restart - a KNOWN GAP; see kUserOidStart in
-//     well_known.hpp. sys.patterns rows do not use it, for that reason.
+//   - Object oids (GenerateUserOid()) are unique for the life of the
+//     database. The counter is recovered from the catalog's own rows on
+//     first use rather than persisted; see that function and
+//     kUserOidStart in well_known.hpp. This was a KNOWN GAP until
+//     2026-08-08 - the counter was in-memory and restarted every boot,
+//     so a clean restart plus one CREATE TABLE produced two relations
+//     sharing an oid (docs/keystoneid-k0-findings.md §6).
 //
 // Logging (component tag "catalog"): catalog pages are the pages whose
 // contents explain every other page, so the writes are logged at Info
@@ -112,9 +117,33 @@ public:
     // the first conflicting CreateAt() reports.
     Status Bootstrap();
 
-    // Allocates one fresh object oid. See kUserOidStart's comment: not
-    // persisted across restarts.
-    Oid GenerateUserOid() noexcept;
+    // Allocates one fresh object oid, **unique for the life of the
+    // database** and not merely for the life of the process
+    // (docs/keystoneid-k0-findings.md §6).
+    //
+    // The counter is not stored anywhere. It is *recovered* on first use by
+    // reading back the highest oid the catalog already carries, and every
+    // call after that is an in-memory increment - so a boot costs one scan
+    // and a `CREATE TABLE` costs nothing extra. Recovering beats persisting
+    // here because there is no durable counter to fall behind the rows it
+    // describes: the rows **are** the counter, so a crash between issuing an
+    // oid and writing its row loses the oid rather than duplicating it, and
+    // losing one is free (`keystoneid-invariant.md` K3 - no density promise).
+    //
+    // **The contract this depends on**, and the one thing to check before
+    // adding a caller: every oid handed out here must end up in `sys.objects`
+    // or `sys.columns`, because those are the two relations
+    // `HighestIssuedUserOid()` reads back. An oid written only to some third
+    // relation would be invisible to the recovery and reissued after a
+    // restart. Nothing else in the engine takes its ids from here - patterns,
+    // cabins, foreign keys and indexes each use their own persistent
+    // per-relation `next_id` sequence - so the contract holds today, and the
+    // scan is where to extend it if that changes.
+    //
+    // Fallible now, where it used to be `noexcept`: reading the catalog can
+    // fail, and an oid guessed after a failed read is exactly the collision
+    // this exists to prevent.
+    StatusOr<Oid> GenerateUserOid();
 
     // Creates a new table: allocates its storage root page, formats it for
     // the requested clustered type, and inserts the corresponding
@@ -643,7 +672,16 @@ private:
 
     Logger* log_ = nullptr;
     InvalidationHook on_invalidate_;
-    Oid next_user_oid_ = kUserOidStart;
+    // Unset until the first GenerateUserOid() recovers it from the catalog.
+    // An optional rather than a sentinel value, because every integer in
+    // this type's range is a legal oid and a sentinel would be one more
+    // thing that has to stay outside the range it guards.
+    std::optional<Oid> next_user_oid_;
+
+    // The highest oid `sys.objects` and `sys.columns` carry, or
+    // kUserOidStart - 1 if they carry none above it. Reads the pages; called
+    // once per process, by the first GenerateUserOid().
+    StatusOr<Oid> HighestIssuedUserOid();
     SysObjectRegistry sys_objects_;
     CatalogCache cache_;
     std::uint64_t catalog_version_ = 0;

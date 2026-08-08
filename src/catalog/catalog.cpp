@@ -282,7 +282,7 @@ Status Catalog::Bootstrap() {
         {kSysCabinsTable, "cabins", kCatalogPageCabins},
         // sys.fkeys, same shape again. It issues Keystone ids for the same
         // reason sys.cabins does - an `fk_id` comes from this relation's own
-        // `next_id`, not from GenerateUserOid(), which restarts every boot.
+        // `next_id`, not from GenerateUserOid(), which numbers objects.
         {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
     }};
 
@@ -373,7 +373,8 @@ Status Catalog::Bootstrap() {
     // ordinary user tuple format (well_known.hpp explains why). It is built
     // here by hand rather than through CreateTable() for two reasons:
     // CreateTable() takes its oids from GenerateUserOid(), which is
-    // in-memory and restarts every boot, and it roots the relation on a
+    // in-memory at bootstrap time and could not recover a position from the
+    // very pages being built, and it roots the relation on a
     // dynamically allocated page, which nothing could find at bootstrap
     // without first reading the catalog it is part of.
     //
@@ -587,7 +588,58 @@ Status Catalog::BootstrapAssertions() {
     return Status::OK();
 }
 
-Oid Catalog::GenerateUserOid() noexcept { return next_user_oid_++; }
+StatusOr<Oid> Catalog::HighestIssuedUserOid() {
+    // The two relations every `GenerateUserOid()` result is written to, and
+    // the reason that function's comment states the contract: an oid landing
+    // in some third relation would be invisible here and reissued after a
+    // restart.
+    //
+    // The bootstrap oids are in these pages too and are all far below
+    // kUserOidStart, which is why the floor below is a `max` and not a
+    // special case for the empty database.
+    Oid highest = kUserOidStart - 1;
+
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects);
+    if (!objects.ok()) return objects.status();
+    for (const SysObjectRow& row : objects.value()) {
+        if (row.oid > highest) highest = row.oid;
+    }
+
+    // Columns are scanned as well as objects, and leaving them out is the
+    // subtle way to get this wrong: column oids come from the *same* counter
+    // as relation oids, so a database whose last DDL was a `CREATE TABLE`
+    // has its high-water mark on a column and not on the table.
+    auto columns = ScanAll<SysColumnRow>(store_, kCatalogPageColumns);
+    if (!columns.ok()) return columns.status();
+    for (const SysColumnRow& row : columns.value()) {
+        if (row.oid > highest) highest = row.oid;
+    }
+
+    return highest;
+}
+
+StatusOr<Oid> Catalog::GenerateUserOid() {
+    // Recovered once, on first use, then incremented in memory. Lazy rather
+    // than done at construction because a `Catalog` is constructed on two
+    // paths - `BootstrapDatabase()`'s fresh branch and its existing-database
+    // branch - and only one of them calls anything afterwards. Recovering
+    // where the value is *needed* covers both without either having to
+    // remember, and costs an empty database nothing.
+    if (!next_user_oid_.has_value()) {
+        auto highest = HighestIssuedUserOid();
+        if (!highest.ok()) {
+            return highest.status().WithContext(
+                "cannot issue an object oid without reading back the ones already issued");
+        }
+        next_user_oid_ = highest.value() + 1;
+
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("catalog", "object oid sequence recovered at " +
+                                       std::to_string(*next_user_oid_));
+        }
+    }
+    return (*next_user_oid_)++;
+}
 
 void Catalog::BumpVersion(std::string_view what) {
     ++catalog_version_;
@@ -736,14 +788,18 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         varheap_root = created_varheap.value();
     }
 
-    Oid new_oid = GenerateUserOid();
+    auto generated_oid = GenerateUserOid();
+    if (!generated_oid.ok()) return generated_oid.status();
+    const Oid new_oid = generated_oid.value();
 
     // Placement (docs/workplan-crosscore.md M1). The rotation counter is
-    // how many relations already exist, read off the page rather than held
-    // in memory: it has to survive a restart, and the oid cannot serve
-    // because GenerateUserOid() restarts at kUserOidStart every boot
-    // (core_placement.hpp says why that matters). Nothing here decides the
-    // policy - AssignOwnerCore does, and it is `[PROPOSED]`.
+    // how many relations already exist, read off the page rather than
+    // derived from the oid. That was originally because the oid restarted
+    // at kUserOidStart every boot; it no longer does, but the reason still
+    // holds and is a better one - an oid counts objects *ever created*,
+    // including columns, where placement wants relations that exist now.
+    // Nothing here decides the policy - AssignOwnerCore does, and it is
+    // `[PROPOSED]`.
     auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables);
     if (!existing_relations.ok()) return existing_relations.status();
     // DDL runs on the system core and allocates from its free map, so the
@@ -762,7 +818,9 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     }
 
     for (const auto& col : schema.columns) {
-        Status s = InsertColumnRow(GenerateUserOid(), new_oid, col.pos, NameView(col.name),
+        auto col_oid = GenerateUserOid();
+        if (!col_oid.ok()) return col_oid.status();
+        Status s = InsertColumnRow(col_oid.value(), new_oid, col.pos, NameView(col.name),
                                     col.type_val, col.len, col.notnull, col.cabin_policy);
         if (!s.ok()) return s;
     }

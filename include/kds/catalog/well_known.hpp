@@ -84,9 +84,10 @@ inline constexpr Oid kSysPatternsTable = 114;
 inline constexpr Oid kSysPatternDefsTable = 115;
 
 // Fixed oids for sys.pattern_defs' four sys.columns rows, one per schema
-// position. Fixed rather than from GenerateUserOid() for the reason
-// kUserOidStart records below: that counter is in-memory and restarts every
-// boot, and these rows are persisted.
+// position. Fixed rather than from GenerateUserOid() because these rows are
+// written *during* bootstrap: the oid sequence recovers its position by
+// reading sys.objects and sys.columns, and asking it for an oid while those
+// are the pages being built is a question with no answer yet.
 inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
 
 // sys.assertions (docs/feat-assertion.md §8.2, workplan AST03): one row per
@@ -109,8 +110,8 @@ inline constexpr Oid kSysAssertionsTable = 116;
 
 // Fixed oids for sys.assertions' six sys.columns rows, one per schema
 // position - fixed rather than from GenerateUserOid() for the reason
-// kSysPatternDefsColumnOidBase gives: that counter is in-memory, restarts
-// every boot, and these rows are persisted.
+// kSysPatternDefsColumnOidBase gives: they are written during bootstrap,
+// before the oid sequence has pages to recover its position from.
 inline constexpr Oid kSysAssertionsColumnOidBase = 140;
 
 // sys.access_stats (docs/heap-and-tuple.md §7): one row per access *shape*
@@ -145,12 +146,23 @@ inline constexpr Oid kSysCabinsTable = 131;
 // mis-attribute.
 inline constexpr Oid kSysFkeysTable = 132;
 
-// Starting point for user-created object oids. **KNOWN GAP:** this counter
-// is in-memory only and resets on every process restart, so two objects
-// created in different runs can share an oid. Persisting it means adding a
-// field to kds::server::SuperBlock, a layout change other code depends on.
-// This is why sys.patterns rows take their oid from a persistent sequence
-// instead (Catalog::RegisterPattern).
+// The **floor** for user-created object oids, not a counter.
+//
+// `Catalog::GenerateUserOid()` starts here on an empty database and, on a
+// populated one, resumes past the highest oid `sys.objects` and `sys.columns`
+// already carry - so an oid names one object for the life of the database.
+//
+// This was a KNOWN GAP until 2026-08-08: the counter was in-memory only and
+// restarted here every boot, so two objects created in different runs shared
+// an oid and resolving it returned whichever row the scan reached first
+// (docs/keystoneid-k0-findings.md §6). It is fixed by *recovering* the
+// position rather than persisting it, which is why no format changed and why
+// an existing data file is repaired simply by being opened. sys.patterns
+// rows still take their oid from a persistent per-relation sequence; that
+// predates the fix and is not made wrong by it.
+//
+// The number itself may not move: it is the boundary below which every oid
+// is a bootstrap oid, and lowering it would collide with them.
 inline constexpr Oid kUserOidStart = 4000;
 
 // Fixed page ids for the bootstrap catalog heap pages. Reserved: a
