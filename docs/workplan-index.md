@@ -1,9 +1,8 @@
 # Workplan: secondary indexes
 
 Spec: `docs/feat-index.md` (decisions `IX1`-`IX14`).
-Tasks `IX01`-`IX16`, in five milestones. **IX01-IX11 and IX13 are built**
-(IX-M1 to IX-M3 in full, the read path of IX-M4, and the switch); IX12, IX14,
-IX15 and IX16 remain.
+Tasks `IX01`-`IX16`, in five milestones. **IX01-IX13 are built** (IX-M1 to
+IX-M4 in full, plus the switch); IX14, IX15 and IX16 remain.
 
 Read `feat-index.md` §1 before touching anything on the write path: the
 superset invariant is what makes every maintenance action an append, and §2's
@@ -14,9 +13,16 @@ note.
 
 ## Where to pick this up
 
-**At `IX12`** — the equivalence suite, which now has the switch it needed to
-flip. IX01-IX11 and IX13 are built as of 2026-08-08 and the whole suite is
-green at **1,686 tests**.
+**At `IX14`** — the benchmark, which goes through `bench/`'s owner and wants a
+Release build. IX01-IX13 are built as of 2026-08-08 and the whole suite is
+green at **1,694 tests**.
+
+`tests/index_contract_test.cpp` is what keeps the feature honest, and it was
+**mutation-tested rather than assumed**: deleting IX8a's pk-order sort fails
+two of its tests, and letting the covered filter decide a spilled value fails
+a third. The third case existed only because the first mutation run showed the
+suite could not see it - a suite that passes against a broken engine is not a
+suite.
 
 **The feature works end to end.** A probe over a 60-row relation examines 10;
 a `BETWEEN` over 100 rows examines 10 and stops; a `COVERING` clause drops 30
@@ -458,16 +464,40 @@ it cannot decide keeps the row, including a spilled covered value, because
 resolving one would be a page fetch under the leaf's span. Wrong in that
 direction costs a wasted descent; wrong in the other costs a row.
 
-### IX12 — Equivalence tests
+### IX12 — Equivalence tests — **built**
 
-The suite that keeps this honest, modelled on `waystone_contract_test.cpp`:
-the same statements over the same data, with the index used and with it
-forced off, compared **byte for byte** — rows and order. Plus:
+`tests/index_contract_test.cpp`, modelled on `waystone_contract_test.cpp` and
+holding an index to a **higher** bar than that file holds a trail to. A trail
+is advisory, so invariant 8 lets it be deleted wholesale; an index is
+authoritative and cannot be. What it *can* be held to is the other half of the
+same standard - an accelerator may cost performance and must never change a
+query result - and that is what this suite asserts.
 
-- an UPDATE that moves a key, read from both an old and a new snapshot;
-- a DELETE, which must leave the entry and still return nothing;
-- a truncated string key with two values sharing a prefix;
-- a deliberately corrupted index page, which must fail rather than mis-answer.
+Four configurations, one query set, replies compared byte for byte:
+
+  1. indexed, filled by the **write hook**   the ordinary one
+  2. indexed, filled by the **backfill**     declared after the rows existed
+  3. `indexes = off`                          the index exists and is ignored
+  4. no index at all                          the baseline
+
+Configuration 2 is what says the backfill and the write hook agree about what
+an entry is; 3 and 4 together say the index changed neither plan nor answer.
+`TheIndexedRunActuallyUsedTheIndex` is the control every equivalence suite
+needs, without which all four could agree because none of them used one.
+
+Five cases the shared set cannot express get their own tests: an old snapshot
+reading its version through a superseded entry, a delete whose entry survives
+and still returns nothing, two string keys sharing a truncated prefix, a
+**spilled covered value** that the entry-side filter must not decide, and a
+deliberately corrupted index page - which must **fail** rather than
+mis-answer, the opposite outcome from the waystone suite's corrupted trail,
+because an index has no fall-through that could be correct.
+
+**It was mutation-tested, and that is why the fifth case exists.** Removing
+IX8a's pk-order sort fails two tests. Letting the covered filter decide a
+spilled value failed *nothing* on the first run - the suite had no case where
+a covered column spilled - so the case was written and the mutation now fails
+it. A suite that passes against a broken engine is not a suite.
 
 ---
 

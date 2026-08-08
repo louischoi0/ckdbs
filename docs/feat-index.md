@@ -1,10 +1,11 @@
 # Secondary indexes: multi-column and covering
 
-Status: **`IX01`-`IX11` and `IX13` built**: the storage layer, the catalog,
+Status: **`IX01`-`IX13` built**: the storage layer, the catalog,
 the grammar, the write hook, its WAL records, the backfill, the compiler, the
 read path and the `indexes` switch. A statement on an indexed column
-**descends the index**. What remains is IX12 (the equivalence suite), IX14
-(the benchmark), IX15 (docs) and IX16 (access statistics).
+**descends the index**, and `tests/index_contract_test.cpp` is the suite that
+keeps it honest. What remains is IX14 (the benchmark), IX15 (docs) and IX16
+(access statistics).
 Decisions `IX1`-`IX14`. Workplan: `docs/workplan-index.md` (`IX01`-`IX16`).
 
 This document owns the secondary index. It does **not** own the clustered
