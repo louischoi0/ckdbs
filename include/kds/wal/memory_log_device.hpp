@@ -45,7 +45,7 @@ public:
         std::uint64_t segment_size = kDefaultSegmentSize);
 
     std::uint64_t segment_size() const noexcept override { return segment_size_; }
-    std::uint64_t segment_count() const noexcept override { return segments_.size(); }
+    std::uint64_t segment_count() const noexcept override { return base_.size(); }
 
     // Segments durable as of the last Sync() - what Crash() reverts to.
     std::uint64_t durable_segment_count() const noexcept { return durable_segment_count_; }
@@ -87,9 +87,17 @@ private:
     // default costs nothing until something is actually written.
     using Segment = std::unordered_map<std::uint64_t, std::byte>;
 
+    // Durable base plus un-synced overlay — MemoryPageDevice's shape, for
+    // MemoryPageDevice's reason: Sync() merges the overlay into the base,
+    // so its cost is proportional to the bytes written *since the last
+    // sync*, never to the log's whole history. (It used to deep-copy every
+    // segment per sync; under group durability that is one full-history
+    // copy per committed statement, which made any long-running driver
+    // quadratic.) Crash() drops the overlay and the segments created since
+    // the last sync — the same observable semantics as before.
     std::uint64_t segment_size_;
-    std::vector<Segment> segments_;
-    std::vector<Segment> durable_;
+    std::vector<Segment> base_;     // content as of the last Sync()
+    std::vector<Segment> pending_;  // writes since; parallel to base_
     std::uint64_t durable_segment_count_ = 0;
 
     std::optional<Status> fail_next_write_;
