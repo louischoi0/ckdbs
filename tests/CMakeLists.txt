@@ -116,8 +116,10 @@ add_executable(kds_tests
     wal_checkpointer_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
+    sim_rng_test.cpp
+    sim_loop_test.cpp
 )
-target_link_libraries(kds_tests PRIVATE kds GTest::gtest GTest::gtest_main Threads::Threads)
+target_link_libraries(kds_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main Threads::Threads)
 
 # The V01 golden corpus is data, not source: the test reads it at run time
 # so a corpus edit does not force a rebuild. The path is baked in rather

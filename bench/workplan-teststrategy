@@ -3,6 +3,41 @@
 Work instructions for building the verification layer that sits **above** the
 existing unit and subsystem-contract tests. Tasks `SIM01`–`SIM14`.
 
+**Status (2026-08-09): SIM01–SIM04 are built.** The harness lives in `sim/`
+at the repo root ([OPEN: harness home] is resolved: `sim/` it is; the
+`ckdbs-sim` binary links no gtest, while `tests/sim_rng_test.cpp` and
+`tests/sim_loop_test.cpp` drive the same `kds_sim` library from inside the
+unit suite). The committed corpus is `tests/testdata/sim_seeds.txt` (seeds
+1–5) and is regression-mandatory from this day. What each piece is:
+`sim/rng.hpp` (label-forked streams, mapping pinned by test),
+`sim/instance.hpp` (the whole engine stack over crashable memory devices —
+wired like the expeditor, TrxIdSequence persist callback included, because
+a harness on the null-persist test path would reissue trx ids across a
+restart and blame the engine), `sim/integrity.{hpp,cpp}` (SIM02's sweep,
+nine categories, each pinned by a corruption test that must be caught by
+exactly its category), `sim/workload.{hpp,cpp}` + `sim/oracle.{hpp,cpp}`
+(SIM03: generator is engine-independent — pk guesses come from its own
+insert counter, truth comes from replies), `sim/loop.{hpp,cpp}` +
+`sim/sim_main.cpp` (SIM04: the three modes; the `[GATED: recovery]`
+assertion is written, counted as `gated_missing_rows`, and provably able to
+fire — `SimConfig::assert_recovery` arms it and a test does so). One
+engine-side finding fell out on day one, exactly as SIM04's design
+predicted it would: **`MemoryLogDevice::Sync()` deep-copied every
+segment's per-byte map on every sync**, and group durability syncs once per
+committed statement, so any long driver was quadratic (a 1,000-op run cost
+84 s; 10,000 ops did not finish in ten minutes). Restructured to the
+base+pending-overlay shape `MemoryPageDevice` already had — sync merges
+the overlay, cost proportional to bytes since the last sync, observable
+semantics untouched, its whole unit suite green unmodified. The same run
+now costs 0.96 s, and 10,000 ops about 19 s (Debug). Known v1 limits,
+stated rather than implied: catalog relations are checked at catalog level
+only (typed codecs, not user tuples); the ghost detector lives in oracle
+reconciliation, not the sweep; crash-anywhere reconciliation counts a
+table created after the last SYNC under `unlogged_ddl_lost_tables`
+(unlogged DDL is not recovery's debt). Next: SIM05 (fault schedules — the
+device hooks are already exercised by the torn-write corruption test),
+SIM06 (workload v2), SIM07 (minimizer).
+
 The 87 files under `tests/` are thick at the unit and subsystem level — device
 crash/torn-write contracts, WAL durability classes, B+ tree structural
 invariants, MVCC visibility, parser fuzz — and empty above it. Nothing runs a

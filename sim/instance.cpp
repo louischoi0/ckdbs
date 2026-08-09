@@ -1,0 +1,117 @@
+#include "sim/instance.hpp"
+
+#include <utility>
+
+#include "kds/server/superblock.hpp"
+
+namespace kds::sim {
+
+// Fixed and deliberately unrealistic: the harness has no wall clock
+// ([OPEN: sim clock] in bench/workplan-teststrategy), and last_mount_time
+// is the only consumer. A constant keeps two runs of one seed
+// byte-identical.
+constexpr std::uint64_t kMountTime = 1000;
+
+StatusOr<std::unique_ptr<SimInstance>> SimInstance::Create(Options options) {
+    std::unique_ptr<SimInstance> instance(new SimInstance());
+    instance->options_ = options;
+
+    auto page_device = storage::MemoryPageDevice::Create(options.extent_pages,
+                                                         options.initial_pages);
+    if (!page_device.ok()) return page_device.status();
+    instance->page_device_ = std::move(page_device.value());
+
+    auto log_device = wal::MemoryLogDevice::Create(options.wal_segment_bytes);
+    if (!log_device.ok()) return log_device.status();
+    instance->log_device_ = std::move(log_device.value());
+
+    if (Status s = instance->Boot(); !s.ok()) return s;
+    return instance;
+}
+
+Status SimInstance::Boot() {
+    auto wal = wal::WalManager::Open(log_device_.get(), clock_, /*core_id=*/0);
+    if (!wal.ok()) return wal.status();
+    wal_ = std::move(wal.value());
+
+    auto store = storage::DevicePageStore::Open(*page_device_, server::kFirstUserPageId);
+    if (!store.ok()) return store.status();
+    store_ = std::move(store.value());
+    store_->SetWalGate(wal_.get());
+
+    auto boot = bootstrap::BootstrapDatabase(*store_, kMountTime);
+    if (!boot.ok()) return boot.status();
+    boot_.emplace(std::move(boot.value()));
+
+    // The persist callback, exactly as the expeditor wires it: the harness
+    // is a full instance, and the null-persist path is the socket-free
+    // tests' — ids reissued across a restart would be *this harness's*
+    // fault, not the engine's.
+    trx_ids_.emplace(boot_->superblock, [this] { return PersistSuperBlock(); });
+    undo_.emplace(*store_, wal_.get());
+    txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get());
+
+    dispatcher_.emplace(boot_->superblock, boot_->catalog, *store_, /*log=*/nullptr,
+                        /*clock=*/nullptr, wal_.get(), options_.durability,
+                        exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                        /*access_statistics=*/true, /*cabins=*/nullptr, &*txn_);
+    session_ = server::Session();
+    return Status::OK();
+}
+
+void SimInstance::TearDown() {
+    // Reverse of Boot(). The session first: it may hold a pointer into the
+    // transaction manager it sits above.
+    session_ = server::Session();
+    dispatcher_.reset();
+    txn_.reset();
+    undo_.reset();
+    trx_ids_.reset();
+    boot_.reset();
+    store_.reset();
+    wal_.reset();
+}
+
+void SimInstance::Crash() {
+    // The devices lose their unsynced halves *first*: from this moment the
+    // image is what a power cut left, and tearing the stack down afterwards
+    // cannot write (no component has a flushing destructor — that property
+    // is what makes this two-liner a crash rather than a shutdown).
+    page_device_->Crash();
+    log_device_->Crash();
+    TearDown();
+}
+
+Status SimInstance::CleanShutdown() {
+    // The dispatcher's own SYNC: log first, then the store, the same order
+    // and the same code a client's SYNC runs.
+    const std::string reply = Execute("SYNC");
+    if (reply.rfind("OK", 0) != 0) {
+        return Status::IoError("clean shutdown: SYNC answered: " + reply);
+    }
+    TearDown();
+    return Status::OK();
+}
+
+Status SimInstance::PersistSuperBlock() {
+    // Expeditor::PersistSuperBlock's shape: encode into the resident frame,
+    // then sync the store so the raised ceiling is really on the platter.
+    auto page = store_->Get(server::kSuperBlockPageId);
+    if (!page.ok()) return page.status();
+    boot_->superblock.Encode(page.value());
+    return store_->Sync();
+}
+
+Status SimInstance::Reboot() {
+    if (running()) {
+        return Status::InvalidArgument("Reboot() while the engine is up; Crash() or "
+                                       "CleanShutdown() first");
+    }
+    return Boot();
+}
+
+std::string SimInstance::Execute(std::string_view sql) {
+    return dispatcher_->Dispatch(sql, &session_).response;
+}
+
+}  // namespace kds::sim
