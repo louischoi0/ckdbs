@@ -286,9 +286,11 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01 is built (2026-08-09); PHY02 onward are
-not.** Part I's `stats/decay.hpp` is the R1 implementation PHY01's S1
-reuses (it grew the N-point `Accumulate` for S2's decayed sums).
+dependency of PHY04), `workplan-testing.md`. **PHY01 and PHY02 are built (2026-08-09); PHY03
+onward are not.** Part I's `stats/decay.hpp` is the R1 implementation
+PHY01's S1 reuses (it grew the N-point `Accumulate` for S2's decayed
+sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp` with no
+engine-effect includes, per PO10.
 
 Engine rules apply throughout: explicit Status errors, thread-per-core
 core-local state, deterministic tests, decide/execute phase separation
@@ -346,7 +348,33 @@ in, snapshot out, exact counts under no clock).
 **Acceptance.** Unit tests for decayed accumulation; snapshot immutability;
 counters correct under scripted workloads.
 
-## PHY02 — Decision core (pure)
+## PHY02 — Decision core (pure)  **[DONE 2026-08-09]**
+
+**Built.** `stats/cabin_optimizer.hpp/.cpp`: `Decide(Snapshot) → ActionSet`
+in unsigned 16.16 (saturating multiply/divide, zero-divide answering the
+harmless 0), an ordered managed table so iteration order is part of
+determinism, and time taken only from `snapshot.decay_epoch`. The
+lifecycle rides `Decide` plus three completion edges (`NoteCreated`/
+`NoteBuildFailed`/`NoteDropped`) that PHY04 will call and the tests drive.
+It needed one **PHY01 amendment**: §II.4's Σ_i sums fingerprints *served
+by candidate c*, and a bare pattern_id names no column - so
+`CandidateRef {rel_oid, col_pos, cabin_id}` rides the snapshot, derived by
+the dispatcher from the compiled chain (a kCabinProbe step names its
+Cabin; else the first kFilterScan's filtered column is what a Cabin would
+serve). Three v1 model choices, stated in the header so they are revisited
+rather than discovered: P_rel is the largest serving fingerprint's mean
+page cost (the observed scan *is* the observed build cost), CREATE's
+budget admission uses P_rel/8 `[PROPOSED]` until `NoteCreated` reports the
+real size, and EXTEND's marginal pair scales both B and C by the
+coverage-miss share. Two rule refinements the tests forced: a managed
+candidate whose shape vanished from the snapshot still gets a (zero)
+evidence entry, and zero benefit decays an ACTIVE regardless of cost -
+otherwise a dead Cabin is forgotten alive. The swap emits its DROP
+*before* its CREATE so executing the set in order lands back under
+budget. All four acceptance oracles pass: golden ActionSets (exact 16.16
+B/C values pinned), hysteresis (100 noisy snapshots inside the θ gap,
+zero actions), the budget invariant across admission/refusal/swap, and
+bit-identical traces from identical streams.
 
 **Scope.** `CabinOptimizer::Decide(Snapshot) → ActionSet` implementing
 spec §II.4 exactly. **No I/O, no clock, no allocation of engine resources,

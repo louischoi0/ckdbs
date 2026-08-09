@@ -59,11 +59,32 @@ inline constexpr std::size_t kMaxTrackedFingerprints = 4096;
 // the same backstop shape.
 inline constexpr std::size_t kMaxTrackedCabins = 4096;
 
+// Which (relation, column) a fingerprint's cabin-servable predicate
+// targets - the linkage §II.4's Σ_i needs, since B(c) sums fingerprints
+// *served by candidate c* and a bare pattern_id names no column. Derived
+// by the dispatcher from the compiled chain (a kCabinProbe step, or the
+// first kFilterScan's filtered column); `cabin_id` is non-zero when an
+// existing Cabin already serves the shape. Zero rel_oid means the shape
+// has no cabin candidacy (a pk lookup, a bare scan) - still counted, so
+// S1 stays the workload's whole heat map, but no CREATE prices it.
+struct CandidateRef {
+    std::uint64_t rel_oid = 0;
+    std::uint16_t col_pos = 0;
+    std::uint64_t cabin_id = 0;
+
+    bool valid() const noexcept { return rel_oid != 0; }
+};
+
 // One fingerprint's S1/S2 state: the decayed execution count and the
 // decayed page sum. Their ratio is the decayed mean pages-per-execution.
 struct FingerprintSignal {
     DecayState executions;
     DecayState pages;
+    // Last-observed candidacy. A shape's target is a function of the
+    // shape, so overwriting is idempotent in the steady state; it moves
+    // only when the catalog under the shape moved (a Cabin created or
+    // dropped), and then the newest answer is the right one.
+    CandidateRef candidate;
 };
 
 // One Cabin's S3 state.
@@ -79,6 +100,7 @@ struct SnapshotFingerprint {
     std::uint64_t pattern_id = 0;
     std::uint32_t frequency_q8 = 0;  // decayed executions, Q24.8
     std::uint32_t pages_q8 = 0;      // decayed page sum, Q24.8
+    CandidateRef candidate;          // zero rel_oid = no cabin candidacy
 };
 
 struct SnapshotCabin {
@@ -108,9 +130,11 @@ public:
         : clock_(clock), half_life_ns_(half_life_ns) {}
 
     // S1 + S2: one successful fingerprinted execution that read
-    // `pages_fetched` pages. Never fails; a full table evicts its coldest
-    // fingerprint to admit this one.
-    void NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched);
+    // `pages_fetched` pages, targeting `candidate` if the shape has cabin
+    // candidacy. Never fails; a full table evicts its coldest fingerprint
+    // to admit this one.
+    void NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched,
+                       CandidateRef candidate = {});
 
     // S3, forwarded by CabinStore: a probe against `cabin_id`. `served`
     // false is a coverage miss - the value was not observed.

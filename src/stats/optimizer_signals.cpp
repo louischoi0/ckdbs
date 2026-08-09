@@ -51,8 +51,10 @@ CabinQualitySignal* OptimizerSignals::CabinFor(std::uint64_t cabin_id) {
     return &cabins_[cabin_id];
 }
 
-void OptimizerSignals::NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched) {
+void OptimizerSignals::NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched,
+                                     CandidateRef candidate) {
     FingerprintSignal* signal = FingerprintFor(pattern_id);
+    if (candidate.valid()) signal->candidate = candidate;
     Touch(signal->executions, clock_, half_life_ns_);
     // Clamped into Accumulate's point width; a statement that read four
     // billion pages has problems this signal is not among.
@@ -85,6 +87,7 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
         out.pattern_id = id;
         out.frequency_q8 = ValueAt(signal.executions, clock_, half_life_ns_);
         out.pages_q8 = ValueAt(signal.pages, clock_, half_life_ns_);
+        out.candidate = signal.candidate;
         snapshot.fingerprints.push_back(out);
     }
     snapshot.cabins.reserve(cabins_.size());

@@ -682,7 +682,7 @@ private:
     // RecordAccessShapes because it is the same moment - a completed
     // execution - observed by a third collector.
     void RecordOptimizerSignals(const std::optional<stats::InstanceKey>& instance,
-                                const exec::ExecStats& stats);
+                                const exec::StepChain& chain, const exec::ExecStats& stats);
 
     // ---- The Cabin write hook (docs/feat-cabin.md §5) --------------------
     //
