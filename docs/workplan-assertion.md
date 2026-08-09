@@ -458,7 +458,22 @@ the AST07 test scenarios.
 
 ---
 
-## AST10 — End-to-end validation and documentation close-out
+## AST10 — End-to-end validation and documentation close-out  **[BUILT 2026-08-09; bench measurement delegated]**
+
+**Built.** The E2E scenario
+(`AssertionEnforceTest.EndToEndLifecycleLeavesNoResidue`): create → load →
+CREATE ASSERTION → mixed workload (admitted and refused inserts, a
+group-move, an update down and up, a delete, a poisoned transaction rolled
+back) → DROP → no observable residue, name free, enforcement off at once.
+README gained the low-key positioning bullet ("SQL-92 CREATE ASSERTION,
+restricted class, lock-free at admission"). The reserved-form refusals are
+confirmed standing by the suite (`assertion_ddl_test.cpp`, all green at
+close-out). The INSERT-path overhead benchmark runs via
+`tools/assertion_benchmark.py` (staged at f7462e2, before enforcement
+existed) and its write-up lands as `bench/results-assertion.md` -
+delegated to the bench owner at close-out; the number to expect is shaped
+by "a batch of one is a batch": the entry write and ASSERT_RESERVE record
+amortize under fsync at strict/group and show under relaxed.
 
 **Scope.** System-level pass + doc hygiene.
 

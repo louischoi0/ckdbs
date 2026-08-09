@@ -250,6 +250,41 @@ TEST_F(AssertionEnforceTest, DropStopsEnforcementAtOnce) {
     EXPECT_EQ(Run("INSERT INTO trades VALUES (7, 1)").substr(0, 8), "INSERTED");
 }
 
+TEST_F(AssertionEnforceTest, EndToEndLifecycleLeavesNoResidue) {
+    // AST10's scenario: create -> load -> CREATE ASSERTION -> mixed
+    // workload with violations -> DROP ASSERTION -> no residue.
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_EQ(Run("INSERT INTO trades VALUES (7, 10)").substr(0, 8), "INSERTED");
+    }
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 60")
+                  .substr(0, 7),
+              "CREATED");
+
+    // Mixed workload: admitted and refused inserts, a group-move, an
+    // update down and up, a delete, a poisoned transaction rolled back.
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7, 20)").substr(0, 8), "INSERTED");  // 60/60
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7, 1)").substr(0, 23), "ERR ASSERTION_VIOLATION");
+    ASSERT_EQ(Run("UPDATE trades SET account = 8 WHERE id = 5").substr(0, 7), "UPDATED");
+    ASSERT_EQ(Run("UPDATE trades SET qty = 5 WHERE id = 1").substr(0, 7), "UPDATED");  // 35/60
+    ASSERT_EQ(Run("DELETE FROM trades WHERE id = 2"), "DELETED 1");                    // 25/60
+    Session s;
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "INSERT INTO trades VALUES (7, 35)").substr(0, 8), "INSERTED");  // 60/60
+    ASSERT_EQ(Run(s, "INSERT INTO trades VALUES (7, 1)").substr(0, 23),
+              "ERR ASSERTION_VIOLATION");
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");  // back to 25/60
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7, 35)").substr(0, 8), "INSERTED");
+
+    // Drop: enforcement ends at once, the catalog row is gone, and the
+    // name is free - no residue a client can observe.
+    ASSERT_EQ(Run("DROP ASSERTION cap").substr(0, 7), "DROPPED");
+    EXPECT_NE(Run("SHOW ASSERTIONS").find("assertions=0"), std::string::npos);
+    EXPECT_EQ(Run("INSERT INTO trades VALUES (7, 999)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 5000")
+                  .substr(0, 7),
+              "CREATED");
+}
+
 TEST_F(AssertionEnforceTest, CountersAreMonotonicAndPrintedOnlyWhileHeld) {
     // §9's production counters (AST09), under AST07's own scenario: two
     // admitted inserts, one refusal, one aborted transaction.
