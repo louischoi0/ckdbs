@@ -1212,6 +1212,14 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
                 enforcer_.Holds(def.id))
                    ? 1
                    : 0);
+        // §9's production counters, printed only while the registry holds
+        // the assertion: they live and die with the directory, so an
+        // unenforced row prints no numbers rather than zeros that would
+        // read as "counted, and nothing happened".
+        if (const auto* counters = enforcer_.CountersOf(def.id); counters != nullptr) {
+            os << " checks=" << counters->checks << " violations=" << counters->violations
+               << " reserved=" << counters->reserved << " aborted=" << counters->aborted;
+        }
         os << " def=" << def.source_text;
     }
     return {os.str(), false};

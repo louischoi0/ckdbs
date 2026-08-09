@@ -416,7 +416,33 @@ leaves transaction open and usable (explicit test).
 
 ---
 
-## AST09 — Observability: ANALYZE + production counters
+## AST09 — Observability: ANALYZE + production counters  **[BUILT 2026-08-09, two halves recorded]**
+
+**Built: the production counters.** `LiveAssertion::Counters` - `checks`
+(admission checks run), `violations`, `reserved` (entries applied, arrivals
+and departures both), `aborted` (reservations reversed) - incremented at
+the exact enforcement sites AST07 built, monotonic, registry-resident.
+`SHOW ASSERTIONS` prints them **only while the registry holds the
+assertion**: they live and die with the directory, so an unenforced row
+prints no numbers rather than zeros that would read as "counted, and
+nothing happened". Pinned under AST07's own scenarios in
+`tests/assertion_enforce_test.cpp`, cold-dispatcher case included.
+
+**Recorded, not faked - two deliverables with no vehicle.**
+
+*The ANALYZE `Assertion` line.* ANALYZE is a dispatcher prefix that wraps
+the SELECT path only; a *checked* statement is a write, and no write
+statement can be ANALYZE'd. The line lands when ANALYZE learns write
+statements, which is its own decision about a surface far wider than
+assertions - not something to decide from here. `group_dir_probes` waits
+with it.
+
+*`hint_heals` and the dev-mode timing hooks.* No code path reads a Bound
+Cabin entry's location hint (admission is O(1) against the header; no read
+path walks entries), so the counter could never move - and a counter
+nothing can increment is worse than none, the INDEX_PAGE_INIT argument.
+The dev/production profiling split the spec references has no
+infrastructure in this engine to hook into.
 
 **Scope.** Spec §9.
 

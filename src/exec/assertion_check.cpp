@@ -85,9 +85,13 @@ Status AssertionEnforcer::AdmitInsert(catalog::Oid oid,
     for (const std::uint64_t id : on->second) {
         LiveAssertion& a = live_.at(id);
         const std::string key = KeyFor(a, values, /*first_col_pos=*/1);
+        ++a.counters.checks;
         auto admitted = a.cabin.Admit(key, ContributionOf(a, values, 1));
         if (!admitted.ok()) return admitted.status();
-        if (!admitted.value().admitted) return Refuse(a, values, 1);
+        if (!admitted.value().admitted) {
+            ++a.counters.violations;
+            return Refuse(a, values, 1);
+        }
     }
     return Status::OK();
 }
@@ -121,6 +125,7 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
     r.page = at.value().first;
     r.index = at.value().second;
     pending_[txn_id].push_back(std::move(r));
+    ++a.counters.reserved;
     return Status::OK();
 }
 
@@ -169,17 +174,25 @@ Status AssertionEnforcer::AdmitAndReserveUpdate(storage::PageStore& store, wal::
                                           "\": SUM delta overflows int64");
             }
             if (delta > 0) {
+                ++a.counters.checks;
                 auto admitted = a.cabin.Admit(new_key, delta);
                 if (!admitted.ok()) return admitted.status();
-                if (!admitted.value().admitted) return Refuse(a, new_row, 0);
+                if (!admitted.value().admitted) {
+                    ++a.counters.violations;
+                    return Refuse(a, new_row, 0);
+                }
             }
         } else {
             // §4.2 row 4: departure (no check) + arrival (checked, at its
             // full contribution - leaving one group buys nothing in
             // another).
+            ++a.counters.checks;
             auto admitted = a.cabin.Admit(new_key, new_contrib);
             if (!admitted.ok()) return admitted.status();
-            if (!admitted.value().admitted) return Refuse(a, new_row, 0);
+            if (!admitted.value().admitted) {
+                ++a.counters.violations;
+                return Refuse(a, new_row, 0);
+            }
         }
 
         // The mutation is uniform whatever the case above decided: the old
@@ -275,6 +288,7 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
                             ? a.cabin.UnapplyDeparture(it->key, it->value, it->page, it->index)
                             : a.cabin.Unapply(it->key, it->value, it->page, it->index);
         if (!undone.ok()) return undone;
+        ++a.counters.aborted;
         if (wal != nullptr) {
             std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
             wal::AssertRollbackPayload fields{};

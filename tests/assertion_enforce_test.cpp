@@ -250,6 +250,37 @@ TEST_F(AssertionEnforceTest, DropStopsEnforcementAtOnce) {
     EXPECT_EQ(Run("INSERT INTO trades VALUES (7, 1)").substr(0, 8), "INSERTED");
 }
 
+TEST_F(AssertionEnforceTest, CountersAreMonotonicAndPrintedOnlyWhileHeld) {
+    // §9's production counters (AST09), under AST07's own scenario: two
+    // admitted inserts, one refusal, one aborted transaction.
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK COUNT(*) <= 2")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7, 1)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7, 1)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7, 1)").substr(0, 23), "ERR ASSERTION_VIOLATION");
+    Session s;
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "INSERT INTO trades VALUES (8, 1)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // 4 admission checks (3 autocommit inserts + the txn's), 1 violation,
+    // 3 reservations applied (the refusal reserved nothing), 1 aborted.
+    const std::string shown = Run("SHOW ASSERTIONS");
+    EXPECT_NE(shown.find("checks=4"), std::string::npos) << shown;
+    EXPECT_NE(shown.find("violations=1"), std::string::npos) << shown;
+    EXPECT_NE(shown.find("reserved=3"), std::string::npos) << shown;
+    EXPECT_NE(shown.find("aborted=1"), std::string::npos) << shown;
+
+    // A dispatcher whose registry does not hold the assertion prints no
+    // counters at all - zeros would claim a count that never ran.
+    CommandDispatcher second(boot_->superblock, boot_->catalog, store_, nullptr, nullptr,
+                             nullptr, wal::DurabilityClass::kRelaxed, exec::Budget(), nullptr,
+                             false, true, nullptr, &*mgr_);
+    const std::string cold = second.Dispatch("SHOW ASSERTIONS").response;
+    EXPECT_EQ(cold.find("checks="), std::string::npos) << cold;
+}
+
 TEST_F(AssertionEnforceTest, AFreshDispatcherOverTheSameStoreReportsAndDoesNotEnforce) {
     // The recovery gap, reported rather than hidden: the catalog row and
     // the entry pages survive, the registry does not - a second dispatcher

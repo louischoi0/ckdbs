@@ -89,6 +89,24 @@ struct LiveAssertion {
     BoundCabinChainWriter chain;
     BoundCabin cabin;
 
+    // §9's production counters, registry-resident like everything else here
+    // - they die with the directory at restart, and SHOW prints them only
+    // while the registry holds the assertion, so a zero is never a stale
+    // number wearing a fresh face. Monotonic; nothing resets them.
+    //
+    // `hint_heals` from §9 is deliberately absent: no code path reads a
+    // Bound Cabin entry's location hint today (admission is O(1) against
+    // the header, and no read path walks entries), so the counter could
+    // never move - and a counter nothing can increment is worse than none,
+    // the INDEX_PAGE_INIT argument.
+    struct Counters {
+        std::uint64_t checks = 0;      // admission checks run
+        std::uint64_t violations = 0;  // refusals answered
+        std::uint64_t reserved = 0;    // entries reserved (arrivals and departures)
+        std::uint64_t aborted = 0;     // reservations reversed by abort
+    };
+    Counters counters;
+
     LiveAssertion() : cabin(BoundAggregate::kCount, 0) {}
 };
 
@@ -97,6 +115,14 @@ public:
     bool empty() const noexcept { return live_.empty(); }
     bool Holds(std::uint64_t assertion_id) const { return live_.count(assertion_id) != 0; }
     bool AnyOn(catalog::Oid oid) const { return by_oid_.count(oid) != 0; }
+
+    // The counters, or nullptr while the registry does not hold the
+    // assertion - the caller prints nothing then, rather than zeros that
+    // would read as "counted and none happened".
+    const LiveAssertion::Counters* CountersOf(std::uint64_t assertion_id) const {
+        auto it = live_.find(assertion_id);
+        return it == live_.end() ? nullptr : &it->second.counters;
+    }
 
     void Adopt(LiveAssertion assertion);
     void Evict(std::uint64_t assertion_id);
