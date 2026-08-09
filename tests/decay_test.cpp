@@ -46,6 +46,22 @@ TEST(DecayTest, TwoHalfLivesQuarterExactly) {
     EXPECT_EQ(ValueAt(s, &clock, kHalfLife), 2 * kDecayScoreScale);
 }
 
+TEST(DecayTest, AccumulateAddsWholePointsAfterDecaying) {
+    sched::ManualClock clock;
+    DecayState s;
+    Accumulate(s, &clock, kHalfLife, 10);
+    EXPECT_EQ(ValueAt(s, &clock, kHalfLife), 10 * kDecayScoreScale);
+
+    // Decay-then-add: one half-life halves the 10, then 6 more land whole.
+    clock.Advance(kHalfLife);
+    Accumulate(s, &clock, kHalfLife, 6);
+    EXPECT_EQ(ValueAt(s, &clock, kHalfLife), 11 * kDecayScoreScale);
+
+    // The N-point form saturates exactly as the one-point form does.
+    Accumulate(s, &clock, kHalfLife, UINT32_MAX);
+    EXPECT_EQ(s.scaled, UINT32_MAX);
+}
+
 TEST(DecayTest, TouchThenReadIsReadPlusOnePoint) {
     sched::ManualClock clock(12345);
     DecayState s = Seed(3, &clock);

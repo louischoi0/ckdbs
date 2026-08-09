@@ -637,6 +637,14 @@ public:
         decay_half_life_ns_ = half_life_ns;
     }
 
+    // The cabin optimizer's signal collector (workplan PHY01), a setter
+    // for the two above's reason. Null - every existing construction site,
+    // and any configuration without the collector - records nothing and
+    // costs one predicate per successful SELECT.
+    void set_optimizer_signals(stats::OptimizerSignals* signals) noexcept {
+        optimizer_signals_ = signals;
+    }
+
 private:
     // The aggregated SELECT path (docs/feat-aggregate.md AG1): the same
     // execution, with an `Aggregator` in the sink and the fold's output
@@ -667,6 +675,14 @@ private:
     // call sites that could disagree about when a statistic is written
     // would make the statistic mean two things.
     void RecordAccessShapes(const exec::StepChain& chain);
+
+    // The cabin optimizer's S1/S2 (feat-physical-optimizer.md §II.2,
+    // workplan PHY01): one decayed touch per successful fingerprinted
+    // SELECT, carrying the statement's page count. Beside RecordTrail and
+    // RecordAccessShapes because it is the same moment - a completed
+    // execution - observed by a third collector.
+    void RecordOptimizerSignals(const std::optional<stats::InstanceKey>& instance,
+                                const exec::StepChain& chain, const exec::ExecStats& stats);
 
     // ---- The Cabin write hook (docs/feat-cabin.md §5) --------------------
     //
@@ -963,6 +979,13 @@ private:
     // in the config.
     PhysicalOptimizerMode relayout_mode_ = PhysicalOptimizerMode::kShadow;
     sched::MonoTimeNs decay_half_life_ns_ = 600'000'000'000ULL;
+
+    // PHY01's collector, and the per-statement counters that feed its S2.
+    // The ExecStats is hoisted for the aggregator's reason: `For()` sizes a
+    // vector, and a member reused across statements makes the ordinary
+    // SELECT allocate nothing for its counting.
+    stats::OptimizerSignals* optimizer_signals_ = nullptr;
+    exec::ExecStats exec_stats_;
     CrossCoreWriteCounters cross_core_writes_;
 
     // Refuses a write to a relation this core may not write, and binds the

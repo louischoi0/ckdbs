@@ -15,6 +15,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/core_runtime.hpp"
+#include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -421,6 +422,12 @@ private:
     // dispatcher that borrows it, which is the whole of its lifetime
     // contract - the sets are memory-resident by design (§9: a crash
     // declares every Cabin unobserved and traffic rebuilds it).
+    // The cabin optimizer's signal collector (workplan PHY01): S1/S2 fed
+    // by the dispatcher per successful SELECT, S3 forwarded by the Cabin
+    // store. Declared **before** both of its feeders - each holds a
+    // pointer to it, so it must be destroyed after them.
+    std::optional<stats::OptimizerSignals> optimizer_signals_;
+
     std::optional<stats::CabinStore> cabin_store_;
 
     // ---- The transaction stack (docs/txn.md) ---------------------------

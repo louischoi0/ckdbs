@@ -103,11 +103,17 @@ inline std::uint32_t ValueAt(const DecayState& s, const sched::Clock* clock,
     return DecayedScaledAt(s, clock->Now(), half_life_ns);
 }
 
-// Touch: decay to now, add one point, store. Saturating at the top —
-// a score that cannot go higher stays at the ceiling rather than wrapping
-// to cold, for the reason every aggregate in this engine checks: a wrap
-// is a wrong answer wearing a plausible one's clothes.
-inline void Touch(DecayState& s, const sched::Clock* clock, sched::MonoTimeNs half_life_ns) {
+// Accumulate: decay to now, add `points` whole points, store. Saturating
+// at the top — a score that cannot go higher stays at the ceiling rather
+// than wrapping to cold, for the reason every aggregate in this engine
+// checks: a wrap is a wrong answer wearing a plausible one's clothes.
+//
+// The N-point form exists for the quantity signals (feat-physical-optimizer
+// §II.2 S2: pages scanned per execution) — a decayed *sum* kept beside a
+// decayed *count* yields a decayed mean as their ratio, both halves
+// decaying on the same clock so the ratio is stable under idleness.
+inline void Accumulate(DecayState& s, const sched::Clock* clock, sched::MonoTimeNs half_life_ns,
+                       std::uint32_t points) {
     std::uint32_t decayed = s.scaled;
     if (clock != nullptr) {
         const sched::MonoTimeNs now = clock->Now();
@@ -116,8 +122,14 @@ inline void Touch(DecayState& s, const sched::Clock* clock, sched::MonoTimeNs ha
         // from the earlier of the two points would double-charge the gap.
         if (now > s.last_bump) s.last_bump = now;
     }
-    s.scaled = (decayed <= UINT32_MAX - kDecayScoreScale) ? decayed + kDecayScoreScale
-                                                          : UINT32_MAX;
+    const std::uint64_t added =
+        std::uint64_t{decayed} + std::uint64_t{points} * kDecayScoreScale;
+    s.scaled = added > UINT32_MAX ? UINT32_MAX : static_cast<std::uint32_t>(added);
+}
+
+// Touch: Accumulate's one-point form, the common case.
+inline void Touch(DecayState& s, const sched::Clock* clock, sched::MonoTimeNs half_life_ns) {
+    Accumulate(s, clock, half_life_ns, 1);
 }
 
 }  // namespace kds::stats

@@ -2,11 +2,13 @@
 
 #include "kds/exec/type_literals.hpp"
 
+#include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/pattern_defs.hpp"
 #include "kds/stats/relayout_planner.hpp"
 #include "kds/stats/trail_store.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cstring>
 #include <charconv>
@@ -2489,13 +2491,14 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // client, and a `RowSink` answers `StatusOr<VisitControl>`, so a
     // non-ok status ends the walk and propagates out of Execute. That is
     // the same path a decode error already takes.
+    exec_stats_.steps.clear();
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
             if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
+        &exec_stats_, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
         // path has it: a statement that stopped part way through touched
@@ -2531,6 +2534,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     // and the access shape its unaggregated twin would.
     RecordTrail(instance, trail, chain);
     RecordAccessShapes(chain);
+    RecordOptimizerSignals(instance, chain, exec_stats_);
     return {os.str(), false};
 }
 
@@ -2583,12 +2587,13 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     }
     RecordTrail(instance, trail, chain);
     RecordAccessShapes(chain);
+    RecordOptimizerSignals(instance, chain, stats);
 
     const exec::StepStats total = stats.Total();
     std::ostringstream os;
     os << "analyze rows=" << rows << " class=" << exec::StatementClassName(chain.klass)
        << " steps=" << chain.steps.size() << " examined=" << total.rows_examined
-       << " opens=" << total.relation_opens;
+       << " pages=" << total.pages_fetched << " opens=" << total.relation_opens;
 
     // The number an aggregated statement is actually about. `rows=` stays
     // what it has always been - the rows the *chain* produced - so the two
@@ -2754,7 +2759,14 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         (recorder_ != nullptr || replay_enabled_) && exec::HasReplayableStep(compiled);
 
     std::optional<stats::InstanceKey> instance;
-    if (waystone_usable) {
+    // The optimizer's S1 widens this beyond Waystone's shape guard, and the
+    // difference is the point: a *scan-only* statement is exactly the shape
+    // whose decayed frequency the cabin optimizer's CREATE decision prices
+    // (feat-physical-optimizer.md §II.4's f_i), and it is the one shape
+    // invariant 9 keeps Waystone away from. The trail and replay reads
+    // below still guard on their own switches, so deriving the identity
+    // here costs nothing they did not already pay.
+    if (waystone_usable || optimizer_signals_ != nullptr) {
         if (auto fingerprint = parser.fingerprint(); fingerprint.has_value()) {
             instance = stats::InstanceKey{fingerprint->pattern_id, fingerprint->arg_hash};
         }
@@ -2819,6 +2831,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return RunAggregated(compiled, os, trail, replay_ptr, instance, snapshot.value());
     }
 
+    exec_stats_.steps.clear();
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -2846,7 +2859,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             }
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_, &snapshot.value(), indexes_enabled_);
+        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value(), indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -2857,6 +2870,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
 
     RecordTrail(instance, trail, compiled);
     RecordAccessShapes(compiled);
+    RecordOptimizerSignals(instance, compiled, exec_stats_);
 
     if (logging(LogLevel::kTrace)) {
         log_->Trace("query", "chain of " + std::to_string(compiled.steps.size()) +
@@ -2977,6 +2991,42 @@ void CommandDispatcher::RecordTrail(const std::optional<stats::InstanceKey>& ins
     if (recorder_ == nullptr || trail == nullptr || trail->empty()) return;
     if (!instance.has_value()) return;
     recorder_->OnPatternResult(*instance, *trail, exec::StoredStatementClass(chain.klass));
+}
+
+void CommandDispatcher::RecordOptimizerSignals(const std::optional<stats::InstanceKey>& instance,
+                                               const exec::StepChain& chain,
+                                               const exec::ExecStats& stats) {
+    // Success path only, like its two siblings, and only for a statement
+    // with an identity - the fingerprint is the key the cost-benefit model
+    // aggregates by, so a statement without one has nowhere to be counted.
+    if (optimizer_signals_ == nullptr || !instance.has_value()) return;
+
+    // The shape's cabin candidacy (§II.4's Σ_i linkage): a kCabinProbe step
+    // names its Cabin outright; otherwise the first kFilterScan's filtered
+    // column is the column a Cabin *would* serve - the shape whose decayed
+    // frequency prices a CREATE. A chain with neither has no candidacy and
+    // is recorded as pure heat.
+    stats::CandidateRef candidate;
+    for (const exec::Step& step : chain.steps) {
+        if (step.kind == exec::AccessKind::kCabinProbe && step.cabin.has_value()) {
+            candidate.rel_oid = step.rel_oid;
+            candidate.col_pos = step.cabin->col_pos;
+            candidate.cabin_id = step.cabin->cabin_id;
+            break;
+        }
+        if (step.kind == exec::AccessKind::kFilterScan && !candidate.valid()) {
+            // The lowest filtered non-pk column: a single-column equality's
+            // mask has one bit, and a multi-column residual's lowest is a
+            // deterministic pick rather than a claim of primacy.
+            const std::uint64_t non_pk = step.filter_columns & ~std::uint64_t{1};
+            if (non_pk != 0 && step.filter_columns != exec::Step::kAllColumns) {
+                candidate.rel_oid = step.rel_oid;
+                candidate.col_pos = static_cast<std::uint16_t>(std::countr_zero(non_pk));
+            }
+        }
+    }
+    optimizer_signals_->NoteExecution(instance->pattern_id, stats.Total().pages_fetched,
+                                      candidate);
 }
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {

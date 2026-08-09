@@ -396,6 +396,7 @@ private:
             if (memo_valid_ && memo_step_ == step.step_id && memo_key_ == key.value()) {
                 ++stats_.For(step.step_id).probe_memo_hits;
                 NoteFetch();
+                ++stats_.For(step.step_id).pages_fetched;
                 auto bytes = store_.GetForRead(memo_page_);
                 if (bytes.ok()) {
                     heap::PageView page(bytes.value());
@@ -413,6 +414,7 @@ private:
             if (replayed_) return Status::OK();
 
             NoteFetch();
+            ++stats_.For(step.step_id).pages_fetched;
             auto found = btree::BtreeLookup(store_, access.desc_page_id, key.value());
             if (found.ok()) {
                 memo_valid_ = true;
@@ -481,6 +483,7 @@ private:
         StepStats& step_stats = stats_.For(step.step_id);
 
         NoteFetch();
+        ++step_stats.pages_fetched;
         // Spec section 2 rules 1-2, through the one verifier both this and
         // Cabin's location hints go through (exec/tuple_verify.hpp). The
         // page gone, the slot retired, and a different tuple at the target
@@ -644,6 +647,7 @@ private:
         auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, probe.low);
         if (!first.ok()) return first.status();
         NoteFetch();
+        ++step_stats.pages_fetched;
 
         Status walked = index::IndexVisitFrom(
             store_, first.value(), layout, storage::PageAccess::kRead,
@@ -715,6 +719,7 @@ private:
         for (const std::uint64_t pk : index_scratch_) {
             if (stopped_) break;
             NoteFetch();
+            ++step_stats.pages_fetched;
             auto found = btree::BtreeLookup(store_, access.desc_page_id, pk);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
@@ -819,14 +824,17 @@ private:
 
             if (entry.hint_valid()) {
                 NoteFetch();
+                ++step_stats.pages_fetched;
                 VerifiedTuple verified =
                     VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch);
                 if (verified.ok()) {
                     ++step_stats.cabin_hint_hits;
+                    cabins_->NoteHint(key.cabin_id, /*ok=*/true);
                     serve_scratch_.push_back(Located{entry.page_id, entry.slot});
                     continue;
                 }
                 ++step_stats.cabin_hint_misses;
+                cabins_->NoteHint(key.cabin_id, /*ok=*/false);
             }
 
             if (!is_btree) {
@@ -839,6 +847,7 @@ private:
             }
 
             NoteFetch();
+            ++step_stats.pages_fetched;
             auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.pk);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
@@ -875,6 +884,7 @@ private:
         for (const Located& at : serve_scratch_) {
             if (stopped_) break;
             NoteFetch();
+            ++step_stats.pages_fetched;
             auto bytes = store_.GetForRead(at.page_id);
             if (!bytes.ok()) {
                 // The page went away between the two phases. Nothing evicts
@@ -959,9 +969,18 @@ private:
         // and a trail that has to re-derive an address is a trail that has
         // to search for it - which is the search the trail exists to avoid
         // (workplan P09).
+        PageId walk_last_page = kInvalidPageId;
         auto visitor = [&](PageId page_id, heap::PageView& page,
                            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (stopped_) return storage::VisitControl::kStop;
+
+            // The walk's page count, exact by construction: the chain hands
+            // the visitor one page's slots consecutively, so a transition
+            // is a fetch (feat-physical-optimizer.md §II.2 S2).
+            if (page_id != walk_last_page) {
+                ++stats_.For(step.step_id).pages_fetched;
+                walk_last_page = page_id;
+            }
 
             // Checked per slot rather than per page because the walk has no
             // per-page hook; it costs one compare against a header field
@@ -1459,9 +1478,16 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     probe_memo_hits += other.probe_memo_hits;
     correlated_scans += other.correlated_scans;
     spill_fetches += other.spill_fetches;
+    pages_fetched += other.pages_fetched;
     trail_replays += other.trail_replays;
     trail_misses += other.trail_misses;
     range_pages_pruned += other.range_pages_pruned;
+    // The index trio was missing from this sum until 2026-08-09, so
+    // Total() silently dropped them - found while adding pages_fetched,
+    // fixed beside it.
+    index_entries_scanned += other.index_entries_scanned;
+    index_entries_filtered += other.index_entries_filtered;
+    index_rows_resolved += other.index_rows_resolved;
     cabin_hits += other.cabin_hits;
     cabin_misses += other.cabin_misses;
     cabin_entries_served += other.cabin_entries_served;
