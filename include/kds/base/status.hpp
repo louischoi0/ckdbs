@@ -71,6 +71,22 @@ enum class StatusCode {
     // new non-retryable one keeps the wire's `retryable` bit - a
     // compatibility surface (docs/protocol.md §11) - one code wide.
     kFkViolation,
+    // A write would take a declared assertion's group aggregate past its
+    // bound (docs/feat-assertion.md §4.4, AS9): the admission check on the
+    // relation's home core refused the statement before anything was
+    // mutated.
+    //
+    // **Not retryable, and the near-miss is deliberate.** The aggregate a
+    // check reads counts committed *and* reserved rows (§4.1), so there is
+    // one race where a retry could succeed: a refusal caused by a
+    // reservation whose transaction later aborts. §4.3 accepts that as a
+    // bounded false rejection precisely because it can only happen where at
+    // most one contender could have won anyway - so granting the code the
+    // retryable bit would buy that sliver at the price of every client
+    // spinning on a group that is genuinely full, which is the common case
+    // a bound exists for. A violation against committed state answers the
+    // same way forever, kFkViolation's argument exactly.
+    kAssertionViolation,
 };
 
 // True for a Status a caller may sensibly re-issue the same statement for.
@@ -116,6 +132,9 @@ public:
     }
     static Status FkViolation(std::string msg) {
         return Status(StatusCode::kFkViolation, std::move(msg));
+    }
+    static Status AssertionViolation(std::string msg) {
+        return Status(StatusCode::kAssertionViolation, std::move(msg));
     }
 
     // The same failure, said with more context: "<prefix>: <message>",

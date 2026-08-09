@@ -1,10 +1,14 @@
 #include "kds/exec/assertion_catalog.hpp"
 
+#include <array>
 #include <utility>
 
+#include "kds/exec/assertion_build.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/varheap.hpp"
+#include "kds/wal/manager.hpp"
+#include "kds/wal/payload.hpp"
 
 namespace kds::exec {
 
@@ -151,9 +155,9 @@ StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catal
     return out;
 }
 
-StatusOr<std::uint64_t> InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
-                                        catalog::Oid target_oid, std::string_view name,
-                                        std::string_view source_text) {
+Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std::uint64_t id,
+                       catalog::Oid target_oid, std::string_view name,
+                       std::string_view source_text, PageId cabin_root) {
     // Refused here, naming the limit, rather than letting EncodeRow report it
     // as an anonymous over-long varchar: the caller is a client who wrote a
     // statement, and the number that matters to them is how long a
@@ -166,9 +170,10 @@ StatusOr<std::uint64_t> InsertAssertion(catalog::Catalog& catalog, storage::Page
     }
 
     // §3.1's duplicate-name check. Made here rather than at the parser
-    // because it is the catalog's question, and made *before* the row id is
-    // allocated so a refused declaration burns no id - the same ordering
-    // `InsertInner` uses for a foreign-key check.
+    // because it is the catalog's question and this is the door every caller
+    // comes through. `CreateAssertion` also checks it *before* the build,
+    // which buys failing before the scan rather than after; this one is the
+    // guard that cannot be reached past.
     auto existing = FindAssertionByName(catalog, store, name);
     if (!existing.ok()) return existing.status();
     if (existing.value().has_value()) {
@@ -179,20 +184,17 @@ StatusOr<std::uint64_t> InsertAssertion(catalog::Catalog& catalog, storage::Page
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
 
-    auto id = catalog.AllocateRowId(catalog::kSysAssertionsTable);
-    if (!id.ok()) return id.status();
-
     // The pk is not among these: it is carried by the Keystone word and never
     // also as a body column (invariant 11), so EncodeRow takes the columns
     // *after* it.
     std::vector<parser::AstValue> values(kColumnCount - 1);
     values[kColTargetOid - 1].type = parser::ValueType::kInt;
     values[kColTargetOid - 1].int_val = static_cast<std::int64_t>(target_oid);
-    // kInvalidPageId until AST04 builds a Bound Cabin and AST06 publishes its
-    // root. Written explicitly rather than left at the default so a reader
-    // can tell "no structure yet" from "decoded a zero".
+    // The built chain's root (AST06), or kInvalidPageId from a caller that
+    // built nothing. Written explicitly rather than left at a default so a
+    // reader can tell "no structure" from "decoded a zero".
     values[kColCabinRoot - 1].type = parser::ValueType::kInt;
-    values[kColCabinRoot - 1].int_val = static_cast<std::int64_t>(kInvalidPageId);
+    values[kColCabinRoot - 1].int_val = static_cast<std::int64_t>(cabin_root);
     values[kColFlags - 1].type = parser::ValueType::kInt;
     values[kColFlags - 1].int_val = 0;
     values[kColName - 1].type = parser::ValueType::kStr;
@@ -204,17 +206,17 @@ StatusOr<std::uint64_t> InsertAssertion(catalog::Catalog& catalog, storage::Page
     sink.store = &store;
     sink.root = rel.varheap_page_id;
 
-    auto payload = EncodeRow(rel.schema, rel.layout, id.value(), values, sink);
+    auto payload = EncodeRow(rel.schema, rel.layout, id, values, sink);
     if (!payload.ok()) return payload.status();
 
     // Unlogged, like every other catalog write. A declaration therefore
     // survives a crash only as far as the next SYNC, which is the guarantee
     // CREATE TABLE already gives and is not made worse here. §7's
     // `ASSERT_BUILD` is about the Bound Cabin's contents, not this row.
-    auto placed = heap::ChainInsert(store, rel.desc_page_id, id.value(), payload.value(),
-                                    catalog::kBootstrapXid);
+    auto placed =
+        heap::ChainInsert(store, rel.desc_page_id, id, payload.value(), catalog::kBootstrapXid);
     if (!placed.ok()) return placed.status();
-    return id.value();
+    return Status::OK();
 }
 
 Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
@@ -298,9 +300,30 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
 
 }  // namespace
 
+namespace {
+
+// The teardown marker (§7's "WAL'd teardown"): a stream that saw this
+// assertion's records learns they are void. Replay needs nothing more,
+// because its skip rule already drops records for an id the catalog cannot
+// resolve - the marker makes the stream self-describing rather than
+// dependent on that. `cabin_root` is a diagnostic; replay does not touch it.
+Status EmitAssertDrop(wal::WalManager* wal, std::uint64_t assertion_id, PageId cabin_root) {
+    if (wal == nullptr) return Status::OK();
+    std::array<std::byte, wal::kAssertDropPayloadSize> payload{};
+    auto used = wal::EncodeAssertDrop(payload, wal::AssertDropPayload{assertion_id});
+    if (!used.ok()) return used.status();
+    auto rec = wal->Append(
+        wal::RecordSpec{wal::RecordType::kAssertDrop, wal::kNoTxnId, cabin_root}, payload);
+    return rec.ok() ? Status::OK() : rec.status();
+}
+
+}  // namespace
+
 StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
                                              storage::PageStore& store,
-                                             const parser::AssertionStmt& stmt) {
+                                             const parser::AssertionStmt& stmt,
+                                             const txn::ReadView& check_view,
+                                             wal::WalManager* wal) {
     auto oid = catalog.FindTableOidByName(stmt.table_name);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
@@ -309,21 +332,24 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
     auto access = catalog.InitTableAccess(oid.value());
     if (!access.ok()) return access.status();
 
-    // Every GROUP BY column must exist. Resolved and then discarded: the
-    // positions are not stored, because §8.2 keeps `source_text` as the canon
-    // and the columns are recovered by re-parsing it. What the resolution
-    // buys is the refusal - a declaration naming a column that is not there
-    // could never be enforced, and finding that out at CREATE is §3.1's whole
-    // "maximized validation" point.
+    // Every GROUP BY column must exist. The positions are kept for the
+    // builder and still not *stored*, because §8.2 keeps `source_text` as the
+    // canon and the columns are recovered by re-parsing it. The refusal is
+    // §3.1's whole "maximized validation" point - a declaration naming a
+    // column that is not there could never be enforced.
+    std::vector<std::uint16_t> group_cols;
+    group_cols.reserve(stmt.group_columns.size());
     for (const parser::IndexColumnRef& col : stmt.group_columns) {
-        if (auto pos = ResolveColumn(*access.value(), col, stmt.table_name); !pos.ok()) {
-            return pos.status();
-        }
+        auto pos = ResolveColumn(*access.value(), col, stmt.table_name);
+        if (!pos.ok()) return pos.status();
+        group_cols.push_back(pos.value());
     }
 
+    std::uint16_t sum_col = 0;
     if (stmt.func == parser::AggFunc::kSum) {
         auto pos = ResolveColumn(*access.value(), stmt.sum_column, stmt.table_name);
         if (!pos.ok()) return pos.status();
+        sum_col = pos.value();
 
         const catalog::SysColumnRow& col = access.value()->schema.columns[pos.value()];
         if (col.type_val == catalog::kTypeValUint64) {
@@ -347,20 +373,89 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
         }
     }
 
-    // Duplicate name, and the row. Both are `InsertAssertion`'s, which is the
-    // door every non-parser caller comes through - so the check cannot be
-    // skipped by reaching past this function.
-    auto id = InsertAssertion(catalog, store, oid.value(), stmt.name, stmt.source_text);
+    // The cheap refusals the build must not run ahead of: a taken name and
+    // an over-long declaration would both fail the publish, and finding out
+    // after a full scan is the scan wasted. `InsertAssertion` keeps both
+    // guards - these buy the position of the failure, `index_ddl.cpp`'s
+    // "one implementation, two callers" note.
+    if (stmt.source_text.size() > varheap::kMaxValueSize) {
+        return Status::Unsupported("assertion declaration of " +
+                                   std::to_string(stmt.source_text.size()) +
+                                   " bytes exceeds the " +
+                                   std::to_string(varheap::kMaxValueSize) +
+                                   "-byte limit on a single stored value");
+    }
+    auto existing = FindAssertionByName(catalog, store, stmt.name);
+    if (!existing.ok()) return existing.status();
+    if (existing.value().has_value()) {
+        return Status::AlreadyExists("assertion \"" + stmt.name + "\" already exists");
+    }
+
+    // The id, before the build: ASSERT_BUILD records carry it. A failed
+    // build burns it, which K3 makes free.
+    auto id = catalog.AllocateRowId(catalog::kSysAssertionsTable);
     if (!id.ok()) return id.status();
+
+    // ---- Built before it is published (§8.1, index_ddl.cpp's shape) ------
+    auto build = BuildBoundCabin(store, *access.value(), stmt, id.value(), group_cols, sum_col,
+                                 check_view, wal);
+    if (!build.ok()) {
+        // The discard marker, then the caller's error. Pages and id leak -
+        // the backfill's precedent; nothing reclaims a page in this engine.
+        if (Status s = EmitAssertDrop(wal, id.value(), kInvalidPageId); !s.ok()) return s;
+        return build.status();
+    }
+
+    // ---- The publish: the single commit point (§8.1a) ---------------------
+    //
+    // The row carrying the root, and deliberately **no version bump**:
+    // `Catalog::BumpVersion` is private on purpose, called only by catalog
+    // mutators from which something cached is derived, and nothing cached is
+    // derived from a `sys.assertions` row - no CatalogCache entry, and no
+    // compiled plan consults assertions. The task that changes the second
+    // fact (AST07, whose check steps make a plan a function of the
+    // assertion set) is the task that must make this publish invalidate
+    // plans, and it owns choosing the door.
+    if (Status s = InsertAssertion(catalog, store, id.value(), oid.value(), stmt.name,
+                                   stmt.source_text, build.value().cabin_root);
+        !s.ok()) {
+        if (Status drop = EmitAssertDrop(wal, id.value(), build.value().cabin_root); !drop.ok()) {
+            return drop;
+        }
+        return s;
+    }
 
     AssertionDdlResult result;
     result.assertion_id = id.value();
     result.target_oid = oid.value();
+    result.cabin_root = build.value().cabin_root;
+    result.rows_incorporated = build.value().rows_incorporated;
+    result.group_count = build.value().cabin.group_count();
+
+    // The live half, resolved here where the statement, the schema and the
+    // build are all in hand: the write hook must never re-scan a catalog or
+    // re-parse a declaration per statement.
+    LiveAssertion live;
+    live.assertion_id = id.value();
+    live.target_oid = oid.value();
+    live.name = stmt.name;
+    live.aggregate = stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum
+                                                        : BoundAggregate::kCount;
+    live.group_cols = group_cols;
+    live.sum_col = sum_col;
+    live.sum_col_name = stmt.sum_column.name;
+    for (std::size_t i = 0; i < group_cols.size(); ++i) {
+        live.group_col_names.push_back(stmt.group_columns[i].name);
+        live.group_type_vals.push_back(access.value()->schema.columns[group_cols[i]].type_val);
+    }
+    live.chain = build.value().chain;
+    live.cabin = std::move(build.value().cabin);
+    result.live.emplace(std::move(live));
     return result;
 }
 
 StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageStore& store,
-                                      const parser::AssertionStmt& stmt) {
+                                      const parser::AssertionStmt& stmt, wal::WalManager* wal) {
     auto found = FindAssertionByName(catalog, store, stmt.name);
     if (!found.ok()) return found.status();
     if (!found.value().has_value()) {
@@ -368,7 +463,13 @@ StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageSt
                                 std::to_string(stmt.byte_offset) + ")");
     }
     const std::uint64_t id = found.value()->id;
+    // The record before the row - WAL before data, though the row itself is
+    // unlogged: a stream must not end holding live-looking ASSERT records
+    // for an assertion whose catalog row is already gone.
+    if (Status s = EmitAssertDrop(wal, id, found.value()->cabin_root); !s.ok()) return s;
     if (Status s = DeleteAssertion(catalog, store, stmt.name); !s.ok()) return s;
+    // No BumpVersion(), CreateAssertion's reasoning: nothing cached is
+    // derived from these rows until AST07's check steps are.
     return id;
 }
 

@@ -364,4 +364,179 @@ StatusOr<std::size_t> EncodeCheckpointEnd(std::span<std::byte> out,
                                           const CheckpointEndPayload& fields);
 StatusOr<CheckpointEndPayload> DecodeCheckpointEnd(std::span<const std::byte> in);
 
+// ---- ASSERT_RESERVE / ASSERT_BUILD ---------------------------------------
+//
+// One Bound Cabin entry landing in the page the envelope names
+// (docs/feat-assertion.md §7, workplan AST05). One shape for both record
+// types, HEAP_INSERT/HEAP_OVERWRITE's precedent: a reservation and a build
+// row write identical bytes and differ in ownership - RESERVE is txn-owned
+// with kEntryReserved set in the entry, BUILD is DDL-owned (kNoTxnId) with
+// it clear - and the replay handler (exec/assertion_replay.hpp) checks the
+// flag agrees with the type, so the two cannot be confused on disk.
+//
+// The entry rides as opaque bytes through storage/cabin_bound_page.hpp's
+// codec - INDEX_INSERT's rule: the one place that knows the entry layout
+// stays the one place. The **group key rides beside it** because an entry
+// does not carry its group: the key is the canonical encoding of the GROUP
+// BY values (exec::EncodeGroupKey), and carrying it is what lets replay
+// rebuild the memory-resident group directory without re-reading any
+// relation row.
+//
+// There is deliberately no delta field: the entry's inline aggregate value
+// **is** the group delta (a COUNT assertion writes 1, §5.1) - one number,
+// one place to be wrong.
+
+struct AssertEntryPayload {
+    std::uint64_t assertion_id;  // the sys.assertions Keystone id
+    std::uint16_t index;         // the slot the entry took in the envelope's page
+    std::uint16_t entry_len;     // bytes of entry that follow
+    std::uint16_t key_len;       // bytes of group key that follow the entry
+    std::uint16_t reserved;      // 0
+};
+
+inline constexpr std::size_t kAssertEntryAssertionIdOffset = 0;
+inline constexpr std::size_t kAssertEntryIndexOffset = 8;
+inline constexpr std::size_t kAssertEntryEntryLenOffset = 10;
+inline constexpr std::size_t kAssertEntryKeyLenOffset = 12;
+inline constexpr std::size_t kAssertEntryReservedOffset = 14;
+// 8+2+2+2+2 = 16; entry bytes begin here, key bytes after them.
+inline constexpr std::size_t kAssertEntryFixedSize = 16;
+
+static_assert(offsetof(AssertEntryPayload, assertion_id) == kAssertEntryAssertionIdOffset);
+static_assert(offsetof(AssertEntryPayload, index) == kAssertEntryIndexOffset);
+static_assert(offsetof(AssertEntryPayload, entry_len) == kAssertEntryEntryLenOffset);
+static_assert(offsetof(AssertEntryPayload, key_len) == kAssertEntryKeyLenOffset);
+static_assert(offsetof(AssertEntryPayload, reserved) == kAssertEntryReservedOffset);
+static_assert(sizeof(AssertEntryPayload) == kAssertEntryFixedSize);
+
+struct DecodedAssertEntry {
+    AssertEntryPayload fields;
+    std::span<const std::byte> entry;  // view into the caller's buffer
+    std::span<const std::byte> key;    // view into the caller's buffer
+};
+
+// `fields.entry_len` and `fields.key_len` are ignored on encode - both are
+// set from their spans, so the lengths and the bytes cannot disagree on
+// disk.
+StatusOr<std::size_t> EncodeAssertEntry(std::span<std::byte> out,
+                                        const AssertEntryPayload& fields,
+                                        std::span<const std::byte> entry,
+                                        std::span<const std::byte> key);
+StatusOr<DecodedAssertEntry> DecodeAssertEntry(std::span<const std::byte> in);
+
+// ---- ASSERT_COMMIT -------------------------------------------------------
+//
+// The reserved→committed flag transition for one transaction's entries **on
+// one page** - the envelope's. Batched per page rather than per transaction
+// because a physiological record describes one page's mutation; the spec's
+// "batched per txn" (§7) is met one page at a time, and a transaction whose
+// reservations span N pages commits them with N of these. The group
+// directory is untouched by replay of one: a reservation counts in the
+// aggregate from the moment of admission (§6.2), so commit moves flags and
+// never sums.
+
+struct AssertCommitPayload {
+    std::uint64_t assertion_id;
+    std::uint16_t count;     // how many little-endian u16 indexes follow
+    std::uint16_t reserved;  // 0
+};
+
+inline constexpr std::size_t kAssertCommitAssertionIdOffset = 0;
+inline constexpr std::size_t kAssertCommitCountOffset = 8;
+inline constexpr std::size_t kAssertCommitReservedOffset = 10;
+// 8+2+2 = 12; the index array begins here.
+inline constexpr std::size_t kAssertCommitFixedSize = 12;
+
+static_assert(offsetof(AssertCommitPayload, assertion_id) == kAssertCommitAssertionIdOffset);
+static_assert(offsetof(AssertCommitPayload, count) == kAssertCommitCountOffset);
+static_assert(offsetof(AssertCommitPayload, reserved) == kAssertCommitReservedOffset);
+// No sizeof assert: the struct pads to 16 for its u64's alignment while the
+// wire form is 12 - HEAP_DELETE_MARK's situation, handled the same way.
+
+struct DecodedAssertCommit {
+    AssertCommitPayload fields;
+    std::span<const std::byte> indexes;  // fields.count little-endian u16s
+
+    // The i-th cleared entry's page slot; `i < fields.count` is the
+    // caller's to honour, as a span index would be.
+    std::uint16_t index_at(std::uint16_t i) const noexcept;
+};
+
+// `fields.count` is ignored on encode - it is set from `indexes.size()`.
+StatusOr<std::size_t> EncodeAssertCommit(std::span<std::byte> out,
+                                         const AssertCommitPayload& fields,
+                                         std::span<const std::uint16_t> indexes);
+StatusOr<DecodedAssertCommit> DecodeAssertCommit(std::span<const std::byte> in);
+
+// ---- ASSERT_ROLLBACK -----------------------------------------------------
+//
+// One reserved entry compensated (§6.2 step 5, or recovery closing a
+// crashed in-flight reservation): the delta leaves the group's aggregate
+// and the directory forgets the entry at (envelope page_id, index). The
+// page entry itself is **not** rewritten - the slot is orphaned, see the
+// record-type comment - so the payload carries the delta rather than
+// pointing replay at page bytes whose flags no longer distinguish an
+// aborted entry from a live reservation.
+
+// The envelope's per-type `flags` byte, bit 0: the reservation being
+// compensated was a **departure** (kEntryDeparture), so replay restores it
+// with UnapplyDeparture (+1, +delta) rather than Unapply (-1, -delta). In
+// the envelope rather than the payload because the record header already
+// reserves per-type flags for exactly this, and the entry whose flag could
+// answer instead is orphaned page state a rollback must not depend on.
+inline constexpr std::uint8_t kAssertRollbackFlagDeparture = 0x1;
+
+struct AssertRollbackPayload {
+    std::uint64_t assertion_id;
+    std::int64_t delta;      // the reserved delta as applied; replay reverses it
+    std::uint16_t index;     // the orphaned entry's slot in the envelope's page
+    std::uint16_t key_len;   // bytes of group key that follow
+    std::uint32_t reserved;  // 0
+};
+
+inline constexpr std::size_t kAssertRollbackAssertionIdOffset = 0;
+inline constexpr std::size_t kAssertRollbackDeltaOffset = 8;
+inline constexpr std::size_t kAssertRollbackIndexOffset = 16;
+inline constexpr std::size_t kAssertRollbackKeyLenOffset = 18;
+inline constexpr std::size_t kAssertRollbackReservedOffset = 20;
+// 8+8+2+2+4 = 24; key bytes begin here.
+inline constexpr std::size_t kAssertRollbackFixedSize = 24;
+
+static_assert(offsetof(AssertRollbackPayload, assertion_id) == kAssertRollbackAssertionIdOffset);
+static_assert(offsetof(AssertRollbackPayload, delta) == kAssertRollbackDeltaOffset);
+static_assert(offsetof(AssertRollbackPayload, index) == kAssertRollbackIndexOffset);
+static_assert(offsetof(AssertRollbackPayload, key_len) == kAssertRollbackKeyLenOffset);
+static_assert(offsetof(AssertRollbackPayload, reserved) == kAssertRollbackReservedOffset);
+static_assert(sizeof(AssertRollbackPayload) == kAssertRollbackFixedSize);
+
+struct DecodedAssertRollback {
+    AssertRollbackPayload fields;
+    std::span<const std::byte> key;  // view into the caller's buffer
+};
+
+// `fields.key_len` is ignored on encode - it is set from `key.size()`.
+StatusOr<std::size_t> EncodeAssertRollback(std::span<std::byte> out,
+                                           const AssertRollbackPayload& fields,
+                                           std::span<const std::byte> key);
+StatusOr<DecodedAssertRollback> DecodeAssertRollback(std::span<const std::byte> in);
+
+// ---- ASSERT_DROP ---------------------------------------------------------
+//
+// Teardown: replay forgets everything held for the assertion. The pages
+// return through ordinary FREE records; the envelope's page_id names the
+// cabin root as a diagnostic and replay does not touch it.
+
+struct AssertDropPayload {
+    std::uint64_t assertion_id;
+};
+
+inline constexpr std::size_t kAssertDropAssertionIdOffset = 0;
+inline constexpr std::size_t kAssertDropPayloadSize = 8;
+
+static_assert(offsetof(AssertDropPayload, assertion_id) == kAssertDropAssertionIdOffset);
+
+StatusOr<std::size_t> EncodeAssertDrop(std::span<std::byte> out,
+                                       const AssertDropPayload& fields);
+StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in);
+
 }  // namespace kds::wal

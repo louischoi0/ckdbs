@@ -8,7 +8,7 @@ KDS does not try to be everything a traditional RDBMS is. It deliberately narrow
 > Alongside the query optimizer every database has, KDS has a **physical optimizer** of equal rank: runtime access-pattern statistics don't just steer query plans — they periodically **rearrange the data itself** so that the pages your workload touches become fewer, denser, and hotter in cache.
 
 > **KDS indexes query patterns, not relations.**
-> There is no `CREATE INDEX`. The engine fingerprints every statement's shape at parse time, watches which pattern instances recur, and records **Waystone trails** — where each recurring `pattern(args)` actually found its rows, across every relation it touched. The workload teaches the database how to serve it.
+> The index you did not create: the engine fingerprints every statement's shape at parse time, watches which pattern instances recur, and records **Waystone trails** — where each recurring `pattern(args)` actually found its rows, across every relation it touched. `CREATE INDEX` exists for the searches a trail may never replace; the recurring lookups teach the database how to serve them for free.
 
 ## Design Philosophy
 
@@ -16,6 +16,7 @@ KDS does not try to be everything a traditional RDBMS is. It deliberately narrow
 - **The engine observes, then reorganizes.** Executions feed a statistics layer (**Waystone**). Time-decayed scores classify data hot/warm/cold; the physical optimizer clusters hot tuples, compacts dead ones, and co-locates rows that recurring patterns touch together. Statistics change *where bytes live*, not just how queries run.
 - **Advisory by construction.** Everything learned — trails, scores, placement hints — is structurally advisory: delete all of it and every query still returns the same rows, just slower. The B+ tree stays the sole authority. This is a hard invariant with its own test family, not a design preference.
 - **Reliability is a product feature.** Write-ahead logging with per-transaction durability classes, page checksums, full-page-image torn-write recovery, and crash-recovery paths that are exercised — not assumed — by deterministic fault-injection tests.
+- **Declarative group constraints.** SQL-92 `CREATE ASSERTION`, restricted to the class that can be checked incrementally — `COUNT(*)`/`SUM(col)` upper bounds per group — enforced lock-free at admission time on the relation's home core. A violating write is refused before it happens; the check is O(1) against a running aggregate, never a re-evaluation.
 - **Mechanical sympathy everywhere.** Thread-per-core, shared-nothing: each core owns its data, its buffer pool, and its WAL stream. The buffer-cache hit path is a hash probe and an integer increment — no locks, no atomics. All I/O is asynchronous behind an injectable seam, so the entire engine runs under deterministic simulation.
 
 ## Indexing the Workload
@@ -111,7 +112,7 @@ KDS names its own concepts; the stone metaphor is deliberate — a *keystone* ho
 
 ## What KDS is not
 
-No CTEs or derived tables, no window functions, no cross-dialect SQL compatibility, no attempt to be a data warehouse. Aggregations are on the roadmap, not in the core promise. There is no `CREATE INDEX` — the stated goal is that pattern trails make user-defined secondary indexes unnecessary. If your workload is analytical scans over wide history, use a column store; if it is high-rate transactional access to living data, KDS is built for exactly that.
+No CTEs or derived tables, no window functions, no cross-dialect SQL compatibility, no attempt to be a data warehouse. `GROUP BY` with `COUNT`/`SUM`/`MIN`/`MAX`/`AVG` is built; `HAVING` and sorted aggregate output are not. Secondary indexes exist (`CREATE INDEX`, multi-column and covering, on clustered relations) for the searches a trail may never replace — an index answers with a *set*, a trail only ever replaces a *lookup* — while recurring point access is served from Waystone trails without one. If your workload is analytical scans over wide history, use a column store; if it is high-rate transactional access to living data, KDS is built for exactly that.
 
 ## Status
 

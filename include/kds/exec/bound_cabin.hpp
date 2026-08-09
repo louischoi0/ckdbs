@@ -163,6 +163,20 @@ public:
     Status Unapply(const std::string& key, std::int64_t delta, PageId page_id,
                    std::uint16_t index);
 
+    // The departure pair (AST07, §4.2): a row leaving its group. A
+    // departure *entry* contributes (-1, -delta) where an arrival's is
+    // (+1, +delta) — `storage::cabin::kEntryDeparture` is the flag that
+    // says which, and re-summation reads it. ApplyDeparture records one;
+    // UnapplyDeparture is its abort, restoring what the departure took.
+    //
+    // A departure's group must exist — the row it removes was incorporated
+    // by build or insert — so a missing one answers NotFound rather than
+    // creating an empty group to go negative in.
+    Status ApplyDeparture(const std::string& key, std::int64_t delta, PageId page_id,
+                          std::uint16_t index);
+    Status UnapplyDeparture(const std::string& key, std::int64_t delta, PageId page_id,
+                            std::uint16_t index);
+
     // Re-sums the group headers from a caller-supplied entry reader — §7's
     // verification hook, and the reason the aggregate value rides inline in
     // every entry. Answers Corruption naming the first group whose header
