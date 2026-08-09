@@ -9,10 +9,12 @@ divider after §10) is **autonomous advisory Cabin management** — the
 Part I's R1 decay score and neither part touches the other's structures;
 the merge note at the Part II divider carries the history.
 
-Status (Part I): **ADOPTED (v1 scope, 2026-08-09); built through PX06 the
+Status (Part I): **ADOPTED (v1 scope, 2026-08-09); built and measured the
 same day** — the decay score, the epoch with real comparisons, the planner
-and `SHOW RELAYOUT` all exist; PX07's shadow measurement is in flight and
-PX08's close-out is done. Every `[PROPOSED]` below was built as proposed.
+and `SHOW RELAYOUT` all exist; PX07's measurement
+(`bench/results-physical-optimizer-shadow.md`) verified zero idle cost at
+exact noise and priced the report at ~60 µs + 24 ns/slot. Every
+`[PROPOSED]` below was built as proposed.
 Markers: `[CONFIRMED]` is settled,
 `[PROPOSED]` is a default to amend before building, `[OPEN]` must not be
 assumed. Part I decisions are numbered `R1`-`R12`.

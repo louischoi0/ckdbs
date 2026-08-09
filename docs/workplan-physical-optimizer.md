@@ -149,7 +149,7 @@ refuses at startup with the exact text; corpus diff shows additions only;
 
 ---
 
-## PX07 — Shadow measurement
+## PX07 — Shadow measurement  **[DONE 2026-08-09]**
 
 **Scope.** Run the shadow report against a real workload and record what it
 says — the first data for gate 2's eventual decision, and the verification
@@ -251,12 +251,22 @@ have been a lie in the hopeful direction - §4 forbids the mover touching
 catalog pages, permanently. So the bare form skips system relations, the
 named form answers `plans=none reason=catalog-relation-outside-mover-
 jurisdiction` and is never surveyed, and `RelationReport.system_relation`
-carries the distinction. PX07 is **in flight** (2026-08-09): the shadow
-measurement was handed to the bench agent — Release-build interleaved A/B
-of `shadow` vs `off` over scenario0 and scenario2, `SHOW RELAYOUT` latency
-for both forms, and the archived reports as gate 2's first data — landing
-in `bench/results-physical-optimizer-shadow.md`; mark PX07 done and add
-the measured line here when it lands. PX08 (2026-08-09) closed out ahead
+carries the distinction. PX07 is **done** (2026-08-09,
+`bench/results-physical-optimizer-shadow.md`): zero idle cost verified at
+exact noise — +0.02% TPS on the freight scenario, +0.06% median on the
+stockmarket one, both far inside the 2-6% run-to-run spread, as the
+mechanism predicted (the two modes differ in one unexercised branch);
+the report's own price is ~60 µs server CPU for the bare form and
+~60 µs + 24 ns per slot examined for the survey, fitted three independent
+ways. The archived reports carry the first gate-2 data, and it points at
+scoping before gates: **both real workloads put every hot chain-walk shape
+on btree relations (outside R5's mover scope) while the mover-eligible
+heap relations are write-only ledgers with shapes=0** — and compact
+honestly predicts 0 pages saved everywhere, because nothing deletes and
+updates leave no dead heap tuples; the synthetic 33%-delete-mark sweep is
+what exercised the arithmetic (1/4/46 pages at 200/1K/10K rows). Named
+follow-up: commit the pricing harness as `tools/relayout_price.py`. PX08
+(2026-08-09) closed out ahead
 of it, since none of its edits depend on PX07's numbers: the CLAUDE.md
 Core Architecture entry, Documents row and a Physical-optimizer
 Open-Decisions section (the three gates each naming their owner);
