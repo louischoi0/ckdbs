@@ -286,11 +286,12 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01 and PHY02 are built (2026-08-09); PHY03
-onward are not.** Part I's `stats/decay.hpp` is the R1 implementation
-PHY01's S1 reuses (it grew the N-point `Accumulate` for S2's decayed
-sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp` with no
-engine-effect includes, per PO10.
+dependency of PHY04), `workplan-testing.md`. **PHY01, PHY02 and PHY07 are built (2026-08-09);
+PHY03-PHY06 and PHY08 are not.** Part I's `stats/decay.hpp` is the R1
+implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
+S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
+with no engine-effect includes, per PO10; PHY07's golden traces are
+`tests/testdata/cabin_optimizer_traces.txt`.
 
 Engine rules apply throughout: explicit Status errors, thread-per-core
 core-local state, deterministic tests, decide/execute phase separation
@@ -462,7 +463,30 @@ switch; thresholds boot-time in v1).
 **Acceptance.** View snapshot tests under PHY04 scenarios; ANALYZE golden
 output.
 
-## PHY07 — Deterministic replay harness (PO10)
+## PHY07 — Deterministic replay harness (PO10)  **[DONE 2026-08-09]**
+
+**Built.** `tests/cabin_optimizer_replay_test.cpp` +
+`tests/testdata/cabin_optimizer_traces.txt` (golden, regenerated via
+`KDS_TRACE_REGEN=1` — the parser corpus's arrangement). The harness runs
+the **real pipeline**, not a mock: splitmix64-seeded streams (chosen over
+`<random>` because the standard's *distributions* are
+implementation-defined, and byte-identical traces are the point) feed
+PHY01's `OptimizerSignals` under a ManualClock, each period snapshots and
+runs PHY02's `Decide`, and a simulated Execute applies the completion
+edges with deterministic ids and page counts. Four scenarios (rising
+star, fading star, stationary noise, quality collapse), each also
+carrying a foreign Cabin with miserable quality for the jurisdiction
+oracle. All four oracles wired and green: no-oscillation (sixty jittering
+periods inside the θ gap produce **zero** actions), the budget invariant
+after every executed set, jurisdiction (the foreign Cabin is never
+touched; Bound Cabins cannot appear at all — the snapshot is fed by
+Observational counting alone), and PO7's HEAL-before-DROP ordering. One
+observation the golden trace surfaced, recorded rather than hidden:
+after a quality-collapse DROP, still-hot demand **re-nominates and
+re-creates** (steps 12-13 of that scenario) and heals again — PO7's
+"demand, if real, re-nominates" working as written, and the churn a
+persistent per-key cooldown (PHY03's state) could dampen if measurement
+ever says it should.
 
 **Scope.** Seed-driven statistics streams replayed through Decide.
 

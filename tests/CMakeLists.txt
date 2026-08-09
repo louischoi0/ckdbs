@@ -65,6 +65,7 @@ add_executable(kds_tests
     show_relayout_test.cpp
     optimizer_signals_test.cpp
     cabin_optimizer_test.cpp
+    cabin_optimizer_replay_test.cpp
     trail_store_test.cpp
     trail_recorder_test.cpp
     waystone_replay_test.cpp
@@ -125,6 +126,12 @@ target_link_libraries(kds_tests PRIVATE kds GTest::gtest GTest::gtest_main Threa
 # directly-invoked binary do not agree on what that is.
 target_compile_definitions(kds_tests
     PRIVATE KDS_PARSER_CORPUS="${CMAKE_CURRENT_SOURCE_DIR}/testdata/parser_corpus.txt")
+
+# PHY07's golden action traces, the same data-not-source arrangement for
+# the same reasons - and stability of this file across runs and platforms
+# is itself the acceptance (fixed-point determinism, PO10).
+target_compile_definitions(kds_tests
+    PRIVATE KDS_CABIN_TRACES="${CMAKE_CURRENT_SOURCE_DIR}/testdata/cabin_optimizer_traces.txt")
 
 # V13's hygiene check greps the parser sources for productions that exist
 # only to accept another dialect's spelling (spec I13). It reads them at
