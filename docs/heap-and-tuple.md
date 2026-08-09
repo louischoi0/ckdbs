@@ -33,7 +33,7 @@ Every heap page header carries an **epoch counter**, bumped whenever the tuples 
 
 Waystone records a page's epoch when it observes a tuple's location, and a consumer trusts that location only while the recorded epoch still matches the page's. This is how an advisory structure avoids becoming a second authoritative index: relayout bumps one counter instead of synchronously rewriting every entry that pointed into the page.
 
-`[OPEN]` — where the epoch lives (a header field, which makes it on-disk format under `rules.md` §5, versus a core-local table keyed by page id), and its width and wraparound handling.
+**Decided 2026-08-09 (`docs/feat-physical-optimizer.md` R4):** the epoch lives in the **common page header** — `PageHeaderFields::reserved0` (offset 16), the slot the header comment had already nominated — as `relayout_epoch`, u64, durable by construction. Every existing page carries 0 there, so the decision costs **no format bump**: a zero reads as epoch 0. Wraparound is unreachable at u64 width rather than handled. The pairing rule is part of the decision: no consumer may accept a location on epoch equality alone — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. The field and the consumers' comparisons are in code (`docs/workplan-physical-optimizer.md` PX03/PX04, 2026-08-09) — recorded at access by the executor, compared at `exec/tuple_verify.hpp` for Waystone replay and Cabin hints alike, with a bump API called by nothing — and nothing bumps it until a mover exists.
 
 ### 3.1b Chain growth by tail append
 
@@ -132,7 +132,7 @@ There is no single canonical in-memory tuple and no hash table enforcing that an
 
 KDS collects access statistics and uses them to **physically optimize tuple placement**, starting with heap pages.
 
-**Collection landed 2026-08-03; optimization has not.** `sys.access_stats` records one row per access *shape* — `(kind, rel_id, column_mask)` — with how often it ran and when it last ran, written for every access kind through one call with no per-kind branch (`include/kds/stats/access_stats.hpp`). `SHOW ACCESS` reads it.
+**Collection landed 2026-08-03; the shadow planner that consumes it landed 2026-08-09; the optimization itself — a mover — has not.** `sys.access_stats` records one row per access *shape* — `(kind, rel_id, column_mask)` — with how often it ran and when it last ran, written for every access kind through one call with no per-kind branch (`include/kds/stats/access_stats.hpp`). `SHOW ACCESS` reads it, and `SHOW RELAYOUT` weighs it with the R1 decay score into candidate relayout plans (`docs/feat-physical-optimizer.md` §5).
 
 The shape is keyed by **columns, never values**: `WHERE flag = 1` and `WHERE flag = 2` are one row. That is what bounds the relation by the schema rather than by the data, so it needs no eviction policy and no directory — the unbounded axis, *which arguments repeat*, is Waystone's and stays there (`waystone-concpets.md` §5). The two layers answer different questions and are deliberately not merged.
 
@@ -140,11 +140,11 @@ What makes the data worth having is the kind split that arrived with it: a walk 
 
 Since 2026-08-08 the same split records what happened when that case *was* fixed: `kIndexProbe` and `kIndexRange` (`docs/feat-index.md` §8) are counted through the same call with no per-kind branch, so a relation's history now distinguishes "searched every row for a few" from "descended an index for them". A `kFilterScan` sitting beside a `kIndexProbe` on the same relation names two columns with different treatment, which is the first shape a physical optimizer could act on that this file's §7 does not already describe. Neither is trail-replayable — invariant 9's line is lookup versus search, and both are searches.
 
-Relayout must respect the `min_key` insertion rule (§3.1), keep the B+ tree consistent (entries updated or lazily repaired for moved tuples), and bump the page epoch (§3.1a) so every recorded location on that page becomes untrusted at once. Under the fixed-length rule (§3.3) a relayout is a copy of fixed cells — exact fill-factor math, no per-tuple size negotiation — and `kVarHeap` pages are outside its jurisdiction entirely (§3.4).
+Relayout must respect the `min_key` insertion rule (§3.1), bump the page epoch (§3.1a) so every recorded location on that page becomes untrusted at once, and — **on a btree-clustered relation only** — keep the tree consistent, which is a tree restructure and out of the first mover's scope (`docs/feat-physical-optimizer.md` R8). A heap relation has no pk index, its Cabin is relocation-invariant by value = pk indirection, and secondary indexes exist only on btree relations — so a heap-relation mover maintains *nothing but the epoch*, which is why the first mover targets heap relations. Under the fixed-length rule (§3.3) a relayout is a copy of fixed cells — exact fill-factor math, no per-tuple size negotiation — and `kVarHeap` pages are outside its jurisdiction entirely (§3.4).
 
 Key-boundary re-partitioning mainly benefits range locality; for single-pk point lookups the acceleration comes from Waystone instead. The two coexist and address different shapes.
 
-*No physical optimizer is implemented, and consequently nothing bumps a page epoch.* The statistics above are its input, collected ahead of it so the history exists when it arrives; nothing reads them yet but `SHOW ACCESS`.
+*No mover is implemented, and consequently nothing bumps a page epoch.* **The shadow half is built (2026-08-09)**: `docs/feat-physical-optimizer.md` (R1-R12) — the decay score, the epoch field with real comparisons at both validation sites, the planner, and `SHOW RELAYOUT`, which reports every candidate plan with its predicted benefit and the §6 gate blocking it. v1 is deliberately shadow-only: every enactment is gated, and the report exists to price opening the gates.
 
 ## 8. Invariants
 
@@ -169,9 +169,9 @@ Never violated, never "temporarily" bypassed.
 
 Collected from the sections above, plus those owned by companion specs.
 
-- Per-page epoch storage location, width, and wraparound (§3.1a). **Now load-bearing for Waystone replay** as well as relayout: replay's §2 rule 2 cannot be enforced without it, and is safe today only because a tuple's address is stable for life. The epoch must land with relayout, whichever comes first.
+- ~~Per-page epoch storage location, width, and wraparound (§3.1a)~~ — **decided 2026-08-09 (`docs/feat-physical-optimizer.md` R4)**: common header `reserved0` → `relayout_epoch`, u64, no format bump. What remains true: a tuple's address is stable for life, so until a mover bumps a page every comparison is between two zeros; the field landed at workplan PX03 and the real comparisons at PX04 (both 2026-08-09), ahead of any mover — the hand-bumped-epoch contract tests in both suites are what prove they would fire.
 - `kMaxAccessShapes` (`[PROPOSED]` 4096) — the cap on distinct rows in `sys.access_stats` (§7). The population is (kind × relation × column combination), which in a real schema is dozens; the cap exists because "in a real schema" is an assumption and an unbounded catalog relation written from the statement path is where that assumption would fail quietly.
-- Whether access statistics ever *drive* anything (§7). Collection is built; no policy consumes it, and choosing one is a separate decision with its own blast radius — relayout has to respect `min_key` (invariant 3), keep the btree consistent, and bump an epoch that does not exist.
+- Whether access statistics ever *drive* anything (§7). Collection is built; no policy consumes it, and choosing one is a separate decision with its own blast radius — relayout has to respect `min_key` (invariant 3), keep a btree-clustered relation's tree consistent, and bump an epoch that is decided (§3.1a) but not yet in code. `docs/feat-physical-optimizer.md` §5-§6 is where the driving policy now lives, shadow-first.
 - Heap page split policy; free-space reuse and page compaction, both gated on reader registration (§3.1b).
 - `kds.inline_cell_width` default value (§3.3) — settle against measured target-schema string-length distributions.
 - Spilled-value size cap; prefix-inline revisit trigger (adopt only if string-equality steps become a measured cost) (§§3.3–3.4).

@@ -1,6 +1,6 @@
 # Fixed-Length Tuples & the Var-Heap — Technical Specification
 
-**Status:** **Official specification**, decisions confirmed 2026-08-01. This document graduates the discussion draft (`quarry/fixed-length-tuples-discussion.md`) into normative design; per the quarry rule, the draft remains as the argument record and this file is what implementers follow. Rationale is retained inline — every decision here carries its *why*. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/rules.md`, `docs/heap-and-tuple.md`, `docs/wal.md`, `docs/txn.md`, `docs/waystone-concpets.md`, and the physical-optimizer blueprint.
+**Status:** **Official specification**, decisions confirmed 2026-08-01. This document graduates the discussion draft (`quarry/fixed-length-tuples-discussion.md`) into normative design; per the quarry rule, the draft remains as the argument record and this file is what implementers follow. Rationale is retained inline — every decision here carries its *why*. Markers: `[CONFIRMED]`, `[PROPOSED]`, `[OPEN]`. Consistent with `docs/rules.md`, `docs/heap-and-tuple.md`, `docs/wal.md`, `docs/txn.md`, `docs/waystone-concpets.md`, and `docs/feat-physical-optimizer.md` (the physical-optimizer spec — written 2026-08-09, backfilling the blueprint this line cited before one existed).
 
 ## 0. Decision Record `[CONFIRMED 2026-08-01]`
 

@@ -125,6 +125,15 @@
 
 namespace kds::server {
 
+// The `physical_optimizer` config key's two legal states
+// (docs/feat-physical-optimizer.md R3). There is deliberately no `kOn`:
+// the config layer refuses `on` at startup naming §6's gates, so a mode a
+// mover would need cannot exist before the mover does.
+enum class PhysicalOptimizerMode : std::uint8_t {
+    kOff = 0,
+    kShadow = 1,
+};
+
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
@@ -510,6 +519,7 @@ private:
     // a `PageStore` to resolve their var-heap spills. Both row-codec catalog
     // relations are therefore surfaced by `SHOW`, which has one.
     DispatchOutcome HandleShowAssertions();
+    DispatchOutcome HandleShowRelayout(std::string_view rest);
 
     // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
     //
@@ -603,6 +613,17 @@ public:
     // never told behaves exactly as the documented configuration does.
     void set_aggregate_limits(exec::AggregateLimits limits) noexcept {
         aggregate_limits_ = limits;
+    }
+
+    // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
+    // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
+    // with the same default posture: a dispatcher never told behaves as the
+    // documented configuration - shadow on, the spec's `[PROPOSED]` 600 s
+    // half-life. `on` never reaches here: the config layer refuses it at
+    // startup naming §6's gates.
+    void set_relayout(PhysicalOptimizerMode mode, sched::MonoTimeNs half_life_ns) noexcept {
+        relayout_mode_ = mode;
+        decay_half_life_ns_ = half_life_ns;
     }
 
 private:
@@ -913,6 +934,13 @@ private:
     // maintenance is not switchable, because an index that stops being
     // maintained is wrong rather than slow.
     bool indexes_enabled_ = true;
+
+    // The physical optimizer's mode and R1 half-life (workplan PX06).
+    // Shadow costs nothing at rest - the planner is pull-only, computed
+    // when `SHOW RELAYOUT` asks - so shadow is the default here as it is
+    // in the config.
+    PhysicalOptimizerMode relayout_mode_ = PhysicalOptimizerMode::kShadow;
+    sched::MonoTimeNs decay_half_life_ns_ = 600'000'000'000ULL;
     CrossCoreWriteCounters cross_core_writes_;
 
     // Refuses a write to a relation this core may not write, and binds the

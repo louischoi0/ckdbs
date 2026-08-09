@@ -11,7 +11,7 @@
 //
 // ---- Why this type knows nothing about Waystone -------------------------
 //
-// `TouchedTuple` is five integers. It is not a `WaystoneEntry`, it carries
+// `TouchedTuple` is six integers. It is not a `WaystoneEntry`, it carries
 // no page format, and nothing here mentions a trail, a directory or a
 // pattern. That is the seam spec section 1 asks for - "Waystone lives
 // outside the executor" - and it is what keeps the *dependency arrow*
@@ -42,11 +42,6 @@
 namespace kds::exec {
 
 // One tuple an execution found, and where.
-//
-// `page_epoch` is deliberately absent: no page epoch exists in this engine
-// yet (storage/page_header.hpp reserves the field, CLAUDE.md keeps its
-// storage and width open), so there is nothing for the executor to report.
-// trail_store.hpp records 0 and says what that costs.
 struct TouchedTuple {
     // A full 64-bit oid, for the reason waystone.hpp gives about the entry
     // field it becomes: oids are uint64 at the source, and a narrowed copy
@@ -57,6 +52,15 @@ struct TouchedTuple {
     std::uint64_t pk = 0;
 
     PageId page_id = kInvalidPageId;
+
+    // The page's relayout epoch at the moment of access
+    // (docs/feat-physical-optimizer.md R4, since PX04 - it was absent while
+    // the engine had no epoch). Reported **verbatim** as the header's u64:
+    // the executor states the fact, and each store that keeps it owns its
+    // stored width - trail_store.hpp narrows to its entry format's u32 and
+    // says why that is safe.
+    std::uint64_t page_epoch = 0;
+
     std::uint16_t slot = 0;
 
     // Which step of the chain produced it - the join position. This is what

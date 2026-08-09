@@ -8,6 +8,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/page_header.hpp"
 
 // **The cabin contract** (docs/feat-cabin.md, workplan CB10). The Waystone
 // suite's shape, pointed at a structure with the opposite trust class - and
@@ -63,6 +64,7 @@ public:
 
     catalog::Catalog& catalog() { return boot_->catalog; }
     stats::CabinStore& cabins() { return *cabins_; }
+    storage::InMemoryPageStore& store() { return store_; }
 
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -145,6 +147,21 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
         EXPECT_EQ(got[i], want[i])
             << what << " diverged at reply " << i << " (" << Queries()[query] << ")";
     }
+}
+
+// What a relayout mover will do to every page it touches, done by hand
+// because no mover exists (docs/feat-physical-optimizer.md §6). Sweeps the
+// user id range; absent ids just miss.
+std::size_t BumpEveryUserPage(Instance& db) {
+    std::size_t bumped = 0;
+    const PageId end = static_cast<PageId>(kFirstUserPageId + db.store().page_count());
+    for (PageId id = kFirstUserPageId; id < end; ++id) {
+        auto page = db.store().Get(id);
+        if (!page.ok()) continue;
+        storage::BumpRelayoutEpoch(page.value());
+        ++bumped;
+    }
+    return bumped;
 }
 
 // ---- The configurations --------------------------------------------------
@@ -276,6 +293,57 @@ TEST(CabinContractTest, CorruptedLocationHintsChangeNoReply) {
     const std::vector<std::string> after = RunAll(db, 2);
     replies.insert(replies.end(), after.begin(), after.end());
     ExpectSame(replies, Reference(5), "corrupted location hints");
+}
+
+TEST(CabinContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
+    // **The epoch check made real for the Cabin's hints**
+    // (docs/feat-physical-optimizer.md R4, workplan PX04). Every hint was
+    // recorded at epoch 0; the page side moves here, as a relayout mover
+    // will move it. A btree relation must notice per entry, resolve the pk,
+    // and stamp the healed hint with the *bumped* epoch - a heal that wrote
+    // 0 back would miss and re-heal forever. A heap relation must abandon
+    // the Cabin and re-record from the walk. Either way no reply moves.
+    Instance db(/*cabins=*/true);
+    Load(db);
+    DeclareCabins(db);
+    std::vector<std::string> replies = RunAll(db, 3);
+
+    ASSERT_GT(BumpEveryUserPage(db), 0u);
+
+    const std::vector<std::string> after = RunAll(db, 2);
+    replies.insert(replies.end(), after.begin(), after.end());
+    ExpectSame(replies, Reference(5), "bumped page epoch");
+
+    // The heal is stamped, not inferred: every surviving hint now carries
+    // the bumped epoch, on the btree relation (healed in place) and the
+    // heap one (re-recorded from the walk) alike.
+    auto b_oid = db.catalog().FindTableOidByName("b");
+    ASSERT_TRUE(b_oid.ok());
+    auto h_oid = db.catalog().FindTableOidByName("h");
+    ASSERT_TRUE(h_oid.ok());
+    std::size_t checked = 0;
+    for (const catalog::Oid oid : {b_oid.value(), h_oid.value()}) {
+        auto access = db.catalog().InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        const std::uint64_t cabin_id = access.value()->CabinOn(1).id;
+        ASSERT_NE(cabin_id, 0u);
+        for (const char* sym : {"aaa", "bbb", "ccc", "ddd"}) {
+            parser::AstValue value;
+            value.type = parser::ValueType::kStr;
+            value.str_val = sym;
+            auto key = stats::MakeCabinKey(cabin_id, value);
+            ASSERT_TRUE(key.has_value());
+            std::vector<stats::CabinEntry>* entries = db.cabins().Find(*key);
+            if (entries == nullptr) continue;
+            for (const stats::CabinEntry& entry : *entries) {
+                if (!entry.hint_valid()) continue;
+                EXPECT_EQ(entry.page_epoch, 1u)
+                    << "a hint kept a stale epoch after the resolve (" << sym << ")";
+                ++checked;
+            }
+        }
+    }
+    ASSERT_GT(checked, 0u) << "no hint was checked; the test proves nothing";
 }
 
 TEST(CabinContractTest, DanglingPksChangeNoReply) {

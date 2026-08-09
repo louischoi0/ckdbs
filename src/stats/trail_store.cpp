@@ -8,15 +8,18 @@ namespace {
 
 // One executor observation as the on-disk entry format.
 //
-// The `page_epoch = 0` is the gap trail_store.hpp names: there is no epoch
-// in this engine to record. Written explicitly rather than left to the
-// zero-initializer so it reads as a decision and not an omission.
+// `page_epoch` is the executor's observed value narrowed to the entry
+// format's u32 (workplan PX04; the layout did not change - the field was
+// always here, written 0 while the engine had no epoch). The truncation is
+// this layer's decision to make, and it is safe: a wrap needs 2^32
+// relayouts of one page, and even a wrap collision only readmits the
+// location to the Keystone-id check (R4's pairing rule).
 WaystoneEntry EntryOf(const exec::TouchedTuple& touched) noexcept {
     WaystoneEntry entry{};
     entry.pk = touched.pk;
     entry.rel_oid = touched.rel_oid;
     entry.page_id = touched.page_id;
-    entry.page_epoch = 0;
+    entry.page_epoch = static_cast<std::uint32_t>(touched.page_epoch);
     entry.slot = touched.slot;
     entry.step_id = touched.step_id;
     // Never inferred from `pk != 0`: a never-written entry reads back

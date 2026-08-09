@@ -11,6 +11,7 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/page_header.hpp"
 
 // **The advisory contract** (docs/waystone-concpets.md §11-3 and §11-4,
 // workplan P12). The spec calls §11-3 "the test that must never be allowed
@@ -181,6 +182,21 @@ void ExpectSame(const std::vector<std::string>& got, const std::vector<std::stri
     }
 }
 
+// What a relayout mover will do to every page it touches, done by hand
+// because no mover exists (docs/feat-physical-optimizer.md §6). Sweeps the
+// user id range; absent ids just miss.
+std::size_t BumpEveryUserPage(Instance& db) {
+    std::size_t bumped = 0;
+    const PageId end = static_cast<PageId>(kFirstUserPageId + db.store().page_count());
+    for (PageId id = kFirstUserPageId; id < end; ++id) {
+        auto page = db.store().Get(id);
+        if (!page.ok()) continue;
+        storage::BumpRelayoutEpoch(page.value());
+        ++bumped;
+    }
+    return bumped;
+}
+
 // ---- §11-3, the five configurations --------------------------------------
 
 TEST(WaystoneContractTest, RecordingAndReplayingChangesNoReply) {
@@ -335,6 +351,67 @@ TEST(WaystoneContractTest, AnUnindexedNonPkPredicateStillScans) {
     EXPECT_NE(analyzed.find("Scan"), std::string::npos) << analyzed;
     EXPECT_EQ(analyzed.find("replays="), std::string::npos) << analyzed;
     EXPECT_NE(analyzed.find("examined=8"), std::string::npos) << analyzed;
+}
+
+TEST(WaystoneContractTest, ABumpedPageEpochMissesHealsAndChangesNoReply) {
+    // **Spec §2 rule 2, proven load-bearing** (docs/feat-physical-optimizer.md
+    // R4, workplan PX04). Until this test the epoch comparison's inputs were
+    // constant - recorded 0 against a page at 0 - so it passed vacuously.
+    // Here the page side moves, which is exactly what a relayout mover will
+    // do: every recorded location on a bumped page must become untrusted at
+    // once, every consult must miss and fall through, no reply may move, and
+    // the next recording must heal the trail at the new epoch.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+    std::vector<std::string> replies = RunAll(db, 2);
+
+    // The contrast: replay fires before the bump, or the miss below proves
+    // nothing.
+    const std::string keyed = "SELECT * FROM b WHERE id = 3";
+    const std::string before = db.Run("ANALYZE " + keyed);
+    ASSERT_NE(before.find("replays="), std::string::npos) << before;
+
+    ASSERT_GT(BumpEveryUserPage(db), 0u);
+
+    // Every consult now meets a page whose epoch moved: a per-entry miss,
+    // the ordinary descent, and the same rows.
+    const std::string missed = db.Run("ANALYZE " + keyed);
+    EXPECT_EQ(missed.find("replays="), std::string::npos) << missed;
+    EXPECT_NE(missed.find("trail_misses="), std::string::npos) << missed;
+
+    // Self-healing: re-recording stores the new epoch, and replay resumes
+    // without anyone repairing anything by hand.
+    db.Run(keyed);
+    db.Run(keyed);
+    const std::string healed = db.Run("ANALYZE " + keyed);
+    EXPECT_NE(healed.find("replays="), std::string::npos) << healed;
+
+    // The healed trail carries the bumped epoch - read it back and say so,
+    // rather than inferring it from the replay above.
+    auto fp = parser::FingerprintOf(keyed);
+    ASSERT_TRUE(fp.has_value());
+    auto patterns = db.catalog().ListPatterns();
+    ASSERT_TRUE(patterns.ok());
+    bool checked = false;
+    for (const catalog::SysPatternRow& row : patterns.value()) {
+        if (row.pattern_id != fp->pattern_id || !catalog::HasWaystoneDirectory(row)) continue;
+        auto trail = stats::ReadTrail(db.store(), row.waystone_root, row.dir_depth,
+                                      stats::InstanceKey{fp->pattern_id, fp->arg_hash});
+        ASSERT_TRUE(trail.ok());
+        ASSERT_FALSE(trail.value().empty());
+        for (const stats::WaystoneEntry& entry : trail.value()) {
+            EXPECT_EQ(entry.page_epoch, 1u) << "re-recorded entry kept a stale epoch";
+        }
+        checked = true;
+    }
+    ASSERT_TRUE(checked) << "the keyed query's trail was not found; the test proves nothing";
+
+    // And the standing invariant: nothing above moved a reply.
+    const std::vector<std::string> after = RunAll(db, 2);
+    replies.insert(replies.end(), after.begin(), after.end());
+    Instance reference(/*record=*/false, /*replay=*/false);
+    Load(reference);
+    ExpectSame(replies, RunAll(reference, 4), "bumped page epoch");
 }
 
 TEST(WaystoneContractTest, AKeyedStepDoesReplaySoTheContrastIsReal) {

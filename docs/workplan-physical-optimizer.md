@@ -1,0 +1,270 @@
+# Physical Optimizer — Workplan (PX01–PX08)
+
+Status: **READY FOR EXECUTION** — spec adopted 2026-08-09; PX01 done.
+Spec: `feat-physical-optimizer.md` (normative, decisions R1-R12). Related:
+`heap-and-tuple.md` §7 and §3.1a, `waystone-concpets.md` §3.1,
+`feat-cabin.md`, `spec-eviction.md` EV1, `spec-pattern-tracking-levels.md`,
+`txn.md` §9.
+
+Task prefix is `PX` — the repo already carries three `P`-numbered schemes
+(`crosscore.md` `P0`-`P8`, Waystone and protocol `P01`-`P17`), so cite the
+file with any bare number, per the standing rule.
+
+Execution order is the numbering order. Each item lists scope, deliverables,
+and acceptance. All new code follows the engine rules: explicit `Status`
+(no throw), core-local state, deterministic tests, field-wise memcpy page
+access, shift/mask only for persisted encodings, no floating point on
+statement paths.
+
+**The one rule carried in from `workplan-aggregate-perf.md`: re-measure the
+premise before building the fix.** Every benefit number the planner prints
+is a prediction; nothing in this plan treats a prediction as a result.
+
+---
+
+## PX01 — Spec adoption and cross-document reconciliation  **[DONE 2026-08-09]**
+
+**Scope.** Make the dangling references true and move the settled decision
+out of the open lists. No code.
+
+**Deliverables.**
+- `spec-eviction.md` EV1 and `spec-pattern-tracking-levels.md`: point the
+  "lazy-decay score (R1)" citations at `feat-physical-optimizer.md`.
+- `rule-fixed-length-tuple.md` status line: "the physical-optimizer
+  blueprint" → this spec, by name.
+- `heap-and-tuple.md`: §3.1a's epoch-storage `[OPEN]` → decided per R4
+  (common header `reserved0`, u64, no format bump), pointing here; §7's
+  "keep the B+ tree consistent" parenthetical amended per R8 (btree-clustered
+  relations only; a heap relation's mover maintains nothing but the epoch).
+- `CLAUDE.md`: Open Decisions "per-page epoch counter storage" struck as
+  decided-with-pointer; a Core Architecture entry for this feature lands with
+  PX08, not here.
+
+**Acceptance.** `grep -rn "blueprint\|lazy-decay" docs/` resolves every hit
+to an existing file; no doc names a physical-optimizer decision this spec
+does not define.
+
+---
+
+## PX02 — The lazy-decay score library (R1)  **[DONE 2026-08-09]**
+
+**Scope.** `include/kds/stats/decay.hpp`: the `{score, last_bump}` pair,
+touch and read over an injected `sched::Clock`, fixed-point per R1's
+`[PROPOSED]` representation. Library only — no consumer wiring beyond what
+PX05 needs.
+
+**Deliverables.**
+- `DecayState` (two words), `Touch(state, clock)`, `ValueAt(state, clock)`;
+  named `constexpr` for the fixed-point scale with the derivation comment.
+- `decay_half_life` config key threaded to the one construction site;
+  unknown-key startup error behavior untouched.
+- No-clock degradation: with a null clock the score is a raw counter.
+
+**Acceptance.** Unit tests under `ManualClock`: exact halving at one
+half-life, quarter at two; touch-then-read equals read-then-touch minus one;
+no-clock counter semantics; zero allocations per touch.
+
+---
+
+## PX03 — The page epoch field (R4)  **[DONE 2026-08-09]**
+
+**Scope.** `page_header.hpp`: `reserved0` becomes `relayout_epoch` with
+read/write accessors; every page-format path (`PAGE_INIT`, heap format,
+undo, index, cabin-bound) continues writing 0. A bump API exists and is
+called by nothing — the eviction sweep's precedent, stated plainly in the
+header comment.
+
+**Deliverables.**
+- Accessors with the offset `static_assert`s; the R4 pairing rule ("never
+  accept on epoch equality alone") stated at the accessor, where a consumer
+  will read it.
+- No format bump: the claim tested, not asserted.
+
+**Acceptance.** A page image written by the pre-change build mounts and
+reads epoch 0; round-trip write/read; checksum discipline unaffected (the
+field is inside the checksummed span already).
+
+---
+
+## PX04 — Real epoch reads at the validation sites  **[DONE 2026-08-09]**
+
+**Scope.** Close the two documented vacuous checks. `trail_recorder.hpp`
+records the page's current epoch instead of the literal 0
+(`trail_store.hpp`'s stated gap); replay compares recorded against current
+through the existing per-entry validation; `CabinStore`'s write hook records
+it; `exec/tuple_verify.hpp` — the one shared verifier — performs the
+comparison for both consumers at one site.
+
+**Deliverables.**
+- Recorder/replay and Cabin record-and-compare paths; a mismatch is a
+  per-entry miss with the ordinary fall-through, never an error.
+- Contract-test extensions: `waystone_contract_test.cpp` and the Cabin suite
+  each gain the hand-bumped-epoch case — bump a page's `relayout_epoch`
+  directly, then require per-entry miss, heal, and a byte-identical reply.
+
+**Acceptance.** Both suites pass with the new case; all pre-existing
+configurations byte-identical; the trail page layout does not change (the
+entry's epoch field already exists and was written 0).
+
+---
+
+## PX05 — The planner (R2, R9)  **[DONE 2026-08-09]**
+
+**Scope.** `include/kds/stats/relayout_planner.hpp` (+ `src/stats/`): pure
+planning over `sys.access_stats`, the catalog, and — per-relation form
+only — a read-only, stoppable, budget-charged chain walk for delete-mark
+density and live fill. Produces `RelayoutPlan`s for the three v1 plan kinds
+(`compact`, `cluster`, `defrag`), each carrying predicted benefit per R9 and
+its blocking gate per §6.
+
+**Deliverables.**
+- `RelayoutPlan` with both R9 fields (predicted, measured — the latter
+  unpopulated in v1 so the promotion comparison needs no format change).
+- Decayed shape weights via PX02; the all-relations form performs no
+  relation walk by construction.
+- Benefit math as a pure function with unit tests over synthetic stats.
+
+**Acceptance.** Deterministic tests: seeded stats produce the golden plan
+set; the walk respects `max_rows_touched`; a page-fetch counter proves the
+bare form fetches no relation page.
+
+---
+
+## PX06 — `SHOW RELAYOUT`, config keys, refusals (R3, R12)  **[DONE 2026-08-09]**
+
+**Scope.** The surface: `SHOW RELAYOUT [<relation>]` per spec §5's report
+shape; `physical_optimizer = off | shadow` with `on` refused at startup
+naming §6's gates; `decay_half_life` validated positive.
+
+**Deliverables.**
+- Dispatcher verb + report rendering (client-manual table row included);
+  `off` answers the one-line disabled notice.
+- Startup refusal text naming all three gates.
+- Fingerprint safety: `relayout` stays an ordinary identifier; golden corpus
+  gains the new statements and modifies none.
+
+**Acceptance.** E2E tests over a live server: report golden-matched; `on`
+refuses at startup with the exact text; corpus diff shows additions only;
+`SHOW RELAYOUT` changes no query result (advisory family assertion).
+
+---
+
+## PX07 — Shadow measurement
+
+**Scope.** Run the shadow report against a real workload and record what it
+says — the first data for gate 2's eventual decision, and the verification
+of the zero-cost claim.
+
+**Deliverables.**
+- `bench/results-physical-optimizer-shadow.md`: `tools/scenario0_stockmarket.py`
+  (and the freight scenario) with `physical_optimizer=shadow` vs `off` —
+  interleaved A/B, Release build, server CPU per the
+  `workplan-aggregate-perf.md` measurement rules.
+- The report's own output for both scenarios, archived: per-relation plan
+  kinds, predicted benefits, decayed weights.
+
+**Acceptance.** The A/B shows the pull-only planner at measurement noise
+(the claim is "zero idle cost" — prove it); the results doc carries commit,
+full percentile table, and an insight about the engine, per the bench
+conventions.
+
+---
+
+## PX08 — Close-out: status and docs  **[DONE 2026-08-09]**
+
+**Scope.** The repo's standing rule: when a decision lands, update
+`CLAUDE.md` and the owning spec, and move items out of Open Decisions.
+
+**Deliverables.**
+- `CLAUDE.md`: Core Architecture entry for the physical optimizer (shadow
+  v1, R-numbered decisions, the three gates, epoch landed); Documents-table
+  row; Open Decisions updated (epoch storage decided; mover/cadence/gates
+  listed as the open remainder, each naming its owner).
+- `feat-physical-optimizer.md` status → adopted, with any `[PROPOSED]`
+  amended during build marked as such.
+- `overview.md`/`README.md`: while editing for the optimizer's status, fix
+  the stale "There is no `CREATE INDEX`" claim and roadmap step 2 —
+  falsified since `feat-index.md` shipped. Unrelated to this feature, found
+  by this work, cheapest to fix here.
+
+**Acceptance.** Spec review only. `SHOW ACCESS`'s client-manual row and
+`heap-and-tuple.md` §7 no longer say "nothing consumes this" without
+qualification — the planner consumes it, in shadow.
+
+---
+
+## Where to pick this up
+
+PX01 and PX02 are done (2026-08-09). PX02 built the library as R1 proposed —
+`include/kds/stats/decay.hpp`, Q24.8 fixed point, a 16-bucket Q8 fraction
+LUT (worst-case overestimate 2^(1/16) − 1 ≈ 4.4%, exact at whole
+half-lives), saturating at the top, backwards-clock-proof — with
+`decay_half_life` parsed in seconds, validated `1..UINT64_MAX/1e9`, and
+defaulted to the `[PROPOSED]` 600 in `Expeditor::Config` (`kds.conf.sample`
+and the client manual carry it). Twelve unit tests plus two config tests;
+the zero-allocation claim is asserted via `tests/alloc_counter.hpp`, not
+stated. PX03 (2026-08-09) renamed the common header's `reserved0` to
+`relayout_epoch` in place — same offset 16, same size, so the pre-change
+image test writes the old layout by hand and reads epoch 0 through the new
+accessor — with `Get`/`Set`/`BumpRelayoutEpoch` beside the LSN accessors,
+the pairing rule stated at the declaration, and a test proving the field
+sits inside the checksummed span (a bump without a restamp is detected).
+`BumpRelayoutEpoch` is called by nothing, as specified. PX04 (2026-08-09)
+made the comparisons real: the executor captures the epoch under the row's
+span (`exec::TouchedTuple` grew to six integers, reported verbatim as u64 —
+each store narrows to its own entry width and owns that decision),
+`VerifyTupleAt` gained the `recorded_epoch` parameter and a
+`kEpochMismatch` outcome checked before the slot read, `TrailLocation`
+carries the entry's epoch to the consult site, and both heal paths stamp
+the healed page's *current* epoch (a heal that wrote 0 against a bumped
+page would miss and re-heal forever — the subtlety worth carrying). The
+Cabin write hook reads the epoch lazily, once per statement that actually
+appends. Both contract suites gained the hand-bumped-epoch case —
+`ABumpedPageEpochMissesHealsAndChangesNoReply` in each — proving miss,
+heal at the new epoch, and byte-identical replies; no entry layout moved.
+PX05 (2026-08-09) built the planner: `stats/relayout_planner.hpp/.cpp`,
+with **the bare form taking no PageStore parameter at all** — "never walks
+a relation" by signature, and additionally proven by a counting-store test.
+Sharpenings found while building: `ListTables()` carries objects that are
+not resolvable relations, so the bare form skips what `InitTableAccess`
+refuses while the *named* form reports it as the caller's error; the
+decayed shape weight treats a row's whole `use_count` as at `last_seen`
+(stated approximation — a truer weight is a collection change, R2);
+`cluster` and `defrag` carry no predicted number because their inputs
+(a hot set; sequential-I/O gain) are respectively uncollected and outside
+R9's pages metric — stated, not faked. The survey is a census (no MVCC:
+`delete_marked` is an upper bound, which is gate 1's whole point), priced
+through `exec::Budget` per slot, refusing rather than truncating. Golden
+plan set pinned over 400 rows / 300 delete-marks. PX06 (2026-08-09) built
+the surface: `SHOW RELAYOUT [<table>]` (`HandleShowRelayout`, rendering in
+the SHOW ACCESS style), `physical_optimizer = off|shadow` defaulting to
+shadow with `on` refused at startup naming all three gates (pinned by a
+test asserting each gate's name in the message), `off` answering the
+one-line notice, and the corpus gaining 9 lines - `SHOW RELAYOUT` refusing
+as SHOW TABLES does, plus two SELECTs pinning `relayout` as an ordinary
+identifier - with zero modified. The dispatcher takes the mode and
+half-life through a `set_relayout` setter (`set_aggregate_limits`'s
+precedent), so no construction site moved. One jurisdiction finding:
+`ListTables` carries `pattern_defs` and `assertions` (the two catalog
+relations in user tuple format), and listing gated plans for them would
+have been a lie in the hopeful direction - §4 forbids the mover touching
+catalog pages, permanently. So the bare form skips system relations, the
+named form answers `plans=none reason=catalog-relation-outside-mover-
+jurisdiction` and is never surveyed, and `RelationReport.system_relation`
+carries the distinction. PX07 is **in flight** (2026-08-09): the shadow
+measurement was handed to the bench agent — Release-build interleaved A/B
+of `shadow` vs `off` over scenario0 and scenario2, `SHOW RELAYOUT` latency
+for both forms, and the archived reports as gate 2's first data — landing
+in `bench/results-physical-optimizer-shadow.md`; mark PX07 done and add
+the measured line here when it lands. PX08 (2026-08-09) closed out ahead
+of it, since none of its edits depend on PX07's numbers: the CLAUDE.md
+Core Architecture entry, Documents row and a Physical-optimizer
+Open-Decisions section (the three gates each naming their owner);
+`heap-and-tuple.md` §7 now says the shadow planner consumes the
+statistics; the spec status reads built-through-PX06 with every
+`[PROPOSED]` built as proposed; and `overview.md`/`README.md` dropped the
+falsified "there is no CREATE INDEX" claim (three places) plus the stale
+"aggregations are on the roadmap" line, and the component table now states
+shadow-built/mover-absent honestly. The mover is deliberately absent from this plan —
+its prerequisite is a §6 gate opening, and the shadow report (PX07) is what
+that decision reads.

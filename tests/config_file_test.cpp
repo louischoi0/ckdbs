@@ -230,6 +230,54 @@ TEST(ExpeditorConfigTest, AggregateCapsParseAndCarryTheProposedDefaults) {
     EXPECT_EQ(config.aggregate_max_distinct, 256u);
 }
 
+// ---- Physical optimizer (docs/feat-physical-optimizer.md R1/R3) --------
+
+TEST(ExpeditorConfigTest, PhysicalOptimizerParsesOffAndShadowDefaultingToShadow) {
+    Expeditor::Config config;
+    EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kShadow);
+
+    ASSERT_TRUE(config.ApplyFile(ParseOk("physical_optimizer = off\n")).ok());
+    EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kOff);
+    ASSERT_TRUE(config.ApplyFile(ParseOk("physical_optimizer = SHADOW\n")).ok());
+    EXPECT_EQ(config.physical_optimizer, PhysicalOptimizerMode::kShadow);
+}
+
+TEST(ExpeditorConfigTest, PhysicalOptimizerOnIsRefusedNamingAllThreeGates) {
+    // R3: a config written for the future fails loudly today. The message
+    // must name what is missing, not what word to try next - all three of
+    // §6's gates.
+    Expeditor::Config config;
+    Status on = config.ApplyFile(ParseOk("physical_optimizer = on\n"));
+    ASSERT_EQ(on.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(on.message().find("reader horizon"), std::string::npos) << on.message();
+    EXPECT_NE(on.message().find("ordered-between"), std::string::npos) << on.message();
+    EXPECT_NE(on.message().find("page reuse"), std::string::npos) << on.message();
+
+    Status typo = config.ApplyFile(ParseOk("physical_optimizer = onn\n"));
+    EXPECT_EQ(typo.code(), StatusCode::kInvalidArgument);
+}
+
+TEST(ExpeditorConfigTest, DecayHalfLifeParsesSecondsAndCarriesTheProposedDefault) {
+    Expeditor::Config config;
+    // The spec's `[PROPOSED]` 600 s, pinned where it lives and nowhere
+    // else. Nothing may depend on the number, only on the rule.
+    EXPECT_EQ(config.decay_half_life_ns, 600'000'000'000ULL);
+
+    ASSERT_TRUE(config.ApplyFile(ParseOk("decay_half_life = 2\n")).ok());
+    EXPECT_EQ(config.decay_half_life_ns, 2'000'000'000ULL);
+}
+
+TEST(ExpeditorConfigTest, DecayHalfLifeRefusesZeroAndTheSecondsToNsOverflow) {
+    Expeditor::Config config;
+
+    Status zero = config.ApplyFile(ParseOk("decay_half_life = 0\n"));
+    EXPECT_EQ(zero.code(), StatusCode::kInvalidArgument) << zero.message();
+
+    // One past UINT64_MAX / 1e9: accepting it would wrap the ns value.
+    Status wide = config.ApplyFile(ParseOk("decay_half_life = 18446744074\n"));
+    EXPECT_EQ(wide.code(), StatusCode::kInvalidArgument) << wide.message();
+}
+
 TEST(ExpeditorConfigTest, ZeroGroupsIsAcceptedAndMeansRefuseEveryFold) {
     // The same shape `cabin_max_values = 0` has: a coherent way to switch
     // the behaviour off per instance while leaving the grammar in place.

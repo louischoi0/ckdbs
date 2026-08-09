@@ -8,7 +8,7 @@ KDS does not try to be everything a traditional RDBMS is. It deliberately narrow
 > Alongside the query optimizer every database has, KDS has a **physical optimizer** of equal rank: runtime access-pattern statistics don't just steer query plans — they periodically **rearrange the data itself** so that the pages your workload touches become fewer, denser, and hotter in cache.
 
 > **KDS indexes query patterns, not relations.**
-> There is no `CREATE INDEX`. The engine fingerprints every statement's shape at parse time, watches which pattern instances recur, and records **Waystone trails** — where each recurring `pattern(args)` actually found its rows, across every relation it touched. The workload teaches the database how to serve it.
+> The engine fingerprints every statement's shape at parse time, watches which pattern instances recur, and records **Waystone trails** — where each recurring `pattern(args)` actually found its rows, across every relation it touched. Declared secondary indexes exist too (`CREATE INDEX`, built as "a Cabin that observed everything"), but the ambition stands: the workload teaches the database how to serve it, and the trail is the index nobody had to declare.
 
 ## Design Philosophy
 
@@ -30,8 +30,8 @@ What this buys: a three-relation join served from a trail is three direct page r
 
 The learned layer grows in deliberate steps:
 
-1. **Advisory acceleration** *(current work)* — trails skip descents for recurring patterns; the physical optimizer reshapes pages under them.
-2. **Secondary indexes made unnecessary** — the indexes a DBA would have created simply never get built; observed patterns are the index.
+1. **Advisory acceleration** *(current work)* — trails skip descents for recurring patterns; the physical optimizer's shadow report prices the reshaping before any page moves.
+2. **Secondary indexes tamed** — declared `CREATE INDEX` shipped first (an index is a Cabin that observed everything, so its correctness argument was already proved); making most declarations unnecessary for recurring patterns remains the trail's ambition.
 3. **Bounded set caching** — with a commit-time change stamp per relation, "nothing changed under this result" becomes provable, and search-class steps join the party *(open design)*.
 4. **Hands-off operation** — everything needed to run KDS is exposed as data and levers, not intuition: the workload is inspectable (`sys.patterns`, metrics), every optimization can be evaluated before it acts (the physical optimizer's **shadow mode** reports predicted benefit first), and every action is a flag or a threshold with a promotion metric to verify it. The control loop closes without anyone in it; who — or what — sits in the operator seat is deliberately left open.
 
@@ -84,7 +84,7 @@ One property makes the last step sane rather than reckless, and it is structural
 | **Waystone** | The trail store: per pattern instance `(pattern_id, arg_hash)`, the recorded Keystones of the rows it touched, with last-seen locations and step tags. Reached through `sys.patterns` and a per-pattern directory. Strictly advisory — droppable wholesale without changing any result |
 | **Semi-sorted heap** | 8 KiB pages with an immutable per-page key lower bound (`min_key`): pages are unordered inside, ordered between — range pruning without full sorting. Each tuple carries a 64-bit **Keystone** word (40-bit id · flags/lock byte · reserved) as its identity |
 | **B+ tree** | The authoritative pk → location index. One tree core, thin facades; append-optimized for monotonic engine-issued ids (rightmost fast path, asymmetric splits). Core-local — no latching protocols at all |
-| **Physical optimizer** *(experimental)* | Threshold-triggered relayout that clusters hot tuples and compacts pages, driven by per-pattern hot sets and time-decayed scores. Ships behind flags with a **shadow mode** — predicted benefit is reported before anything moves — for measured, gradual rollout |
+| **Physical optimizer** *(shadow mode built)* | The shadow half exists: `SHOW RELAYOUT` reports every candidate relayout plan with its lazy-decay-weighted benefit and the gate blocking it, and the page epoch that makes moving tuples safe is live at every validation site. The mover does not exist yet, so nothing moves — deliberately: the promotion gate applied to the optimizer itself, with the shadow report as the evidence that opening a gate pays |
 | **Buffer pool** | One per core over core-owned pages. RAII pinned-page handles, clock eviction, background writer, WAL-ordering gate enforced in code. Hit path: zero locks, zero atomics, zero allocation |
 | **WAL** | Per-core append-only streams. Physiological redo + undo-chain MVCC (writer trx-id + undo pointer; no xmax). Durability classes per transaction: `strict` / `group` / `relaxed`. Fuzzy checkpoints, full-page images, point-in-time-recovery-ready archives |
 | **Storage** | One growable data file, pure arithmetic page addressing (`offset = page_id × 8 KiB`), extent-based crash-safe growth, bitmap free-space management, CRC32C page checksums. mmap deliberately rejected — explicit async I/O only |
@@ -111,7 +111,7 @@ KDS names its own concepts; the stone metaphor is deliberate — a *keystone* ho
 
 ## What KDS is not
 
-No CTEs or derived tables, no window functions, no cross-dialect SQL compatibility, no attempt to be a data warehouse. Aggregations are on the roadmap, not in the core promise. There is no `CREATE INDEX` — the stated goal is that pattern trails make user-defined secondary indexes unnecessary. If your workload is analytical scans over wide history, use a column store; if it is high-rate transactional access to living data, KDS is built for exactly that.
+No CTEs or derived tables, no window functions, no cross-dialect SQL compatibility, no attempt to be a data warehouse. Aggregation (`GROUP BY` with `COUNT`/`SUM`/`MIN`/`MAX`/`AVG`) is built; `CREATE INDEX` exists — though the stated ambition remains that pattern trails make most declared indexes unnecessary. If your workload is analytical scans over wide history, use a column store; if it is high-rate transactional access to living data, KDS is built for exactly that.
 
 ## Status
 

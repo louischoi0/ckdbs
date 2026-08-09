@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <sched.h>
 
+#include <cctype>
 #include <cstring>
 #include <limits>
 #include <thread>
@@ -33,7 +34,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "access_statistics",       "cabins",   "cabin_max_values",
             "indexes",
             "cabin_max_entries_per_value", "cores",
-            "aggregate_max_groups",  "aggregate_max_distinct"};
+            "aggregate_max_groups",  "aggregate_max_distinct",
+            "decay_half_life",       "physical_optimizer"};
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -138,6 +140,49 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetUint("aggregate_max_distinct");
         if (!v.ok()) return v.status();
         aggregate_max_distinct = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("physical_optimizer")) {
+        auto v = file.GetString("physical_optimizer");
+        if (!v.ok()) return v.status();
+        std::string mode = v.value();
+        for (char& c : mode) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (mode == "off") {
+            physical_optimizer = PhysicalOptimizerMode::kOff;
+        } else if (mode == "shadow") {
+            physical_optimizer = PhysicalOptimizerMode::kShadow;
+        } else if (mode == "on") {
+            // Refused naming every gate, so the operator learns what is
+            // missing rather than what word to try next
+            // (docs/feat-physical-optimizer.md §6).
+            return Status::InvalidArgument(
+                file.origin() +
+                ": physical_optimizer = on is not available: every relayout plan is blocked - "
+                "compact on the reader horizon (readers are unregistered, txn.md §9), cluster "
+                "on the ordered-between property kRange pruning reads, defrag on cross-relation "
+                "page reuse breaking trail validation (docs/feat-physical-optimizer.md §6). "
+                "Use 'shadow' for the report, 'off' to silence it.");
+        } else {
+            return Status::InvalidArgument(file.origin() + ": physical_optimizer '" + v.value() +
+                                           "' is not off|shadow (on is refused, naming why)");
+        }
+    }
+    if (file.Has("decay_half_life")) {
+        auto v = file.GetUint("decay_half_life");
+        if (!v.ok()) return v.status();
+        // Positive, because a zero half-life has no meaning to round toward
+        // (instant decay is "no score", which is not a configuration this
+        // engine offers), and bounded so seconds-to-ns cannot wrap:
+        // 2^64 ns is ~584 years, and a half-life near it is the same
+        // request as "never decay", which is what a large finite value
+        // already delivers.
+        constexpr std::uint64_t kMaxHalfLifeSeconds = UINT64_MAX / 1'000'000'000ULL;
+        if (v.value() == 0 || v.value() > kMaxHalfLifeSeconds) {
+            return Status::InvalidArgument(
+                file.origin() + ": decay_half_life " + std::to_string(v.value()) +
+                " is outside 1.." + std::to_string(kMaxHalfLifeSeconds) +
+                " (seconds; docs/feat-physical-optimizer.md R1)");
+        }
+        decay_half_life_ns = v.value() * 1'000'000'000ULL;
     }
     if (file.Has("max_rows_touched")) {
         auto v = file.GetUint("max_rows_touched");
@@ -344,6 +389,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->dispatcher_->set_aggregate_limits(
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});
+    expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
+                                         expeditor->config_.decay_half_life_ns);
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
                                  wal::DurabilityClassName(expeditor->config_.durability) +

@@ -3,6 +3,7 @@
 #include "kds/exec/type_literals.hpp"
 
 #include "kds/stats/pattern_defs.hpp"
+#include "kds/stats/relayout_planner.hpp"
 #include "kds/stats/trail_store.hpp"
 
 #include <algorithm>
@@ -265,6 +266,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "INDEXES")) return HandleShowIndexes();
         if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
         if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
+        if (IEquals(sub, "RELAYOUT")) return HandleShowRelayout(sub_rest);
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -1166,6 +1168,88 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
         // this yet.
         os << " enforcing=" << (def.cabin_root == kInvalidPageId ? 0 : 1);
         os << " def=" << def.source_text;
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowRelayout(std::string_view rest) {
+    // The physical optimizer's shadow report (docs/feat-physical-optimizer.md
+    // §5, workplan PX06). Read-only by construction: the bare form's planner
+    // takes no PageStore, and the per-relation form's walk is a census
+    // priced through the statement budget.
+    if (relayout_mode_ == PhysicalOptimizerMode::kOff) {
+        return {"RELAYOUT off (physical_optimizer=off)", false};
+    }
+
+    auto [name, extra] = SplitFirstToken(Trim(rest));
+    if (!Trim(extra).empty()) {
+        return {"ERR SHOW RELAYOUT takes at most one relation name", false};
+    }
+
+    std::vector<stats::RelationReport> reports;
+    if (name.empty()) {
+        auto all = stats::PlanAllRelations(catalog_, clock_, decay_half_life_ns_);
+        if (!all.ok()) return {"ERR " + all.status().message(), false};
+        reports = std::move(all.value());
+    } else {
+        auto oid = catalog_.FindTableOidByName(name);
+        if (!oid.ok()) {
+            return {"ERR unknown relation '" + std::string(name) + "'", false};
+        }
+        // A fresh budget at the configured ceiling: the walk is priced like
+        // any other relation read, and a spent budget refuses the survey
+        // rather than serving a half-count.
+        exec::Budget budget(budget_.limit());
+        auto one = stats::PlanRelation(catalog_, page_store_, oid.value(), budget, clock_,
+                                       decay_half_life_ns_);
+        if (!one.ok()) return {"ERR " + one.status().message(), false};
+        reports.push_back(std::move(one.value()));
+    }
+
+    std::ostringstream os;
+    os << "relayout_relations=" << reports.size();
+    for (const stats::RelationReport& report : reports) {
+        os << "\\n";
+        os << "rel=" << report.name << " clustered="
+           << (report.clustered_type == catalog::ClusteredType::kBtree ? "btree" : "heap")
+           << " shapes=" << report.shapes.size()
+           << " walk_weight_q8=" << stats::WalkWeightOf(report.shapes);
+
+        for (const stats::ShapeWeight& shape : report.shapes) {
+            os << "\\n";
+            os << "shape kind=" << exec::AccessKindName(shape.kind) << " columns_mask=0x"
+               << std::hex << shape.column_mask << std::dec << " uses=" << shape.use_count
+               << " weight_q8=" << shape.decayed_weight;
+        }
+
+        if (report.survey.has_value()) {
+            os << "\\n";
+            os << "survey pages=" << report.survey->chain_pages
+               << " live=" << report.survey->live_tuples
+               << " delete_marked=" << report.survey->delete_marked
+               << " tuples_per_page=" << report.survey->tuples_per_page;
+        }
+
+        if (report.plans.empty()) {
+            // Out of jurisdiction, not "nothing to do": a btree relation has
+            // no v1 mover candidate (R5), and a catalog relation may never
+            // have one (§4's must-not list). Each names its reason so an
+            // empty candidate set cannot be read as a clean bill of health.
+            os << "\\n";
+            os << (report.system_relation
+                       ? "plans=none reason=catalog-relation-outside-mover-jurisdiction"
+                       : "plans=none reason=btree-outside-v1-mover-scope");
+            continue;
+        }
+        for (const stats::RelayoutPlan& plan : report.plans) {
+            os << "\\n";
+            os << "plan=" << stats::RelayoutPlanKindName(plan.kind)
+               << " blocked_on=" << stats::RelayoutGateName(plan.blocked_on)
+               << " surveyed=" << (plan.survey_backed ? 1 : 0)
+               << " predicted_pages_saved=" << plan.predicted_pages_saved
+               << " predicted_benefit=" << plan.predicted_benefit
+               << " measured_pages_saved=" << plan.measured_pages_saved;
+        }
     }
     return {os.str(), false};
 }
@@ -2720,6 +2804,9 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
     // The two tests a relation with no Cabin pays, and nothing else.
     if (cabins_ == nullptr || access.cabin_mask == 0) return;
 
+    // Filled on the first entry actually appended (see below).
+    std::optional<std::uint32_t> write_epoch;
+
     for (std::uint16_t col = 1; col < 64; ++col) {
         if ((access.cabin_mask & (std::uint64_t{1} << col)) == 0) continue;
         if (col < first_col_pos) continue;
@@ -2782,8 +2869,18 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         stats::CabinEntry entry;
         entry.pk = pk;
         entry.page_id = page_id;
-        // Written 0: there is no page epoch to read (cabin_store.hpp).
-        entry.page_epoch = 0;
+        // The page's current epoch, fetched lazily - once per statement
+        // that actually appends, and only then - so a relation whose write
+        // touches no cabined column pays nothing new. A buffer hit: the
+        // page was written by this very statement moments ago.
+        if (!write_epoch.has_value()) {
+            write_epoch = 0;
+            if (auto bytes = page_store_.GetForRead(page_id); bytes.ok()) {
+                write_epoch =
+                    static_cast<std::uint32_t>(storage::GetRelayoutEpoch(bytes.value()));
+            }
+        }
+        entry.page_epoch = *write_epoch;
         entry.slot = slot;
         entry.flags = stats::kCabinHintValid;
         cabins_->NoteWrite(*key, entry);

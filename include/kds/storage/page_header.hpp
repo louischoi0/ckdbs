@@ -41,7 +41,7 @@ struct PageHeaderFields {
     std::uint16_t flags;          // per-type meaning; 0 unless the type specifies otherwise
     std::uint32_t checksum;       // CRC32C over the full page with this field zeroed
     std::uint64_t page_lsn;       // LSN of the last WAL record applied; 0 = never logged
-    std::uint64_t reserved0;      // 0; leading candidate is the heap relayout epoch
+    std::uint64_t relayout_epoch; // bumped when tuples on the page move; 0 = never relayouted
     std::uint64_t reserved1;      // 0
 };
 
@@ -50,7 +50,11 @@ inline constexpr std::size_t kFormatVersionOffset = 1;
 inline constexpr std::size_t kPageFlagsOffset = 2;
 inline constexpr std::size_t kPageChecksumOffset = 4;
 inline constexpr std::size_t kPageLsnOffset = 8;
-inline constexpr std::size_t kPageReserved0Offset = 16;
+// Offset 16 is the word that was `reserved0`, whose comment nominated
+// exactly this use — which is why the field's arrival is not a format
+// event: every page ever written already carries 0 here, and 0 reads as
+// "never relayouted" (docs/feat-physical-optimizer.md R4).
+inline constexpr std::size_t kPageRelayoutEpochOffset = 16;
 inline constexpr std::size_t kPageReserved1Offset = 24;
 
 // 1+1+2+4+8+8+8 = 32, with no interior or tail padding at these offsets
@@ -67,7 +71,7 @@ static_assert(offsetof(PageHeaderFields, format_version) == kFormatVersionOffset
 static_assert(offsetof(PageHeaderFields, flags) == kPageFlagsOffset);
 static_assert(offsetof(PageHeaderFields, checksum) == kPageChecksumOffset);
 static_assert(offsetof(PageHeaderFields, page_lsn) == kPageLsnOffset);
-static_assert(offsetof(PageHeaderFields, reserved0) == kPageReserved0Offset);
+static_assert(offsetof(PageHeaderFields, relayout_epoch) == kPageRelayoutEpochOffset);
 static_assert(offsetof(PageHeaderFields, reserved1) == kPageReserved1Offset);
 static_assert(sizeof(PageHeaderFields) == kPageHeaderSize);
 
@@ -97,8 +101,8 @@ void WritePageHeader(std::span<std::byte, kPageSize> page, const PageHeaderField
 
 // Formats a brand-new headered page: zeroes all kPageSize bytes, then
 // writes a header for `type` at this build's current format version, with
-// page_lsn 0, both reserved words 0, and checksum 0. The body is left
-// zeroed for the type-specific codec to initialize.
+// page_lsn 0, relayout_epoch 0, the reserved word 0, and checksum 0. The
+// body is left zeroed for the type-specific codec to initialize.
 void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16_t flags = 0);
 
 // Rejects a page whose header this build must not interpret: an
@@ -115,6 +119,29 @@ std::uint8_t RawPageType(std::span<const std::byte, kPageSize> page);
 std::uint64_t GetPageLsn(std::span<const std::byte, kPageSize> page);
 void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn);
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page);
+
+// ---- Relayout epoch (docs/feat-physical-optimizer.md R4) ----------------
+//
+// Bumped only by the physical optimizer's mover when tuples on the page
+// move; INSERT, UPDATE and DELETE never bump it, because the fixed-length
+// rule makes them address-stable — that stability is what keeps every
+// recorded location valid today. **Nothing calls Bump yet**: the mover
+// does not exist (feat-physical-optimizer.md §6's gates), and the API is
+// here ahead of it — the eviction sweep's precedent — so the consumers'
+// comparisons (Waystone replay rule 2, Cabin entry verification, workplan
+// PX04) are real code now rather than promises.
+//
+// The pairing rule, stated where a consumer will read it: **no consumer
+// may accept a location on epoch equality alone.** The epoch is a fast
+// whole-page invalidation layered over the Keystone-id check (K1), never
+// a substitute for it — two equal epochs prove nothing about one slot.
+//
+// Like SetPageLsn, mutation does not restamp the checksum: the field is
+// inside the checksummed span, and StampPageChecksum() at flush time is
+// the one place that seals it.
+std::uint64_t GetRelayoutEpoch(std::span<const std::byte, kPageSize> page);
+void SetRelayoutEpoch(std::span<std::byte, kPageSize> page, std::uint64_t epoch);
+void BumpRelayoutEpoch(std::span<std::byte, kPageSize> page);  // +1, under the caller's exclusive access
 
 // ---- Checksums ----------------------------------------------------------
 

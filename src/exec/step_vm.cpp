@@ -487,7 +487,8 @@ private:
         // are all the same answer here - the caller descends - which is
         // deliberate: a caller that could tell them apart would be tempted
         // to treat one of them as authoritative.
-        VerifiedTuple verified = VerifyTupleAt(store_, at->page_id, at->slot, key);
+        VerifiedTuple verified =
+            VerifyTupleAt(store_, at->page_id, at->slot, key, at->page_epoch);
         if (!verified.ok()) {
             ++step_stats.trail_misses;
             return Status::OK();
@@ -819,7 +820,7 @@ private:
             if (entry.hint_valid()) {
                 NoteFetch();
                 VerifiedTuple verified =
-                    VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk);
+                    VerifyTupleAt(store_, entry.page_id, entry.slot, entry.pk, entry.page_epoch);
                 if (verified.ok()) {
                     ++step_stats.cabin_hint_hits;
                     serve_scratch_.push_back(Located{entry.page_id, entry.slot});
@@ -851,10 +852,18 @@ private:
 
             // Healed in place. The hint was wrong and the pk was right,
             // which is C6's whole shape: authority in the pk, speed in the
-            // location, and the location repaired from the authority.
+            // location, and the location repaired from the authority. The
+            // healed page's *current* epoch is stamped with it - a heal
+            // that wrote 0 against a bumped page would miss on every later
+            // resolve and re-heal forever. One extra fetch, on the heal
+            // path only, which storage-stability makes rare.
             entry.page_id = found.value().page_id;
             entry.slot = found.value().slot;
             entry.page_epoch = 0;
+            if (auto healed = store_.GetForRead(entry.page_id); healed.ok()) {
+                entry.page_epoch = static_cast<std::uint32_t>(
+                    storage::GetRelayoutEpoch(healed.value()));
+            }
             entry.flags |= stats::kCabinHintValid;
             serve_scratch_.push_back(Located{entry.page_id, entry.slot});
         }
@@ -1044,8 +1053,15 @@ private:
         std::uint64_t walk_trx_id = 0;
         std::uint64_t walk_undo_ptr = txn::kNoUndoPtr;
         bool walk_deleted = false;
+        // The page's relayout epoch at the moment of access, captured under
+        // the span because the trail record below runs after its release -
+        // recorded so replay's rule 2 has something real to compare
+        // (docs/feat-physical-optimizer.md R4, PX04). One u64 load per
+        // accepted tuple.
+        std::uint64_t observed_epoch = 0;
         {
             PageSpanGuard span;
+            observed_epoch = page.RelayoutEpoch();
             auto tuple = page.ReadTuple(slot);
             if (tuple.ok()) {
                 switch (txn::Classify(snapshot_.view, tuple.value())) {
@@ -1184,8 +1200,9 @@ private:
                 stats::CabinEntry entry;
                 entry.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
                 entry.page_id = page_id;
-                // Written 0: there is no page epoch to read (cabin_store.hpp).
-                entry.page_epoch = 0;
+                // The epoch captured under this row's span, above - the
+                // hint names the page as it was at observation (R4).
+                entry.page_epoch = static_cast<std::uint32_t>(observed_epoch);
                 entry.slot = slot;
                 entry.flags = stats::kCabinHintValid;
                 recording_->entries.push_back(entry);
@@ -1268,6 +1285,7 @@ private:
                 frame_.Get(ColumnRef{0, static_cast<std::uint16_t>(index), 0});
             touched.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
             touched.page_id = page_id;
+            touched.page_epoch = observed_epoch;
             touched.slot = slot;
             touched.step_id = static_cast<std::uint16_t>(step.step_id);
             trail_->Add(touched);

@@ -53,7 +53,7 @@ PageHeaderFields ReadPageHeader(std::span<const std::byte, kPageSize> page) {
     fields.flags = Load<std::uint16_t>(page, kPageFlagsOffset);
     fields.checksum = Load<std::uint32_t>(page, kPageChecksumOffset);
     fields.page_lsn = Load<std::uint64_t>(page, kPageLsnOffset);
-    fields.reserved0 = Load<std::uint64_t>(page, kPageReserved0Offset);
+    fields.relayout_epoch = Load<std::uint64_t>(page, kPageRelayoutEpochOffset);
     fields.reserved1 = Load<std::uint64_t>(page, kPageReserved1Offset);
     return fields;
 }
@@ -64,7 +64,7 @@ void WritePageHeader(std::span<std::byte, kPageSize> page, const PageHeaderField
     Store<std::uint16_t>(page, kPageFlagsOffset, fields.flags);
     Store<std::uint32_t>(page, kPageChecksumOffset, fields.checksum);
     Store<std::uint64_t>(page, kPageLsnOffset, fields.page_lsn);
-    Store<std::uint64_t>(page, kPageReserved0Offset, fields.reserved0);
+    Store<std::uint64_t>(page, kPageRelayoutEpochOffset, fields.relayout_epoch);
     Store<std::uint64_t>(page, kPageReserved1Offset, fields.reserved1);
 }
 
@@ -77,7 +77,7 @@ void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16
     fields.flags = flags;
     fields.checksum = 0;  // stamped at flush, never here
     fields.page_lsn = kNoPageLsn;
-    fields.reserved0 = 0;
+    fields.relayout_epoch = 0;
     fields.reserved1 = 0;
     WritePageHeader(page, fields);
 }
@@ -132,6 +132,18 @@ void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn) {
 
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page) {
     return Load<std::uint32_t>(page, kPageChecksumOffset);
+}
+
+std::uint64_t GetRelayoutEpoch(std::span<const std::byte, kPageSize> page) {
+    return Load<std::uint64_t>(page, kPageRelayoutEpochOffset);
+}
+
+void SetRelayoutEpoch(std::span<std::byte, kPageSize> page, std::uint64_t epoch) {
+    Store<std::uint64_t>(page, kPageRelayoutEpochOffset, epoch);
+}
+
+void BumpRelayoutEpoch(std::span<std::byte, kPageSize> page) {
+    SetRelayoutEpoch(page, GetRelayoutEpoch(page) + 1);
 }
 
 std::uint32_t ComputePageChecksum(std::span<const std::byte, kPageSize> page) {

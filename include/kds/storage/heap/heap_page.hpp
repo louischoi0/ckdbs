@@ -227,6 +227,13 @@ public:
     PageId next_page_id() const;
     void set_next_page_id(PageId next);
 
+    // The common header's relayout epoch (docs/feat-physical-optimizer.md
+    // R4), surfaced here because the callers that need it at tuple-access
+    // time hold a PageView, not the raw span. Read-only on purpose: bumping
+    // is the mover's act, through storage::BumpRelayoutEpoch on the span it
+    // holds exclusively.
+    std::uint64_t RelayoutEpoch() const noexcept { return storage::GetRelayoutEpoch(page_); }
+
     // A tuple read back out of the page. `payload` is a view into the
     // page buffer itself - valid only as long as the owning PageView (and
     // its underlying bytes) stay alive and untouched.

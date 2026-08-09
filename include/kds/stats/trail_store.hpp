@@ -40,20 +40,17 @@
 // qualify, and nothing at this layer can tell those from rows that still
 // do - the trail records where an execution looked, not what is true.
 //
-// ---- Two gaps worth knowing before building on this --------------------
+// ---- Two things worth knowing before building on this ------------------
 //
-// **`page_epoch` is written as 0**, because this engine has no page epoch:
-// `storage/page_header.hpp` reserves a field for it and CLAUDE.md keeps its
-// storage, width and wraparound open. Spec section 2's replay rule 2 -
-// "check the recorded epoch against the page's current epoch" - is
-// therefore unenforceable, and a replayer must not pretend otherwise.
-//
-// It is safe *today* for a narrow and expiring reason: a tuple's address is
-// stable for its whole life. The fixed-length rule (invariant 13) stops an
-// UPDATE ever migrating a tuple, and nothing relayouts or compacts a page.
-// **The day relayout lands, the epoch has to land with it**, or a trail can
-// point at a slot whose occupant has changed and rule 1's Keystone-id check
-// is the only thing standing between that and a wrong row.
+// **`page_epoch` is recorded for real since 2026-08-09** (workplan PX04):
+// the executor observes the page's relayout epoch at access
+// (`storage/page_header.hpp`, `docs/feat-physical-optimizer.md` R4), this
+// layer narrows it to the entry format's u32, and replay compares it in
+// `exec/tuple_verify.hpp` - spec section 2's rule 2, enforceable at last.
+// The entry layout did not change: the field was always here, written 0
+// while the engine had no epoch. Until a mover exists every comparison is
+// between two zeros - real check, constant inputs - and the hand-bumped
+// contract test is what proves it would fire.
 //
 // **Trails are unlogged.** No WAL record describes one, so a crash loses
 // whatever the last checkpoint did not carry. That costs replays and never

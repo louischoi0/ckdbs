@@ -195,15 +195,50 @@ waystone_replay = on
 # instead of by the data, so it needs no eviction and no cap beyond a
 # backstop.
 #
-# What it is for: the physical optimizer that section 7 describes and that
-# does not exist yet. "This relation was filter-scanned on `flag` 40,000
-# times" is the signal that would justify clustering or indexing it. Nothing
-# consumes this yet - it is being collected now so the history exists when
-# something does.
+# What it is for: the physical optimizer that section 7 describes. "This
+# relation was filter-scanned on `flag` 40,000 times" is the signal that
+# would justify clustering or indexing it. Since 2026-08-09 the optimizer's
+# shadow planner consumes it - SHOW RELAYOUT weighs these shapes into
+# candidate relayout plans (docs/feat-physical-optimizer.md) - though no
+# mover exists yet, so nothing acts on it.
 #
 # Measured cost: +1-2% on a point lookup, unmeasurable on anything slower.
 # Independent of the Waystone switches above.
 access_statistics = on
+
+# ---- Physical optimizer ----------------------------------------------------
+
+# The physical optimizer's mode (docs/feat-physical-optimizer.md R3).
+#
+#   off      SHOW RELAYOUT answers a one-line disabled notice.
+#   shadow   the default: the planner computes the relayout report when
+#            SHOW RELAYOUT asks - plans, predicted benefit, and the gate
+#            blocking each - and moves nothing. Pull-only, so it costs
+#            nothing at rest.
+#
+# `on` is refused at startup, naming the three gates that block every plan
+# (spec section 6): compaction needs the reader horizon that unregistered
+# readers withhold, clustering breaks the ordered-between property range
+# pruning reads, and page reuse across relations would break trail
+# validation. A config written for the future fails loudly today.
+physical_optimizer = shadow
+
+# How long an untouched decay score takes to lose half its weight, in
+# seconds (docs/feat-physical-optimizer.md R1). The lazy-decay score is the
+# one time-weighting the engine has: the physical-optimizer planner weighs
+# access shapes with it, and trail retention and the eviction temperature
+# hook are its declared future consumers.
+#
+# Decay is computed lazily at read and touch - there is no background pass,
+# so this key prices nothing per second; it only decides how fast "hot"
+# goes cold. One half-life halves a score exactly; the default is the
+# spec's `[PROPOSED]` 600, ten minutes, to be settled against a measured
+# workload. 0 is refused - instant decay is "no score", which is not a
+# configuration this engine offers.
+#
+# Consumed by the planner (workplan PX05). Until that lands the key
+# parses, validates, and steers nothing.
+decay_half_life = 600
 
 # ---- Cabins ----------------------------------------------------------------
 
