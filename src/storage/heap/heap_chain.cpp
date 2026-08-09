@@ -168,13 +168,21 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
-    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn) {
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
+    storage::ScanFetcher* fetcher) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = CheckHopBudget(steps, head); !s.ok()) return s;
 
-        auto bytes = access == storage::PageAccess::kWrite ? store.Get(current)
-                                                           : store.GetForRead(current);
+        // Ring mode is a read path only (spec-eviction §5): a writer's walk
+        // takes the ordinary route, because the ring never bypasses the
+        // dirty protocol. The visitor's per-page discipline is what makes
+        // the ring's stricter lifetime safe: each page is finished before
+        // the next fetch can rotate its frame away.
+        auto bytes = access == storage::PageAccess::kWrite
+                         ? store.Get(current)
+                         : (fetcher != nullptr ? fetcher->Fetch(current)
+                                               : store.GetForRead(current));
         if (!bytes.ok()) return bytes.status();
         PageView page(bytes.value());
 

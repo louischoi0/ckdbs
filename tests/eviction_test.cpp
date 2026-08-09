@@ -500,5 +500,129 @@ TEST_F(EvictionTest, MaintainFreeReserveRestoresTheWatermarkThroughDirt) {
     (void)store_->MaintainFreeReserve(0, 1'000'000);  // must terminate
 }
 
+// ---- EVT06: the scan ring -------------------------------------------------
+
+TEST_F(EvictionTest, ARingBoundsAScansResidencyAndSparesTheWorkingSet) {
+    // The pre-scan working set: three pages the foreground is using, their
+    // usage counters raised by ordinary reads.
+    std::vector<PageId> working;
+    for (int i = 0; i < 3; ++i) {
+        working.push_back(MakeCleanResidentPage(std::byte{static_cast<unsigned char>(i)}));
+        for (int touch = 0; touch < 3; ++touch) {
+            ASSERT_TRUE(store_->GetForRead(working.back()).ok());
+        }
+    }
+
+    // Twelve scan pages, written out and reclaimed so the scan must fault
+    // every one of them back in.
+    std::vector<PageId> scanned;
+    for (int i = 0; i < 12; ++i) {
+        scanned.push_back(MakeCleanResidentPage(std::byte{static_cast<unsigned char>(50 + i)}));
+    }
+    while (store_->EvictColdFrames(16) > 0) {
+    }
+    for (const PageId id : working) {
+        // Re-raise: the reclaim laps above walked the counters down.
+        for (int touch = 0; touch < 3; ++touch) ASSERT_TRUE(store_->GetForRead(id).ok());
+    }
+    const std::size_t resident_before = store_->resident_pages();
+
+    // The scan, through a four-slot ring: every page's bytes are right,
+    // and residency grows by at most the ring's size - the whole point.
+    auto ring = store_->OpenScanRing(/*frames=*/4);
+    for (std::size_t i = 0; i < scanned.size(); ++i) {
+        auto bytes = ring->Fetch(scanned[i]);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        EXPECT_EQ(bytes.value()[kPageBodyOffset],
+                  std::byte{static_cast<unsigned char>(50 + i)});
+    }
+    EXPECT_LE(store_->resident_pages(), resident_before + 4)
+        << "the scan flooded the pool instead of reusing its ring";
+
+    // The working set is untouched: still resident, and still *hot* - a
+    // sweep that reclaims the ring leftovers spares it, which is only true
+    // if the scan never walked its usage down or dropped its frames.
+    ASSERT_GT(store_->EvictColdFrames(16), 0u);
+    for (const PageId id : working) {
+        auto back = store_->GetForRead(id);
+        ASSERT_TRUE(back.ok());
+    }
+    EXPECT_GE(store_->resident_pages(), working.size());
+}
+
+TEST_F(EvictionTest, RingFetchesNeverBumpUsage) {
+    const PageId id = MakeCleanResidentPage(std::byte{9});
+    ASSERT_GT(store_->EvictColdFrames(8), 0u);  // start absent
+
+    // Fetched through the ring five times: if any fetch bumped usage, the
+    // single sweep below could not reclaim it in one pass.
+    auto ring = store_->OpenScanRing(/*frames=*/2);
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(ring->Fetch(id).ok());
+    }
+    EXPECT_EQ(store_->EvictColdFrames(8), 1u)
+        << "a scan's touches registered as heat (usage was bumped)";
+}
+
+TEST_F(EvictionTest, RotationSparesAPinnedPageAndDropsAColdOne) {
+    std::vector<PageId> ids;
+    for (int i = 0; i < 4; ++i) {
+        ids.push_back(MakeCleanResidentPage(std::byte{static_cast<unsigned char>(30 + i)}));
+    }
+    while (store_->EvictColdFrames(16) > 0) {
+    }
+    ASSERT_EQ(store_->resident_pages(), 0u);
+
+    auto ring = store_->OpenScanRing(/*frames=*/2);
+    ASSERT_TRUE(ring->Fetch(ids[0]).ok());
+    ASSERT_TRUE(ring->Fetch(ids[1]).ok());
+
+    // The foreground pins the first ring page mid-scan.
+    auto pinned = store_->PinnedGet(ids[0]);
+    ASSERT_TRUE(pinned.ok());
+
+    // Rotation reaches both slots: ids[0]'s is skipped (pinned - abandoned
+    // to the table), ids[1]'s is dropped.
+    ASSERT_TRUE(ring->Fetch(ids[2]).ok());
+    ASSERT_TRUE(ring->Fetch(ids[3]).ok());
+
+    EXPECT_EQ(pinned.value().bytes()[kPageBodyOffset], std::byte{30})
+        << "the pinned page's bytes moved under the pin";
+    // ids[0] survived with the pin; ids[1] was rotated out; the ring holds
+    // ids[2] and ids[3]: three resident of the four.
+    EXPECT_EQ(store_->resident_pages(), 3u);
+    EXPECT_EQ(store_->pinned_frames(), 1u);
+}
+
+TEST_F(EvictionTest, TheRingNeverDropsADirtyFrameOrAResidentClassPage) {
+    // Staged first, because MakeCleanResidentPage syncs the whole store
+    // and would clean the page this test needs dirty.
+    const PageId other = MakeCleanResidentPage(std::byte{78});
+    while (store_->EvictColdFrames(8) > 0) {
+    }
+
+    // A page the foreground dirtied is not the ring's to discard, however
+    // cold: the write must reach the device first (§5's dirty rule).
+    auto created = store_->CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId dirty = created.value().first;
+    FormatPage(created.value().second, PageType::kHeap);
+    created.value().second[kPageBodyOffset] = std::byte{77};
+
+    auto ring = store_->OpenScanRing(/*frames=*/1);
+    ASSERT_TRUE(ring->Fetch(dirty).ok());  // in place: already resident
+    ASSERT_TRUE(ring->Fetch(other).ok());  // faults into the one slot
+    ASSERT_TRUE(ring->Fetch(dirty).ok());  // in place again; slot keeps `other`
+
+    ring.reset();  // scan over: drops `other`, must not drop `dirty`
+    const std::vector<PageId> dirty_ids = store_->DirtyPageIds();
+    EXPECT_NE(std::find(dirty_ids.begin(), dirty_ids.end(), dirty), dirty_ids.end())
+        << "the dirty page lost its frame to the ring";
+    ASSERT_TRUE(store_->Sync().ok());
+    auto back = store_->GetForRead(dirty);
+    ASSERT_TRUE(back.ok());
+    EXPECT_EQ(back.value()[kPageBodyOffset], std::byte{77});
+}
+
 }  // namespace
 }  // namespace kds::storage

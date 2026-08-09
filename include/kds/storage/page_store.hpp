@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <span>
 #include <utility>
 
@@ -30,6 +31,39 @@ enum class PageAccess {
     kRead,   // the visitor will not write through the page
     kWrite,  // the visitor may modify tuples in place
 };
+
+// How a bulk sequential reader fetches pages (docs/spec-eviction.md §5,
+// workplan EVT06). A scan that faults every page of a large relation
+// through the ordinary path floods the pool with frames it will touch
+// exactly once; ring mode reuses a small fixed set of frames cyclically
+// and never bumps usage counters, so a scan's touch does not look like
+// heat and the foreground working set stays where it was.
+//
+// The seam is a virtual fetcher rather than a store method because the
+// callers that need it - the relayout planner's survey, the cabin
+// optimizer's builds (PO4 makes ring routing mandatory there), aggregate
+// full scans - hold a `PageStore&` and must not know which concrete store
+// is under them. The base-class ring is deliberately plain: a store that
+// never evicts has no pool to protect, so fetching through `GetForRead`
+// *is* its correct ring, and only `DevicePageStore` overrides with the
+// real cyclic one.
+class ScanFetcher {
+public:
+    virtual ~ScanFetcher() = default;
+
+    // Read-only by contract, exactly as GetForRead(): the span is mutable
+    // for the same mechanical reason and writing through it is the same
+    // defect. Valid until the next Fetch() on this fetcher - ring rotation
+    // may drop the previous page's frame - which is a *stricter* lifetime
+    // than the ordinary accessors give, and the reason a ring consumer
+    // finishes each page before fetching the next.
+    virtual StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) = 0;
+};
+
+// Frames one ring holds (`kds.scan_ring_frames`, spec §6). `[PROPOSED]`
+// 32; a parameter of OpenScanRing rather than a behavior anything may
+// depend on.
+inline constexpr std::size_t kScanRingFrames = 32;
 
 class PageStore {
 public:
@@ -121,6 +155,29 @@ public:
     // durability class, docs/protocol.md) and calling this per statement
     // stops being the right shape.
     virtual Status Sync() { return Status::OK(); }
+
+    // A scan fetcher for one bulk sequential read (see ScanFetcher above).
+    // The default is the plain pass-through - correct for any store with
+    // no pool to protect - so every existing store and test behaves
+    // exactly as before; DevicePageStore overrides with the real ring.
+    virtual std::unique_ptr<ScanFetcher> OpenScanRing(std::size_t frames = kScanRingFrames);
 };
+
+// The pass-through fetcher: GetForRead, page by page. What ring mode
+// *means* on a store that never evicts.
+class PlainScanFetcher final : public ScanFetcher {
+public:
+    explicit PlainScanFetcher(PageStore& store) noexcept : store_(store) {}
+    StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) override {
+        return store_.GetForRead(page_id);
+    }
+
+private:
+    PageStore& store_;
+};
+
+inline std::unique_ptr<ScanFetcher> PageStore::OpenScanRing(std::size_t /*frames*/) {
+    return std::make_unique<PlainScanFetcher>(*this);
+}
 
 }  // namespace kds::storage

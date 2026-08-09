@@ -287,10 +287,10 @@ Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
 dependency of PHY04), `workplan-testing.md`. **PHY01, PHY02, PHY03, PHY05 and PHY07 are built
-(2026-08-09); PHY04 (gated on EVT06's scan ring), PHY06 (needs PHY04) and
-PHY08 (needs the PHY04 E2E) are not — everything buildable ahead of the
-eviction track has landed, exactly the split the dependency graph
-predicted.** Part I's `stats/decay.hpp` is the R1
+(2026-08-09); PHY04, PHY06 and PHY08 are not — but PHY04's gate is open:
+EVT06's scan ring landed the same day (`workplan-eviction.md`), with
+EVT03's writeback under it, so the executor is the next buildable task and
+its build scans are ring consumers from birth (PO4).** Part I's `stats/decay.hpp` is the R1
 implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
 S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
 with no engine-effect includes, per PO10; PHY07's golden traces are

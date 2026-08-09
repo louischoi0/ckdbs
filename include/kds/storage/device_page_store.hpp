@@ -197,6 +197,23 @@ public:
     // it in production until then - the same stance the sweep itself takes.
     std::size_t MaintainFreeReserve(std::size_t pool_frames, std::size_t watermark);
 
+    // ---- Scan ring (docs/spec-eviction.md §5, EVT06) --------------------
+    //
+    // The real cyclic ring: a page absent from the pool is faulted into
+    // the ring's next slot, whose previous occupant is dropped from the
+    // page table - **unless the foreground got there**. A pin, a usage
+    // bump (only foreground accessors bump; ring fetches never do), a
+    // dirty write, or pinned-class membership each abandon the frame to
+    // the table instead of dropping it, which is §5's interaction rule and
+    // the whole of pin-safety. A page already resident - foreground's or a
+    // ring slot's - is used in place, with no usage bump and no rotation.
+    //
+    // What this bounds: a full scan grows residency by at most the ring's
+    // size, whatever the relation's. The frames are ordinary frames in the
+    // page table while resident, so a foreground hit on one behaves as a
+    // hit anywhere - only the lifecycle differs.
+    std::unique_ptr<ScanFetcher> OpenScanRing(std::size_t frames = kScanRingFrames) override;
+
     // Installs the WAL-before-data gate described above. Null (the
     // default) disables it. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
@@ -519,8 +536,19 @@ private:
 
     // `mark_dirty` is false only for a read-only fetch: a frame faulted in
     // by a reader has not been modified, so it enters the map clean and
-    // nothing writes it back.
-    StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty);
+    // nothing writes it back. `bump_usage` is false only for a ring fetch
+    // (§5: a scan's touch must not look like heat).
+    StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
+                                                            bool bump_usage = true);
+
+    // The ring's rotation half: drops `page_id`'s frame unless the
+    // foreground claimed it (dirty, pinned, usage-bumped, or pinned-class)
+    // - in which case the frame is abandoned to the page table, having
+    // graduated to ordinary life. kInvalidPageId and non-resident ids are
+    // no-ops.
+    void ReleaseScanSlot(PageId page_id) noexcept;
+
+    class ScanRing;  // the ScanFetcher over this store; defined in the .cpp
 
     // PageRef's two callbacks. Private because a pin is only ever taken and
     // dropped by a handle - a caller that could unpin by hand could unpin

@@ -165,7 +165,8 @@ std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId page_id,
-                                                                         bool mark_dirty) {
+                                                                         bool mark_dirty,
+                                                                         bool bump_usage) {
 #ifndef NDEBUG
     // The shared-nothing check (workplan-crosscore.md P2, guideline 1),
     // debug builds only. It sits here rather than in Get()/GetForRead()
@@ -193,8 +194,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         // mutation stays dirty however many readers touch it afterwards.
         if (mark_dirty) it->second.dirty = true;
         // §3.1-2: a saturating bump on every hit, including a read -
-        // "recently used" is about access, not about mutation.
-        if (it->second.usage < kClockUsageCap) ++it->second.usage;
+        // "recently used" is about access, not about mutation. A *ring*
+        // fetch is the one exception (§5): a scan's touch is not heat.
+        if (bump_usage && it->second.usage < kClockUsageCap) ++it->second.usage;
         return std::span<std::byte, kPageSize>(*it->second.bytes);
     }
 
@@ -232,6 +234,63 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         log_->Trace("pagestore", "read page=" + std::to_string(page_id) + " from device");
     }
     return InsertFrame(page_id, std::move(bytes), mark_dirty);
+}
+
+void DevicePageStore::ReleaseScanSlot(PageId page_id) noexcept {
+    if (page_id == kInvalidPageId) return;
+    auto it = frames_.find(page_id);
+    if (it == frames_.end()) return;  // reclaimed by a sweep meanwhile: fine
+    const Frame& frame = it->second;
+    // The foreground got there: a dirty write must reach the device, a pin
+    // is absolute, a usage bump means a foreground accessor touched it
+    // (ring fetches never bump), and a pinned-class page is never dropped
+    // by anyone. Each abandons the frame to ordinary pool life.
+    if (frame.dirty || frame.pins > 0 || frame.usage > 0 || IsPinnedClass(page_id)) return;
+    frames_.erase(it);
+}
+
+// The real ring (§5): fixed slots, cyclic reuse, drop-on-rotation unless
+// the foreground claimed the frame. Nested so it can reach the frame
+// table; handed out as the base-class ScanFetcher so callers stay
+// concrete-store-blind.
+class DevicePageStore::ScanRing final : public ScanFetcher {
+public:
+    ScanRing(DevicePageStore& store, std::size_t frames)
+        : store_(store), slots_(frames == 0 ? 1 : frames, kInvalidPageId) {}
+
+    ~ScanRing() override {
+        // The scan is over: every slot the foreground did not claim goes
+        // back to the device's keeping.
+        for (const PageId id : slots_) store_.ReleaseScanSlot(id);
+    }
+
+    StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) override {
+        // In place when resident - the foreground's frame or one of this
+        // ring's own slots - never bumping usage: §5's interaction rule in
+        // one direction, and "a scan is not heat" in the other.
+        if (auto it = store_.frames_.find(page_id); it != store_.frames_.end()) {
+            return std::span<std::byte, kPageSize>(*it->second.bytes);
+        }
+
+        // Rotate: the slot's previous occupant is dropped unless the
+        // foreground claimed it, then the new page faults in clean with
+        // its usage untouched.
+        store_.ReleaseScanSlot(slots_[hand_]);
+        auto bytes = store_.ResidentBytes(page_id, /*mark_dirty=*/false, /*bump_usage=*/false);
+        if (!bytes.ok()) return bytes.status();
+        slots_[hand_] = page_id;
+        hand_ = (hand_ + 1) % slots_.size();
+        return bytes;
+    }
+
+private:
+    DevicePageStore& store_;
+    std::vector<PageId> slots_;
+    std::size_t hand_ = 0;
+};
+
+std::unique_ptr<ScanFetcher> DevicePageStore::OpenScanRing(std::size_t frames) {
+    return std::make_unique<ScanRing>(*this, frames);
 }
 
 bool DevicePageStore::MayFault(PageId page_id) const noexcept {

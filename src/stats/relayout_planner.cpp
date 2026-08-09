@@ -242,6 +242,10 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
     RelationSurvey survey;
     survey.tuples_per_page = TuplesPerPage(access.value()->layout.row_size);
     PageId last_page = kInvalidPageId;
+    // The survey is a bulk sequential read by construction, so it is a
+    // ring consumer (spec-eviction §5, EVT06): a census of a relation
+    // larger than memory must not flood the pool it is surveying for.
+    auto ring = store.OpenScanRing();
     Status walked = heap::ChainVisit(
         store, access.value()->desc_page_id, storage::PageAccess::kRead,
         [&](PageId page_id, heap::PageView& page,
@@ -263,7 +267,8 @@ StatusOr<RelationReport> PlanRelation(catalog::Catalog& catalog, storage::PageSt
                 }
             }
             return storage::VisitControl::kContinue;
-        });
+        },
+        ring.get());
     if (!walked.ok()) return walked;
 
     report.value().survey = survey;

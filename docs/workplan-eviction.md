@@ -184,7 +184,36 @@ introspection path (SHOW META or successor).
 
 ---
 
-## EVT06 — Scan ring (EV6)
+## EVT06 — Scan ring (EV6)  **[BUILT 2026-08-09]**
+
+**Built.** The seam is `storage::ScanFetcher` with a virtual
+`PageStore::OpenScanRing()` factory, because every consumer (the relayout
+planner's survey, the cabin optimizer's builds, aggregate scans) holds a
+`PageStore&` and must not know the concrete store: the base default is the
+plain pass-through - what ring mode *means* on a store with no pool to
+protect, so `InMemoryPageStore` and every existing test behave
+byte-identically - and `DevicePageStore` overrides with the real cyclic
+ring. §5's rules land as one drop predicate: rotation (and ring
+destruction) drops a slot's frame **unless the foreground claimed it** - a
+dirty write, a live pin, a usage bump (only foreground accessors bump;
+ring fetches never do, which is what makes usage the claim signal), or
+pinned-class membership each abandon the frame to ordinary pool life. A
+resident page is used in place with no rotation and no bump, which is the
+foreground-hit rule in one direction and "a scan is not heat" in the
+other. `heap::ChainVisit` gained the optional fetcher (read walks only -
+the ring never bypasses the dirty protocol), and the walk's per-page
+discipline is what makes the ring's stricter lifetime safe: each page is
+finished before the next fetch can rotate its frame away. **First live
+consumer: the relayout planner's survey census.** Acceptance held: a
+twelve-page scan through a four-slot ring grows residency by ≤ 4 and the
+usage-raised working set survives the following sweep; five ring fetches
+leave a page reclaimable in one pass; a mid-scan pin survives rotation
+with its bytes intact while the cold slot drops. **Deferred, stated:** the
+step VM's aggregate full-scan switch needs the ring threaded through
+`Execute` plus a which-steps-qualify policy, and belongs beside EVT07's
+observability so the switch is measurable; AST06's builder predates the
+ring and adopts it as a follow-up. PHY04's builds are ring consumers from
+birth. **This unblocks workplan-physical-optimizer PHY04.**
 
 **Scope.** Spec §5. **Blocks AST06** (assertion builder is the first
 consumer) — schedule accordingly.
