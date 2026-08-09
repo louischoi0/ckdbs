@@ -316,6 +316,7 @@ prices the missing visibility witness.
 | `benchmark.py` | four phases (insert / point-select / full-scan / update) against one synthetic relation, on ckdbs |
 | `pg_benchmark.py` | the same four phases on PostgreSQL, same table shape, same JSON keys |
 | `aggregate_benchmark.py` | the fold's cost against group count and row count (`docs/feat-aggregate.md`) |
+| `assertion_benchmark.py` | a declared assertion's write-path delay, with against without, per statement shape (`docs/feat-assertion.md`) — reads `enforcing=` from the server and stamps every result with it, so the same driver prices today's declared-only state (expect zero) and AST07's enforcement when it lands; no PostgreSQL twin, because PostgreSQL does not implement `CREATE ASSERTION` |
 | `join_benchmark.py` | join-chain shapes |
 | `latency_matrix.py` | per-statement latency across storage forms and access kinds |
 | `bench/keystone_alloc_bench.cpp` | the id allocator, in-process — no client, no socket |
