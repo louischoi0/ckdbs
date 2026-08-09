@@ -130,6 +130,28 @@ struct VarHeapSink {
 Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>& spills,
                      std::span<parser::AstValue> out);
 
+// Rewrites a literal into the storage form of `col`'s type, in place
+// (docs/spec-types.md §3.1).
+//
+// A `'2026-08-07'` against a `DATE` column becomes the epoch integer
+// 20672; a `'12.34'` against a `DECIMAL(10,2)` becomes the unscaled 1234
+// carrying scale 2. Every other column type leaves the value untouched.
+// Errors carry **no byte position** - this has no idea where the literal
+// was written - so a caller holding an offset adds it with
+// `Status::WithContext`.
+//
+// **There is exactly one of these because there were once two.** The step
+// compiler coerced a predicate's literal here; the Cabin's write hook
+// keyed on the *raw* literal it got from the statement. So a read of a
+// DATE column keyed on 20672 and a write keyed on the string
+// `"2026-08-07"`, the two never met, and an observed value silently
+// stopped seeing rows inserted after it was observed - a Cabin returning
+// fewer rows than exist, which is the one failure mode
+// `docs/feat-cabin.md` §5 calls out as invisible without a baseline to
+// compare against. Any path that turns a written literal into a value the
+// engine compares or keys on must come through here.
+Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& value);
+
 // Rejects a schema that cannot carry a Keystone word: no columns at all,
 // or a first column whose declared type is not an integer one. Exposed so
 // CREATE TABLE can refuse such a table at definition time rather than at
@@ -214,10 +236,43 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
                      std::span<const std::byte> payload, std::span<parser::AstValue> out,
                      std::vector<PendingSpill>* spills = nullptr);
 
+// One column, from a cell the caller located itself.
+//
+// The two above find their cells at the row layout's offsets. This one takes
+// the cell directly, because a secondary index entry carries its covered
+// columns **concatenated in the index's declared order** rather than at the
+// relation's offsets (docs/feat-index.md §7) - and re-deriving what a cell
+// means from an entry would be a second decoder for the same bytes.
+//
+// `column_index` is only what a reported spill names, so an entry-side caller
+// passes the covered column's schema position.
+Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std::byte> cell,
+                          std::size_t column_index, parser::AstValue& out,
+                          std::vector<PendingSpill>* spills);
+
 // Renders one decoded value for display in a SELECT response line.
 // Prefers AstValue::raw_int_text when set (exact literal/uint64 text),
 // falling back to int_val otherwise.
-std::string FormatValue(const parser::AstValue& value);
+//
+// `type_val` is the **column's** catalog type, and rendering is the one
+// place it is needed (docs/spec-types.md §3.3). A `DATE` and a
+// `TIMESTAMP` decode to the integers they are - epoch days and epoch
+// microseconds - so the value alone cannot say which, or that either is a
+// date at all. That is deliberate: decode does not format, and the string
+// exists only for rows actually emitted, which is what keeps a scan from
+// building text for every row it rejects.
+//
+// **Pass 0 when there is no column type**, which renders exactly as this
+// function did before types existed: a plan's compiled literal, a
+// catalog view's value, an aggregate's group label. There is no
+// single-argument overload on purpose - the sweep that added the
+// parameter has to be complete, and a defaulted one would let a caller
+// that *should* pass a type silently keep rendering an epoch day as
+// `20672`.
+//
+// A `DECIMAL` needs no `type_val`: it is the one kind whose value carries
+// its own scale, so `12.30` renders from the value alone.
+std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value);
 
 // The unsigned reading of a decoded integer value.
 //

@@ -31,6 +31,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "max_rows_touched",      "inline_cell_width",      "waystone_recording",
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
+            "indexes",
             "cabin_max_entries_per_value", "cores",
             "aggregate_max_groups",  "aggregate_max_distinct"};
 }
@@ -105,6 +106,11 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetBool("cabins");
         if (!v.ok()) return v.status();
         cabins = v.value();
+    }
+    if (file.Has("indexes")) {
+        auto v = file.GetBool("indexes");
+        if (!v.ok()) return v.status();
+        indexes = v.value();
     }
     if (file.Has("cabin_max_values")) {
         auto v = file.GetUint("cabin_max_values");
@@ -333,7 +339,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->trail_recorder_ ? &*expeditor->trail_recorder_ : nullptr,
         expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
         expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
-        &*expeditor->txn_manager_, expeditor->config_.isolation);
+        &*expeditor->txn_manager_, expeditor->config_.isolation, /*core_id=*/0,
+        expeditor->config_.indexes);
     expeditor->dispatcher_->set_aggregate_limits(
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});

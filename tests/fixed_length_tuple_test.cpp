@@ -314,16 +314,109 @@ TEST_F(FixedLengthTupleTest, AValueTooLongToInlineSpillsAndStillRoundTrips) {
     }
 }
 
-TEST_F(FixedLengthTupleTest, AFloatOrDecimalColumnIsRefusedAtCreateTable) {
-    // A column with no decided on-disk width cannot be part of a schema
-    // constant, so the table is refused at definition time rather than at
-    // the first INSERT (catalog/schema.hpp).
-    for (const char* type : {"float", "decimal"}) {
-        const std::string reply =
-            Run(std::string("CREATE TABLE bad_") + type + " (id int64, x " + type + ")");
-        EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
-        EXPECT_NE(reply.find("float/decimal"), std::string::npos) << reply;
+TEST_F(FixedLengthTupleTest, AFloatColumnIsRefusedAtCreateTable) {
+    // Refused at definition time rather than at the first INSERT, and now
+    // on the merits rather than for want of a width: IEEE semantics
+    // conflict with this engine's exactness discipline (spec-types.md TY1).
+    const std::string reply = Run("CREATE TABLE bad_float (id int64, x float)");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("float"), std::string::npos) << reply;
+}
+
+TEST_F(FixedLengthTupleTest, ABareDecimalColumnIsRefusedForWantOfAScale) {
+    // A bare `decimal` says nothing about scale, and a default scale is a
+    // silent decision about someone's money (spec-types.md §2). Refused at
+    // parse, so the position is the type's own.
+    const std::string reply = Run("CREATE TABLE bad_dec (id int64, x decimal)");
+    EXPECT_EQ(reply.substr(0, 3), "ERR") << reply;
+    EXPECT_NE(reply.find("no default scale"), std::string::npos) << reply;
+}
+
+TEST_F(FixedLengthTupleTest, TheThreeNewTypesRoundTripThroughTheCatalog) {
+    // TY03's done-when. The row size is the sum of the declared widths
+    // (TY1's table), which is invariant 13 holding for the new types
+    // exactly as it does for the old ones.
+    ASSERT_EQ(Run("CREATE TABLE ty (id int64, d date, ts timestamp, price decimal(10, 2))")
+                  .substr(0, 7),
+              "CREATED");
+
+    const std::string described = Run("DESCRIBE ty");
+    EXPECT_NE(described.find("name=d type=date"), std::string::npos) << described;
+    EXPECT_NE(described.find("name=ts type=timestamp"), std::string::npos) << described;
+    // The declared form, parameters included - which is what TY02's
+    // packing made necessary and `ColumnTypeText` makes uniform.
+    EXPECT_NE(described.find("name=price type=decimal(10,2)"), std::string::npos) << described;
+}
+
+TEST_F(FixedLengthTupleTest, DecimalBoundsAreRefusedAtCreateTable) {
+    // TY2: 1 <= p <= 18 for the 8-byte type, 19 <= p <= 38 for the 16-byte
+    // one (its once-future int128 type, built 2026-08-07), 0 <= s <= p for
+    // both. `decimal(19, 0)` pinned the old ceiling and now *creates*; the
+    // refusals live at the edges that remain.
+    for (const char* decl : {"decimal(39, 0)", "decimal(0, 0)", "decimal(5, 6)"}) {
+        const std::string sql =
+            std::string("CREATE TABLE bad_") + (decl[8] == '3' ? "a" : "b") +
+            " (id int64, x " + decl + ")";
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.substr(0, 3), "ERR") << decl << " -> " << reply;
+        EXPECT_NE(reply.find("byte "), std::string::npos) << decl << " -> " << reply;
     }
+}
+
+TEST_F(FixedLengthTupleTest, TheNewTypesStoreAndReadBackAsWritten) {
+    // TY03 shipped these declarable-but-not-storable and pinned the
+    // refusal so TY04 would have to remove it deliberately. This is that
+    // removal: the same statement now stores, and reads back the literal
+    // it was given.
+    ASSERT_EQ(Run("CREATE TABLE ty2 (id int64, d date, ts timestamp, p decimal(10, 2))")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(
+        Run("INSERT INTO ty2 VALUES ('2026-08-07', '2026-08-07 09:15:00.250000', '12.34')")
+            .substr(0, 8),
+        "INSERTED");
+
+    // **Read back as written** - which is TY06's doing, not TY04's. The
+    // stored value is still the epoch integer and decode still produces
+    // one; the column's `type_val` turns it back into a date at the
+    // emission boundary and nowhere earlier, so a scan that rejects a row
+    // builds no text for it.
+    const std::string read = Run("SELECT * FROM ty2");
+    EXPECT_NE(read.find("2026-08-07"), std::string::npos) << read;
+    EXPECT_NE(read.find("2026-08-07 09:15:00.250000"), std::string::npos) << read;
+    EXPECT_NE(read.find("12.34"), std::string::npos) << read;
+}
+
+TEST_F(FixedLengthTupleTest, AStoredValueSurvivesAnUpdateOfAnotherColumn) {
+    // The round trip that matters most in practice: an UPDATE re-encodes
+    // every column its SET list did not touch, from the *decoded* form. So
+    // encode has to accept what decode produces - an epoch integer for a
+    // date, a (unscaled, scale) pair for a decimal - or an untouched column
+    // silently changes when a neighbour is written.
+    ASSERT_EQ(Run("CREATE TABLE ty4 (id int64, d date, p decimal(8, 3), n int64)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO ty4 VALUES ('2026-08-07', '1.500', 1)").substr(0, 8), "INSERTED");
+
+    const std::string before = Run("SELECT d, p FROM ty4");
+    ASSERT_EQ(Run("UPDATE ty4 SET n = 2 WHERE id = 1").substr(0, 7), "UPDATED");
+    EXPECT_EQ(Run("SELECT d, p FROM ty4"), before) << "an untouched column moved";
+}
+
+TEST_F(FixedLengthTupleTest, AMalformedLiteralIsRefusedAtTheGate) {
+    // TY7: encode is the only gate, so a bad value is refused at INSERT
+    // and never reaches a page - which is what lets decode skip
+    // re-validating.
+    ASSERT_EQ(Run("CREATE TABLE ty3 (id int64, d date, p decimal(6, 2))").substr(0, 7),
+              "CREATED");
+    for (const char* values : {"'2026-02-30', '1.00'",   // not a real day
+                               "'not a date', '1.00'",
+                               "'2026-08-07', '1.234'",  // more digits than the scale
+                               "'2026-08-07', '99999.99'"}) {
+        const std::string reply = Run(std::string("INSERT INTO ty3 VALUES (") + values + ")");
+        EXPECT_EQ(reply.substr(0, 3), "ERR") << values << " -> " << reply;
+    }
+    // Nothing was written by any of them.
+    EXPECT_NE(Run("SELECT COUNT(*) FROM ty3").find("\\n0"), std::string::npos);
 }
 
 // ---- The same, on a clustered B+ tree ------------------------------------

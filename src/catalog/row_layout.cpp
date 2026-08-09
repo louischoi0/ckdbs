@@ -23,13 +23,20 @@ StatusOr<std::uint32_t> RowLayout::ColumnWidth(const SysColumnRow& col,
         case kTypeValChar: return col.len;
         // The tagged cell: one width for every value, whatever it holds.
         case kTypeValVarchar: return inline_cell_width;
+        // docs/spec-types.md TY1/TY2/TY4. All three are fixed-width by
+        // construction, which is why they are expressible at all: a
+        // relation's row size is a schema constant (invariant 13), so a
+        // type with no decided width cannot be part of one.
+        case kTypeValDate: return 4;        // int32 epoch days
+        case kTypeValTimestamp: return 8;   // int64 UTC micros
+        case kTypeValDecimal: return 8;      // int64 unscaled, 1 <= p <= 18
+        case kTypeValDecimalWide: return 16; // int128 unscaled, 19 <= p <= 38
         case kTypeValFloat:
-        case kTypeValDecimal:
             return Status::Unsupported(
                 "column '" + std::string(NameView(col.name)) +
-                "' has type float/decimal, which has no on-disk encoding yet - and under the "
-                "fixed-length rule a relation's row size is a schema constant, so a column with "
-                "no decided width cannot be part of one (docs/heap-and-tuple.md section 3.3)");
+                "' has type float, which this engine does not store (docs/spec-types.md TY1): "
+                "IEEE comparison and aggregation semantics conflict with its exactness "
+                "discipline. Use decimal(p, s) for money and int64 for counts");
         default:
             return Status::InvalidArgument("column '" + std::string(NameView(col.name)) +
                                             "' has an unrecognized type_val " +

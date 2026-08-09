@@ -41,6 +41,12 @@ std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
         // sys.access_stats, so a value here may never change meaning and a
         // new kind takes the next free one however the enum is ordered.
         case AccessKind::kCabinProbe: return 6;
+        // Appended, and the numbers are what `sys.access_stats` stores - so
+        // this mapping is explicit rather than the enum's own values,
+        // precisely so a kind can be inserted where it reads best without
+        // silently re-labelling every row already on disk.
+        case AccessKind::kIndexProbe: return 7;
+        case AccessKind::kIndexRange: return 8;
     }
     return catalog::kAccessKindUnset;
 }
@@ -53,6 +59,8 @@ std::optional<AccessKind> AccessKindOfStored(std::uint8_t stored) noexcept {
         case 4: return AccessKind::kFilterScan;
         case 5: return AccessKind::kScan;
         case 6: return AccessKind::kCabinProbe;
+        case 7: return AccessKind::kIndexProbe;
+        case 8: return AccessKind::kIndexRange;
         default: return std::nullopt;
     }
 }
@@ -101,9 +109,13 @@ std::string FormatOperand(const Operand& operand) {
     // they compare differently (row_codec.hpp's CompareValues), and a plan
     // that hid the difference would hide the reason for a wrong answer.
     if (operand.literal.type == parser::ValueType::kStr) {
-        return "'" + FormatValue(operand.literal) + "'";
+        // type_val 0: a plan shows the **compiled** form, and a date
+        // literal is an epoch integer by the time a chain exists (TY05).
+        // Rendering it back as a date would show something the chain does
+        // not contain.
+        return "'" + FormatValue(/*type_val=*/0, operand.literal) + "'";
     }
-    return FormatValue(operand.literal);
+    return FormatValue(/*type_val=*/0, operand.literal);
 }
 
 std::string FormatPredicate(const StepPredicate& pred) {
@@ -123,7 +135,7 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     }
     if (step.cabin.has_value()) {
         os << " cabin=" << step.cabin->cabin_id << " on=col" << step.cabin->col_pos
-           << " value=" << FormatValue(step.cabin->value);
+           << " value=" << FormatValue(/*type_val=*/0, step.cabin->value);
     }
     os << '\n';
 
@@ -165,6 +177,8 @@ const char* AccessKindName(AccessKind kind) noexcept {
         case AccessKind::kFilterScan: return "FilterScan";
         case AccessKind::kScan: return "Scan";
         case AccessKind::kCabinProbe: return "CabinProbe";
+        case AccessKind::kIndexProbe: return "IndexProbe";
+        case AccessKind::kIndexRange: return "IndexRange";
     }
     return "?";
 }
@@ -311,7 +325,8 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.relation_opens == 0 && counters.rows_examined == 0 &&
             counters.sub_chain_runs == 0 && counters.trail_replays == 0 &&
             counters.trail_misses == 0 && counters.range_pages_pruned == 0 &&
-            counters.cabin_hits == 0 && counters.cabin_misses == 0) {
+            counters.cabin_hits == 0 && counters.cabin_misses == 0 &&
+            counters.index_entries_scanned == 0) {
             continue;
         }
 
@@ -358,6 +373,21 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         if (counters.cabin_hint_hits > 0) os << " hint_hits=" << counters.cabin_hint_hits;
         if (counters.cabin_hint_misses > 0) os << " hint_misses=" << counters.cabin_hint_misses;
         if (counters.cabin_recordings > 0) os << " cabin_recorded=" << counters.cabin_recordings;
+
+        // The index's three numbers (docs/feat-index.md §7). The gap between
+        // `index_scanned` and `index_resolved` is what the layer saved, and
+        // `index_filtered` is the part of that gap a COVERING clause bought -
+        // the only honest price for one, since a covered column saves a
+        // base *descent* and never a base read.
+        if (counters.index_entries_scanned > 0) {
+            os << " index_scanned=" << counters.index_entries_scanned;
+        }
+        if (counters.index_entries_filtered > 0) {
+            os << " index_filtered=" << counters.index_entries_filtered;
+        }
+        if (counters.index_rows_resolved > 0) {
+            os << " index_resolved=" << counters.index_rows_resolved;
+        }
     }
     return os.str();
 }

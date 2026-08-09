@@ -16,6 +16,12 @@ const char* StatementTypeName(const Statement& stmt) {
             if constexpr (std::is_same_v<T, CabinStmt>) {
                 return s.drop ? "DROP CABIN" : "CREATE CABIN";
             }
+            if constexpr (std::is_same_v<T, IndexStmt>) {
+                return s.drop ? "DROP INDEX" : "CREATE INDEX";
+            }
+            if constexpr (std::is_same_v<T, AssertionStmt>) {
+                return s.drop ? "DROP ASSERTION" : "CREATE ASSERTION";
+            }
         },
         stmt);
 }
@@ -26,6 +32,7 @@ std::string_view AggFuncText(AggFunc func) noexcept {
         case AggFunc::kSum: return "sum";
         case AggFunc::kMin: return "min";
         case AggFunc::kMax: return "max";
+        case AggFunc::kAvg: return "avg";
     }
     return "?";
 }

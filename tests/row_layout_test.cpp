@@ -93,19 +93,45 @@ TEST(RowLayoutTest, ACharColumnKeepsItsDeclaredWidth) {
 
 // ---- Refusals ------------------------------------------------------------
 
-TEST(RowLayoutTest, AFloatOrDecimalColumnIsUnsupported) {
-    for (std::uint32_t type_val : {kTypeValFloat, kTypeValDecimal}) {
-        Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "x", type_val)});
-        auto layout = RowLayout::Build(schema, kW);
+TEST(RowLayoutTest, AFloatColumnIsUnsupported) {
+    // Float and decimal used to be refused together, for one reason: no
+    // decided width. `docs/spec-types.md` TY1 splits them. Decimal is a
+    // scaled int64 and has a width now; float stays out on the merits -
+    // IEEE comparison and aggregation semantics conflict with this
+    // engine's exactness discipline - which is a product decision rather
+    // than an undecided encoding.
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "x", kTypeValFloat)});
+    auto layout = RowLayout::Build(schema, kW);
 
-        ASSERT_FALSE(layout.ok()) << "type_val " << type_val;
-        // Unsupported, not InvalidArgument: the schema is not malformed,
-        // the *encoding* is an open decision and reserving a width for it
-        // would be half of settling it.
-        EXPECT_EQ(layout.status().code(), StatusCode::kUnsupported);
-        EXPECT_NE(layout.status().message().find("float/decimal"), std::string::npos)
-            << layout.status().message();
-    }
+    ASSERT_FALSE(layout.ok());
+    EXPECT_EQ(layout.status().code(), StatusCode::kUnsupported);
+    EXPECT_NE(layout.status().message().find("float"), std::string::npos)
+        << layout.status().message();
+}
+
+TEST(RowLayoutTest, ADecimalColumnHasAWidthNow) {
+    // Eight bytes, the unscaled int64 (TY2). A width is not an encoding:
+    // `CheckDeclarableColumnTypes` is what still refuses the *column* until
+    // the DDL can carry (p, s), and this only says how wide it will be.
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "x", kTypeValDecimal)});
+    auto layout = RowLayout::Build(schema, kW);
+
+    ASSERT_TRUE(layout.ok()) << layout.status().message();
+    auto width = RowLayout::ColumnWidth(Col(1, "x", kTypeValDecimal), kW);
+    ASSERT_TRUE(width.ok());
+    EXPECT_EQ(width.value(), 8u);
+}
+
+TEST(RowLayoutTest, DateAndTimestampHaveTheirSpecifiedWidths) {
+    // TY4: a date is int32 epoch days, a timestamp int64 UTC micros. Both
+    // fixed-width, which is the only reason invariant 13 is untouched.
+    auto date = RowLayout::ColumnWidth(Col(1, "d", kTypeValDate), kW);
+    ASSERT_TRUE(date.ok()) << date.status().message();
+    EXPECT_EQ(date.value(), 4u);
+
+    auto ts = RowLayout::ColumnWidth(Col(1, "t", kTypeValTimestamp), kW);
+    ASSERT_TRUE(ts.ok()) << ts.status().message();
+    EXPECT_EQ(ts.value(), 8u);
 }
 
 TEST(RowLayoutTest, ARowTooWideForAPageIsUnsupported) {

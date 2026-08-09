@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "kds/base/int128.hpp"
 #include "kds/base/status.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/step_chain.hpp"
@@ -51,8 +52,10 @@
 // is what lets `docs/crosscore.md`'s step pipeline ship *partial
 // aggregates* - group count on the wire, not row count - without touching
 // the step VM, and a v1 that quietly broke it would take that option away
-// silently. `AVG`, when it lands, must be carried as a `(sum, count)` pair
-// for the same reason.
+// silently. `AVG` landed 2026-08-07 carried as the `(sum, count)` pair
+// this paragraph reserved for it: partial sums and counts merge by
+// addition and the divide waits for `Finish`, where merging two partial
+// quotients would have been unrecoverable rounding.
 
 namespace kds::exec {
 
@@ -167,6 +170,13 @@ private:
         // SUM's accumulator. int64 with checked addition (AG3): an
         // overflow is a statement error, never a wrapped number.
         std::int64_t sum = 0;
+
+        // The wide decimal's accumulator (`kTypeValDecimalWide` items):
+        // int128, same checked-addition discipline, a wider register.
+        // Separate from `sum` rather than replacing it, because the int64
+        // accumulator is a *product contract* (§3.3's overflow point) and
+        // widening it silently would move where SUM over int64 fails.
+        Int128 sum_wide = 0;
 
         // Whether any **non-NULL** argument was seen. This is what makes
         // §3.1's "NULL when the group has none" a property of the fold

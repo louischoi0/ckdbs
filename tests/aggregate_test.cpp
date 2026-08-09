@@ -1,13 +1,12 @@
 #include "kds/exec/aggregate.hpp"
 
 #include <algorithm>
-#include <cstdlib>
-#include <new>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "alloc_counter.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/row_codec.hpp"
 
@@ -33,38 +32,10 @@ namespace {
 
 // ---- An allocation counter ----------------------------------------------
 //
-// Replaces the global operators for the whole test binary, and counts only
-// while `counting` is set - so every other test in the binary pays one
-// predicate per allocation and nothing else.
-std::size_t g_allocations = 0;
-bool g_counting = false;
-
-struct CountAllocations {
-    CountAllocations() {
-        g_allocations = 0;
-        g_counting = true;
-    }
-    ~CountAllocations() { g_counting = false; }
-    std::size_t count() const { return g_allocations; }
-};
-
-}  // namespace
-}  // namespace kds::exec
-
-void* operator new(std::size_t size) {
-    if (kds::exec::g_counting) ++kds::exec::g_allocations;
-    void* p = std::malloc(size == 0 ? 1 : size);
-    if (p == nullptr) throw std::bad_alloc();
-    return p;
-}
-void* operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
-
-namespace kds::exec {
-namespace {
+// Shared with the row codec's own zero-allocation test - one counter,
+// because it replaces the global operators and there can only be one set of
+// those in a binary. See tests/alloc_counter.hpp.
+using test_support::CountAllocations;
 
 parser::AstValue IntVal(std::int64_t v) {
     parser::AstValue out;
@@ -161,7 +132,7 @@ std::vector<std::vector<std::string>> Collect(Aggregator& agg) {
     Status s = agg.Finish([&](std::span<const parser::AstValue> row) {
         std::vector<std::string> out;
         for (const parser::AstValue& v : row) {
-            out.push_back(v.type == parser::ValueType::kNull ? "NULL" : FormatValue(v));
+            out.push_back(v.type == parser::ValueType::kNull ? "NULL" : FormatValue(/*type_val=*/0, v));
         }
         rows.push_back(std::move(out));
         return Status::OK();
@@ -991,6 +962,242 @@ TEST(AggregateTest, AMergeThatOverflowsSumFails) {
     const Status overflowed = left.Merge(std::move(right));
     ASSERT_FALSE(overflowed.ok());
     EXPECT_EQ(overflowed.code(), StatusCode::kOutOfRange);
+}
+
+// ---- AVG (feat-aggregate.md §3.4, decided 2026-08-07) --------------------
+//
+// One principle, three consequences: AVG answers at exactly the scale the
+// schema declared, rounding half to even. These tests pin the divide - the
+// one place the pair state stops being (sum, count) and becomes a value.
+
+parser::AstValue DecVal(std::int64_t unscaled, std::uint8_t scale) {
+    parser::AstValue out;
+    out.type = parser::ValueType::kDecimal;
+    out.int_val = unscaled;
+    out.scale = scale;
+    return out;
+}
+
+AggregateItem AvgItem(std::uint16_t col_pos, std::uint8_t scale, bool distinct = false) {
+    AggregateItem item = Agg(parser::AggFunc::kAvg, col_pos, catalog::kTypeValDecimal);
+    item.scale = scale;
+    item.distinct = distinct;
+    return item;
+}
+
+TEST(AggregateTest, AvgAnswersAtTheColumnsDeclaredScale) {
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    // 100.25 + 200.75 + 10.00 = 311.00; /3 = 103.666... -> 103.67. Not a
+    // tie - the ordinary round-up case, at the column's own scale.
+    for (std::int64_t v : {10025, 20075, 1000}) {
+        ASSERT_TRUE(fold.Row(agg, {DecVal(v, 2)}).ok());
+    }
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"103.67"}));
+}
+
+TEST(AggregateTest, AvgTiesRoundHalfToEven) {
+    // The pinned rounding rule, at its only interesting points. Each pair
+    // averages to an exact .5 at the result scale, and the answer goes to
+    // the even neighbor - in both signs, which half-up would get wrong on
+    // one side.
+    struct Case {
+        std::vector<std::int64_t> unscaled;
+        const char* expect;
+    };
+    const Case cases[] = {
+        {{1, 2}, "0.02"},    // 1.5 -> 2 (1 is odd)
+        {{2, 3}, "0.02"},    // 2.5 -> 2 (2 is even)
+        {{-1, -2}, "-0.02"}, // -1.5 -> -2
+        {{-2, -3}, "-0.02"}, // -2.5 -> -2
+    };
+    for (const Case& c : cases) {
+        AggregateSpec spec;
+        spec.items.push_back(AvgItem(0, 2));
+        Aggregator agg = Make(spec);
+        Fold fold(1);
+        for (std::int64_t v : c.unscaled) ASSERT_TRUE(fold.Row(agg, {DecVal(v, 2)}).ok());
+        const auto rows = Collect(agg);
+        ASSERT_EQ(rows.size(), 1u);
+        EXPECT_EQ(rows[0][0], c.expect);
+    }
+}
+
+TEST(AggregateTest, AvgOverADeclaredScaleZeroRoundsToWholeUnits) {
+    // DECIMAL(p, 0) averages - that scale was *declared*, which is the
+    // whole line the integer-column refusal draws. avg(1, 2) = 1.5 -> 2.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    for (std::int64_t v : {1, 2}) ASSERT_TRUE(fold.Row(agg, {DecVal(v, 0)}).ok());
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"2"}));
+}
+
+TEST(AggregateTest, AvgOverEmptyInputIsNullLikeSum) {
+    // The global form emits one row over no rows, and an average of
+    // nothing is an absence, not a zero - and never a divide by zero,
+    // because the divide only runs when a value was seen.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator agg = Make(spec);
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"NULL"}));
+}
+
+TEST(AggregateTest, AvgDistinctDividesByTheDistinctCount) {
+    // AVG(DISTINCT) is SUM(DISTINCT)/COUNT(DISTINCT) over one set: the
+    // repeated 10.00 contributes once to the sum *and* once to the count,
+    // or the two halves would disagree about which set they averaged.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2, /*distinct=*/true));
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    for (std::int64_t v : {1000, 1000, 2000}) {
+        ASSERT_TRUE(fold.Row(agg, {DecVal(v, 2)}).ok());
+    }
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    // Distinct: (10.00 + 20.00) / 2 = 15.00. Plain: 40.00 / 3 = 13.33.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"15.00", "13.33"}));
+}
+
+TEST(AggregateTest, AvgMergesAsSumAndCountPairsNotAsQuotients) {
+    // AG-M's reason made concrete: the partitions' true averages are 1.00
+    // and 3.00, whose naive mean is 2.00 - the pair state answers 2.33,
+    // which is the average of the *rows*. Merging quotients would be
+    // unrecoverable rounding; merging pairs is exact until the one divide.
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    ASSERT_TRUE(lfold.Row(left, {DecVal(100, 2)}).ok());
+    for (std::int64_t v : {200, 400}) ASSERT_TRUE(rfold.Row(right, {DecVal(v, 2)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"2.33"}));
+}
+
+TEST(AggregateTest, AvgDistinctMergeCountsAValueInBothPartitionsOnce) {
+    AggregateSpec spec;
+    spec.items.push_back(AvgItem(0, 2, /*distinct=*/true));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    for (std::int64_t v : {1000, 2000}) ASSERT_TRUE(lfold.Row(left, {DecVal(v, 2)}).ok());
+    for (std::int64_t v : {1000, 3000}) ASSERT_TRUE(rfold.Row(right, {DecVal(v, 2)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    // The union is {10.00, 20.00, 30.00}: sum 60.00, count 3 - the shared
+    // 10.00 counted once in both halves of the pair.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"20.00"}));
+}
+
+// ---- The wide decimal in the fold (spec-types.md TY2, 2026-08-07) --------
+
+parser::AstValue DecWideVal(std::int64_t hi, std::int64_t lo, std::uint8_t scale) {
+    parser::AstValue out;
+    out.type = parser::ValueType::kDecimalWide;
+    out.dec_hi = hi;
+    out.int_val = lo;
+    out.scale = scale;
+    return out;
+}
+
+AggregateItem WideItem(parser::AggFunc func, std::uint16_t col_pos, std::uint8_t scale,
+                       bool distinct = false) {
+    AggregateItem item = Agg(func, col_pos, catalog::kTypeValDecimalWide);
+    item.scale = scale;
+    item.distinct = distinct;
+    return item;
+}
+
+TEST(AggregateTest, WideSumFoldsThroughTheInt128Accumulator) {
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kSum, 0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    // Each addend is 2^64 - beyond any int64 - so the sum being 2^65 means
+    // the wide register carried it.
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 0, 0)}).ok());
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"36893488147419103232"}));
+}
+
+TEST(AggregateTest, WideSumOverflowFailsTheStatementLikeTheNarrowOne) {
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kSum, 0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    // int128 max is (hi = INT64_MAX, lo = all ones); twice exceeds it.
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(INT64_MAX, -1, 0)}).ok());
+    const Status overflowed = fold.Row(agg, {DecWideVal(INT64_MAX, -1, 0)});
+    ASSERT_FALSE(overflowed.ok());
+    EXPECT_EQ(overflowed.code(), StatusCode::kOutOfRange);
+    EXPECT_NE(overflowed.message().find("int128"), std::string::npos) << overflowed.message();
+}
+
+TEST(AggregateTest, WideAvgTiesRoundHalfToEvenBeyondInt64) {
+    // sum = 2^65 + 1, count 2: the exact quotient is 2^64 + 0.5, a tie
+    // whose even neighbor is 2^64 itself - only reachable through the wide
+    // divide, since every number involved exceeds int64.
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kAvg, 0, 0));
+
+    Aggregator agg = Make(spec);
+    Fold fold(1);
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(fold.Row(agg, {DecWideVal(1, 1, 0)}).ok());
+    const auto rows = Collect(agg);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"18446744073709551616"}));
+}
+
+TEST(AggregateTest, WideDistinctMergeCountsAValueInBothPartitionsOnce) {
+    // The union rule over 17-byte entries: the shared 2^64 contributes
+    // once, so AVG(DISTINCT) divides 2^64 + 2^65 by 2 - and both the
+    // decode and the accumulator have to be wide for that to come out.
+    AggregateSpec spec;
+    spec.items.push_back(WideItem(parser::AggFunc::kAvg, 0, 0, /*distinct=*/true));
+
+    Aggregator left = Make(spec);
+    Aggregator right = Make(spec);
+    Fold lfold(1);
+    Fold rfold(1);
+    ASSERT_TRUE(lfold.Row(left, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(rfold.Row(right, {DecWideVal(1, 0, 0)}).ok());
+    ASSERT_TRUE(rfold.Row(right, {DecWideVal(2, 0, 0)}).ok());
+
+    ASSERT_TRUE(left.Merge(std::move(right)).ok());
+    const auto rows = Collect(left);
+    ASSERT_EQ(rows.size(), 1u);
+    // (2^64 + 2^65) / 2 = 3 * 2^63 = 27670116110564327424.
+    EXPECT_EQ(rows[0], (std::vector<std::string>{"27670116110564327424"}));
 }
 
 // ---- Malformed specs -----------------------------------------------------

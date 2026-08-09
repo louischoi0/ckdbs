@@ -117,6 +117,16 @@ void CatalogCache::UpdatePatternOrigin(std::uint64_t pattern_id, std::uint8_t or
     it->second.flags = flags;
 }
 
+void CatalogCache::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId root) noexcept {
+    auto it = table_access_.find(rel_oid);
+    if (it == table_access_.end()) return;
+    for (TableAccess::IndexRef& ix : it->second.indexes) {
+        if (ix.index_oid != index_oid) continue;
+        ix.root_page_id = root;
+        return;
+    }
+}
+
 void CatalogCache::Invalidate() noexcept {
     // types_ is deliberately kept: sys.types is written only by Bootstrap()
     // (see catalog_cache.hpp's table of what is cacheable).

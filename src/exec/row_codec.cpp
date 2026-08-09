@@ -1,5 +1,7 @@
 #include "kds/exec/row_codec.hpp"
 
+#include "kds/exec/type_literals.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <charconv>
@@ -18,6 +20,8 @@ namespace {
 
 using catalog::kTypeValBool;
 using catalog::kTypeValChar;
+using catalog::kTypeValDate;
+using catalog::kTypeValTimestamp;
 using catalog::kTypeValDecimal;
 using catalog::kTypeValFloat;
 using catalog::kTypeValInt16;
@@ -217,22 +221,201 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
                 .WithContext("column '" + NameOf() + "'");
         }
         case kTypeValFloat:
-        case kTypeValDecimal:
             // Unreachable through a catalog-built layout: RowLayout::Build()
-            // refuses these columns at CREATE TABLE (schema.hpp). Kept as a
+            // refuses a float column at CREATE TABLE, and TY1 makes that a
+            // product decision rather than an undecided encoding. Kept as a
             // failure rather than an assert for a hand-built schema.
             return Status::Unsupported(
                 "column '" + NameOf() +
-                "' has type float/decimal - no on-disk encoding exists yet (open decision, see "
-                "catalog/schema.hpp)");
+                "' has type float, which this engine does not store (docs/spec-types.md TY1)");
+        // ---- DATE / TIMESTAMP / DECIMAL (docs/spec-types.md TY7) -------
+        //
+        // **This is the only gate.** Each accepts two shapes and no others:
+        // the *literal* a client wrote, as a string, which is parsed and
+        // range-checked here; and the *decoded* form of a value already
+        // stored, which an UPDATE carries back for every column its SET
+        // list did not touch. A third shape would be a way for an
+        // unvalidated value to reach the disk.
+        case kTypeValDate: {
+            std::int32_t days = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseDateLiteral(val.str_val);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                days = parsed.value();
+            } else if (val.type == parser::ValueType::kInt) {
+                if (val.int_val < kMinEpochDay || val.int_val > kMaxEpochDay) {
+                    return Status::OutOfRange("column '" + NameOf() +
+                                              "' date is outside the supported range");
+                }
+                days = static_cast<std::int32_t>(val.int_val);
+            } else {
+                return Status::InvalidArgument("column '" + NameOf() +
+                                                "' expects a date written as a string, "
+                                                "'YYYY-MM-DD'");
+            }
+            PutLE(cell, static_cast<std::uint64_t>(static_cast<std::uint32_t>(days)), 4);
+            return Status::OK();
+        }
+        case kTypeValTimestamp: {
+            std::int64_t micros = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseTimestampLiteral(val.str_val);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                micros = parsed.value();
+            } else if (val.type == parser::ValueType::kInt) {
+                if (val.int_val < kMinEpochMicros || val.int_val > kMaxEpochMicros) {
+                    return Status::OutOfRange("column '" + NameOf() +
+                                              "' timestamp is outside the supported range");
+                }
+                micros = val.int_val;
+            } else {
+                return Status::InvalidArgument(
+                    "column '" + NameOf() +
+                    "' expects a timestamp written as a string, "
+                    "'YYYY-MM-DD HH:MM:SS[.ffffff]'");
+            }
+            PutLE(cell, static_cast<std::uint64_t>(micros), 8);
+            return Status::OK();
+        }
+        case kTypeValDecimal: {
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            std::int64_t unscaled = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseDecimalLiteral(val.str_val, precision, scale);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                unscaled = parsed.value();
+            } else if (val.type == parser::ValueType::kDecimal) {
+                // **The scale must match, not be converted.** Rescaling
+                // here would either lose digits or invent them, and TY6
+                // defers cross-scale work whole rather than shipping half.
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column '" + NameOf() + "' has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                unscaled = val.int_val;
+            } else {
+                return Status::InvalidArgument("column '" + NameOf() +
+                                                "' expects a decimal written as a string, "
+                                                "e.g. '12.34'");
+            }
+            PutLE(cell, static_cast<std::uint64_t>(unscaled), 8);
+            return Status::OK();
+        }
+        case catalog::kTypeValDecimalWide: {
+            // The 16-byte sibling: the same two accepted shapes, the same
+            // no-rescale rule, the wide parser. The int128 goes to the
+            // cell as two LE uint64 halves, low first - invariant 6's
+            // explicit encoding, never a memcpy of the builtin.
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            Int128 unscaled = 0;
+            if (val.type == parser::ValueType::kStr) {
+                auto parsed = ParseDecimalLiteralWide(val.str_val, precision, scale);
+                if (!parsed.ok()) return parsed.status().WithContext("column '" + NameOf() + "'");
+                unscaled = parsed.value();
+            } else if (val.type == parser::ValueType::kDecimalWide) {
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column '" + NameOf() + "' has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                unscaled = Int128FromHalves(val.dec_hi, val.int_val);
+            } else {
+                return Status::InvalidArgument("column '" + NameOf() +
+                                                "' expects a decimal written as a string, "
+                                                "e.g. '12.34'");
+            }
+            PutLE(cell.subspan(0, 8), static_cast<std::uint64_t>(Int128Low(unscaled)), 8);
+            PutLE(cell.subspan(8, 8), static_cast<std::uint64_t>(Int128High(unscaled)), 8);
+            return Status::OK();
+        }
         default:
             return Status::InvalidArgument("column '" + NameOf() + "' has an unrecognized type_val");
     }
 }
 
+
+// A layout is only meaningful for the schema it was built from. Checked at
+// every entry point rather than trusted, because the failure mode of a
+// mismatched pair is not an error but a *wrong row*: offsets that address
+// the right bytes for a different relation.
+Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayout& layout) {
+    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
+        return Status::InvalidArgument(
+            "row layout has " + std::to_string(layout.offsets.size()) +
+            " column offset(s) for a schema of " + std::to_string(schema.columns.size()) +
+            " column(s)");
+    }
+    return Status::OK();
+}
+
+// The span of `payload` column `i` occupies: from its offset to the next
+// column's, or to the end of the row for the last one.
+std::span<const std::byte> CellOf(const catalog::RowLayout& layout,
+                                   std::span<const std::byte> payload, std::size_t i) {
+    const std::size_t begin = layout.offsets[i];
+    const std::size_t end =
+        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
+    return payload.subspan(begin, end - begin);
+}
+
+std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<std::byte> payload,
+                                    std::size_t i) {
+    const std::size_t begin = layout.offsets[i];
+    const std::size_t end =
+        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
+    return payload.subspan(begin, end - begin);
+}
+
+bool CompareInt(std::int64_t a, std::int64_t b, parser::CompareOp op) {
+    switch (op) {
+        case parser::CompareOp::kEq: return a == b;
+        case parser::CompareOp::kNeq: return a != b;
+        case parser::CompareOp::kLt: return a < b;
+        case parser::CompareOp::kLte: return a <= b;
+        case parser::CompareOp::kGt: return a > b;
+        case parser::CompareOp::kGte: return a >= b;
+    }
+    return false;
+}
+
+bool CompareUint(std::uint64_t a, std::uint64_t b, parser::CompareOp op) {
+    switch (op) {
+        case parser::CompareOp::kEq: return a == b;
+        case parser::CompareOp::kNeq: return a != b;
+        case parser::CompareOp::kLt: return a < b;
+        case parser::CompareOp::kLte: return a <= b;
+        case parser::CompareOp::kGt: return a > b;
+        case parser::CompareOp::kGte: return a >= b;
+    }
+    return false;
+}
+
+bool CompareStr(std::string_view a, std::string_view b, parser::CompareOp op) {
+    switch (op) {
+        case parser::CompareOp::kEq: return a == b;
+        case parser::CompareOp::kNeq: return a != b;
+        case parser::CompareOp::kLt: return a < b;
+        case parser::CompareOp::kLte: return a <= b;
+        case parser::CompareOp::kGt: return a > b;
+        case parser::CompareOp::kGte: return a >= b;
+    }
+    return false;
+}
+
+}  // namespace
+
 // Decodes one column from its cell into a slot the caller already owns.
 // Assigning rather than appending is what lets a chain frame reuse its
 // buffer for every row instead of allocating one per row per step (V16).
+//
+// Declared in the header since IX11: a secondary index entry carries covered
+// columns concatenated in the index's order, so the entry-side filter locates
+// its own cells and needs exactly this.
 Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std::byte> cell,
                            std::size_t column_index, parser::AstValue& out,
                            std::vector<PendingSpill>* spills) {
@@ -333,85 +516,250 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
             return Status::OK();
         }
         case kTypeValFloat:
-        case kTypeValDecimal:
             return Status::Corruption(
                 "column '" + NameOf() +
-                "' has type float/decimal, which no row this codec wrote should ever contain "
+                "' has type float, which no row this codec wrote should ever contain "
                 "(see row_codec.hpp)");
+        // ---- DATE / TIMESTAMP / DECIMAL -------------------------------
+        //
+        // **Integers out, no strings, no formatting** (TY5, workplan TY04).
+        // A date's value *is* its epoch day, and rendering it is the
+        // emission boundary's job - so nothing here allocates, exactly as
+        // the int arm above documents, and a scan that never emits a row
+        // never builds a single character of text.
+        //
+        // No re-validation either: these bytes were proven by
+        // EncodeOneValue, which is the only gate (TY7).
+        case kTypeValDate: {
+            out.type = parser::ValueType::kInt;
+            out.int_val = SignExtend(GetLE(cell, 4), 4);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
+        case kTypeValTimestamp: {
+            out.type = parser::ValueType::kInt;
+            out.int_val = SignExtend(GetLE(cell, 8), 8);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
+        case kTypeValDecimal: {
+            // The one kind that carries something besides the integer: its
+            // scale, without which the unscaled value means nothing. Taken
+            // from the column, which is where the schema keeps it.
+            out.type = parser::ValueType::kDecimal;
+            out.int_val = SignExtend(GetLE(cell, 8), 8);
+            out.scale = catalog::DecimalScaleOf(col.len);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
+        case catalog::kTypeValDecimalWide: {
+            // Two LE halves back into the pair the AstValue carries - low
+            // into int_val, high into dec_hi - with no validation, per
+            // TY7: the bytes were proven at the encode gate.
+            out.type = parser::ValueType::kDecimalWide;
+            out.int_val = static_cast<std::int64_t>(GetLE(cell.subspan(0, 8), 8));
+            out.dec_hi = static_cast<std::int64_t>(GetLE(cell.subspan(8, 8), 8));
+            out.scale = catalog::DecimalScaleOf(col.len);
+            out.raw_int_text.clear();
+            out.str_val.clear();
+            return Status::OK();
+        }
         default:
             return Status::Corruption("column '" + NameOf() + "' has an unrecognized type_val");
     }
 }
 
-// A layout is only meaningful for the schema it was built from. Checked at
-// every entry point rather than trusted, because the failure mode of a
-// mismatched pair is not an error but a *wrong row*: offsets that address
-// the right bytes for a different relation.
-Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayout& layout) {
-    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
-        return Status::InvalidArgument(
-            "row layout has " + std::to_string(layout.offsets.size()) +
-            " column offset(s) for a schema of " + std::to_string(schema.columns.size()) +
-            " column(s)");
+// ---- Literal coercion (TY05, moved here at TY07) ------------------------
+//
+// `WHERE price = '12.34'` against a `DECIMAL(10,2)` column compiles to a
+// comparison whose right side is **already the scaled integer 1234**
+// (docs/spec-types.md §3.1). The string is parsed once, here, by the same
+// routines `EncodeOneValue` calls - one parser, two callers, zero drift -
+// so a literal that stores and a literal that compares can never come to
+// disagree about what it means.
+//
+// Two properties follow, and both are the point rather than side effects.
+// Per-row evaluation stays an **int64 comparison**, which keeps the
+// residual path on the cost profile the scan attribution work demands. And
+// a literal that does not parse is a **positioned compile error**, not a
+// row-by-row false: `WHERE d = '2026-02-30'` is a statement that cannot be
+// satisfied by any row, and answering it with zero rows would hide the
+// typo behind a plausible-looking empty result.
+Status CoerceLiteralToColumn(const catalog::SysColumnRow& col, parser::AstValue& val) {
+    // A parameter is never evaluated - a declared pattern's body is
+    // type-checked and fingerprinted, never run - and NULL matches nothing
+    // whatever its type. Neither has a value to coerce.
+    if (val.type == parser::ValueType::kParam || val.type == parser::ValueType::kNull) {
+        return Status::OK();
     }
-    return Status::OK();
-}
 
-// The span of `payload` column `i` occupies: from its offset to the next
-// column's, or to the end of the row for the last one.
-std::span<const std::byte> CellOf(const catalog::RowLayout& layout,
-                                   std::span<const std::byte> payload, std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end =
-        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
-    return payload.subspan(begin, end - begin);
-}
+    // An integer literal wider than int64 **wrapped in the lexer**, which
+    // has always been the token's documented behaviour - `int_val` cannot
+    // be trusted for a range question, only `raw_int_text` can (token.hpp's
+    // digits() note). The three arms below that read `int_val` as the value
+    // must refuse a wrapped one, or `= 36893488147419103232` coerces as the
+    // 0 it wrapped to and matches rows the client never named. Scoped to
+    // those arms and not hoisted: a uint64 comparison legitimately carries
+    // its upper half in the digits (`ValueAsUint64`), and the wide-decimal
+    // arm reads the digits themselves.
+    const bool int_literal_wrapped =
+        val.type == parser::ValueType::kInt && !val.raw_int_text.empty() &&
+        val.raw_int_text != std::to_string(val.int_val);
 
-std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<std::byte> payload,
-                                    std::size_t i) {
-    const std::size_t begin = layout.offsets[i];
-    const std::size_t end =
-        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
-    return payload.subspan(begin, end - begin);
-}
+    switch (col.type_val) {
+        case catalog::kTypeValDate: {
+            if (val.type == parser::ValueType::kInt) {
+                // Already an epoch day. Accepted, and range-checked to the
+                // same bounds the encoder applies - the two sides of the
+                // engine must agree on which integers are dates.
+                if (int_literal_wrapped || val.int_val < kMinEpochDay ||
+                    val.int_val > kMaxEpochDay) {
+                    return Status::OutOfRange("date is outside the supported range");
+                }
+                return Status::OK();
+            }
+            if (val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument("a date is written as a string, 'YYYY-MM-DD'");
+            }
+            auto days = ParseDateLiteral(val.str_val);
+            if (!days.ok()) return days.status();
+            val.type = parser::ValueType::kInt;
+            val.int_val = days.value();
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
 
-bool CompareInt(std::int64_t a, std::int64_t b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
+        case catalog::kTypeValTimestamp: {
+            if (val.type == parser::ValueType::kInt) {
+                if (int_literal_wrapped || val.int_val < kMinEpochMicros ||
+                    val.int_val > kMaxEpochMicros) {
+                    return Status::OutOfRange("timestamp is outside the supported range");
+                }
+                return Status::OK();
+            }
+            if (val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument(
+                    "a timestamp is written as a string, 'YYYY-MM-DD HH:MM:SS[.ffffff]'");
+            }
+            auto micros = ParseTimestampLiteral(val.str_val);
+            if (!micros.ok()) return micros.status();
+            val.type = parser::ValueType::kInt;
+            val.int_val = micros.value();
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
+
+        case catalog::kTypeValDecimal: {
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+
+            // An integer literal against a decimal column - `price = 12` -
+            // is exact and worth accepting, but scaling it here would be a
+            // second implementation of the range and precision rules
+            // `ParseDecimalLiteral` already owns, which is precisely the
+            // drift TY01's one-parser rule exists to prevent. So it is
+            // rendered and handed to that parser instead: one small string
+            // per predicate at *compile*, never per row.
+            // **Already in storage form: accept it and change nothing.**
+            // The date and timestamp arms above have always done this - an
+            // epoch integer coerces to itself - and this arm not doing so
+            // made the function non-idempotent for exactly two types.
+            //
+            // That is not academic. A write hook re-coerces a *decoded* row
+            // (an UPDATE carries one), so a decimal column reached here as
+            // kDecimal and was refused. The Cabin's hook absorbs a coercion
+            // failure by un-observing, so a Cabin on a decimal column was
+            // silently destroyed by the first UPDATE that touched its
+            // relation; the index hook, which cannot absorb, would have
+            // failed the statement. Found by workplan IX06.
+            //
+            // The scale still has to agree, and a disagreement is refused
+            // rather than rescaled - the same answer EncodeOneValue gives,
+            // for the same reason: rescaling either drops digits or invents
+            // them.
+            if (val.type == parser::ValueType::kDecimal) {
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                return Status::OK();
+            }
+            if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
+            }
+            if (int_literal_wrapped) {
+                // The true digits cannot fit any narrow decimal (p <= 18),
+                // so the precision check would refuse them anyway - but
+                // only if it sees them rather than the wrapped value.
+                return Status::OutOfRange("integer literal " + val.raw_int_text +
+                                          " has more digits than a decimal(p <= 18) can hold");
+            }
+            const std::string text = val.type == parser::ValueType::kInt
+                                         ? std::to_string(val.int_val)
+                                         : val.str_val;
+
+            auto unscaled = ParseDecimalLiteral(text, precision, scale);
+            if (!unscaled.ok()) return unscaled.status();
+            val.type = parser::ValueType::kDecimal;
+            val.int_val = unscaled.value();
+            val.scale = scale;
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
+
+        case catalog::kTypeValDecimalWide: {
+            // The wide sibling of the arm above: same two accepted kinds,
+            // same integer-rendered-to-text route, the wide parser. The
+            // result is the compile-time constant every per-row comparison
+            // then runs against, exactly as for the narrow type.
+            const std::uint8_t precision = catalog::DecimalPrecisionOf(col.len);
+            const std::uint8_t scale = catalog::DecimalScaleOf(col.len);
+            // Idempotent for the same reason the narrow arm above is.
+            if (val.type == parser::ValueType::kDecimalWide) {
+                if (val.scale != scale) {
+                    return Status::InvalidArgument(
+                        "column has scale " + std::to_string(scale) +
+                        " but the value carries scale " + std::to_string(val.scale) +
+                        "; this engine does not rescale");
+                }
+                return Status::OK();
+            }
+            if (val.type != parser::ValueType::kInt && val.type != parser::ValueType::kStr) {
+                return Status::InvalidArgument("a decimal is written as a string, e.g. '12.34'");
+            }
+            // The digit text when the literal carries one - `int_val`
+            // wraps past 64 bits and a wide column exists precisely for
+            // values past 64 bits, so the spelling is the value here.
+            const std::string text =
+                val.type == parser::ValueType::kInt
+                    ? (val.raw_int_text.empty() ? std::to_string(val.int_val)
+                                                : val.raw_int_text)
+                    : val.str_val;
+
+            auto unscaled = ParseDecimalLiteralWide(text, precision, scale);
+            if (!unscaled.ok()) return unscaled.status();
+            val.type = parser::ValueType::kDecimalWide;
+            val.int_val = Int128Low(unscaled.value());
+            val.dec_hi = Int128High(unscaled.value());
+            val.scale = scale;
+            val.str_val.clear();
+            val.raw_int_text.clear();
+            return Status::OK();
+        }
+
+        default:
+            // Every other type keeps the behaviour it had before this task.
+            return Status::OK();
     }
-    return false;
 }
-
-bool CompareUint(std::uint64_t a, std::uint64_t b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
-    }
-    return false;
-}
-
-bool CompareStr(std::string_view a, std::string_view b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
-    }
-    return false;
-}
-
-}  // namespace
 
 StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
                                             const catalog::RowLayout& layout, std::uint64_t id,
@@ -651,12 +999,40 @@ StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value) {
     return static_cast<std::uint64_t>(value.int_val);
 }
 
-std::string FormatValue(const parser::AstValue& value) {
+std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value) {
     switch (value.type) {
         case parser::ValueType::kInt:
+            // **The one place the column's type is consulted** (TY06). A
+            // date and a timestamp are integers everywhere else in the
+            // engine, and this is the boundary where they stop being one.
+            //
+            // Guarded on the value being an integer as well as on the
+            // column's type, so a caller that passes a `type_val` not
+            // matching the value it holds gets the value rendered rather
+            // than a nonsense date - the same fall-through discipline
+            // CompareValues uses for an operand that does not fit its
+            // column.
+            if (type_val == catalog::kTypeValDate) {
+                return FormatDate(static_cast<std::int32_t>(value.int_val));
+            }
+            if (type_val == catalog::kTypeValTimestamp) {
+                return FormatTimestamp(value.int_val);
+            }
             return !value.raw_int_text.empty() ? value.raw_int_text : std::to_string(value.int_val);
         case parser::ValueType::kStr:
             return value.str_val;
+        // The scale is part of the value's meaning, so `12.30` and not
+        // `12.3` (docs/spec-types.md §3.3). This is the one kind that
+        // carries enough to render itself, so it ignores `type_val`
+        // entirely - a decimal read out of a column and a decimal folded
+        // by SUM render the same way with no caller having to know which
+        // it is holding.
+        case parser::ValueType::kDecimal:
+            return FormatDecimal(value.int_val, value.scale);
+        case parser::ValueType::kDecimalWide:
+            // Carries its own scale like the narrow kind, so it too
+            // ignores `type_val` and renders itself.
+            return FormatDecimalWide(Int128FromHalves(value.dec_hi, value.int_val), value.scale);
         // Rendered as written, sigil restored. Only a plan printed from a
         // declared pattern's body reaches this - no row ever holds one - and
         // printing `$flag` is what makes such a plan readable back against
@@ -696,6 +1072,46 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         if (!a.ok() || !b.ok()) return false;
         return CompareUint(a.value(), b.value(), op);
     }
+    // ---- DECIMAL (docs/spec-types.md §3.1, TY05) -----------------------
+    //
+    // Unscaled integers, compared directly - which is only valid because
+    // **the scales are equal**, and they are equal because the compiler
+    // made them so: a string literal is parsed to the column's scale at
+    // compile (`CoerceLiteralTo`), and a column-column residual whose two
+    // scales differ is refused there rather than reaching this line.
+    //
+    // So a disagreement here is not a case to handle, it is a compiler bug
+    // - and the answer is a non-match rather than a rescale, because
+    // rescaling would either drop digits or invent them, and doing it
+    // per-row inside a predicate is the worst possible place to decide it.
+    if (lhs.type == parser::ValueType::kDecimal || rhs.type == parser::ValueType::kDecimal) {
+        if (lhs.type != rhs.type || lhs.scale != rhs.scale) return false;
+        return CompareInt(lhs.int_val, rhs.int_val, op);
+    }
+    // The wide decimal: the same equal-kind, equal-scale contract - and
+    // since a narrow and a wide column can never share a (p, s), a
+    // cross-width operand pair is a kind mismatch here by construction,
+    // answered as the non-match every other mismatch gets.
+    if (lhs.type == parser::ValueType::kDecimalWide ||
+        rhs.type == parser::ValueType::kDecimalWide) {
+        if (lhs.type != rhs.type || lhs.scale != rhs.scale) return false;
+        const Int128 a = Int128FromHalves(lhs.dec_hi, lhs.int_val);
+        const Int128 b = Int128FromHalves(rhs.dec_hi, rhs.int_val);
+        switch (op) {
+            case parser::CompareOp::kEq: return a == b;
+            case parser::CompareOp::kNeq: return a != b;
+            case parser::CompareOp::kLt: return a < b;
+            case parser::CompareOp::kLte: return a <= b;
+            case parser::CompareOp::kGt: return a > b;
+            case parser::CompareOp::kGte: return a >= b;
+        }
+        return false;
+    }
+    // DATE and TIMESTAMP arrive here as the integers they are - epoch days
+    // and epoch microseconds - so they need no arm of their own. That is
+    // the whole reason TY5 reused kInt for them instead of giving each a
+    // ValueType: an ordering on the encoded integer *is* the ordering on
+    // the value, for both.
     if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
         return CompareInt(lhs.int_val, rhs.int_val, op);
     }

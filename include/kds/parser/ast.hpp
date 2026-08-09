@@ -60,14 +60,37 @@ namespace kds::parser {
 // type-checked and fingerprinted, never run. Every path that would consume a
 // value refuses it explicitly (exec/row_codec.cpp, exec/step_vm.cpp) rather
 // than treating it as a missing string.
-enum class ValueType { kInt, kStr, kNull, kParam };
+// `kDecimal` is the **one** kind the type work added, and TY5 is explicit
+// that it is one rather than three: a `DATE` *is* an integer - days since
+// the epoch - and a `TIMESTAMP` is microseconds since it, so both reuse
+// `kInt` and differ only in how they render, which happens at the emission
+// boundary and not in the value. A decimal cannot reuse it, because its
+// unscaled integer means nothing without the scale beside it.
+// `kDecimalWide` is the 16-byte decimal's kind (`decimal(p, s)`, p 19..38,
+// stored as int128 - docs/spec-types.md TY2's separate type, built
+// 2026-08-07). A kind of its own rather than a width flag on `kDecimal`,
+// deliberately: one kind hiding two widths would make every consumer that
+// reads `int_val` silently truncate a wide value, where a new enumerator
+// makes the compiler surface each switch that has to decide. The value is
+// `Int128FromHalves(dec_hi, int_val)`.
+enum class ValueType { kInt, kStr, kNull, kParam, kDecimal, kDecimalWide };
 
 struct AstValue {
     ValueType type = ValueType::kNull;
 
-    // Where the value sits in the statement text. Set for kParam, where an
-    // error message has to be able to point at the offending `$x`; other
-    // kinds may leave it 0.
+    // Where the value sits in the statement text.
+    //
+    // Set for every literal the parser produces, and for kParam. It was
+    // kParam only until TY05, when a literal became something a *later*
+    // stage can reject: the step compiler coerces one against its column's
+    // type (docs/spec-types.md §3.1), so `WHERE d = '2026-02-30'` fails
+    // long after the token is gone, and without the offset that failure
+    // can name the column but not the byte.
+    //
+    // **Nothing compares it.** Chain identity renders operand values, not
+    // offsets; Cabin keys are built from the value's kind and contents; the
+    // fingerprint is folded from tokens. A value constructed by anything
+    // other than the parser - a decoded row, a test - leaves it 0.
     std::uint32_t byte_offset = 0;
 
     std::int64_t int_val = 0;  // valid when type == kInt
@@ -88,6 +111,24 @@ struct AstValue {
     // encoding a uint64 column from this raw text rather than from
     // int_val is how that full range survives.
     std::string raw_int_text;
+
+    // kDecimal and kDecimalWide: the scale the unscaled value is scaled
+    // by, so `1234` at scale 2 is 12.34 (docs/spec-types.md TY2/TY5).
+    //
+    // A separate field rather than a second integer packed into `int_val`,
+    // because the unscaled value needs the whole 64 bits - `p` may be 18 -
+    // and because a value that carries its own scale is what lets
+    // `CompareValues` assert the two sides agree instead of guessing.
+    std::uint8_t scale = 0;
+
+    // kDecimalWide only: the high 64 bits of the int128 unscaled value,
+    // whose low 64 ride in `int_val` - `Int128FromHalves(dec_hi, int_val)`
+    // is the value, and `int128.hpp`'s helpers are the one spelling of
+    // which half is which. 8 bytes per AstValue that only the wide kind
+    // reads, paid on the same argument `scale` was: a chain frame holds
+    // one of these per column, and the alternative - a heap-allocated
+    // wide value - would cost an allocation per wide value per row.
+    std::int64_t dec_hi = 0;
 
     // The parameter name a kParam value names. Spelled out so no call site
     // has to know which field it borrows.
@@ -190,6 +231,24 @@ struct ColumnDef {
     std::string name;
     std::string type_name;  // unresolved - see file comment
 
+    // `DECIMAL(p, s)`'s two arguments, as written (docs/spec-types.md TY2).
+    //
+    // **Both are mandatory and neither is defaulted here.** A bare
+    // `decimal` is refused at parse rather than given a scale, because a
+    // default scale is a silent decision about someone's money - and a
+    // parser that supplied one would make the refusal impossible to state
+    // later. `has_precision` is what distinguishes "written `decimal(10,2)`"
+    // from "written `decimal`", which the zero values cannot.
+    //
+    // Left unresolved like `type_name` beside them: the bounds check
+    // belongs with the type registry, not in a syntax layer.
+    bool has_precision = false;
+    std::uint32_t precision = 0;
+    std::uint32_t scale = 0;
+
+    // Where the type name was written, for a refusal that can point at it.
+    std::uint32_t type_byte_offset = 0;
+
     // The column's cabin policy (docs/feat-cabin.md), one of
     // `catalog::kCabinPolicy*`. Written as an optional suffix on the column:
     //
@@ -276,15 +335,18 @@ struct JoinClause {
     ColumnName right;  // always qualified
 };
 
-// The aggregate functions v1 folds (docs/feat-aggregate.md AG2).
+// The aggregate functions the fold computes (docs/feat-aggregate.md AG2).
 //
-// `AVG` is deliberately **not** here. It is recognized by the parser and
-// answers `Unsupported`, because `AstValue` has no decimal kind and an
-// average truncated to an integer is a wrong answer wearing a right
-// answer's type - so there is nothing for this enum to name until a
-// decimal type exists. Adding a value for a function that cannot be folded
-// would put the refusal somewhere it can be forgotten.
-enum class AggFunc : std::uint8_t { kCount, kSum, kMin, kMax };
+// `kAvg` joined on 2026-08-07, when §10's open question - return scale,
+// rounding rule, divide semantics, "three questions, one answer" - was
+// decided rather than expired: **AVG answers at exactly the scale the
+// schema declared, rounding half-even**, so `AVG(DECIMAL(p,s))` returns a
+// decimal of scale `s` and a column that declared no scale (the integer
+// types) is refused at compile - a fractional answer would invent digits
+// and a scale-0 one would silently drop them, and this engine's answer to
+// "which wrong number would you like" has always been neither. The state
+// is the `(sum, count)` pair AG-M mandated in advance.
+enum class AggFunc : std::uint8_t { kCount, kSum, kMin, kMax, kAvg };
 
 // The canonical lower-case spelling, for the column label a fold's output
 // carries (`count(*)`, `sum(distinct x)`).
@@ -512,8 +574,126 @@ struct CabinStmt {
     bool drop = false;
 };
 
+// One column named in a *declaration's* column list, with where it was
+// written - which is what lets "this relation has no column x" carry a
+// position.
+//
+// Named for the index because that is what first needed it; it serves any
+// declaration's parenthesised list, and an assertion's `GROUP BY (...)`
+// reuses it rather than declaring a second two-field struct. There is one
+// production for all of them (`Parser::ParseDeclaredColumnList`).
+struct IndexColumnRef {
+    std::string name;
+    std::uint32_t byte_offset = 0;
+};
+
+// `CREATE INDEX <name> ON <table>(<col>, ...) [COVERING (<col>, ...)]` and
+// `DROP INDEX <name>` (docs/feat-index.md §10).
+//
+// **A secondary index is named**, where a Cabin is not, and the difference
+// is not a style choice: `(relation, column)` identifies a Cabin uniquely
+// because C3 keeps it to one column, while two indexes on one relation may
+// share a leading column and differ after it. So there has to be something
+// to point `DROP` at.
+//
+// One struct for both statements, for CabinStmt's reason: they share the
+// name resolution and differ only in which catalog call they reach. `DROP`
+// fills `index_name` alone - an index's name is unique instance-wide, so
+// naming its relation again would be a second identity to keep in step.
+struct IndexStmt {
+    std::string index_name;
+    std::string table_name;
+    std::vector<IndexColumnRef> key_columns;
+    std::vector<IndexColumnRef> covered_columns;
+    std::uint32_t byte_offset = 0;        // of the index name
+    std::uint32_t table_byte_offset = 0;
+    bool drop = false;
+};
+
+// `CREATE ASSERTION <name> ON <rel> GROUP BY (<col>, ...)
+//     CHECK COUNT(*) <op> <N> | SUM(<col>) <op> <N>` and
+// `DROP ASSERTION <name>` (docs/feat-assertion.md §3, AS2).
+//
+// **The grammar encodes the supported class** (AS2), which is the whole
+// reason this is not SQL-92's free-form `CHECK (<search condition>)`. There
+// is no predicate tree here and no expression to evaluate: an assertion is
+// four facts - a relation, a group-column list, one of two aggregates, and
+// an integer upper bound - and anything outside that shape is refused by the
+// parser with a position rather than accepted and then found unenforceable.
+// That is what makes the check O(1) against a group header (§5.2) instead of
+// a re-evaluation of arbitrary SQL.
+//
+// One struct for both statements, for IndexStmt's reason: they share the
+// name resolution and differ only in which catalog call they reach. `DROP`
+// fills `name` alone - an assertion's name is unique instance-wide (§3), so
+// naming its relation again would be a second identity to keep in step.
+struct AssertionStmt {
+    std::string name;
+    std::uint32_t byte_offset = 0;  // of the assertion name
+
+    bool drop = false;
+
+    // Everything below is CREATE-only and stays empty for a DROP.
+    std::string table_name;
+    std::uint32_t table_byte_offset = 0;
+
+    std::vector<IndexColumnRef> group_columns;
+
+    // `kCount` or `kSum`, and nothing else: AggFunc is the shared enum, but
+    // this grammar admits two of its five members (§10 - MIN/MAX are not
+    // incrementally maintainable under deletion, and AVG is not a bound).
+    // The other three are refused by name at the paren.
+    AggFunc func = AggFunc::kCount;
+
+    // The `SUM` column, empty for a `COUNT(*)` assertion. Carried as a
+    // declared-column ref so the "no such column" error can name its byte
+    // exactly as a group column's can.
+    IndexColumnRef sum_column;
+
+    // `<` or `<=`, and nothing else (AS11 as revised 2026-08-08).
+    //
+    // `>` and `>=` parse and are refused as `Unsupported`: a lower bound
+    // would have to be checked on DELETE and on every decreasing UPDATE,
+    // which is the whole reason v1 can leave DELETE uninstrumented.
+    //
+    // **`=` is refused for the same reason, and that is the revision.** It
+    // was briefly accepted and documented as meaning `aggregate <= N`, on
+    // the grounds of syntactic familiarity. That was a truthfulness
+    // violation: the engine would have enforced something other than what
+    // the operator wrote, and a constraint that quietly means less than it
+    // says is worse than one that is refused. Enforcing real equality needs
+    // the lower-bound half, so `=` costs exactly what `>=` costs.
+    CompareOp op = CompareOp::kLte;
+
+    // The declared bound: a non-negative integer literal (§3.1 - literals
+    // only, no expressions, per TY3 conservatism).
+    std::int64_t bound = 0;
+    std::uint32_t bound_byte_offset = 0;
+
+    // The whole declaration, verbatim, for `sys.assertions.source_text` -
+    // the `sys.pattern_defs` model (AS10), where the stored text is the
+    // canon and the catalog row carries no per-column table beside it. It is
+    // also what makes an unbounded `GROUP BY` list storable in a fixed-width
+    // row: the columns are recovered by re-parsing this, not by widening a
+    // catalog array.
+    std::string source_text;
+
+    // The enforced ceiling, which is **not** always `bound`: the enforced
+    // invariant is `aggregate <= this`, so `< N` means `<= N - 1` and `<= N`
+    // means itself. Computed once here so no later stage re-derives it and
+    // no two stages can disagree about what `<` meant.
+    //
+    // Both accepted operators map onto a ceiling *without reinterpreting
+    // anything* - which is what `=` could not do, and why it is now refused
+    // rather than folded in here.
+    std::int64_t enforced_max() const noexcept {
+        return op == CompareOp::kLt ? bound - 1 : bound;
+    }
+};
+
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
-                               DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt>;
+                               DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt,
+                               IndexStmt, AssertionStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

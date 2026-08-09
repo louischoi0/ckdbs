@@ -24,14 +24,17 @@ std::string_view Describe(const Token& tok) {
 
 // The aggregate `name` spells, or false if it spells none.
 //
-// **`AVG` is deliberately absent**, so it is not an AggFunc anywhere and
-// the one place that knows the word is the refusal that names it. A caller
-// that wants to recognize the head without folding it tests for it by name.
+// `AVG` was deliberately absent until 2026-08-07, when feat-aggregate.md
+// §10's open question was decided (see AggFunc's note in ast.hpp); the
+// grammar half is now ordinary and the type half - decimal columns only -
+// is the compiler's `CheckAggregateArgType`, where every other per-type
+// aggregate rule already lives.
 bool AggFuncOf(std::string_view name, AggFunc& out) noexcept {
     if (IEquals(name, "COUNT")) { out = AggFunc::kCount; return true; }
     if (IEquals(name, "SUM")) { out = AggFunc::kSum; return true; }
     if (IEquals(name, "MIN")) { out = AggFunc::kMin; return true; }
     if (IEquals(name, "MAX")) { out = AggFunc::kMax; return true; }
+    if (IEquals(name, "AVG")) { out = AggFunc::kAvg; return true; }
     return false;
 }
 
@@ -67,6 +70,23 @@ StatusOr<std::string> Parser::ParseIdent() {
     return std::string(tok.text);
 }
 
+StatusOr<std::uint32_t> Parser::ParseTypeArgument(std::string_view what) {
+    const Token tok = lexer_.Next();
+    if (tok.type != TokenType::kIntLit || tok.negative) {
+        return Status::InvalidArgument("expected a non-negative integer " + std::string(what) +
+                                        ", got '" + std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
+    }
+    // The *bounds* are the type registry's business (TY2), not this
+    // layer's; what a syntax layer can say is that the digits fit at all.
+    if (tok.int_val < 0 || tok.int_val > 0xFFFF) {
+        return Status::InvalidArgument(std::string(what) + " " + std::to_string(tok.int_val) +
+                                        " is implausible at byte " +
+                                        std::to_string(tok.byte_offset));
+    }
+    return static_cast<std::uint32_t>(tok.int_val);
+}
+
 void Parser::ConsumeOptionalSemicolon() {
     if (lexer_.Peek().type == TokenType::kSemicolon) {
         lexer_.Next();
@@ -76,23 +96,54 @@ void Parser::ConsumeOptionalSemicolon() {
 StatusOr<AstValue> Parser::ParseValue() {
     Token tok = lexer_.Next();
 
+    // Every literal carries where it was written, not just `$param`.
+    // A literal is now something a *later* stage can reject - the step
+    // compiler coerces one against its column's type (spec-types.md §3.1),
+    // and `WHERE d = '2026-02-30'` fails there, long after the token is
+    // gone. Without the offset that failure can only say which column it
+    // was about; with it, it can point at the byte.
+    //
+    // Nothing downstream compares it: chain identity renders operand
+    // *values* (the aggregate contract suite's RenderOperand), Cabin keys
+    // are built from the value's kind and contents, and the fingerprint is
+    // folded from tokens. So this adds a fact to error messages and
+    // changes no plan, no `pattern_id`, and no comparison.
     switch (tok.type) {
         case TokenType::kIntLit: {
             AstValue v;
             v.type = ValueType::kInt;
             v.int_val = tok.int_val;
             v.raw_int_text = std::string(tok.text);  // full-range digits; see ast.hpp
+            v.byte_offset = tok.byte_offset;
             return v;
         }
         case TokenType::kStrLit: {
             AstValue v;
             v.type = ValueType::kStr;
             v.str_val = std::string(tok.text);
+            v.byte_offset = tok.byte_offset;
+            return v;
+        }
+        case TokenType::kNumLit: {
+            // Deliberately the kStrLit arm's value, byte for byte: a bare
+            // numeric is sugar for the quoted string of its spelling
+            // (token.hpp), so `= 12.34` and `= '12.34'` produce one AST and
+            // every stage past this line has exactly one case to be right
+            // about. The column's type gives it meaning at the same gate
+            // the quoted form goes through - `CoerceLiteralToColumn` for a
+            // predicate, `EncodeOneValue` for an INSERT - and a column no
+            // string satisfies (an integer one) refuses or misses exactly
+            // as it would the quoted form.
+            AstValue v;
+            v.type = ValueType::kStr;
+            v.str_val = std::string(tok.text);
+            v.byte_offset = tok.byte_offset;
             return v;
         }
         case TokenType::kNullLit: {
             AstValue v;
             v.type = ValueType::kNull;
+            v.byte_offset = tok.byte_offset;
             return v;
         }
         case TokenType::kNamedParam: {
@@ -117,7 +168,7 @@ StatusOr<AstValue> Parser::ParseValue() {
         }
         default:
             return Status::InvalidArgument(
-                "expected value (integer, 'string', or NULL), got '" +
+                "expected value (integer, number, 'string', or NULL), got '" +
                 std::string(Describe(tok)) + "'");
     }
 }
@@ -345,9 +396,52 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         if (!col_name.ok()) return col_name.status();
         col.name = std::move(col_name.value());
 
+        col.type_byte_offset = lexer_.Peek().byte_offset;
         auto type_name = ParseIdent();
         if (!type_name.ok()) return type_name.status();
         col.type_name = std::move(type_name.value());
+
+        // `DECIMAL(p, s)` - the one type whose declaration carries
+        // arguments (docs/spec-types.md §2). Recognized by the paren rather
+        // than by the name, so a type that takes no arguments refuses them
+        // here instead of each type name needing its own production.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            const std::uint32_t paren_at = lexer_.Peek().byte_offset;
+            if (!IEquals(col.type_name, "DECIMAL")) {
+                return Status::InvalidArgument("type '" + col.type_name +
+                                                "' takes no arguments (byte " +
+                                                std::to_string(paren_at) + ")");
+            }
+            lexer_.Next();  // consume '('
+
+            auto precision = ParseTypeArgument("precision");
+            if (!precision.ok()) return precision.status();
+            if (Status s = ExpectToken(TokenType::kComma,
+                                       "',' between a decimal's precision and scale");
+                !s.ok()) {
+                return s;
+            }
+            auto scale = ParseTypeArgument("scale");
+            if (!scale.ok()) return scale.status();
+            if (Status s = ExpectToken(TokenType::kRParen, "')' after a decimal's scale");
+                !s.ok()) {
+                return s;
+            }
+
+            col.has_precision = true;
+            col.precision = precision.value();
+            col.scale = scale.value();
+        } else if (IEquals(col.type_name, "DECIMAL")) {
+            // **A bare `decimal` is refused, never defaulted.** A default
+            // scale is a silent decision about someone's money, and the
+            // parser is the only layer that can still tell the difference
+            // between "said nothing" and "said zero".
+            return Status::InvalidArgument(
+                "column '" + col.name + "' needs a precision and a scale - `decimal(p, s)` - "
+                "at byte " + std::to_string(col.type_byte_offset) +
+                "; there is no default scale, because one would be a silent decision about "
+                "what a stored value means");
+        }
 
         // Optional `REFERENCES <table>` (docs/impl-foreign-keys.md §1).
         // Peeked like the cabin clause below it, and written *before* it
@@ -665,6 +759,398 @@ StatusOr<CabinStmt> Parser::ParseCabin(bool drop) {
     return stmt;
 }
 
+Status Parser::ParseDeclaredColumnList(std::vector<IndexColumnRef>& out, const char* what,
+                                       std::size_t cap) {
+    if (Status s = ExpectToken(TokenType::kLParen,
+                                (std::string("'(' before the ") + what).c_str());
+        !s.ok()) {
+        return s;
+    }
+
+    for (;;) {
+        IndexColumnRef col;
+        col.byte_offset = lexer_.Peek().byte_offset;
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        col.name = std::move(name.value());
+
+        // **The cap is refused here, with a position, and again in the
+        // catalog without one.** Not a duplicated check: this is the only
+        // layer that knows *where* the offending column was written, and
+        // `Catalog::CreateIndex` is the door every non-parser caller comes
+        // through. A cap refuses and never truncates (spec §11) - a
+        // truncated index declared complete is a wrong answer with a right
+        // answer's shape.
+        if (cap != 0 && out.size() == cap) {
+            return Status::Unsupported("at most " + std::to_string(cap) + " " + what +
+                                        " are supported (byte " +
+                                        std::to_string(col.byte_offset) + ")");
+        }
+        out.push_back(std::move(col));
+
+        if (lexer_.Peek().type != TokenType::kComma) break;
+        lexer_.Next();
+    }
+
+    return ExpectToken(TokenType::kRParen, (std::string("')' after the ") + what).c_str());
+}
+
+StatusOr<IndexStmt> Parser::ParseIndex(bool drop) {
+    IndexStmt stmt;
+    stmt.drop = drop;
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.index_name = std::move(name.value());
+
+    // An index's name is unique instance-wide, so DROP names nothing else.
+    // Naming its relation again would be a second identity to keep in step
+    // with the first.
+    if (drop) {
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
+
+    // `ON` is a reserved keyword (it joins), so it arrives as a keyword
+    // token and ExpectKeyword cannot be used for it - the same wrinkle
+    // ParseCabin has.
+    const Token& on = lexer_.Peek();
+    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) {
+        return Status::InvalidArgument(
+            "CREATE INDEX names the relation it is on: `CREATE INDEX <name> ON "
+            "<table>(<column>, ...)` (byte " +
+            std::to_string(on.byte_offset) + ")");
+    }
+    lexer_.Next();
+
+    stmt.table_byte_offset = lexer_.Peek().byte_offset;
+    auto table = ParseIdent();
+    if (!table.ok()) return table.status();
+    stmt.table_name = std::move(table.value());
+
+    if (Status s = ParseDeclaredColumnList(stmt.key_columns, "index key columns",
+                                           catalog::kMaxIndexKeyColumns);
+        !s.ok()) {
+        return s;
+    }
+
+    // `COVERING` is optional and peeked, exactly as the cabin policy clause
+    // is: an index without one is the ordinary case and must not have to
+    // spell anything.
+    const Token& covering = lexer_.Peek();
+    if (covering.type == TokenType::kIdent && IEquals(covering.text, "COVERING")) {
+        lexer_.Next();
+        if (Status s = ParseDeclaredColumnList(stmt.covered_columns, "covered columns",
+                                               catalog::kMaxIndexCoveredColumns);
+            !s.ok()) {
+            return s;
+        }
+    }
+
+    ConsumeOptionalSemicolon();
+    return stmt;
+}
+
+// `{CREATE | DROP} ASSERTION ...` (docs/feat-assertion.md §3).
+//
+// **Every refusal in here is a create-time refusal by design** (AS2, §3.1):
+// the grammar *is* the supported predicate class, so a form outside the class
+// is answered here, with the byte that caused it, instead of being accepted
+// and then discovered unenforceable by a builder or - worse - by a write path.
+// The refusals split three ways and the split is deliberate:
+//
+//   * `Unsupported` for a form this engine understands and declines - a lower
+//     bound (AS11), `DEFERRABLE` (AS3), `NOT VALID` (AS7), an aggregate
+//     outside {COUNT, SUM} (§10). These are reserved grammar: they parse, so
+//     the answer names the decision rather than pointing at a syntax error
+//     somewhere else, and the grammar will not shift when any of them lands.
+//   * `InvalidArgument` for a declaration that is simply wrong - a negative
+//     bound, `!=`, a degenerate predicate that could never admit a row.
+//   * Nothing at all for the catalog's questions. Whether the relation
+//     exists, whether a group column exists, whether the `SUM` column is
+//     int64, whether the name is taken: all of that needs the catalog and is
+//     `Catalog::CreateAssertion`'s, which is the door every non-parser caller
+//     comes through. This layer knows *where* each name was written and
+//     hands the offsets on so those errors can carry a position too.
+StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
+    AssertionStmt stmt;
+    stmt.drop = drop;
+
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.name = std::move(name.value());
+
+    // An assertion's name is unique instance-wide (§3), so DROP names nothing
+    // else - IndexStmt's rule, and for its reason.
+    if (drop) {
+        ConsumeOptionalSemicolon();
+        return stmt;
+    }
+
+    // `ON` is a reserved keyword (it joins), so it arrives as a keyword token
+    // and ExpectKeyword cannot be used for it - the wrinkle ParseCabin and
+    // ParseIndex both have.
+    const Token& on = lexer_.Peek();
+    if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) {
+        return Status::InvalidArgument(
+            "CREATE ASSERTION names the relation it is on: `CREATE ASSERTION <name> ON "
+            "<table> GROUP BY (<column>, ...) CHECK ...` (byte " +
+            std::to_string(on.byte_offset) + ")");
+    }
+    lexer_.Next();
+
+    stmt.table_byte_offset = lexer_.Peek().byte_offset;
+    auto table = ParseIdent();
+    if (!table.ok()) return table.status();
+    stmt.table_name = std::move(table.value());
+
+    // ---- GROUP BY (<column>, ...) ---------------------------------------
+    //
+    // Mandatory, and parenthesised where a SELECT's GROUP BY is not. Both
+    // halves are deliberate: an assertion with no grouping is a whole-relation
+    // bound, which is a different structure (one header, no directory) and is
+    // not what v1 built - so it is refused rather than silently read as one
+    // group. The parens are what make the list's end unambiguous with `CHECK`
+    // following it, without `CHECK` having to be reserved.
+    if (const Token& group = lexer_.Peek();
+        group.type != TokenType::kIdent || !IEquals(group.text, "GROUP")) {
+        return Status::InvalidArgument(
+            "CREATE ASSERTION requires a GROUP BY list: `... ON <table> GROUP BY (<column>, "
+            "...) CHECK ...` (byte " +
+            std::to_string(group.byte_offset) + ")");
+    }
+    lexer_.Next();
+    if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
+
+    // No cap: §3 declares none, and inventing one here would settle a number
+    // nothing has measured. The list is storable regardless because the
+    // catalog row keeps `source_text` and not a column array (AS10).
+    if (Status s = ParseDeclaredColumnList(stmt.group_columns, "assertion GROUP BY columns",
+                                           /*cap=*/0);
+        !s.ok()) {
+        return s;
+    }
+
+    // ---- CHECK COUNT(*) | SUM(<column>) ---------------------------------
+    //
+    // `CHECK` is an ordinary identifier matched by text, like `GROUP`,
+    // `COVERING` and `DISTINCT` before it: nothing here is reserved, so a
+    // column may still be named `check` or `assertion` (V04's property - all
+    // keywords share one token type, and these are not keywords at all).
+    if (const Token& check = lexer_.Peek();
+        check.type != TokenType::kIdent || !IEquals(check.text, "CHECK")) {
+        return Status::InvalidArgument(
+            "CREATE ASSERTION requires a CHECK clause: `... CHECK COUNT(*) <= <N>` or `... "
+            "CHECK SUM(<column>) <= <N>` (byte " +
+            std::to_string(check.byte_offset) + ")");
+    }
+    lexer_.Next();
+
+    const Token agg_tok = lexer_.Peek();
+    auto agg_name = ParseIdent();
+    if (!agg_name.ok()) {
+        return Status::InvalidArgument(
+            "CHECK takes COUNT(*) or SUM(<column>) (byte " +
+            std::to_string(agg_tok.byte_offset) + ")");
+    }
+    AggFunc func = AggFunc::kCount;
+    if (!AggFuncOf(agg_name.value(), func)) {
+        return Status::InvalidArgument("'" + agg_name.value() +
+                                        "' is not an aggregate; CHECK takes COUNT(*) or "
+                                        "SUM(<column>) (byte " +
+                                        std::to_string(agg_tok.byte_offset) + ")");
+    }
+    if (func != AggFunc::kCount && func != AggFunc::kSum) {
+        // §10: MIN and MAX are not incrementally maintainable under deletion
+        // without extra structure, and AVG is not a bound. Reserved and
+        // refused by name, so the answer says which decision it is waiting on.
+        return Status::Unsupported(
+            std::string(AggFuncText(func)) +
+            " bounds are out of scope for assertions (byte " +
+            std::to_string(agg_tok.byte_offset) +
+            "); v1 takes COUNT(*) and SUM(<int64 column>) upper bounds only "
+            "(docs/feat-assertion.md §10)");
+    }
+    stmt.func = func;
+
+    if (Status s = ExpectToken(TokenType::kLParen, "'(' after the aggregate's name"); !s.ok()) {
+        return s;
+    }
+
+    // `DISTINCT` is refused rather than folded away: a distinct count is a
+    // different aggregate, and maintaining one incrementally needs per-value
+    // multiplicity that no group header carries.
+    if (const Token& distinct = lexer_.Peek();
+        distinct.type == TokenType::kIdent && IEquals(distinct.text, "DISTINCT")) {
+        return Status::Unsupported("DISTINCT is not supported in an assertion's CHECK (byte " +
+                                    std::to_string(distinct.byte_offset) +
+                                    "); a distinct aggregate is not incrementally maintainable "
+                                    "from a group header alone");
+    }
+
+    if (stmt.func == AggFunc::kCount) {
+        // `COUNT(*)` exactly. `COUNT(<column>)` is a different aggregate -
+        // it skips NULLs - and reading it as `COUNT(*)` would enforce a bound
+        // the operator did not write.
+        const Token& star = lexer_.Peek();
+        if (star.type != TokenType::kStar) {
+            return Status::Unsupported(
+                "an assertion's cardinality bound is written COUNT(*) (byte " +
+                std::to_string(star.byte_offset) +
+                "); COUNT(<column>) counts non-NULLs, which is a different aggregate");
+        }
+        lexer_.Next();
+    } else {
+        const Token& arg = lexer_.Peek();
+        if (arg.type == TokenType::kStar) {
+            return Status::InvalidArgument("SUM takes a column, not '*' (byte " +
+                                            std::to_string(arg.byte_offset) + ")");
+        }
+        stmt.sum_column.byte_offset = arg.byte_offset;
+        auto col = ParseIdent();
+        if (!col.ok()) return col.status();
+        stmt.sum_column.name = std::move(col.value());
+    }
+
+    if (Status s = ExpectToken(TokenType::kRParen, "')' closing the aggregate's argument");
+        !s.ok()) {
+        return s;
+    }
+
+    // ---- <op> <N> -------------------------------------------------------
+
+    const std::uint32_t op_at = lexer_.Peek().byte_offset;
+    auto op = ParseCompareOp();
+    if (!op.ok()) return op.status();
+
+    switch (op.value()) {
+        case CompareOp::kLt:
+        case CompareOp::kLte:
+            break;
+        case CompareOp::kEq:
+            // **AS11 as revised 2026-08-08.** `=` was briefly accepted and
+            // documented as meaning `aggregate <= N`. That is refused now,
+            // and the reason is truthfulness rather than cost: the engine
+            // would have enforced something other than what the operator
+            // wrote, and a constraint that quietly means less than it says is
+            // worse than one that is refused outright. Enforcing real
+            // equality means enforcing a *lower* bound too, which is the
+            // DELETE and decreasing-UPDATE write path v1 excludes - so `=`
+            // costs exactly what `>=` costs, and is refused beside it.
+            return Status::Unsupported(
+                "equality assertions (=) are not supported (byte " + std::to_string(op_at) +
+                "); enforcing = means enforcing a lower bound, which v1 excludes, and reading "
+                "it as <= would enforce something other than what was written "
+                "(docs/feat-assertion.md AS11)");
+        case CompareOp::kGt:
+        case CompareOp::kGte:
+            // AS11, and the one refusal that pays for a whole write path:
+            // a lower bound has to be re-checked on DELETE and on every
+            // decreasing UPDATE, which is exactly why v1 leaves DELETE
+            // uninstrumented (§4.2). Reserved grammar - it parses.
+            return Status::Unsupported(
+                std::string("lower-bound assertions (") + CompareOpName(op.value()) +
+                ") are not supported (byte " + std::to_string(op_at) +
+                "); v1 enforces upper bounds only, which is what makes DELETE check-free "
+                "(docs/feat-assertion.md AS11)");
+        case CompareOp::kNeq:
+            // Distinct from `=` and from `>`: those name a constraint this
+            // engine understands and declines, so they say which decision
+            // they wait on. `!=` names no ceiling in any direction, so there
+            // is no decision pending and it is simply wrong.
+            return Status::InvalidArgument(
+                "'!=' is not a bound (byte " + std::to_string(op_at) +
+                "); an assertion's comparison is < or <=");
+    }
+    stmt.op = op.value();
+
+    const Token bound = lexer_.Peek();
+    if (bound.type != TokenType::kIntLit || bound.negative || bound.int_val < 0) {
+        // §3.1: a non-negative integer *literal*, no expressions (TY3
+        // conservatism). A negative one is caught by the same test, which is
+        // why the message names both halves.
+        return Status::InvalidArgument(
+            "an assertion's bound is a non-negative integer literal, got '" +
+            std::string(Describe(bound)) + "' (byte " + std::to_string(bound.byte_offset) + ")");
+    }
+    lexer_.Next();
+    stmt.bound = bound.int_val;
+    stmt.bound_byte_offset = bound.byte_offset;
+
+    // ---- Degenerate predicates (§3.1) -----------------------------------
+    //
+    // Only for COUNT, and the asymmetry is a proof rather than an oversight:
+    // a group *exists* only because it holds at least one row, so its count is
+    // at least 1 and any ceiling below 1 admits nothing - `COUNT(*) <= 0` and
+    // `COUNT(*) < 1` both declare a relation that may never be written to
+    // again. (`= 0`, the spelling §3.1 named, is now refused one step earlier
+    // by the operator itself.) A SUM has no such floor, because an int64
+    // column may hold negative values, so no non-negative bound is provably
+    // unsatisfiable and refusing one would be inventing a restriction.
+    if (stmt.func == AggFunc::kCount && stmt.enforced_max() < 1) {
+        return Status::InvalidArgument(
+            "assertion \"" + stmt.name + "\" can never admit a row: COUNT(*) " +
+            CompareOpName(stmt.op) + " " + std::to_string(stmt.bound) +
+            " enforces count <= " + std::to_string(stmt.enforced_max()) +
+            ", and a group holds at least one row (byte " +
+            std::to_string(stmt.bound_byte_offset) + ")");
+    }
+
+    // ---- Reserved trailing clauses (AS3, AS7) ---------------------------
+    //
+    // `DEFERRABLE`, `NOT DEFERRABLE`, `INITIALLY DEFERRED/IMMEDIATE` and
+    // `NOT VALID` are SQL-92's and PostgreSQL's spellings for constraint
+    // timing. All parse and all answer `Unsupported` with their own position,
+    // which is what a client wants when they wrote a word this engine has
+    // heard of but does not honour - the alternative is "unexpected token"
+    // pointing at a clause that was the whole point of the statement.
+    for (;;) {
+        const Token& tail = lexer_.Peek();
+        if (tail.type == TokenType::kKeyword && tail.kw == Keyword::kNot) {
+            // `NOT DEFERRABLE` and `NOT VALID`. Both are refused, and `NOT
+            // DEFERRABLE` too even though it names the behaviour v1 *has*:
+            // accepting it would make it a promise, and AS3 reserves the whole
+            // timing clause rather than half of it.
+            return Status::Unsupported(
+                "constraint timing clauses (NOT DEFERRABLE / NOT VALID) are not supported "
+                "(byte " +
+                std::to_string(tail.byte_offset) +
+                "); an assertion is checked at statement time, always "
+                "(docs/feat-assertion.md AS3, AS7)");
+        }
+        if (tail.type == TokenType::kIdent &&
+            (IEquals(tail.text, "DEFERRABLE") || IEquals(tail.text, "INITIALLY") ||
+             IEquals(tail.text, "VALID"))) {
+            return Status::Unsupported(
+                "'" + std::string(tail.text) +
+                "' is reserved and not supported (byte " + std::to_string(tail.byte_offset) +
+                "); an assertion is checked at statement time, always "
+                "(docs/feat-assertion.md AS3, AS7)");
+        }
+        break;
+    }
+
+    ConsumeOptionalSemicolon();
+
+    // The whole declaration verbatim, for `sys.assertions.source_text`
+    // (AS10) - the sys.pattern_defs model, and what makes an uncapped GROUP
+    // BY list storable in a fixed-width catalog row. Sliced from the input
+    // rather than rebuilt from the AST, because a rebuild is a second
+    // spelling of the operator's declaration that can drift from theirs.
+    // `Parse()` refuses trailing garbage, so the statement is exactly the
+    // input and needs no end offset to find.
+    std::string_view text = sql_;
+    while (!text.empty() && (text.back() == ';' ||
+                             std::isspace(static_cast<unsigned char>(text.back())) != 0)) {
+        text.remove_suffix(1);
+    }
+    stmt.source_text = std::string(text);
+
+    return stmt;
+}
+
 StatusOr<InsertStmt> Parser::ParseInsert() {
     if (Status s = ExpectKeyword("INTO"); !s.ok()) return s;
 
@@ -812,21 +1298,10 @@ StatusOr<SelectItem> Parser::ParseSelectItem() {
     if (!col.ok()) return col.status();
 
     AggFunc func = AggFunc::kCount;
-    const bool named_avg = !col.value().qualified() && IEquals(col.value().name, "AVG");
     if (col.value().qualified() || lexer_.Peek().type != TokenType::kLParen ||
-        (!AggFuncOf(col.value().name, func) && !named_avg)) {
+        !AggFuncOf(col.value().name, func)) {
         item.column = std::move(col.value());
         return item;
-    }
-
-    // `AVG` is a head this engine understands and declines. Refused here
-    // rather than at compile, because the reason is the type system and not
-    // the catalog: there is no decimal kind, and an average truncated to an
-    // integer is a wrong answer wearing a right answer's type.
-    if (named_avg) {
-        return Status::Unsupported(
-            "AVG is not supported (byte " + std::to_string(item.byte_offset) +
-            "); compute it from SUM and COUNT, which are exact");
     }
 
     item.is_aggregate = true;
@@ -1203,10 +1678,24 @@ StatusOr<Statement> Parser::Parse() {
 
     if (IEquals(tok.text, "CREATE")) {
         // One token of lookahead picks the object. `TABLE` still goes
-        // through ParseCreateTable's own ExpectKeyword, so the error a
-        // client gets for `CREATE INDEX` is unchanged.
+        // through ParseCreateTable's own ExpectKeyword.
         const Token& what = lexer_.Peek();
-        if (what.type == TokenType::kIdent && IEquals(what.text, "PATTERN")) {
+        if (what.type == TokenType::kIdent && IEquals(what.text, "INDEX")) {
+            lexer_.Next();
+            auto s = ParseIndex(/*drop=*/false);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "UNIQUE")) {
+            // Refused here rather than parsed and rejected later, because
+            // the position that matters is this word's. Enforcing
+            // uniqueness makes the index a *constraint*, which needs a
+            // second write-conflict path and would let an index failure
+            // abort a write (docs/feat-index.md IX11).
+            return Status::Unsupported(
+                "UNIQUE indexes are not supported (byte " + std::to_string(what.byte_offset) +
+                "); v1 is a read accelerator that cannot fail a write for a reason of its own "
+                "(docs/feat-index.md IX11)");
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "PATTERN")) {
             lexer_.Next();
             auto s = ParseCreatePattern();
             if (!s.ok()) return s.status();
@@ -1216,17 +1705,28 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseCabin(/*drop=*/false);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "ASSERTION")) {
+            lexer_.Next();
+            auto s = ParseAssertion(/*drop=*/false);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else {
             auto s = ParseCreateTable();
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
         }
     } else if (IEquals(tok.text, "DROP")) {
-        // Patterns and cabins can be dropped. There is still no DROP TABLE,
-        // and saying so here beats a syntax error that points at the table
-        // name - the list in the message is the whole of what exists.
+        // Patterns, cabins and indexes can be dropped. There is still no
+        // DROP TABLE, and saying so here beats a syntax error that points at
+        // the table name - the list in the message is the whole of what
+        // exists.
         const Token& what = lexer_.Peek();
-        if (what.type == TokenType::kIdent && IEquals(what.text, "CABIN")) {
+        if (what.type == TokenType::kIdent && IEquals(what.text, "INDEX")) {
+            lexer_.Next();
+            auto s = ParseIndex(/*drop=*/true);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "CABIN")) {
             lexer_.Next();
             auto s = ParseCabin(/*drop=*/true);
             if (!s.ok()) return s.status();
@@ -1236,8 +1736,15 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseDropPattern();
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "ASSERTION")) {
+            lexer_.Next();
+            auto s = ParseAssertion(/*drop=*/true);
+            if (!s.ok()) return s.status();
+            stmt = std::move(s.value());
         } else {
-            return Status::Unsupported("only DROP PATTERN and DROP CABIN are supported (byte " +
+            return Status::Unsupported(
+                "only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported "
+                "(byte " +
                                         std::to_string(what.byte_offset) + ")");
         }
     } else if (IEquals(tok.text, "INSERT")) {

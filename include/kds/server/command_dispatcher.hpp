@@ -17,6 +17,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/pattern_ddl.hpp"
 #include "kds/exec/cabin_ddl.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/stats/access_stats.hpp"
 #include "kds/stats/cabin_store.hpp"
@@ -185,7 +186,7 @@ public:
                        txn::TransactionManager* txn = nullptr,
                        txn::IsolationLevel isolation =
                            txn::IsolationLevel::kReadCommitted,
-                       std::uint32_t core_id = 0) noexcept
+                       std::uint32_t core_id = 0, bool indexes = true) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -201,7 +202,8 @@ public:
           txn_(txn),
           default_isolation_(isolation),
           autocommit_session_(isolation),
-          core_id_(core_id) {}
+          core_id_(core_id),
+          indexes_enabled_(indexes) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -474,6 +476,41 @@ private:
     // Cabin exists but has never been probed" visible.
     DispatchOutcome HandleShowCabins();
 
+    // `CREATE INDEX` / `DROP INDEX` (docs/feat-index.md §10). One handler
+    // for both, for HandleCabin's reason: they share a parse and a reply
+    // shape and differ only in which catalog call they reach.
+    // Emits one INDEX_INSERT per index mutation, or a full page image per
+    // page a split restructured. Called **before** the HEAP_INSERT or
+    // HEAP_OVERWRITE the entries point at (docs/feat-index.md §12.1): a
+    // dangling entry is dropped by verification, a row with no entry is
+    // lost.
+    Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
+
+    DispatchOutcome HandleIndex(std::string_view line);
+    DispatchOutcome HandleShowIndexes();
+
+    // `CREATE ASSERTION` / `DROP ASSERTION` (docs/feat-assertion.md §3,
+    // workplan AST03). One handler for both, for HandleCabin's reason.
+    //
+    // **This is the catalog half only.** It validates the declaration
+    // against the catalog - the relation exists, every GROUP BY column
+    // exists, the SUM column exists and is int64, the name is free (§3.1) -
+    // and records it. It builds no Bound Cabin (AST04), enforces nothing
+    // (AST07) and scans nothing (AST06), so an assertion recorded today
+    // constrains no write. Saying so in the reply is deliberate: a
+    // constraint that silently does not run is not a degraded mode.
+    DispatchOutcome HandleAssertion(std::string_view line);
+
+    // `SHOW ASSERTIONS` - every declared assertion, with the relation it is
+    // on and its declaration verbatim.
+    //
+    // The `SHOW` surface rather than `SELECT * FROM sys.assertions`, for the
+    // reason `sys.pattern_defs` has no view either: a catalog *view* is read
+    // through `catalog::Catalog` alone, and a row-codec relation's rows need
+    // a `PageStore` to resolve their var-heap spills. Both row-codec catalog
+    // relations are therefore surfaced by `SHOW`, which has one.
+    DispatchOutcome HandleShowAssertions();
+
     // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
     //
     // The write paths' three entry points. They live here rather than in
@@ -712,6 +749,7 @@ private:
     Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
                      const std::vector<exec::AppendedSpill>& spills = {},
+                     const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
 
     // What a `WHERE id = <const>` statement should do instead of scanning.
@@ -870,6 +908,11 @@ private:
     // §6 asks for. 0 is the system core and the only value a single-core
     // build ever has, so every pre-multicore construction site is unchanged.
     std::uint32_t core_id_ = 0;
+
+    // The read-path index switch (`indexes`, default on). Read-path only:
+    // maintenance is not switchable, because an index that stops being
+    // maintained is wrong rather than slow.
+    bool indexes_enabled_ = true;
     CrossCoreWriteCounters cross_core_writes_;
 
     // Refuses a write to a relation this core may not write, and binds the

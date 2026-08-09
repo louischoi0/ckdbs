@@ -94,7 +94,7 @@ StatusOr<CatalogView> ObjectsView(catalog::Catalog& catalog) {
 
 StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
     CatalogView view;
-    view.column_names = {"rel_id", "rel_name", "pos", "name", "type_val", "len", "notnull"};
+    view.column_names = {"rel_id", "rel_name", "pos", "name", "type_val", "type", "notnull"};
 
     auto objects = catalog.ListTables();
     if (!objects.ok()) return objects.status();
@@ -114,9 +114,20 @@ StatusOr<CatalogView> ColumnsView(catalog::Catalog& catalog) {
         // sys.tables is exactly what a view cannot do.
         const std::string rel_name(catalog::NameView(object.name));
         for (const catalog::SysColumnRow& column : schema.value().columns) {
+            // **The declared type, not `len`.** `len` used to be readable
+            // as "the width", and for a decimal column it is now the packed
+            // (precision, scale) pair (catalog/rows.hpp) - so printing the
+            // integer would show `2562` where the client wrote
+            // `decimal(10,2)`. `ColumnTypeText` is the one place that knows
+            // the field's per-type meaning.
+            auto type_row = catalog.ResolveTypeByVal(column.type_val);
+            const std::string base =
+                type_row.ok() ? std::string(catalog::NameView(type_row.value().name))
+                              : "?type_val=" + std::to_string(column.type_val);
             view.rows.push_back({Int(column.rel_id), Str(rel_name), Int(column.pos),
                                  Str(std::string(catalog::NameView(column.name))),
-                                 Int(column.type_val), Int(column.len),
+                                 Int(column.type_val),
+                                 Str(catalog::ColumnTypeText(column, base)),
                                  Int(column.notnull ? 1 : 0)});
         }
     }

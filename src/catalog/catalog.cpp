@@ -282,7 +282,7 @@ Status Catalog::Bootstrap() {
         {kSysCabinsTable, "cabins", kCatalogPageCabins},
         // sys.fkeys, same shape again. It issues Keystone ids for the same
         // reason sys.cabins does - an `fk_id` comes from this relation's own
-        // `next_id`, not from GenerateUserOid(), which restarts every boot.
+        // `next_id`, not from GenerateUserOid(), which numbers objects.
         {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
     }};
 
@@ -341,7 +341,7 @@ Status Catalog::Bootstrap() {
         std::uint32_t type_val;
         std::uint32_t len;
     };
-    static constexpr std::array<SysTypeBootstrap, 10> kTypes{{
+    static constexpr std::array<SysTypeBootstrap, 13> kTypes{{
         {kTypeInt8, "int8", kTypeValInt8, 1},
         {kTypeInt16, "int16", kTypeValInt16, 2},
         {kTypeInt32, "int32", kTypeValInt32, 4},
@@ -352,6 +352,16 @@ Status Catalog::Bootstrap() {
         {kTypeBool, "bool", kTypeValBool, 1},
         {kTypeVarchar, "varchar", kTypeValVarchar, 0},
         {kTypeChar, "char", kTypeValChar, 1},
+        // docs/spec-types.md TY1. `len` here is the type's *width*, which
+        // is what sys.types has always meant by it - a DECIMAL column
+        // carries its own (p, s) elsewhere (TY9).
+        {kTypeDate, "date", kTypeValDate, 4},
+        {kTypeTimestamp, "timestamp", kTypeValTimestamp, 8},
+        // The wide decimal under its own name, so name->type_val stays a
+        // function: `decimal(p >= 19, s)` reaches it by promotion at the
+        // DDL site, `decimal128(p, s)` by this row directly, and DESCRIBE
+        // renders whichever a column's type_val says it is.
+        {kTypeDecimalWide, "decimal128", kTypeValDecimalWide, 16},
     }};
     for (const auto& t : kTypes) {
         if (Status s = InsertTypeRow(t.oid, t.name, t.type_val, t.len); !s.ok()) {
@@ -363,13 +373,19 @@ Status Catalog::Bootstrap() {
     // ordinary user tuple format (well_known.hpp explains why). It is built
     // here by hand rather than through CreateTable() for two reasons:
     // CreateTable() takes its oids from GenerateUserOid(), which is
-    // in-memory and restarts every boot, and it roots the relation on a
+    // in-memory at bootstrap time and could not recover a position from the
+    // very pages being built, and it roots the relation on a
     // dynamically allocated page, which nothing could find at bootstrap
     // without first reading the catalog it is part of.
     //
     // It must come after phase 4: BuildPatternDefsSchema() names its column
     // types by the type_val tags phase 4 just registered.
     if (Status s = BootstrapPatternDefs(); !s.ok()) return s;
+
+    // Phase 6: sys.assertions, the second relation of that kind and for the
+    // same reason - it stores a declaration's text verbatim (AS10), which is
+    // what lets an assertion's GROUP BY list have no cap at all.
+    if (Status s = BootstrapAssertions(); !s.ok()) return s;
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("catalog", "bootstrapped " + std::to_string(kSysTables.size() + 1) +
@@ -472,7 +488,158 @@ Status Catalog::BootstrapPatternDefs() {
     return Status::OK();
 }
 
-Oid Catalog::GenerateUserOid() noexcept { return next_user_oid_++; }
+namespace {
+
+Schema AssertionsSchema() {
+    // Six columns, and the shape is §8.2's table with one addition and one
+    // subtraction, both forced.
+    //
+    // Added: `id`, the Keystone pk, because every relation stored in user
+    // tuple format has one (invariant 11). It **is** §8.2's `assertion_id` -
+    // engine-issued, unique, never reused (K1) - rather than a second
+    // sequence beside it, because a second sequence is a second thing to keep
+    // monotonic and there is nothing the first cannot say.
+    //
+    // Subtracted: nothing stores the parsed declaration. The group columns,
+    // the aggregate, the operator and the bound are all recoverable from
+    // `source_text` by re-parsing it, which is the sys.pattern_defs model
+    // AS10 names - and it is what lets the GROUP BY list be uncapped, since a
+    // longer list costs text rather than a wider row. A decoded sibling table
+    // would be a second copy that can drift from the canon.
+    //
+    // `cabin_root` is the Bound Cabin anchor and is written kInvalidPageId
+    // here: AST04 builds the structure, AST06 fills the field in. Reserved
+    // now rather than added later because it is in §8.2's table and because
+    // adding a catalog column costs the same superblock bump this relation
+    // already cost - paying it twice would be paying it for nothing.
+    //
+    // `name` and `source_text` are varchar, so the relation can spill and
+    // gets a var-heap chain. A declaration longer than one var-heap page is
+    // refused rather than chained: the spilled-value size cap is open and
+    // this does not settle it.
+    Schema schema;
+    auto column = [](Oid oid, std::uint32_t pos, std::string_view name, std::uint32_t type_val,
+                     std::uint32_t len) {
+        SysColumnRow col{};
+        col.oid = oid;
+        col.rel_id = kSysAssertionsTable;
+        col.pos = pos;
+        SetName(col.name, name);
+        col.type_val = type_val;
+        col.len = len;
+        col.notnull = true;
+        return col;
+    };
+    schema.columns.push_back(column(kSysAssertionsColumnOidBase + 0, 0, "id", kTypeValInt64, 8));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 1, 1, "target_oid", kTypeValInt32, 4));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 2, 2, "cabin_root", kTypeValInt64, 8));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 3, 3, "flags", kTypeValInt32, 4));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 4, 4, "name", kTypeValVarchar, 0));
+    schema.columns.push_back(
+        column(kSysAssertionsColumnOidBase + 5, 5, "source_text", kTypeValVarchar, 0));
+    return schema;
+}
+
+}  // namespace
+
+Status Catalog::BootstrapAssertions() {
+    const Schema schema = AssertionsSchema();
+
+    // Refused at bootstrap rather than at the first CREATE ASSERTION, for
+    // BootstrapPatternDefs()' reason: a relation whose row size cannot be
+    // computed is one no row could ever be written to, and it also proves the
+    // schema is expressible under whatever inline_cell_width this instance
+    // pinned.
+    if (auto layout = RowLayout::Build(schema, inline_cell_width_); !layout.ok()) {
+        return layout.status();
+    }
+
+    auto created = store_.CreateAt(kCatalogPageAssertions);
+    if (!created.ok()) return created.status();
+    // min_key 0: scanned in full, by name or by target_oid, never by key
+    // range - like every other catalog page.
+    auto root = heap::PageView::CreateEmpty(created.value(), 0);
+    if (!root.ok()) return root.status();
+
+    auto varheap_root = varheap::CreateChain(store_);
+    if (!varheap_root.ok()) return varheap_root.status();
+
+    if (Status s = InsertObjectRow(kSysAssertionsTable, kNamespaceSys, kTypeTable, "assertions");
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = InsertRelationRow(kSysAssertionsTable, kNamespaceSys, "assertions",
+                                      kCatalogPageAssertions, ClusteredType::kHeap,
+                                      varheap_root.value());
+        !s.ok()) {
+        return s;
+    }
+    for (const auto& col : schema.columns) {
+        if (Status s = InsertColumnRow(col.oid, kSysAssertionsTable, col.pos, NameView(col.name),
+                                        col.type_val, col.len, col.notnull);
+            !s.ok()) {
+            return s;
+        }
+    }
+    return Status::OK();
+}
+
+StatusOr<Oid> Catalog::HighestIssuedUserOid() {
+    // The two relations every `GenerateUserOid()` result is written to, and
+    // the reason that function's comment states the contract: an oid landing
+    // in some third relation would be invisible here and reissued after a
+    // restart.
+    //
+    // The bootstrap oids are in these pages too and are all far below
+    // kUserOidStart, which is why the floor below is a `max` and not a
+    // special case for the empty database.
+    Oid highest = kUserOidStart - 1;
+
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects);
+    if (!objects.ok()) return objects.status();
+    for (const SysObjectRow& row : objects.value()) {
+        if (row.oid > highest) highest = row.oid;
+    }
+
+    // Columns are scanned as well as objects, and leaving them out is the
+    // subtle way to get this wrong: column oids come from the *same* counter
+    // as relation oids, so a database whose last DDL was a `CREATE TABLE`
+    // has its high-water mark on a column and not on the table.
+    auto columns = ScanAll<SysColumnRow>(store_, kCatalogPageColumns);
+    if (!columns.ok()) return columns.status();
+    for (const SysColumnRow& row : columns.value()) {
+        if (row.oid > highest) highest = row.oid;
+    }
+
+    return highest;
+}
+
+StatusOr<Oid> Catalog::GenerateUserOid() {
+    // Recovered once, on first use, then incremented in memory. Lazy rather
+    // than done at construction because a `Catalog` is constructed on two
+    // paths - `BootstrapDatabase()`'s fresh branch and its existing-database
+    // branch - and only one of them calls anything afterwards. Recovering
+    // where the value is *needed* covers both without either having to
+    // remember, and costs an empty database nothing.
+    if (!next_user_oid_.has_value()) {
+        auto highest = HighestIssuedUserOid();
+        if (!highest.ok()) {
+            return highest.status().WithContext(
+                "cannot issue an object oid without reading back the ones already issued");
+        }
+        next_user_oid_ = highest.value() + 1;
+
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("catalog", "object oid sequence recovered at " +
+                                       std::to_string(*next_user_oid_));
+        }
+    }
+    return (*next_user_oid_)++;
+}
 
 void Catalog::BumpVersion(std::string_view what) {
     ++catalog_version_;
@@ -566,25 +733,13 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
     return s;
 }
 
-// No version bump: nothing cached is derived from sys.indexes (see
-// catalog_cache.hpp - index rows have no production reader yet).
-Status Catalog::InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_pos,
-                                std::uint32_t col_type, std::uint8_t flags) {
-    SysIndexRow row{};
-    row.index_oid = index_oid;
-    row.table_oid = table_oid;
-    row.col_pos = col_pos;
-    row.col_type = col_type;
-    row.flags = flags;
-    return InsertRow(store_, kCatalogPageIndexes, row, kBootstrapXid);
-}
-
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                     ClusteredType clustered_type) {
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
     if (Status s = CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
     // size is a schema constant, so if it cannot be computed - a column
@@ -633,14 +788,18 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         varheap_root = created_varheap.value();
     }
 
-    Oid new_oid = GenerateUserOid();
+    auto generated_oid = GenerateUserOid();
+    if (!generated_oid.ok()) return generated_oid.status();
+    const Oid new_oid = generated_oid.value();
 
     // Placement (docs/workplan-crosscore.md M1). The rotation counter is
-    // how many relations already exist, read off the page rather than held
-    // in memory: it has to survive a restart, and the oid cannot serve
-    // because GenerateUserOid() restarts at kUserOidStart every boot
-    // (core_placement.hpp says why that matters). Nothing here decides the
-    // policy - AssignOwnerCore does, and it is `[PROPOSED]`.
+    // how many relations already exist, read off the page rather than
+    // derived from the oid. That was originally because the oid restarted
+    // at kUserOidStart every boot; it no longer does, but the reason still
+    // holds and is a better one - an oid counts objects *ever created*,
+    // including columns, where placement wants relations that exist now.
+    // Nothing here decides the policy - AssignOwnerCore does, and it is
+    // `[PROPOSED]`.
     auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables);
     if (!existing_relations.ok()) return existing_relations.status();
     // DDL runs on the system core and allocates from its free map, so the
@@ -659,7 +818,9 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     }
 
     for (const auto& col : schema.columns) {
-        Status s = InsertColumnRow(GenerateUserOid(), new_oid, col.pos, NameView(col.name),
+        auto col_oid = GenerateUserOid();
+        if (!col_oid.ok()) return col_oid.status();
+        Status s = InsertColumnRow(col_oid.value(), new_oid, col.pos, NameView(col.name),
                                     col.type_val, col.len, col.notnull, col.cabin_policy);
         if (!s.ok()) return s;
     }
@@ -868,6 +1029,45 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
                 ForeignKeyRef{fk.fk_id, fk.child_rel_oid, fk.child_column_no, fk.flags});
         }
     }
+
+    // The relation's secondary indexes, in one sys.indexes scan
+    // (docs/feat-index.md §12, workplan IX04).
+    //
+    // A failure here is fatal to opening the relation, and for the *fkeys*
+    // reason rather than the Cabin one. An index the compiler cannot see
+    // would only cost speed - but an index the **write hook** cannot see is
+    // an entry never appended, and an index missing an entry is a row lost
+    // to every later probe. Both halves read this one list, so it fails
+    // shut.
+    auto indexes = ListIndexes();
+    if (!indexes.ok()) return indexes.status();
+    for (const SysIndexRow& row : indexes.value()) {
+        if (row.table_oid != oid) continue;
+
+        TableAccess::IndexRef ref;
+        ref.index_oid = row.index_oid;
+        ref.root_page_id = row.root_page_id;
+        ref.key_width = row.key_width;
+        ref.entry_width = row.entry_width;
+        ref.nkeys = row.nkeys;
+        ref.ncovered = row.ncovered;
+        ref.key_cols = row.key_cols;
+        ref.covered_cols = row.covered_cols;
+        access.indexes.push_back(ref);
+
+        // Leading column only - schema.hpp says why "any indexed column"
+        // would be the wrong question.
+        const std::uint16_t leading = ref.leading_column();
+        if (ref.nkeys > 0 && leading > 0 && leading < 64) {
+            access.index_mask |= (std::uint64_t{1} << leading);
+        }
+    }
+    // Creation order, so §9's lowest-oid tie-break is a property of the list
+    // rather than of how the rows happened to land on the page.
+    std::sort(access.indexes.begin(), access.indexes.end(),
+              [](const TableAccess::IndexRef& a, const TableAccess::IndexRef& b) {
+                  return a.index_oid < b.index_oid;
+              });
 
     return cache_.PutTableAccess(std::move(access));
 }
@@ -1450,23 +1650,207 @@ StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
     return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats);
 }
 
+Status Catalog::CheckIndexDef(const IndexDef& def) {
+    if (def.key_cols.empty()) {
+        return Status::InvalidArgument("catalog: an index needs at least one key column");
+    }
+    // A cap **refuses** and never truncates (spec §11): a truncated index
+    // declared complete is a wrong answer with a right answer's shape. That
+    // is the opposite of a Cabin cap, which may decline because a Cabin is
+    // only ever a shortcut.
+    if (def.key_cols.size() > kMaxIndexKeyColumns) {
+        return Status::InvalidArgument("catalog: an index takes at most " +
+                                        std::to_string(kMaxIndexKeyColumns) +
+                                        " key columns, this one declares " +
+                                        std::to_string(def.key_cols.size()));
+    }
+    if (def.covered_cols.size() > kMaxIndexCoveredColumns) {
+        return Status::InvalidArgument("catalog: an index covers at most " +
+                                        std::to_string(kMaxIndexCoveredColumns) +
+                                        " columns, this one declares " +
+                                        std::to_string(def.covered_cols.size()));
+    }
+    if ((def.flags & kIndexFlagUnique) != 0) {
+        return Status::Unsupported(
+            "catalog: UNIQUE indexes are not supported (docs/feat-index.md IX11); v1 is a read "
+            "accelerator that cannot fail a write for a reason of its own");
+    }
+
+    auto access = InitTableAccess(def.table_oid);
+    if (!access.ok()) return access.status();
+    const Schema& schema = access.value()->schema;
+
+    // A heap relation has no pk index, so resolving an entry's pk would be a
+    // chain scan and an index over it would turn one full scan into N
+    // partial ones. The same rule and the same argument as
+    // impl-foreign-keys.md F1's refusal of a heap parent.
+    if (access.value()->clustered_type != ClusteredType::kBtree) {
+        return Status::InvalidArgument(
+            "catalog: relation oid " + std::to_string(def.table_oid) +
+            " is heap-clustered; a secondary index resolves an entry through the primary key, "
+            "which a heap relation has no index for (docs/feat-index.md IX3)");
+    }
+
+    const auto check_column = [&](std::uint16_t pos, const char* role) -> Status {
+        if (pos >= schema.columns.size()) {
+            return Status::InvalidArgument("catalog: " + std::string(role) + " column position " +
+                                            std::to_string(pos) + " is past the relation's " +
+                                            std::to_string(schema.columns.size()) + " columns");
+        }
+        return Status::OK();
+    };
+    for (std::size_t i = 0; i < def.key_cols.size(); ++i) {
+        if (Status s = check_column(def.key_cols[i], "key"); !s.ok()) return s;
+        // The pk is carried only by the Keystone word and the clustered tree
+        // already indexes it; a second copy would be maintained forever to
+        // answer questions the descent answers faster.
+        if (def.key_cols[i] == 0) {
+            return Status::InvalidArgument(
+                "catalog: the primary key already has an index - the clustered tree is it");
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (def.key_cols[j] == def.key_cols[i]) {
+                return Status::InvalidArgument("catalog: column " +
+                                                std::to_string(def.key_cols[i]) +
+                                                " appears twice in the index key");
+            }
+        }
+    }
+    for (std::uint16_t pos : def.covered_cols) {
+        if (Status s = check_column(pos, "covered"); !s.ok()) return s;
+    }
+
+    if (FindIndexByName(def.name).ok()) {
+        return Status::AlreadyExists("catalog: an index named '" + def.name + "' already exists");
+    }
+    return Status::OK();
+}
+
+StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
+    // Re-checked here even when the caller already asked: this is the door
+    // every non-DDL caller comes through, and a check that only runs when
+    // someone remembers to ask is not a check.
+    if (Status s = CheckIndexDef(def); !s.ok()) return s;
+
+    auto index_oid = AllocateRowId(kSysIndexesTable);
+    if (!index_oid.ok()) return index_oid.status();
+
+    SysIndexRow row{};
+    row.index_oid = index_oid.value();
+    row.table_oid = def.table_oid;
+    row.root_page_id = def.root_page_id;
+    row.key_width = def.key_width;
+    row.entry_width = def.entry_width;
+    SetName(row.name, def.name);
+    row.nkeys = static_cast<std::uint8_t>(def.key_cols.size());
+    row.ncovered = static_cast<std::uint8_t>(def.covered_cols.size());
+    row.flags = def.flags;
+    row.reserved0 = 0;
+    for (std::size_t i = 0; i < def.key_cols.size(); ++i) row.key_cols[i] = def.key_cols[i];
+    for (std::size_t i = 0; i < def.covered_cols.size(); ++i) {
+        row.covered_cols[i] = def.covered_cols[i];
+    }
+
+    if (Status s = InsertRow(store_, kCatalogPageIndexes, row, kBootstrapXid); !s.ok()) return s;
+
+    // **Bumped**, where InsertIndexRow() deliberately did not. That comment
+    // was true while nothing cached anything derived from sys.indexes; an
+    // index appearing now stales `TableAccess::index_mask` on every held
+    // entry for this relation (IX04), which is a fact the compiler reads.
+    BumpVersion("sys.indexes create");
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("catalog", "created index " + def.name + " (oid " +
+                                  std::to_string(row.index_oid) + ") on relation oid " +
+                                  std::to_string(def.table_oid));
+    }
+    return row.index_oid;
+}
+
+Status Catalog::DropIndex(Oid index_oid) {
+    auto acted = ForFirstRow<SysIndexRow>(
+        store_, kCatalogPageIndexes,
+        [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple&) -> StatusOr<bool> {
+            if (row.index_oid != index_oid) return false;
+
+            // Retired, not delete-marked - DropCabin() and RetirePattern()
+            // state the argument, and it is the same one here.
+            if (Status s = page.RetireSlot(i); !s.ok()) return s;
+
+            BumpVersion("sys.indexes drop");
+            if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+                log_->Info("catalog", "dropped index oid " + std::to_string(index_oid));
+            }
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+    return Status::OK();
+}
+
+Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root) {
+    auto acted = ForFirstRow<SysIndexRow>(
+        store_, kCatalogPageIndexes,
+        [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.index_oid != index_oid) return false;
+            const Oid rel_oid = row.table_oid;
+            row.root_page_id = new_root;
+            const auto encoded = row.Encode();
+            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            // **Updated in place, not bumped**, which is this catalog's
+            // third departure from "drop everything at one choke point" and
+            // the one that had to exist. A root moves when a split grows the
+            // tree, which happens inside an ordinary INSERT - so a global
+            // drop would dangle the `const TableAccess*` the running
+            // statement holds, and a multi-row UPDATE would be holding it
+            // across every later row.
+            //
+            // It qualifies by the same test the two pattern updates do: a
+            // root belongs to one index and is read by nothing else.
+            cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+    return Status::OK();
+}
+
+StatusOr<std::vector<SysIndexRow>> Catalog::ListIndexes() {
+    return ScanAll<SysIndexRow>(store_, kCatalogPageIndexes);
+}
+
 StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {
-    auto rows = ScanAll<SysIndexRow>(store_, kCatalogPageIndexes);
+    auto rows = ListIndexes();
     if (!rows.ok()) return rows.status();
 
     std::vector<SysIndexRow> out;
-    for (const auto& row : rows.value()) {
+    for (const SysIndexRow& row : rows.value()) {
         if (row.table_oid == table_oid) out.push_back(row);
     }
     return out;
 }
 
+StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name) {
+    auto rows = ListIndexes();
+    if (!rows.ok()) return rows.status();
+    for (const SysIndexRow& row : rows.value()) {
+        if (NameView(row.name) == name) return row;
+    }
+    return Status::NotFound("no index by that name");
+}
+
 StatusOr<SysIndexRow> Catalog::FindIndexOnColumn(Oid table_oid, std::uint32_t col_pos) {
-    auto rows = ScanAll<SysIndexRow>(store_, kCatalogPageIndexes);
+    auto rows = ListIndexes();
     if (!rows.ok()) return rows.status();
 
-    for (const auto& row : rows.value()) {
-        if (row.table_oid == table_oid && row.col_pos == col_pos) return row;
+    for (const SysIndexRow& row : rows.value()) {
+        // `key_cols[0]` only - see the header for why "contains" would be
+        // the wrong question.
+        if (row.table_oid == table_oid && row.key_cols[0] == col_pos) return row;
     }
     return Status::NotFound("no index on this column");
 }

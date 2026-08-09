@@ -3,6 +3,7 @@
 #include "kds/sched/coro.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <unordered_set>
 
 #include <string>
@@ -12,6 +13,8 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/index/index_page.hpp"
+#include "kds/storage/index/index_tree.hpp"
 
 namespace kds::exec {
 
@@ -146,10 +149,10 @@ public:
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-                const txn::Snapshot* snapshot)
+                const txn::Snapshot* snapshot, bool indexes)
         : catalog_(catalog), store_(store), sink_(sink), depth_(depth), parent_(parent),
           stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins),
-          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything) {}
+          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes) {}
 
     Status Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
@@ -281,7 +284,7 @@ public:
         // step reading a relation through a different view than its outer
         // step would make one statement see two databases.
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_, cabins_, &snapshot_);
+                          trail_, replay_, cabins_, &snapshot_, indexes_);
         Status ran = inner.Run(sub.steps);
         if (!ran.ok()) return ran;
 
@@ -358,6 +361,9 @@ private:
         }
         if (step.kind == AccessKind::kCabinProbe) {
             return RunCabinStep(steps, index, step, access);
+        }
+        if (step.kind == AccessKind::kIndexProbe || step.kind == AccessKind::kIndexRange) {
+            return RunIndexStep(steps, index, step, access);
         }
         // A kFilterScan walks exactly as a kScan does - the kind is a
         // statistics distinction, not an execution one, and there is
@@ -573,6 +579,213 @@ private:
             ++stats_.For(step.step_id).cabin_recordings;
         }
         return Status::OK();
+    }
+
+    // A secondary-index probe or range (docs/feat-index.md §§1, 7).
+    //
+    // **Two phases, as ServeFromCabin is, and for a related reason.** Phase 1
+    // walks the index between the bounds the compiler encoded and collects
+    // the pks it names; phase 2 resolves each through the clustered tree and
+    // emits. The split is what keeps R1: `AcceptTupleAt` descends into the
+    // next step and anything below it may fetch, so an index-leaf span held
+    // across emission is exactly the span that rule forbids.
+    //
+    // What this must **not** do, both stated because both look like
+    // optimizations:
+    //
+    //   - It does not decide visibility. The predicate lives at exactly one
+    //     site and this is not it; every located row goes through
+    //     `AcceptTupleAt` like every other kind.
+    //   - It does not emit a row from the entry. There is no visibility
+    //     witness outside the tuple (spec §7), so covered columns are a
+    //     **filter** and never a projection source - they let a row that
+    //     will be dropped avoid its base descent, and nothing more.
+    Status RunIndexStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                        const catalog::TableAccess& access) {
+        // Any reason to decline takes the walk, which is what the step would
+        // have compiled to had the index not existed - and returns the
+        // identical rows, because the equalities are still in the residual.
+        // `indexes = off`: take the walk the step would have taken had the
+        // index not existed. The chain is **unchanged** - the kind is still
+        // kIndexProbe and ANALYZE still says so - which is what keeps the
+        // plan `f(shape, catalog)` and makes the A/B comparison compare
+        // execution rather than compilation.
+        if (!indexes_ || !step.index.has_value()) return RunWalkStep(steps, index, step, access);
+        const IndexProbe& probe = *step.index;
+
+        // The **live** root, not the one compiled in: a split republishes it
+        // in place on the cached entry (feat-index.md §12a), and a chain
+        // compiled before a write may name a page that is no longer the top
+        // of the tree.
+        const catalog::TableAccess::IndexRef* ix = nullptr;
+        for (const catalog::TableAccess::IndexRef& candidate : access.indexes) {
+            if (candidate.index_oid == probe.index_oid) ix = &candidate;
+        }
+        // Dropped between compile and execution. The chain is stale, not
+        // wrong: walking answers it.
+        if (ix == nullptr) return RunWalkStep(steps, index, step, access);
+
+        index::IndexLayout layout;
+        layout.key_width = ix->key_width;
+        layout.covered_width =
+            static_cast<std::uint16_t>(ix->entry_width - ix->key_width - index::kIndexPkWidth);
+        const std::size_t sort_key_width = layout.sort_key_width();
+        if (probe.low.size() != sort_key_width || probe.high.size() != sort_key_width) {
+            // The index was redefined under a compiled chain. Same answer as
+            // a dropped one.
+            return RunWalkStep(steps, index, step, access);
+        }
+
+        StepStats& step_stats = stats_.For(step.step_id);
+        index_scratch_.clear();
+        seen_pks_.clear();
+
+        auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, probe.low);
+        if (!first.ok()) return first.status();
+        NoteFetch();
+
+        Status walked = index::IndexVisitFrom(
+            store_, first.value(), layout, storage::PageAccess::kRead,
+            [&](PageId, index::IndexLeafView& leaf,
+                std::uint16_t at) -> StatusOr<storage::VisitControl> {
+                auto entry = leaf.Entry(at);
+                if (!entry.ok()) return entry.status();
+                const std::span<const std::byte> sort_key =
+                    entry.value().subspan(0, sort_key_width);
+
+                // The descent lands on the first leaf that *could* hold the
+                // low bound, so the entries before it are skipped rather
+                // than assumed absent.
+                if (std::memcmp(sort_key.data(), probe.low.data(), sort_key_width) < 0) {
+                    return storage::VisitControl::kContinue;
+                }
+                // Past the high bound: the leaves to the right are never
+                // fetched, which is what makes a range cost its range.
+                if (std::memcmp(sort_key.data(), probe.high.data(), sort_key_width) > 0) {
+                    return storage::VisitControl::kStop;
+                }
+                ++step_stats.index_entries_scanned;
+
+                // **Duplicates are expected, not damage.** Maintenance is
+                // append-only, so a key round trip (v -> v' -> v) leaves two
+                // entries naming one pk (§2) - and resolving it twice would
+                // emit its row twice.
+                const std::uint64_t pk =
+                    index::GetIndexPk(entry.value().subspan(ix->key_width));
+                if (!seen_pks_.insert(pk).second) return storage::VisitControl::kContinue;
+
+                // The covering filter (§7). A row this entry's own values
+                // already disqualify never costs a base descent - which is
+                // the whole of what covering buys, since visibility still
+                // requires the tuple.
+                if (layout.covered_width > 0) {
+                    auto kept = CoveredRowSurvives(step, access, *ix,
+                                                   entry.value().subspan(sort_key_width));
+                    if (!kept.ok()) return kept.status();
+                    if (!kept.value()) {
+                        ++step_stats.index_entries_filtered;
+                        return storage::VisitControl::kContinue;
+                    }
+                }
+
+                index_scratch_.push_back(pk);
+                return storage::VisitControl::kContinue;
+            });
+        if (!walked.ok()) return walked;
+
+        // **Sorted, and this is a correctness property rather than a
+        // locality one.** The walk collects pks in *index key* order; a scan
+        // of the same relation emits them in pk order. Without this sort,
+        // creating an index would reorder a reply - and "an accelerator may
+        // cost performance and must never change a query result" is the
+        // standard invariant 8 holds Waystone to, which an authoritative
+        // structure does not get to fall below. The equivalence tests
+        // compare byte for byte precisely so this cannot be missed.
+        //
+        // It buys locality as well: on a btree relation pk order *is* leaf
+        // order, so the descents below walk the tree forwards instead of
+        // jumping. The cost is one sort of the matched set, against one
+        // descent per element of it.
+        std::sort(index_scratch_.begin(), index_scratch_.end());
+
+        // Phase 2. Every pk resolves through the clustered tree - the index
+        // is refused on a heap relation precisely so this descent exists
+        // (spec IX3).
+        for (const std::uint64_t pk : index_scratch_) {
+            if (stopped_) break;
+            NoteFetch();
+            auto found = btree::BtreeLookup(store_, access.desc_page_id, pk);
+            if (!found.ok()) {
+                if (found.status().code() == StatusCode::kNotFound) {
+                    // Dangling: the pk is in no clustered tree. By K1 it can
+                    // never resurface under a different tuple, so the entry
+                    // is dead forever - a skip, never an error.
+                    continue;
+                }
+                return found.status();
+            }
+
+            auto bytes = store_.GetForRead(found.value().page_id);
+            if (!bytes.ok()) return bytes.status();
+            heap::PageView page(bytes.value());
+            if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
+                                         found.value().slot);
+                !s.ok()) {
+                return s;
+            }
+        }
+        step_stats.index_rows_resolved += index_scratch_.size();
+        return Status::OK();
+    }
+
+    // Whether an entry's covered columns already disqualify its row.
+    //
+    // A **conservative** test: it answers false only when a residual
+    // predicate this entry's own values can decide says no. Anything it
+    // cannot decide - a predicate on an uncovered column, a spilled covered
+    // value, an operand that is not a literal - keeps the row, and the base
+    // read filters it exactly as it would have. Getting that direction wrong
+    // is the difference between a lost row and a wasted descent.
+    StatusOr<bool> CoveredRowSurvives(const Step& step, const catalog::TableAccess& access,
+                                      const catalog::TableAccess::IndexRef& ix,
+                                      std::span<const std::byte> covered) {
+        std::size_t at = 0;
+        for (const std::uint16_t col_pos : ix.covered()) {
+            auto width = catalog::RowLayout::ColumnWidth(access.schema.columns[col_pos],
+                                                          access.layout.inline_cell_width);
+            if (!width.ok()) return width.status();
+            if (at + width.value() > covered.size()) {
+                return Status::Corruption("index entry is shorter than its covered columns");
+            }
+            const std::span<const std::byte> cell = covered.subspan(at, width.value());
+            at += width.value();
+
+            bool decoded = false;
+            for (const StepPredicate& pred : step.residual) {
+                if (pred.lhs.up != 0 || pred.lhs.col_pos != col_pos) continue;
+                if (pred.rhs.kind != OperandKind::kLiteral) continue;
+
+                if (!decoded) {
+                    // A spilled covered value carries a pointer and not the
+                    // bytes, and resolving one here would be a page fetch
+                    // under the index leaf's span - R1's exact prohibition.
+                    // So it is undecidable *here* and the row is kept.
+                    std::vector<PendingSpill> spills;
+                    if (Status s = DecodeOneValueInto(access.schema.columns[col_pos], cell,
+                                                      col_pos, covered_scratch_, &spills);
+                        !s.ok()) {
+                        return s;
+                    }
+                    if (!spills.empty()) break;
+                    decoded = true;
+                }
+                if (!CompareValues(access.schema.columns[col_pos].type_val, covered_scratch_,
+                                   pred.rhs.literal, pred.op)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     // Serves an observed value's entry set.
@@ -1180,10 +1393,18 @@ private:
     std::vector<Located> serve_scratch_;
     std::unordered_set<std::uint64_t> seen_pks_;
 
+    // RunIndexStep's phase-1 output and its covered-column decode slot. Held
+    // on the runner rather than built per step, for TrailCollector's reason:
+    // a per-statement allocation on the read path measured as most of an 18%
+    // regression once.
+    std::vector<std::uint64_t> index_scratch_;
+    parser::AstValue covered_scratch_;
+
     std::vector<Bound> bound_;
     std::vector<const catalog::Schema*> schemas_;
     ChainFrame frame_;
     bool stopped_ = false;
+    bool indexes_ = true;
 };
 
 // The highest step_id anywhere under `step`/`chain`, sub-chains included.
@@ -1287,7 +1508,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     // conjuncts for UPDATE, which is not a chain execution and has no trail
     // of its own to contribute to.
     ChainRunner runner(catalog, store, kUnused, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr, snapshot);
+                       /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr, snapshot, /*indexes=*/true);
 
     for (const SubChain& sub : step.sub_chains) {
         auto value = runner.EvaluateSubChain(sub, frame);
@@ -1301,7 +1522,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot) {
+               const txn::Snapshot* snapshot, bool indexes) {
     if (chain.steps.empty()) {
         return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -1324,7 +1545,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     Budget spend(budget.limit());
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay, cabins, snapshot);
+                       trail, replay, cabins, snapshot, indexes);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by

@@ -254,6 +254,87 @@ SysTableRow SampleTableRow() {
     return row;
 }
 
+// ---- sys.indexes (docs/feat-index.md §12, workplan IX03) ---------------
+
+SysIndexRow SampleIndexRow() {
+    SysIndexRow row{};
+    row.index_oid = 0x0102030405060708ull;
+    row.table_oid = 0x1112131415161718ull;
+    row.root_page_id = 0xA1A2A3A4u;
+    row.key_width = 0xB1B2;
+    row.entry_width = 0xC1C2;
+    SetName(row.name, "orders_by_owner");
+    row.nkeys = 2;
+    row.ncovered = 3;
+    row.flags = 0;
+    row.reserved0 = 0;
+    row.key_cols = {7, 9, 0, 0};
+    row.covered_cols = {11, 13, 17, 0, 0, 0, 0, 0};
+    return row;
+}
+
+TEST(SysIndexRowTest, RoundTripsEveryFieldIncludingBothColumnArrays) {
+    const SysIndexRow in = SampleIndexRow();
+    auto out = SysIndexRow::Decode(in.Encode());
+    ASSERT_TRUE(out.ok()) << out.status().message();
+
+    EXPECT_EQ(out.value().index_oid, in.index_oid);
+    EXPECT_EQ(out.value().table_oid, in.table_oid);
+    EXPECT_EQ(out.value().root_page_id, in.root_page_id);
+    EXPECT_EQ(out.value().key_width, in.key_width);
+    EXPECT_EQ(out.value().entry_width, in.entry_width);
+    EXPECT_EQ(NameView(out.value().name), "orders_by_owner");
+    EXPECT_EQ(out.value().nkeys, in.nkeys);
+    EXPECT_EQ(out.value().ncovered, in.ncovered);
+    EXPECT_EQ(out.value().key_cols, in.key_cols);
+    EXPECT_EQ(out.value().covered_cols, in.covered_cols);
+}
+
+TEST(SysIndexRowTest, TheColumnArraysArePackedAtTheirDeclaredStride) {
+    // Written element by element rather than as one block copy, so the
+    // on-disk stride is sizeof(uint16_t) and not whatever the compiler chose
+    // for the std::array. Moving one entry must move exactly two bytes.
+    SysIndexRow row = SampleIndexRow();
+    const auto baseline = row.Encode();
+
+    row.key_cols[1] = 0;
+    const auto zeroed = row.Encode();
+
+    for (std::size_t i = 0; i < SysIndexRow::kOnDiskSize; ++i) {
+        const std::size_t at = SysIndexRow::kKeyColsOffset + sizeof(std::uint16_t);
+        const bool in_field = i >= at && i < at + sizeof(std::uint16_t);
+        if (in_field) continue;
+        EXPECT_EQ(baseline[i], zeroed[i]) << "byte " << i << " moved with key_cols[1]";
+    }
+}
+
+TEST(SysIndexRowTest, ACountPastItsArrayIsCorruptionRatherThanAnOutOfBoundsRead) {
+    // One corrupt byte would otherwise let every later reader index off the
+    // end of the array, so it is caught at the one door these rows come
+    // through.
+    SysIndexRow row = SampleIndexRow();
+    row.nkeys = static_cast<std::uint8_t>(kMaxIndexKeyColumns + 1);
+    auto out = SysIndexRow::Decode(row.Encode());
+    EXPECT_FALSE(out.ok());
+    EXPECT_EQ(out.status().code(), StatusCode::kCorruption);
+
+    // Zero too: an index with no key column has nothing to order by.
+    row = SampleIndexRow();
+    row.nkeys = 0;
+    EXPECT_FALSE(SysIndexRow::Decode(row.Encode()).ok());
+
+    row = SampleIndexRow();
+    row.ncovered = static_cast<std::uint8_t>(kMaxIndexCoveredColumns + 1);
+    EXPECT_FALSE(SysIndexRow::Decode(row.Encode()).ok());
+}
+
+TEST(SysIndexRowTest, AWrongSizedPayloadIsRefusedNeverInterpreted) {
+    const auto encoded = SampleIndexRow().Encode();
+    std::vector<std::byte> short_row(encoded.begin(), encoded.end() - 1);
+    auto out = SysIndexRow::Decode(short_row);
+    EXPECT_FALSE(out.ok());
+}
+
 TEST(SysTableRowTest, RoundTripsEveryFieldIncludingTheOwnerCore) {
     const SysTableRow in = SampleTableRow();
     auto out = SysTableRow::Decode(in.Encode());
@@ -333,6 +414,77 @@ TEST(CorePlacementTest, TheRotationIsNotPerformedWhileDdlOwnsAllocation) {
     EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 0), kSystemCore);
     EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 1), kSystemCore);
     EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 2), kSystemCore);
+}
+
+// ---- decimal(p, s) packed into `len` (TY02) -----------------------------
+//
+// The packing exists so that adding DECIMAL cost **no data-file format
+// change**: `SysColumnRow` has no spare byte, so widening it would have
+// meant a superblock version bump and every pre-existing file refusing to
+// mount. `len` was already dead weight for a decimal column - only `char`
+// reads it as a width - so the pair rides in it.
+
+TEST(SysColumnRowDecimalTest, PrecisionAndScaleRoundTripThroughLen) {
+    for (std::uint8_t p = 1; p <= 18; ++p) {
+        for (std::uint8_t s = 0; s <= p; ++s) {
+            const std::uint32_t packed = PackDecimalLen(p, s);
+            EXPECT_EQ(DecimalPrecisionOf(packed), p) << int(p) << "," << int(s);
+            EXPECT_EQ(DecimalScaleOf(packed), s) << int(p) << "," << int(s);
+        }
+    }
+}
+
+TEST(SysColumnRowDecimalTest, ThePackingSurvivesTheRowsOwnEncoding) {
+    // The point of the whole exercise: it goes to disk in a field that
+    // already existed, so it round-trips through Encode/Decode unchanged
+    // and no format version moved.
+    SysColumnRow row{};
+    row.oid = 7;
+    row.rel_id = 4000;
+    row.pos = 2;
+    SetName(row.name, "price");
+    row.type_val = kTypeValDecimal;
+    row.len = PackDecimalLen(10, 2);
+    row.notnull = true;
+
+    auto decoded = SysColumnRow::Decode(row.Encode());
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().len, row.len);
+    EXPECT_EQ(DecimalPrecisionOf(decoded.value().len), 10);
+    EXPECT_EQ(DecimalScaleOf(decoded.value().len), 2);
+}
+
+TEST(SysColumnRowDecimalTest, TheUnusedHighBitsStayZero) {
+    // Sixteen of len's thirty-two bits are used, and the rest are left
+    // available rather than filled with anything - which is what makes a
+    // future third field in here possible without a format event.
+    EXPECT_EQ(PackDecimalLen(18, 18) >> 16, 0u);
+}
+
+TEST(SysColumnRowDecimalTest, ColumnTypeTextRendersTheDeclaredForm) {
+    // The client-visible half: `len` is no longer readable as a width
+    // without knowing the type, so the two display paths render the type.
+    SysColumnRow dec{};
+    dec.type_val = kTypeValDecimal;
+    dec.len = PackDecimalLen(10, 2);
+    EXPECT_EQ(ColumnTypeText(dec, "decimal"), "decimal(10,2)");
+
+    SysColumnRow chr{};
+    chr.type_val = kTypeValChar;
+    chr.len = 8;
+    EXPECT_EQ(ColumnTypeText(chr, "char"), "char(8)");
+
+    // Every other type's width comes from its type_val, so the bare name
+    // is the whole truth and `len` says nothing a reader wants.
+    SysColumnRow i64{};
+    i64.type_val = kTypeValInt64;
+    i64.len = 8;
+    EXPECT_EQ(ColumnTypeText(i64, "int64"), "int64");
+
+    SysColumnRow date{};
+    date.type_val = kTypeValDate;
+    date.len = 4;
+    EXPECT_EQ(ColumnTypeText(date, "date"), "date");
 }
 
 }  // namespace

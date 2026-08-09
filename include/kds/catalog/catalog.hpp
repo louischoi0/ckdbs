@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -27,9 +28,13 @@
 //     (heap_chain.hpp vs btree.hpp).
 //   - No transaction manager exists yet, so every row written here is
 //     stamped kBootstrapXid, which is visible to every read view.
-//   - Object oid generation (GenerateUserOid()) is in-memory only and
-//     resets on restart - a KNOWN GAP; see kUserOidStart in
-//     well_known.hpp. sys.patterns rows do not use it, for that reason.
+//   - Object oids (GenerateUserOid()) are unique for the life of the
+//     database. The counter is recovered from the catalog's own rows on
+//     first use rather than persisted; see that function and
+//     kUserOidStart in well_known.hpp. This was a KNOWN GAP until
+//     2026-08-08 - the counter was in-memory and restarted every boot,
+//     so a clean restart plus one CREATE TABLE produced two relations
+//     sharing an oid (docs/keystoneid-k0-findings.md §6).
 //
 // Logging (component tag "catalog"): catalog pages are the pages whose
 // contents explain every other page, so the writes are logged at Info
@@ -112,9 +117,33 @@ public:
     // the first conflicting CreateAt() reports.
     Status Bootstrap();
 
-    // Allocates one fresh object oid. See kUserOidStart's comment: not
-    // persisted across restarts.
-    Oid GenerateUserOid() noexcept;
+    // Allocates one fresh object oid, **unique for the life of the
+    // database** and not merely for the life of the process
+    // (docs/keystoneid-k0-findings.md §6).
+    //
+    // The counter is not stored anywhere. It is *recovered* on first use by
+    // reading back the highest oid the catalog already carries, and every
+    // call after that is an in-memory increment - so a boot costs one scan
+    // and a `CREATE TABLE` costs nothing extra. Recovering beats persisting
+    // here because there is no durable counter to fall behind the rows it
+    // describes: the rows **are** the counter, so a crash between issuing an
+    // oid and writing its row loses the oid rather than duplicating it, and
+    // losing one is free (`keystoneid-invariant.md` K3 - no density promise).
+    //
+    // **The contract this depends on**, and the one thing to check before
+    // adding a caller: every oid handed out here must end up in `sys.objects`
+    // or `sys.columns`, because those are the two relations
+    // `HighestIssuedUserOid()` reads back. An oid written only to some third
+    // relation would be invisible to the recovery and reissued after a
+    // restart. Nothing else in the engine takes its ids from here - patterns,
+    // cabins, foreign keys and indexes each use their own persistent
+    // per-relation `next_id` sequence - so the contract holds today, and the
+    // scan is where to extend it if that changes.
+    //
+    // Fallible now, where it used to be `noexcept`: reading the catalog can
+    // fail, and an oid guessed after a failed read is exactly the collision
+    // this exists to prevent.
+    StatusOr<Oid> GenerateUserOid();
 
     // Creates a new table: allocates its storage root page, formats it for
     // the requested clustered type, and inserts the corresponding
@@ -485,10 +514,78 @@ public:
                               PageId varheap_page_id,
                               std::uint32_t owner_core = kSystemCore);
 
-    Status InsertIndexRow(Oid index_oid, Oid table_oid, std::uint32_t col_pos,
-                           std::uint32_t col_type, std::uint8_t flags);
+    // ---- Secondary indexes (docs/feat-index.md §12) --------------------
+
+    // What CREATE INDEX has settled by the time it reaches the catalog.
+    // The widths are computed by the caller from the key columns
+    // (exec::IndexKeyWidth) rather than here, because deriving them needs
+    // the key encoding and `catalog/` sits below `exec/`.
+    struct IndexDef {
+        Oid table_oid = 0;
+        std::string name;
+        PageId root_page_id = kInvalidPageId;
+        std::uint16_t key_width = 0;
+        std::uint16_t entry_width = 0;
+        std::vector<std::uint16_t> key_cols;      // declared order; part of the format
+        std::vector<std::uint16_t> covered_cols;  // declared order
+        std::uint8_t flags = 0;
+    };
+
+    // Writes the sys.indexes row and returns its `index_oid`.
+    //
+    // Refuses, each naming the reason: a name already in use, an empty or
+    // over-cap column list (a cap **refuses**, never truncates - spec §11),
+    // a duplicate or out-of-range column position, an index on the primary
+    // key (the clustered tree already is one), a heap-clustered relation
+    // (spec IX3 - there is no pk descent to resolve an entry through), and
+    // `kIndexFlagUnique` (spec IX11).
+    //
+    // It does **not** build the tree or check the key columns' types: the
+    // root page is allocated and formatted by the caller, which is what
+    // keeps the catalog free of the index page format.
+    StatusOr<Oid> CreateIndex(const IndexDef& def);
+
+    // Every refusal `CreateIndex` makes, without writing anything.
+    //
+    // `CreateIndex` is this plus the write, so there is still exactly one
+    // implementation of each refusal. It is public because the DDL layer
+    // **backfills before it publishes** (docs/feat-index.md §10a) - and a
+    // declaration that could never work should be refused by name before it
+    // walks a relation, not after, and certainly not as a page-type error
+    // from inside the build.
+    Status CheckIndexDef(const IndexDef& def);
+
+    // Retires the row. Retired rather than delete-marked, for DropCabin()'s
+    // reason: a catalog read has no snapshot to filter a mark against, so a
+    // marked row would still be found by every lookup.
+    //
+    // The index's **pages are not freed** - nothing frees a page in this
+    // engine yet - so a dropped index leaks its tree until page reclamation
+    // exists, exactly as a dropped Cabin's memory and a superseded var-heap
+    // value do.
+    Status DropIndex(Oid index_oid);
+
+    StatusOr<std::vector<SysIndexRow>> ListIndexes();
     StatusOr<std::vector<SysIndexRow>> FindIndexesForTable(Oid table_oid);
+    StatusOr<SysIndexRow> FindIndexByName(std::string_view name);
+
+    // An index whose **leading** key column is `col_pos`.
+    //
+    // Leading, not "contains", and the distinction is load-bearing: an index
+    // on `(a, b)` can serve an equality on `a` and cannot serve one on `b`,
+    // so answering yes for `b` would stop the compiler calling that step a
+    // filter scan while leaving it exactly as slow - a lie to the access
+    // statistics, which is the one consumer that exists today.
+    //
+    // NotFound is the ordinary answer and is never cached
+    // (catalog_cache.hpp's absence rule).
     StatusOr<SysIndexRow> FindIndexOnColumn(Oid table_oid, std::uint32_t col_pos);
+
+    // Republishes an index's root after a split grew the tree a level.
+    // The counterpart of UpdateRelationDescPage(), and it exists for the
+    // same reason: the storage layer has no catalog, so it reports a new
+    // root and someone above it records one.
+    Status UpdateIndexRoot(Oid index_oid, PageId new_root);
 
     const SysObjectRegistry& sys_objects() const noexcept { return sys_objects_; }
 
@@ -515,6 +612,13 @@ private:
     // bootstrap relation that is not just a page and two rows, and folding
     // it into Bootstrap() would bury the reason it differs.
     Status BootstrapPatternDefs();
+
+    // Phase 6 of Bootstrap(): creates sys.assertions, the *second* row-codec
+    // catalog relation (docs/feat-assertion.md §8.2, workplan AST03). Same
+    // shape as the phase above it and for the same reason - it stores the
+    // declaration's text verbatim - so the two read as one pattern rather
+    // than as a special case and a copy of it.
+    Status BootstrapAssertions();
 
     // `cabin_policy` is one of the `kCabinPolicy*` values (rows.hpp) and
     // defaults to unset, which every reader treats as `auto`. It is a
@@ -568,7 +672,16 @@ private:
 
     Logger* log_ = nullptr;
     InvalidationHook on_invalidate_;
-    Oid next_user_oid_ = kUserOidStart;
+    // Unset until the first GenerateUserOid() recovers it from the catalog.
+    // An optional rather than a sentinel value, because every integer in
+    // this type's range is a legal oid and a sentinel would be one more
+    // thing that has to stay outside the range it guards.
+    std::optional<Oid> next_user_oid_;
+
+    // The highest oid `sys.objects` and `sys.columns` carry, or
+    // kUserOidStart - 1 if they carry none above it. Reads the pages; called
+    // once per process, by the first GenerateUserOid().
+    StatusOr<Oid> HighestIssuedUserOid();
     SysObjectRegistry sys_objects_;
     CatalogCache cache_;
     std::uint64_t catalog_version_ = 0;

@@ -36,6 +36,23 @@ bool SchemaCanSpill(const Schema& schema) noexcept {
     return false;
 }
 
+Status CheckDeclarableColumnTypes(const Schema& schema) {
+    for (const auto& col : schema.columns) {
+        // A decimal with no scale stored has values with no defined
+        // meaning. The parser refuses a bare `decimal` and the dispatcher
+        // packs the pair, so reaching here with an unset one means the
+        // schema was built by neither - which is exactly the case a check
+        // at the catalog's own door is for.
+        if ((col.type_val == kTypeValDecimal || col.type_val == kTypeValDecimalWide) &&
+            DecimalPrecisionOf(col.len) == 0) {
+            return Status::InvalidArgument(
+                "column '" + std::string(NameView(col.name)) +
+                "' is decimal with no precision recorded (docs/spec-types.md TY2)");
+        }
+    }
+    return Status::OK();
+}
+
 Status CheckKeystoneColumn(const Schema& schema) {
     if (schema.columns.empty()) {
         return Status::InvalidArgument(

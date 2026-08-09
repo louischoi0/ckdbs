@@ -117,6 +117,26 @@ struct StepStats {
     // was pruned, and `rows_examined` is what tells those apart.
     std::uint64_t range_pages_pruned = 0;
 
+    // Secondary index (docs/feat-index.md §§1, 7).
+    //
+    // `index_entries_scanned` counts entries the walk read between its two
+    // bounds; `index_rows_resolved` counts the pks it then descended for.
+    // The gap between them is what the layer actually saved, and it has two
+    // sources the third counter separates: a duplicate pk (maintenance is
+    // append-only, so a key round trip leaves two entries naming one row)
+    // and `index_entries_filtered`, a row a **covered** column already
+    // disqualified.
+    //
+    // That last one is the only number that prices covering, and it prices
+    // it honestly: a covered column saves a base *descent*, never a base
+    // read, because visibility still requires the tuple (spec §7). So
+    // `index_entries_filtered` counts descents avoided and nothing else -
+    // if it is zero, a COVERING clause bought exactly the write cost it
+    // added.
+    std::uint64_t index_entries_scanned = 0;
+    std::uint64_t index_entries_filtered = 0;
+    std::uint64_t index_rows_resolved = 0;
+
     // Cabin (docs/feat-cabin.md §7's "ANALYZE narrates all three").
     //
     // `cabin_hits` counts probes served from an observed value's entry set -
@@ -219,11 +239,22 @@ struct ExecStats {
 // precisely what the engine did before MVCC: every row carried
 // kBootstrapXid and every row was visible. So a caller that passes nothing
 // gets byte-identical results to the pre-transactional executor.
+// `indexes` is the read-path switch (`indexes`, default on). Off makes an
+// index step take the walk it would have taken had the index not existed -
+// **the compiled chain is unchanged either way**, exactly as `cabins` leaves
+// a `kCabinProbe` step compiled and steers only the branch inside it. That is
+// what keeps the plan `f(shape, catalog)`, and it makes the A/B comparison a
+// sharper test than a compiler switch would: identical plan, identical rows,
+// different work.
+//
+// There is deliberately no switch for index **maintenance**. An index that
+// stops being maintained is *wrong* rather than slow, and a config key that
+// can produce a wrong answer is not a config key.
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
-               const txn::Snapshot* snapshot = nullptr);
+               const txn::Snapshot* snapshot = nullptr, bool indexes = true);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

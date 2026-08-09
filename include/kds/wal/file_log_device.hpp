@@ -19,9 +19,16 @@
 // sections 4.1, 11, 13) - "archive a segment" is then a file copy and
 // "recycle" is a rename or unlink, with no hole-punching.
 //
-// Segment files are created at full size via posix_fallocate, so a later
-// append cannot fail for lack of space after the record it belongs to was
-// already accepted. Sparse reads inside that space return zeroes.
+// Segment files are created at full size - posix_fallocate for the space
+// promise, then zero-filled and fsynced - so a later append cannot fail for
+// lack of space after the record it belongs to was already accepted, and so
+// the commit path never writes into an unwritten extent. That second half
+// is a latency property: converting a reserved extent to a written one is a
+// journal transaction, and paying it inside the fsync a commit waits for
+// measured as the difference between a ~950us flush and a ~2,100us one
+// (bench/results-scenario2-freight.md). Creation therefore costs one
+// sequential segment-sized write, and every commit-path Sync() is
+// data-only fdatasync.
 //
 // pwrite/pread rather than seek+write: no shared file offset means no
 // hidden state between calls, matching FilePageDevice.
@@ -59,9 +66,11 @@ public:
     Status ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                   std::span<std::byte> out) override;
 
-    // fsync of every open segment. Directory metadata (the segment files'
-    // existence) is synced when a segment is created, not here, so a crash
-    // right after CreateSegment cannot leave a nameless file.
+    // fdatasync of every open segment - data only, because a segment's size
+    // and extents were made durable at creation. Directory metadata (the
+    // segment files' existence) is synced when a segment is created, not
+    // here, so a crash right after CreateSegment cannot leave a nameless
+    // file.
     Status Sync() override;
 
 private:

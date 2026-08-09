@@ -233,6 +233,23 @@ access_statistics = on
 # so a crash declares every Cabin unobserved and traffic rebuilds it.
 cabins = on
 
+# ---- Secondary indexes (docs/feat-index.md) --------------------------------
+#
+# Whether a secondary index may be **read**. Off makes an index step take the
+# walk it would have taken had the index not existed.
+#
+# **A read-path switch only, and the asymmetry is deliberate.** There is no
+# key for index *maintenance*, because an index that stops being maintained
+# is wrong rather than slow - a config key that can produce a wrong answer is
+# not a config key. Turning the write cost off is a catalog act: `DROP INDEX`.
+#
+# On by default because it does nothing until a `CREATE INDEX`. Off is what
+# the contract tests compare against: replies must be byte-identical either
+# way, and the *compiled chain* is identical too - `indexes = off` steers the
+# branch inside an index step, never which step was compiled - so the
+# comparison is over execution rather than over planning.
+indexes = on
+
 # How much one Cabin may hold: distinct observed values, and entries per
 # value. `[PROPOSED]` - docs/feat-cabin.md section 8 leaves the budget open,
 # so these are configurable rather than compiled in, and nothing depends on

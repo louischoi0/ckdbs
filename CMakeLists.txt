@@ -25,6 +25,8 @@ add_library(kds
     src/storage/heap/heap_chain.cpp
     src/storage/btree/btree_page.cpp
     src/storage/btree/btree.cpp
+    src/storage/index/index_page.cpp
+    src/storage/index/index_tree.cpp
     src/storage/free_map.cpp
     src/storage/extent_lease.cpp
     src/txn/undo_page.cpp
@@ -33,6 +35,7 @@ add_library(kds
     src/txn/trx_id.cpp
     src/txn/manager.cpp
     src/storage/in_memory_page_store.cpp
+    src/storage/cabin_bound_page.cpp
     src/storage/device_page_store.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
@@ -78,10 +81,12 @@ add_library(kds
     src/wal/file_log_device.cpp
     src/wal/writer.cpp
     src/exec/row_codec.cpp
+    src/exec/index_key.cpp
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
     src/exec/step_compiler.cpp
     src/exec/aggregate.cpp
+    src/exec/type_literals.cpp
     src/exec/chain_frame.cpp
     src/exec/step_vm.cpp
     src/exec/budget.cpp
@@ -90,6 +95,10 @@ add_library(kds
     src/exec/tuple_verify.cpp
     src/exec/pattern_ddl.cpp
     src/exec/cabin_ddl.cpp
+    src/exec/index_ddl.cpp
+    src/exec/assertion_catalog.cpp
+    src/exec/bound_cabin.cpp
+    src/exec/index_maintain.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/coro.cpp

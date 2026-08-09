@@ -55,6 +55,33 @@ TEST(ParserTest, InsertParsesMixedValueTypes) {
     EXPECT_EQ(ins->values[3].int_val, -9);
 }
 
+TEST(ParserTest, ABareNumericLiteralIsTheQuotedStringOfItsSpelling) {
+    // TY3 phase 2: `12.34` produces exactly the AstValue `'12.34'` would -
+    // kStr, spelling preserved - so every stage past the parser has one
+    // case, and the column's type gives it meaning at the usual gates.
+    auto stmt = Parse("INSERT INTO t VALUES (12.34, -0.5)");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ins = std::get_if<InsertStmt>(&stmt.value());
+    ASSERT_NE(ins, nullptr);
+    ASSERT_EQ(ins->values.size(), 2u);
+    EXPECT_EQ(ins->values[0].type, ValueType::kStr);
+    EXPECT_EQ(ins->values[0].str_val, "12.34");
+    EXPECT_EQ(ins->values[1].type, ValueType::kStr);
+    EXPECT_EQ(ins->values[1].str_val, "-0.5");
+
+    // The byte offset is the literal's own first byte - what lets a later
+    // coercion failure point at what the client wrote (TY05).
+    //                            0123456789012345678901234567
+    auto sel = Parse("SELECT * FROM t WHERE amt = 12.34");
+    ASSERT_TRUE(sel.ok()) << sel.status().message();
+    auto* s = std::get_if<SelectStmt>(&sel.value());
+    ASSERT_NE(s, nullptr);
+    ASSERT_EQ(s->where.size(), 1u);
+    EXPECT_EQ(s->where[0].val.type, ValueType::kStr);
+    EXPECT_EQ(s->where[0].val.str_val, "12.34");
+    EXPECT_EQ(s->where[0].val.byte_offset, 28u);
+}
+
 TEST(ParserTest, InsertPreservesRawIntTextForLargeLiterals) {
     auto stmt = Parse("INSERT INTO t VALUES (18446744073709551615)");
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();

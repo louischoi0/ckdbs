@@ -157,6 +157,16 @@ namespace kds::parser {
 // X. Only a change that moves an existing statement's hash invalidates
 // what is on disk.
 //
+// One refinement, earned by the bare-numeric token (TY3 phase 2):
+// "already fingerprintable" means *already storable* - a statement that
+// lexes but cannot parse produces a hash, but that hash can never reach
+// `sys.patterns`, because nothing records a statement that does not
+// execute and a CREATE PATTERN body must itself parse. Fusing
+// `12.34`'s three tokens into one moved the hash of exactly such
+// statements and nothing else, so the version did not move. The claim a
+// change like it must argue: the only token sequences whose hashing
+// changes appear in no statement any production accepts.
+//
 // Never 0. A `sys.patterns` row read out of a zeroed or never-written page
 // decodes to version 0, and that must not be mistaken for a current row -
 // which is exactly the mistake `IsCurrentFingerprintVersion()` exists to

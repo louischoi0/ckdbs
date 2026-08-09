@@ -1,0 +1,375 @@
+#include "kds/exec/assertion_catalog.hpp"
+
+#include <utility>
+
+#include "kds/exec/row_codec.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/varheap.hpp"
+
+namespace kds::exec {
+
+namespace {
+
+// Schema positions. Named rather than spelled as literals at each use: the
+// relation's shape is fixed by Catalog::BootstrapAssertions() and these are
+// the one place this file states its dependence on it.
+inline constexpr std::size_t kColId = 0;
+inline constexpr std::size_t kColTargetOid = 1;
+inline constexpr std::size_t kColCabinRoot = 2;
+inline constexpr std::size_t kColFlags = 3;
+inline constexpr std::size_t kColName = 4;
+inline constexpr std::size_t kColSourceText = 5;
+inline constexpr std::size_t kColumnCount = 6;
+
+// ASCII-only fold, matching the lexer's and the fingerprint's. Not
+// std::tolower: it consults the locale, and which assertion a name resolves
+// to must not depend on the locale the server booted in.
+char FoldAscii(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+bool IEquals(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (FoldAscii(a[i]) != FoldAscii(b[i])) return false;
+    }
+    return true;
+}
+
+StatusOr<const catalog::TableAccess*> OpenAssertions(catalog::Catalog& catalog) {
+    auto access = catalog.InitTableAccess(catalog::kSysAssertionsTable);
+    if (!access.ok()) {
+        return access.status().WithContext(
+            "sys.assertions is missing - the database was bootstrapped by an older build");
+    }
+    if (access.value()->schema.columns.size() != kColumnCount) {
+        return Status::Corruption("sys.assertions has the wrong column count");
+    }
+    return access.value();
+}
+
+// One row as the walk collected it: decoded, but with its spilled cells still
+// unfetched. Kept as a struct because the pending spills index into `values`,
+// so the two have to move together.
+struct StagedRow {
+    std::vector<parser::AstValue> values;
+    std::vector<PendingSpill> spills;
+};
+
+AssertionDef ToAssertionDef(const std::vector<parser::AstValue>& values) {
+    AssertionDef def{};
+    // The pk arrives as a plain signed decode; ids are 40-bit, so it cannot
+    // be negative and the cast is total.
+    def.id = static_cast<std::uint64_t>(values[kColId].int_val);
+    def.target_oid = static_cast<catalog::Oid>(values[kColTargetOid].int_val);
+    def.cabin_root = static_cast<PageId>(values[kColCabinRoot].int_val);
+    def.flags = static_cast<std::uint32_t>(values[kColFlags].int_val);
+    def.name = values[kColName].str_val;
+    def.source_text = values[kColSourceText].str_val;
+    return def;
+}
+
+// The one walk every reader here shares. Staged first, resolved second: the
+// decode inside the walk touches no page but the one the walk is already
+// holding, and every var-heap fetch happens after ChainVisit has returned and
+// released its spans. That ordering is I15's R1, and it is the whole reason
+// none of these can short-circuit on a match - the name to match on may still
+// be an unresolved pointer while the walk runs.
+StatusOr<std::vector<AssertionDef>> ScanAssertions(catalog::Catalog& catalog,
+                                                   storage::PageStore& store) {
+    auto access = OpenAssertions(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    std::vector<StagedRow> staged;
+    Status walked = heap::ChainVisit(
+        store, rel.desc_page_id, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            // A retired slot reads as NotFound and is not an error: it is
+            // what DeleteAssertion leaves behind. ChainVisit deliberately
+            // re-tests liveness through the callback rather than filtering for
+            // it, so this skip belongs here.
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                return tuple.status();
+            }
+            if (tuple.value().deleted) return storage::VisitControl::kContinue;
+
+            StagedRow row;
+            row.values.resize(kColumnCount);
+            if (Status s = DecodeRowInto(rel.schema, rel.layout, tuple.value().payload,
+                                          row.values, &row.spills);
+                !s.ok()) {
+                return s;
+            }
+            staged.push_back(std::move(row));
+            return storage::VisitControl::kContinue;
+        });
+    if (!walked.ok()) return walked;
+
+    std::vector<AssertionDef> out;
+    out.reserve(staged.size());
+    for (StagedRow& row : staged) {
+        if (Status s = ResolveSpills(store, row.spills, row.values); !s.ok()) return s;
+        out.push_back(ToAssertionDef(row.values));
+    }
+    return out;
+}
+
+}  // namespace
+
+StatusOr<std::vector<AssertionDef>> ListAssertions(catalog::Catalog& catalog,
+                                                   storage::PageStore& store) {
+    return ScanAssertions(catalog, store);
+}
+
+StatusOr<std::optional<AssertionDef>> FindAssertionByName(catalog::Catalog& catalog,
+                                                          storage::PageStore& store,
+                                                          std::string_view name) {
+    auto defs = ScanAssertions(catalog, store);
+    if (!defs.ok()) return defs.status();
+    for (AssertionDef& def : defs.value()) {
+        if (IEquals(def.name, name)) return std::optional<AssertionDef>(std::move(def));
+    }
+    return std::optional<AssertionDef>();
+}
+
+StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catalog,
+                                                         storage::PageStore& store,
+                                                         catalog::Oid target_oid) {
+    auto defs = ScanAssertions(catalog, store);
+    if (!defs.ok()) return defs.status();
+
+    std::vector<AssertionDef> out;
+    for (AssertionDef& def : defs.value()) {
+        if (def.target_oid == target_oid) out.push_back(std::move(def));
+    }
+    return out;
+}
+
+StatusOr<std::uint64_t> InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
+                                        catalog::Oid target_oid, std::string_view name,
+                                        std::string_view source_text) {
+    // Refused here, naming the limit, rather than letting EncodeRow report it
+    // as an anonymous over-long varchar: the caller is a client who wrote a
+    // statement, and the number that matters to them is how long a
+    // declaration may be.
+    if (source_text.size() > varheap::kMaxValueSize) {
+        return Status::Unsupported("assertion declaration of " +
+                                   std::to_string(source_text.size()) + " bytes exceeds the " +
+                                   std::to_string(varheap::kMaxValueSize) +
+                                   "-byte limit on a single stored value");
+    }
+
+    // §3.1's duplicate-name check. Made here rather than at the parser
+    // because it is the catalog's question, and made *before* the row id is
+    // allocated so a refused declaration burns no id - the same ordering
+    // `InsertInner` uses for a foreign-key check.
+    auto existing = FindAssertionByName(catalog, store, name);
+    if (!existing.ok()) return existing.status();
+    if (existing.value().has_value()) {
+        return Status::AlreadyExists("assertion \"" + std::string(name) + "\" already exists");
+    }
+
+    auto access = OpenAssertions(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    auto id = catalog.AllocateRowId(catalog::kSysAssertionsTable);
+    if (!id.ok()) return id.status();
+
+    // The pk is not among these: it is carried by the Keystone word and never
+    // also as a body column (invariant 11), so EncodeRow takes the columns
+    // *after* it.
+    std::vector<parser::AstValue> values(kColumnCount - 1);
+    values[kColTargetOid - 1].type = parser::ValueType::kInt;
+    values[kColTargetOid - 1].int_val = static_cast<std::int64_t>(target_oid);
+    // kInvalidPageId until AST04 builds a Bound Cabin and AST06 publishes its
+    // root. Written explicitly rather than left at the default so a reader
+    // can tell "no structure yet" from "decoded a zero".
+    values[kColCabinRoot - 1].type = parser::ValueType::kInt;
+    values[kColCabinRoot - 1].int_val = static_cast<std::int64_t>(kInvalidPageId);
+    values[kColFlags - 1].type = parser::ValueType::kInt;
+    values[kColFlags - 1].int_val = 0;
+    values[kColName - 1].type = parser::ValueType::kStr;
+    values[kColName - 1].str_val = std::string(name);
+    values[kColSourceText - 1].type = parser::ValueType::kStr;
+    values[kColSourceText - 1].str_val = std::string(source_text);
+
+    VarHeapSink sink;
+    sink.store = &store;
+    sink.root = rel.varheap_page_id;
+
+    auto payload = EncodeRow(rel.schema, rel.layout, id.value(), values, sink);
+    if (!payload.ok()) return payload.status();
+
+    // Unlogged, like every other catalog write. A declaration therefore
+    // survives a crash only as far as the next SYNC, which is the guarantee
+    // CREATE TABLE already gives and is not made worse here. §7's
+    // `ASSERT_BUILD` is about the Bound Cabin's contents, not this row.
+    auto placed = heap::ChainInsert(store, rel.desc_page_id, id.value(), payload.value(),
+                                    catalog::kBootstrapXid);
+    if (!placed.ok()) return placed.status();
+    return id.value();
+}
+
+Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
+                       std::string_view name) {
+    auto access = OpenAssertions(catalog);
+    if (!access.ok()) return access.status();
+    const catalog::TableAccess& rel = *access.value();
+
+    // Unlike DeletePatternDef, this walk **cannot** stop early on its match:
+    // it matches on `name`, which is a varchar and may therefore be spilled,
+    // and resolving a spill under a live page span is exactly what I15's R1
+    // forbids. So the id is found by a full scan first and the retiring walk
+    // matches on the pk, which is fixed-width and always on the page.
+    auto found = FindAssertionByName(catalog, store, name);
+    if (!found.ok()) return found.status();
+    if (!found.value().has_value()) {
+        return Status::NotFound("no assertion named \"" + std::string(name) + "\"");
+    }
+    const std::uint64_t target_id = found.value()->id;
+
+    // The spills list is passed only so a spilled `name`/`source_text` cell
+    // does not turn the decode into an error; nothing here reads them, and
+    // `id` is int64 and therefore never spilled.
+    std::vector<parser::AstValue> values(kColumnCount);
+    std::vector<PendingSpill> spills;
+    bool retired = false;
+    Status walked = heap::ChainVisit(
+        store, rel.desc_page_id, storage::PageAccess::kWrite,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                return tuple.status();
+            }
+            if (tuple.value().deleted) return storage::VisitControl::kContinue;
+
+            spills.clear();
+            if (Status s = DecodeRowInto(rel.schema, rel.layout, tuple.value().payload, values,
+                                          &spills);
+                !s.ok()) {
+                return s;
+            }
+            if (static_cast<std::uint64_t>(values[kColId].int_val) != target_id) {
+                return storage::VisitControl::kContinue;
+            }
+
+            // Retired, not delete-marked. Catalog reads have no snapshot to
+            // filter a delete-mark against, so a marked row would still be
+            // found by name and a DROP followed by a CREATE of the same name
+            // would collide with a row nobody can see.
+            if (Status s = page.RetireSlot(slot); !s.ok()) return s;
+            retired = true;
+            return storage::VisitControl::kStop;
+        });
+    if (!walked.ok()) return walked;
+    if (!retired) return Status::NotFound("no assertion named \"" + std::string(name) + "\"");
+    return Status::OK();
+}
+
+namespace {
+
+// Exact-match resolution, like `Schema::FindColumn` everywhere else: the
+// catalog stores a column's name as it was declared, and case folding here
+// alone would make `CREATE ASSERTION` accept a spelling no other statement
+// does. (The *assertion's own* name is matched case-insensitively, which is a
+// different question - that is an object name, like a pattern's.)
+StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
+                                       const parser::IndexColumnRef& col,
+                                       const std::string& table_name) {
+    for (std::size_t i = 0; i < access.schema.columns.size(); ++i) {
+        if (catalog::NameView(access.schema.columns[i].name) == col.name) {
+            return static_cast<std::uint16_t>(i);
+        }
+    }
+    return Status::NotFound("relation '" + table_name + "' has no column '" + col.name +
+                            "' (byte " + std::to_string(col.byte_offset) + ")");
+}
+
+}  // namespace
+
+StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
+                                             storage::PageStore& store,
+                                             const parser::AssertionStmt& stmt) {
+    auto oid = catalog.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) {
+        return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
+                                std::to_string(stmt.table_byte_offset) + ")");
+    }
+    auto access = catalog.InitTableAccess(oid.value());
+    if (!access.ok()) return access.status();
+
+    // Every GROUP BY column must exist. Resolved and then discarded: the
+    // positions are not stored, because §8.2 keeps `source_text` as the canon
+    // and the columns are recovered by re-parsing it. What the resolution
+    // buys is the refusal - a declaration naming a column that is not there
+    // could never be enforced, and finding that out at CREATE is §3.1's whole
+    // "maximized validation" point.
+    for (const parser::IndexColumnRef& col : stmt.group_columns) {
+        if (auto pos = ResolveColumn(*access.value(), col, stmt.table_name); !pos.ok()) {
+            return pos.status();
+        }
+    }
+
+    if (stmt.func == parser::AggFunc::kSum) {
+        auto pos = ResolveColumn(*access.value(), stmt.sum_column, stmt.table_name);
+        if (!pos.ok()) return pos.status();
+
+        const catalog::SysColumnRow& col = access.value()->schema.columns[pos.value()];
+        if (col.type_val == catalog::kTypeValUint64) {
+            // Named separately because §10 names it separately, and for AG3's
+            // reason: half of a uint64's range does not fit the int64
+            // accumulator a group header keeps, so a sum of them is not a
+            // number this engine can maintain.
+            return Status::Unsupported(
+                "SUM over a uint64 column is not supported (byte " +
+                std::to_string(stmt.sum_column.byte_offset) +
+                "); a group's running aggregate is a checked int64 "
+                "(docs/feat-assertion.md §10)");
+        }
+        if (col.type_val != catalog::kTypeValInt64) {
+            return Status::InvalidArgument(
+                "an assertion's SUM column must be int64; '" + stmt.sum_column.name +
+                "' is type_val=" + std::to_string(col.type_val) + " (byte " +
+                std::to_string(stmt.sum_column.byte_offset) +
+                "); v1 restricts the aggregate to a checked int64 "
+                "(docs/feat-assertion.md §3.1)");
+        }
+    }
+
+    // Duplicate name, and the row. Both are `InsertAssertion`'s, which is the
+    // door every non-parser caller comes through - so the check cannot be
+    // skipped by reaching past this function.
+    auto id = InsertAssertion(catalog, store, oid.value(), stmt.name, stmt.source_text);
+    if (!id.ok()) return id.status();
+
+    AssertionDdlResult result;
+    result.assertion_id = id.value();
+    result.target_oid = oid.value();
+    return result;
+}
+
+StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageStore& store,
+                                      const parser::AssertionStmt& stmt) {
+    auto found = FindAssertionByName(catalog, store, stmt.name);
+    if (!found.ok()) return found.status();
+    if (!found.value().has_value()) {
+        return Status::NotFound("no assertion named '" + stmt.name + "' (byte " +
+                                std::to_string(stmt.byte_offset) + ")");
+    }
+    const std::uint64_t id = found.value()->id;
+    if (Status s = DeleteAssertion(catalog, store, stmt.name); !s.ok()) return s;
+    return id;
+}
+
+}  // namespace kds::exec

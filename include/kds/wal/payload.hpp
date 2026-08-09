@@ -157,6 +157,39 @@ StatusOr<std::size_t> EncodeVarHeapAppend(std::span<std::byte> out,
                                            std::span<const std::byte> value);
 StatusOr<DecodedVarHeapAppend> DecodeVarHeapAppend(std::span<const std::byte> in);
 
+// ---- INDEX_INSERT --------------------------------------------------------
+//
+// One entry appended to one secondary-index leaf (docs/feat-index.md §12.1).
+// The record's `page_id` names the leaf, and the leaf's own header carries
+// the widths - so redo needs neither the index's oid nor its layout, and
+// there is no second place for either to be wrong.
+
+struct IndexInsertPayload {
+    std::uint16_t slot;       // the sorted position the entry took
+    std::uint16_t entry_len;  // bytes of entry that follow
+};
+
+inline constexpr std::size_t kIndexInsertSlotOffset = 0;
+inline constexpr std::size_t kIndexInsertEntryLenOffset = 2;
+// 2+2 = 4; entry bytes begin here.
+inline constexpr std::size_t kIndexInsertFixedSize = 4;
+
+static_assert(offsetof(IndexInsertPayload, slot) == kIndexInsertSlotOffset);
+static_assert(offsetof(IndexInsertPayload, entry_len) == kIndexInsertEntryLenOffset);
+static_assert(sizeof(IndexInsertPayload) == kIndexInsertFixedSize);
+
+struct DecodedIndexInsert {
+    IndexInsertPayload fields;
+    std::span<const std::byte> entry;  // view into the caller's buffer
+};
+
+// `fields.entry_len` is ignored on encode - it is set from `entry.size()`,
+// so the two can never disagree on disk.
+StatusOr<std::size_t> EncodeIndexInsert(std::span<std::byte> out,
+                                         const IndexInsertPayload& fields,
+                                         std::span<const std::byte> entry);
+StatusOr<DecodedIndexInsert> DecodeIndexInsert(std::span<const std::byte> in);
+
 // ---- HEAP_DELETE_MARK ----------------------------------------------------
 //
 // The whole of DELETE in the no-xmax model (wal.md section 5.1): a slot flag

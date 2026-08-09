@@ -187,6 +187,11 @@ public:
         core_id_ = core_id;
         lease_ = lease;
         system_page_limit_ = system_page_limit;
+        // The same boundary by the same definition, so it is adopted rather
+        // than restated: everything below `system_page_limit` is a fixed
+        // system structure, and a fixed system structure is resident by
+        // class (docs/workplan-eviction.md EV3).
+        SetResidentLimit(system_page_limit);
     }
 
     std::uint32_t core_id() const noexcept { return core_id_; }
@@ -280,7 +285,146 @@ public:
     // `log` must outlive the store.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
+    // ---- Frame reclamation (docs/workplan-eviction.md EV01-EV02) -------
+    //
+    // Read that document's §0 before changing anything here. The short of
+    // it: raw spans from `Get()` are only safe because nothing evicts, so
+    // the pinned accessors below are the seam EV03 migrates every caller
+    // onto, and **eviction must stay off until it has** (EV2).
+
+    // A move-only RAII handle that keeps its frame resident for as long as
+    // it lives (`page.md` S2). Construction pins, destruction unpins.
+    //
+    // Copy is deleted rather than refcounted: two handles to one frame is
+    // not a thing any caller needs, and making it expressible would make
+    // "who unpins" a question. Move leaves the source empty, which is what
+    // lets a handle be returned from a factory without a double unpin.
+    class PageRef {
+    public:
+        PageRef() noexcept = default;
+        PageRef(const PageRef&) = delete;
+        PageRef& operator=(const PageRef&) = delete;
+        PageRef(PageRef&& other) noexcept { *this = std::move(other); }
+        PageRef& operator=(PageRef&& other) noexcept;
+        ~PageRef();
+
+        bool valid() const noexcept { return store_ != nullptr; }
+        PageId page_id() const noexcept { return page_id_; }
+
+        // Valid exactly as long as this handle is. Taking a copy of the
+        // span and dropping the handle is the use-after-free eviction
+        // introduces - see EV03's note on why no implicit conversion to a
+        // span exists.
+        std::span<std::byte, kPageSize> bytes() const noexcept {
+            return std::span<std::byte, kPageSize>(data_, kPageSize);
+        }
+
+        // Marks the frame dirty after the fact, for a handle taken through
+        // `PinnedGetForRead` that turned out to write. Cheaper than a
+        // second fetch and honest about which frames are written back.
+        void MarkDirty() noexcept;
+
+        // Drops the pin early. Idempotent; the destructor calls it.
+        void Release() noexcept;
+
+    private:
+        friend class DevicePageStore;
+        PageRef(DevicePageStore* store, PageId page_id,
+                std::span<std::byte, kPageSize> bytes) noexcept
+            : store_(store), page_id_(page_id), data_(bytes.data()) {}
+
+        DevicePageStore* store_ = nullptr;
+        PageId page_id_ = kInvalidPageId;
+        // A pointer rather than a span, because `std::span<T, N>` with a
+        // fixed extent has no empty state - and a moved-from or released
+        // handle needs one.
+        std::byte* data_ = nullptr;
+    };
+
+    // `Get()` / `GetForRead()` returning a pinned handle. Same fetch, same
+    // faulting, same dirty semantics - the only difference is that the
+    // frame cannot be reclaimed while the handle lives.
+    StatusOr<PageRef> PinnedGet(PageId page_id);
+    StatusOr<PageRef> PinnedGetForRead(PageId page_id);
+
+    // Whether `page_id` belongs to a **pinned class**
+    // (`docs/spec-eviction.md` EV3): never a sweep candidate at any
+    // pressure. v1's classes are the fixed catalog pages and - when AST04
+    // lands - Bound Cabin pages.
+    //
+    // **A finding against EV3, recorded here because it changes how the rule
+    // can be implemented.** EV3 says pinning is "a page-class attribute …
+    // resolved from page kind at load", and for a Bound Cabin that works,
+    // because it gets a page type of its own. It does **not** work for the
+    // fixed catalog pages: they are formatted `PageType::kHeap`, exactly as
+    // a user relation's pages are, so the page kind cannot tell them apart.
+    // The id range is the only thing that can, and it is a sound
+    // discriminator because those ids are reserved and fixed
+    // (`catalog/well_known.hpp`). So the rule is implemented as
+    // *id-range-or-kind*, and EV3's "resolved from page kind" is true of one
+    // of its two v1 classes rather than both.
+    //
+    // **Both halves are live.** The kind half answers for
+    // `PageType::kCabinBound` (AST04): a Bound Cabin page carries the
+    // aggregate an admission check reads, so reclaiming one takes a
+    // *constraint* out of memory. It is asked only of a resident frame -
+    // reading a header off the device to answer would turn a skip test into
+    // an I/O, and a non-resident page cannot be a sweep candidate anyway.
+    bool IsPinnedClass(PageId page_id) const noexcept;
+
+    // Raises the pinned id range's upper bound. **Additive only** - the
+    // limit never falls, because a structure that declared itself
+    // un-evictable and then found itself evictable is exactly the failure
+    // the declaration exists to prevent.
+    //
+    // `SetCoreOwnership` already raises it, since its `system_page_limit` is
+    // the same boundary by the same definition; this is for a store that
+    // never calls that, and for AST04, whose Bound Cabin pages are resident
+    // by class and are allocated above the system range.
+    void SetResidentLimit(PageId first_evictable_page_id) noexcept;
+
+    // One clock pass, reclaiming at most `budget` frames. Returns how many
+    // it actually reclaimed - so a caller can tell "nothing to do" from
+    // "nothing allowed", which are very different states under pressure.
+    //
+    // **Never reclaims a pinned frame or a resident-class one**, at any
+    // budget. That is the guarantee `docs/workplan-assertion.md` AST04
+    // rests on, and `EvictionTest` asserts it against a sweep that is
+    // reclaiming other frames in the same pass, so it is not a tautology.
+    //
+    // **A dirty frame at usage zero is queued, not reclaimed** (§3.2's
+    // fourth branch). The writeback that would clean it is EVT03's - a
+    // background-group task doing durable-then-write-then-clean - and
+    // reclaiming before that runs would lose a write. `DirtyEvictionQueue()`
+    // is what EVT03 will drain.
+    //
+    // **Nothing calls this yet**, deliberately: `page.md` §3's first line is
+    // that raw spans are unsafe the moment eviction exists, and every caller
+    // still holds one, so enabling the sweep before the `PageRef` migration
+    // would be a use-after-free. It exists now so the pinned-class guarantee
+    // a Bound Cabin rests on is testable before that migration lands.
+    // The CLOCK usage counter's ceiling (`docs/spec-eviction.md` EV1,
+    // `[PROPOSED] 5`). A cap and not a free-running count: it bounds how
+    // many sweep rotations a hot frame can survive, so a page that fell out
+    // of use cannot hold a frame for an unbounded time on the strength of
+    // how popular it once was. **Nothing may depend on the number** - it is
+    // the knob EV1 leaves open, and a sweep sizes its own laps from it.
+    static constexpr std::uint8_t kClockUsageCap = 5;
+
+    std::size_t EvictColdFrames(std::size_t budget);
+
+    // Pages the sweep found dirty at usage zero, in the order it found them
+    // - §4's dirty queue, populated here and drained by EVT03's writeback
+    // task. Cleared by `TakeDirtyEvictionQueue()`.
+    std::vector<PageId> TakeDirtyEvictionQueue();
+
     std::size_t resident_pages() const noexcept { return frames_.size(); }
+
+    // How many frames currently hold at least one pin. Test and §11
+    // observability: an unbalanced pin shows up here as a number that never
+    // returns to its floor.
+    std::size_t pinned_frames() const noexcept;
+
     std::uint32_t allocated_pages() const noexcept;
     bool IsAllocated(PageId page_id) const noexcept;
 
@@ -293,6 +437,22 @@ private:
         // First log record to dirty this frame since it was last written
         // back; 0 when nothing logged touched it. See StampPageLsn().
         wal::Lsn rec_lsn = 0;
+
+        // ---- Reclamation state (docs/workplan-eviction.md EV01) --------
+        //
+        // How many live `PageRef`s hold this frame. **Plain, non-atomic,
+        // core-local** - `page.md` §6 makes that the model rather than a
+        // shortcut: one pool per core, and cross-core page access does not
+        // exist. A frame with pins > 0 is never a victim, at any pressure
+        // (EV4 answers OutOfSpace instead of waiting).
+        std::uint32_t pins = 0;
+
+        // The CLOCK usage counter (`docs/spec-eviction.md` EV1 / §3.1-2):
+        // **saturating on access, decremented by the sweep, reclaimed at
+        // zero.** A counter rather than a single reference bit, so a page
+        // touched five times outlives one touched once - which a bit cannot
+        // express, and which is the whole of EV1's "no LRU lists".
+        std::uint8_t usage = 0;
     };
 
     DevicePageStore(PageDevice& device, PageId first_new_page_id, const Page& free_map,
@@ -316,6 +476,12 @@ private:
     // by a reader has not been modified, so it enters the map clean and
     // nothing writes it back.
     StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty);
+
+    // PageRef's two callbacks. Private because a pin is only ever taken and
+    // dropped by a handle - a caller that could unpin by hand could unpin
+    // someone else's frame.
+    void UnpinFrame(PageId page_id) noexcept;
+    void MarkFrameDirty(PageId page_id) noexcept;
     std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes,
                                                 bool dirty);
     Status EnsureAddressable(PageId page_id);
@@ -349,6 +515,31 @@ private:
     // create a state where one is on disk and the other is not.
     bool maps_dirty_;
     PageId next_new_page_id_;
+
+    // First id that may ever be evicted; everything below is resident by
+    // class (EV3).
+    //
+    // **0 means nothing has been declared resident**, which is the honest
+    // default rather than a gap: this layer must not know the catalog's page
+    // layout (see SetCoreOwnership), so it cannot invent the boundary, and a
+    // structure's real protection is its *pin* and not its class. A server
+    // sets it through SetCoreOwnership, whose `system_page_limit` is already
+    // exactly this boundary - "the first id that is not a fixed system
+    // structure".
+    PageId first_evictable_page_id_ = 0;
+
+    // §4's dirty queue: what the sweep found dirty at usage zero. Drained by
+    // the writeback task (EVT03), which does not exist yet - so today it is
+    // an accurate record of what a sweep *would* have had cleaned.
+    std::vector<PageId> dirty_eviction_queue_;
+
+    // The clock hand: where the next sweep resumes. An id rather than an
+    // iterator, because `frames_` rehashes and an iterator would not
+    // survive it - the sweep re-finds its position by ordering, which is
+    // O(n log n) per pass over an unordered_map and is why the frame table
+    // becomes open-addressed at EV05 (page.md §16-7).
+    PageId clock_hand_ = 0;
+
     std::unordered_map<PageId, Frame> frames_;
 };
 

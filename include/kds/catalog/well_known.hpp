@@ -38,6 +38,18 @@ inline constexpr Oid kTypeDecimal = 29;
 inline constexpr Oid kTypeUint64 = 30;
 inline constexpr Oid kTypeInt64 = kTypeInt;
 
+// docs/spec-types.md TY1. Appended rather than inserted, like every oid
+// above them: these are seeded into `sys.types` at bootstrap and a moved
+// oid would change what an existing catalog row means.
+inline constexpr Oid kTypeDate = 31;
+inline constexpr Oid kTypeTimestamp = 32;
+
+// The wide decimal (TY2's separate type, 2026-08-07). Appended like the
+// two above; a data file bootstrapped before it lacks the row, which
+// costs a "?type_val=13" rendering for a column such a file cannot
+// contain anyway - the same purely-additive stance TY9 took.
+inline constexpr Oid kTypeDecimalWide = 33;
+
 inline constexpr Oid kSysTypesTable = 100;
 inline constexpr Oid kSysObjectsTable = 110;
 inline constexpr Oid kSysColumnsTable = 111;
@@ -72,10 +84,35 @@ inline constexpr Oid kSysPatternsTable = 114;
 inline constexpr Oid kSysPatternDefsTable = 115;
 
 // Fixed oids for sys.pattern_defs' four sys.columns rows, one per schema
-// position. Fixed rather than from GenerateUserOid() for the reason
-// kUserOidStart records below: that counter is in-memory and restarts every
-// boot, and these rows are persisted.
+// position. Fixed rather than from GenerateUserOid() because these rows are
+// written *during* bootstrap: the oid sequence recovers its position by
+// reading sys.objects and sys.columns, and asking it for an oid while those
+// are the pages being built is a question with no answer yet.
 inline constexpr Oid kSysPatternDefsColumnOidBase = 120;
+
+// sys.assertions (docs/feat-assertion.md §8.2, workplan AST03): one row per
+// declared assertion - a group-level upper-bound constraint over one
+// relation.
+//
+// **The second catalog relation stored in ordinary user tuple format**, and
+// for sys.pattern_defs' reason rather than a new one: it stores the
+// declaration's `source_text` verbatim (AS10), and the fixed-length rule
+// already answers where an arbitrary-length value goes. That choice is what
+// lets the `GROUP BY` list have no cap at all - the columns are recovered by
+// re-parsing the stored text, so a longer list costs text and not a widened
+// row - and it is why there is no sibling relation for them, exactly as
+// there is none for a pattern's parameters.
+//
+// Its readers therefore cannot live in `catalog/` either: decoding needs
+// `exec::DecodeRowInto`, and `exec/` depends on `catalog/`. They are
+// `include/kds/exec/assertion_catalog.hpp`.
+inline constexpr Oid kSysAssertionsTable = 116;
+
+// Fixed oids for sys.assertions' six sys.columns rows, one per schema
+// position - fixed rather than from GenerateUserOid() for the reason
+// kSysPatternDefsColumnOidBase gives: they are written during bootstrap,
+// before the oid sequence has pages to recover its position from.
+inline constexpr Oid kSysAssertionsColumnOidBase = 140;
 
 // sys.access_stats (docs/heap-and-tuple.md §7): one row per access *shape*
 // - `(kind, rel_id, column_mask)` - with how often it ran and when it last
@@ -109,12 +146,23 @@ inline constexpr Oid kSysCabinsTable = 131;
 // mis-attribute.
 inline constexpr Oid kSysFkeysTable = 132;
 
-// Starting point for user-created object oids. **KNOWN GAP:** this counter
-// is in-memory only and resets on every process restart, so two objects
-// created in different runs can share an oid. Persisting it means adding a
-// field to kds::server::SuperBlock, a layout change other code depends on.
-// This is why sys.patterns rows take their oid from a persistent sequence
-// instead (Catalog::RegisterPattern).
+// The **floor** for user-created object oids, not a counter.
+//
+// `Catalog::GenerateUserOid()` starts here on an empty database and, on a
+// populated one, resumes past the highest oid `sys.objects` and `sys.columns`
+// already carry - so an oid names one object for the life of the database.
+//
+// This was a KNOWN GAP until 2026-08-08: the counter was in-memory only and
+// restarted here every boot, so two objects created in different runs shared
+// an oid and resolving it returned whichever row the scan reached first
+// (docs/keystoneid-k0-findings.md §6). It is fixed by *recovering* the
+// position rather than persisting it, which is why no format changed and why
+// an existing data file is repaired simply by being opened. sys.patterns
+// rows still take their oid from a persistent per-relation sequence; that
+// predates the fix and is not made wrong by it.
+//
+// The number itself may not move: it is the boundary below which every oid
+// is a bootstrap oid, and lowering it would collide with them.
 inline constexpr Oid kUserOidStart = 4000;
 
 // Fixed page ids for the bootstrap catalog heap pages. Reserved: a
@@ -140,6 +188,12 @@ inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
 
+// Root heap page of sys.assertions. Fixed like the nine above, and - like
+// sys.pattern_defs, the other row-codec catalog relation - its *var-heap*
+// root is not: that one is allocated by CreateNew() and recorded in
+// sys.tables, where it is DDL-immutable and therefore cacheable.
+inline constexpr PageId kCatalogPageAssertions = 14;
+
 // Every catalog relation's **root** page, in id order.
 //
 // One list, because two places now need "all of them at once" and a
@@ -157,7 +211,7 @@ inline constexpr PageId kAllCatalogPages[] = {
     kCatalogPageTypes,       kCatalogPageColumns,     kCatalogPageObjects,
     kCatalogPageTables,      kCatalogPageIndexes,     kCatalogPagePatterns,
     kCatalogPagePatternDefs, kCatalogPageAccessStats, kCatalogPageCabins,
-    kCatalogPageFkeys,
+    kCatalogPageFkeys,       kCatalogPageAssertions,
 };
 
 // ---- Where a catalog chain grows into ------------------------------------
@@ -182,14 +236,20 @@ inline constexpr PageId kAllCatalogPages[] = {
 // columns to ~7,800. It is a ceiling and not "unbounded" - saying so is the
 // point, because the previous ceiling was also unstated until something hit
 // it.
-inline constexpr PageId kCatalogOverflowFirst = 14;
+// Moved 14 -> 15 when sys.assertions claimed page 14 (AST03). The range is
+// "whatever is left of the reserved low pages after the roots", so it walks
+// up by one with every new bootstrap relation, and the ceiling it implies
+// drops by ~68 columns each time. Both facts ride on the same superblock
+// version bump the new relation needed anyway: an existing file could have
+// put a catalog overflow page at id 14, and that file no longer mounts.
+inline constexpr PageId kCatalogOverflowFirst = 15;
 
 // One past the last id a catalog chain may take. Must equal
 // kds::server::kFirstUserPageId; the static_assert lives in catalog.cpp,
 // which is free to include both headers.
 inline constexpr PageId kCatalogOverflowLimit = 128;
 
-static_assert(kCatalogOverflowFirst > kCatalogPageFkeys,
+static_assert(kCatalogOverflowFirst > kCatalogPageAssertions,
               "the overflow range must start past every fixed root");
 
 // Every page a catalog relation can occupy: the roots, then the whole
@@ -231,11 +291,11 @@ static_assert(kFirstUserTrxId > kBootstrapXid);
 // sys.columns/sys.types `type_val` tags for the scalar types Bootstrap()
 // registers. Placeholder values (no external format they must match) but
 // named rather than left as magic numbers now that row_codec.cpp switches
-// on them to decide on-disk encoding - see that file's comment for which
-// of these are actually encodable today (kTypeValFloat/kTypeValDecimal
-// are declared but not yet given an on-disk encoding, a currently open
-// decision - see CLAUDE.md's KWP `DECIMAL` wire encoding open item, which
-// extends to storage until a type registry exists).
+// on them to decide on-disk encoding. kTypeValFloat is the one declared
+// type with no encoding anywhere - storage refuses it at CREATE TABLE and
+// the wire refuses it by fallthrough; kTypeValDecimal gained its storage
+// encoding at TY04 and its wire encoding on 2026-08-07 (protocol.md §6:
+// unscaled int64 LE, scale in the row description's type_mod).
 inline constexpr std::uint32_t kTypeValInt8 = 1;
 inline constexpr std::uint32_t kTypeValInt16 = 2;
 inline constexpr std::uint32_t kTypeValInt32 = 3;
@@ -246,6 +306,34 @@ inline constexpr std::uint32_t kTypeValDecimal = 7;
 inline constexpr std::uint32_t kTypeValBool = 8;
 inline constexpr std::uint32_t kTypeValVarchar = 9;
 inline constexpr std::uint32_t kTypeValChar = 10;
+
+// ---- docs/spec-types.md TY1 / TY9 --------------------------------------
+//
+// **Purely additive**, and that is the whole migration story: no existing
+// `type_val` changes meaning, so no existing relation does either.
+//
+// All three are fixed-width and compare as signed integers, which is the
+// selection criterion TY2 and TY4 applied rather than a coincidence - it
+// is what lets every ordered structure in the engine take them unmodified:
+// a btree's clustering, a `kRange`'s bounds, MIN/MAX's int arm, and the
+// fold's first-seen group key encoding.
+//
+//   kTypeValDate       int32 LE, days since 1970-01-01
+//   kTypeValTimestamp  int64 LE, microseconds since the epoch, **UTC**
+//   kTypeValDecimal    int64 LE, the unscaled value (reserved since
+//                      bootstrap, given an encoding here)
+inline constexpr std::uint32_t kTypeValDate = 11;
+inline constexpr std::uint32_t kTypeValTimestamp = 12;
+
+// The wide decimal (docs/spec-types.md TY2's "future separate type",
+// built 2026-08-07): `decimal(p, s)` with `19 <= p <= 38`, stored as an
+// **int128 unscaled value in 16 LE bytes** - a different schema constant
+// coexisting with the 8-byte type, never a widening of it. Selected by
+// the declared precision at CREATE TABLE (the one DDL site), or declared
+// directly as `decimal128(p, s)`; `(p, s)` packs into `SysColumnRow::len`
+// exactly as the narrow type's does, and 38 fits the precision byte with
+// room to spare. 38 is the cap because 10^38 - 1 < 2^127.
+inline constexpr std::uint32_t kTypeValDecimalWide = 13;
 
 enum class ClusteredType : std::uint8_t {
     kHeap = 0,

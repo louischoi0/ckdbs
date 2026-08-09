@@ -71,11 +71,11 @@ PG-shaped phases, KDS semantics:
 
 ## 6. Data Encoding
 
-- `S_ROW_DESC`: `{field_count u16, fields: [{name str, type_oid u32, type_len i16 (-1=varlen), flags u16}]}`. Field 0 of every user relation is the Keystone-derived `id` (u64).
+- `S_ROW_DESC`: `{field_count u16, fields: [{name str, type_oid u32, type_len i16 (-1=varlen), flags u16, type_mod u32}]}`. Field 0 of every user relation is the Keystone-derived `id` (u64). `type_mod` is zero for every type except `DECIMAL`, where it carries the column's packed `(p, s)` — precision in the high byte of the low half, scale in the low byte, **the same word the catalog stores** (`catalog::PackDecimalLen`), so there is one packing with two readers.
 - Row values: `{i32 len | -1 = NULL, bytes}` per field — one NULL convention everywhere (params and rows).
-- v1 type wire formats: `INT8/16/32/64` (LE two's complement), `UINT64` (Keystone ids), `FLOAT64` (IEEE 754 LE), `BOOL` (1 byte), `TEXT` (UTF-8), `BYTES`, `DECIMAL` `[OPEN: encoding — financial domain will need it; scaled-int128 vs string, decide with the type system]`, `TIMESTAMP` (i64 micros since epoch, UTC `[PROPOSED]`).
-- No text result mode exists. Human-readable rendering is a client concern (the CLI renders).
-- **Status: the row encoding above is implemented** — `include/kds/wire/row_codec.hpp` (2026-08-05). It is deliberately below both consumers: `docs/crosscore.md` CC2 requires cross-core `STEP_BATCH` payloads in this same encoding, so the encoder knows about neither frames nor cores. `DECIMAL` stays `[OPEN]` and is refused, not guessed.
+- v1 type wire formats: `INT8/16/32/64` (LE two's complement), `UINT64` (Keystone ids), `FLOAT64` (IEEE 754 LE), `BOOL` (1 byte), `TEXT` (UTF-8), `BYTES`, `DECIMAL` (**decided 2026-08-07, with the type system as the `[OPEN]` required**: the unscaled **int64 LE, 8 bytes** — exactly the integer storage holds — with the scale in `S_ROW_DESC.type_mod`, once per result set and never per value; a per-value scale could only ever agree with the column or be a defect. The `[OPEN]`'s "scaled-int128 vs string" resolves as *scaled-int at the type's width*: `p > 18` is a future **separate** type per `spec-types.md` TY2, which will carry its own type_oid and a 16-byte width, so nothing is foreclosed — and string is rejected because per-value text on an all-binary protocol reintroduces a parse step and the two-readings drift the type system removed), `DATE` (i32 epoch days since 1970-01-01), `TIMESTAMP` (i64 micros since epoch, UTC — **confirmed with `spec-types.md` TY4**, which fixed storage to the same encoding), `DECIMAL128` (**the reserved separate type, realized 2026-08-07** — `spec-types.md` §2a: type_oid 13, the int128 unscaled value in 16 LE bytes, low half first, `(p, s)` in `type_mod` exactly as the 8-byte type carries it).
+- No text result mode exists. Human-readable rendering is a client concern (the CLI renders) — a `DATE`'s epoch day and a `DECIMAL`'s unscaled integer included.
+- **Status: the row encoding above is implemented** — `include/kds/wire/row_codec.hpp` (2026-08-05; `DECIMAL`/`DATE`/`TIMESTAMP` arms and `type_mod` 2026-08-07). It is deliberately below both consumers: `docs/crosscore.md` CC2 requires cross-core `STEP_BATCH` payloads in this same encoding, so the encoder knows about neither frames nor cores. `FLOAT64` is specified above but not implemented — nothing can store one, and the encoder refuses what storage refuses. A decimal value whose scale disagrees with its column is refused at encode, never rescaled — the same rule the storage codec applies.
 
 ## 7. Result Streaming
 
@@ -131,7 +131,7 @@ PG-shaped phases, KDS semantics:
 
 - TLS activation phase and mode (direct vs upgrade); SCRAM parameters.
 - `kMaxFrame`, default batch size target, session/portal timeout defaults.
-- `DECIMAL` wire encoding (with the engine type system); additional types.
+- ~~`DECIMAL` wire encoding (with the engine type system)~~ — **decided 2026-08-07** with the type system built, exactly as this line required; see §6. Additional types stay open.
 - Compression capability; credit-based flow control capability; topology/smart-routing extension.
 - Auth→authorization model (roles/permissions) — protocol only reserves the stage.
 

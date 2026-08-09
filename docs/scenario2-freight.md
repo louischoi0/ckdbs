@@ -36,7 +36,7 @@ Sibling workloads, and what each already owns:
 | S2-7 | One derived column, deliberately | `operations.booked_cbm` is the running total of its freights' CBM. scenario0 refuses derived columns; here it *is* the subject — the value two statements must agree on and a torn transaction corrupts. `freights` carries **no `org_id`**: the customer axis goes through the join, so `--verify` recomputes rather than re-reads |
 | S2-8 | Encodings | Money `int64` **minor units**, volume `int32` **milli-m³**, dates `int32` **epoch days**. Forced: KDS refuses `float`/`decimal` at `CREATE TABLE` (fixed-length rule) and has no date type |
 | S2-9 | Off by default | `--fk`, `--cabin`, `--isolation repeatable-read`, `--verify`. Each is a measurement of its own cost against a baseline run, which is what "off by default" is for |
-| S2-10 | Contention | Bookers **share voyages and customers by default** (`--contend`). scenario0 partitions accounts so first-updater-wins never fires; this scenario exists partly to fire it `[OPEN: default, §5]` |
+| S2-10 | Contention | Bookers **share voyages and customers by default** (`--contend`), and cargos are split in every mode. **Settled at `S2-03` and no longer open**: with contention off the workload cannot exhibit the lost update that §4's invariants exist to catch, so the default that hides the defect cannot be the default |
 | S2-11 | Schema construction is its own run | `--schema-only` and `--load-only` end the run before any measurement, so a data file can be prepared once and driven many times (§7.1) |
 
 ---
@@ -231,7 +231,7 @@ to be consistent; `S2-03` is what makes it capable of failing.
 
 ---
 
-## 5. Contention `[OPEN: default]`
+## 5. Contention `[CONFIRMED at S2-03]`
 
 `--bookers N` client processes, each driving the §3 transaction in a loop.
 
@@ -245,9 +245,28 @@ Counters, per axis, because a single "conflicts" number cannot be acted on:
 conflicts on `operations`, conflicts on `organizations`, retries per commit
 (mean and max), and retry time as a fraction of the run.
 
-**`[OPEN]`: whether `--contend` defaults on.** It lowers the headline TPS and
-is the more honest number; leaving it off makes the scenario comparable to
-scenario0 by construction. Settle at `S2-03`, with both measured.
+**Cargos are partitioned in both modes.** A cargo ships once; two bookers
+holding the same cargo would book it onto two voyages, which is a driver that
+lost track of its pool rather than contention. What `--contend` shares is the
+two rows a booking *updates*, because those are the axes.
+
+**Settled: `--contend` defaults on**, and the reason is stronger than the
+"more honest number" this section originally gave. With it off, four bookers
+produce zero conflicts and pass every invariant at every scale measured. With
+it on, at READ COMMITTED, the run **loses updates** — `booked_cbm` drifts
+below `SUM(freights.cbm)` and `outstanding` below its recomputed total,
+because two bookers read the same value and both commit. The engine's
+first-updater-wins rejects only a writer whose target is held by a
+*concurrent uncommitted* transaction; two read-modify-write transactions that
+merely overlap in time, and commit in sequence, are not that case.
+
+`--isolation repeatable-read` converts those silent losses into visible
+retryable conflicts and the invariants hold. Measured cost: −1.7% at four
+bookers. See `bench/results-scenario2-freight.md`.
+
+The consequence for this scenario is that the mode which cannot fail cannot
+be the default. The consequence for the engine is an open question about what
+a read-modify-write is supposed to look like here, recorded in §10.
 
 ---
 
@@ -361,9 +380,9 @@ Each is a real limit as of 2026-08-06, not a preference:
 |---|---|---|
 | `S2-01` **done** | schema, loaders, `--schema-only` / `--load-only`, the §6 join-aggregate probe | eight relations create on a fresh file; `--schema-only` exits without loading; the probe reports all six reads accepted. `--verify` moves to `S2-02`, which is where there is state worth verifying |
 | `S2-02` **done** | the §3 transaction, one booker, both `--capacity-mode` values, §3.1's demand sizing, `--verify` | a single run commits, rejects for capacity **and** rejects for credit, reports the three outcomes separately, and passes all four invariants in every flag combination |
-| `S2-03` | `--bookers`, `--contend`, the retry loop and its per-axis counters | conflicts are observed and retried, not counted as errors; §5's `[OPEN]` default is settled with both numbers measured |
-| `S2-04` | the `--manifest` reporter process | reporter latency reported beside TPS, as scenario0 does |
-| `S2-05` | `pg_scenario2_freight.py`, `compare_scenario2.py` | same schema, same transaction, same phase names; the two tools' JSON is diffable |
+| `S2-03` **done** | `--bookers`, `--contend`, the retry loop, per-axis conflict counters | conflicts are observed and retried rather than counted as errors, split by the row they hit; §5's `[OPEN]` default is settled with both numbers measured; **and the invariant checker fails a run for the first time** |
+| `S2-04` **done** | the `--manifest` reporter process | reporter latency reported beside TPS, as scenario0 does. The three reads are the three shapes the engine treats differently: a FilterScan over a growing ledger, the same walk with a fold, and the join-aggregate `S2-01` proved |
+| `S2-05` **done** | `pg_scenario2_freight.py`, `compare_scenario2.py` | same schema, same transaction, same phase names; the two tools' JSON is diffable. The twin's reporter is the same three statements *interleaved between bookings* — one connection cannot contend with itself — and the compare tool labels that placement difference rather than hiding it. Identity is checked before any table: same seed, sizes, headrooms, modes, booker count, and the loaded reference counts, which the shared generator makes exactly reproducible |
 | `S2-06` | `bench/results-scenario2-freight.md` | `--txn` vs `--no-txn` invariant table, capacity-mode gap **at two ledger sizes**, conflict cost, `--fk` and `--cabin` deltas, PostgreSQL side by side |
 
 `bench/results-scenario2-freight.md` exists already, written from `S2-02`'s
@@ -388,8 +407,20 @@ it change what later tasks should expect:
 
 ## 10. Open items — do not assume
 
-- **`--contend` default** (§5). Both numbers measured at `S2-03`, then settled
-  here.
+- ~~**`--contend` default**~~ — **settled at `S2-03`: on.** With it off, four
+  bookers produce zero conflicts and zero invariant failures at every scale
+  measured; with it on, they produce lost updates (§5). A default that cannot
+  fail is not a baseline, it is a blindfold.
+- **Whether `--isolation repeatable-read` should become this scenario's
+  default, or whether the engine should offer something narrower.** `S2-03`
+  shows READ COMMITTED silently loses updates on this workload and REPEATABLE
+  READ does not, for ~1.7%. But RR is a heavier promise than the workload
+  needs: what a booking actually wants is an atomic read-modify-write of one
+  column, which this engine has no way to express — there is no
+  `SET c = c + n` (the grammar takes a literal) and no `SELECT ... FOR
+  UPDATE`. Naming that gap is `S2-03`'s output; choosing between "make RR the
+  default", "add an atomic increment" and "leave it to the client" is a
+  design decision for `docs/txn.md`, not for a benchmark driver.
 - ~~**Recipe match cap**~~ — **settled at `S2-02`: uncapped.** The generated
   rule set bounds itself at 8 matches per booking (four route-agnostic rules,
   at most three per cargo type, at most one route-specific), so a cap adds no

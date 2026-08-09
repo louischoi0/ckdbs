@@ -402,22 +402,59 @@ TEST(WalPayloadTest, CheckpointEndRoundTrips) {
 // ---- Record type registry ------------------------------------------------
 
 TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
-    // The enum is frozen and append-only: UNDO_WRITE and FREE were appended
-    // after PAD, so PAD must still be 13, and VARHEAP_APPEND went after
-    // both rather than filling any gap.
+    // The enum is frozen and append-only, so every number here is a
+    // compatibility fact and this test is meant to be *extended* when one is
+    // appended - never edited. UNDO_WRITE and FREE went after PAD, so PAD is
+    // still 13; VARHEAP_APPEND after both; INDEX_INSERT after all of them.
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPad), 13);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kUndoWrite), 14);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kFree), 15);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kVarHeapAppend), 16);
-    EXPECT_EQ(kMaxAssignedRecordType, 16);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kIndexInsert), 17);
+    EXPECT_EQ(kMaxAssignedRecordType, 17);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kVarHeapAppend)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kIndexInsert)));
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
     EXPECT_STREQ(RecordTypeName(RecordType::kUndoWrite), "UNDO_WRITE");
     EXPECT_STREQ(RecordTypeName(RecordType::kFree), "FREE");
     EXPECT_STREQ(RecordTypeName(RecordType::kVarHeapAppend), "VARHEAP_APPEND");
+    EXPECT_STREQ(RecordTypeName(RecordType::kIndexInsert), "INDEX_INSERT");
+}
+
+// ---- INDEX_INSERT --------------------------------------------------------
+
+TEST(WalPayloadTest, IndexInsertRoundTrips) {
+    const std::vector<std::byte> entry(37, std::byte{0xC3});
+    std::vector<std::byte> buf(kIndexInsertFixedSize + entry.size());
+    const IndexInsertPayload fields{1234, /*entry_len=*/0};  // set from the span
+    auto n = EncodeIndexInsert(buf, fields, entry);
+    ASSERT_TRUE(n.ok()) << n.status().message();
+    EXPECT_EQ(n.value(), buf.size());
+
+    auto decoded = DecodeIndexInsert(buf);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().fields.slot, 1234);
+    EXPECT_EQ(decoded.value().fields.entry_len, entry.size());
+    ASSERT_EQ(decoded.value().entry.size(), entry.size());
+    EXPECT_EQ(std::memcmp(decoded.value().entry.data(), entry.data(), entry.size()), 0);
+}
+
+TEST(WalPayloadTest, IndexInsertRefusesAnEmptyEntryAndALyingLength) {
+    // An entry is never empty - a key is at least one byte plus the pk - and
+    // a length claiming more than was written must not size a read.
+    std::vector<std::byte> buf(kIndexInsertFixedSize + 4);
+    EXPECT_FALSE(EncodeIndexInsert(buf, IndexInsertPayload{0, 0}, {}).ok());
+
+    const std::vector<std::byte> entry(4, std::byte{1});
+    ASSERT_TRUE(EncodeIndexInsert(buf, IndexInsertPayload{0, 0}, entry).ok());
+    // Truncate the payload behind the length's back.
+    buf.resize(kIndexInsertFixedSize + 2);
+    auto decoded = DecodeIndexInsert(buf);
+    EXPECT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
 }
 
 // ---- VARHEAP_APPEND ------------------------------------------------------

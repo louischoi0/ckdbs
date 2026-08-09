@@ -462,6 +462,12 @@ TEST(CabinContractTest, ACabinIsNotTrailReplayable) {
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kFilterScan));
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kRange));
     EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kScan));
+    // A secondary index is authoritative too, and lands on the same side of
+    // the line for the same reason (docs/feat-index.md §8): an index probe
+    // answers with a *set*, and a trail has no witness for a row inserted
+    // since it was recorded.
+    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexProbe));
+    EXPECT_FALSE(exec::IsTrailReplayable(exec::AccessKind::kIndexRange));
     EXPECT_TRUE(exec::IsTrailReplayable(exec::AccessKind::kLookup));
     EXPECT_TRUE(exec::IsTrailReplayable(exec::AccessKind::kProbe));
 }
@@ -510,15 +516,15 @@ TEST(CabinContractTest, ColumnPolicyDecidesWhoMayCreateACabin) {
 
     // And DESCRIBE reports the effective policy per column.
     const std::string described = db.Run("DESCRIBE p");
-    EXPECT_NE(described.find("name=a type=varchar len=0 notnull=yes pk=no autoincrement=no "
+    EXPECT_NE(described.find("name=a type=varchar notnull=yes pk=no autoincrement=no "
                              "cabin=yes"),
               std::string::npos)
         << described;
-    EXPECT_NE(described.find("name=b type=varchar len=0 notnull=yes pk=no autoincrement=no "
+    EXPECT_NE(described.find("name=b type=varchar notnull=yes pk=no autoincrement=no "
                              "cabin=no"),
               std::string::npos)
         << described;
-    EXPECT_NE(described.find("name=c type=varchar len=0 notnull=yes pk=no autoincrement=no "
+    EXPECT_NE(described.find("name=c type=varchar notnull=yes pk=no autoincrement=no "
                              "cabin=auto"),
               std::string::npos)
         << described;

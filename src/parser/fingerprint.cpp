@@ -154,7 +154,24 @@ bool ShapeTagOf(TokenType type, ShapeTag& out) noexcept {
         // silently dead. Neither the parameter's *name* nor its declared
         // *type* enters the stream here, for the same reason: live traffic
         // has neither to contribute.
+        // kNumLit is in the group by the phase-2 rule (spec-types.md TY3):
+        // a bare `12.34` *is* the quoted `'12.34'`, so it must land where
+        // every other bindable literal lands or the two spellings of one
+        // statement would grow two pattern_ids.
+        //
+        // The fingerprint analysis that gated this token, recorded where it
+        // is load-bearing: `12.34` lexed *before* this token existed - as
+        // kIntLit, kDot, kIntLit, all valid - so a statement containing it
+        // was fingerprintable, and fusing the three tokens moves that
+        // statement's hash. `kFingerprintVersion` stays 1 anyway, because
+        // the bump rule protects what is *stored*, and no such hash was
+        // ever storable: int-dot-int parses in no production, a statement
+        // that cannot parse cannot execute, recording happens only on the
+        // execution path, and a CREATE PATTERN body must itself parse. A
+        // hash that can never reach `sys.patterns` has no on-disk meaning
+        // to preserve.
         case TokenType::kIntLit:
+        case TokenType::kNumLit:
         case TokenType::kStrLit:
         case TokenType::kParam:
         case TokenType::kNamedParam: out = ShapeTag::kValue; return true;
@@ -264,6 +281,13 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
             ++literal_count_;
             break;
         }
+        // One arm for both, and the sharing is the semantics: a bare
+        // numeric is the quoted string of its spelling (token.hpp), and
+        // `tok.text` carries the same characters for `12.34` and `'12.34'`
+        // (the quotes are stripped at lexing). Identical tag, identical
+        // field, identical arg_hash - the two spellings share a waystone
+        // because they are one statement, not because they collide.
+        case TokenType::kNumLit:
         case TokenType::kStrLit: {
             Fnv1a args(args_);
             args.Byte(static_cast<std::uint8_t>(ArgTag::kStr));

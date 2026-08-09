@@ -2,6 +2,7 @@ find_package(GTest REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(kds_tests
+    alloc_counter.cpp
     status_test.cpp
     crc32c_test.cpp
     page_header_test.cpp
@@ -21,6 +22,14 @@ add_executable(kds_tests
     txn_session_test.cpp
     heap_chain_test.cpp
     btree_test.cpp
+    index_key_test.cpp
+    index_tree_test.cpp
+    index_ddl_test.cpp
+    assertion_ddl_test.cpp
+    assertion_catalog_test.cpp
+    index_maintain_test.cpp
+    index_compile_test.cpp
+    index_contract_test.cpp
     superblock_test.cpp
     extent_lease_test.cpp
     extent_lease_service_test.cpp
@@ -32,6 +41,9 @@ add_executable(kds_tests
     sim_ring_transport_test.cpp
     send_retry_test.cpp
     row_codec_test.cpp
+    types_predicate_test.cpp
+    types_e2e_test.cpp
+    types_contract_test.cpp
     row_layout_test.cpp
     tagged_cell_test.cpp
     analyze_test.cpp
@@ -58,6 +70,8 @@ add_executable(kds_tests
     in_memory_page_store_test.cpp
     free_map_test.cpp
     device_page_store_test.cpp
+    eviction_test.cpp
+    bound_cabin_test.cpp
     catalog_cache_test.cpp
     catalog_test.cpp
     insert_wal_test.cpp
@@ -74,6 +88,7 @@ add_executable(kds_tests
     parser_aggregate_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp
+    type_literals_test.cpp
     parser_subquery_test.cpp
     parser_fuzz_test.cpp
     step_compile_test.cpp

@@ -1,5 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include "kds/exec/type_literals.hpp"
+
 #include "kds/stats/pattern_defs.hpp"
 #include "kds/stats/trail_store.hpp"
 
@@ -18,9 +20,13 @@
 #include "kds/exec/catalog_view.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/fk_check.hpp"
+#include "kds/exec/assertion_catalog.hpp"
+#include "kds/exec/index_ddl.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
@@ -256,7 +262,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
         if (IEquals(sub, "BUDGET")) return HandleShowBudget();
         if (IEquals(sub, "CABINS")) return HandleShowCabins();
+        if (IEquals(sub, "INDEXES")) return HandleShowIndexes();
         if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
+        if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -269,6 +277,15 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         }
         if (IEquals(sub, "CABIN")) {
             return HandleCabin(Trim(line));
+        }
+        if (IEquals(sub, "ASSERTION")) {
+            return HandleAssertion(Trim(line));
+        }
+        // `UNIQUE` routes here too, so its refusal comes from the parser
+        // with the byte offset of the word itself rather than from this
+        // layer as "unknown CREATE target".
+        if (IEquals(sub, "INDEX") || IEquals(sub, "UNIQUE")) {
+            return HandleIndex(Trim(line));
         }
         if (IEquals(sub, "TABLE")) {
             // Disambiguate the bare-name form ("CREATE TABLE foo")
@@ -286,17 +303,24 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
-        // Patterns and cabins can be dropped - there is still no DROP TABLE,
-        // and the catalog is append-only apart from these two paths. Routed
-        // by name so `DROP TABLE t` gets the parser's truthful refusal with a
-        // position rather than "unknown DROP target".
+        // Patterns, cabins and indexes can be dropped - there is still no
+        // DROP TABLE, and the catalog is append-only apart from these three
+        // paths. Routed by name so `DROP TABLE t` gets the parser's truthful
+        // refusal with a position rather than "unknown DROP target".
         if (IEquals(sub, "PATTERN")) {
             return HandleDropPattern(Trim(line));
         }
         if (IEquals(sub, "CABIN")) {
             return HandleCabin(Trim(line));
         }
-        return {"ERR only DROP PATTERN and DROP CABIN are supported", false};
+        if (IEquals(sub, "INDEX")) {
+            return HandleIndex(Trim(line));
+        }
+        if (IEquals(sub, "ASSERTION")) {
+            return HandleAssertion(Trim(line));
+        }
+        return {"ERR only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported",
+                false};
     }
     if (IEquals(cmd, "INSERT")) {
         return HandleInsert(Trim(line), session);
@@ -779,16 +803,21 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
         // a reason to fail the whole DESCRIBE - report it in place, since
         // seeing *which* column is broken is the point of the command.
         auto type_row = catalog_.ResolveTypeByVal(col.type_val);
-        const std::string type_name = type_row.ok()
+        const std::string base_name = type_row.ok()
                                           ? std::string(catalog::NameView(type_row.value().name))
                                           : "?type_val=" + std::to_string(col.type_val);
+        // The declared form - `decimal(10,2)`, `char(8)`, `int64` - rather
+        // than a bare name beside a `len` a reader would have to interpret.
+        // For a decimal `len` is the packed (p, s) pair, so printing it as
+        // a width would be actively misleading (catalog/rows.hpp).
+        const std::string type_name = catalog::ColumnTypeText(col, base_name);
 
         // Column 0 is the Keystone primary key by construction, not by a
         // stored flag - heap-and-tuple.md section 4 makes it positional.
         const bool is_pk = i == 0;
         os << "\\n"
            << "pos=" << col.pos << " name=" << catalog::NameView(col.name) << " type=" << type_name
-           << " len=" << col.len << " notnull=" << (col.notnull ? "yes" : "no")
+           << " notnull=" << (col.notnull ? "yes" : "no")
            << " pk=" << (is_pk ? "yes" : "no")
            << " autoincrement=" << (is_pk ? "yes" : "no");
 
@@ -885,6 +914,127 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
     return {os.str(), false};
 }
 
+DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line) {
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
+        return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
+    }
+    const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
+
+    if (stmt.drop) {
+        auto index_oid = exec::DropIndex(catalog_, stmt);
+        if (!index_oid.ok()) {
+            return {"ERR " + index_oid.status().message(), false};
+        }
+        std::ostringstream os;
+        os << "DROPPED INDEX name=" << stmt.index_name << " index_oid=" << index_oid.value();
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped index '" + stmt.index_name + "'");
+        }
+        return {os.str(), false};
+    }
+
+    auto result = exec::CreateIndex(catalog_, page_store_, stmt);
+    if (!result.ok()) {
+        return {"ERR " + result.status().message(), false};
+    }
+
+    std::ostringstream os;
+    // `entries=0` is printed for the reason `observed=0` is on a fresh
+    // Cabin: it is the thing most likely to be misunderstood. Creating an
+    // index over an empty relation indexes nothing, and only the rows
+    // written after it exist in it.
+    os << "CREATED INDEX name=" << stmt.index_name << " on=" << stmt.table_name
+       << " index_oid=" << result.value().index_oid
+       << " root_page=" << result.value().root_page_id
+       << " key_width=" << result.value().key_width
+       << " entry_width=" << result.value().entry_width << " entries=0";
+    for (const std::string& warning : result.value().warnings) {
+        os << "\\n" << "WARN " << warning;
+    }
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowIndexes() {
+    auto rows = catalog_.ListIndexes();
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    std::ostringstream os;
+    os << "indexes=" << rows.value().size();
+
+    for (const catalog::SysIndexRow& row : rows.value()) {
+        os << "\\n";
+        os << "index_oid=" << row.index_oid << " name=" << catalog::NameView(row.name);
+
+        // Names resolved here rather than stored, exactly as SHOW CABINS and
+        // SHOW ACCESS do: the row holds oids so it stays fixed width, and an
+        // inspection surface can afford the lookup.
+        auto access = catalog_.InitTableAccess(row.table_oid);
+        os << " rel=";
+        bool named = false;
+        if (auto tables = catalog_.ListTables(); tables.ok()) {
+            for (const catalog::SysObjectRow& obj : tables.value()) {
+                if (obj.oid != row.table_oid) continue;
+                os << catalog::NameView(obj.name);
+                named = true;
+                break;
+            }
+        }
+        if (!named) os << "oid=" << row.table_oid;
+
+        const auto write_columns = [&](const char* label, const std::uint16_t* cols,
+                                       std::size_t n) {
+            os << ' ' << label << "=(";
+            for (std::size_t i = 0; i < n; ++i) {
+                if (i > 0) os << ',';
+                if (access.ok() && cols[i] < access.value()->schema.columns.size()) {
+                    os << catalog::NameView(access.value()->schema.columns[cols[i]].name);
+                } else {
+                    os << cols[i];
+                }
+            }
+            os << ')';
+        };
+        // Declared order, which is the order the key encoding concatenates
+        // them in - so what is printed is what a probe must match a prefix
+        // of, not a sorted set.
+        write_columns("keys", row.key_cols.data(), row.nkeys);
+        if (row.ncovered > 0) {
+            write_columns("covering", row.covered_cols.data(), row.ncovered);
+        }
+
+        os << " root_page=" << row.root_page_id << " key_width=" << row.key_width
+           << " entry_width=" << row.entry_width;
+
+        // The physical half. Height and entry count are what say whether an
+        // index is worth its write hook, and the catalog cannot answer
+        // either: it stores that an index exists, never what is in it.
+        const index::IndexLayout layout{row.key_width,
+                                        static_cast<std::uint16_t>(row.entry_width -
+                                                                   row.key_width -
+                                                                   index::kIndexPkWidth)};
+        auto height = index::IndexHeight(page_store_, row.root_page_id, layout);
+        auto entries = index::IndexEntryCount(page_store_, row.root_page_id, layout);
+        if (height.ok() && entries.ok()) {
+            os << " height=" << height.value() << " entries=" << entries.value();
+        } else {
+            // Not zeros: an unreadable tree is unknown, and printing zeros
+            // would read as "empty" when the truth is "could not be walked".
+            os << " height=- entries=-";
+        }
+    }
+    return {os.str(), false};
+}
+
 DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
@@ -934,6 +1084,88 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     }
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "created cabin on " + stmt.table_name + "." + stmt.column_name);
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::AssertionStmt>(parsed.value())) {
+        return {"ERR expected a CREATE ASSERTION or DROP ASSERTION statement", false};
+    }
+    const auto& stmt = std::get<parser::AssertionStmt>(parsed.value());
+
+    if (stmt.drop) {
+        auto id = exec::DropAssertion(catalog_, page_store_, stmt);
+        if (!id.ok()) {
+            return {"ERR " + id.status().message(), false};
+        }
+        std::ostringstream os;
+        os << "DROPPED ASSERTION name=" << stmt.name << " assertion_id=" << id.value();
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped assertion '" + stmt.name + "'");
+        }
+        return {os.str(), false};
+    }
+
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt);
+    if (!created.ok()) {
+        return {"ERR " + created.status().message(), false};
+    }
+
+    // **`enforcing=0` is the whole point of this reply.** AST03 records a
+    // declaration; the structure that would enforce it is AST04's and the
+    // write-path check is AST07's. A constraint that silently does not run is
+    // not a degraded mode, so the statement that creates one says which it
+    // is, in a field a client can read rather than in a comment.
+    std::ostringstream os;
+    os << "CREATED ASSERTION name=" << stmt.name
+       << " assertion_id=" << created.value().assertion_id << " on=" << stmt.table_name
+       << " enforcing=0";
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "declared assertion '" + stmt.name + "' on '" + stmt.table_name +
+                              "' (not yet enforced)");
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowAssertions() {
+    auto rows = exec::ListAssertions(catalog_, page_store_);
+    if (!rows.ok()) {
+        return {"ERR " + rows.status().message(), false};
+    }
+
+    std::ostringstream os;
+    os << "assertions=" << rows.value().size();
+
+    for (const exec::AssertionDef& def : rows.value()) {
+        os << "\\n";
+        os << "assertion_id=" << def.id << " name=" << def.name;
+
+        // The relation's name, resolved here rather than stored - exactly as
+        // SHOW CABINS and SHOW INDEXES do. The row holds an oid so it stays
+        // narrow, and an inspection surface can afford the lookup.
+        os << " rel=";
+        bool named = false;
+        if (auto tables = catalog_.ListTables(); tables.ok()) {
+            for (const catalog::SysObjectRow& obj : tables.value()) {
+                if (obj.oid != def.target_oid) continue;
+                os << catalog::NameView(obj.name);
+                named = true;
+                break;
+            }
+        }
+        if (!named) os << "oid=" << def.target_oid;
+
+        // Reported rather than derived: `cabin_root` is what AST06 will fill
+        // in, so an unset one is the honest statement that nothing enforces
+        // this yet.
+        os << " enforcing=" << (def.cabin_root == kInvalidPageId ? 0 : 1);
+        os << " def=" << def.source_text;
     }
     return {os.str(), false};
 }
@@ -1216,6 +1448,55 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
         row.len = type_row.value().len;
         row.notnull = true;  // no NULL support yet - see row_codec.hpp
         row.cabin_policy = col.cabin_policy;
+
+        // ---- decimal(p, s) (docs/spec-types.md TY2, TY9) ----------------
+        //
+        // The pair replaces the type's default `len`, which for a decimal
+        // was never read as a width - `RowLayout::ColumnWidth` gives every
+        // decimal its bytes from its `type_val` alone (catalog/rows.hpp
+        // says why the field was free).
+        //
+        // **The declared precision selects the width, here and only here.**
+        // `decimal(p, s)` with p <= 18 is the 8-byte type and with p >= 19
+        // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
+        // not a widening, so the promotion is a different type_val and a
+        // different schema constant, chosen from the one fact the client
+        // declared. Writing `decimal128(p, s)` names the wide type
+        // directly and its bounds refuse p <= 18 toward the narrow
+        // spelling, so either way one declaration selects exactly one type.
+        if (row.type_val == catalog::kTypeValDecimal ||
+            row.type_val == catalog::kTypeValDecimalWide) {
+            if (!col.has_precision) {
+                // Unreachable through the parser, which refuses a bare
+                // `decimal`. Checked anyway: a schema can be built without
+                // one, and a decimal with no scale stored is a column whose
+                // values have no defined meaning.
+                return {"ERR column '" + col.name + "' is decimal with no precision or scale",
+                        false};
+            }
+            if (row.type_val == catalog::kTypeValDecimal &&
+                col.precision >= exec::kMinDecimalPrecisionWide) {
+                row.type_val = catalog::kTypeValDecimalWide;
+            }
+            Status bounds = row.type_val == catalog::kTypeValDecimalWide
+                                ? exec::CheckDecimalWidePrecisionScale(col.precision, col.scale)
+                                : exec::CheckDecimalPrecisionScale(col.precision, col.scale);
+            if (!bounds.ok()) {
+                return {"ERR " + bounds.message() + " (byte " +
+                            std::to_string(col.type_byte_offset) + ")",
+                        false};
+            }
+            row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
+                                              static_cast<std::uint8_t>(col.scale));
+        } else if (col.has_precision) {
+            // Unreachable through the parser too, and refused rather than
+            // ignored: silently dropping the arguments would leave an
+            // operator believing they had said something.
+            return {"ERR type '" + col.type_name + "' takes no precision or scale (byte " +
+                        std::to_string(col.type_byte_offset) + ")",
+                    false};
+        }
+
         schema.columns.push_back(row);
     }
 
@@ -1332,9 +1613,52 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
     return {created.str(), false};
 }
 
+Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& writes,
+                                         std::uint64_t txn_id) {
+    if (wal_ == nullptr) return Status::OK();
+
+    for (const exec::IndexWrite& write : writes) {
+        // A split's pages take full page images and **no** INDEX_INSERT: the
+        // images are taken after the entry is in, so emitting both would
+        // apply it twice. Same instrument the clustered tree's internal
+        // nodes take, and for the same reason - no record type describes an
+        // entry-array division (wal/record.hpp).
+        if (!write.restructured.empty()) {
+            for (PageId page_id : write.restructured) {
+                auto bytes = page_store_.Get(page_id);
+                if (!bytes.ok()) return bytes.status();
+                std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+                if (auto n = wal::EncodeFullPageImage(
+                        image, std::span<const std::byte, kPageSize>(bytes.value()));
+                    !n.ok()) {
+                    return n.status();
+                }
+                auto fpi = wal_->Append(
+                    wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id}, image);
+                if (!fpi.ok()) return fpi.status();
+                if (Status s = page_store_.StampPageLsn(page_id, fpi.value()); !s.ok()) return s;
+            }
+            continue;
+        }
+
+        std::vector<std::byte> buf(wal::kIndexInsertFixedSize + write.entry.size());
+        const wal::IndexInsertPayload fields{write.slot,
+                                             static_cast<std::uint16_t>(write.entry.size())};
+        if (auto n = wal::EncodeIndexInsert(buf, fields, write.entry); !n.ok()) {
+            return n.status();
+        }
+        auto rec = wal_->Append(
+            wal::RecordSpec{wal::RecordType::kIndexInsert, txn_id, write.page_id}, buf);
+        if (!rec.ok()) return rec.status();
+        if (Status s = page_store_.StampPageLsn(write.page_id, rec.value()); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
                                     const std::vector<exec::AppendedSpill>& spills,
+                                    const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
     if (wal_ == nullptr) return Status::OK();
 
@@ -1409,6 +1733,12 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
             return s;
         }
     }
+
+    // The index entries this row is now reachable through, before the row
+    // itself (docs/feat-index.md §12.1). Same direction as the var-heap
+    // above, reached from the opposite pointer: a dangling entry is dropped
+    // by verification, a row with no entry is lost.
+    if (Status s = LogIndexWrites(index_writes, txn_id); !s.ok()) return s;
 
     // undo_ptr 0: an insert supersedes no version, so its undo chain ends
     // at itself (wal.md section 5.1).
@@ -1607,6 +1937,33 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     NoteCabinWrite(ta, stmt.values, /*first_col_pos=*/1, id.value(), placed.value().page_id,
                    placed.value().slot);
 
+    // ---- Index maintenance (docs/feat-index.md §2) ----------------------
+    //
+    // Beside the Cabin witness and before the log, for the same reason and a
+    // stronger one: a Cabin that missed an append can be un-observed, and an
+    // index that missed one has lost a row to every later probe. So this
+    // **fails the statement** where the hook above absorbs.
+    //
+    // `ta` survives this call even when a split republishes an index root:
+    // Catalog::UpdateIndexRoot updates the cached entry in place rather than
+    // invalidating it (catalog_cache.hpp), which is exactly what the
+    // desc-page relink below does *not* do.
+    // Collected only when there is a log to write to, so the unlogged path
+    // stays the code it always was.
+    std::vector<exec::IndexWrite> index_writes;
+    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, stmt.values,
+                                          /*first_col_pos=*/1, encoded.value(), id.value(),
+                                          /*previous=*/{},
+                                          wal_ != nullptr ? &index_writes : nullptr);
+        !s.ok()) {
+        if (logging(LogLevel::kError)) {
+            log_->Error("index", "maintaining the indexes of table oid " +
+                                     std::to_string(oid.value()) + " for id " +
+                                     std::to_string(id.value()) + " failed: " + s.message());
+        }
+        return {"ERR " + s.message(), false};
+    }
+
     // ---- The rollback trail (docs/txn.md section 3.6) -------------------
     //
     // An insert writes **no undo record**: a tuple with undo_ptr == 0 whose
@@ -1623,7 +1980,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // here and what would break it.
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded.value(),
-                             WriterId(scope), spills,
+                             WriterId(scope), spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
@@ -1913,7 +2270,10 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         bool first_val = true;
         for (std::size_t index : project) {
             if (!first_val) os << ',';
-            os << exec::FormatValue(row[index]);
+            // type_val 0, for the reason the CompareValues call above
+            // gives: a catalog view's values carry their own kind, and none
+            // of them is a DATE or TIMESTAMP column.
+            os << exec::FormatValue(/*type_val=*/0, row[index]);
             first_val = false;
         }
     }
@@ -1971,7 +2331,7 @@ DispatchOutcome CommandDispatcher::RunAggregated(
             if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay, cabins_, &snapshot);
+        /*stats=*/nullptr, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
         // path has it: a statement that stopped part way through touched
@@ -1984,9 +2344,16 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         [&](std::span<const parser::AstValue> row) -> Status {
             os << "\\n";
             bool first = true;
-            for (const parser::AstValue& value : row) {
+            for (std::size_t i = 0; i < row.size(); ++i) {
                 if (!first) os << ',';
-                os << exec::FormatValue(value);
+                // One item per output value, in written order - the fold
+                // emits `spec.items` and nothing else - so the item's
+                // `type_val` is this value's column type. `MIN(d)` renders
+                // as a date; `COUNT(*)` carries type_val 0 and renders as
+                // the integer it is.
+                const std::uint32_t type_val =
+                    i < chain.aggregate->items.size() ? chain.aggregate->items[i].type_val : 0;
+                os << exec::FormatValue(type_val, row[i]);
                 first = false;
             }
             return Status::OK();
@@ -2046,7 +2413,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
             }
             return storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay, cabins_, &snapshot);
+        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
         return {"ERR " + ran.message(), false};
     }
@@ -2298,20 +2665,24 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                 if (!access.ok()) return access.status();
                 for (std::size_t i = 0; i < access.value()->schema.columns.size(); ++i) {
                     if (!first_val) os << ',';
+                    // `SELECT *` renders from the schema it already holds,
+                    // which is why the chain carries no types for it.
                     os << exec::FormatValue(
+                        access.value()->schema.columns[i].type_val,
                         frame.Get(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)}));
                     first_val = false;
                 }
             } else {
-                for (const exec::ColumnRef& ref : compiled.projection) {
+                for (std::size_t i = 0; i < compiled.projection.size(); ++i) {
                     if (!first_val) os << ',';
-                    os << exec::FormatValue(frame.Get(ref));
+                    os << exec::FormatValue(compiled.projection_types[i],
+                                            frame.Get(compiled.projection[i]));
                     first_val = false;
                 }
             }
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_, &snapshot.value());
+        /*stats=*/nullptr, budget_, trail, replay_ptr, cabins_, &snapshot.value(), indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -2355,6 +2726,34 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         const std::size_t at = static_cast<std::size_t>(col - first_col_pos);
         if (at >= values.size()) continue;
 
+        // **Coerced first, and this is load-bearing.** `values` holds the
+        // literals as written, so a DATE column's value here is still the
+        // string `'2026-08-07'` while everything that *reads* this Cabin
+        // keys on the epoch integer the compiler produced. Keying on the
+        // raw literal put the append under a key no read ever looks up:
+        // the value stayed observed, its set stopped growing, and queries
+        // returned rows that existed before the observation and silently
+        // dropped every row inserted after it.
+        //
+        // Through the codec's shared coercion, so the write key and the
+        // read key are produced by one routine rather than by two that
+        // agree today.
+        const catalog::SysColumnRow& column = access.schema.columns[col];
+        parser::AstValue value = values[at];
+        if (Status s = exec::CoerceLiteralToColumn(column, value); !s.ok()) {
+            // Unreachable: encode is the only gate (spec §7) and it already
+            // accepted this row, so a literal that reaches here parses. If
+            // that ever stops being true, un-observing is the right answer
+            // and always legal (feat-cabin.md §1) - a set that might have
+            // missed an append is not a superset, and serving it would lose
+            // a row.
+            if (auto stale = stats::MakeCabinKey(access.CabinOn(col).id, values[at]);
+                stale.has_value()) {
+                cabins_->Unobserve(*stale);
+            }
+            continue;
+        }
+
         // **§5's third row: an UPDATE that did not touch the key column does
         // nothing.** Appending anyway would still be *correct* - the entry
         // set stays a superset, and the read dedupes - but it is unbounded:
@@ -2364,13 +2763,17 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         // very relation it was declared for. Correct and useless is still a
         // defect, so the comparison is made here rather than left to the
         // cap.
+        //
+        // The comparison uses the column's own `type_val` and the coerced
+        // value: against the raw literal a decoded date never compared
+        // equal to the string it was written as, so this check silently
+        // never fired for a typed column and every write appended.
         if (at < previous.size() &&
-            exec::CompareValues(/*type_val=*/0, previous[at], values[at],
-                                parser::CompareOp::kEq)) {
+            exec::CompareValues(column.type_val, previous[at], value, parser::CompareOp::kEq)) {
             continue;
         }
 
-        auto key = stats::MakeCabinKey(access.CabinOn(col).id, values[at]);
+        auto key = stats::MakeCabinKey(access.CabinOn(col).id, value);
         // A value that can never be observed - NULL, an unbound param -
         // cannot have a set to append to either, so there is nothing to
         // witness. Silent, exactly as it is on the read path.
@@ -2600,8 +3003,12 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // when this relation has a Cabin - it is what tells the write hook
         // whether a key column actually moved (§5's third row). A relation
         // with no Cabin copies nothing.
+        // ...and what tells the index hook the same thing (feat-index.md §2).
+        // A relation with neither copies nothing.
         std::vector<parser::AstValue> previous;
-        if (cabins_ != nullptr && ta.cabin_mask != 0) previous = row.value();
+        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty()) {
+            previous = row.value();
+        }
 
         for (const auto& assignment : stmt.assignments) {
             for (std::size_t c = 0; c < ta.schema.columns.size(); ++c) {
@@ -2686,28 +3093,6 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             return s;
         }
 
-        // ---- HEAP_OVERWRITE (wal.md section 5.2) -----------------------
-        //
-        // UPDATE was unlogged **entirely** before this: it mutated a page
-        // and told the log nothing, so a crash lost the change with no
-        // record that it had happened. Logged now, after the undo record
-        // it points at - the ordering the var-heap already uses, and for
-        // the same reason: a replay must never reach a tuple whose pointer
-        // resolves to nothing.
-        if (wal_ != nullptr && scope.txn != nullptr) {
-            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());
-            const wal::HeapWritePayload fields{
-                new_trx_id, new_undo_ptr, slot,
-                static_cast<std::uint16_t>(encoded.value().size())};
-            if (auto n = wal::EncodeHeapWrite(buf, fields, encoded.value()); !n.ok()) {
-                return n.status();
-            }
-            auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapOverwrite, scope.txn->id(), page_id}, buf);
-            if (!rec.ok()) return rec.status();
-            if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
-        }
-
         // ---- The Cabin witness, UPDATE half (docs/feat-cabin.md §5) -----
         //
         // `row.value()` now holds the **new** values, so this appends the pk
@@ -2721,6 +3106,44 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // in-place overwrite under invariant 13 - so the appended hint is
         // the row's real address.
         NoteCabinWrite(ta, row.value(), /*first_col_pos=*/0, id.value(), page_id, slot, previous);
+
+        // The index half. `previous` is what makes §2's rule work: an UPDATE
+        // that moved no key and no covered column appends nothing, which is
+        // what keeps an index from growing by an entry per write forever.
+        std::vector<exec::IndexWrite> index_writes;
+        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row.value(),
+                                              /*first_col_pos=*/0, encoded.value(), id.value(),
+                                              previous,
+                                              wal_ != nullptr ? &index_writes : nullptr);
+            !s.ok()) {
+            return s;
+        }
+
+        // ---- HEAP_OVERWRITE (wal.md section 5.2) -----------------------
+        //
+        // UPDATE was unlogged **entirely** before this: it mutated a page
+        // and told the log nothing, so a crash lost the change with no
+        // record that it had happened. Logged now, after the undo record it
+        // points at *and* after the index entries that reach the new
+        // version - both for the same reason the var-heap has: a replay must
+        // never reach a pointer that resolves to nothing, and a version no
+        // index entry names is a row a probe cannot find
+        // (docs/feat-index.md §12.1).
+        if (wal_ != nullptr && scope.txn != nullptr) {
+            if (Status s = LogIndexWrites(index_writes, scope.txn->id()); !s.ok()) return s;
+
+            std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());
+            const wal::HeapWritePayload fields{
+                new_trx_id, new_undo_ptr, slot,
+                static_cast<std::uint16_t>(encoded.value().size())};
+            if (auto n = wal::EncodeHeapWrite(buf, fields, encoded.value()); !n.ok()) {
+                return n.status();
+            }
+            auto rec = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kHeapOverwrite, scope.txn->id(), page_id}, buf);
+            if (!rec.ok()) return rec.status();
+            if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
+        }
 
         ++updated;
         if (page_id != last_page) {
@@ -3139,11 +3562,16 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             if (Status s = page_store_.StampPageLsn(page_id, rec.value()); !s.ok()) return s;
         }
 
-        // No Cabin write hook: removal is forbidden (feat-cabin.md section
-        // 5), because an older snapshot may still match this row through
-        // the undo chain. The entry stays and the read-time check subtracts
-        // it - which is now the visibility predicate as well as the key
-        // re-check.
+        // No Cabin write hook, and no index one either: removal is
+        // forbidden (feat-cabin.md section 5, feat-index.md IX2), because an
+        // older snapshot may still match this row through the undo chain.
+        // The entry stays and the read-time check subtracts it - which is
+        // the visibility predicate as well as the key re-check.
+        //
+        // Stated rather than left as an omission: a DELETE calling
+        // MaintainIndexes with nothing to do would read as maintenance that
+        // happens to be empty, when the truth is that maintenance here would
+        // be a defect.
 
         ++deleted;
         return Status::OK();

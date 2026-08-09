@@ -192,6 +192,29 @@ It is also the cheapest thing in this document to fix: seed `next_user_oid_`
 from the catalog at load, or persist it in the superblock. Neither is K0's
 to do.
 
+**Fixed 2026-08-08 (the first option).** `GenerateUserOid()` recovers its
+position on first use from the highest oid `sys.objects` and `sys.columns`
+carry, then increments in memory - so a boot costs one scan and a
+`CREATE TABLE` costs nothing extra. `ObjectOidsAreReissuedAcrossABootAndCollide`
+is inverted and renamed `ObjectOidsAreUniqueAcrossABoot`, and both of its
+"invert this test" messages are gone.
+
+Recovering beat persisting for a reason worth keeping: **there is no durable
+counter that can fall behind the rows it describes.** The rows *are* the
+counter, so a crash between issuing an oid and writing its row loses the oid
+rather than duplicating it, and a lost oid is free under K3's no-density
+promise. A superblock field would have needed a format bump and would have
+introduced exactly the write-ordering question `sys.tables.next_id` already
+has with the WAL (§4 of this document).
+
+Two things this does **not** fix. The scan reads `sys.objects` and
+`sys.columns` because those are the only two relations `GenerateUserOid()`'s
+results are written to; an oid written only to some third relation would be
+invisible to the recovery, so that contract is stated at the function and is
+what to check before adding a caller. And it says nothing about the *pk* half
+of §1.2, which §§1-5 of this document are about and which still depends on a
+durable `next_id` (K-M2a).
+
 ## 7. Amendments to `docs/keystoneid-invariant.md`
 
 **Approved and applied 2026-08-03.** All four are in that document now; what

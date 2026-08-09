@@ -68,6 +68,24 @@ private:
     // words already consumed. One production for both, since they differ
     // only in `drop` - see CabinStmt (ast.hpp).
     StatusOr<CabinStmt> ParseCabin(bool drop);
+    StatusOr<IndexStmt> ParseIndex(bool drop);
+
+    // `{CREATE | DROP} ASSERTION ...` (docs/feat-assertion.md §3), with the
+    // leading two words already consumed. One production for both, for
+    // ParseCabin's reason - see AssertionStmt (ast.hpp).
+    StatusOr<AssertionStmt> ParseAssertion(bool drop);
+
+    // A parenthesised comma-separated column list, as both halves of a
+    // CREATE INDEX declaration and an assertion's GROUP BY list are. `what`
+    // names the list in every error.
+    //
+    // `cap == 0` means **no cap**, which is what an assertion's GROUP BY list
+    // takes: `feat-assertion.md` §3 declares no ceiling on it, and inventing
+    // one here would settle a number nothing has measured. An index's lists
+    // pass their own `[PROPOSED]` caps, which are refusals and never
+    // truncations (docs/feat-index.md §13).
+    Status ParseDeclaredColumnList(std::vector<IndexColumnRef>& out, const char* what,
+                                   std::size_t cap);
 
     // The two bracketed lists of a declaration, split out only because
     // ParseCreatePattern is otherwise three loops in a row.
@@ -120,6 +138,11 @@ private:
     StatusOr<std::vector<Condition>> ParseOptionalWhere(std::uint32_t depth);
 
     StatusOr<std::string> ParseIdent();
+
+    // One argument of a parameterized type - `decimal(10, 2)`'s 10 and 2.
+    // `what` names it in the error, so a client is told which of the two
+    // was wrong rather than that "a type argument" was.
+    StatusOr<std::uint32_t> ParseTypeArgument(std::string_view what);
     Status ExpectKeyword(std::string_view keyword);
     Status ExpectToken(TokenType type, std::string_view desc);
     void ConsumeOptionalSemicolon();

@@ -1,3 +1,4 @@
+#include <string>
 #include "kds/catalog/rows.hpp"
 
 #include <cstring>
@@ -147,9 +148,26 @@ std::array<std::byte, SysIndexRow::kOnDiskSize> SysIndexRow::Encode() const {
     std::byte* base = buf.data();
     std::memcpy(base + kIndexOidOffset, &index_oid, sizeof(index_oid));
     std::memcpy(base + kTableOidOffset, &table_oid, sizeof(table_oid));
-    std::memcpy(base + kColPosOffset, &col_pos, sizeof(col_pos));
-    std::memcpy(base + kColTypeOffset, &col_type, sizeof(col_type));
+    std::memcpy(base + kRootPageIdOffset, &root_page_id, sizeof(root_page_id));
+    std::memcpy(base + kKeyWidthOffset, &key_width, sizeof(key_width));
+    std::memcpy(base + kEntryWidthOffset, &entry_width, sizeof(entry_width));
+    std::memcpy(base + kNameOffset, name.data(), kCatalogNameMax);
+    std::memcpy(base + kNkeysOffset, &nkeys, sizeof(nkeys));
+    std::memcpy(base + kNcoveredOffset, &ncovered, sizeof(ncovered));
     std::memcpy(base + kFlagsOffset, &flags, sizeof(flags));
+    std::memcpy(base + kReserved0Offset, &reserved0, sizeof(reserved0));
+    // Element by element rather than one block copy of the array: the
+    // on-disk stride is sizeof(uint16_t) by declaration, and a block copy
+    // would silently adopt whatever stride the compiler chose for the
+    // std::array (rules.md #2).
+    for (std::size_t i = 0; i < kMaxIndexKeyColumns; ++i) {
+        std::memcpy(base + kKeyColsOffset + i * sizeof(std::uint16_t), &key_cols[i],
+                    sizeof(std::uint16_t));
+    }
+    for (std::size_t i = 0; i < kMaxIndexCoveredColumns; ++i) {
+        std::memcpy(base + kCoveredColsOffset + i * sizeof(std::uint16_t), &covered_cols[i],
+                    sizeof(std::uint16_t));
+    }
     return buf;
 }
 
@@ -160,9 +178,32 @@ StatusOr<SysIndexRow> SysIndexRow::Decode(std::span<const std::byte> bytes) {
     const std::byte* base = bytes.data();
     std::memcpy(&row.index_oid, base + kIndexOidOffset, sizeof(row.index_oid));
     std::memcpy(&row.table_oid, base + kTableOidOffset, sizeof(row.table_oid));
-    std::memcpy(&row.col_pos, base + kColPosOffset, sizeof(row.col_pos));
-    std::memcpy(&row.col_type, base + kColTypeOffset, sizeof(row.col_type));
+    std::memcpy(&row.root_page_id, base + kRootPageIdOffset, sizeof(row.root_page_id));
+    std::memcpy(&row.key_width, base + kKeyWidthOffset, sizeof(row.key_width));
+    std::memcpy(&row.entry_width, base + kEntryWidthOffset, sizeof(row.entry_width));
+    std::memcpy(row.name.data(), base + kNameOffset, kCatalogNameMax);
+    std::memcpy(&row.nkeys, base + kNkeysOffset, sizeof(row.nkeys));
+    std::memcpy(&row.ncovered, base + kNcoveredOffset, sizeof(row.ncovered));
     std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
+    std::memcpy(&row.reserved0, base + kReserved0Offset, sizeof(row.reserved0));
+    for (std::size_t i = 0; i < kMaxIndexKeyColumns; ++i) {
+        std::memcpy(&row.key_cols[i], base + kKeyColsOffset + i * sizeof(std::uint16_t),
+                    sizeof(std::uint16_t));
+    }
+    for (std::size_t i = 0; i < kMaxIndexCoveredColumns; ++i) {
+        std::memcpy(&row.covered_cols[i], base + kCoveredColsOffset + i * sizeof(std::uint16_t),
+                    sizeof(std::uint16_t));
+    }
+
+    // A count past its array would let every later reader index out of
+    // bounds off one corrupt byte. Checked here, at the one door these rows
+    // come through, rather than at each of them.
+    if (row.nkeys == 0 || row.nkeys > kMaxIndexKeyColumns ||
+        row.ncovered > kMaxIndexCoveredColumns) {
+        return Status::Corruption("sys.indexes row claims " + std::to_string(row.nkeys) +
+                                  " key and " + std::to_string(row.ncovered) +
+                                  " covered columns, outside the declared limits");
+    }
     return row;
 }
 
@@ -296,6 +337,20 @@ StatusOr<SysFkeyRow> SysFkeyRow::Decode(std::span<const std::byte> bytes) {
     // whether the two oids name live relations is a question this function
     // has no catalog to ask.
     return row;
+}
+
+std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name) {
+    if (col.type_val == kTypeValDecimal || col.type_val == kTypeValDecimalWide) {
+        return std::string(base_name) + "(" + std::to_string(DecimalPrecisionOf(col.len)) + "," +
+               std::to_string(DecimalScaleOf(col.len)) + ")";
+    }
+    // `char` is the other type whose declared width is part of its name.
+    if (col.type_val == kTypeValChar) {
+        return std::string(base_name) + "(" + std::to_string(col.len) + ")";
+    }
+    // Every other type's width comes from its type_val, so `len` says
+    // nothing a reader wants and the bare name is the whole truth.
+    return std::string(base_name);
 }
 
 }  // namespace kds::catalog

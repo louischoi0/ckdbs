@@ -18,10 +18,16 @@
 #
 #   pattern_id  must not move from one hash to another, ever: the v2
 #   arg_hash    language is additive shape, and a moved hash retires every
-#               stored waystone. The one permitted transition is "-" to a
-#               hash, when a statement that could not be lexed becomes
-#               lexable (V04's dot token) — nothing already stored changes
-#               meaning, since a shape that hashed to X still hashes to X.
+#               stored waystone. Two permitted transitions. "-" to a hash,
+#               when a statement that could not be lexed becomes lexable
+#               (V04's dot token) — nothing already stored changes meaning,
+#               since a shape that hashed to X still hashes to X. And a
+#               hash that could never be stored may move (TY3 phase 2's
+#               numeric token): a statement that lexed but parsed in no
+#               production was fingerprintable yet unrecordable, so its
+#               hash names nothing on disk. The second is the one to argue
+#               carefully — fingerprint.cpp's kNumLit note is the shape of
+#               the argument required.
 #
 # Verdicts here were derived by reading src/parser/parser.cpp; hashes were
 # recorded from the build. See tests/parser_golden_test.cpp for why those
@@ -183,8 +189,12 @@ ok	489356a113ef4e44	cbf29ce484222325	SELECT SUM(DISTINCT x) FROM t
 # column reference.
 ok	ff41a860584dc5e0	cbf29ce484222325	SELECT count FROM t
 ok	060af4ce805c88ca	b5d414774c8002cc	SELECT * FROM t WHERE group = 1
-# AVG is understood and declined: there is no decimal kind to hold one.
-Unsupported	91fa1130f96f7220	cbf29ce484222325	SELECT AVG(x) FROM t
+# AVG folds since 2026-08-07 (feat-aggregate.md §3.4): the verdict flipped
+# with its task, and the hash did not move - AVG was always an ordinary
+# identifier to the lexer, which is what the non-reservation rule buys.
+# The type rule (decimal columns only) is the compiler's, invisible here.
+ok	91fa1130f96f7220	cbf29ce484222325	SELECT AVG(x) FROM t
+ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
 # HAVING and ORDER BY over aggregated output, each refused with its own
 # position (AG7, and §2's [PROPOSED] ORDER BY row).
 Unsupported	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
@@ -392,3 +402,112 @@ InvalidArgument	-	-	CREATE PATTERN p($f int64) OF INSERT INTO t VALUES (1)
 # live traffic it is meant to match reduce to one pattern.
 Unsupported	0212b03badb413ad	cbf29ce484222325	SELECT * FROM t WHERE id = $x
 Unsupported	ae34f9ce9d472ac9	b5d414774c8002cc	UPDATE t SET c = $x WHERE id = 1
+
+# ---- Bare numeric literals (TY3 phase 2) -----------------------------------
+#
+# `12.34` is one token and one value: the quoted string of its spelling.
+# The first two lines pin the whole design in corpus form - the bare and
+# quoted spellings carry the *same* pattern_id and the *same* arg_hash,
+# because they are one statement, not a collision.
+#
+# Before this token, digit-dot-digit lexed as int, dot, int: fingerprintable
+# but parsed by no production. Fusing it moved those statements' hashes -
+# the corpus rule's second permitted transition, "a hash that could never be
+# stored may move", argued in fingerprint.cpp and pinned by
+# fingerprint_test.cpp's TheNumericTokenNeededNoFingerprintVersionBump.
+ok	ecba24c306c70be5	a3c68932ec2dc068	SELECT * FROM t WHERE amt = 12.34
+ok	ecba24c306c70be5	a3c68932ec2dc068	SELECT * FROM t WHERE amt = '12.34'
+ok	ecba24c306c70be5	100a442a17d84421	SELECT * FROM t WHERE amt = -0.5
+ok	d6bd36cbdaeee580	66f3ec47f0d82909	SELECT * FROM t WHERE amt BETWEEN 1.00 AND 2.50
+ok	c323a07930901e82	f7f9adb5d61121fd	INSERT INTO t VALUES (12.34, 'x')
+ok	ae34f9ce9d472ac9	46ac44ad760bc8f1	UPDATE t SET c = 12.34 WHERE id = 1
+# Digits are required on both sides of the point, so these stay the parse
+# errors they always were - and their hashes are the pre-fusion token
+# sequences, unchanged.
+InvalidArgument	0758626484394051	183c9cbf54792c5d	SELECT * FROM t WHERE amt = 12.
+InvalidArgument	0765f6648444c629	b5d410774c7ffc00	SELECT * FROM t WHERE amt = .5
+InvalidArgument	b46f83ccad484d09	ae5e91f4b62d26a6	SELECT * FROM t WHERE amt = 1.2.3
+
+# ---- CREATE INDEX / DROP INDEX (docs/feat-index.md §10) --------------------
+#
+# Every line here is new, and not one pre-existing line moved: `index`,
+# `covering` and `unique` reach the lexer as ordinary identifiers, exactly as
+# the aggregate function names did, so no token sequence changed meaning and
+# kFingerprintVersion did not move. A column may still be named any of them,
+# which the line below the refusals pins.
+ok	-	-	CREATE INDEX by_owner ON accounts (owner)
+ok	-	-	CREATE INDEX ix ON t (b, a, c)
+ok	-	-	CREATE INDEX ix ON t (a) COVERING (b, c)
+ok	-	-	CREATE INDEX ix ON t (a) covering (b)
+ok	-	-	CREATE INDEX ix ON t (a);
+ok	-	-	DROP INDEX by_owner
+ok	-	-	CREATE INDEX unique ON t (index) COVERING (covering)
+ok	98c09327562a9560	b5d414774c8002cc	SELECT index FROM t WHERE covering = 1
+# UNIQUE is refused at its own byte: enforcing uniqueness makes the index a
+# constraint, which would let an index failure abort a write (IX11).
+Unsupported	-	-	CREATE UNIQUE INDEX ix ON t (a)
+# A cap refuses and never truncates (spec §11), with the offending column's
+# position - which is the one thing only this layer knows.
+Unsupported	-	-	CREATE INDEX ix ON t (a, b, c, d, e)
+Unsupported	-	-	CREATE INDEX ix ON t (a) COVERING (b, c, d, e, f, g, h, i, j)
+InvalidArgument	-	-	CREATE INDEX ix (a)
+InvalidArgument	-	-	CREATE INDEX ix ON t
+InvalidArgument	-	-	DROP INDEX
+
+# ---- CREATE ASSERTION / DROP ASSERTION (docs/feat-assertion.md §3) ---------
+#
+# Every line here is "-  -": assertion DDL carries no pattern, because its
+# leading word is CREATE. The point of the block is the *verdicts*, and that
+# every pre-existing line in this file passed unchanged - which is the whole
+# evidence AST02 owes for "DML fingerprints are unaffected".
+#
+# `assertion`, `check` and `group` are matched by text and are not keywords,
+# so they are still usable as names; the fourth line is that, and the DML
+# lines below it are the half that actually carries a hash.
+ok	-	-	CREATE ASSERTION lim ON purchases GROUP BY (user_id, product_id) CHECK COUNT(*) <= 5
+ok	-	-	CREATE ASSERTION credit ON orders GROUP BY (user_id) CHECK SUM(amount) < 1000
+ok	-	-	create assertion a on t group by (x) check count(*) <= 1;
+ok	-	-	CREATE ASSERTION assertion ON check GROUP BY (assertion, check) CHECK COUNT(*) <= 1
+ok	-	-	CREATE ASSERTION a ON t GROUP BY (c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10) CHECK COUNT(*) <= 1
+ok	-	-	DROP ASSERTION lim
+
+# Reserved and refused: a form this engine understands and declines, each at
+# its own byte. AS11 (a lower bound would have to be checked on DELETE),
+# AS3/AS7 (timing clauses), §10 (aggregates that are not incrementally
+# maintainable, or are not bounds at all).
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) > 5
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) >= 5
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 DEFERRABLE
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT DEFERRABLE
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1 NOT VALID
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK MIN(v) <= 1
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK AVG(v) <= 1
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(v) <= 1
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(DISTINCT v) <= 1
+
+# Wrong rather than reserved: no ceiling in any direction, a bound that is not
+# a non-negative integer literal, a predicate that could never admit a row
+# (§3.1 - a group holds at least one row, so COUNT(*) = 0 is unsatisfiable),
+# and a missing mandatory clause.
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) != 5
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= -1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 1.5
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 0
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) < 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(*) <= 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK TOTAL(v) <= 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t CHECK COUNT(*) <= 1
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY (x)
+InvalidArgument	-	-	CREATE ASSERTION a ON t GROUP BY () CHECK COUNT(*) <= 1
+InvalidArgument	-	-	DROP ASSERTION
+
+# A SUM bound of zero is *not* degenerate: an int64 column may hold negative
+# values, so no non-negative bound is provably unsatisfiable.
+ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
+
+# [AS11 rev. 2026-08-08] `=` moved from ok to Unsupported. It parsed and was
+# documented as meaning `aggregate <= N`; that reinterpreted what the operator
+# wrote, and enforcing real equality needs the lower-bound half v1 excludes.
+# A verdict moving with the task that owns it, which is what this column is for.
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
+Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100

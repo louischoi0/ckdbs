@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
@@ -135,7 +136,31 @@ struct SysColumnRow {
     std::uint32_t pos;
     Name name;
     std::uint32_t type_val;
+
+    // What `len` means depends on the type, and only two types read it.
+    //
+    //   `char`     the declared width, which is what it has always meant.
+    //   `decimal`  the packed **(precision, scale)** pair - see
+    //              `PackDecimalLen` below.
+    //   anything else
+    //              the type's width, stored and **never consulted**:
+    //              `RowLayout::ColumnWidth` derives every other width from
+    //              `type_val` alone.
+    //
+    // The decimal reading is an **overload of an existing field, chosen
+    // over widening this row** (docs/spec-types.md TY9, workplan TY02).
+    // Widening it is a data-file format change: `SysColumnRow` has no spare
+    // byte, so `(p, s)` would have cost a superblock version bump and every
+    // pre-existing data file would stop mounting - which is what the last
+    // four bootstrap-relation additions each cost. `len` was already dead
+    // weight for a decimal column, so the pair rides in it for free.
+    //
+    // The price, stated so nobody has to find it: `len` is no longer
+    // readable as "a width" without knowing the type. Two display paths
+    // consulted it that way - `sys.columns` and `DESCRIBE` - and both now
+    // render the type instead.
     std::uint32_t len;
+
     bool notnull;
 
     // Whether this column may carry a Cabin, and on whose initiative
@@ -169,6 +194,37 @@ static_assert(offsetof(SysColumnRow, type_val) == SysColumnRow::kTypeValOffset);
 static_assert(offsetof(SysColumnRow, len) == SysColumnRow::kLenOffset);
 static_assert(offsetof(SysColumnRow, notnull) == SysColumnRow::kNotNullOffset);
 static_assert(offsetof(SysColumnRow, cabin_policy) == SysColumnRow::kCabinPolicyOffset);
+
+// ---- decimal(p, s) packed into `len` (docs/spec-types.md TY9) ----------
+//
+// Explicit shift and mask, never a compiler bitfield: invariant 6 forbids
+// one for any persisted format, because their layout is
+// implementation-defined and this engine must be architecture-portable.
+//
+// Precision in the high byte, scale in the low one. Both are bounded well
+// under 255 by TY2 (1 <= p <= 18, 0 <= s <= p), so sixteen of `len`'s
+// thirty-two bits are used and the rest stay zero and available.
+inline constexpr std::uint32_t PackDecimalLen(std::uint8_t precision,
+                                              std::uint8_t scale) noexcept {
+    return (static_cast<std::uint32_t>(precision) << 8) | static_cast<std::uint32_t>(scale);
+}
+
+inline constexpr std::uint8_t DecimalPrecisionOf(std::uint32_t len) noexcept {
+    return static_cast<std::uint8_t>((len >> 8) & 0xFF);
+}
+
+inline constexpr std::uint8_t DecimalScaleOf(std::uint32_t len) noexcept {
+    return static_cast<std::uint8_t>(len & 0xFF);
+}
+
+// How a column's declared type reads back to a client: `int64`, `varchar`,
+// `char(8)`, `decimal(10,2)`, `date`. `base_name` is the `sys.types` name
+// for the column's `type_val`, which the caller has already resolved.
+//
+// Here rather than at each display site because `len`'s meaning is this
+// header's to know, and two callers rendering it differently is how a
+// `DESCRIBE` and a `sys.columns` come to disagree about one column.
+std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name);
 
 // ---- Per-column cabin policy (docs/feat-cabin.md §8) -------------------
 //
@@ -256,22 +312,84 @@ static_assert(offsetof(SysTypeRow, type_val) == SysTypeRow::kTypeValOffset);
 static_assert(offsetof(SysTypeRow, len) == SysTypeRow::kLenOffset);
 
 // ---- sys.indexes -----------------------------------------------------
+//
+// One row per secondary index (docs/feat-index.md §12, workplan IX03).
+//
+// The row this replaces described a **single-column** index: one `col_pos`,
+// no root page, no name. Nothing ever wrote it - `HasUnindexedEqualityFilter`
+// was its only reader and every answer was "unindexed" - so widening it costs
+// no migration of live data. What it does cost is a superblock version bump,
+// for a reason worth stating exactly because it is *not* the reason the four
+// previous bumps had: no pre-existing file misparses anything here, since no
+// pre-existing file has an index row at all. The bump protects the other
+// direction - an **older binary opening a newer file**, which would find rows
+// of a size its `Decode` rejects and fail on every SELECT compile rather than
+// refusing to mount. That refusal is what a version is for.
 
-inline constexpr std::uint8_t kIndexFlagUnique = 0x1;  // the only mode supported today
+// A **cap refuses, never truncates** (spec §11): an index declared with more
+// columns than fit is rejected at CREATE INDEX, because a truncated index
+// marked complete is a wrong answer with a right answer's shape. Both are
+// `[PROPOSED]`, chosen to keep the row inside one catalog slot; nothing may
+// depend on either number, only on the rule.
+inline constexpr std::size_t kMaxIndexKeyColumns = 4;
+inline constexpr std::size_t kMaxIndexCoveredColumns = 8;
+
+// Defined and never written (spec IX11). v1 is a read accelerator that
+// cannot fail a write for a reason of its own, so `UNIQUE` is refused at
+// declaration; the bit exists so turning it on later is a code change and
+// not a format event, exactly as `UndoRecordType::kInsert` does.
+inline constexpr std::uint8_t kIndexFlagUnique = 0x1;
 
 struct SysIndexRow {
+    // From AllocateRowId(kSysIndexesTable) - this relation's own persistent
+    // sequence, like a cabin_id or an fk_id, and not GenerateUserOid(),
+    // which counts objects rather than rows of this relation.
     Oid index_oid;
     Oid table_oid;
-    std::uint32_t col_pos;
-    std::uint32_t col_type;
+
+    // The index tree's root (storage/index/index_tree.hpp). Allocated
+    // eagerly at CREATE INDEX and **never moved by growth** - a root split
+    // publishes a new root here through this row, which is why the id may
+    // live on a cached TableAccess at all (catalog_cache.hpp's rule).
+    PageId root_page_id;
+
+    // The index's schema constants, in the sense RowLayout::row_size is a
+    // relation's: `key_width` from exec::IndexKeyWidth over the key columns,
+    // `entry_width` the whole leaf entry. Stored rather than recomputed so
+    // every page the tree touches can be **checked** against them, and a
+    // page that disagrees is Corruption rather than a reinterpretation.
+    std::uint16_t key_width;
+    std::uint16_t entry_width;
+
+    Name name;
+
+    std::uint8_t nkeys;
+    std::uint8_t ncovered;
     std::uint8_t flags;
+    std::uint8_t reserved0;
+
+    // Positions into the relation's schema, in **declared index order** -
+    // which is the order the key encoding concatenates them in, so it is
+    // part of the format and not a presentation detail. Entries past
+    // `nkeys`/`ncovered` are written 0 and never read.
+    std::array<std::uint16_t, kMaxIndexKeyColumns> key_cols;
+    std::array<std::uint16_t, kMaxIndexCoveredColumns> covered_cols;
 
     static constexpr std::size_t kIndexOidOffset = 0;
     static constexpr std::size_t kTableOidOffset = 8;
-    static constexpr std::size_t kColPosOffset = 16;
-    static constexpr std::size_t kColTypeOffset = 20;
-    static constexpr std::size_t kFlagsOffset = 24;
-    static constexpr std::size_t kOnDiskSize = kFlagsOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kRootPageIdOffset = 16;
+    static constexpr std::size_t kKeyWidthOffset = 20;
+    static constexpr std::size_t kEntryWidthOffset = 22;
+    static constexpr std::size_t kNameOffset = 24;
+    static constexpr std::size_t kNkeysOffset = kNameOffset + kCatalogNameMax;      // 88
+    static constexpr std::size_t kNcoveredOffset = kNkeysOffset + 1;                // 89
+    static constexpr std::size_t kFlagsOffset = kNcoveredOffset + 1;                // 90
+    static constexpr std::size_t kReserved0Offset = kFlagsOffset + 1;               // 91
+    static constexpr std::size_t kKeyColsOffset = kReserved0Offset + 1;             // 92
+    static constexpr std::size_t kCoveredColsOffset =
+        kKeyColsOffset + kMaxIndexKeyColumns * sizeof(std::uint16_t);               // 100
+    static constexpr std::size_t kOnDiskSize =
+        kCoveredColsOffset + kMaxIndexCoveredColumns * sizeof(std::uint16_t);       // 116
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysIndexRow> Decode(std::span<const std::byte> bytes);
@@ -279,9 +397,16 @@ struct SysIndexRow {
 
 static_assert(offsetof(SysIndexRow, index_oid) == SysIndexRow::kIndexOidOffset);
 static_assert(offsetof(SysIndexRow, table_oid) == SysIndexRow::kTableOidOffset);
-static_assert(offsetof(SysIndexRow, col_pos) == SysIndexRow::kColPosOffset);
-static_assert(offsetof(SysIndexRow, col_type) == SysIndexRow::kColTypeOffset);
+static_assert(offsetof(SysIndexRow, root_page_id) == SysIndexRow::kRootPageIdOffset);
+static_assert(offsetof(SysIndexRow, key_width) == SysIndexRow::kKeyWidthOffset);
+static_assert(offsetof(SysIndexRow, entry_width) == SysIndexRow::kEntryWidthOffset);
+static_assert(offsetof(SysIndexRow, name) == SysIndexRow::kNameOffset);
+static_assert(offsetof(SysIndexRow, nkeys) == SysIndexRow::kNkeysOffset);
+static_assert(offsetof(SysIndexRow, ncovered) == SysIndexRow::kNcoveredOffset);
 static_assert(offsetof(SysIndexRow, flags) == SysIndexRow::kFlagsOffset);
+static_assert(offsetof(SysIndexRow, reserved0) == SysIndexRow::kReserved0Offset);
+static_assert(offsetof(SysIndexRow, key_cols) == SysIndexRow::kKeyColsOffset);
+static_assert(offsetof(SysIndexRow, covered_cols) == SysIndexRow::kCoveredColsOffset);
 
 // ---- sys.patterns ----------------------------------------------------
 //
@@ -542,7 +667,7 @@ inline constexpr std::uint8_t kStmtClassUnclassified = 0;
 struct SysCabinRow {
     // From AllocateRowId(kSysCabinsTable) - the persistent sequence in
     // sys.cabins' own sys.tables row, for the reason RegisterPattern()
-    // records: GenerateUserOid() restarts at kUserOidStart every boot, and
+    // records: GenerateUserOid() numbers *objects*, not this relation's rows, and
     // this row is persisted.
     std::uint64_t cabin_id;
 
@@ -641,7 +766,7 @@ constexpr bool IsCabinServing(const SysCabinRow& row) noexcept {
 struct SysFkeyRow {
     // From AllocateRowId(kSysFkeysTable) - the persistent sequence in
     // sys.fkeys' own sys.tables row, for the reason SysCabinRow records:
-    // GenerateUserOid() restarts at kUserOidStart every boot and this row
+    // GenerateUserOid() numbers objects rather than this relation's rows, and this row
     // is persisted.
     std::uint64_t fk_id;
 

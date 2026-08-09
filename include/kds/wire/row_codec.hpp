@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "kds/base/int128.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/parser/ast.hpp"
@@ -54,12 +55,28 @@
 //
 // ---- Types ---------------------------------------------------------------
 //
-// v1 covers exactly what the engine can store (`src/exec/row_codec.cpp`):
-// the signed ints, `uint64`, `bool`, `char` and `varchar`. `float` and
-// `decimal` are refused at CREATE TABLE under the fixed-length rule, so no
-// column can hold one and nothing here encodes one; `DECIMAL`'s wire format
-// is `[OPEN]` in protocol.md §6 and settling it here would settle it for
-// the type system too.
+// Covers exactly what the engine can store (`src/exec/row_codec.cpp`): the
+// signed ints, `uint64`, `bool`, `char`, `varchar`, and - since the types
+// work (`docs/spec-types.md`) - `date`, `timestamp` and `decimal(p, s)`.
+// `float` is refused at CREATE TABLE, so no column can hold one and
+// nothing here encodes one.
+//
+// **DECIMAL on the wire** (the decision protocol.md §6 held `[OPEN]`,
+// settled 2026-08-07): the value is the **unscaled int64, LE, 8 bytes** -
+// the exact integer storage holds, in TIMESTAMP's shape - and the scale
+// travels **in the row description, once**, never per value. A per-value
+// scale would be 2 bytes of redundancy per field that can only ever agree
+// with the column or be a defect; the description states the fact once,
+// which is the same reasoning that put `(p, s)` in one catalog word
+// (TY02). `FieldDescription::type_mod` carries that word - literally the
+// catalog's packed `len`, read through `catalog::DecimalPrecisionOf` /
+// `DecimalScaleOf`, so there is one packing with two readers and no
+// second scheme. A `p > 18` decimal is a *future separate type* (TY2)
+// with its own type_val and its own 16-byte width; nothing here forecloses
+// it, which is what "scaled-int, width follows the type" buys over the
+// rejected string encoding - text would cost a per-value parse on an
+// all-binary protocol and reintroduce the two-readings drift the type
+// system just removed.
 
 namespace kds::wire {
 
@@ -74,6 +91,12 @@ struct FieldDescription {
     // a client ends up padding.
     std::int16_t type_len = -1;
     std::uint16_t flags = 0;
+    // Type modifier. Zero for every type except `decimal`, where it is the
+    // catalog's packed `(p, s)` word (`SysColumnRow::len`), read with
+    // `catalog::DecimalPrecisionOf` / `DecimalScaleOf`. The scale a
+    // decimal field's unscaled int64 means nothing without lives here,
+    // once per result set - see the DECIMAL note in the file header.
+    std::uint32_t type_mod = 0;
 };
 
 // Field 0 of every user relation is the Keystone id (protocol.md §6), which
@@ -97,15 +120,20 @@ void EncodeRowDescription(const std::vector<FieldDescription>& fields,
 
 // Appends one value in its `{len i32, bytes}` form.
 //
-// `type_val` decides how the value is read, not what it is: a `uint64`
+// The column decides how the value is read, not what it is: a `uint64`
 // column encodes from `AstValue::raw_int_text` because `int_val` cannot
 // represent the upper half of the range - the same reason
-// `exec::CompareValues` compares that column through its digit text.
+// `exec::CompareValues` compares that column through its digit text - and
+// a `decimal` column is why this takes the column row rather than a bare
+// type_val: the value's scale is checked against the column's, because an
+// unscaled integer written under the wrong scale is not a malformed byte,
+// it is a different number.
 //
 // Fails with InvalidArgument if the value's kind cannot satisfy the column
-// (an integer for a text column), and with Unsupported for a `kParam`,
-// which is a declaration's placeholder and never a result value.
-Status EncodeValue(std::uint32_t type_val, const parser::AstValue& value,
+// (an integer for a text column, a decimal whose scale disagrees), and
+// with Unsupported for a `kParam`, which is a declaration's placeholder
+// and never a result value.
+Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& value,
                    std::vector<std::byte>& out);
 
 // Accumulates rows into one batch payload.
@@ -182,5 +210,10 @@ StatusOr<std::vector<std::vector<DecodedField>>> DecodeRowBatch(std::vector<std:
 StatusOr<std::int64_t> DecodeInt(std::span<const std::byte> bytes);
 StatusOr<std::uint64_t> DecodeUint64(std::span<const std::byte> bytes);
 std::string_view DecodeText(std::span<const std::byte> bytes);
+
+// The 16-byte wide-decimal field: two LE halves, low first. The scale is
+// the row description's `type_mod`, not the field's, exactly as for the
+// 8-byte decimal.
+StatusOr<Int128> DecodeDecimalWide(std::span<const std::byte> bytes);
 
 }  // namespace kds::wire

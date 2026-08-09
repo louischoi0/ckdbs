@@ -84,6 +84,13 @@ class Phase:
             "elapsed_s": round(self.elapsed, 6),
             "qps": round(self.qps, 1),
             "mean_us": round(statistics.fmean(self.latencies) * 1e6, 1) if self.latencies else 0.0,
+            # p0 and p25 are here because a benchmark document is required to
+            # carry them (bench/docs/README.md, rule 6): p0 is the best case
+            # the path can reach, which is what says how much of the mean is
+            # fixed cost, and p25 says whether the body of the distribution is
+            # tight or long. p50/p99 alone hide both.
+            "p0_us": round(min(self.latencies) * 1e6, 1) if self.latencies else 0.0,
+            "p25_us": round(self.percentile(25) * 1e6, 1),
             "p50_us": round(self.percentile(50) * 1e6, 1),
             "p95_us": round(self.percentile(95) * 1e6, 1),
             "p99_us": round(self.percentile(99) * 1e6, 1),
@@ -131,14 +138,15 @@ def report(phases, meta, footer=()):
           f"{connections} connection{'' if connections == 1 else 's'}")
     print(f"server {meta['host']}:{meta['port']}  table {meta['table']}")
     print()
-    header = (f"{'phase':<{NAME_WIDTH}}{'ops':>8}{'qps':>12}{'mean us':>10}"
-              f"{'p50':>9}{'p95':>9}{'p99':>9}{'max':>10}{'err':>6}")
+    header = (f"{'phase':<{NAME_WIDTH}}{'ops':>8}{'qps':>10}{'mean us':>10}"
+              f"{'p0':>9}{'p25':>9}{'p50':>9}{'p95':>9}{'p99':>9}{'max':>10}{'err':>6}")
     print(header)
     print("-" * len(header))
     for phase in phases:
         s = phase.summary()
-        print(f"{s['phase']:<{NAME_WIDTH}}{s['ops']:>8}{s['qps']:>12,.0f}{s['mean_us']:>10.1f}"
-              f"{s['p50_us']:>9.1f}{s['p95_us']:>9.1f}{s['p99_us']:>9.1f}{s['max_us']:>10.1f}"
+        print(f"{s['phase']:<{NAME_WIDTH}}{s['ops']:>8}{s['qps']:>10,.0f}{s['mean_us']:>10.1f}"
+              f"{s['p0_us']:>9.1f}{s['p25_us']:>9.1f}{s['p50_us']:>9.1f}"
+              f"{s['p95_us']:>9.1f}{s['p99_us']:>9.1f}{s['max_us']:>10.1f}"
               f"{s['errors']:>6}")
     print()
     for phase in phases:
