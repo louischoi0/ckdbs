@@ -93,6 +93,17 @@ struct StepStats {
     // path that a row count does not imply.
     std::uint64_t spill_fetches = 0;
 
+    // Pages this step demonstrably read (feat-physical-optimizer.md §II.2
+    // S2 - the cost-benefit model's currency is page accesses, and this is
+    // its collector). Counted exactly where the count is exact: a walk
+    // counts each chain page once as the visitor crosses onto it, and every
+    // keyed access - a descent, a replay verify, a memo re-read, an index
+    // seek or resolve - counts **one** per access rather than one per
+    // b-tree level, because the VM sees the descent as a call, not a path.
+    // An undercount on descents is the honest direction: the signal exists
+    // to price *scans*, where it is exact.
+    std::uint64_t pages_fetched = 0;
+
     // Waystone replay (workplan P11). `trail_replays` counts descents this
     // step skipped because a recorded location validated; `trail_misses`
     // counts consultations that found an entry and fell through anyway -

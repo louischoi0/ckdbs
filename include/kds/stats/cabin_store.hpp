@@ -9,6 +9,13 @@
 #include "kds/base/common.hpp"
 #include "kds/parser/ast.hpp"
 
+namespace kds::stats {
+// Forward-declared rather than included: the store only holds a pointer
+// and forwards through it (optimizer_signals.hpp), and an include here
+// would put the optimizer's header under every file that touches a Cabin.
+class OptimizerSignals;
+}  // namespace kds::stats
+
 // The Cabin runtime store: the observed sets, the sighting counter, and the
 // policy that decides when a value becomes observed
 // (docs/feat-cabin.md §§3-5, docs/cabin-workplan.md CB04).
@@ -223,6 +230,20 @@ public:
     void NoteHit(std::uint64_t cabin_id);
     void NoteMiss(std::uint64_t cabin_id);
 
+    // Counts a C6 location hint's verification outcome, per cabin. The
+    // callers are the two hint sites that already bump the per-step
+    // counters (step_vm's ServeFromCabin, fk_check's reverse fast path) -
+    // this is the per-*cabin* attribution those per-step counters cannot
+    // carry, and the cabin optimizer's S3 needs (workplan PHY01).
+    void NoteHint(std::uint64_t cabin_id, bool ok);
+
+    // Where the optimizer's decayed quality signals live, when a collector
+    // exists (feat-physical-optimizer.md §II.2 S3). Null is the ordinary
+    // no-optimizer configuration and costs one predicate per note. The
+    // store forwards and never owns: eviction, snapshotting and caps are
+    // the collector's policy, not this class's.
+    void set_signals(OptimizerSignals* signals) noexcept { signals_ = signals; }
+
     // ---- Recording ------------------------------------------------------
 
     // Bumps `key`'s sighting count and returns the new value, clearing the
@@ -291,6 +312,7 @@ private:
     std::unordered_map<CabinKey, std::uint8_t, CabinKeyHash> sightings_;
     std::unordered_map<std::uint64_t, CabinInfo> info_;
     Stats stats_;
+    OptimizerSignals* signals_ = nullptr;
 };
 
 }  // namespace kds::stats

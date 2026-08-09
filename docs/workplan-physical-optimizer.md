@@ -286,16 +286,48 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **Nothing of Part II is
-built**; Part I's `stats/decay.hpp` is the R1 implementation PHY01's S1
-reuses.
+dependency of PHY04), `workplan-testing.md`. **PHY01 is built (2026-08-09); PHY02 onward are
+not.** Part I's `stats/decay.hpp` is the R1 implementation PHY01's S1
+reuses (it grew the N-point `Accumulate` for S2's decayed sums).
 
 Engine rules apply throughout: explicit Status errors, thread-per-core
 core-local state, deterministic tests, decide/execute phase separation
 (PO10 structural requirement — enforced by construction: the decision core
 lives in a module with no engine-effect includes).
 
-## PHY01 — Statistics plumbing (S1–S3)
+## PHY01 — Statistics plumbing (S1–S3)  **[DONE 2026-08-09]**
+
+**Built.** `stats/optimizer_signals.hpp/.cpp` is the collector: S1/S2 as a
+per-fingerprint `{executions, pages}` DecayState pair (the decayed mean is
+their ratio — division left to PHY02's 16.16 core, so nothing rounds
+twice), S3 as per-cabin `{lookups, hint_failures, coverage_misses}`,
+bounded maps (`kMaxTrackedFingerprints`/`kMaxTrackedCabins`, 4096
+`[PROPOSED]`) evicting the coldest to admit a newcomer — restarting
+evidence, never fabricating it. `Snapshot()` is versioned, decay-epoch
+stamped, sorted by id for byte-identical determinism, and is the one read
+PHY02 will perform. Four things the build decided or found. **S2's counter
+had to be built**: `StepStats::pages_fetched` — exact for walks (counted at
+the visitor's page transitions), one per keyed access (the VM sees a
+descent as a call, not a path; the undercount is the honest direction for
+a signal that exists to price scans) — rendered as `pages=` in ANALYZE,
+and the fix rode with it that `StepStats::operator+=` had been dropping
+the three index counters from `Total()`. **S3's attribution lives in
+`CabinStore`**: `NoteHit`/`NoteMiss` forward to the collector and the new
+`NoteHint(cabin_id, ok)` is called from the two hint sites (step VM,
+fk_check) that already bumped the per-step counters — per-cabin
+attribution those counters cannot carry. **The dispatcher's statement
+identity widened**: `instance` was derived only when Waystone could use it
+(replayable step + recorder/replay on), which excluded exactly the
+scan-only shapes the CREATE decision prices; with a collector wired, every
+fingerprinted SELECT derives it, and the trail/replay reads still guard on
+their own switches. **The ACTIVE-baseline freeze is deferred to PHY03**,
+where the lifecycle state it freezes into exists. Wired at the expeditor
+(collector before its two feeders, for destruction order), and the
+ordinary/aggregated SELECT paths now run with a hoisted `ExecStats` — the
+VM always counted internally, so the change is a member reuse, not new
+cost. Tests: decayed-mean pair, snapshot immutability/version/sort, cap
+eviction, null-clock degradation, and the scripted end-to-end (dispatcher
+in, snapshot out, exact counts under no clock).
 
 **Scope.** Make the three input signals collectible into a snapshot.
 

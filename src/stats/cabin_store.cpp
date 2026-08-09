@@ -3,6 +3,8 @@
 #include <limits>
 #include <utility>
 
+#include "kds/stats/optimizer_signals.hpp"
+
 namespace kds::stats {
 
 std::size_t CabinKeyHash::operator()(const CabinKey& key) const noexcept {
@@ -86,11 +88,17 @@ std::vector<CabinEntry>* CabinStore::Find(const CabinKey& key) {
 void CabinStore::NoteHit(std::uint64_t cabin_id) {
     ++stats_.hits;
     ++info_[cabin_id].hits;
+    if (signals_ != nullptr) signals_->NoteCabinLookup(cabin_id, /*served=*/true);
 }
 
 void CabinStore::NoteMiss(std::uint64_t cabin_id) {
     ++stats_.misses;
     ++info_[cabin_id].misses;
+    if (signals_ != nullptr) signals_->NoteCabinLookup(cabin_id, /*served=*/false);
+}
+
+void CabinStore::NoteHint(std::uint64_t cabin_id, bool ok) {
+    if (signals_ != nullptr) signals_->NoteCabinHint(cabin_id, ok);
 }
 
 std::uint8_t CabinStore::Observe(const CabinKey& key) {

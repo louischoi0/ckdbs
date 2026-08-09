@@ -391,6 +391,16 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                               expeditor->config_.aggregate_max_distinct});
     expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
                                          expeditor->config_.decay_half_life_ns);
+    // PHY01's collector, wired to both feeders: the dispatcher touches
+    // S1/S2 per successful SELECT, the Cabin store forwards S3 from its
+    // counting sites. One construction site, the config's clock and
+    // half-life bound once.
+    expeditor->optimizer_signals_.emplace(&expeditor->clock_,
+                                          expeditor->config_.decay_half_life_ns);
+    expeditor->dispatcher_->set_optimizer_signals(&*expeditor->optimizer_signals_);
+    if (expeditor->cabin_store_) {
+        expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
+    }
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +
                                  wal::DurabilityClassName(expeditor->config_.durability) +

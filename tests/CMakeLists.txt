@@ -63,6 +63,7 @@ add_executable(kds_tests
     decay_test.cpp
     relayout_planner_test.cpp
     show_relayout_test.cpp
+    optimizer_signals_test.cpp
     trail_store_test.cpp
     trail_recorder_test.cpp
     waystone_replay_test.cpp

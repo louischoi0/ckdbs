@@ -316,7 +316,9 @@ component's runtime name stays distinct too — class `CabinOptimizer`, keys
 `kds.cabin_optimizer`/`kds.po_*`, view `sys.cabin_optimizer` — because
 Part I's built `physical_optimizer` config key already means the shadow
 report, and one key wearing two meanings is how switches lie.
-**Status: ADOPTED (experimental); nothing of Part II is built.**
+**Status: ADOPTED (experimental); PHY01 — the S1-S3 signal plumbing and
+the snapshot — is built (2026-08-09, `stats/optimizer_signals.hpp`);
+PHY02 onward are not.**
 
 ## II.1 Positioning
 
