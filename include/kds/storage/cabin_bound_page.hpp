@@ -74,6 +74,16 @@ inline constexpr std::uint8_t kEntryReserved = 0x1;
 // complete, correct entry that costs a descent.
 inline constexpr std::uint8_t kEntryHintValid = 0x2;
 
+// `flags` bit 2: the entry records a row *leaving* its group - an UPDATE's
+// departure half (§4.2's group-move row) or a DELETE - so its contribution
+// to re-summation is (-1, -value) where an ordinary entry's is (+1, +value).
+// One flag rather than a signed value, because a SUM column may itself be
+// negative and overloading the value's sign would make the two unreadable
+// apart. Amends AST04's "cardinality moves by one per entry" to "by *plus or
+// minus* one per entry, by this flag, never by the value" - the rule's point,
+// value-independence, survives intact.
+inline constexpr std::uint8_t kEntryDeparture = 0x4;
+
 // One entry, exactly 32 bytes on disk (§5.1's normative width).
 //
 // A plain struct with explicit encode/decode rather than a memcpy'd overlay:
@@ -99,6 +109,7 @@ struct BoundCabinEntry {
     std::int64_t value = 0;
 
     bool reserved() const noexcept { return (flags & kEntryReserved) != 0; }
+    bool departure() const noexcept { return (flags & kEntryDeparture) != 0; }
     bool hint_valid() const noexcept {
         return (flags & kEntryHintValid) != 0 && page_id != kInvalidPageId;
     }

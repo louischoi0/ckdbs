@@ -1,0 +1,159 @@
+#pragma once
+
+#include <cstdint>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "kds/base/status.hpp"
+#include "kds/catalog/catalog.hpp"
+#include "kds/exec/assertion_build.hpp"
+#include "kds/exec/bound_cabin.hpp"
+#include "kds/parser/ast.hpp"
+#include "kds/storage/page_store.hpp"
+
+// The write-path admission and reservation protocol (docs/feat-assertion.md
+// §§4.2, 6.2; workplan AST07): the one place a write is checked against a
+// declared assertion, and the bookkeeping that makes a refused race lose
+// cleanly and an aborted transaction restore the aggregates exactly.
+//
+// ---- The FK shape, for FK's reason ----------------------------------------
+//
+// The spec says "compile the check into the step chain"; that mechanism does
+// not exist to use, exactly as `fk_check.hpp` records - INSERT compiles to
+// no chain and UPDATE/DELETE walk a single Step outside the step VM. So this
+// is a helper called from the three write paths, **one implementation, no
+// trigger machinery**, which is the part of the placement decision that is
+// not up for discussion. A consequence worth naming: because no compiled
+// plan embeds a check step, the plan cache does not depend on the assertion
+// set, and CREATE/DROP ASSERTION need no plan invalidation - the door
+// `assertion_catalog.cpp`'s publish comment left to this task closes itself.
+//
+// ---- Every write is a departure, an arrival, or both (§4.2) ---------------
+//
+//   INSERT                     arrival, admission-checked
+//   UPDATE, aggregate invariant  nothing (no entry, no delta)
+//   UPDATE, same group, SUM moved  departure + arrival; checked iff delta > 0
+//   UPDATE, group moved        departure + arrival; the arrival is checked
+//   DELETE                     departure, check-free (AS11)
+//
+// A departure entry carries kEntryDeparture and contributes (-1, -value);
+// DELETE's is required by §5's coverage contract - "100% of live rows" - not
+// by any check: a header that kept counting deleted rows would overstate
+// forever (nothing prunes) and refuse valid writes without bound.
+//
+// ---- Reservations and the transaction (§6.2) ------------------------------
+//
+// A reservation counts in the aggregate from the moment of admission, which
+// is what makes a false admission impossible and is §4.3's deliberate
+// stricter-than-snapshot semantics. The pending set is keyed by the writing
+// transaction's id; COMMIT clears the RESERVED flags (batched per page,
+// ASSERT_COMMIT), ABORT reverses each reservation (ASSERT_ROLLBACK). In the
+// no-transaction-manager configuration every statement is its own
+// transaction under kBootstrapXid, and the dispatcher ends it either way at
+// statement end - one statement at a time per core is what makes the shared
+// key safe.
+//
+// ---- Page spans -----------------------------------------------------------
+//
+// Reserving fetches cabin pages. UPDATE and DELETE call this from inside
+// their own relation walk, which is the pre-existing exposure `fk_check.hpp`
+// names and this shares rather than creates - safe only because nothing
+// evicts.
+//
+// Concurrency: core-local, no latches (§6.1). The registry is
+// dispatcher-owned and memory-resident; a restart loses it, and SHOW
+// ASSERTIONS derives `enforcing` from its presence so the loss is reported
+// rather than silent.
+
+namespace kds::wal {
+class WalManager;
+}
+
+namespace kds::exec {
+
+// One published assertion, live on this core: everything the write hook
+// needs, resolved once at CREATE (or by future recovery) so the per-write
+// cost is lookups and never a catalog scan or a re-parse.
+struct LiveAssertion {
+    std::uint64_t assertion_id = 0;
+    catalog::Oid target_oid = 0;
+    std::string name;
+    BoundAggregate aggregate = BoundAggregate::kCount;
+    std::vector<std::uint16_t> group_cols;  // schema positions
+    std::uint16_t sum_col = 0;              // schema position; read for kSum only
+    std::string sum_col_name;
+    std::vector<std::string> group_col_names;      // for the §4.4 message
+    std::vector<std::uint32_t> group_type_vals;    // for the §4.4 message
+    BoundCabinChainWriter chain;
+    BoundCabin cabin;
+
+    LiveAssertion() : cabin(BoundAggregate::kCount, 0) {}
+};
+
+class AssertionEnforcer {
+public:
+    bool empty() const noexcept { return live_.empty(); }
+    bool Holds(std::uint64_t assertion_id) const { return live_.count(assertion_id) != 0; }
+    bool AnyOn(catalog::Oid oid) const { return by_oid_.count(oid) != 0; }
+
+    void Adopt(LiveAssertion assertion);
+    void Evict(std::uint64_t assertion_id);
+
+    // INSERT's admission, pure - run before the row id is allocated, FK's
+    // ordering, so a refusal burns nothing. `values` are the statement's
+    // VALUES list: columns after the pk, so schema position p is values[p-1].
+    Status AdmitInsert(catalog::Oid oid, std::span<const parser::AstValue> values);
+
+    // INSERT's reservation, after placement: the arrival entry, the delta,
+    // the ASSERT_RESERVE record. The admission already passed and nothing
+    // ran in between (one statement at a time, nothing suspends).
+    Status ReserveInsert(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id,
+                         catalog::Oid oid, std::span<const parser::AstValue> values,
+                         std::uint64_t pk, PageId row_page, std::uint16_t row_slot);
+
+    // UPDATE's per-row check-and-reserve, §4.2's table. `old_row`/`new_row`
+    // are schema-indexed (pk at 0). Refusal leaves the row untouched - the
+    // caller runs this before the undo record and the overwrite.
+    Status AdmitAndReserveUpdate(storage::PageStore& store, wal::WalManager* wal,
+                                 std::uint64_t txn_id, catalog::Oid oid,
+                                 std::span<const parser::AstValue> old_row,
+                                 std::span<const parser::AstValue> new_row, std::uint64_t pk,
+                                 PageId row_page, std::uint16_t row_slot);
+
+    // DELETE's per-row departure: check-free (AS11), maintenance only.
+    Status ReserveDelete(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id,
+                         catalog::Oid oid, std::span<const parser::AstValue> old_row,
+                         std::uint64_t pk, PageId row_page, std::uint16_t row_slot);
+
+    // Transaction end. Commit clears RESERVED flags on the entry pages and
+    // logs ASSERT_COMMIT per (assertion, page); the aggregates were correct
+    // from admission, so nothing else moves. Abort reverses each
+    // reservation and logs ASSERT_ROLLBACK per entry. Both forget the
+    // transaction's pending set; a transaction with none is a no-op.
+    Status CommitTxn(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id);
+    Status AbortTxn(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id);
+
+private:
+    // One applied reservation, remembered so commit and abort can find it.
+    struct Reservation {
+        std::uint64_t assertion_id = 0;
+        std::string key;
+        bool departure = false;
+        std::int64_t value = 0;
+        PageId page = kInvalidPageId;
+        std::uint16_t index = 0;
+    };
+
+    Status ReserveOne(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id,
+                      LiveAssertion& a, const std::string& key, bool departure,
+                      std::int64_t value, std::uint64_t pk, PageId row_page,
+                      std::uint16_t row_slot);
+
+    std::unordered_map<std::uint64_t, LiveAssertion> live_;
+    std::unordered_map<catalog::Oid, std::vector<std::uint64_t>> by_oid_;
+    std::unordered_map<std::uint64_t, std::vector<Reservation>> pending_;
+};
+
+}  // namespace kds::exec

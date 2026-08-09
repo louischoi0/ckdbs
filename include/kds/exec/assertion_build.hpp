@@ -7,8 +7,10 @@
 #include "kds/catalog/schema.hpp"
 #include "kds/exec/bound_cabin.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/read_view.hpp"
+#include "kds/wal/record.hpp"
 
 // The CREATE-time Bound Cabin builder (docs/feat-assertion.md §8.1, workplan
 // AST06): one full scan of the target relation, accumulated into entry pages
@@ -57,16 +59,61 @@ class WalManager;
 
 namespace kds::exec {
 
+// The entry-page chain writer: allocation, formatting, linking and the WAL
+// record for each append, kept together so the emission order cannot drift
+// from the mutation order. **Two callers, one implementation**: the builder
+// appends with `kAssertBuild`/`kNoTxnId`, and AST07's write hook appends
+// reservations with `kAssertReserve` and the writing transaction - the same
+// bytes through the same code, which is what keeps a built entry and a
+// reserved one from disagreeing about what an entry is.
+//
+// Plain state (root, tail, page count) with the store and WAL taken per
+// call, so a registry can hold one for an assertion's lifetime without
+// holding references.
+class BoundCabinChainWriter {
+public:
+    BoundCabinChainWriter() = default;
+    explicit BoundCabinChainWriter(std::uint64_t assertion_id) noexcept
+        : assertion_id_(assertion_id) {}
+
+    PageId root() const noexcept { return root_; }
+    std::size_t pages() const noexcept { return pages_; }
+
+    // Allocates and formats the first page. Called unconditionally by the
+    // builder, because the publish step names a root even for an empty
+    // relation.
+    Status EnsureRoot(storage::PageStore& store, wal::WalManager* wal);
+
+    // Appends one entry, growing the chain when the tail is full, and logs
+    // it as `type` owned by `txn_id` against the page it landed in.
+    StatusOr<std::pair<PageId, std::uint16_t>> Append(storage::PageStore& store,
+                                                      wal::WalManager* wal,
+                                                      const storage::cabin::BoundCabinEntry& entry,
+                                                      const std::string& key,
+                                                      wal::RecordType type,
+                                                      std::uint64_t txn_id);
+
+private:
+    Status Grow(storage::PageStore& store, wal::WalManager* wal);
+
+    std::uint64_t assertion_id_ = 0;
+    PageId root_ = kInvalidPageId;
+    PageId tail_ = kInvalidPageId;
+    std::size_t pages_ = 0;
+};
+
 // What a completed build hands back: the root the publish step names, the
-// directory the caller's registry will own, and the two numbers the reply
-// reports.
+// directory the caller's registry will own, the chain writer AST07's write
+// hook keeps appending through, and the two numbers the reply reports.
 struct BoundCabinBuild {
-    BoundCabinBuild(BoundAggregate aggregate, std::int64_t enforced_max)
-        : cabin(aggregate, enforced_max) {}
+    BoundCabinBuild(BoundAggregate aggregate, std::int64_t enforced_max,
+                    std::uint64_t assertion_id)
+        : chain(assertion_id), cabin(aggregate, enforced_max) {}
 
     PageId cabin_root = kInvalidPageId;
     std::size_t rows_incorporated = 0;
     std::size_t pages_allocated = 0;
+    BoundCabinChainWriter chain;
     BoundCabin cabin;
 };
 

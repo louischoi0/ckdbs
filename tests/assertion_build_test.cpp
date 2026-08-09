@@ -88,11 +88,11 @@ TEST_F(AssertionBuildTest, ACountBuildIncorporatesEveryLiveRowAndReportsIt) {
     // A real root was published...
     EXPECT_EQ(out.find("cabin_root=4294967295"), std::string::npos) << out;
     EXPECT_NE(out.find("cabin_root="), std::string::npos) << out;
-    // ...and the reply still says nothing enforces, because nothing does:
-    // the write-path check is AST07's, and a root must not be read as one.
-    EXPECT_NE(out.find("enforcing=0"), std::string::npos) << out;
+    // ...and the reply says it enforces (AST07): built, checked on the
+    // write path, and held by this dispatcher's registry - all three.
+    EXPECT_NE(out.find("enforcing=1"), std::string::npos) << out;
     const std::string shown = Run("SHOW ASSERTIONS");
-    EXPECT_NE(shown.find("enforcing=0"), std::string::npos) << shown;
+    EXPECT_NE(shown.find("enforcing=1"), std::string::npos) << shown;
 }
 
 TEST_F(AssertionBuildTest, ViolatingDataFailsTheCreateNamingTheFirstGroup) {

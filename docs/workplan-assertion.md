@@ -291,10 +291,58 @@ trace (catalog, pages, WAL replay all clean).
 
 ---
 
-## AST07 — Write-path integration: reservation protocol + undo
+## AST07 — Write-path integration: reservation protocol + undo  **[BUILT 2026-08-09]**
 
-**Scope.** Compile the admission/reserve step into statement step chains per
-spec §4.2/§6.2 (FK-style step-chain compilation; no trigger machinery).
+**Built.** `exec::AssertionEnforcer` (`include/kds/exec/assertion_check.hpp`):
+the registry of live assertions (resolved once at CREATE, never a catalog
+scan or re-parse per write), the admission checks, the reservations, and the
+per-transaction pending set that COMMIT clears (flag transitions +
+`ASSERT_COMMIT` per page) and ROLLBACK reverses (`ASSERT_ROLLBACK` per
+entry, the envelope's flag byte marking a departure). Hooks: INSERT admits
+before the row id (FK's ordering - a refusal burns nothing) and reserves
+after placement; UPDATE checks and reserves per row before the undo record;
+DELETE reserves its departure per row; `EndWrite`/`HandleCommit`/
+`HandleRollback` settle the transaction's set on every path, the
+no-manager configuration included (each statement is its own transaction
+under `kBootstrapXid`). `enforcing` is now the three-way conjunction - root,
+write-path constant (flipped true), registry-resident - so a restart's
+surviving catalog row reports 0 rather than claiming a check that cannot
+run. `tests/assertion_enforce_test.cpp` covers the acceptance: the bound-1
+race admits exactly one, abort restores exactly (INSERT and DELETE both
+directions), group-move charges only its destination, a decreasing SUM
+UPDATE is check-free *and* still maintained, an aggregate-invariant UPDATE
+reserves nothing, and the fresh-dispatcher case pins the honest recovery
+gap.
+
+**Three decisions, named.**
+
+*The FK shape, for FK's reason.* The spec says step-chain compilation; that
+mechanism still does not exist (INSERT compiles to no chain, UPDATE/DELETE
+walk outside the step VM), so this is `fk_check.hpp`'s shape - one
+implementation, three call sites, no trigger machinery. Consequence: no
+compiled plan embeds a check step, so the plan cache does not depend on the
+assertion set and CREATE/DROP ASSERTION need no plan invalidation - the
+door AST06's publish comment left open closes itself.
+
+*Every write is a departure, an arrival, or both.* `kEntryDeparture`
+(cabin_bound_page.hpp) marks an entry contributing (-1, -value); an UPDATE
+that moves the aggregate is departure + arrival (same group or not, one
+code path), DELETE is a check-free departure - **required by §5's "100% of
+live rows" coverage contract**, not by any check: a header that kept
+counting deleted rows would overstate forever and refuse valid writes
+without bound. AST04's "cardinality moves by one per entry" is amended to
+"by *plus or minus* one, by the flag, never by the value"; re-summation and
+AST05's replay both read the flag, and the rollback record carries it in
+the envelope's per-type flags byte.
+
+*The AS9 conflict, operator-decided: poison.* Spec §4.4 carries the
+amendment and the argument; the acceptance line "statement error leaves
+transaction open" is satisfied in its autocommit sense only, deliberately.
+
+**Gap carried, not hidden**: the S-3 concurrent-history checks stay gated
+with the isolation checker that does not exist, per the workplan's own
+gate. Reservation *page entries* orphaned by an abort ride on purge with
+everything else.
 
 **Deliverables.**
 - Step-chain insertion for INSERT, UPDATE (delta rules of §4.2, including

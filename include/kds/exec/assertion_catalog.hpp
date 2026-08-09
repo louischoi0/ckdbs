@@ -8,6 +8,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/assertion_check.hpp"
 #include "kds/exec/bound_cabin.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
@@ -170,11 +171,12 @@ struct AssertionDdlResult {
     std::size_t rows_incorporated = 0;
     std::size_t group_count = 0;
 
-    // The directory the build produced, for the caller that owns live
-    // assertion state (the dispatcher's registry). An optional rather than a
-    // value because a moved-from directory held beside a published root
-    // would look exactly like an empty relation's.
-    std::optional<BoundCabin> cabin;
+    // Everything the write hook needs, resolved here where the statement,
+    // the schema and the build are all in hand - the dispatcher moves it
+    // into its `AssertionEnforcer`. An optional rather than a value because
+    // a moved-from one held beside a published root would look exactly like
+    // an empty relation's.
+    std::optional<LiveAssertion> live;
 };
 
 // `CREATE ASSERTION`: §3.1's remaining create-time checks - the ones only

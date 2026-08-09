@@ -34,124 +34,100 @@ struct StagedRow {
     std::vector<std::byte> payload;
 };
 
-// The entry-page chain under construction: allocation, formatting, linking
-// and the WAL records for each, kept together so the emission order cannot
-// drift from the mutation order.
-class CabinChainWriter {
-public:
-    CabinChainWriter(storage::PageStore& store, wal::WalManager* wal,
-                     std::uint64_t assertion_id) noexcept
-        : store_(store), wal_(wal), assertion_id_(assertion_id) {}
-
-    PageId root() const noexcept { return root_; }
-    std::size_t pages() const noexcept { return pages_; }
-
-    // Allocates and formats the first page. Called unconditionally, because
-    // the publish step names a root even for an empty relation.
-    Status EnsureRoot() { return tail_ == kInvalidPageId ? Grow() : Status::OK(); }
-
-    // Appends one entry, growing the chain when the tail is full, and logs
-    // ASSERT_BUILD against the page it landed in.
-    StatusOr<std::pair<PageId, std::uint16_t>> Append(const BoundCabinEntry& entry,
-                                                      const std::string& key) {
-        if (tail_ == kInvalidPageId) {
-            if (Status s = Grow(); !s.ok()) return s;
-        }
-        auto page = store_.Get(tail_);
-        if (!page.ok()) return page.status();
-        auto opened = BoundCabinPage::Open(page.value());
-        if (!opened.ok()) return opened.status();
-        if (opened.value().full()) {
-            if (Status s = Grow(); !s.ok()) return s;
-            page = store_.Get(tail_);
-            if (!page.ok()) return page.status();
-            opened = BoundCabinPage::Open(page.value());
-            if (!opened.ok()) return opened.status();
-        }
-
-        auto index = opened.value().Append(entry);
-        if (!index.ok()) return index.status();
-
-        if (wal_ != nullptr) {
-            std::array<std::byte, kEntryBytes> entry_bytes{};
-            if (Status s = storage::cabin::EncodeEntry(entry, entry_bytes); !s.ok()) return s;
-            std::vector<std::byte> payload(wal::kAssertEntryFixedSize + kEntryBytes + key.size());
-            wal::AssertEntryPayload fields{};
-            fields.assertion_id = assertion_id_;
-            fields.index = index.value();
-            auto used = wal::EncodeAssertEntry(
-                payload, fields, entry_bytes,
-                std::as_bytes(std::span<const char>(key.data(), key.size())));
-            if (!used.ok()) return used.status();
-            auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kAssertBuild, wal::kNoTxnId, tail_}, payload);
-            if (!rec.ok()) return rec.status();
-            if (Status s = store_.StampPageLsn(tail_, rec.value()); !s.ok()) return s;
-        }
-        return std::make_pair(tail_, index.value());
-    }
-
-private:
-    Status Grow() {
-        auto created = store_.CreateNew();
-        if (!created.ok()) return created.status();
-        auto [pid, bytes] = created.value();
-        if (Status s = BoundCabinPage::Format(bytes); !s.ok()) return s;
-        ++pages_;
-
-        if (wal_ != nullptr) {
-            // Deliberately unstamped, LogInsert's rule for a new tuple page:
-            // the first ASSERT_BUILD into it stamps it, and an empty root
-            // that never receives one carries page_lsn 0, "never logged".
-            std::array<std::byte, wal::kPageInitPayloadSize> init{};
-            const wal::PageInitPayload fields{
-                0, static_cast<std::uint8_t>(PageType::kCabinBound), {0, 0, 0}};
-            if (auto n = wal::EncodePageInit(init, fields); !n.ok()) return n.status();
-            if (auto rec = wal_->Append(
-                    wal::RecordSpec{wal::RecordType::kPageInit, wal::kNoTxnId, pid}, init);
-                !rec.ok()) {
-                return rec.status();
-            }
-        }
-
-        if (tail_ == kInvalidPageId) {
-            root_ = pid;
-        } else {
-            // The link edit, then a full page image of the old tail: no
-            // record type describes a link edit, which is the same reason
-            // heap chain growth images its predecessor (docs/wal.md).
-            auto old_tail = store_.Get(tail_);
-            if (!old_tail.ok()) return old_tail.status();
-            auto opened = BoundCabinPage::Open(old_tail.value());
-            if (!opened.ok()) return opened.status();
-            opened.value().SetNextPageId(pid);
-            if (wal_ != nullptr) {
-                std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-                if (auto n = wal::EncodeFullPageImage(
-                        image, std::span<const std::byte, kPageSize>(old_tail.value()));
-                    !n.ok()) {
-                    return n.status();
-                }
-                auto rec = wal_->Append(
-                    wal::RecordSpec{wal::RecordType::kFullPageImage, wal::kNoTxnId, tail_},
-                    image);
-                if (!rec.ok()) return rec.status();
-                if (Status s = store_.StampPageLsn(tail_, rec.value()); !s.ok()) return s;
-            }
-        }
-        tail_ = pid;
-        return Status::OK();
-    }
-
-    storage::PageStore& store_;
-    wal::WalManager* wal_;
-    std::uint64_t assertion_id_;
-    PageId root_ = kInvalidPageId;
-    PageId tail_ = kInvalidPageId;
-    std::size_t pages_ = 0;
-};
-
 }  // namespace
+
+Status BoundCabinChainWriter::EnsureRoot(storage::PageStore& store, wal::WalManager* wal) {
+    return tail_ == kInvalidPageId ? Grow(store, wal) : Status::OK();
+}
+
+StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
+    storage::PageStore& store, wal::WalManager* wal, const BoundCabinEntry& entry,
+    const std::string& key, wal::RecordType type, std::uint64_t txn_id) {
+    if (tail_ == kInvalidPageId) {
+        if (Status s = Grow(store, wal); !s.ok()) return s;
+    }
+    auto page = store.Get(tail_);
+    if (!page.ok()) return page.status();
+    auto opened = BoundCabinPage::Open(page.value());
+    if (!opened.ok()) return opened.status();
+    if (opened.value().full()) {
+        if (Status s = Grow(store, wal); !s.ok()) return s;
+        page = store.Get(tail_);
+        if (!page.ok()) return page.status();
+        opened = BoundCabinPage::Open(page.value());
+        if (!opened.ok()) return opened.status();
+    }
+
+    auto index = opened.value().Append(entry);
+    if (!index.ok()) return index.status();
+
+    if (wal != nullptr) {
+        std::array<std::byte, kEntryBytes> entry_bytes{};
+        if (Status s = storage::cabin::EncodeEntry(entry, entry_bytes); !s.ok()) return s;
+        std::vector<std::byte> payload(wal::kAssertEntryFixedSize + kEntryBytes + key.size());
+        wal::AssertEntryPayload fields{};
+        fields.assertion_id = assertion_id_;
+        fields.index = index.value();
+        auto used = wal::EncodeAssertEntry(
+            payload, fields, entry_bytes,
+            std::as_bytes(std::span<const char>(key.data(), key.size())));
+        if (!used.ok()) return used.status();
+        auto rec = wal->Append(wal::RecordSpec{type, txn_id, tail_}, payload);
+        if (!rec.ok()) return rec.status();
+        if (Status s = store.StampPageLsn(tail_, rec.value()); !s.ok()) return s;
+    }
+    return std::make_pair(tail_, index.value());
+}
+
+Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* wal) {
+    auto created = store.CreateNew();
+    if (!created.ok()) return created.status();
+    auto [pid, bytes] = created.value();
+    if (Status s = BoundCabinPage::Format(bytes); !s.ok()) return s;
+    ++pages_;
+
+    if (wal != nullptr) {
+        // Deliberately unstamped, LogInsert's rule for a new tuple page:
+        // the first entry record into it stamps it, and an empty root that
+        // never receives one carries page_lsn 0, "never logged".
+        std::array<std::byte, wal::kPageInitPayloadSize> init{};
+        const wal::PageInitPayload fields{
+            0, static_cast<std::uint8_t>(PageType::kCabinBound), {0, 0, 0}};
+        if (auto n = wal::EncodePageInit(init, fields); !n.ok()) return n.status();
+        if (auto rec = wal->Append(
+                wal::RecordSpec{wal::RecordType::kPageInit, wal::kNoTxnId, pid}, init);
+            !rec.ok()) {
+            return rec.status();
+        }
+    }
+
+    if (tail_ == kInvalidPageId) {
+        root_ = pid;
+    } else {
+        // The link edit, then a full page image of the old tail: no record
+        // type describes a link edit, which is the same reason heap chain
+        // growth images its predecessor (docs/wal.md).
+        auto old_tail = store.Get(tail_);
+        if (!old_tail.ok()) return old_tail.status();
+        auto opened = BoundCabinPage::Open(old_tail.value());
+        if (!opened.ok()) return opened.status();
+        opened.value().SetNextPageId(pid);
+        if (wal != nullptr) {
+            std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+            if (auto n = wal::EncodeFullPageImage(
+                    image, std::span<const std::byte, kPageSize>(old_tail.value()));
+                !n.ok()) {
+                return n.status();
+            }
+            auto rec = wal->Append(
+                wal::RecordSpec{wal::RecordType::kFullPageImage, wal::kNoTxnId, tail_}, image);
+            if (!rec.ok()) return rec.status();
+            if (Status s = store.StampPageLsn(tail_, rec.value()); !s.ok()) return s;
+        }
+    }
+    tail_ = pid;
+    return Status::OK();
+}
 
 StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
                                           const catalog::TableAccess& access,
@@ -163,9 +139,8 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
                                           wal::WalManager* wal) {
     const BoundAggregate aggregate =
         stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum : BoundAggregate::kCount;
-    BoundCabinBuild build(aggregate, stmt.enforced_max());
-    CabinChainWriter chain(store, wal, assertion_id);
-    if (Status s = chain.EnsureRoot(); !s.ok()) return s;
+    BoundCabinBuild build(aggregate, stmt.enforced_max(), assertion_id);
+    if (Status s = build.chain.EnsureRoot(store, wal); !s.ok()) return s;
 
     // A btree leaf is a heap page, so the walk below is one loop for both
     // clustered forms - only the first leaf differs.
@@ -251,7 +226,8 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
             entry.slot = row.slot;
             entry.value = delta;
 
-            auto at = chain.Append(entry, key);
+            auto at = build.chain.Append(store, wal, entry, key,
+                                         wal::RecordType::kAssertBuild, wal::kNoTxnId);
             if (!at.ok()) return at.status();
             if (Status s = build.cabin.Apply(key, delta, at.value().first, at.value().second);
                 !s.ok()) {
@@ -278,8 +254,8 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
         leaf = next;
     }
 
-    build.cabin_root = chain.root();
-    build.pages_allocated = chain.pages();
+    build.cabin_root = build.chain.root();
+    build.pages_allocated = build.chain.pages();
     return build;
 }
 

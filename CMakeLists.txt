@@ -98,6 +98,7 @@ add_library(kds
     src/exec/index_ddl.cpp
     src/exec/assertion_build.cpp
     src/exec/assertion_catalog.cpp
+    src/exec/assertion_check.cpp
     src/exec/assertion_replay.cpp
     src/exec/assertion_violation.cpp
     src/exec/bound_cabin.cpp

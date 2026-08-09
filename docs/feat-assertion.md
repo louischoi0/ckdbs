@@ -170,17 +170,17 @@ A violation aborts the **statement only**. The transaction remains open and
 usable. Status: `AssertionViolation`, message including the assertion name
 and the rendered group key, e.g.:
 
-> **[CONFLICT, flagged at AST08 (2026-08-09), decided at AST07.]** "The
-> transaction remains open and usable" contradicts the engine's
-> per-transaction failure atomicity (docs/txn.md §6): every failing write
-> statement inside an explicit transaction poisons the session —
-> `Session::Poison()`'s only caller is `EndWrite()` — and `FK_VIOLATION`
-> already behaves that way. Honouring AS9 as written would make an assertion
-> refusal the first write failure that does not poison, a carve-out the txn
-> docs would have to own; matching the engine means amending this sentence.
-> AST07 owns the decision, because it owns the call site. The Status code,
-> message format and wire spelling below are built (AST08) and encode
-> neither answer.
+> **[RESOLVED at AST07 (2026-08-09), operator-decided]: the violation
+> poisons, like every other write failure.** AS9's "the transaction remains
+> open and usable" is amended: inside an explicit transaction the session
+> enters failed-txn and the client must ROLLBACK — uniform with
+> `FK_VIOLATION` and per-transaction failure atomicity (docs/txn.md §6),
+> and the only honest option once a multi-row UPDATE can violate on row 3
+> of 10 with rows 1-2 already written; "open and usable" would need
+> statement-level rollback the engine does not have. In autocommit the
+> statement *is* its transaction and unwinds fully, reservations included —
+> which is the sense in which a violation is a statement error. A refusal
+> itself still mutates nothing (§6.2 step 2).
 
 ```
 AssertionViolation: assertion "user_product_purchase_limit"

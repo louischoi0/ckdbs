@@ -431,7 +431,26 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
     result.cabin_root = build.value().cabin_root;
     result.rows_incorporated = build.value().rows_incorporated;
     result.group_count = build.value().cabin.group_count();
-    result.cabin.emplace(std::move(build.value().cabin));
+
+    // The live half, resolved here where the statement, the schema and the
+    // build are all in hand: the write hook must never re-scan a catalog or
+    // re-parse a declaration per statement.
+    LiveAssertion live;
+    live.assertion_id = id.value();
+    live.target_oid = oid.value();
+    live.name = stmt.name;
+    live.aggregate = stmt.func == parser::AggFunc::kSum ? BoundAggregate::kSum
+                                                        : BoundAggregate::kCount;
+    live.group_cols = group_cols;
+    live.sum_col = sum_col;
+    live.sum_col_name = stmt.sum_column.name;
+    for (std::size_t i = 0; i < group_cols.size(); ++i) {
+        live.group_col_names.push_back(stmt.group_columns[i].name);
+        live.group_type_vals.push_back(access.value()->schema.columns[group_cols[i]].type_val);
+    }
+    live.chain = build.value().chain;
+    live.cabin = std::move(build.value().cabin);
+    result.live.emplace(std::move(live));
     return result;
 }
 

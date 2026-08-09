@@ -48,6 +48,11 @@ Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
                                       ? "assert replay: ASSERT_RESERVE entry is not reserved"
                                       : "assert replay: ASSERT_BUILD entry is reserved");
     }
+    if (!must_be_reserved && entry.departure()) {
+        // The builder writes arrivals only: every row it incorporates is a
+        // row that exists. A departure can arrive only through a RESERVE.
+        return Status::Corruption("assert replay: ASSERT_BUILD entry is a departure");
+    }
 
     BoundCabin* cabin = context.CabinOf(d.fields.assertion_id);
     if (cabin == nullptr) return Status::OK();  // the skip rule, header comment
@@ -80,9 +85,14 @@ Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
     }
 
     // The entry's inline value is the group delta (wal/payload.hpp: a COUNT
-    // assertion writes 1), so the directory fold reads it and nothing else.
-    return cabin->Apply(KeyOf(d.key), entry.value, record.header.page_id, d.fields.index)
-        .WithContext("assert replay: applying the group delta");
+    // assertion writes 1), so the directory fold reads it and nothing else -
+    // with the departure flag saying which sign it applies under.
+    const std::string key = KeyOf(d.key);
+    Status applied = entry.departure()
+                         ? cabin->ApplyDeparture(key, entry.value, record.header.page_id,
+                                                 d.fields.index)
+                         : cabin->Apply(key, entry.value, record.header.page_id, d.fields.index);
+    return applied.WithContext("assert replay: applying the group delta");
 }
 
 Status ReplayCommit(const wal::DecodedRecord& record, storage::PageStore& store,
@@ -125,10 +135,17 @@ Status ReplayRollback(const wal::DecodedRecord& record, AssertionReplayContext& 
     // The page is deliberately not touched: abort is a removal the directory
     // performs (cabin_bound_page.hpp), and the orphaned slot is the recorded
     // leak that rides on purge. The (page_id, index) pair is the entry's
-    // *name* here, which Unapply confirms against the group's list.
-    return cabin
-        ->Unapply(KeyOf(d.key), d.fields.delta, record.header.page_id, d.fields.index)
-        .WithContext("assert replay: compensating a reservation");
+    // *name* here, which Unapply confirms against the group's list. The
+    // envelope's flag byte says whether the reservation was a departure,
+    // which decides the sign the compensation restores under.
+    const std::string key = KeyOf(d.key);
+    const bool departure =
+        (record.header.flags & wal::kAssertRollbackFlagDeparture) != 0;
+    Status undone = departure ? cabin->UnapplyDeparture(key, d.fields.delta,
+                                                        record.header.page_id, d.fields.index)
+                              : cabin->Unapply(key, d.fields.delta, record.header.page_id,
+                                               d.fields.index);
+    return undone.WithContext("assert replay: compensating a reservation");
 }
 
 }  // namespace

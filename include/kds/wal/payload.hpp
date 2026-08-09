@@ -478,9 +478,17 @@ StatusOr<DecodedAssertCommit> DecodeAssertCommit(std::span<const std::byte> in);
 // pointing replay at page bytes whose flags no longer distinguish an
 // aborted entry from a live reservation.
 
+// The envelope's per-type `flags` byte, bit 0: the reservation being
+// compensated was a **departure** (kEntryDeparture), so replay restores it
+// with UnapplyDeparture (+1, +delta) rather than Unapply (-1, -delta). In
+// the envelope rather than the payload because the record header already
+// reserves per-type flags for exactly this, and the entry whose flag could
+// answer instead is orphaned page state a rollback must not depend on.
+inline constexpr std::uint8_t kAssertRollbackFlagDeparture = 0x1;
+
 struct AssertRollbackPayload {
     std::uint64_t assertion_id;
-    std::int64_t delta;      // the reserved delta as applied; replay subtracts it
+    std::int64_t delta;      // the reserved delta as applied; replay reverses it
     std::uint16_t index;     // the orphaned entry's slot in the envelope's page
     std::uint16_t key_len;   // bytes of group key that follow
     std::uint32_t reserved;  // 0

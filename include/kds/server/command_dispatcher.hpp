@@ -13,7 +13,7 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
-#include "kds/exec/bound_cabin.hpp"
+#include "kds/exec/assertion_check.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -895,14 +895,16 @@ private:
     // a property of the structure rather than of the test data.
     stats::CabinStore* cabins_ = nullptr;
 
-    // The live Bound Cabin directories, keyed by assertion id (workplan
-    // AST06): CREATE ASSERTION's build moves its directory in here, DROP
-    // erases it, and AST07's admission check is the reader this exists for.
-    // Core-local like everything on this dispatcher (feat-assertion.md
-    // §6.1). The entry *pages* are durable; this map is the memory-resident
-    // half a restart loses until recovery replays it (AST05's fold) - which
-    // is one of the two reasons nothing reports `enforcing=1` yet.
-    std::unordered_map<std::uint64_t, exec::BoundCabin> bound_cabins_;
+    // The live assertions and their reservation bookkeeping (workplan
+    // AST06/AST07): CREATE ASSERTION's build moves its LiveAssertion in
+    // here, DROP evicts it, the three write paths check and reserve through
+    // it, and the commit/abort hooks below settle what a transaction
+    // reserved. Core-local like everything on this dispatcher
+    // (feat-assertion.md §6.1). The entry *pages* are durable; this
+    // registry is the memory-resident half a restart loses until recovery
+    // replays it (AST05's fold) - and SHOW ASSERTIONS derives `enforcing`
+    // from its presence, so the loss reports itself instead of hiding.
+    exec::AssertionEnforcer enforcer_;
 
     // The commit a write path staged and did not wait for, read out at the
     // end of DispatchAndStage(). One statement runs at a time on a core, so

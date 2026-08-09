@@ -74,12 +74,14 @@ std::array<std::byte, kEntryBytes> EncodedEntry(const BoundCabinEntry& entry) {
 // Encodes a whole record - envelope and payload - the way the emitting site
 // will, so replay decodes exactly what a stream would carry.
 std::vector<std::byte> WholeRecord(wal::RecordType type, std::uint64_t txn_id, PageId page_id,
-                                   std::span<const std::byte> payload) {
+                                   std::span<const std::byte> payload,
+                                   std::uint8_t flags = 0) {
     std::vector<std::byte> buf(wal::EncodedRecordSize(payload.size()));
     wal::RecordSpec spec;
     spec.type = type;
     spec.txn_id = txn_id;
     spec.page_id = page_id;
+    spec.flags = flags;
     auto used = wal::EncodeRecord(buf, spec, /*lsn=*/4096, payload);
     EXPECT_TRUE(used.ok()) << used.status().message();
     return buf;
@@ -109,7 +111,8 @@ std::vector<std::byte> CommitRecord(std::uint64_t txn_id,
 }
 
 std::vector<std::byte> RollbackRecord(std::uint64_t txn_id, std::int64_t delta,
-                                      std::uint16_t index, const std::string& key) {
+                                      std::uint16_t index, const std::string& key,
+                                      bool departure = false) {
     std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + key.size());
     wal::AssertRollbackPayload fields{};
     fields.assertion_id = kAssertionId;
@@ -117,7 +120,8 @@ std::vector<std::byte> RollbackRecord(std::uint64_t txn_id, std::int64_t delta,
     fields.index = index;
     auto used = wal::EncodeAssertRollback(payload, fields, Bytes(key));
     EXPECT_TRUE(used.ok()) << used.status().message();
-    return WholeRecord(wal::RecordType::kAssertRollback, txn_id, kEntryPage, payload);
+    return WholeRecord(wal::RecordType::kAssertRollback, txn_id, kEntryPage, payload,
+                       departure ? wal::kAssertRollbackFlagDeparture : 0);
 }
 
 std::vector<std::byte> DropRecord(std::uint64_t assertion_id) {
@@ -402,6 +406,47 @@ TEST_F(AssertionReplayTest, TheFoldRestoresThePageAndTheDirectoryExactly) {
         ASSERT_TRUE(now.ok());
         EXPECT_EQ(now.value().admitted, was.value().admitted) << "delta " << delta;
     }
+}
+
+TEST_F(AssertionReplayTest, ADepartureFoldsWithItsSignAndItsRollbackRestoresIt) {
+    // AST07's flag: a departure entry contributes (-1, -value), and its
+    // compensation - marked by the envelope's flag byte - restores with the
+    // opposite sign. Build one row in, reserve its departure (a DELETE's
+    // shape), roll the departure back: the group must end where it began.
+    LiveEntry(wal::RecordType::kAssertBuild, wal::kNoTxnId, 1, 5, /*group=*/7);
+
+    // The departure, live and recorded.
+    const BoundCabinEntry leaving =
+        Entry(1, 5, static_cast<std::uint8_t>(kEntryReserved |
+                                              storage::cabin::kEntryDeparture));
+    auto page = live_store_.Get(kEntryPage);
+    ASSERT_TRUE(page.ok());
+    auto view = BoundCabinPage::Open(page.value());
+    ASSERT_TRUE(view.ok());
+    auto index = view.value().Append(leaving);
+    ASSERT_TRUE(index.ok());
+    ASSERT_TRUE(live_.ApplyDeparture(KeyOf(7), 5, kEntryPage, index.value()).ok());
+    log_.push_back(EntryRecord(wal::RecordType::kAssertReserve, /*txn_id=*/9, index.value(),
+                               leaving, KeyOf(7)));
+    // Mid-stream truth: the group is empty while the departure is reserved.
+    ASSERT_EQ(live_.Find(KeyOf(7))->count, 0);
+    ASSERT_EQ(live_.Find(KeyOf(7))->sum, 0);
+
+    // The abort, live and recorded with the flag.
+    ASSERT_TRUE(live_.UnapplyDeparture(KeyOf(7), 5, kEntryPage, index.value()).ok());
+    log_.push_back(RollbackRecord(/*txn_id=*/9, 5, index.value(), KeyOf(7),
+                                  /*departure=*/true));
+
+    ASSERT_TRUE(Fold(log_, replay_store_, context_).ok());
+    const GroupHeader* was = live_.Find(KeyOf(7));
+    const GroupHeader* now = rebuilt_.Find(KeyOf(7));
+    ASSERT_NE(was, nullptr);
+    ASSERT_NE(now, nullptr);
+    EXPECT_EQ(now->count, was->count);
+    EXPECT_EQ(now->count, 1);
+    EXPECT_EQ(now->sum, was->sum);
+    EXPECT_EQ(now->sum, 5);
+    EXPECT_EQ(now->entries, was->entries);
 }
 
 TEST_F(AssertionReplayTest, AnUnknownAssertionIsSkippedWholePageHalfIncluded) {
