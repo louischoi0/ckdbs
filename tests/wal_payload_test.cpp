@@ -411,7 +411,12 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kFree), 15);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kVarHeapAppend), 16);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kIndexInsert), 17);
-    EXPECT_EQ(kMaxAssignedRecordType, 17);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertReserve), 18);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertCommit), 19);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertRollback), 20);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertBuild), 21);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertDrop), 22);
+    EXPECT_EQ(kMaxAssignedRecordType, 22);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));

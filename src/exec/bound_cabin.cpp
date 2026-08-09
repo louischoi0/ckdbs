@@ -183,6 +183,55 @@ Status BoundCabin::Unapply(const std::string& key, std::int64_t delta, PageId pa
     return Status::OK();
 }
 
+Status BoundCabin::ApplyDeparture(const std::string& key, std::int64_t delta, PageId page_id,
+                                  std::uint16_t index) {
+    GroupHeader* header = FindMutable(key);
+    if (header == nullptr) {
+        // The row this departure removes was incorporated by build or
+        // insert, so its group exists; a missing one means lost coverage,
+        // which is worth an error and not an empty group going negative.
+        return Status::NotFound("bound cabin: no group for a departure to leave");
+    }
+
+    std::int64_t next_count = 0;
+    std::int64_t next_sum = 0;
+    if (__builtin_sub_overflow(header->count, std::int64_t{1}, &next_count) ||
+        __builtin_sub_overflow(header->sum, delta, &next_sum)) {
+        return Status::OutOfRange("bound cabin: aggregate underflow on a departure of " +
+                                  std::to_string(delta));
+    }
+    header->count = next_count;
+    header->sum = next_sum;
+    header->entries.emplace_back(page_id, index);
+    return Status::OK();
+}
+
+Status BoundCabin::UnapplyDeparture(const std::string& key, std::int64_t delta, PageId page_id,
+                                    std::uint16_t index) {
+    GroupHeader* header = FindMutable(key);
+    if (header == nullptr) {
+        return Status::NotFound("bound cabin: no group to restore a departure into");
+    }
+    auto at = std::find(header->entries.begin(), header->entries.end(),
+                        std::pair<PageId, std::uint16_t>(page_id, index));
+    if (at == header->entries.end()) {
+        return Status::NotFound("bound cabin: departure entry (" + std::to_string(page_id) +
+                                ", " + std::to_string(index) + ") is not in this group");
+    }
+
+    std::int64_t next_count = 0;
+    std::int64_t next_sum = 0;
+    if (__builtin_add_overflow(header->count, std::int64_t{1}, &next_count) ||
+        __builtin_add_overflow(header->sum, delta, &next_sum)) {
+        return Status::OutOfRange("bound cabin: aggregate overflow restoring a departure of " +
+                                  std::to_string(delta));
+    }
+    header->count = next_count;
+    header->sum = next_sum;
+    header->entries.erase(at);
+    return Status::OK();
+}
+
 Status BoundCabin::VerifyAgainstEntries(const EntryReader& read) const {
     for (const auto& [hash, headers] : groups_by_hash_) {
         for (const GroupHeader& header : headers) {
@@ -196,9 +245,16 @@ Status BoundCabin::VerifyAgainstEntries(const EntryReader& read) const {
                 // Reserved entries are counted, because the header counts
                 // them: §4.1's invariant is over committed **and** reserved
                 // rows, so a verification that skipped them would report a
-                // disagreement that is the specification working.
-                ++count;
-                if (__builtin_add_overflow(sum, entry.value().value, &sum)) {
+                // disagreement that is the specification working. A
+                // departure entry contributes with the opposite sign - the
+                // flag's whole meaning.
+                const bool departure = entry.value().departure();
+                if (__builtin_add_overflow(count, departure ? -1 : 1, &count)) {
+                    return Status::OutOfRange("bound cabin: overflow while re-counting a group");
+                }
+                if (__builtin_add_overflow(sum, departure ? -entry.value().value
+                                                          : entry.value().value,
+                                           &sum)) {
                     return Status::OutOfRange("bound cabin: overflow while re-summing a group");
                 }
             }

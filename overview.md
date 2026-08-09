@@ -8,7 +8,7 @@ KDS does not try to be everything a traditional RDBMS is. It deliberately narrow
 > Alongside the query optimizer every database has, KDS has a **physical optimizer** of equal rank: runtime access-pattern statistics don't just steer query plans — they periodically **rearrange the data itself** so that the pages your workload touches become fewer, denser, and hotter in cache.
 
 > **KDS indexes query patterns, not relations.**
-> The engine fingerprints every statement's shape at parse time, watches which pattern instances recur, and records **Waystone trails** — where each recurring `pattern(args)` actually found its rows, across every relation it touched. Declared secondary indexes exist too (`CREATE INDEX`, built as "a Cabin that observed everything"), but the ambition stands: the workload teaches the database how to serve it, and the trail is the index nobody had to declare.
+> The index you did not create: the engine fingerprints every statement's shape at parse time, watches which pattern instances recur, and records **Waystone trails** — where each recurring `pattern(args)` actually found its rows, across every relation it touched. `CREATE INDEX` exists for the searches a trail may never replace; the recurring lookups teach the database how to serve them for free.
 
 ## Design Philosophy
 
@@ -111,7 +111,7 @@ KDS names its own concepts; the stone metaphor is deliberate — a *keystone* ho
 
 ## What KDS is not
 
-No CTEs or derived tables, no window functions, no cross-dialect SQL compatibility, no attempt to be a data warehouse. Aggregation (`GROUP BY` with `COUNT`/`SUM`/`MIN`/`MAX`/`AVG`) is built; `CREATE INDEX` exists — though the stated ambition remains that pattern trails make most declared indexes unnecessary. If your workload is analytical scans over wide history, use a column store; if it is high-rate transactional access to living data, KDS is built for exactly that.
+No CTEs or derived tables, no window functions, no cross-dialect SQL compatibility, no attempt to be a data warehouse. `GROUP BY` with `COUNT`/`SUM`/`MIN`/`MAX`/`AVG` is built; `HAVING` and sorted aggregate output are not. Secondary indexes exist (`CREATE INDEX`, multi-column and covering, on clustered relations) for the searches a trail may never replace — an index answers with a *set*, a trail only ever replaces a *lookup* — while recurring point access is served from Waystone trails without one. If your workload is analytical scans over wide history, use a column store; if it is high-rate transactional access to living data, KDS is built for exactly that.
 
 ## Status
 

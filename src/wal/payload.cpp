@@ -481,4 +481,174 @@ StatusOr<CheckpointEndPayload> DecodeCheckpointEnd(std::span<const std::byte> in
     return fields;
 }
 
+// ---- ASSERT_RESERVE / ASSERT_BUILD ---------------------------------------
+
+StatusOr<std::size_t> EncodeAssertEntry(std::span<std::byte> out,
+                                        const AssertEntryPayload& fields,
+                                        std::span<const std::byte> entry,
+                                        std::span<const std::byte> key) {
+    if (entry.size() > 0xFFFF) {
+        return Status::InvalidArgument("wal payload: assert entry longer than a uint16 length");
+    }
+    if (key.size() > 0xFFFF) {
+        return Status::InvalidArgument("wal payload: assert group key longer than a uint16 length");
+    }
+    const std::size_t total = kAssertEntryFixedSize + entry.size() + key.size();
+    if (Status s = CheckOutputSize(out, total, "ASSERT_RESERVE"); !s.ok()) {
+        return s;
+    }
+
+    Store<std::uint64_t>(out, kAssertEntryAssertionIdOffset, fields.assertion_id);
+    Store<std::uint16_t>(out, kAssertEntryIndexOffset, fields.index);
+    // From the spans, never the caller's fields, so the lengths on disk and
+    // the bytes on disk cannot disagree.
+    Store<std::uint16_t>(out, kAssertEntryEntryLenOffset,
+                         static_cast<std::uint16_t>(entry.size()));
+    Store<std::uint16_t>(out, kAssertEntryKeyLenOffset, static_cast<std::uint16_t>(key.size()));
+    Store<std::uint16_t>(out, kAssertEntryReservedOffset, 0);
+    if (!entry.empty()) {
+        std::memcpy(out.data() + kAssertEntryFixedSize, entry.data(), entry.size());
+    }
+    if (!key.empty()) {
+        std::memcpy(out.data() + kAssertEntryFixedSize + entry.size(), key.data(), key.size());
+    }
+    return total;
+}
+
+StatusOr<DecodedAssertEntry> DecodeAssertEntry(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kAssertEntryFixedSize, "ASSERT_RESERVE"); !s.ok()) {
+        return s;
+    }
+
+    DecodedAssertEntry decoded{};
+    decoded.fields.assertion_id = Load<std::uint64_t>(in, kAssertEntryAssertionIdOffset);
+    decoded.fields.index = Load<std::uint16_t>(in, kAssertEntryIndexOffset);
+    decoded.fields.entry_len = Load<std::uint16_t>(in, kAssertEntryEntryLenOffset);
+    decoded.fields.key_len = Load<std::uint16_t>(in, kAssertEntryKeyLenOffset);
+    decoded.fields.reserved = Load<std::uint16_t>(in, kAssertEntryReservedOffset);
+
+    const std::size_t tail =
+        std::size_t{decoded.fields.entry_len} + std::size_t{decoded.fields.key_len};
+    if (Status s = CheckInputSize(in, kAssertEntryFixedSize + tail, "ASSERT_RESERVE"); !s.ok()) {
+        return s;
+    }
+    decoded.entry = in.subspan(kAssertEntryFixedSize, decoded.fields.entry_len);
+    decoded.key =
+        in.subspan(kAssertEntryFixedSize + decoded.fields.entry_len, decoded.fields.key_len);
+    return decoded;
+}
+
+// ---- ASSERT_COMMIT -------------------------------------------------------
+
+std::uint16_t DecodedAssertCommit::index_at(std::uint16_t i) const noexcept {
+    return Load<std::uint16_t>(indexes, std::size_t{i} * sizeof(std::uint16_t));
+}
+
+StatusOr<std::size_t> EncodeAssertCommit(std::span<std::byte> out,
+                                         const AssertCommitPayload& fields,
+                                         std::span<const std::uint16_t> indexes) {
+    if (indexes.size() > 0xFFFF) {
+        return Status::InvalidArgument("wal payload: assert commit names more entries than a "
+                                       "uint16 count");
+    }
+    const std::size_t total = kAssertCommitFixedSize + indexes.size() * sizeof(std::uint16_t);
+    if (Status s = CheckOutputSize(out, total, "ASSERT_COMMIT"); !s.ok()) {
+        return s;
+    }
+
+    Store<std::uint64_t>(out, kAssertCommitAssertionIdOffset, fields.assertion_id);
+    Store<std::uint16_t>(out, kAssertCommitCountOffset,
+                         static_cast<std::uint16_t>(indexes.size()));
+    Store<std::uint16_t>(out, kAssertCommitReservedOffset, 0);
+    for (std::size_t i = 0; i < indexes.size(); ++i) {
+        Store<std::uint16_t>(out, kAssertCommitFixedSize + i * sizeof(std::uint16_t),
+                             indexes[i]);
+    }
+    return total;
+}
+
+StatusOr<DecodedAssertCommit> DecodeAssertCommit(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kAssertCommitFixedSize, "ASSERT_COMMIT"); !s.ok()) {
+        return s;
+    }
+
+    DecodedAssertCommit decoded{};
+    decoded.fields.assertion_id = Load<std::uint64_t>(in, kAssertCommitAssertionIdOffset);
+    decoded.fields.count = Load<std::uint16_t>(in, kAssertCommitCountOffset);
+    decoded.fields.reserved = Load<std::uint16_t>(in, kAssertCommitReservedOffset);
+
+    const std::size_t tail = std::size_t{decoded.fields.count} * sizeof(std::uint16_t);
+    if (Status s = CheckInputSize(in, kAssertCommitFixedSize + tail, "ASSERT_COMMIT"); !s.ok()) {
+        return s;
+    }
+    decoded.indexes = in.subspan(kAssertCommitFixedSize, tail);
+    return decoded;
+}
+
+// ---- ASSERT_ROLLBACK -----------------------------------------------------
+
+StatusOr<std::size_t> EncodeAssertRollback(std::span<std::byte> out,
+                                           const AssertRollbackPayload& fields,
+                                           std::span<const std::byte> key) {
+    if (key.size() > 0xFFFF) {
+        return Status::InvalidArgument("wal payload: assert group key longer than a uint16 length");
+    }
+    const std::size_t total = kAssertRollbackFixedSize + key.size();
+    if (Status s = CheckOutputSize(out, total, "ASSERT_ROLLBACK"); !s.ok()) {
+        return s;
+    }
+
+    Store<std::uint64_t>(out, kAssertRollbackAssertionIdOffset, fields.assertion_id);
+    Store<std::int64_t>(out, kAssertRollbackDeltaOffset, fields.delta);
+    Store<std::uint16_t>(out, kAssertRollbackIndexOffset, fields.index);
+    Store<std::uint16_t>(out, kAssertRollbackKeyLenOffset,
+                         static_cast<std::uint16_t>(key.size()));
+    Store<std::uint32_t>(out, kAssertRollbackReservedOffset, 0);
+    if (!key.empty()) {
+        std::memcpy(out.data() + kAssertRollbackFixedSize, key.data(), key.size());
+    }
+    return total;
+}
+
+StatusOr<DecodedAssertRollback> DecodeAssertRollback(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kAssertRollbackFixedSize, "ASSERT_ROLLBACK"); !s.ok()) {
+        return s;
+    }
+
+    DecodedAssertRollback decoded{};
+    decoded.fields.assertion_id = Load<std::uint64_t>(in, kAssertRollbackAssertionIdOffset);
+    decoded.fields.delta = Load<std::int64_t>(in, kAssertRollbackDeltaOffset);
+    decoded.fields.index = Load<std::uint16_t>(in, kAssertRollbackIndexOffset);
+    decoded.fields.key_len = Load<std::uint16_t>(in, kAssertRollbackKeyLenOffset);
+    decoded.fields.reserved = Load<std::uint32_t>(in, kAssertRollbackReservedOffset);
+
+    if (Status s = CheckInputSize(in, kAssertRollbackFixedSize + decoded.fields.key_len,
+                                  "ASSERT_ROLLBACK");
+        !s.ok()) {
+        return s;
+    }
+    decoded.key = in.subspan(kAssertRollbackFixedSize, decoded.fields.key_len);
+    return decoded;
+}
+
+// ---- ASSERT_DROP ---------------------------------------------------------
+
+StatusOr<std::size_t> EncodeAssertDrop(std::span<std::byte> out,
+                                       const AssertDropPayload& fields) {
+    if (Status s = CheckOutputSize(out, kAssertDropPayloadSize, "ASSERT_DROP"); !s.ok()) {
+        return s;
+    }
+    Store<std::uint64_t>(out, kAssertDropAssertionIdOffset, fields.assertion_id);
+    return kAssertDropPayloadSize;
+}
+
+StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kAssertDropPayloadSize, "ASSERT_DROP"); !s.ok()) {
+        return s;
+    }
+    AssertDropPayload fields{};
+    fields.assertion_id = Load<std::uint64_t>(in, kAssertDropAssertionIdOffset);
+    return fields;
+}
+
 }  // namespace kds::wal

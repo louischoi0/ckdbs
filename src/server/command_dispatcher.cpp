@@ -116,8 +116,26 @@ std::string ErrorReply(const Status& status) {
     if (status.code() == StatusCode::kFkViolation) {
         return "ERR FK_VIOLATION retryable=0 " + status.message();
     }
+    // The third constraint spelling (docs/feat-assertion.md §4.4, AS9),
+    // shaped exactly like FK_VIOLATION and for its reason. Nothing produces
+    // this Status until AST07 compiles the admission check into the write
+    // paths; the spelling lands first because it is a compatibility surface,
+    // and a client written against it must not see the message arrive as a
+    // bare "ERR ..." in the meantime.
+    if (status.code() == StatusCode::kAssertionViolation) {
+        return "ERR ASSERTION_VIOLATION retryable=0 " + status.message();
+    }
     return "ERR " + status.message();
 }
+
+// Whether a write is checked against a Bound Cabin - true as of AST07,
+// whose enforcer runs in the three write paths. Still a conjunct rather
+// than a constant `1` in the replies, because enforcement also needs the
+// *registry* to hold the assertion: the entry pages survive a restart, the
+// directories do not (recovery replays AST05's records; recovery does not
+// exist), and an assertion whose directory is gone is not enforced however
+// true this constant is.
+constexpr bool kWritePathEnforcesAssertions = true;
 
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
                                              DispatchOutcome* out) {
@@ -1102,10 +1120,11 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     const auto& stmt = std::get<parser::AssertionStmt>(parsed.value());
 
     if (stmt.drop) {
-        auto id = exec::DropAssertion(catalog_, page_store_, stmt);
+        auto id = exec::DropAssertion(catalog_, page_store_, stmt, wal_);
         if (!id.ok()) {
-            return {"ERR " + id.status().message(), false};
+            return {ErrorReply(id.status()), false};
         }
+        enforcer_.Evict(id.value());
         std::ostringstream os;
         os << "DROPPED ASSERTION name=" << stmt.name << " assertion_id=" << id.value();
         if (logging(LogLevel::kInfo)) {
@@ -1114,23 +1133,45 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
         return {os.str(), false};
     }
 
-    auto created = exec::CreateAssertion(catalog_, page_store_, stmt);
-    if (!created.ok()) {
-        return {"ERR " + created.status().message(), false};
+    // The visibility the build's scan reads under: latest settled state,
+    // minted here exactly as a FK check's view is. A dispatcher with no
+    // manager reads everything, which is the pre-MVCC engine and what every
+    // socket-free test runs on.
+    txn::ReadView check_view = txn::ReadView::Everything();
+    if (txn_ != nullptr) {
+        auto minted = txn_->MintReadView(txn::kNoTrxId);
+        if (!minted.ok()) return {ErrorReply(minted.status()), false};
+        check_view = minted.value();
     }
 
-    // **`enforcing=0` is the whole point of this reply.** AST03 records a
-    // declaration; the structure that would enforce it is AST04's and the
-    // write-path check is AST07's. A constraint that silently does not run is
-    // not a degraded mode, so the statement that creates one says which it
-    // is, in a field a client can read rather than in a comment.
+    // Through ErrorReply, not a bare "ERR ": the build can refuse with the
+    // two coded spellings - ASSERTION_VIOLATION for data already past the
+    // bound, TXN_CONFLICT for an unsettled relation - and both are
+    // compatibility surfaces a client switches on.
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_);
+    if (!created.ok()) {
+        return {ErrorReply(created.status()), false};
+    }
+    exec::AssertionDdlResult& result = created.value();
+    const bool adopted = result.live.has_value();
+    if (adopted) {
+        enforcer_.Adopt(std::move(*result.live));
+    }
+
+    // Truthful now in the other direction: the check runs (AST07), so a
+    // freshly created assertion **is** enforcing - and says so. The
+    // conjunction matters after a restart, when the catalog row survives
+    // and this registry does not; SHOW derives the same answer the same
+    // way, so the two surfaces cannot disagree.
     std::ostringstream os;
     os << "CREATED ASSERTION name=" << stmt.name
-       << " assertion_id=" << created.value().assertion_id << " on=" << stmt.table_name
-       << " enforcing=0";
+       << " assertion_id=" << result.assertion_id << " on=" << stmt.table_name
+       << " cabin_root=" << result.cabin_root << " rows=" << result.rows_incorporated
+       << " groups=" << result.group_count
+       << " enforcing=" << ((kWritePathEnforcesAssertions && adopted) ? 1 : 0);
     if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "declared assertion '" + stmt.name + "' on '" + stmt.table_name +
-                              "' (not yet enforced)");
+        log_->Info("ddl", "created assertion '" + stmt.name + "' on '" + stmt.table_name +
+                              "' (built, enforcing)");
     }
     return {os.str(), false};
 }
@@ -1163,10 +1204,24 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
         }
         if (!named) os << "oid=" << def.target_oid;
 
-        // Reported rather than derived: `cabin_root` is what AST06 will fill
-        // in, so an unset one is the honest statement that nothing enforces
-        // this yet.
-        os << " enforcing=" << (def.cabin_root == kInvalidPageId ? 0 : 1);
+        // Three conditions, each honest on its own: the structure was built
+        // (a root), the write path checks (AST07's constant), and this
+        // core's registry holds the directory - which a restart empties
+        // until recovery replays it, so a surviving catalog row reports 0
+        // rather than claiming a check that cannot run.
+        os << " enforcing="
+           << ((def.cabin_root != kInvalidPageId && kWritePathEnforcesAssertions &&
+                enforcer_.Holds(def.id))
+                   ? 1
+                   : 0);
+        // §9's production counters, printed only while the registry holds
+        // the assertion: they live and die with the directory, so an
+        // unenforced row prints no numbers rather than zeros that would
+        // read as "counted, and nothing happened".
+        if (const auto* counters = enforcer_.CountersOf(def.id); counters != nullptr) {
+            os << " checks=" << counters->checks << " violations=" << counters->violations
+               << " reserved=" << counters->reserved << " aborted=" << counters->aborted;
+        }
         os << " def=" << def.source_text;
     }
     return {os.str(), false};
@@ -1979,6 +2034,16 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
         }
     }
 
+    // ---- The admission check (docs/feat-assertion.md §6.2 step 2) -------
+    //
+    // Pure, and before the id for FK's reason: a refused row burns nothing.
+    // The reservation (step 3) happens after placement, when the entry has
+    // a pk and a location to carry; nothing runs between the two on a
+    // cooperative core, so the answer holds.
+    if (Status s = enforcer_.AdmitInsert(oid.value(), stmt.values); !s.ok()) {
+        return {ErrorReply(s), false};
+    }
+
     auto id = catalog_.AllocateRowId(oid.value());
     if (!id.ok()) {
         return {"ERR " + id.status().message(), false};
@@ -2046,6 +2111,21 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
                                      std::to_string(id.value()) + " failed: " + s.message());
         }
         return {"ERR " + s.message(), false};
+    }
+
+    // ---- The reservation (docs/feat-assertion.md §6.2 step 3) -----------
+    //
+    // The arrival entry, the group delta, the ASSERT_RESERVE record - after
+    // placement so the entry carries the row's real location, before the
+    // heap records are logged so a crash that kept the reservation and lost
+    // the row over-reserves (compensated by the loser's rollback) rather
+    // than under-reserving, which no compensation could see. A failure here
+    // fails the statement; the abort path unwinds whatever was applied.
+    if (Status s = enforcer_.ReserveInsert(page_store_, wal_, WriterId(scope), oid.value(),
+                                           stmt.values, id.value(), placed.value().page_id,
+                                           placed.value().slot);
+        !s.ok()) {
+        return {ErrorReply(s), false};
     }
 
     // ---- The rollback trail (docs/txn.md section 3.6) -------------------
@@ -3103,7 +3183,8 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // ...and what tells the index hook the same thing (feat-index.md §2).
         // A relation with neither copies nothing.
         std::vector<parser::AstValue> previous;
-        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty()) {
+        if ((cabins_ != nullptr && ta.cabin_mask != 0) || !ta.indexes.empty() ||
+            enforcer_.AnyOn(ta.oid)) {
             previous = row.value();
         }
 
@@ -3120,6 +3201,24 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // carried straight from the tuple's own Keystone word above rather
         // than round-tripped through the decoded row.
         const std::vector<parser::AstValue> body(row.value().begin() + 1, row.value().end());
+
+        // ---- The assertion check, §4.2's delta rules --------------------
+        //
+        // Before the undo record and the overwrite, so a refused row is a
+        // row nothing touched. `previous` holds the old values whenever an
+        // assertion lives on this relation (the condition above); a refusal
+        // mid-statement leaves earlier rows written and the transaction
+        // poisoned - the AS9 resolution, decided 2026-08-09: uniform with
+        // every other write failure, because "open and usable" cannot be
+        // promised once a multi-row statement has partly happened.
+        if (enforcer_.AnyOn(ta.oid)) {
+            if (Status s = enforcer_.AdmitAndReserveUpdate(page_store_, wal_, WriterId(scope),
+                                                           ta.oid, previous, row.value(),
+                                                           id.value(), page_id, slot);
+                !s.ok()) {
+                return s;
+            }
+        }
 
         auto encoded = exec::EncodeRow(ta.schema, ta.layout, id.value(), body,
                                         exec::VarHeapSink{&page_store_, ta.varheap_page_id});
@@ -3365,6 +3464,14 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
 
     txn::Transaction* txn = session.transaction();
     const std::uint64_t id = txn->id();
+
+    // The transaction's reservations become committed entries (§6.2 step
+    // 4): flags cleared, ASSERT_COMMIT logged, before the commit record. A
+    // failure leaves the transaction open - the client may retry COMMIT or
+    // ROLLBACK, and the pending set is untouched until one succeeds.
+    if (Status s = enforcer_.CommitTxn(page_store_, wal_, id); !s.ok()) {
+        return {ErrorReply(s), false};
+    }
     auto committed = txn_->Commit(*txn, durability_);
 
     // The session leaves the transaction either way: a commit that failed
@@ -3393,6 +3500,12 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     txn::Transaction* txn = session.transaction();
     const std::uint64_t id = txn->id();
 
+    // The reservations first (§6.2 step 5): each one removed from its
+    // group, ASSERT_ROLLBACK logged, before the undo trail replays - so the
+    // directory and the pages unwind in the same statement the rows do.
+    if (Status s = enforcer_.AbortTxn(page_store_, wal_, id); !s.ok()) {
+        return {ErrorReply(s), false};
+    }
     Status aborted = txn_->Abort(*txn);
     session.Finish();
     txn_->Release(*txn);
@@ -3461,26 +3574,48 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
 }
 
 Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const Status& result) {
-    if (scope.txn == nullptr) return Status::OK();
+    if (scope.txn == nullptr) {
+        // No manager: every statement is its own transaction under
+        // kBootstrapXid, and this is its end - so its assertion
+        // reservations settle here, exactly as a real transaction's do
+        // below. One statement at a time per core is what makes the shared
+        // id safe.
+        return result.ok()
+                   ? enforcer_.CommitTxn(page_store_, wal_, catalog::kBootstrapXid)
+                   : enforcer_.AbortTxn(page_store_, wal_, catalog::kBootstrapXid);
+    }
 
     if (!scope.owned) {
         // Inside an explicit transaction. A failure does **not** unwind:
         // failure atomicity is per transaction, not per statement (section
         // 6), so the rows already written stay and the client must
         // ROLLBACK. That is the deviation from SQL savepoints would close.
+        // An assertion violation poisons like any other write failure (the
+        // AS9 resolution, feat-assertion.md §4.4); the statement's
+        // reservations stay pending and ROLLBACK's hook unwinds them with
+        // everything else.
         if (!result.ok()) session.Poison();
         return Status::OK();
     }
 
     // Autocommit: this statement is the whole transaction, so behaviour
-    // here *is* statement-atomic.
+    // here *is* statement-atomic - reservations included, on both arms.
     if (!result.ok()) {
+        if (Status s = enforcer_.AbortTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
+            return s;
+        }
         Status aborted = txn_->Abort(*scope.txn);
         txn_->Release(*scope.txn);
         scope.txn = nullptr;
         return aborted;
     }
 
+    // Flags before the commit record (§6.2 step 4's piggyback): if the
+    // commit then fails, the abort arm removes the entries whatever their
+    // flags say, so clearing early is recoverable in both directions.
+    if (Status s = enforcer_.CommitTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
+        return s;
+    }
     auto committed = txn_->Commit(*scope.txn, durability_);
     if (!committed.ok()) {
         txn_->Release(*scope.txn);
@@ -3607,6 +3742,23 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // refused delete leaves no undo record behind.
         if (!ta.fkeys_in.empty()) {
             if (Status s = CheckNoChildrenBeforeDelete(ta, id.value(), check_view); !s.ok()) {
+                return s;
+            }
+        }
+
+        // ---- The assertion departure (§4.2's DELETE row) ----------------
+        //
+        // Check-free (AS11: strictly decreasing cannot violate an upper
+        // bound) but **not** maintenance-free: §5's coverage contract is
+        // "100% of live rows", and a header that kept counting deleted rows
+        // would overstate forever - nothing prunes - refusing valid writes
+        // without bound. The departure entry is what keeps
+        // header == Σ(entries) true while the aggregate goes down. Before
+        // the undo record, so a failure here leaves none behind.
+        if (enforcer_.AnyOn(ta.oid)) {
+            if (Status s = enforcer_.ReserveDelete(page_store_, wal_, WriterId(scope), ta.oid,
+                                                   frame.SlotsFor(0), id.value(), page_id, slot);
+                !s.ok()) {
                 return s;
             }
         }

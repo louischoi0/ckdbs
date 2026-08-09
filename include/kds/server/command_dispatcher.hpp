@@ -7,11 +7,13 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
+#include "kds/exec/assertion_check.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -155,6 +157,15 @@ struct DispatchOutcome {
     // statement run and stage its own commit into the same sync.
     wal::Lsn pending_lsn = wal::kNoLsn;
 };
+
+// The one spelling of an error reply on the newline protocol (docs/txn.md
+// §5, docs/protocol.md §11): `ERR <TOKEN> retryable=<b> <message>` for the
+// codes a client library switches on - TXN_CONFLICT, FK_VIOLATION,
+// ASSERTION_VIOLATION - and `ERR <message>` for everything else. Every
+// dispatcher path reports through it, which is what keeps the shape from
+// drifting between them; declared here so the spellings, a compatibility
+// surface, can be pinned by a test that owns no socket and no dispatcher.
+std::string ErrorReply(const Status& status);
 
 // Where a tuple lives, as a point lookup reports it. Local to the
 // dispatcher because it is the shape of an answer to "skip the scan and
@@ -904,6 +915,17 @@ private:
     // always did, and so that "identical replies with cabins on and off" is
     // a property of the structure rather than of the test data.
     stats::CabinStore* cabins_ = nullptr;
+
+    // The live assertions and their reservation bookkeeping (workplan
+    // AST06/AST07): CREATE ASSERTION's build moves its LiveAssertion in
+    // here, DROP evicts it, the three write paths check and reserve through
+    // it, and the commit/abort hooks below settle what a transaction
+    // reserved. Core-local like everything on this dispatcher
+    // (feat-assertion.md §6.1). The entry *pages* are durable; this
+    // registry is the memory-resident half a restart loses until recovery
+    // replays it (AST05's fold) - and SHOW ASSERTIONS derives `enforcing`
+    // from its presence, so the loss reports itself instead of hiding.
+    exec::AssertionEnforcer enforcer_;
 
     // The commit a write path staged and did not wait for, read out at the
     // end of DispatchAndStage(). One statement runs at a time on a core, so

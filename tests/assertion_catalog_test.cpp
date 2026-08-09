@@ -116,9 +116,10 @@ TEST_F(AssertionCatalogTest, ADeclarationIsRecordedAndReadBackVerbatim) {
     EXPECT_NE(created.find("CREATED ASSERTION name=user_product_purchase_limit"),
               std::string::npos)
         << created;
-    // The field that says this constrains nothing yet. AST04 builds the
-    // structure; AST06 publishes its root and flips this.
-    EXPECT_NE(created.find("enforcing=0"), std::string::npos) << created;
+    // Enforcing, as of AST07: the structure is built, the write path
+    // checks, and this dispatcher's registry holds the directory - all
+    // three, which is what the field is the conjunction of.
+    EXPECT_NE(created.find("enforcing=1"), std::string::npos) << created;
 
     auto defs = ListAssertions(catalog(), store_);
     ASSERT_TRUE(defs.ok()) << defs.status().message();
@@ -129,7 +130,9 @@ TEST_F(AssertionCatalogTest, ADeclarationIsRecordedAndReadBackVerbatim) {
     // The canon, byte for byte. Everything the parser derived is recoverable
     // from this and is deliberately stored nowhere else.
     EXPECT_EQ(def.source_text, sql);
-    EXPECT_EQ(def.cabin_root, kInvalidPageId);
+    // AST06: the publish carries the built chain's root. An unset root now
+    // means a failed or absent build, not a pending task.
+    EXPECT_NE(def.cabin_root, kInvalidPageId);
     EXPECT_EQ(def.flags, 0u);
     EXPECT_GT(def.id, 0u);
 
@@ -336,6 +339,11 @@ TEST_F(AssertionCatalogTest, ShowAssertionsNamesTheRelationAndPrintsTheDeclarati
     // The relation by name, resolved at print time rather than stored - the
     // row holds an oid so it stays narrow.
     EXPECT_NE(shown.find("rel=purchases"), std::string::npos) << shown;
+    // 0, and correctly so: this fixture's Run() builds a fresh dispatcher
+    // per statement, so SHOW here runs on an empty registry - which is the
+    // restart case, and an assertion whose directory is gone is not
+    // enforced however durable its catalog row is. The same-dispatcher
+    // answer (1) is assertion_enforce_test's to pin.
     EXPECT_NE(shown.find("enforcing=0"), std::string::npos) << shown;
     EXPECT_NE(shown.find("CHECK COUNT(*) <= 5"), std::string::npos) << shown;
 }

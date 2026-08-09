@@ -170,6 +170,18 @@ A violation aborts the **statement only**. The transaction remains open and
 usable. Status: `AssertionViolation`, message including the assertion name
 and the rendered group key, e.g.:
 
+> **[RESOLVED at AST07 (2026-08-09), operator-decided]: the violation
+> poisons, like every other write failure.** AS9's "the transaction remains
+> open and usable" is amended: inside an explicit transaction the session
+> enters failed-txn and the client must ROLLBACK — uniform with
+> `FK_VIOLATION` and per-transaction failure atomicity (docs/txn.md §6),
+> and the only honest option once a multi-row UPDATE can violate on row 3
+> of 10 with rows 1-2 already written; "open and usable" would need
+> statement-level rollback the engine does not have. In autocommit the
+> statement *is* its transaction and unwinds fully, reservations included —
+> which is the sense in which a violation is a statement error. A refusal
+> itself still mutates nothing (§6.2 step 2).
+
 ```
 AssertionViolation: assertion "user_product_purchase_limit"
   group (user_id=41, product_id=7): COUNT(*) would exceed bound 5
@@ -295,6 +307,15 @@ by this protocol.
   (uncommitted) reservations at crash are rolled back by normal transaction
   recovery via `ASSERT_ROLLBACK` compensation. The constraint is enforceable
   immediately at restart — **no rebuild scan, no enforcement gap**.
+
+  > **[GAP, found at AST05 (2026-08-09).]** The directory fold needs the
+  > records from the cabin's birth, not merely from the last checkpoint:
+  > nothing durable holds the group headers a checkpoint-bounded replay
+  > would start from, which is AS5's "not a separate store" carrying a
+  > price. Either the checkpoint persists the directory or assertion replay
+  > starts at each cabin's `ASSERT_BUILD`; no milestone owns the choice —
+  > recovery itself is unowned — and `exec/assertion_replay.hpp` is correct
+  > for whatever record range recovery eventually feeds it.
 - Verification: an offline/maintenance check may re-sum entries against group
   headers (hooks into the integrity sweep of the testing harness, S-1).
 
@@ -307,6 +328,17 @@ assertion on a relation.
 ## 8. Lifecycle and catalog (AS7, AS10)
 
 ### 8.1 CREATE
+
+> **[AMENDED at AST06 (2026-08-09).]** The build runs **synchronously
+> inside the CREATE statement**, not in a background scheduling group: the
+> engine has no suspendable statement path (crosscore.md P4), and the index
+> backfill set the precedent. On a cooperative core this means no write can
+> interleave with the build, so §8.1a's membership protocol is met
+> trivially; it remains the decided correctness story for when the build
+> learns to yield. A row written by a transaction still in flight when the
+> build reads it refuses the CREATE with `TxnConflict`, retryably —
+> counting it and losing the abort would overstate the group forever, and
+> skipping it and seeing the commit would understate it.
 
 1. Create-time validation (§3.1).
 2. Full scan of the target relation on its home core (background-group
