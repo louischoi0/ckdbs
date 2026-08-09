@@ -15,6 +15,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/core_runtime.hpp"
+#include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/txn/manager.hpp"
@@ -190,6 +191,34 @@ public:
         // parses, validates, and steers nothing, which is stated in the
         // spec rather than discovered.
         sched::MonoTimeNs decay_half_life_ns = 600'000'000'000ULL;  // 600 s
+
+        // ---- Cabin optimizer, §II.6 (workplan PHY05) --------------------
+        //
+        // The controller's boot settings. `cabin_optimizer` seeds PO8's
+        // switch (off by default - experimental, §II.6's posture, and the
+        // opposite default from Part I's shadow because a controller that
+        // *acts* is not a report); the rest translate into
+        // `stats::CabinOptimizerConfig` via CabinOptimizerSettings().
+        // Thresholds are **percent integers** because the config file
+        // parses no decimals: 300 means θ = 3.0. Validation enforces the
+        // one rule the hysteresis stands on - θ_drop < 100 < θ_create -
+        // and every number is `[PROPOSED]`, consumed by PHY04's task when
+        // it exists and by nothing until then, stated plainly.
+        bool cabin_optimizer = false;
+        std::uint64_t cabin_optimizer_page_budget = 1024;
+        std::uint32_t cabin_optimizer_theta_create_pct = 300;
+        std::uint32_t cabin_optimizer_theta_drop_pct = 50;
+        std::uint32_t cabin_optimizer_theta_swap_pct = 200;
+        std::uint32_t cabin_optimizer_theta_extend_pct = 20;
+        std::uint32_t cabin_optimizer_theta_heal_pct = 10;
+        std::uint32_t cabin_optimizer_confirm_snapshots = 3;
+        // 0 disables the cadence, the checkpoint_interval_ms precedent.
+        std::uint64_t cabin_optimizer_snapshot_interval_ms = 10'000;
+
+        // The boot settings assembled into the decision core's config.
+        // T_amort stays the R1 half-life (§II.6's own default) with no key
+        // of its own until a measured workload argues for one.
+        stats::CabinOptimizerConfig CabinOptimizerSettings() const;
 
         // ---- Cabin (docs/feat-cabin.md) ---------------------------------
 

@@ -195,6 +195,23 @@ TEST(OptimizerSignalsTest, AScriptedWorkloadLandsInTheSnapshot) {
     EXPECT_NE(analyzed.find(" pages="), std::string::npos) << analyzed;
 }
 
+// ---- PHY05: the runtime switch --------------------------------------------
+
+TEST(OptimizerSignalsTest, SetCabinOptimizerTogglesAndShowMetaReports) {
+    Instance db;
+    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=off"), std::string::npos);
+
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER ON"), "OK cabin_optimizer=on");
+    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=on"), std::string::npos);
+
+    // Both spellings read naturally on a terminal; both work.
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER = OFF"), "OK cabin_optimizer=off");
+    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=off"), std::string::npos);
+
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER maybe").substr(0, 3), "ERR");
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER on off").substr(0, 3), "ERR");
+}
+
 // ---- PHY03's catalog half: the ownership tag ------------------------------
 
 TEST(OptimizerSignalsTest, AnOptimizerOwnedCabinRowSurvivesARestartWithItsTag) {

@@ -531,6 +531,7 @@ private:
     // relations are therefore surfaced by `SHOW`, which has one.
     DispatchOutcome HandleShowAssertions();
     DispatchOutcome HandleShowRelayout(std::string_view rest);
+    DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
 
     // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
     //
@@ -643,6 +644,14 @@ public:
     // costs one predicate per successful SELECT.
     void set_optimizer_signals(stats::OptimizerSignals* signals) noexcept {
         optimizer_signals_ = signals;
+    }
+
+    // PO8's switch, boot half (workplan PHY05): the config key seeds it,
+    // SET CABIN_OPTIMIZER flips it at runtime, SHOW META reports it. The
+    // consumer is PHY04's cadence task, which does not exist yet - stated
+    // plainly, the V11 precedent.
+    void set_cabin_optimizer_enabled(bool enabled) noexcept {
+        cabin_optimizer_enabled_ = enabled;
     }
 
 private:
@@ -986,6 +995,7 @@ private:
     // SELECT allocate nothing for its counting.
     stats::OptimizerSignals* optimizer_signals_ = nullptr;
     exec::ExecStats exec_stats_;
+    bool cabin_optimizer_enabled_ = false;  // §II.6: off, experimental
     CrossCoreWriteCounters cross_core_writes_;
 
     // Refuses a write to a relation this core may not write, and binds the

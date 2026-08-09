@@ -321,9 +321,12 @@ snapshot, `stats/optimizer_signals.hpp`), PHY02 (the pure decision core,
 `stats/cabin_optimizer.hpp` — 16.16 fixed point, the PO5 lifecycle) PHY03 (the decision-log ring, the `kCabinOriginAuto` ownership tag, and
 the frozen P_scan baseline — load-bearing, or the controller drops its own
 success) and
+PHY05 (the §II.6 config surface — the `cabin_optimizer` switch with its
+runtime `SET`, and the percent-integer tuning family validated against
+the hysteresis gap) and
 PHY07 (the seed-driven replay harness with checked-in golden traces —
-PO10's determinism proven end to end) are built, 2026-08-09; PHY04-PHY06
-and PHY08 are not.**
+PO10's determinism proven end to end) are built, 2026-08-09. What remains
+is gated: PHY04 on EVT06's scan ring, PHY06 and PHY08 on PHY04.**
 
 ## II.1 Positioning
 

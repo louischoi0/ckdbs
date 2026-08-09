@@ -278,6 +278,54 @@ TEST(ExpeditorConfigTest, DecayHalfLifeRefusesZeroAndTheSecondsToNsOverflow) {
     EXPECT_EQ(wide.code(), StatusCode::kInvalidArgument) << wide.message();
 }
 
+// ---- Cabin optimizer boot settings (spec §II.6, workplan PHY05) --------
+
+TEST(ExpeditorConfigTest, CabinOptimizerParsesItsFamilyAndDefaultsOff) {
+    Expeditor::Config config;
+    EXPECT_FALSE(config.cabin_optimizer);  // experimental: off, §II.6
+
+    ASSERT_TRUE(config
+                    .ApplyFile(ParseOk("cabin_optimizer = on\n"
+                                       "cabin_optimizer_page_budget = 128\n"
+                                       "cabin_optimizer_theta_create_pct = 400\n"
+                                       "cabin_optimizer_theta_drop_pct = 25\n"
+                                       "cabin_optimizer_confirm_snapshots = 5\n"))
+                    .ok());
+    EXPECT_TRUE(config.cabin_optimizer);
+    EXPECT_EQ(config.cabin_optimizer_page_budget, 128u);
+
+    // The assembled decision-core settings: percent to 16.16, half-life
+    // shared with R1's key.
+    const stats::CabinOptimizerConfig assembled = config.CabinOptimizerSettings();
+    EXPECT_EQ(assembled.theta_create, 4 * stats::kFixOne);
+    EXPECT_EQ(assembled.theta_drop, stats::kFixOne / 4);
+    EXPECT_EQ(assembled.confirm_snapshots, 5u);
+    EXPECT_EQ(assembled.page_budget, 128u);
+    EXPECT_EQ(assembled.half_life_ns, config.decay_half_life_ns);
+}
+
+TEST(ExpeditorConfigTest, CabinOptimizerRefusesABrokenHysteresisGap) {
+    // The one cross-key rule: theta_drop < 100 < theta_create, or the
+    // anti-thrash gap the whole rule table stands on does not exist.
+    Expeditor::Config config;
+    Status inverted = config.ApplyFile(ParseOk("cabin_optimizer_theta_drop_pct = 150\n"));
+    EXPECT_EQ(inverted.code(), StatusCode::kInvalidArgument) << inverted.message();
+
+    Expeditor::Config config2;
+    Status low_create =
+        config2.ApplyFile(ParseOk("cabin_optimizer_theta_create_pct = 90\n"));
+    EXPECT_EQ(low_create.code(), StatusCode::kInvalidArgument) << low_create.message();
+
+    Expeditor::Config config3;
+    Status zero_budget = config3.ApplyFile(ParseOk("cabin_optimizer_page_budget = 0\n"));
+    EXPECT_EQ(zero_budget.code(), StatusCode::kInvalidArgument) << zero_budget.message();
+
+    Expeditor::Config config4;
+    Status zero_confirm =
+        config4.ApplyFile(ParseOk("cabin_optimizer_confirm_snapshots = 0\n"));
+    EXPECT_EQ(zero_confirm.code(), StatusCode::kInvalidArgument) << zero_confirm.message();
+}
+
 TEST(ExpeditorConfigTest, ZeroGroupsIsAcceptedAndMeansRefuseEveryFold) {
     // The same shape `cabin_max_values = 0` has: a coherent way to switch
     // the behaviour off per instance while leaving the grammar in place.

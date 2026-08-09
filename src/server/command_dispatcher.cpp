@@ -266,7 +266,10 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "SET")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "ISOLATION")) return HandleSetIsolation(sub_rest, session);
-        return {"ERR unknown SET target; only SET ISOLATION LEVEL is supported", false};
+        if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleSetCabinOptimizer(sub_rest);
+        return {"ERR unknown SET target; SET ISOLATION LEVEL and SET CABIN_OPTIMIZER are "
+                "supported",
+                false};
     }
     if (IEquals(cmd, "PING")) {
         return {"PONG", false};
@@ -414,8 +417,33 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     std::ostringstream os;
     os << "version=" << superblock_.version() << " create_time=" << superblock_.create_time()
        << " last_mount_time=" << superblock_.last_mount_time()
-       << " wal_anchor_count=" << superblock_.wal_anchor_count();
+       << " wal_anchor_count=" << superblock_.wal_anchor_count()
+       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off");
     return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest) {
+    // PO8's runtime kill switch (workplan PHY05). Non-destructive in both
+    // directions by construction: the flag is what PHY04's cadence task
+    // will check at batch boundaries, and until that task exists flipping
+    // it changes bookkeeping and nothing else - which is stated rather
+    // than discovered, the V11 precedent. An optional '=' is accepted
+    // because both spellings read naturally on a terminal.
+    auto [value, extra] = SplitFirstToken(Trim(rest));
+    if (IEquals(value, "=")) std::tie(value, extra) = SplitFirstToken(Trim(extra));
+    if (!Trim(extra).empty()) {
+        return {"ERR SET CABIN_OPTIMIZER takes exactly one value, on or off", false};
+    }
+    if (IEquals(value, "ON")) {
+        cabin_optimizer_enabled_ = true;
+    } else if (IEquals(value, "OFF")) {
+        cabin_optimizer_enabled_ = false;
+    } else {
+        return {"ERR SET CABIN_OPTIMIZER takes on or off, not '" + std::string(value) + "'",
+                false};
+    }
+    return {std::string("OK cabin_optimizer=") + (cabin_optimizer_enabled_ ? "on" : "off"),
+            false};
 }
 
 DispatchOutcome CommandDispatcher::HandleShowPatterns() {

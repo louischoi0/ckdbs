@@ -286,8 +286,11 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01, PHY02, PHY03 and PHY07 are built
-(2026-08-09); PHY04-PHY06 and PHY08 are not.** Part I's `stats/decay.hpp` is the R1
+dependency of PHY04), `workplan-testing.md`. **PHY01, PHY02, PHY03, PHY05 and PHY07 are built
+(2026-08-09); PHY04 (gated on EVT06's scan ring), PHY06 (needs PHY04) and
+PHY08 (needs the PHY04 E2E) are not — everything buildable ahead of the
+eviction track has landed, exactly the split the dependency graph
+predicted.** Part I's `stats/decay.hpp` is the R1
 implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
 S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
 with no engine-effect includes, per PO10; PHY07's golden traces are
@@ -464,7 +467,26 @@ relations; interruption mid-build discards cleanly; foreground working-set
 protection test (build over large relation does not evict scripted hot
 set — reuses the EVT06 oracle); disable-switch harmlessness.
 
-## PHY05 — Configuration surface
+## PHY05 — Configuration surface  **[DONE 2026-08-09]**
+
+**Built.** The switch: `cabin_optimizer` boot key (default **off**,
+experimental - the opposite default from Part I's `physical_optimizer`,
+because a controller that acts is not a report), `SET CABIN_OPTIMIZER
+[=] ON|OFF` at runtime (non-destructive both ways, PO8), `SHOW META`
+reporting it. The tuning family, translated to this engine's conventions:
+`cabin_optimizer_page_budget`, the five `_theta_*_pct` thresholds as
+**percent integers** (the config file parses no decimals; 300 = θ 3.0),
+`_confirm_snapshots`, `_snapshot_interval_ms` (0 = no cadence, the
+checkpoint-interval precedent) - all parsed and validated at boot, with
+the one cross-key rule enforced that the hysteresis stands on:
+**θ_drop < 100 < θ_create**, whatever the numbers.
+`Config::CabinOptimizerSettings()` assembles them into the decision
+core's 16.16 config, sharing R1's `decay_half_life` as T_amort (§II.6's
+own default; no separate key until a workload argues for one). Consumed
+by PHY04's task when it exists and by nothing until then - stated in the
+sample, the manual, and the keys' comments, the V11 precedent. Tests:
+defaults + parse + assembly, the broken-gap/zero-budget/zero-confirm
+refusals, and the runtime toggle with both spellings.
 
 **Scope.** Spec §II.6 settings wired through boot + runtime (`SET` for the
 switch; thresholds boot-time in v1).
