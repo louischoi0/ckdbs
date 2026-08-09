@@ -46,7 +46,8 @@ level-3 and level-4 trail is gone.
 
 Default for auto-registered patterns — exactly today's decided
 behavior: recording starts on the second execution (J5), trails compete
-in the shared budget under the lazy-decay score.
+in the shared budget under the lazy-decay score
+(`docs/feat-physical-optimizer.md` R1).
 
 ## 4. Depend on system memory (`tracking = opportunistic`)
 

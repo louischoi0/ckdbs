@@ -31,15 +31,27 @@
 // could tell "the page went away" from "someone else's row is there" would
 // be tempted to trust the second.
 //
-// ---- What this deliberately does not check -------------------------------
+// ---- The epoch check (docs/feat-physical-optimizer.md R4, PX04) ----------
 //
-// **The page epoch.** There is none in this engine, so Waystone spec §2's
-// rule 2 is unenforceable and Cabin's `page_epoch` is written 0. Sound only
-// while a tuple's address is stable for life - invariant 13 stops an UPDATE
-// migrating one and nothing relayouts - which means **the epoch must land
-// with relayout, whichever comes first**. When it does, it lands *here*, and
-// both callers get it at once. That is the whole argument for this file
-// existing.
+// **The page epoch is checked here since 2026-08-09**, which is Waystone
+// spec §2's rule 2 made enforceable and the Cabin's `page_epoch` made a
+// real comparison - landed *here*, once, so both callers got it at once,
+// which was the whole argument for this file existing. The recorded epoch
+// comes in from the caller's entry; the page's current epoch is read off
+// the fetched bytes; a mismatch is a miss like every other outcome. Until
+// a mover exists every comparison is between two zeros - the check is real
+// and its inputs are constant, which the hand-bumped-epoch contract tests
+// pin from both suites.
+//
+// R4's pairing rule holds in both directions: the epoch never *accepts* a
+// location on its own (the Keystone-id check below still runs on an epoch
+// match), it only rejects a whole page's worth of recorded locations at
+// once. The stored width is the entry formats' u32; the header's u64 is
+// compared truncated, which reintroduces a wrap only after 2^32 relayouts
+// of one page and is harmless anyway - a wrap collision merely readmits a
+// location to the id check.
+//
+// ---- What this deliberately does not check -------------------------------
 //
 // **That the page still belongs to the relation it was recorded from.**
 // Nothing asks a page which relation owns it, because nothing can. Both
@@ -60,6 +72,12 @@ enum class VerifyOutcome : std::uint8_t {
     kPageGone,
     // The slot is retired, dead, or past the directory's end.
     kSlotGone,
+    // The page's relayout epoch no longer matches the recorded one: tuples
+    // on this page have moved since the location was recorded, so every
+    // location recorded against it is untrusted at once (R4). Checked
+    // before the slot is read - the point of an epoch is rejecting a page
+    // without trusting anything on it.
+    kEpochMismatch,
     // A tuple is there and it is a **different** one. This is the check that
     // makes a stale remembered location a miss rather than somebody else's
     // row, and it is the one the corrupted-trail contract test exists to
@@ -78,13 +96,14 @@ struct VerifiedTuple {
     bool ok() const noexcept { return outcome == VerifyOutcome::kOk; }
 };
 
-// Fetches `page_id` for read, reads `slot`, and compares the tuple's
-// Keystone id against `expected_pk`.
+// Fetches `page_id` for read, compares its relayout epoch against
+// `recorded_epoch`, then reads `slot` and compares the tuple's Keystone id
+// against `expected_pk`.
 //
 // Never returns a Status: there is no failure here that is not a miss, and
 // giving one a Status would put a "the trail was corrupt" error in front of
 // a user whose query is perfectly answerable.
 VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint16_t slot,
-                            std::uint64_t expected_pk);
+                            std::uint64_t expected_pk, std::uint32_t recorded_epoch);
 
 }  // namespace kds::exec

@@ -511,3 +511,12 @@ ok	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) <= 0
 # A verdict moving with the task that owns it, which is what this column is for.
 Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) = 5
 Unsupported	-	-	CREATE ASSERTION a ON t GROUP BY (x) CHECK SUM(v) = 100
+
+# ---- Physical optimizer surface (docs/feat-physical-optimizer.md, PX06) ----
+# SHOW is a dispatcher verb, not SQL - the verdict matches SHOW TABLES above -
+# and `relayout` stays an ordinary identifier: no keyword moved for the report
+# surface, which the two SELECTs pin by fingerprinting like any column/table.
+InvalidArgument	-	-	SHOW RELAYOUT
+InvalidArgument	-	-	SHOW RELAYOUT trades
+ok	4b08123e9d144ab4	b5d416774c800632	SELECT relayout FROM t WHERE relayout = 3
+ok	512d110d0175126f	b5d412774c7fff66	SELECT * FROM relayout WHERE id = 7

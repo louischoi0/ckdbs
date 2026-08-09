@@ -172,8 +172,8 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 PageId at_page = kInvalidPageId;
                 std::uint16_t at_slot = 0;
                 if (entry.hint_valid()) {
-                    VerifiedTuple verified =
-                        VerifyTupleAt(store, entry.page_id, entry.slot, entry.pk);
+                    VerifiedTuple verified = VerifyTupleAt(store, entry.page_id, entry.slot,
+                                                           entry.pk, entry.page_epoch);
                     if (verified.ok()) {
                         at_page = entry.page_id;
                         at_slot = entry.slot;
@@ -199,6 +199,8 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     }
                     entry.page_id = found.value().page_id;
                     entry.slot = found.value().slot;
+                    // Stamped from the fetch below - a heal that wrote 0
+                    // against a bumped page would miss and re-heal forever.
                     entry.page_epoch = 0;
                     entry.flags |= stats::kCabinHintValid;
                     at_page = entry.page_id;
@@ -212,6 +214,10 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                 auto bytes = store.GetForRead(at_page);
                 if (!bytes.ok()) return bytes.status();
                 heap::PageView page(bytes.value());
+                // The hint's epoch tracks the page it names. A no-op for a
+                // verified entry (equality was just checked); the real
+                // stamp for a healed one.
+                entry.page_epoch = static_cast<std::uint32_t>(page.RelayoutEpoch());
                 auto tuple = page.ReadTuple(at_slot);
                 if (!tuple.ok()) {
                     if (tuple.status().code() == StatusCode::kNotFound) continue;

@@ -68,7 +68,7 @@ void TrailReplay::Build(const StepChain& chain,
         // key twice found the same row both times. Stated because
         // `insert_or_assign` looks like a choice and is not.
         by_key_.insert_or_assign(PackKey(entry.step_id, entry.pk),
-                                 TrailLocation{entry.page_id, entry.slot});
+                                 TrailLocation{entry.page_id, entry.page_epoch, entry.slot});
     }
 }
 

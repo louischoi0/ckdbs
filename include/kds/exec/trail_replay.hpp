@@ -45,11 +45,12 @@
 //
 // ---- What this deliberately cannot check ---------------------------------
 //
-// **The page epoch.** There is none in this engine (see
-// stats/trail_store.hpp), so spec section 2's rule 2 is unenforceable and
-// replay ships without it. Safe only while a tuple's address is stable for
-// life - the fixed-length rule stops an UPDATE migrating one and nothing
-// relayouts - which means relayout and the epoch have to land together.
+// **The page epoch is no longer on this list** (2026-08-09, workplan PX04):
+// entries carry the epoch the recorder observed, `TrailLocation` carries it
+// to the consult site, and `exec/tuple_verify.hpp` compares it against the
+// page's current epoch - spec section 2's rule 2, enforceable at last.
+// Until a mover exists every comparison is between two zeros; the
+// hand-bumped-epoch contract test is what proves the check would fire.
 //
 // **That a page still belongs to the relation it was recorded from.**
 // `Build()` checks `entry.rel_oid` against the step's, which is a check
@@ -66,6 +67,9 @@ namespace kds::exec {
 // re-validated against the page before anything is read from it.
 struct TrailLocation {
     PageId page_id = kInvalidPageId;
+    // The page's relayout epoch as the entry recorded it, carried so the
+    // consult site can hand it to the verifier (spec section 2 rule 2).
+    std::uint32_t page_epoch = 0;
     std::uint16_t slot = 0;
 };
 

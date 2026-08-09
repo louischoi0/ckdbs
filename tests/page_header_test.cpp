@@ -23,7 +23,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
     written.flags = 0xBEEF;
     written.checksum = 0xDEADBEEF;
     written.page_lsn = 0x0123456789ABCDEFULL;
-    written.reserved0 = 0xFEDCBA9876543210ULL;
+    written.relayout_epoch = 0xFEDCBA9876543210ULL;
     written.reserved1 = 0x1122334455667788ULL;
 
     WritePageHeader(Mut(page), written);
@@ -34,7 +34,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
     EXPECT_EQ(read.flags, written.flags);
     EXPECT_EQ(read.checksum, written.checksum);
     EXPECT_EQ(read.page_lsn, written.page_lsn);
-    EXPECT_EQ(read.reserved0, written.reserved0);
+    EXPECT_EQ(read.relayout_epoch, written.relayout_epoch);
     EXPECT_EQ(read.reserved1, written.reserved1);
 }
 
@@ -64,7 +64,7 @@ TEST(PageHeaderTest, FormatPageZeroesEverythingAndSetsCurrentVersion) {
     EXPECT_EQ(fields.flags, 0x0007);
     EXPECT_EQ(fields.checksum, 0u);
     EXPECT_EQ(fields.page_lsn, kNoPageLsn);
-    EXPECT_EQ(fields.reserved0, 0u);
+    EXPECT_EQ(fields.relayout_epoch, 0u);
     EXPECT_EQ(fields.reserved1, 0u);
     for (std::size_t i = kPageBodyOffset; i < kPageSize; ++i) {
         ASSERT_EQ(page[i], std::byte{0}) << "body byte " << i;
@@ -168,6 +168,65 @@ TEST(PageHeaderTest, VerifyDetectsHeaderCorruption) {
 
 TEST(PageHeaderTest, UnformattedPageTypeHasNoSupportedVersion) {
     EXPECT_EQ(MaxSupportedFormatVersion(PageType::kInvalid), 0u);
+}
+
+// ---- Relayout epoch (docs/feat-physical-optimizer.md R4, workplan PX03) --
+
+TEST(PageHeaderTest, RelayoutEpochRoundTripsAndBumpsByOne) {
+    Page page{};
+    FormatPage(Mut(page), PageType::kHeap);
+    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 0u);
+
+    SetRelayoutEpoch(Mut(page), 41);
+    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 41u);
+
+    BumpRelayoutEpoch(Mut(page));
+    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 42u);
+    BumpRelayoutEpoch(Mut(page));
+    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 43u);
+}
+
+// The no-format-bump claim, tested rather than asserted: a page image laid
+// out by the pre-change build is byte-identical to one this build formats
+// (the field took over `reserved0`, which every writer zeroed), so the
+// closest a single binary can get is writing the old layout by hand — each
+// field at its old offset, zeroes at 16 — and reading the epoch through
+// the new accessor. Same version, same offsets, epoch 0.
+TEST(PageHeaderTest, APreEpochPageImageReadsEpochZeroWithoutAFormatBump) {
+    Page page{};
+    const auto store = [&](std::size_t offset, auto value) {
+        std::memcpy(page.data() + offset, &value, sizeof(value));
+    };
+    store(kPageTypeOffset, static_cast<std::uint8_t>(PageType::kHeap));
+    store(kFormatVersionOffset, std::uint8_t{1});
+    store(kPageFlagsOffset, std::uint16_t{0});
+    store(kPageChecksumOffset, std::uint32_t{0});
+    store(kPageLsnOffset, std::uint64_t{7});
+    // Offsets 16..31: the pre-change build's two reserved words, zero.
+
+    EXPECT_TRUE(ValidatePageHeader(Const(page), PageType::kHeap).ok());
+    EXPECT_EQ(ReadPageHeader(Const(page)).format_version,
+              MaxSupportedFormatVersion(PageType::kHeap));
+    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 0u);
+}
+
+// The epoch is inside the checksummed span: a bump that forgot to restamp
+// must be *detected*, exactly as a forgotten page_lsn restamp is — which
+// is the proof the field is covered, not exempted.
+TEST(PageHeaderTest, TheEpochIsInsideTheChecksumSpan) {
+    Page page{};
+    FormatPage(Mut(page), PageType::kHeap);
+    StampPageChecksum(Mut(page));
+    ASSERT_TRUE(VerifyPageChecksum(Const(page)).ok());
+
+    BumpRelayoutEpoch(Mut(page));
+    const Status stale = VerifyPageChecksum(Const(page));
+    EXPECT_FALSE(stale.ok());
+    EXPECT_EQ(stale.code(), StatusCode::kCorruption);
+
+    StampPageChecksum(Mut(page));
+    EXPECT_TRUE(VerifyPageChecksum(Const(page)).ok());
+    EXPECT_EQ(GetRelayoutEpoch(Const(page)), 1u);
 }
 
 }  // namespace

@@ -60,6 +60,9 @@ add_executable(kds_tests
     create_pattern_test.cpp
     range_scan_test.cpp
     access_stats_test.cpp
+    decay_test.cpp
+    relayout_planner_test.cpp
+    show_relayout_test.cpp
     trail_store_test.cpp
     trail_recorder_test.cpp
     waystone_replay_test.cpp

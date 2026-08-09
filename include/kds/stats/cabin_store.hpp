@@ -92,15 +92,15 @@ struct CabinEntry {
     std::uint64_t pk = 0;
     PageId page_id = kInvalidPageId;
 
-    // The heap epoch at the time the entry was written.
-    //
-    // **Written 0 and checked trivially**, because this engine has no
-    // per-page epoch yet - the same gap `stats/trail_store.hpp` and
-    // `exec/trail_replay.hpp` document. The field is here rather than added
-    // later because C6 fixes the 24-byte layout, and because the day the
-    // epoch lands there must be nowhere for it *not* to be checked. Sound
-    // meanwhile only while a tuple's address is stable for life: invariant
-    // 13 stops an UPDATE migrating one, and nothing relayouts.
+    // The page's relayout epoch at the time the entry was written or last
+    // healed (docs/feat-physical-optimizer.md R4; recorded and compared for
+    // real since workplan PX04 - the field was here from C6, written 0
+    // while the engine had no epoch, precisely so there would be nowhere
+    // for the check *not* to happen the day it landed). Compared in
+    // `exec/tuple_verify.hpp`, the one shared verifier; a mismatch is a
+    // hint miss, resolved through the pk like every other miss. Until a
+    // mover exists every page's epoch is 0 and the comparison's inputs are
+    // constant.
     std::uint32_t page_epoch = 0;
 
     std::uint16_t slot = 0;

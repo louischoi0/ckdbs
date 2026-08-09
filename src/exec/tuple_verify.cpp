@@ -5,7 +5,7 @@
 namespace kds::exec {
 
 VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint16_t slot,
-                            std::uint64_t expected_pk) {
+                            std::uint64_t expected_pk, std::uint32_t recorded_epoch) {
     VerifiedTuple out;
 
     auto bytes = store.GetForRead(page_id);
@@ -15,6 +15,17 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
     }
 
     heap::PageView page(bytes.value());
+
+    // Rule 2, before the slot is read: a bumped epoch means tuples on this
+    // page have moved, so nothing recorded against it may be trusted -
+    // including the slot directory the read below would consult. Compared
+    // at the entry formats' stored width (u32); see the header comment for
+    // why the truncation is harmless.
+    if (static_cast<std::uint32_t>(page.RelayoutEpoch()) != recorded_epoch) {
+        out.outcome = VerifyOutcome::kEpochMismatch;
+        return out;
+    }
+
     auto tuple = page.ReadTuple(slot);
     if (!tuple.ok()) {
         out.outcome = VerifyOutcome::kSlotGone;
