@@ -117,6 +117,24 @@ Scenario StationaryNoise(std::uint64_t seed) {
     return s;
 }
 
+Scenario ServedCheaply(std::uint64_t seed) {
+    // The frozen-baseline case (PHY03): after the CREATE, the Cabin serves
+    // the shape and the *observed* page cost collapses to the probe cost -
+    // because the Cabin is working. A controller pricing the live cheapness
+    // would drop its own success and churn; the frozen pre-Cabin baseline
+    // keeps it ACTIVE, and this scenario's oracle is "exactly one action,
+    // ever".
+    Scenario s{"served-cheaply", seed, 75, 4105, {}};
+    SplitMix64 rng{seed};
+    for (int step = 0; step < 8; ++step) {  // hot and expensive: builds
+        s.periods.push_back(Period{10, rng.Range(38, 42), 0, 0});
+    }
+    for (int step = 0; step < 12; ++step) {  // hot and cheap: served
+        s.periods.push_back(Period{10, 2, 10, 0});
+    }
+    return s;
+}
+
 Scenario QualityCollapse(std::uint64_t seed) {
     Scenario s{"quality-collapse", seed, 74, 4104, {}};
     SplitMix64 rng{seed};
@@ -204,7 +222,7 @@ std::vector<std::string> Replay(const Scenario& scenario) {
 
 std::vector<Scenario> Scenarios() {
     return {RisingStar(0xA1), FadingStar(0xB2), StationaryNoise(0xC3),
-            QualityCollapse(0xD4)};
+            QualityCollapse(0xD4), ServedCheaply(0xE5)};
 }
 
 // ---- The scenario-specific oracles ---------------------------------------
@@ -244,6 +262,14 @@ TEST(CabinOptimizerReplayTest, QualityCollapseHealsThenDrops) {
     ASSERT_NE(heal, std::string::npos) << "no HEAL was attempted";
     ASSERT_NE(drop, std::string::npos) << "quality collapse never dropped";
     EXPECT_LT(heal, drop) << "PO7: repair is attempted before discard, never after";
+}
+
+TEST(CabinOptimizerReplayTest, AServedCabinIsNotDroppedForItsOwnCheapness) {
+    const std::vector<std::string> trace = Replay(ServedCheaply(0xE5));
+    ASSERT_EQ(trace.size(), 1u)
+        << "the frozen baseline failed: the controller acted on the cheapness its own "
+           "Cabin caused";
+    EXPECT_NE(trace[0].find(" CREATE "), std::string::npos) << trace[0];
 }
 
 // ---- The golden traces ----------------------------------------------------

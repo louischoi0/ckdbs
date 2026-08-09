@@ -122,6 +122,22 @@ struct CabinOptimizerConfig {
     // CREATE's admission estimate: P_rel / this, floored at 1, until
     // NoteCreated reports the built size. `[PROPOSED]` 8.
     std::uint64_t create_estimate_divisor = 8;
+
+    // PO8's decision log, bounded: the last K decisions per core.
+    // `[PROPOSED]` 1024. Advisory data - memory-resident, lost on crash,
+    // and the loss is documented as acceptable because the state machine
+    // re-derives from re-observation (PHY03's stated crash posture).
+    std::size_t decision_log_capacity = 1024;
+};
+
+// One logged decision (PO8: "every action is recorded with the inputs
+// that produced it"). The snapshot digest is `{version, decay_epoch}` -
+// the pair that names one snapshot uniquely per core - beside the
+// ActionItem, which already carries the B/C score it was taken on.
+struct DecisionRecord {
+    std::uint64_t snapshot_version = 0;
+    sched::MonoTimeNs decay_epoch = 0;
+    ActionItem item;
 };
 
 class CabinOptimizer {
@@ -145,6 +161,11 @@ public:
     std::uint64_t pages_committed() const noexcept;
     std::size_t managed_count() const noexcept { return managed_.size(); }
 
+    // The decision log, oldest first (PHY03). A copy: this is an
+    // inspection surface (PHY06's view reads it), bounded by the
+    // configured capacity, and never on a statement path.
+    std::vector<DecisionRecord> DecisionLog() const;
+
 private:
     enum class State : std::uint8_t { kCandidate, kBuilding, kActive, kDecaying };
 
@@ -164,10 +185,27 @@ private:
         std::uint32_t confirm_streak = 0;
         sched::MonoTimeNs decaying_since = 0;
         bool heal_attempted = false;
+
+        // §II.4's carried baseline (PHY03, closing PHY02's deferred
+        // choice): the pre-Cabin scan cost, frozen at the CREATE decision.
+        // Load-bearing, not bookkeeping - an ACTIVE Cabin makes the very
+        // scans it replaced cheap, so a benefit recomputed from *live*
+        // page costs collapses the moment the Cabin works and the
+        // controller drops its own success. B and C for an ACTIVE or
+        // DECAYING entry therefore price the frozen mean under the live
+        // frequency; a dead shape still dies, because zero frequency
+        // zeroes the benefit whatever the baseline says.
+        Fix16 frozen_p_scan = 0;
     };
+
+    void RecordDecision(const OptimizerSnapshot& snapshot, const ActionItem& item);
 
     CabinOptimizerConfig config_;
     std::map<CandidateKey, Managed> managed_;
+
+    // The bounded log: grows to capacity, then overwrites oldest-first.
+    std::vector<DecisionRecord> log_;
+    std::size_t log_head_ = 0;  // oldest entry, once the ring is full
 };
 
 }  // namespace kds::stats

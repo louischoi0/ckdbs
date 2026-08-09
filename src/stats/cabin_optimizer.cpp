@@ -64,6 +64,27 @@ const char* ActionReasonName(ActionReason reason) noexcept {
     return "?";
 }
 
+std::vector<DecisionRecord> CabinOptimizer::DecisionLog() const {
+    std::vector<DecisionRecord> out;
+    out.reserve(log_.size());
+    // Oldest first: once the ring is full, log_head_ names the oldest.
+    for (std::size_t i = 0; i < log_.size(); ++i) {
+        out.push_back(log_[(log_head_ + i) % log_.size()]);
+    }
+    return out;
+}
+
+void CabinOptimizer::RecordDecision(const OptimizerSnapshot& snapshot, const ActionItem& item) {
+    if (config_.decision_log_capacity == 0) return;
+    DecisionRecord record{snapshot.version, snapshot.decay_epoch, item};
+    if (log_.size() < config_.decision_log_capacity) {
+        log_.push_back(record);
+        return;
+    }
+    log_[log_head_] = record;
+    log_head_ = (log_head_ + 1) % log_.size();
+}
+
 std::uint64_t CabinOptimizer::pages_committed() const noexcept {
     std::uint64_t pages = 0;
     for (const auto& [key, managed] : managed_) {
@@ -104,8 +125,9 @@ void CabinOptimizer::NoteDropped(std::uint64_t cabin_id) {
 ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
     // ---- Aggregate the snapshot per candidate (the Σ_i of §II.4) --------
     struct Evidence {
-        Fix16 benefit = 0;       // Σ f_i × max(0, mean_i − P_cabin)
+        Fix16 benefit = 0;       // Σ f_i × max(0, mean_i − P_cabin), live means
         Fix16 p_rel = 0;         // max mean_i: the observed scan == build cost
+        Fix16 freq = 0;          // Σ f_i, for the frozen-baseline re-pricing
         Fix16 lookups = 0;       // S3, when an owned cabin serves it
         Fix16 fail_rate = 0;
         Fix16 coverage_share = 0;
@@ -133,6 +155,7 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
         const Fix16 mean = DivFix(FromQ8(fp.pages_q8), FromQ8(fp.frequency_q8));
         if (mean > p_cabin) e.benefit += MulFix(f, mean - p_cabin);
         e.p_rel = std::max(e.p_rel, mean);
+        e.freq += f;
     }
 
     // Every managed candidate gets an evidence entry even when its shape
@@ -159,16 +182,39 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
 
     // ---- The rule table, one candidate at a time, in key order ----------
     ActionSet actions;
+    const auto emit = [&](const ActionItem& item) {
+        RecordDecision(snapshot, item);
+        actions.push_back(item);
+    };
     const sched::MonoTimeNs cooldown_ns = static_cast<sched::MonoTimeNs>(
         MulFix(2 * config_.amort_windows, FromWhole(config_.half_life_ns)) >> 16);
 
+    // The effective score for one entry: live means for a candidate, the
+    // frozen pre-Cabin baseline once one exists - an ACTIVE Cabin makes
+    // the scans it replaced cheap, and pricing it by the cheapness it
+    // caused would drop its own success (Managed::frozen_p_scan).
+    struct Scored {
+        Fix16 benefit = 0;
+        Fix16 cost = 0;
+    };
+    const auto score = [&](const Evidence& e, const Managed* m) {
+        Scored s;
+        const Fix16 quality_upkeep = MulFix(MulFix(e.fail_rate, e.lookups),
+                                            FromWhole(config_.k_heal_pages));
+        Fix16 basis = e.p_rel;
+        s.benefit = e.benefit;
+        if (m != nullptr &&
+            (m->state == State::kActive || m->state == State::kDecaying) &&
+            m->frozen_p_scan != 0) {
+            basis = m->frozen_p_scan;
+            s.benefit = basis > p_cabin ? MulFix(e.freq, basis - p_cabin) : 0;
+        }
+        s.cost = DivFix(basis, config_.amort_windows) + quality_upkeep;
+        return s;
+    };
+
     for (auto& [key, e] : evidence) {
         if (e.served_by_unowned) continue;
-
-        // C(c): build cost amortized per window, plus the quality upkeep.
-        const Fix16 cost = DivFix(e.p_rel, config_.amort_windows) +
-                           MulFix(MulFix(e.fail_rate, e.lookups),
-                                  FromWhole(config_.k_heal_pages));
 
         auto found = managed_.find(key);
         if (found == managed_.end()) {
@@ -176,10 +222,12 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
             found = managed_.emplace(key, Managed{}).first;
         }
         Managed& m = found->second;
+        const Scored scored = score(e, &m);
+        const Fix16 cost = scored.cost;
 
         switch (m.state) {
             case State::kCandidate: {
-                if (e.benefit > MulFix(config_.theta_create, cost)) {
+                if (scored.benefit > MulFix(config_.theta_create, cost)) {
                     ++m.confirm_streak;
                 } else {
                     m.confirm_streak = 0;
@@ -191,11 +239,10 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                 const std::uint64_t estimate = std::max<std::uint64_t>(
                     1, (e.p_rel >> 16) / config_.create_estimate_divisor);
                 if (pages_committed() + estimate > config_.page_budget) {
-                    // The replacement rule: evict the weakest ACTIVE iff the
-                    // candidate beats it by θ_swap. Weakest = lowest benefit
-                    // recorded pages... v1 compares against *pages*-weighted
-                    // nothing - the weakest is the ACTIVE with the smallest
-                    // current benefit, found from this same evidence pass.
+                    // The replacement rule (PO6): evict the weakest ACTIVE
+                    // iff the candidate beats it by θ_swap. Weakest by
+                    // *effective* benefit - a frozen baseline prices an
+                    // incumbent the same way it defends one.
                     const CandidateKey* victim = nullptr;
                     Fix16 victim_net = std::numeric_limits<std::uint64_t>::max();
                     for (auto& [vkey, ve] : evidence) {
@@ -203,31 +250,31 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                         if (vm == managed_.end() || vm->second.state != State::kActive) {
                             continue;
                         }
-                        const Fix16 vnet = ve.benefit;  // net ranking on B; C
-                                                        // is upkeep both pay
+                        const Fix16 vnet = score(ve, &vm->second).benefit;
                         if (vnet < victim_net) {
                             victim_net = vnet;
                             victim = &vkey;
                         }
                     }
                     if (victim == nullptr ||
-                        e.benefit <= MulFix(config_.theta_swap, victim_net)) {
+                        scored.benefit <= MulFix(config_.theta_swap, victim_net)) {
                         break;  // the candidate waits (PO6)
                     }
                     Managed& vm = managed_.find(*victim)->second;
                     assert(vm.cabin_id != 0);
-                    actions.push_back(ActionItem{CabinAction::kDrop,
-                                                 ActionReason::kBudgetSwap, vm.cabin_id,
-                                                 victim->rel_oid, victim->col_pos,
-                                                 evidence[*victim].benefit, cost});
+                    emit(ActionItem{CabinAction::kDrop, ActionReason::kBudgetSwap,
+                                    vm.cabin_id, victim->rel_oid, victim->col_pos,
+                                    victim_net, cost});
                     vm.state = State::kDecaying;  // dropped on execution edge
                 }
                 m.state = State::kBuilding;
                 m.pages = estimate;
                 m.confirm_streak = 0;
-                actions.push_back(ActionItem{CabinAction::kCreate,
-                                             ActionReason::kSustainedBenefit, 0, key.rel_oid,
-                                             key.col_pos, e.benefit, cost});
+                // §II.4's carried baseline, frozen at the decision: the
+                // pre-Cabin scan cost this CREATE was justified by.
+                m.frozen_p_scan = e.p_rel;
+                emit(ActionItem{CabinAction::kCreate, ActionReason::kSustainedBenefit, 0,
+                                key.rel_oid, key.col_pos, scored.benefit, cost});
                 break;
             }
             case State::kBuilding:
@@ -237,7 +284,8 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                 // Zero benefit decays regardless of cost: with no observed
                 // traffic both sides read 0 and the threshold comparison
                 // goes vacuous, which must not keep a dead Cabin alive.
-                if (e.benefit == 0 || e.benefit < MulFix(config_.theta_drop, cost)) {
+                if (scored.benefit == 0 ||
+                    scored.benefit < MulFix(config_.theta_drop, cost)) {
                     m.state = State::kDecaying;
                     m.decaying_since = snapshot.decay_epoch;
                     break;
@@ -246,16 +294,15 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                     if (m.heal_attempted) {
                         // PO7: HEAL did not recover quality. Discard and
                         // re-observe beats repair at any cost.
-                        actions.push_back(ActionItem{CabinAction::kDrop,
-                                                     ActionReason::kQualityCollapse,
-                                                     m.cabin_id, key.rel_oid, key.col_pos,
-                                                     e.benefit, cost});
+                        emit(ActionItem{CabinAction::kDrop, ActionReason::kQualityCollapse,
+                                        m.cabin_id, key.rel_oid, key.col_pos,
+                                        scored.benefit, cost});
                         break;
                     }
                     m.heal_attempted = true;
-                    actions.push_back(ActionItem{CabinAction::kHeal,
-                                                 ActionReason::kQualityHeal, m.cabin_id,
-                                                 key.rel_oid, key.col_pos, e.benefit, cost});
+                    emit(ActionItem{CabinAction::kHeal, ActionReason::kQualityHeal,
+                                    m.cabin_id, key.rel_oid, key.col_pos, scored.benefit,
+                                    cost});
                     break;
                 }
                 m.heal_attempted = false;  // quality recovered
@@ -264,25 +311,25 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                 // scaled by the same share (the v1 model choice the header
                 // states).
                 if (e.coverage_share > config_.theta_extend &&
-                    MulFix(e.benefit, e.coverage_share) >
+                    MulFix(scored.benefit, e.coverage_share) >
                         MulFix(config_.theta_create, MulFix(cost, e.coverage_share))) {
-                    actions.push_back(ActionItem{CabinAction::kExtend,
-                                                 ActionReason::kCoverageExpansion, m.cabin_id,
-                                                 key.rel_oid, key.col_pos, e.benefit, cost});
+                    emit(ActionItem{CabinAction::kExtend, ActionReason::kCoverageExpansion,
+                                    m.cabin_id, key.rel_oid, key.col_pos, scored.benefit,
+                                    cost});
                 }
                 break;
             }
             case State::kDecaying: {
-                if (e.benefit > MulFix(config_.theta_create, cost)) {
+                if (scored.benefit > MulFix(config_.theta_create, cost)) {
                     m.state = State::kActive;  // recovery on score rebound
                     break;
                 }
                 if (m.cabin_id != 0 &&
                     snapshot.decay_epoch >= m.decaying_since &&
                     snapshot.decay_epoch - m.decaying_since >= cooldown_ns) {
-                    actions.push_back(ActionItem{CabinAction::kDrop,
-                                                 ActionReason::kSustainedDecay, m.cabin_id,
-                                                 key.rel_oid, key.col_pos, e.benefit, cost});
+                    emit(ActionItem{CabinAction::kDrop, ActionReason::kSustainedDecay,
+                                    m.cabin_id, key.rel_oid, key.col_pos, scored.benefit,
+                                    cost});
                 }
                 break;
             }

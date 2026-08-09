@@ -205,10 +205,11 @@ TEST(CabinOptimizerTest, DecayRunsTheCooldownAndRecoveryCancelsIt) {
     for (int i = 1; i <= 3; ++i) opt.Decide(HotSnapshot(i));
     opt.NoteCreated(kRel, kCol, 42, 5);
 
-    // B collapses to 1 x 1 = 1 against theta_drop x C = 1.5: DECAYING, no
-    // action yet - pages stay, the state is recoverable.
+    // Traffic dies entirely: zero frequency zeroes the benefit whatever
+    // the frozen baseline says - a dead Cabin still dies - so DECAYING,
+    // no action yet, pages stay, the state is recoverable.
     const auto cold = [&](std::uint64_t v, sched::MonoTimeNs epoch) {
-        return Snap(v, epoch, {Fp(7, 1, 3, kRel, kCol, 42)}, {Quality(42, 1, 0)});
+        return Snap(v, epoch, {Fp(7, 0, 0, kRel, kCol, 42)}, {Quality(42, 1, 0)});
     };
     EXPECT_TRUE(opt.Decide(cold(4, 1000)).empty());
 
@@ -223,6 +224,58 @@ TEST(CabinOptimizerTest, DecayRunsTheCooldownAndRecoveryCancelsIt) {
     EXPECT_EQ(dropped[0].action, CabinAction::kDrop);
     EXPECT_EQ(dropped[0].reason, ActionReason::kSustainedDecay);
     EXPECT_EQ(dropped[0].cabin_id, 42u);
+}
+
+TEST(CabinOptimizerTest, AFrozenBaselineKeepsAServedCabinAlive) {
+    CabinOptimizer opt(TestConfig());
+    for (int i = 1; i <= 3; ++i) opt.Decide(HotSnapshot(i));
+    opt.NoteCreated(kRel, kCol, 42, 5);
+
+    // The Cabin now serves the shape, so the live mean collapses to the
+    // probe cost (2 pages = p_cabin, live benefit 0). The frozen pre-Cabin
+    // baseline keeps B = freq x 38 high: no decay, no drop, no churn.
+    for (std::uint64_t v = 4; v < 24; ++v) {
+        const ActionSet actions = opt.Decide(
+            Snap(v, 0, {Fp(7, 10, 20, kRel, kCol, 42)}, {Quality(42, 10, 0)}));
+        ASSERT_TRUE(actions.empty()) << "acted on its own cheapness at snapshot " << v;
+    }
+    EXPECT_EQ(opt.pages_committed(), 5u);
+
+    // A dead shape still dies: zero frequency zeroes the frozen-priced
+    // benefit too, and the cooldown runs to a DROP.
+    EXPECT_TRUE(
+        opt.Decide(Snap(24, 1000, {Fp(7, 0, 0, kRel, kCol, 42)}, {Quality(42, 1, 0)}))
+            .empty());
+    ActionSet dropped =
+        opt.Decide(Snap(25, 4000, {Fp(7, 0, 0, kRel, kCol, 42)}, {Quality(42, 1, 0)}));
+    ASSERT_EQ(dropped.size(), 1u);
+    EXPECT_EQ(dropped[0].action, CabinAction::kDrop);
+    EXPECT_EQ(dropped[0].reason, ActionReason::kSustainedDecay);
+}
+
+TEST(CabinOptimizerTest, TheDecisionLogCarriesTheDigestAndWraps) {
+    CabinOptimizerConfig config = TestConfig();
+    config.decision_log_capacity = 2;
+    CabinOptimizer opt(config);
+
+    // Three logged decisions through the quality path: CREATE (v3), HEAL
+    // (v4), DROP (v5). Capacity 2 keeps the newest two, oldest first.
+    for (int i = 1; i <= 3; ++i) opt.Decide(HotSnapshot(i, /*epoch=*/i * 10));
+    opt.NoteCreated(kRel, kCol, 42, 5);
+    const auto failing = [&](std::uint64_t v) {
+        return Snap(v, v * 10, {Fp(7, 10, 400, kRel, kCol, 42)}, {Quality(42, 10, 2)});
+    };
+    opt.Decide(failing(4));
+    opt.Decide(failing(5));
+
+    const std::vector<DecisionRecord> log = opt.DecisionLog();
+    ASSERT_EQ(log.size(), 2u);
+    EXPECT_EQ(log[0].snapshot_version, 4u);
+    EXPECT_EQ(log[0].decay_epoch, 40u);
+    EXPECT_EQ(log[0].item.action, CabinAction::kHeal);
+    EXPECT_EQ(log[1].snapshot_version, 5u);
+    EXPECT_EQ(log[1].item.action, CabinAction::kDrop);
+    EXPECT_EQ(log[1].item.reason, ActionReason::kQualityCollapse);
 }
 
 TEST(CabinOptimizerTest, JurisdictionIgnoresUnownedCabins) {

@@ -318,9 +318,11 @@ Part I's built `physical_optimizer` config key already means the shadow
 report, and one key wearing two meanings is how switches lie.
 **Status: ADOPTED (experimental); PHY01 (the S1-S3 signal plumbing and
 snapshot, `stats/optimizer_signals.hpp`), PHY02 (the pure decision core,
-`stats/cabin_optimizer.hpp` — 16.16 fixed point, the PO5 lifecycle) and
+`stats/cabin_optimizer.hpp` — 16.16 fixed point, the PO5 lifecycle) PHY03 (the decision-log ring, the `kCabinOriginAuto` ownership tag, and
+the frozen P_scan baseline — load-bearing, or the controller drops its own
+success) and
 PHY07 (the seed-driven replay harness with checked-in golden traces —
-PO10's determinism proven end to end) are built, 2026-08-09; PHY03-PHY06
+PO10's determinism proven end to end) are built, 2026-08-09; PHY04-PHY06
 and PHY08 are not.**
 
 ## II.1 Positioning

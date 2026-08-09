@@ -286,8 +286,8 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01, PHY02 and PHY07 are built (2026-08-09);
-PHY03-PHY06 and PHY08 are not.** Part I's `stats/decay.hpp` is the R1
+dependency of PHY04), `workplan-testing.md`. **PHY01, PHY02, PHY03 and PHY07 are built
+(2026-08-09); PHY04-PHY06 and PHY08 are not.** Part I's `stats/decay.hpp` is the R1
 implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
 S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
 with no engine-effect includes, per PO10; PHY07's golden traces are
@@ -397,7 +397,33 @@ create/drop oscillation over long sequences); budget invariant test
 (Σ pages ≤ budget after every ActionSet); arithmetic determinism test
 (identical snapshots ⇒ bit-identical ActionSets).
 
-## PHY03 — Catalog state and decision log
+## PHY03 — Catalog state and decision log  **[DONE 2026-08-09]**
+
+**Built, sized to what the engine can honestly persist.** Observational
+Cabin sets are memory-resident by design (`feat-cabin.md` §9: only the
+`sys.cabins` row persists), so "persistence of lifecycle state" means
+exactly three things here, and each landed. **The ownership tag costs
+nothing**: `sys.cabins.origin` already reserved `kCabinOriginAuto` for "a
+future promotion pipeline" - which this controller is - so PO1's tag is
+that value, pinned by a restart round-trip test (a second `Catalog` over
+the same pages reads the row back, origin intact). **The decision log**
+is the controller's own bounded ring (`decision_log_capacity`, 1024
+`[PROPOSED]`; the wrap and oldest-first order tested at capacity 2), each
+record = the ActionItem plus the `{snapshot version, decay_epoch}` digest
+- PO8's "logged with the inputs", memory-resident, loss-on-crash
+documented as acceptable because the state machine re-derives from
+re-observation. **The frozen P_scan baseline** landed as the load-bearing
+piece: frozen at the CREATE decision, it prices an ACTIVE/DECAYING entry's
+B and C (live frequency × frozen mean), because an ACTIVE Cabin makes the
+very scans it replaced cheap and a live-priced benefit collapses the
+moment the Cabin works - the controller would drop its own success and
+churn. The harness gained the `served-cheaply` scenario proving it:
+post-CREATE the observed page cost collapses to the probe cost and the
+trace is **one action, ever**; a dead shape still dies, since zero
+frequency zeroes the frozen-priced benefit too. The budget swap's victim
+ranking prices incumbents on the same frozen basis it defends them with.
+Crash posture: BUILDING is discarded by construction (nothing persists
+it); ACTIVE persists as its catalog row and re-derives the rest.
 
 **Scope.** Persistence of managed-Cabin lifecycle state and the decision
 log (PO5, PO8).
