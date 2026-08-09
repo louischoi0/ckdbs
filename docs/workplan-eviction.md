@@ -13,7 +13,28 @@ design violation, not an implementation detail.
 
 ---
 
-## EVT01 — Frame metadata and state machine
+## EVT01 — Frame metadata and state machine  **[PARTLY BUILT 2026-08-09]**
+
+**Built:** `Frame::pins` and `Frame::usage` (saturating, cap
+`DevicePageStore::kClockUsageCap`, `[PROPOSED] 5`); the move-only
+`DevicePageStore::PageRef` with `PinnedGet`/`PinnedGetForRead`;
+`IsPinnedClass()` + `SetResidentLimit()`; `pinned_frames()`.
+
+**Not built:** the FREE/ACTIVE state machine and its edge asserts - there is
+no free list yet, so a frame has no FREE state to be in (that is EVT02); and
+frame *content poisoning*.
+
+**A finding against EV3, and it changes how the rule can be written.** EV3
+says pinning is a page-class attribute "resolved from page kind at load".
+That works for a Bound Cabin, which gets a page type of its own. It does
+**not** work for the fixed catalog pages: they are formatted
+`PageType::kHeap`, exactly as a user relation's pages are, so the page kind
+cannot tell them apart. Their reserved ids can, and do
+(`catalog/well_known.hpp`). So the implementation is *id-range-or-kind*, and
+EV3's "resolved from page kind" holds for one of its two v1 classes rather
+than both. The id range is adopted from `system_page_limit_`, the boundary
+`SetCoreOwnership` already draws over exactly this set of pages, rather than
+a second one being invented beside it.
 
 **Scope.** Extend the per-core frame descriptor with the eviction fields and
 enforce the lifecycle of spec §3.
@@ -32,7 +53,33 @@ pin-count interaction test (PageRef alive ⇒ frame untouchable).
 
 ---
 
-## EVT02 — Free list and CLOCK sweep core
+## EVT02 — Free list and CLOCK sweep core  **[PARTLY BUILT 2026-08-09]**
+
+**Built:** `EvictColdFrames(budget)` - the sweep rotation with §3.2's four
+branches in the specified order (skip pinned / skip pinned-class /
+decrement / reclaim-clean / queue-dirty), and `TakeDirtyEvictionQueue()`,
+which is §4's queue for EVT03 to drain. The pre-existing `EvictClean()` -
+the peer cache-invalidation path - now refuses a **pinned** page as it
+already refused a dirty one.
+
+**Not built:** the free list and therefore the whole allocation side - there
+is no bounded pool, so a miss still creates a frame rather than popping one,
+and the on-demand fallback has nothing to fall back to. Frame poisoning.
+
+**Nothing calls the sweep**, and that is a sequencing constraint rather than
+an oversight: `page.md` §3's first line is that raw spans are unsafe the
+moment eviction exists, and ~257 call sites still take one from
+`Get`/`GetForRead`/`CreateAt`/`CreateNew`. **The `PageRef` migration (S2) is
+a hard prerequisite for enabling any of this**, and it is not in this
+workplan - it belongs to `page.md` §16-7's "PageStore v2 migration". It must
+not be staged behind an implicit `PageRef → span` conversion: that would make
+`auto s = store.Get(id).value();` compile and dangle, which is the exact bug
+eviction introduces.
+
+The sweep exists ahead of the migration for one reason: it makes the
+pinned-class guarantee testable *now*, so the Bound Cabin can be built
+against it. `tests/eviction_test.cpp` asserts every refusal against a sweep
+that reclaims a victim in the same pass, so none of them is a tautology.
 
 **Scope.** Spec §3.2–§3.3 mechanism, single implementation invoked from
 both trigger contexts (EV5).

@@ -1,0 +1,316 @@
+#include <algorithm>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include <gtest/gtest.h>
+
+#include "kds/storage/device_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
+
+// Buffer-pool frame reclamation (docs/workplan-eviction.md EV01-EV02).
+//
+// The decision this file backs is EV1: reclamation is **pin refcount + clock
+// second chance**, not epoch-based. What that buys is a guarantee that can be
+// stated as a test rather than as a discipline - a frame somebody holds is
+// never reclaimed - and this file is that statement.
+//
+// Two things worth knowing before editing it.
+//
+// **The sweep must be reclaiming something for the refusals to mean
+// anything.** A test that asserts "the pinned frame survived" against a sweep
+// that reclaimed nothing at all is a tautology, and would pass just as well
+// if `EvictColdFrames` were `return 0;`. Every refusal test below therefore
+// checks a *victim* fell in the same pass, so the sweep is provably doing its
+// job while declining to touch the protected frame.
+//
+// **Nothing calls the sweep in production** (EV7 - eviction stays off until
+// EV03 has migrated every caller off raw spans, because a raw span into a
+// reclaimed frame is a use-after-free and `page.md` §3 says so). These tests
+// call it directly. That is the point: the guarantee AST04 needs has to be
+// true *now*, so the Bound Cabin can be built against it, without eviction
+// being on anywhere.
+
+namespace kds::storage {
+namespace {
+
+// Enough pages that a sweep has somewhere to go, few enough to enumerate.
+class EvictionTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+        ASSERT_TRUE(device.ok()) << device.status().message();
+        device_ = std::move(device.value());
+
+        auto store = DevicePageStore::Open(*device_, /*first_new_page_id=*/16);
+        ASSERT_TRUE(store.ok()) << store.status().message();
+        store_ = std::move(store.value());
+    }
+
+    // A fresh page, written, flushed and dropped from the pool - so a later
+    // Get() faults it back in and the sweep has a *clean* frame to work with.
+    // A frame that was only ever created is dirty, and a dirty frame is
+    // deliberately not a victim (EV02).
+    PageId MakeCleanResidentPage(std::byte fill) {
+        auto created = store_->CreateNew();
+        EXPECT_TRUE(created.ok()) << created.status().message();
+        const PageId id = created.value().first;
+        FormatPage(created.value().second, PageType::kHeap);
+        created.value().second[kPageBodyOffset] = fill;
+        EXPECT_TRUE(store_->Sync().ok());
+        // Sync writes back but leaves the frame resident and clean.
+        return id;
+    }
+
+    std::unique_ptr<MemoryPageDevice> device_;
+    std::unique_ptr<DevicePageStore> store_;
+};
+
+// ---- EV01: the handle ---------------------------------------------------
+
+TEST_F(EvictionTest, APageRefPinsForItsLifetimeAndUnpinsExactlyOnce) {
+    const PageId id = MakeCleanResidentPage(std::byte{1});
+    EXPECT_EQ(store_->pinned_frames(), 0u);
+
+    {
+        auto ref = store_->PinnedGet(id);
+        ASSERT_TRUE(ref.ok()) << ref.status().message();
+        EXPECT_TRUE(ref.value().valid());
+        EXPECT_EQ(ref.value().page_id(), id);
+        EXPECT_EQ(store_->pinned_frames(), 1u);
+
+        // A second handle to the same page is a second pin, not a shared
+        // one: the count is what makes "somebody is still holding it" true
+        // after the first is dropped.
+        {
+            auto second = store_->PinnedGetForRead(id);
+            ASSERT_TRUE(second.ok());
+            EXPECT_EQ(store_->pinned_frames(), 1u);  // one frame...
+            EXPECT_EQ(store_->EvictColdFrames(8), 0u);
+        }
+        // ...and still pinned after the inner one dies.
+        EXPECT_EQ(store_->pinned_frames(), 1u);
+    }
+
+    EXPECT_EQ(store_->pinned_frames(), 0u);
+}
+
+TEST_F(EvictionTest, MovingAHandleTransfersThePinRatherThanDuplicatingIt) {
+    const PageId id = MakeCleanResidentPage(std::byte{2});
+
+    auto ref = store_->PinnedGet(id);
+    ASSERT_TRUE(ref.ok());
+    DevicePageStore::PageRef moved = std::move(ref.value());
+
+    EXPECT_TRUE(moved.valid());
+    EXPECT_FALSE(ref.value().valid()) << "the source is emptied, so it drops nothing";
+    EXPECT_EQ(store_->pinned_frames(), 1u);
+
+    moved.Release();
+    EXPECT_EQ(store_->pinned_frames(), 0u);
+
+    // Release is idempotent - the destructor calls it again on the way out.
+    moved.Release();
+    EXPECT_EQ(store_->pinned_frames(), 0u);
+}
+
+TEST_F(EvictionTest, AHandleSeesAndCanDirtyItsOwnBytes) {
+    const PageId id = MakeCleanResidentPage(std::byte{3});
+
+    auto ref = store_->PinnedGetForRead(id);
+    ASSERT_TRUE(ref.ok());
+    EXPECT_EQ(ref.value().bytes()[kPageBodyOffset], std::byte{3});
+    EXPECT_EQ(ref.value().bytes().size(), kPageSize);
+
+    // Taken for read, then written: MarkDirty is what keeps the write from
+    // being dropped by a pool that trusts the accessor the caller chose.
+    ref.value().bytes()[kPageBodyOffset] = std::byte{9};
+    ref.value().MarkDirty();
+    ref.value().Release();
+
+    ASSERT_TRUE(store_->Sync().ok());
+    auto reread = store_->GetForRead(id);
+    ASSERT_TRUE(reread.ok());
+    EXPECT_EQ(reread.value()[kPageBodyOffset], std::byte{9});
+}
+
+// ---- EV02: the sweep ----------------------------------------------------
+
+TEST_F(EvictionTest, TheSweepReclaimsAColdCleanFrameAndTheBytesComeBack) {
+    const PageId id = MakeCleanResidentPage(std::byte{42});
+    const std::size_t before = store_->resident_pages();
+
+    // First pass clears the reference bit the creating fetch set; the second
+    // collects it. That two-lap shape *is* the second chance.
+    EXPECT_EQ(store_->EvictColdFrames(8), 1u);
+    EXPECT_LT(store_->resident_pages(), before);
+
+    // Reclaimed, not lost: the next fetch faults it back off the device and
+    // the bytes are the ones that were written.
+    auto back = store_->GetForRead(id);
+    ASSERT_TRUE(back.ok()) << back.status().message();
+    EXPECT_EQ(back.value()[kPageBodyOffset], std::byte{42});
+}
+
+// EV1's actual claim, and the reason it is a *counter* and not a reference
+// bit: a page touched five times outlives one touched once. A bit cannot
+// express that - both would be "referenced" and both would fall on the pass
+// after next - so this is the test that would still pass against a bit only
+// if the counter were not doing its job.
+TEST_F(EvictionTest, AFrequentlyTouchedFrameOutlivesARarelyTouchedOne) {
+    const PageId hot = MakeCleanResidentPage(std::byte{1});
+    const PageId cold = MakeCleanResidentPage(std::byte{2});
+    ASSERT_NE(hot, cold);
+
+    // `hot` well past the cap, `cold` just created (usage 1 from its own
+    // fetch). Saturation is what bounds how long a once-popular page can
+    // hold a frame after falling out of use.
+    for (int i = 0; i < 20; ++i) ASSERT_TRUE(store_->GetForRead(hot).ok());
+
+    // One rotation at a time, one frame of budget: `cold`'s counter runs out
+    // first, so it is the one reclaimed.
+    std::size_t rotations_until_cold_fell = 0;
+    while (store_->EvictColdFrames(1) == 0) {
+        ++rotations_until_cold_fell;
+        ASSERT_LT(rotations_until_cold_fell, 32u) << "the sweep made no progress";
+    }
+    EXPECT_TRUE(store_->IsAllocated(hot)) << "the hot page outlived the cold one";
+
+    // And `hot` falls too, once its counter is walked down - saturating, so
+    // 20 touches cost no more rotations than the cap allows.
+    std::size_t more = 0;
+    for (int pass = 0; pass < 8 && more == 0; ++pass) more = store_->EvictColdFrames(1);
+    EXPECT_EQ(more, 1u) << "a saturating counter is bounded by the cap, not by touch count";
+}
+
+TEST_F(EvictionTest, ADirtyFrameIsSkippedRatherThanDropped) {
+    // Created and not synced, so the frame is dirty and its write is only in
+    // memory. Dropping it would lose that write, which is why EV02 refuses
+    // dirty victims outright and leaves them to EV04's WAL-gated flush.
+    auto created = store_->CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId dirty = created.value().first;
+    created.value().second[kPageBodyOffset] = std::byte{7};
+
+    EXPECT_EQ(store_->EvictColdFrames(8), 0u);
+    EXPECT_EQ(store_->EvictColdFrames(8), 0u) << "still refused on the second lap";
+
+    // Queued rather than silently skipped: §3.2's fourth branch hands it to
+    // §4's writeback, which is EVT03's. Draining the queue is what a
+    // background writer will do; here it is the evidence the sweep saw the
+    // frame and made the specified decision about it.
+    std::vector<PageId> queued = store_->TakeDirtyEvictionQueue();
+    EXPECT_NE(std::find(queued.begin(), queued.end(), dirty), queued.end())
+        << "the sweep queued the dirty frame for writeback";
+    EXPECT_TRUE(store_->TakeDirtyEvictionQueue().empty()) << "taking it clears it";
+
+    // And the write is still there to be flushed.
+    ASSERT_TRUE(store_->Sync().ok());
+    auto back = store_->GetForRead(dirty);
+    ASSERT_TRUE(back.ok());
+    EXPECT_EQ(back.value()[kPageBodyOffset], std::byte{7});
+}
+
+// ---- The guarantee AST04 rests on ---------------------------------------
+
+TEST_F(EvictionTest, APinnedFrameIsNeverReclaimedWhileAVictimFallsBesideIt) {
+    const PageId pinned = MakeCleanResidentPage(std::byte{1});
+    const PageId victim = MakeCleanResidentPage(std::byte{2});
+    ASSERT_NE(pinned, victim);
+
+    // ForRead, so the frame stays *clean* and the only thing standing
+    // between it and the sweep is the pin. Taking it with PinnedGet would
+    // dirty it, and a dirty frame is refused for a different reason - which
+    // would make this test pass without testing anything.
+    auto ref = store_->PinnedGetForRead(pinned);
+    ASSERT_TRUE(ref.ok());
+
+    // Generous budget and repeated passes: the refusal is not a budget
+    // artefact, and it does not decay.
+    std::size_t reclaimed = 0;
+    for (int pass = 0; pass < 5; ++pass) reclaimed += store_->EvictColdFrames(64);
+
+    // The victim fell - so the sweep was working, and the assertion below is
+    // not a tautology about a sweep that does nothing.
+    EXPECT_GE(reclaimed, 1u);
+    EXPECT_EQ(store_->pinned_frames(), 1u);
+
+    // The handle's bytes are still the frame's, which is the property the
+    // whole design exists for: a reclaimed frame would have freed them.
+    EXPECT_EQ(ref.value().bytes()[kPageBodyOffset], std::byte{1});
+
+    // And once released it becomes an ordinary candidate.
+    ref.value().Release();
+    EXPECT_EQ(store_->pinned_frames(), 0u);
+    std::size_t after = 0;
+    for (int pass = 0; pass < 2; ++pass) after += store_->EvictColdFrames(64);
+    EXPECT_GE(after, 1u) << "unpinning makes it evictable, so the pin was the reason";
+}
+
+TEST_F(EvictionTest, APinnedClassFrameIsNeverReclaimedAndNeedsNoPin) {
+    // EV3: residency is a property of the page's *class*. This is what
+    // `docs/feat-assertion.md` §5's Bound Cabin will declare, and what
+    // AST04's "exempt from eviction" acceptance criterion means.
+    const PageId resident = MakeCleanResidentPage(std::byte{1});
+    const PageId victim = MakeCleanResidentPage(std::byte{2});
+    ASSERT_LT(resident, victim) << "CreateNew hands out ascending ids";
+
+    store_->SetResidentLimit(victim);
+    EXPECT_TRUE(store_->IsPinnedClass(resident));
+    EXPECT_FALSE(store_->IsPinnedClass(victim));
+
+    std::size_t reclaimed = 0;
+    for (int pass = 0; pass < 5; ++pass) reclaimed += store_->EvictColdFrames(64);
+
+    EXPECT_GE(reclaimed, 1u) << "the victim fell, so the sweep ran";
+    EXPECT_EQ(store_->pinned_frames(), 0u) << "residency is not a pin";
+
+    // Still resident, and still the bytes it had.
+    auto still = store_->GetForRead(resident);
+    ASSERT_TRUE(still.ok());
+    EXPECT_EQ(still.value()[kPageBodyOffset], std::byte{1});
+}
+
+TEST_F(EvictionTest, ThePinnedClassRangeOnlyEverGrows) {
+    // A structure that declared itself un-evictable and then found itself
+    // evictable is exactly the failure the declaration exists to prevent, so
+    // lowering the limit is silently refused rather than honoured.
+    store_->SetResidentLimit(100);
+    EXPECT_TRUE(store_->IsPinnedClass(50));
+
+    store_->SetResidentLimit(10);
+    EXPECT_TRUE(store_->IsPinnedClass(50)) << "the limit did not fall";
+
+    store_->SetResidentLimit(200);
+    EXPECT_TRUE(store_->IsPinnedClass(150));
+}
+
+// ---- The pre-existing eviction path learns about pins -------------------
+
+TEST_F(EvictionTest, EvictCleanRefusesAPinnedPageAsItAlreadyRefusesADirtyOne) {
+    const PageId id = MakeCleanResidentPage(std::byte{1});
+    const PageId ids[] = {id};
+
+    // ForRead for the reason above: EvictClean checks dirty *before* pinned,
+    // so a PinnedGet here would report the dirty refusal and never reach the
+    // one this test is about.
+    auto ref = store_->PinnedGetForRead(id);
+    ASSERT_TRUE(ref.ok());
+    Status refused = store_->EvictClean(ids);
+    EXPECT_FALSE(refused.ok());
+    EXPECT_EQ(refused.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(refused.message().find("pinned"), std::string::npos) << refused.message();
+
+    ref.value().Release();
+    EXPECT_TRUE(store_->EvictClean(ids).ok());
+}
+
+TEST_F(EvictionTest, AnEmptyOrZeroBudgetSweepIsAWellDefinedNoOp) {
+    EXPECT_EQ(store_->EvictColdFrames(0), 0u);
+    const PageId id = MakeCleanResidentPage(std::byte{1});
+    EXPECT_EQ(store_->EvictColdFrames(0), 0u);
+    EXPECT_TRUE(store_->IsAllocated(id));
+}
+
+}  // namespace
+}  // namespace kds::storage

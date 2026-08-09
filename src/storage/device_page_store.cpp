@@ -191,6 +191,9 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
         // Never clears the flag: a frame already dirty from an earlier
         // mutation stays dirty however many readers touch it afterwards.
         if (mark_dirty) it->second.dirty = true;
+        // §3.1-2: a saturating bump on every hit, including a read -
+        // "recently used" is about access, not about mutation.
+        if (it->second.usage < kClockUsageCap) ++it->second.usage;
         return std::span<std::byte, kPageSize>(*it->second.bytes);
     }
 
@@ -475,10 +478,23 @@ Status DevicePageStore::EvictClean(std::span<const PageId> page_ids) {
     // exactly as it was rather than half-evicted.
     for (const PageId id : page_ids) {
         auto it = frames_.find(id);
-        if (it != frames_.end() && it->second.dirty) {
+        if (it == frames_.end()) continue;
+        if (it->second.dirty) {
             return Status::InvalidArgument(
                 "DevicePageStore: page " + std::to_string(id) +
                 " is dirty; evicting it would discard a write");
+        }
+        // A pinned frame is one somebody holds a live `PageRef` into, so
+        // dropping it here is the use-after-free the handle exists to
+        // prevent (docs/workplan-eviction.md EV01). This path predates pins
+        // and its callers - a peer dropping stale catalog pages - never hold
+        // one, so the check guards against a future caller rather than
+        // against normal operation, exactly as the dirty check above does.
+        if (it->second.pins != 0) {
+            return Status::InvalidArgument(
+                "DevicePageStore: page " + std::to_string(id) + " is pinned by " +
+                std::to_string(it->second.pins) +
+                " reference(s); evicting it would dangle them");
         }
     }
     for (const PageId id : page_ids) {
@@ -541,6 +557,173 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
         }
     }
     return s;
+}
+
+
+
+// ---- Frame reclamation (docs/workplan-eviction.md EV01-EV02) -------------
+
+DevicePageStore::PageRef& DevicePageStore::PageRef::operator=(PageRef&& other) noexcept {
+    if (this != &other) {
+        Release();
+        store_ = other.store_;
+        page_id_ = other.page_id_;
+        data_ = other.data_;
+        // Emptied, not just copied from: the pin transfers, so the source
+        // must not drop it on destruction.
+        other.store_ = nullptr;
+        other.page_id_ = kInvalidPageId;
+        other.data_ = nullptr;
+    }
+    return *this;
+}
+
+DevicePageStore::PageRef::~PageRef() { Release(); }
+
+void DevicePageStore::PageRef::Release() noexcept {
+    if (store_ == nullptr) return;
+    store_->UnpinFrame(page_id_);
+    store_ = nullptr;
+    page_id_ = kInvalidPageId;
+    data_ = nullptr;
+}
+
+void DevicePageStore::PageRef::MarkDirty() noexcept {
+    if (store_ != nullptr) store_->MarkFrameDirty(page_id_);
+}
+
+void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
+    auto it = frames_.find(page_id);
+    if (it == frames_.end()) return;
+    // Saturating rather than wrapping. An unpin with no pin is a defect in
+    // the handle, not in the caller, and the two failure modes are not
+    // symmetric: a floor leaves a frame resident forever (a leak, visible in
+    // pinned_frames()), where an underflow makes it evictable while somebody
+    // still holds it.
+    if (it->second.pins != 0) --it->second.pins;
+}
+
+void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
+    auto it = frames_.find(page_id);
+    if (it != frames_.end()) it->second.dirty = true;
+}
+
+StatusOr<DevicePageStore::PageRef> DevicePageStore::PinnedGet(PageId page_id) {
+    auto bytes = ResidentBytes(page_id, /*mark_dirty=*/true);
+    if (!bytes.ok()) return bytes.status();
+    // The frame is resident because ResidentBytes just made it so, and the
+    // pin is taken before anything can run between the two.
+    ++frames_.find(page_id)->second.pins;
+    return PageRef(this, page_id, bytes.value());
+}
+
+StatusOr<DevicePageStore::PageRef> DevicePageStore::PinnedGetForRead(PageId page_id) {
+    auto bytes = ResidentBytes(page_id, /*mark_dirty=*/false);
+    if (!bytes.ok()) return bytes.status();
+    ++frames_.find(page_id)->second.pins;
+    return PageRef(this, page_id, bytes.value());
+}
+
+bool DevicePageStore::IsPinnedClass(PageId page_id) const noexcept {
+    // Id range rather than page kind, for the reason the declaration gives:
+    // the fixed catalog pages are formatted kHeap like any user relation, so
+    // the kind cannot tell them apart and their reserved ids can.
+    return page_id < first_evictable_page_id_;
+}
+
+std::vector<PageId> DevicePageStore::TakeDirtyEvictionQueue() {
+    std::vector<PageId> out;
+    out.swap(dirty_eviction_queue_);
+    return out;
+}
+
+void DevicePageStore::SetResidentLimit(PageId first_evictable_page_id) noexcept {
+    // Additive only - see the declaration. A limit that could fall would let
+    // a structure be declared un-evictable and then be evicted.
+    if (first_evictable_page_id > first_evictable_page_id_) {
+        first_evictable_page_id_ = first_evictable_page_id;
+    }
+}
+
+std::size_t DevicePageStore::pinned_frames() const noexcept {
+    std::size_t pinned = 0;
+    for (const auto& [id, frame] : frames_) {
+        if (frame.pins != 0) ++pinned;
+    }
+    return pinned;
+}
+
+std::size_t DevicePageStore::EvictColdFrames(std::size_t budget) {
+    if (budget == 0 || frames_.empty()) return 0;
+
+    // The sweep order. `frames_` is an unordered_map, so "where the hand is"
+    // cannot be an iterator - a rehash would invalidate it - and is instead a
+    // page id the pass re-finds by ordering. That costs a sort per sweep and
+    // is why page.md §16-7 has the frame table becoming open-addressed; it is
+    // deliberately not fixed here, because a sweep nothing calls yet (EV7) is
+    // not where to spend that change.
+    std::vector<PageId> order;
+    order.reserve(frames_.size());
+    for (const auto& [id, frame] : frames_) order.push_back(id);
+    std::sort(order.begin(), order.end());
+
+    // Resume where the last pass stopped, so the hand advances around the
+    // whole set rather than re-punishing the low ids every time.
+    auto start = std::lower_bound(order.begin(), order.end(), clock_hand_);
+    const std::size_t first = static_cast<std::size_t>(start - order.begin());
+
+    std::size_t reclaimed = 0;
+    // Enough laps for the highest usage counter to be walked down to zero
+    // and then collected. Nothing bumps a counter while the sweep runs, so
+    // one more lap than the cap is exactly sufficient and no rotation past
+    // that can reclaim anything a previous one did not.
+    const std::size_t steps = order.size() * (kClockUsageCap + 1);
+    for (std::size_t step = 0; step < steps && reclaimed < budget; ++step) {
+        const PageId id = order[(first + step) % order.size()];
+        auto it = frames_.find(id);
+        if (it == frames_.end()) continue;  // reclaimed earlier in this pass
+
+        Frame& frame = it->second;
+
+        // The three refusals, in the order they are cheapest to test. Each
+        // is a guarantee something else depends on, not an optimization:
+        //   pinned    - a live PageRef points into these bytes (EV01);
+        //   resident  - the class is never a candidate at any pressure (EV3),
+        //               which is what AST04's Bound Cabin rests on;
+        //   dirty     - the flush it needs is WAL-gated and is EV04's, so
+        //               dropping it here would lose a write (EV02's scope).
+        if (frame.pins != 0) continue;
+        if (IsPinnedClass(id)) continue;
+
+        // §3.2's branches, in the specified order: a positive usage counter
+        // is decremented and the frame survives this rotation.
+        if (frame.usage != 0) {
+            --frame.usage;
+            continue;
+        }
+
+        // Usage zero and dirty: queued for writeback, **not** reclaimed
+        // (§3.2's fourth branch, §4's queue). Reclaiming it would lose the
+        // write, and the writeback that would clean it is EVT03's.
+        if (frame.dirty) {
+            if (std::find(dirty_eviction_queue_.begin(), dirty_eviction_queue_.end(), id) ==
+                dirty_eviction_queue_.end()) {
+                dirty_eviction_queue_.push_back(id);
+            }
+            continue;
+        }
+
+        frames_.erase(it);
+        ++reclaimed;
+        clock_hand_ = id + 1;
+    }
+
+    if (reclaimed != 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("pagestore", "clock reclaimed " + std::to_string(reclaimed) +
+                                     " frame(s) on core " + std::to_string(core_id_) + ", " +
+                                     std::to_string(frames_.size()) + " resident");
+    }
+    return reclaimed;
 }
 
 }  // namespace kds::storage

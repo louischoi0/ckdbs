@@ -70,6 +70,7 @@ add_executable(kds_tests
     in_memory_page_store_test.cpp
     free_map_test.cpp
     device_page_store_test.cpp
+    eviction_test.cpp
     catalog_cache_test.cpp
     catalog_test.cpp
     insert_wal_test.cpp
