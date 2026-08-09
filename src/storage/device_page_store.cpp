@@ -1,6 +1,7 @@
 #include "kds/storage/device_page_store.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -395,46 +396,137 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids) {
     return Status::OK();
 }
 
+StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids) {
+    // Ascending and unique: id order is file order (page.md section 13),
+    // and the queue this drains may name a page twice across sweeps.
+    std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
+    std::sort(ordered.begin(), ordered.end());
+    ordered.erase(std::unique(ordered.begin(), ordered.end()), ordered.end());
+
+    // (1) durable: one gate call for the batch maximum, before any byte
+    // moves - the whole of flush-before-evict.
+    if (Status s = AwaitWalGate(ordered); !s.ok()) return s;
+
+    std::size_t written = 0;
+    std::vector<std::byte> scratch;
+    for (std::size_t i = 0; i < ordered.size();) {
+        auto it = frames_.find(ordered[i]);
+        if (it == frames_.end() || !it->second.dirty) {
+            ++i;  // evicted, or already written by someone else: not ours
+            continue;
+        }
+
+        // Extend the run while the next ids are consecutive, resident and
+        // dirty - the shape one WritePageRun can take.
+        std::size_t run = 1;
+        while (run < kWritebackRunPages && i + run < ordered.size() &&
+               ordered[i + run] == ordered[i] + run) {
+            auto next = frames_.find(ordered[i + run]);
+            if (next == frames_.end() || !next->second.dirty) break;
+            ++run;
+        }
+
+        // (2) checksum, the last thing that touches a page before it goes
+        // out (page.md section 8) - skipped for a headerless page, which
+        // has no field to put one in.
+        for (std::size_t k = 0; k < run; ++k) {
+            auto& frame = frames_.find(ordered[i + k])->second;
+            StampIfHeadered(ordered[i + k], std::span<std::byte, kPageSize>(*frame.bytes));
+        }
+
+        // (3) write: one device call for a run, per page otherwise. The
+        // run copies into scratch because frames are separate heap
+        // allocations - bounded by kWritebackRunPages, and best-effort by
+        // spec §4: a device without a real scatter write still sees the
+        // pages land in file order.
+        Status wrote = Status::OK();
+        if (run > 1) {
+            scratch.resize(run * kPageSize);
+            for (std::size_t k = 0; k < run; ++k) {
+                const auto& frame = frames_.find(ordered[i + k])->second;
+                std::memcpy(scratch.data() + k * kPageSize, frame.bytes->data(), kPageSize);
+            }
+            wrote = device_.WritePageRun(ordered[i], static_cast<std::uint32_t>(run),
+                                         std::span<const std::byte>(scratch));
+        } else {
+            const auto& frame = frames_.find(ordered[i])->second;
+            wrote = device_.WritePage(ordered[i],
+                                      std::span<const std::byte, kPageSize>(*frame.bytes));
+        }
+        if (!wrote.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "write failed for page " +
+                                             std::to_string(ordered[i]) + " (run of " +
+                                             std::to_string(run) + "): " + wrote.message());
+            }
+            return wrote;
+        }
+
+        // (4) clean, only now: a failure above leaves the frame dirty and
+        // its recLSN intact, so the next writeback retries it.
+        for (std::size_t k = 0; k < run; ++k) {
+            auto& frame = frames_.find(ordered[i + k])->second;
+            frame.dirty = false;
+            frame.rec_lsn = wal::kNoLsn;  // clean: nothing to replay into it
+            if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+                log_->Trace("pagestore", "wrote page=" + std::to_string(ordered[i + k]));
+            }
+        }
+        written += run;
+        i += run;
+    }
+    return written;
+}
+
+StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue() {
+    const std::vector<PageId> queued = TakeDirtyEvictionQueue();
+    if (queued.empty()) return std::size_t{0};
+    auto written = WriteBack(queued);
+    if (written.ok() && written.value() > 0 && log_ != nullptr &&
+        log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("pagestore", "writeback drained " + std::to_string(written.value()) +
+                                     " queued dirty page(s)");
+    }
+    return written;
+}
+
+std::size_t DevicePageStore::MaintainFreeReserve(std::size_t pool_frames,
+                                                 std::size_t watermark) {
+    std::size_t reclaimed_total = 0;
+    for (;;) {
+        const std::size_t resident = frames_.size();
+        const std::size_t free_frames = pool_frames > resident ? pool_frames - resident : 0;
+        if (free_frames >= watermark) break;
+
+        const std::size_t reclaimed = EvictColdFrames(watermark - free_frames);
+        reclaimed_total += reclaimed;
+
+        // Queued dirt is written clean here so the *next* rotation can
+        // reclaim it - §4's "reclaim happens on the sweep's next visit".
+        // A drain failure ends the loop rather than the world: the pages
+        // stay dirty and queued facts are re-derived by the next sweep.
+        auto drained = DrainDirtyEvictionQueue();
+        const std::size_t cleaned = drained.ok() ? drained.value() : 0;
+
+        if (reclaimed == 0 && cleaned == 0) break;  // a full rotation yielded nothing
+    }
+    return reclaimed_total;
+}
+
 Status DevicePageStore::Flush() {
-    // Merging adjacent ids into one WritePageRun needs the frames to be
-    // contiguous in memory - the preallocated slab of page.md section 9,
-    // which arrives with the buffer pool, not here.
     std::vector<PageId> dirty;
     dirty.reserve(frames_.size());
     for (const auto& [page_id, frame] : frames_) {
         if (frame.dirty) dirty.push_back(page_id);
     }
-    std::sort(dirty.begin(), dirty.end());
 
-    if (Status s = AwaitWalGate(dirty); !s.ok()) return s;
-
-    for (const PageId page_id : dirty) {
-        auto it = frames_.find(page_id);
-
-        // The last thing that touches a page before it goes out (page.md
-        // section 8): every other mutation has already happened. Skipped
-        // for a headerless page, which has no field to put it in.
-        StampIfHeadered(page_id, std::span<std::byte, kPageSize>(*it->second.bytes));
-
-        if (Status s = device_.WritePage(page_id, std::span<const std::byte, kPageSize>(
-                                                      *it->second.bytes));
-            !s.ok()) {
-            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                log_->Error("pagestore", "write failed for page " + std::to_string(page_id) +
-                                             ": " + s.message());
-            }
-            return s;
-        }
-        it->second.dirty = false;
-        it->second.rec_lsn = wal::kNoLsn;  // clean: nothing to replay into it
-        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
-            log_->Trace("pagestore", "wrote page=" + std::to_string(page_id));
-        }
-    }
+    auto written = WriteBack(dirty);
+    if (!written.ok()) return written.status();
 
     if (Status s = FlushMaps(); !s.ok()) return s;
-    if (!dirty.empty() && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("pagestore", "flushed " + std::to_string(dirty.size()) + " dirty page(s)");
+    if (written.value() > 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("pagestore",
+                    "flushed " + std::to_string(written.value()) + " dirty page(s)");
     }
     return Status::OK();
 }
@@ -508,35 +600,11 @@ Status DevicePageStore::EvictClean(std::span<const PageId> page_ids) {
 }
 
 Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
-    std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
-    std::sort(ordered.begin(), ordered.end());
-
-    if (Status s = AwaitWalGate(ordered); !s.ok()) return s;
-
-    bool wrote_any = false;
-    for (const PageId page_id : ordered) {
-        auto it = frames_.find(page_id);
-        if (it == frames_.end() || !it->second.dirty) {
-            continue;  // evicted, or already flushed by someone else
-        }
-
-        StampIfHeadered(page_id, std::span<std::byte, kPageSize>(*it->second.bytes));
-        if (Status s = device_.WritePage(
-                page_id, std::span<const std::byte, kPageSize>(*it->second.bytes));
-            !s.ok()) {
-            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                log_->Error("pagestore", "checkpoint write failed for page " +
-                                             std::to_string(page_id) + ": " + s.message());
-            }
-            return s;
-        }
-        it->second.dirty = false;
-        it->second.rec_lsn = wal::kNoLsn;
-        wrote_any = true;
-        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
-            log_->Trace("pagestore", "wrote page=" + std::to_string(page_id) + " (checkpoint)");
-        }
-    }
+    // The checkpointer's route through the one writeback primitive - §4's
+    // "consumer of the machinery, not a parallel implementation".
+    auto written = WriteBack(page_ids);
+    if (!written.ok()) return written.status();
+    bool wrote_any = written.value() > 0;
 
     // The maps go out with them, and after them: a page is only reachable
     // once the map says its id is allocated, so publishing the map first
@@ -552,7 +620,7 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
         if (!s.ok() && log_->enabled(LogLevel::kError)) {
             log_->Error("pagestore", "checkpoint sync failed: " + s.message());
         } else if (s.ok() && log_->enabled(LogLevel::kDebug)) {
-            log_->Debug("pagestore", "checkpoint wrote " + std::to_string(ordered.size()) +
+            log_->Debug("pagestore", "checkpoint wrote " + std::to_string(written.value()) +
                                          " named page(s) and synced");
         }
     }

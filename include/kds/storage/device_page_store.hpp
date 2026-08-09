@@ -152,6 +152,51 @@ public:
     Status Flush();
     Status Sync() override;
 
+    // ---- The writeback primitive (docs/spec-eviction.md §4, EVT03) ------
+    //
+    // Durable → checksum → write → clean, for exactly these ids, skipping
+    // any that are non-resident or already clean. **The single code path**
+    // §4 requires: Flush(), FlushPages() (the checkpointer's route) and
+    // the dirty-queue drain all run through here, so the checkpointer is a
+    // consumer of the writeback machinery rather than a parallel
+    // implementation. Neither syncs the device nor touches the maps - the
+    // callers own those, because when they happen is what distinguishes a
+    // checkpoint from a background drain.
+    //
+    // Ascending contiguous runs are coalesced into one WritePageRun of at
+    // most kWritebackRunPages, through a bounded copy into scratch -
+    // best-effort, never a correctness property (§4). The copy exists
+    // because frames are separate heap allocations; the zero-copy run
+    // arrives with page.md §9's preallocated slab, not here.
+    //
+    // Returns how many pages it wrote.
+    StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids);
+
+    // Pages one coalesced run may span, and so the scratch bound: 8 pages
+    // = 64 KiB, chosen as the largest single write the background task
+    // should hold the core for under run-to-completion. `[PROPOSED]` -
+    // nothing may depend on the number.
+    static constexpr std::uint32_t kWritebackRunPages = 8;
+
+    // Drains §4's dirty queue through WriteBack(): the sweep found these
+    // dirty at usage zero and queued them instead of reclaiming (§3.2's
+    // fourth branch); once written clean here, the sweep's next visit may
+    // reclaim them - "keeping the page cached until frames are actually
+    // needed", exactly as §4 words it. Returns how many it wrote.
+    StatusOr<std::size_t> DrainDirtyEvictionQueue();
+
+    // §4's watermark loop: sweep rotations (each followed by a drain, so
+    // queued dirt becomes reclaimable on the next lap) until the free
+    // reserve - `pool_frames` minus resident frames - meets `watermark`,
+    // or a full rotation reclaims nothing and drains nothing. Returns
+    // frames reclaimed.
+    //
+    // The pool size and watermark are **parameters, not fields**: no
+    // bounded pool exists yet (EVT02's unbuilt half), so this layer owns
+    // the loop's shape and EVT02/EVT04 will own its numbers. Nothing calls
+    // it in production until then - the same stance the sweep itself takes.
+    std::size_t MaintainFreeReserve(std::size_t pool_frames, std::size_t watermark);
+
     // Installs the WAL-before-data gate described above. Null (the
     // default) disables it. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
