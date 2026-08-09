@@ -127,6 +127,14 @@ std::string ErrorReply(const Status& status) {
     return "ERR " + status.message();
 }
 
+// Whether a write is checked against a Bound Cabin - which is AST07, and
+// does not exist. AST06 builds and publishes the structure, so a root in
+// the catalog no longer implies enforcement, and deriving `enforcing` from
+// the root alone would report exactly the silent non-enforcement the CREATE
+// reply's comment forbids. One constant, two readers (the CREATE reply and
+// SHOW ASSERTIONS), flipped by the task that adds the check.
+constexpr bool kWritePathEnforcesAssertions = false;
+
 sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* session,
                                              DispatchOutcome* out) {
     // Today this never suspends: every statement runs on the core that owns
@@ -1109,10 +1117,11 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     const auto& stmt = std::get<parser::AssertionStmt>(parsed.value());
 
     if (stmt.drop) {
-        auto id = exec::DropAssertion(catalog_, page_store_, stmt);
+        auto id = exec::DropAssertion(catalog_, page_store_, stmt, wal_);
         if (!id.ok()) {
-            return {"ERR " + id.status().message(), false};
+            return {ErrorReply(id.status()), false};
         }
+        bound_cabins_.erase(id.value());
         std::ostringstream os;
         os << "DROPPED ASSERTION name=" << stmt.name << " assertion_id=" << id.value();
         if (logging(LogLevel::kInfo)) {
@@ -1121,23 +1130,45 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
         return {os.str(), false};
     }
 
-    auto created = exec::CreateAssertion(catalog_, page_store_, stmt);
-    if (!created.ok()) {
-        return {"ERR " + created.status().message(), false};
+    // The visibility the build's scan reads under: latest settled state,
+    // minted here exactly as a FK check's view is. A dispatcher with no
+    // manager reads everything, which is the pre-MVCC engine and what every
+    // socket-free test runs on.
+    txn::ReadView check_view = txn::ReadView::Everything();
+    if (txn_ != nullptr) {
+        auto minted = txn_->MintReadView(txn::kNoTrxId);
+        if (!minted.ok()) return {ErrorReply(minted.status()), false};
+        check_view = minted.value();
     }
 
-    // **`enforcing=0` is the whole point of this reply.** AST03 records a
-    // declaration; the structure that would enforce it is AST04's and the
-    // write-path check is AST07's. A constraint that silently does not run is
-    // not a degraded mode, so the statement that creates one says which it
-    // is, in a field a client can read rather than in a comment.
+    // Through ErrorReply, not a bare "ERR ": the build can refuse with the
+    // two coded spellings - ASSERTION_VIOLATION for data already past the
+    // bound, TXN_CONFLICT for an unsettled relation - and both are
+    // compatibility surfaces a client switches on.
+    auto created = exec::CreateAssertion(catalog_, page_store_, stmt, check_view, wal_);
+    if (!created.ok()) {
+        return {ErrorReply(created.status()), false};
+    }
+    exec::AssertionDdlResult& result = created.value();
+    if (result.cabin.has_value()) {
+        bound_cabins_.insert_or_assign(result.assertion_id, std::move(*result.cabin));
+    }
+
+    // **`enforcing=0` is still the point of this reply.** AST06 built and
+    // published the structure and validated the existing data against the
+    // bound - that is what `cabin_root`, `rows` and `groups` report - but
+    // nothing consults it on a write until AST07, and a constraint that
+    // silently does not run is not a degraded mode. One constant, flipped by
+    // AST07, decides the field here and in SHOW ASSERTIONS.
     std::ostringstream os;
     os << "CREATED ASSERTION name=" << stmt.name
-       << " assertion_id=" << created.value().assertion_id << " on=" << stmt.table_name
-       << " enforcing=0";
+       << " assertion_id=" << result.assertion_id << " on=" << stmt.table_name
+       << " cabin_root=" << result.cabin_root << " rows=" << result.rows_incorporated
+       << " groups=" << result.group_count
+       << " enforcing=" << (kWritePathEnforcesAssertions ? 1 : 0);
     if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "declared assertion '" + stmt.name + "' on '" + stmt.table_name +
-                              "' (not yet enforced)");
+        log_->Info("ddl", "created assertion '" + stmt.name + "' on '" + stmt.table_name +
+                              "' (built, not yet enforced)");
     }
     return {os.str(), false};
 }
@@ -1170,10 +1201,12 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
         }
         if (!named) os << "oid=" << def.target_oid;
 
-        // Reported rather than derived: `cabin_root` is what AST06 will fill
-        // in, so an unset one is the honest statement that nothing enforces
-        // this yet.
-        os << " enforcing=" << (def.cabin_root == kInvalidPageId ? 0 : 1);
+        // A root says the structure was built (AST06); enforcement needs the
+        // write-path check as well, which is AST07's constant above. The two
+        // conditions are deliberately separate, so an assertion declared
+        // before AST06 (rootless) stays 0 even after the flip.
+        os << " enforcing="
+           << ((def.cabin_root != kInvalidPageId && kWritePathEnforcesAssertions) ? 1 : 0);
         os << " def=" << def.source_text;
     }
     return {os.str(), false};

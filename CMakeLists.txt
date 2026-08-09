@@ -96,6 +96,7 @@ add_library(kds
     src/exec/pattern_ddl.cpp
     src/exec/cabin_ddl.cpp
     src/exec/index_ddl.cpp
+    src/exec/assertion_build.cpp
     src/exec/assertion_catalog.cpp
     src/exec/assertion_replay.cpp
     src/exec/assertion_violation.cpp

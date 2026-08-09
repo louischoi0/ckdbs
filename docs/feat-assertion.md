@@ -329,6 +329,17 @@ assertion on a relation.
 
 ### 8.1 CREATE
 
+> **[AMENDED at AST06 (2026-08-09).]** The build runs **synchronously
+> inside the CREATE statement**, not in a background scheduling group: the
+> engine has no suspendable statement path (crosscore.md P4), and the index
+> backfill set the precedent. On a cooperative core this means no write can
+> interleave with the build, so §8.1a's membership protocol is met
+> trivially; it remains the decided correctness story for when the build
+> learns to yield. A row written by a transaction still in flight when the
+> build reads it refuses the CREATE with `TxnConflict`, retryably —
+> counting it and losing the abort would overstate the group forever, and
+> skipping it and seeing the commit would understate it.
+
 1. Create-time validation (§3.1).
 2. Full scan of the target relation on its home core (background-group
    scheduled; cooperative yielding per the scheduler contract).

@@ -8,8 +8,14 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/bound_cabin.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/read_view.hpp"
+
+namespace kds::wal {
+class WalManager;
+}
 
 // `sys.assertions`: the declaration of every group-level constraint on this
 // instance (docs/feat-assertion.md §8.2, workplan AST03).
@@ -124,6 +130,13 @@ StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catal
 // Records a declaration. `source_text` is the whole `CREATE ASSERTION`
 // statement verbatim.
 //
+// `id` is allocated by the caller (`Catalog::AllocateRowId`), **before the
+// build rather than here**, because the builder's `ASSERT_BUILD` records
+// carry it - a record for an id that does not exist yet could never be
+// written first. A build that fails burns the id, which K3 makes free.
+// `cabin_root` is the built chain's root, or `kInvalidPageId` from a caller
+// that built nothing (tests of the row alone).
+//
 // Fails with `AlreadyExists` when the name is taken - the duplicate-name
 // check of §3.1, made here rather than at the parser because it is the
 // catalog's question and this is the door every caller comes through.
@@ -131,11 +144,9 @@ StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catal
 // Fails with `Unsupported` when `source_text` is longer than one var-heap
 // page can hold. The spilled-value size cap is an open decision and this does
 // not settle it: a longer declaration is refused rather than chained.
-//
-// Returns the new assertion's id.
-StatusOr<std::uint64_t> InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
-                                        catalog::Oid target_oid, std::string_view name,
-                                        std::string_view source_text);
+Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std::uint64_t id,
+                       catalog::Oid target_oid, std::string_view name,
+                       std::string_view source_text, PageId cabin_root);
 
 // Removes the assertion named `name`, case-insensitively. `NotFound` if there
 // is none.
@@ -155,29 +166,55 @@ Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
 struct AssertionDdlResult {
     std::uint64_t assertion_id = 0;
     catalog::Oid target_oid = 0;
+    PageId cabin_root = kInvalidPageId;
+    std::size_t rows_incorporated = 0;
+    std::size_t group_count = 0;
+
+    // The directory the build produced, for the caller that owns live
+    // assertion state (the dispatcher's registry). An optional rather than a
+    // value because a moved-from directory held beside a published root
+    // would look exactly like an empty relation's.
+    std::optional<BoundCabin> cabin;
 };
 
-// `CREATE ASSERTION`'s catalog half: §3.1's remaining create-time checks -
-// the ones only the catalog can answer - and then the row.
+// `CREATE ASSERTION`: §3.1's remaining create-time checks - the ones only
+// the catalog can answer - then the AST06 build, then the publish.
 //
 // The parser already refused everything decidable from the text alone (the
 // operator set, the bound, a degenerate predicate, every reserved form), so
-// what is left here is exactly the four questions that need a schema:
-// does the relation exist, does every `GROUP BY` column exist, does the `SUM`
+// the checks here are exactly the four questions that need a schema: does
+// the relation exist, does every `GROUP BY` column exist, does the `SUM`
 // column exist and is it `int64`, and is the name free. Each error carries
 // the byte the parser recorded for that name, which is the only reason those
 // offsets are on the statement at all.
 //
-// **It builds nothing.** No Bound Cabin, no scan, no enforcement: those are
-// AST04, AST06 and AST07. What this ships is a declaration that is recorded,
-// re-readable and droppable - and a caller that reports it as enforcing
-// anything is lying.
+// **The order is validate → build → publish** (§8.1): the full scan runs
+// before the `sys.assertions` row exists, so an assertion is published
+// complete or not at all, and the publish - the row carrying `cabin_root`,
+// plus the catalog version bump - is the single commit point §8.1a
+// requires. A failed build leaves an unreachable page chain, a burned row
+// id, an `ASSERT_DROP` discard marker in the log when one is attached, and
+// **no catalog row** - `index_ddl.cpp`'s precedent.
+//
+// `check_view` is the visibility the scan reads under (latest settled
+// state; `ReadView::Everything()` from a caller with no transaction
+// manager, which is the pre-MVCC engine exactly). `wal` may be null: the
+// build is then unlogged, like every other DDL today.
+//
+// **Publishing does not enforce.** The write-path check is AST07's; a
+// caller that reports `enforcing=1` because a root exists is lying.
 StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
                                              storage::PageStore& store,
-                                             const parser::AssertionStmt& stmt);
+                                             const parser::AssertionStmt& stmt,
+                                             const txn::ReadView& check_view,
+                                             wal::WalManager* wal);
 
-// `DROP ASSERTION`'s catalog half. Returns the dropped assertion's id.
+// `DROP ASSERTION`: the catalog row retired, `ASSERT_DROP` logged when
+// `wal` is attached (before the row goes - WAL before data), and the
+// catalog version bumped. Returns the dropped assertion's id so the caller
+// can evict its live directory; the entry pages are not reclaimed, because
+// page reclamation does not exist.
 StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageStore& store,
-                                      const parser::AssertionStmt& stmt);
+                                      const parser::AssertionStmt& stmt, wal::WalManager* wal);
 
 }  // namespace kds::exec

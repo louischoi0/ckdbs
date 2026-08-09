@@ -116,8 +116,9 @@ TEST_F(AssertionCatalogTest, ADeclarationIsRecordedAndReadBackVerbatim) {
     EXPECT_NE(created.find("CREATED ASSERTION name=user_product_purchase_limit"),
               std::string::npos)
         << created;
-    // The field that says this constrains nothing yet. AST04 builds the
-    // structure; AST06 publishes its root and flips this.
+    // The field that says this constrains nothing yet. AST06 builds and
+    // publishes the structure - `cabin_root` below is real now - but the
+    // write-path check is AST07's, and only it flips this.
     EXPECT_NE(created.find("enforcing=0"), std::string::npos) << created;
 
     auto defs = ListAssertions(catalog(), store_);
@@ -129,7 +130,9 @@ TEST_F(AssertionCatalogTest, ADeclarationIsRecordedAndReadBackVerbatim) {
     // The canon, byte for byte. Everything the parser derived is recoverable
     // from this and is deliberately stored nowhere else.
     EXPECT_EQ(def.source_text, sql);
-    EXPECT_EQ(def.cabin_root, kInvalidPageId);
+    // AST06: the publish carries the built chain's root. An unset root now
+    // means a failed or absent build, not a pending task.
+    EXPECT_NE(def.cabin_root, kInvalidPageId);
     EXPECT_EQ(def.flags, 0u);
     EXPECT_GT(def.id, 0u);
 

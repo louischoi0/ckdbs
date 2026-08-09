@@ -198,7 +198,66 @@ tested from AST04.
 
 ---
 
-## AST06 — CREATE-time builder and cutover
+## AST06 — CREATE-time builder and cutover  **[BUILT 2026-08-09]**
+
+**Built.** `exec::BuildBoundCabin()` (`include/kds/exec/assertion_build.hpp`)
+- the full scan, the entry-page chain, the group directory, the mid-scan
+violation check - orchestrated by the restructured `exec::CreateAssertion()`:
+validate → allocate the id → build → publish, with the publish (the
+`sys.assertions` row now carrying the real `cabin_root`) as the single
+commit point. The dispatcher owns the live directories
+(`CommandDispatcher::bound_cabins_`, keyed by assertion id) - the reader
+AST07's admission check will consult - and `DROP ASSERTION` now emits
+`ASSERT_DROP` and evicts its directory. `tests/assertion_build_test.cpp`
+covers the acceptance through the statement surface, and its WAL fixture
+proves the strongest AST05+AST06 joint claim: a directory folded from
+nothing but the emitted stream (PAGE_INIT → ASSERT_BUILD, via
+`ReplayAssertionRecord`) lands on the aggregates the live build reported,
+with `header == Σ(entries)` over the replayed pages.
+
+**Deviations and decisions, named.**
+
+*The build is synchronous inside the CREATE statement* - not backgrounded,
+not yielding. The engine has no suspendable statement path (`crosscore.md`
+P4's largest remaining change), and `index_ddl.cpp`'s backfill set the
+precedent. Consequence: no write can interleave, so §8.1a's membership
+protocol is met trivially and stays the recorded correctness story for the
+day the build learns to yield. The "interleaved writes land exactly once"
+acceptance is therefore structural; what is tested instead is the in-flight
+case below.
+
+*Visibility is latest settled state, and an unsettled relation refuses.*
+The scan judges by `txn::CheckVisibility` (the FK checks' predicate); a row
+whose writer or deleter is in flight fails the CREATE with `kTxnConflict`,
+retryable - counting it and losing the abort would overstate the group
+forever (nothing prunes), skipping it and seeing the commit would
+understate it, which is the one wrong answer. Delete-marked rows are
+excluded; a committed DELETE's row does not count.
+
+*A failed build leaves an unreachable page chain, a burned row id, an
+`ASSERT_DROP` discard marker when a WAL is attached, and no catalog row* -
+the backfill's precedent, since page reclamation does not exist. The id is
+allocated **before** the build because `ASSERT_BUILD` records carry it; K3
+makes a burned id free.
+
+*`enforcing` stays 0, now by an explicit conjunction.* SHOW ASSERTIONS used
+to derive it from `cabin_root` alone, which AST06 turns into a lie - the
+structure exists, nothing checks a write. `kWritePathEnforcesAssertions`
+(command_dispatcher.cpp) is the second conjunct, false until AST07 flips
+it; the CREATE reply reports `cabin_root`/`rows`/`groups` and still says
+`enforcing=0`.
+
+*No `BumpVersion()` at publish.* It is private on purpose, and nothing
+cached is derived from a `sys.assertions` row - the same recorded-no-bump
+pattern two catalog mutators already use. AST07, whose check steps make a
+plan a function of the assertion set, owns making the publish invalidate
+plans and owns choosing the door.
+
+*The WAL half*: `PAGE_INIT` (the payload's page_type byte says
+`kCabinBound`) per allocated page, a full page image of the old tail on a
+chain link edit - no record type describes a link edit, the heap chain's
+exact reason - and one `ASSERT_BUILD` per entry, stamped through
+`StampPageLsn` so the store's gate holds flushes behind the log.
 
 **Scope.** Full-scan build per spec §8.1 on the relation's home core,
 background scheduling group, cooperative yielding.
