@@ -97,6 +97,7 @@ add_library(kds
     src/exec/cabin_ddl.cpp
     src/exec/index_ddl.cpp
     src/exec/assertion_catalog.cpp
+    src/exec/assertion_violation.cpp
     src/exec/bound_cabin.cpp
     src/exec/index_maintain.cpp
     src/sched/clock.cpp

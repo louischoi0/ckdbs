@@ -22,7 +22,7 @@ const std::vector<StatusCode>& AllErrorCodes() {
         StatusCode::kAlreadyExists,   StatusCode::kOutOfRange,  StatusCode::kCorruption,
         StatusCode::kIoError,         StatusCode::kTxnConflict, StatusCode::kUnsupported,
         StatusCode::kCardinalityViolation, StatusCode::kResourceExhausted,
-        StatusCode::kFkViolation,
+        StatusCode::kFkViolation,          StatusCode::kAssertionViolation,
     };
     return codes;
 }
@@ -43,6 +43,8 @@ Status Make(StatusCode code) {
         case StatusCode::kResourceExhausted:
             return Status::ResourceExhausted("m");
         case StatusCode::kFkViolation:     return Status::FkViolation("m");
+        case StatusCode::kAssertionViolation:
+            return Status::AssertionViolation("m");
         case StatusCode::kOk:              return Status::OK();
     }
     // Unreachable for a code in AllErrorCodes(); a new enumerator lands
@@ -121,6 +123,19 @@ TEST(StatusTest, ResourceExhaustedIsNotRetryable) {
     EXPECT_EQ(s.code(), StatusCode::kResourceExhausted);
     EXPECT_FALSE(s.retryable());
     EXPECT_NE(s.message().find("row-touch budget"), std::string::npos);
+}
+
+TEST(StatusTest, AssertionViolationIsNotRetryable) {
+    // docs/feat-assertion.md §4.4. The one race a retry could win - a
+    // refusal caused by a reservation that later aborts - is §4.3's bounded
+    // false rejection, accepted rather than encoded: granting the bit would
+    // make every client spin on a group that is genuinely full. The enum
+    // comment carries the full argument; this pins its conclusion.
+    const Status s = Status::AssertionViolation(
+        "assertion \"limit\" group (id=1): COUNT(*) would exceed bound 5");
+    EXPECT_EQ(s.code(), StatusCode::kAssertionViolation);
+    EXPECT_FALSE(s.retryable());
+    EXPECT_NE(s.message().find("would exceed bound 5"), std::string::npos);
 }
 
 TEST(StatusOrTest, HoldsAValueOrAStatusNeverBoth) {

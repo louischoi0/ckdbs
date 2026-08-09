@@ -115,6 +115,15 @@ std::string ErrorReply(const Status& status) {
     if (status.code() == StatusCode::kFkViolation) {
         return "ERR FK_VIOLATION retryable=0 " + status.message();
     }
+    // The third constraint spelling (docs/feat-assertion.md §4.4, AS9),
+    // shaped exactly like FK_VIOLATION and for its reason. Nothing produces
+    // this Status until AST07 compiles the admission check into the write
+    // paths; the spelling lands first because it is a compatibility surface,
+    // and a client written against it must not see the message arrive as a
+    // bare "ERR ..." in the meantime.
+    if (status.code() == StatusCode::kAssertionViolation) {
+        return "ERR ASSERTION_VIOLATION retryable=0 " + status.message();
+    }
     return "ERR " + status.message();
 }
 

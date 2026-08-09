@@ -147,6 +147,15 @@ struct DispatchOutcome {
     wal::Lsn pending_lsn = wal::kNoLsn;
 };
 
+// The one spelling of an error reply on the newline protocol (docs/txn.md
+// §5, docs/protocol.md §11): `ERR <TOKEN> retryable=<b> <message>` for the
+// codes a client library switches on - TXN_CONFLICT, FK_VIOLATION,
+// ASSERTION_VIOLATION - and `ERR <message>` for everything else. Every
+// dispatcher path reports through it, which is what keeps the shape from
+// drifting between them; declared here so the spellings, a compatibility
+// surface, can be pinned by a test that owns no socket and no dispatcher.
+std::string ErrorReply(const Status& status);
+
 // Where a tuple lives, as a point lookup reports it. Local to the
 // dispatcher because it is the shape of an answer to "skip the scan and
 // look here", not a storage-layer concept.

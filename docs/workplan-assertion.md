@@ -220,30 +220,44 @@ isolation checker. **[S-3 dependency GATED as in testing-workplan.]**
 
 ---
 
-## AST08 — Error semantics: `AssertionViolation`
+## AST08 — Error semantics: `AssertionViolation`  **[BUILT 2026-08-09]**
 
-**Status (2026-08-08): NOT STARTED — selected as the next unblocked task, then the
-agent's budget ran out before any code. Tree untouched, no baseline run observed.**
-Selection reasoning, so the next agent spends nothing re-deriving it: AST04 is
-blocked on the frame-reclamation Open Decision; AST05→AST06→AST07→AST10 chain
-behind it; AST09's acceptance needs AST07's scenarios. AST08 is the dependency
-graph's only remaining unblocked item. Notes for the implementer:
-- Follow the `kFkViolation` precedent (status code, non-retryable, `ERR ... retryable=0`
-  wire spelling on the newline protocol). KWP has no caller yet — the "KWP error
-  frame / KDS Studio" deliverable cannot be done and should be recorded as deferred,
-  not faked.
-- Message format is spec §4.4 / AS9:
-  `assertion "<name>" group (<col>=<val>, ...): <AGG> would exceed bound <N>`.
-- AS9 says the violation is a **statement error (transaction survives)**. That
-  conflicts with the engine's per-transaction failure atomicity (a failing statement
-  inside an explicit txn sets the failed-txn flag — see txn docs). Resolve by reading
-  how AG3's SUM-overflow statement error behaves today and match it; if they truly
-  conflict, that is an operator question, not a silent pick.
-- Group-key rendering must go through the existing `FormatValue(type_val, value)`
-  two-argument form (single-argument is deleted, deliberately).
-- Nothing enforces yet (AST07), so the code + a formatting helper + golden-message
-  tests are the shippable unit; the "leaves transaction open" test needs a caller
-  and may have to be a unit test of the Status path only.
+**Built.** `StatusCode::kAssertionViolation` + `Status::AssertionViolation()`
+(base/status.hpp, non-retryable — the enum comment carries the argument,
+including why §4.3's bounded false rejection deliberately does not earn the
+retryable bit); the newline-protocol spelling
+`ERR ASSERTION_VIOLATION retryable=0 <msg>` in `server::ErrorReply`, which is
+now declared in `command_dispatcher.hpp` so all three constraint spellings are
+pinnable by a socket-free test; and `exec::AssertionViolationMessage()`
+(`include/kds/exec/assertion_violation.hpp`), the one place §4.4's format
+lives. Golden tests in `tests/assertion_violation_test.cpp` compare whole
+strings (the spec's own example byte for byte, SUM naming its column, a
+varchar key, a DATE key rendering as a date through the two-argument
+`FormatValue`), and `status_test.cpp`'s every-code guards cover the new code.
+
+**One decision made, as the format allowed.** `<N>` in the message is the
+**enforced ceiling** (`AssertionStmt::enforced_max()`), not the declared
+literal: a `COUNT(*) < 5` refusal fires when the count would reach 5, and
+"would exceed bound 5" would then be literally false. AS11's truthfulness
+rule, applied to the error surface; a test pins it.
+
+**Deferred, recorded rather than faked.** The KWP error frame and KDS Studio
+display: KWP has no caller, and `wire::ErrorCategory` gains assertion's entry
+with the P12 error registry **beside `kFkViolation`'s, which is also still
+absent** — the FK precedent this follows.
+
+**The AS9 conflict is real and is AST07's to decide, with the facts now
+gathered.** AG3's SUM overflow is a *read-path* error (a SELECT fold) and
+reads never poison — `Session::Poison()` has exactly one caller,
+`EndWrite()`, so *every* failing write statement inside an explicit
+transaction poisons the session, `kFkViolation` included. An assertion check
+lives on the write path, so AS9's "the transaction remains open and usable"
+cannot hold as written unless AST07 special-cases the violation before
+`EndWrite`'s poison — which would make an assertion refusal the first write
+failure that does not poison, a per-transaction-atomicity carve-out the txn
+docs would have to own. Nothing in AST08's surface encodes either answer;
+the acceptance line "statement error leaves transaction open" transfers to
+AST07 with this question.
 
 **Scope.** Status catalog addition per spec §4.4 (D9 error-code coherence).
 

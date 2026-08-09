@@ -170,6 +170,18 @@ A violation aborts the **statement only**. The transaction remains open and
 usable. Status: `AssertionViolation`, message including the assertion name
 and the rendered group key, e.g.:
 
+> **[CONFLICT, flagged at AST08 (2026-08-09), decided at AST07.]** "The
+> transaction remains open and usable" contradicts the engine's
+> per-transaction failure atomicity (docs/txn.md §6): every failing write
+> statement inside an explicit transaction poisons the session —
+> `Session::Poison()`'s only caller is `EndWrite()` — and `FK_VIOLATION`
+> already behaves that way. Honouring AS9 as written would make an assertion
+> refusal the first write failure that does not poison, a carve-out the txn
+> docs would have to own; matching the engine means amending this sentence.
+> AST07 owns the decision, because it owns the call site. The Status code,
+> message format and wire spelling below are built (AST08) and encode
+> neither answer.
+
 ```
 AssertionViolation: assertion "user_product_purchase_limit"
   group (user_id=41, product_id=7): COUNT(*) would exceed bound 5
