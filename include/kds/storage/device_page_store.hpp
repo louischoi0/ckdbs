@@ -363,6 +363,13 @@ public:
     // (`catalog/well_known.hpp`). So the rule is implemented as
     // *id-range-or-kind*, and EV3's "resolved from page kind" is true of one
     // of its two v1 classes rather than both.
+    //
+    // **Both halves are live.** The kind half answers for
+    // `PageType::kCabinBound` (AST04): a Bound Cabin page carries the
+    // aggregate an admission check reads, so reclaiming one takes a
+    // *constraint* out of memory. It is asked only of a resident frame -
+    // reading a header off the device to answer would turn a skip test into
+    // an I/O, and a non-resident page cannot be a sweep candidate anyway.
     bool IsPinnedClass(PageId page_id) const noexcept;
 
     // Raises the pinned id range's upper bound. **Additive only** - the

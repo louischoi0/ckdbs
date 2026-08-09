@@ -35,6 +35,7 @@ add_library(kds
     src/txn/trx_id.cpp
     src/txn/manager.cpp
     src/storage/in_memory_page_store.cpp
+    src/storage/cabin_bound_page.cpp
     src/storage/device_page_store.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
@@ -96,6 +97,7 @@ add_library(kds
     src/exec/cabin_ddl.cpp
     src/exec/index_ddl.cpp
     src/exec/assertion_catalog.cpp
+    src/exec/bound_cabin.cpp
     src/exec/index_maintain.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp

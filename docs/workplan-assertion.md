@@ -71,7 +71,50 @@ restart → catalog intact.
 
 ---
 
-## AST04 — Bound Cabin storage engine
+## AST04 — Bound Cabin storage engine  **[BUILT 2026-08-09]**
+
+**Built.** `PageType::kCabinBound` (a class of its own, not a subtype flag -
+`spec-eviction.md` EV3 resolves pinning from the page kind, and a flag would
+put the answer one indirection past where the sweep can cheaply ask);
+`storage/cabin_bound_page.hpp` - the 32 B entry codec with explicit shift/mask
+packing and `static_assert`s on every offset, and the headered page holding
+254 of them; `exec/bound_cabin.hpp` - the group directory, the canonical group
+key encoding, the running `{count, sum}` header, `Admit`/`Apply`/`Unapply`,
+and `VerifyAgainstEntries` for §7's re-summation. All five acceptance
+criteria have a test in `tests/bound_cabin_test.cpp`.
+
+**Four things decided in code, as the deliverable allows.**
+
+*A page class, not a subtype flag* - see above.
+
+*Cardinality moves by one per entry whatever the value.* A summed zero is
+still a row; making the count depend on the value would make `COUNT(*)` wrong
+for any relation containing one, and it would hide until the data had one.
+
+*The directory holds the group key by value and confirms it.* A header is
+found by hash and then checked against the stored key
+(`docs/feat-cabin.md` §12.3). Trusting the hash would merge two groups, which
+for a structure an admission check reads is a wrong answer rather than a slow
+one.
+
+*The directory is memory-resident, the entries are not.* Entries are on
+durable checksummed `kCabinBound` pages; the directory is rebuilt from them,
+which is AST05's WAL replay. Until AST05 lands a restart loses the directory,
+which is why AST06's publish step and not this structure is what turns
+enforcement on.
+
+**An honest limit in the collision test.** A true 64-bit FNV-1a collision is
+~2^32 work to find and is not a unit test. What is tested is the pair of
+properties the isolation is made of - distinct keys never resolve to each
+other, across 500 groups, and the lookup confirms rather than assumes. The
+residual risk is that the confirmation loop is never entered with two
+occupants.
+
+**What this task deliberately did not do**, against its own deliverable list:
+the pinned-page discipline is *asserted* but its enabling half lives
+elsewhere - `EvictColdFrames` skips a `kCabinBound` frame by class, and
+eviction is off engine-wide until the `PageRef` migration
+(`docs/workplan-eviction.md` EVT02).
 
 **Scope.** Storage per spec §5 on top of existing page/buffer
 infrastructure (S1 common header, S7 per-core buffer pool, S9 checksums).

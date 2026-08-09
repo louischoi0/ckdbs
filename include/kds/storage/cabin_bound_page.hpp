@@ -1,0 +1,173 @@
+#pragma once
+
+#include <cstdint>
+#include <span>
+
+#include "kds/base/common.hpp"
+#include "kds/base/status.hpp"
+#include "kds/storage/page_header.hpp"
+
+// A Bound Cabin's entry page (`docs/feat-assertion.md` §5.1, workplan AST04).
+//
+// ---- What a Bound Cabin is, in one line -----------------------------------
+//
+// A Cabin that is required to have observed everything, forever
+// (`docs/feat-cabin.md` §12). The observational class is lazy, evictable and
+// advisory; this one is eager, **pinned** and authoritative, because an
+// assertion's admission check reads its group aggregate and a missing entry
+// would be a wrong answer rather than a slow one.
+//
+// ---- The entry: 32 bytes, and what each half is for ------------------------
+//
+// | offset | width | field                                                  |
+// |--------|-------|--------------------------------------------------------|
+// |    0   |   8   | pk (40 bits used) | flags (8) | reserved (16)           |
+// |    8   |   8   | location hint: page_id (32) | epoch (16) | slot (16)    |
+// |   16   |   8   | aggregate value, int64                                  |
+// |   24   |   8   | padding to 32                                           |
+//
+// **The pk is authoritative and the hint is advisory**, which is C2 carried
+// over from the observational class unchanged. Under K1 a stored Keystone id
+// is a forever-unique name: it can dangle - the row may be gone - but it can
+// never come to mean a different row, so a wrong hint costs a descent and
+// never a wrong answer. The hint is verified through the one verifier
+// (`exec/tuple_verify.hpp`) that Waystone replay and the observational Cabin
+// already share.
+//
+// **The aggregate value is inline** so a re-summation - the integrity check
+// §7 asks for, and the repair path if a header is ever doubted - reads the
+// entries and nothing else. For a `COUNT(*)` assertion it is written 1, which
+// makes re-summation one code path rather than two.
+//
+// The 8 bytes of padding are real padding and not a reservation: §5.1 fixes
+// the entry at 32 bytes, and 24 would have done. It is here because a
+// power-of-two entry makes `entry_index × 32` a shift, and because the day a
+// field is needed there is somewhere to put it without a format change.
+//
+// ---- Page layout -----------------------------------------------------------
+//
+// The common 32-byte page header (S1), then a small page header, then the
+// entry array. Headered and checksummed like any authoritative class: this is
+// committed data, so `kVarHeap`'s argument applies and the advisory rules that
+// govern a waystone page do not.
+//
+// Concurrency: core-local. A relation's pages belong to its home core, and an
+// assertion is single-relation (AS8), so the whole structure is one core's
+// (`docs/feat-assertion.md` §6.1). No latches, no atomics.
+
+namespace kds::storage::cabin {
+
+// `flags` bit 0: the entry was written by a statement that has not committed
+// (`docs/feat-assertion.md` §6.2 step 3). Cleared at commit, and the entry
+// plus its delta are removed at abort.
+//
+// **A reservation counts in the aggregate from the moment of admission**,
+// which is what makes false *admissions* impossible - the property §6.2 calls
+// out - at the price of bounded false rejections, which are accepted and
+// documented there.
+inline constexpr std::uint8_t kEntryReserved = 0x1;
+
+// `flags` bit 1: the location hint is worth trying. Cleared - never the entry
+// dropped - when a hint has been proven wrong and there was nothing better to
+// heal it with, exactly as `stats::kCabinHintValid` is for the observational
+// class. The pk is the authority, so an entry with no usable hint is still a
+// complete, correct entry that costs a descent.
+inline constexpr std::uint8_t kEntryHintValid = 0x2;
+
+// One entry, exactly 32 bytes on disk (§5.1's normative width).
+//
+// A plain struct with explicit encode/decode rather than a memcpy'd overlay:
+// `docs/rules.md` forbids compiler bitfields in a persisted format, and the
+// pk/flags/reserved word is packed by shift and mask for the same reason the
+// Keystone word is (invariant 6 - bitfield layout is implementation-defined
+// and this format must be architecture-portable).
+struct BoundCabinEntry {
+    std::uint64_t pk = 0;  // 40 bits used; the upper 24 are always 0
+    std::uint8_t flags = 0;
+
+    // The advisory location. `page_epoch` is written 0 and checked trivially,
+    // because this engine has **no per-page epoch** - the same gap
+    // `stats/cabin_store.hpp` and `exec/trail_replay.hpp` document. The field
+    // is here rather than added later because §5.1 fixes the 32-byte layout,
+    // and because the day the epoch lands there must be nowhere for it *not*
+    // to be checked.
+    PageId page_id = kInvalidPageId;
+    std::uint16_t page_epoch = 0;
+    std::uint16_t slot = 0;
+
+    // The row's SUM column value, or 1 for a COUNT assertion.
+    std::int64_t value = 0;
+
+    bool reserved() const noexcept { return (flags & kEntryReserved) != 0; }
+    bool hint_valid() const noexcept {
+        return (flags & kEntryHintValid) != 0 && page_id != kInvalidPageId;
+    }
+};
+
+inline constexpr std::size_t kEntryBytes = 32;
+
+// The largest pk an entry can carry: ids are 40-bit (invariant 5), and the
+// upper 24 bits of a stored id are always zero (invariant 7).
+inline constexpr std::uint64_t kMaxEntryPk = (std::uint64_t{1} << 40) - 1;
+
+// Field-wise codec. `EncodeEntry` fails with InvalidArgument on a pk that does
+// not fit 40 bits - refused rather than truncated, because a truncated pk is a
+// name that means a different row, which is precisely what K1 exists to
+// prevent.
+Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryBytes> out);
+BoundCabinEntry DecodeEntry(std::span<const std::byte, kEntryBytes> in);
+
+// ---- The page ------------------------------------------------------------
+
+// Bytes of the page header that follows the common one.
+inline constexpr std::size_t kCabinPageHeaderBytes = 8;
+
+// Where the entry array starts, and how many fit.
+inline constexpr std::size_t kEntriesOffset = kPageBodyOffset + kCabinPageHeaderBytes;
+inline constexpr std::uint16_t kMaxEntriesPerPage =
+    static_cast<std::uint16_t>((kPageSize - kEntriesOffset) / kEntryBytes);
+
+static_assert(kEntryBytes == 32, "feat-assertion.md §5.1 fixes the entry at 32 bytes");
+static_assert(kEntriesOffset % 8 == 0, "entries stay 8-byte aligned within the page");
+static_assert(kMaxEntriesPerPage == 254,
+              "8192 - 32 (common header) - 8 (page header) = 8152; 8152 / 32 = 254");
+
+// A read/write view over one `kCabinBound` page. Non-owning: it borrows the
+// caller's span and does not outlive it.
+class BoundCabinPage {
+public:
+    // Formats a freshly created page: common header stamped kCabinBound,
+    // entry count zero, next page invalid.
+    static Status Format(std::span<std::byte, kPageSize> page);
+
+    // Fails with Corruption if the page is not a formatted kCabinBound page -
+    // so a caller that reached the wrong page finds out here rather than by
+    // decoding whatever bytes were there.
+    static StatusOr<BoundCabinPage> Open(std::span<std::byte, kPageSize> page);
+
+    std::uint16_t entry_count() const noexcept;
+    PageId next_page_id() const noexcept;
+    void SetNextPageId(PageId next) noexcept;
+
+    bool full() const noexcept { return entry_count() >= kMaxEntriesPerPage; }
+
+    // Appends one entry. Fails with OutOfSpace when the page is full - the
+    // caller grows the chain, exactly as a heap chain's tail does.
+    StatusOr<std::uint16_t> Append(const BoundCabinEntry& entry);
+
+    StatusOr<BoundCabinEntry> Read(std::uint16_t index) const;
+
+    // Rewrites an entry in place. The one mutation the format needs: commit
+    // clears `kEntryReserved` and abort is a removal the *directory* performs,
+    // so nothing here ever shrinks. An entry's pk never changes.
+    Status Write(std::uint16_t index, const BoundCabinEntry& entry);
+
+private:
+    explicit BoundCabinPage(std::span<std::byte, kPageSize> page) noexcept : page_(page) {}
+
+    void SetEntryCount(std::uint16_t count) noexcept;
+
+    std::span<std::byte, kPageSize> page_;
+};
+
+}  // namespace kds::storage::cabin

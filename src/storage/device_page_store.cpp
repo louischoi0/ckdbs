@@ -625,10 +625,26 @@ StatusOr<DevicePageStore::PageRef> DevicePageStore::PinnedGetForRead(PageId page
 }
 
 bool DevicePageStore::IsPinnedClass(PageId page_id) const noexcept {
-    // Id range rather than page kind, for the reason the declaration gives:
-    // the fixed catalog pages are formatted kHeap like any user relation, so
-    // the kind cannot tell them apart and their reserved ids can.
-    return page_id < first_evictable_page_id_;
+    // Half one: the reserved low ids. Needed because the fixed catalog pages
+    // are formatted kHeap like any user relation, so the kind cannot tell
+    // them apart - the finding recorded at the declaration and in
+    // docs/workplan-eviction.md EVT01.
+    if (page_id < first_evictable_page_id_) return true;
+
+    // Half two: the page kind, which is what EV3 actually specifies and what
+    // works for a class that has one of its own. A Bound Cabin's pages carry
+    // the aggregate an admission check reads, so reclaiming one would take a
+    // *constraint* out of memory - the definition of a class that is never a
+    // candidate.
+    //
+    // Only asked of a resident frame: a page that is not in the pool cannot
+    // be a sweep candidate anyway, and reading a header off the device to
+    // answer would turn a skip test into an I/O.
+    auto it = frames_.find(page_id);
+    if (it == frames_.end()) return false;
+    const PageHeaderFields header =
+        ReadPageHeader(std::span<const std::byte, kPageSize>(*it->second.bytes));
+    return header.page_type == static_cast<std::uint8_t>(PageType::kCabinBound);
 }
 
 std::vector<PageId> DevicePageStore::TakeDirtyEvictionQueue() {

@@ -96,10 +96,27 @@ enum class PageType : std::uint8_t {
     // lost hint. Advisory rules do not apply.
     kIndexInternal = 11,
     kIndexLeaf = 12,
+
+    // A Bound Cabin's entry pages (docs/feat-assertion.md §5,
+    // docs/feat-cabin.md §12, workplan AST04).
+    //
+    // **Its own class rather than a subtype flag on a Cabin page**, and the
+    // reason is `docs/spec-eviction.md` EV3: pinning is a page-class
+    // attribute resolved from the page kind, and a subtype flag would put
+    // the answer one indirection past where the sweep can cheaply ask. It
+    // is also what makes an observational Cabin's page - if one is ever
+    // made durable (feat-cabin.md §11 leaves that open) - a *different*
+    // class with a different lifecycle, which §12's class table requires.
+    //
+    // Headered, checksummed and authoritative: the aggregate a group header
+    // carries is what an admission check reads, so losing a page loses the
+    // constraint rather than a hint. Advisory rules do not apply, exactly
+    // as they do not for kVarHeap.
+    kCabinBound = 13,
 };
 
 // Highest value currently assigned above; anything greater read off disk
 // was written by a newer build. Bump when appending to the enum.
-inline constexpr std::uint8_t kMaxAssignedPageType = 12;
+inline constexpr std::uint8_t kMaxAssignedPageType = 13;
 
 }  // namespace kds

@@ -71,6 +71,7 @@ add_executable(kds_tests
     free_map_test.cpp
     device_page_store_test.cpp
     eviction_test.cpp
+    bound_cabin_test.cpp
     catalog_cache_test.cpp
     catalog_test.cpp
     insert_wal_test.cpp
