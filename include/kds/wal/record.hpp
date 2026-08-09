@@ -84,6 +84,47 @@ enum class RecordType : std::uint8_t {
     // page images, and those images are taken after the entry is in - so
     // emitting this as well would apply it twice.
     kIndexInsert = 17,
+    // ---- The assertion records (docs/feat-assertion.md §7, AST05) --------
+    //
+    // A Bound Cabin is an authoritative constraint substrate, so its
+    // maintenance is logged on the var-heap's and the index's argument:
+    // losing an entry loses part of an admission check's answer, never a
+    // hint. All five payloads carry their assertion's id, because one
+    // relation may carry several assertions and the envelope's page_id
+    // names a page, not an owner.
+    //
+    // One reservation admitted on the home core (§6.2 step 3): the entry
+    // written into the envelope's page, plus the group key that attributes
+    // it - which is what lets replay rebuild the memory-resident group
+    // directory without re-reading any relation row. txn_id is the writer,
+    // and the entry bytes carry kEntryReserved set.
+    kAssertReserve = 18,
+    // The reserved→committed flag transition, batched **per page** rather
+    // than per transaction: a physiological record describes one page, so a
+    // transaction holding reservations on N pages commits them with N of
+    // these. Replay touches flags only - a reservation counts in the
+    // aggregate from the moment of admission, so commit moves no sum.
+    kAssertCommit = 19,
+    // The compensation (§6.2 step 5, and recovery's answer to a crashed
+    // in-flight reservation): the reserved delta subtracted and the entry
+    // forgotten by the group directory. **The page entry is not rewritten**
+    // - abort is a removal the directory performs (cabin_bound_page.hpp) -
+    // so the slot is orphaned and its 32 bytes ride on purge like every
+    // superseded value in this engine. txn_id is the aborting transaction,
+    // SLOT_RETIRE's rollback rule.
+    kAssertRollback = 20,
+    // One entry materialized by the CREATE-time builder (AST06): the same
+    // payload shape as ASSERT_RESERVE - HEAP_INSERT/HEAP_OVERWRITE's
+    // precedent - but owned by no transaction and with kEntryReserved
+    // clear, because §8.1a's build applies its deltas at commit time and
+    // what the builder writes is committed by construction. Per entry, not
+    // per batch: a batched sibling is an append-only addition the day the
+    // build's log volume asks for one, and guessing its shape before a
+    // builder exists is how a record nobody can write gets assigned.
+    kAssertBuild = 21,
+    // Teardown (DROP ASSERTION): the directory forgets the assertion. The
+    // pages return through ordinary FREE records, not through this one.
+    kAssertDrop = 22,
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
     // there is no B+ tree page format to describe, and a number reserved
     // for a payload nobody can encode is a number that gets used wrong.
@@ -99,7 +140,7 @@ enum class RecordType : std::uint8_t {
     // nodes already do. A record type nothing can write is worse than none.
 };
 
-inline constexpr std::uint8_t kMaxAssignedRecordType = 17;
+inline constexpr std::uint8_t kMaxAssignedRecordType = 22;
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

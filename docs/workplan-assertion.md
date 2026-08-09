@@ -137,28 +137,64 @@ statement-error path, never wraparound.
 
 ---
 
-## AST05 — WAL integration and recovery
+## AST05 — WAL integration and recovery  **[BUILT 2026-08-09, gated half registered below]**
 
-**Scope.** Record types and replay per spec §7: `ASSERT_RESERVE`,
-`ASSERT_COMMIT`, `ASSERT_ROLLBACK`, `ASSERT_BUILD`, `ASSERT_DROP`.
-WAL-before-data ordering throughout.
+**Built.** The five record types (`kAssertReserve = 18` … `kAssertDrop = 22`,
+`kMaxAssignedRecordType` → 22, no format bump — IX08's precedent for a
+record-type append); payload codecs in `wal/payload.hpp` under every house
+convention (lengths from spans, Corruption for a tail that lies, offsets
+pinned); and the replay fold, `exec::ReplayAssertionRecord()`
+(`include/kds/exec/assertion_replay.hpp`) — one call applies one decoded
+record to the store and the group directory, once, in stream order.
+`tests/assertion_wal_test.cpp` proves §7's claim in its strongest form: a
+live run and its replayed twin compared **byte for byte on the page**,
+header by header in the directory, `header == Σ(entries)` through AST04's
+`VerifyAgainstEntries`, and the admission boundary answering identically on
+both sides — the "no gap where a violating write could be admitted" half.
 
-**Deliverables.**
-- Record encoders/decoders + replay handlers restoring group headers and
-  entries exactly.
-- Transaction recovery integration: crash with in-flight reservations ⇒
-  compensating `ASSERT_ROLLBACK` during recovery; constraint enforceable
-  immediately at restart with zero enforcement gap.
-- Offline verification hook: re-sum entries vs group headers (wired into the
-  harness integrity sweep, S-1).
+**Five decisions made in code, as the spec left them.**
 
-**Acceptance.** Deterministic crash-recovery tests (harness S-2 loop):
-crash before/after each record type at every step boundary; post-recovery
-invariant `header == Σ(entries)` for all groups; no gap where a violating
-write could be admitted. **[GATED on recovery harness availability — same
-gate as testing-workplan SIM items; if the S-2 loop is not yet ready, land
-replay unit tests now and register the crash matrix as a follow-up in the
-SIM series.]**
+*RESERVE and BUILD share one payload* (HEAP_INSERT/OVERWRITE's precedent),
+differing in the envelope's type, ownership (txn versus `kNoTxnId`) and one
+bit — a RESERVE's entry carries `kEntryReserved`, a BUILD's must not — and
+replay checks that bit, so the two cannot be confused on disk.
+
+*No delta field anywhere.* The entry's inline aggregate value **is** the
+group delta (a COUNT assertion writes 1, §5.1): one number, one place to be
+wrong.
+
+*The group key rides in RESERVE/BUILD/ROLLBACK payloads*, because an entry
+does not carry its group and the directory cannot be rebuilt without it —
+carrying it is what lets replay restore the directory without re-reading
+any relation row.
+
+*COMMIT batches per page, not per transaction*: a physiological record
+describes one page, so a transaction whose reservations span N pages
+commits with N records. ROLLBACK and BUILD are per entry; batched siblings
+are append-only additions the day a measurement asks.
+
+*A record whose assertion the replay context cannot resolve is skipped
+whole, page half included* — after ASSERT_DROP the cabin's pages are freed
+and may be reused, so touching one would corrupt an unrelated page.
+
+**One finding, recorded rather than solved: the checkpoint-genesis gap.**
+A directory folded from records needs the records from the cabin's birth
+(the ASSERT_BUILD run), not merely from the last checkpoint, because
+nothing durable holds the group headers a checkpoint-bounded replay would
+start from — AS5's "not a separate store" has this as its price. Closing it
+means the checkpoint persists the directory, or assertion replay starts at
+each cabin's build; **no milestone owns that**, the same way nothing owns
+single-core recovery itself, and the fold is correct for whatever record
+range recovery eventually feeds it.
+
+**The gated half, registered as follow-ups.** The S-2 crash matrix
+(crash before/after each record type at every boundary) — the harness does
+not exist; register with the SIM series. Transaction-recovery integration
+(compensating ASSERT_ROLLBACK for in-flight reservations at crash) — the
+fold handles the record; nothing emits it, because recovery is not
+implemented engine-wide. The S-1 integrity-sweep wiring of
+`VerifyAgainstEntries` — the sweep does not exist; the hook is built and
+tested from AST04.
 
 ---
 

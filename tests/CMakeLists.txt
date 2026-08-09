@@ -28,6 +28,7 @@ add_executable(kds_tests
     assertion_ddl_test.cpp
     assertion_catalog_test.cpp
     assertion_violation_test.cpp
+    assertion_wal_test.cpp
     index_maintain_test.cpp
     index_compile_test.cpp
     index_contract_test.cpp

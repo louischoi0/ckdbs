@@ -307,6 +307,15 @@ by this protocol.
   (uncommitted) reservations at crash are rolled back by normal transaction
   recovery via `ASSERT_ROLLBACK` compensation. The constraint is enforceable
   immediately at restart — **no rebuild scan, no enforcement gap**.
+
+  > **[GAP, found at AST05 (2026-08-09).]** The directory fold needs the
+  > records from the cabin's birth, not merely from the last checkpoint:
+  > nothing durable holds the group headers a checkpoint-bounded replay
+  > would start from, which is AS5's "not a separate store" carrying a
+  > price. Either the checkpoint persists the directory or assertion replay
+  > starts at each cabin's `ASSERT_BUILD`; no milestone owns the choice —
+  > recovery itself is unowned — and `exec/assertion_replay.hpp` is correct
+  > for whatever record range recovery eventually feeds it.
 - Verification: an offline/maintenance check may re-sum entries against group
   headers (hooks into the integrity sweep of the testing harness, S-1).
 
