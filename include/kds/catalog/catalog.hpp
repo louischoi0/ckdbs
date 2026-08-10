@@ -9,6 +9,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog_cache.hpp"
 #include "kds/catalog/core_placement.hpp"
+#include "kds/catalog/row_id_lease.hpp"
 #include "kds/catalog/rows.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/catalog/sys_object_registry.hpp"
@@ -115,6 +116,15 @@ public:
     // (workplan P6c, the `placement` config key). Default kCreatingCore;
     // set once at startup, before any DDL.
     void SetPlacementPolicy(PlacementPolicy policy) noexcept { placement_ = policy; }
+
+    // Row-id leases for a core that may not write the catalog (P5's shape;
+    // catalog/row_id_lease.hpp). With a table installed, AllocateRowId()
+    // draws from it - no catalog write, retryable exhaustion when a
+    // relation's lease is spent - and the catalog page is only ever
+    // touched by core 0's AllocateRowIdRange() carving the blocks. Null
+    // (the default) is core 0's arrangement and the path that always
+    // existed. `leases` must outlive the catalog.
+    void SetRowIdLeases(RowIdLeaseTable* leases) noexcept { row_id_leases_ = leases; }
 
     // Drops every cached fact without bumping the version. What a **peer**
     // does on receiving `kCatalogInvalidate`: the version counter is
@@ -727,6 +737,7 @@ private:
     InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
     PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;
+    RowIdLeaseTable* row_id_leases_ = nullptr;
     // Unset until the first GenerateUserOid() recovers it from the catalog.
     // An optional rather than a sentinel value, because every integer in
     // this type's range is a legal oid and a sentinel would be one more

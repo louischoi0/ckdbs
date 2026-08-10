@@ -815,6 +815,17 @@ Status Expeditor::Serve() {
             return s;
         }
 
+        // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
+        // request is answered with a block carved by AllocateRowIdRange -
+        // the bulk-INSERT primitive, already ceiling-checked. Core 0 is the
+        // one core that may write the sequence page, which is the whole
+        // reason this service exists.
+        if (Status s = RegisterRowIdGrantHandler(scheduler, *transport_, database_->catalog,
+                                                 &*logger_);
+            !s.ok()) {
+            return s;
+        }
+
         // Core 0's DDL choke point, wired to the broadcast. Installed after
         // the peers exist so the loop below always has somebody to tell.
         database_->catalog.SetInvalidationHook([this, &scheduler] {

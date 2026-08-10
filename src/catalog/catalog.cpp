@@ -1315,6 +1315,18 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
 }
 
 StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
+    // A core with leases installed may not write the catalog page this
+    // function would otherwise bump - it draws from its per-relation block
+    // instead, and a spent block is retryable exhaustion, not OutOfRange
+    // (catalog/row_id_lease.hpp).
+    if (row_id_leases_ != nullptr) {
+        auto id = row_id_leases_->Next(table_oid);
+        if (id.ok() && log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+            log_->Trace("catalog", "issued leased row id " + std::to_string(id.value()) +
+                                       " for table oid " + std::to_string(table_oid));
+        }
+        return id;
+    }
     std::uint64_t issued = 0;
     auto acted = ForFirstRow<SysTableRow>(
         store_, kCatalogPageTables,

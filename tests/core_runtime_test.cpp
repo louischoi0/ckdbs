@@ -456,6 +456,73 @@ TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
     EXPECT_TRUE(peer.value()->catalog().InitTableAccess(oid.value()).ok());
 }
 
+// ---- Row-id leases (P5's shape) ----------------------------------------
+
+TEST(RowIdLeaseTableTest, IssuesFromAGrantAndExhaustsRetryably) {
+    catalog::RowIdLeaseTable table;
+
+    // No grant yet: exhaustion, and the code a retry loop keys on.
+    auto dry = table.Next(1000);
+    ASSERT_FALSE(dry.ok());
+    EXPECT_EQ(dry.status().code(), StatusCode::kResourceExhausted);
+
+    table.Grant(1000, 100, 3);
+    EXPECT_EQ(table.Next(1000).value(), 100u);
+    EXPECT_EQ(table.Next(1000).value(), 101u);
+    // Relations do not share blocks: oid 2000's lease is its own.
+    EXPECT_FALSE(table.Next(2000).ok());
+    EXPECT_EQ(table.Next(1000).value(), 102u);
+    EXPECT_EQ(table.Next(1000).status().code(), StatusCode::kResourceExhausted);
+
+    // A contiguous grant extends; a disjoint one replaces and burns.
+    table.Grant(1000, 103, 2);
+    EXPECT_EQ(table.Next(1000).value(), 103u);
+    table.Grant(1000, 500, 2);
+    EXPECT_EQ(table.Next(1000).value(), 500u);
+}
+
+TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
+    // The whole point of the lease: a peer's AllocateRowId() answers from
+    // its granted block and never touches the sys.tables page - which its
+    // own store would refuse to write anyway (MayWrite is the guard this
+    // path exists to satisfy, not to bypass).
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // Before any grant: retryable exhaustion, never a catalog write.
+    auto dry = peer.value()->catalog().AllocateRowId(oid.value());
+    ASSERT_FALSE(dry.ok());
+    EXPECT_EQ(dry.status().code(), StatusCode::kResourceExhausted);
+
+    // Core 0 carves a block with the bulk-INSERT primitive - the exact
+    // call the kRowIdLease handler makes - and the peer's table takes it,
+    // the exact application the receiver makes.
+    auto first = core0_->catalog.AllocateRowIdRange(oid.value(), 16);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
+
+    // The peer issues the block, in order, from its own table.
+    for (std::uint64_t i = 0; i < 16; ++i) {
+        auto id = peer.value()->catalog().AllocateRowId(oid.value());
+        ASSERT_TRUE(id.ok()) << id.status().message();
+        EXPECT_EQ(id.value(), first.value() + i);
+    }
+    EXPECT_EQ(peer.value()->catalog().AllocateRowId(oid.value()).status().code(),
+              StatusCode::kResourceExhausted);
+
+    // And the blocks stay disjoint: core 0's next single id sits past the
+    // granted block, so a peer id can never collide with a core-0 id -
+    // K1's issue-once contract across cores.
+    auto next_on_core0 = core0_->catalog.AllocateRowId(oid.value());
+    ASSERT_TRUE(next_on_core0.ok());
+    EXPECT_GE(next_on_core0.value(), first.value() + 16);
+}
+
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     // P6's deliberate cost, pinned so it stays a decision rather than
     // becoming a surprise: sys.patterns and sys.access_stats are catalog

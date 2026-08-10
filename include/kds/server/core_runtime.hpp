@@ -15,6 +15,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
@@ -157,6 +158,12 @@ public:
     // test can drive it without a reactor, InvalidateCatalog's pattern.
     void GrantRelationFault(storage::Extent extent);
 
+    // This core's row-id leases and refill state (P5's shape). Exposed for
+    // the same reason GrantRelationFault is: a test drives the grant
+    // without a reactor, and diagnostics read the counters.
+    catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
+    RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
+
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     sched::Scheduler& scheduler() noexcept { return *scheduler_; }
     wal::WalManager& wal() noexcept { return *wal_; }
@@ -195,6 +202,12 @@ private:
     // landed, and every one of them would be answered - burning an extent
     // per tick for a core that needed one.
     bool refill_in_flight_ = false;
+
+    // Row-id leases (P5's shape): the per-relation blocks this core issues
+    // Keystone ids from, installed into the catalog on every non-zero
+    // core, and the refill state the kRowIdLease receiver releases.
+    catalog::RowIdLeaseTable row_id_leases_;
+    RowIdRefill row_id_refill_;
 
     // The statement stack. A peer's `SuperBlock` is a **copy** taken on the
     // startup thread: the dispatcher needs one for SHOW-class commands, and

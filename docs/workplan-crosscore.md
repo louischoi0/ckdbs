@@ -444,11 +444,22 @@ specifies. The remaining P6 tasks:
   handoff end to end, and the placement tests pin both the rotation math
   and the default staying put.
 
-A second, independent blocker sits behind it: **a peer cannot INSERT
-either**, because `AllocateRowId()` bumps `next_id` on a catalog page.
-That one is P5's shape — a leased range of row ids, the same mechanism as
-the page-id lease and as `docs/keystoneid-invariant.md` K-M2's bump-ahead
-allocator.
+The second, independent blocker behind it — **a peer cannot INSERT**,
+because `AllocateRowId()` bumps `next_id` on a catalog page — is **built
+(2026-08-10), P5's shape**: `catalog::RowIdLeaseTable`
+(`catalog/row_id_lease.hpp`) holds per-relation leased blocks; a non-zero
+core's catalog has one installed, so its `AllocateRowId()` issues from the
+block with no catalog write and answers **retryable exhaustion** when
+spent — never OutOfRange, which stays the truthful spelling for the 40-bit
+ceiling itself. `kRowIdLease` (22) carries the request/grant both ways
+(`row_id_lease_service.hpp`, the extent service's shape): core 0's handler
+carves blocks with `AllocateRowIdRange()` — the bulk-INSERT primitive,
+already ceiling-checked — and a zero-count grant means "none", so a waiter
+fails honestly instead of hanging. Default block 4096, K-M2's measured
+floor reused rather than re-decided. Blocks are disjoint from core 0's own
+ids by construction (one sequence, one writer), which is K1's issue-once
+contract across cores, and the contract test pins it. What a peer still
+cannot do is *run* the INSERT — that is the pipeline.
 
 ### P7 — Observability
 - Per-core: everything wal.md §16 lists, now labeled by core.
