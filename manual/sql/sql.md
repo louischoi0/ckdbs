@@ -255,22 +255,37 @@ Registered in `sys.types` (verified in `src/catalog/catalog.cpp`):
 
 ## 3. DML
 
-### INSERT (verified)
+### INSERT (verified; multi-row built 2026-08-10, spec-bulkinsert.md T1)
 
 ```sql
 INSERT INTO accounts VALUES ('alice', 120.50);
+INSERT INTO accounts VALUES ('bob', 10), ('carol', 20), ('dave', 30);
 ```
 
-- Grammar: `INSERT INTO <table> VALUES (<val> [, ...])` — no column list.
+- Grammar: `INSERT INTO <table> VALUES (<val> [, ...]) [, (<val> [, ...])]*`
+  — no column list; up to `max_insert_rows` rows per statement (config key,
+  default 1024, a refusal never a truncation).
 - **VALUES supplies the columns *after* the primary key.** Supplying a value
   for the pk column is caught with a dedicated message:
   `ERR do not supply a value for primary-key column 'id' - it is autoincrement and engine-assigned`.
-- The reply is `INSERTED id=<n>`-class; the engine issues the id.
+- Replies: `INSERTED oid=<o> id=<n> page=<p> slot=<s>` for one row;
+  `INSERTED oid=<o> rows=<n> first_id=<f> last_id=<l>` for several (no id
+  contiguity promised).
+- **Every bulk row runs the full single-row pipeline, in order** (BI2):
+  FK check, assertion admission (row k sees rows 1..k-1's reservations),
+  id, encode, placement, Cabin witness, index maintenance, WAL. Bulk
+  amortizes parse and round trips, never authority.
+- **Atomic** (BI4): any per-row refusal fails the whole statement with the
+  row ordinal appended to the message — ` (row 3)` — and inserts nothing.
+  A pre-id refusal burns no id; an aborted statement burns exactly its
+  placed rows' ids (BI9, accepted and documented).
+- Row count is not part of the pattern (BI5): a 500-row insert
+  fingerprints as the 1-row insert on the same relation.
 - Values are integers, strings (`'...'`, no quote escaping), bare numerics
-  and `NULL`. Order of checks: FK forward check and assertion admission run
-  *before* the row id is allocated, so a refused row burns nothing.
+  and `NULL`.
 - INSERT is the one fully WAL-logged statement path; durability class comes
-  from the `durability` config key (see §5).
+  from the `durability` config key (see §5). For bulk load, `relaxed` is
+  the documented recommendation (BI8).
 
 ### UPDATE (verified)
 

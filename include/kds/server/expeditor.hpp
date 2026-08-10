@@ -133,6 +133,11 @@ public:
         // answer than a connection that never replies.
         std::uint64_t max_rows_touched = exec::kDefaultRowTouchBudget;
 
+        // BI3's per-statement row cap for a multi-row INSERT
+        // (docs/spec-bulkinsert.md, `max_insert_rows`). A refusal, never a
+        // truncation; must be at least 1.
+        std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows;
+
         // ---- `isolation` (docs/txn.md section 1) -----------------------
         //
         // The level a session starts at, and therefore the level an

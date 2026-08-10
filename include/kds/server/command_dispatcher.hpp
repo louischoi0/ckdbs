@@ -206,7 +206,8 @@ public:
                        txn::TransactionManager* txn = nullptr,
                        txn::IsolationLevel isolation =
                            txn::IsolationLevel::kReadCommitted,
-                       std::uint32_t core_id = 0, bool indexes = true) noexcept
+                       std::uint32_t core_id = 0, bool indexes = true,
+                       std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -223,7 +224,8 @@ public:
           default_isolation_(isolation),
           autocommit_session_(isolation),
           core_id_(core_id),
-          indexes_enabled_(indexes) {}
+          indexes_enabled_(indexes),
+          max_insert_rows_(max_insert_rows) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -585,6 +587,31 @@ private:
     // will close. Split so that every early return below is an ordinary
     // return rather than one that has to remember to end a transaction.
     DispatchOutcome InsertInner(std::string_view line, WriteScope& scope);
+
+    // Where one row landed, for the reply.
+    struct InsertRowResult {
+        std::uint64_t id = 0;
+        PageId page_id = kInvalidPageId;
+        std::uint16_t slot = 0;
+    };
+
+    // The per-row write pipeline, verbatim and in order (spec-bulkinsert.md
+    // §4, BI2): arity, FK forward check, assertion admission, id, encode +
+    // spill, placement, Cabin witness, index maintenance, reservation,
+    // rollback trail, WAL, root repoint. **A refactor of InsertInner's
+    // body, not a second write path** - there is exactly one place a row
+    // becomes durable state, and it is this one for one row and for a
+    // thousand. Returns the full error reply on failure (spellings intact -
+    // ErrorReply's leading tokens are a compatibility surface, which is why
+    // the bulk loop appends its row ordinal rather than prefixing it).
+    //
+    // `ta` is a live borrow the callee may *refresh*: a btree level growth
+    // repoints the relation's root, which invalidates the catalog cache -
+    // harmless on the last row, fatal to the next one, so the pointer is
+    // re-borrowed before returning.
+    std::optional<std::string> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
+                                            const std::vector<parser::AstValue>& values,
+                                            WriteScope& scope, InsertRowResult& out);
     // `analyze` switches the reply from rows to the compiled plan plus
     // the per-step counters the run produced. Everything before that -
     // parse, compile, execute - is the same code on the same statement
@@ -997,6 +1024,10 @@ private:
     // maintenance is not switchable, because an index that stops being
     // maintained is wrong rather than slow.
     bool indexes_enabled_ = true;
+
+    // BI3's per-statement row cap, from the `max_insert_rows` config key.
+    // A refusal, never a truncation.
+    std::uint64_t max_insert_rows_ = parser::kDefaultMaxInsertRows;
 
     // The physical optimizer's mode and R1 half-life (workplan PX06).
     // Shadow costs nothing at rest - the planner is pull-only, computed

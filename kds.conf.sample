@@ -148,6 +148,16 @@ relaxed_flush_interval_us = 10000
 # statement the budget would refuse.
 max_rows_touched = 100000000
 
+# How many rows one INSERT statement may carry
+# (docs/spec-bulkinsert.md BI3: `INSERT INTO t VALUES (...), (...), ...`).
+#
+# A refusal, never a truncation: an over-cap statement is refused naming
+# the cap and the count, and inserts nothing. The cap bounds the memory a
+# statement holds before execution begins and the Keystone ids an aborted
+# bulk statement can burn (BI9). Must be at least 1; the default is
+# `[PROPOSED]`.
+max_insert_rows = 1024
+
 # ---- Waystone --------------------------------------------------------------
 
 # Whether a successful SELECT records where it found its rows, so a repeated

@@ -2087,6 +2087,26 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     }
     auto& stmt = std::get<parser::InsertStmt>(parsed.value());
 
+    // BI3: the row cap, at the first config-aware layer (the parser is a
+    // pure syntax layer and deliberately config-blind). A refusal naming
+    // the cap and the count, never a truncation.
+    if (stmt.rows.size() > max_insert_rows_) {
+        return {"ERR INSERT of " + std::to_string(stmt.rows.size()) +
+                    " rows exceeds max_insert_rows (" + std::to_string(max_insert_rows_) + ")",
+                false};
+    }
+
+    // BI4's atomicity is the transaction scope's: rows placed before a
+    // failure are unwound by rollback, and rollback replays the manager's
+    // in-memory trail. A configuration without one (tests; production
+    // always builds it) could place rows it cannot take back, which is a
+    // wrong answer with a right answer's shape - refused upfront instead.
+    if (stmt.rows.size() > 1 && txn_ == nullptr) {
+        return {"ERR a multi-row INSERT requires the transaction manager; this configuration "
+                "cannot unwind a partially placed statement and is single-row only",
+                false};
+    }
+
     auto oid = catalog_.FindTableOidByName(stmt.table_name);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
@@ -2097,43 +2117,100 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
         return {"ERR " + access.status().message(), false};
     }
     // Borrowed from the catalog's cache, not owned: valid for this
-    // statement, including across AllocateRowId() (catalog.hpp).
-    const catalog::TableAccess& ta = *access.value();
+    // statement, including across AllocateRowId() (catalog.hpp), and
+    // refreshed by InsertOneRow when a root repoint invalidates it.
+    const catalog::TableAccess* ta = access.value();
 
     // Before anything is written: a relation this core does not own, or a
     // transaction already bound to another core, is refused retryably
-    // (crosscore.md CC3, core_affinity.hpp).
-    if (Status affinity = CheckWriteAffinity(ta, stmt.table_name, *scope.session); !affinity.ok()) {
+    // (crosscore.md CC3, core_affinity.hpp). Once per statement - every
+    // row goes to the one relation.
+    if (Status affinity = CheckWriteAffinity(*ta, stmt.table_name, *scope.session);
+        !affinity.ok()) {
         return {"ERR " + affinity.message(), false};
     }
 
+    // ---- The bulk loop (docs/spec-bulkinsert.md §2.3, §4) ---------------
+    //
+    // One write scope, one resolution, one affinity check - and then the
+    // full single-row pipeline per row, in the same order (BI2). Admission
+    // at row k sees rows 1..k-1's reservations, which is why validate-all-
+    // then-place-all is forbidden: a statement must fail on its own third
+    // row when the third row is the one that breaks a group bound. Any
+    // failure fails the whole statement (BI4) - the ordinal is appended
+    // rather than prefixed so the wire's leading compatibility tokens
+    // (TXN_CONFLICT, FK_VIOLATION, ASSERTION_VIOLATION) never move.
+    const bool bulk = stmt.rows.size() > 1;
+    InsertRowResult first{};
+    InsertRowResult last{};
+    for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
+        InsertRowResult row{};
+        if (auto err = InsertOneRow(oid.value(), ta, stmt.rows[k], scope, row);
+            err.has_value()) {
+            if (bulk) *err += " (row " + std::to_string(k + 1) + ")";
+            return {std::move(*err), false};
+        }
+        if (k == 0) first = row;
+        last = row;
+    }
+
+    if (bulk) {
+        // rows= is BI13's rows_affected; the id range is what a loader
+        // wants back, and with per-row allocation it is contiguous exactly
+        // when nothing else allocated concurrently - so both ends are
+        // reported and no contiguity is promised.
+        return {"INSERTED oid=" + std::to_string(oid.value()) +
+                    " rows=" + std::to_string(stmt.rows.size()) +
+                    " first_id=" + std::to_string(first.id) +
+                    " last_id=" + std::to_string(last.id),
+                false};
+    }
+    // The single-row reply, byte-identical to what it always was.
+    return {"INSERTED oid=" + std::to_string(oid.value()) + " id=" + std::to_string(last.id) +
+                " page=" + std::to_string(last.page_id) + " slot=" + std::to_string(last.slot),
+            false};
+}
+
+std::optional<std::string> CommandDispatcher::InsertOneRow(
+    catalog::Oid oid, const catalog::TableAccess*& ta_ptr,
+    const std::vector<parser::AstValue>& values, WriteScope& scope, InsertRowResult& out) {
+    const catalog::TableAccess& ta = *ta_ptr;
+
     // The primary key is the engine's to issue, never the caller's
-    // (CLAUDE.md invariant 10), so VALUES supplies the columns *after* it.
+    // (CLAUDE.md invariant 11), so VALUES supplies the columns *after* it.
     // Catching the old arity here gives a usable message instead of the
     // codec's "expected N value(s)".
     const std::size_t ncols = ta.schema.columns.size();
-    if (ncols > 0 && stmt.values.size() == ncols) {
-        return {"ERR do not supply a value for primary-key column '" +
-                    std::string(catalog::NameView(ta.schema.columns.front().name)) +
-                    "' - it is autoincrement and engine-assigned",
-                false};
+    if (ncols > 0 && values.size() == ncols) {
+        return "ERR do not supply a value for primary-key column '" +
+               std::string(catalog::NameView(ta.schema.columns.front().name)) +
+               "' - it is autoincrement and engine-assigned";
+    }
+    // Any other arity error, *before* the id: the codec would refuse this
+    // row at encode, which sits after AllocateRowId - and BI9's rule is
+    // that a refused row burns nothing. Same spelling as the codec's own
+    // check (row_codec.cpp), which stays the authority on everything
+    // deeper; this is only the count, hoisted above the burn.
+    if (ncols > 0 && values.size() != ncols - 1) {
+        return "ERR expected " + std::to_string(ncols - 1) +
+               " value(s) after the primary key, got " + std::to_string(values.size());
     }
 
     // ---- The forward check (docs/impl-foreign-keys.md §2) ---------------
     //
     // **Before the id is allocated**, which is a stronger form of §2's
     // "before the heap write": a refused row costs no undo work *and* no
-    // Keystone id. VALUES supplies the columns after the pk, so a column at
-    // schema position c is at index c-1.
+    // Keystone id (BI9). VALUES supplies the columns after the pk, so a
+    // column at schema position c is at index c-1.
     if (!ta.fkeys_out.empty()) {
         auto view = CheckView(scope);
-        if (!view.ok()) return {ErrorReply(view.status()), false};
+        if (!view.ok()) return ErrorReply(view.status());
         for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
-            if (fk.column_no == 0 || fk.column_no > stmt.values.size()) continue;
-            if (Status s = CheckForeignKeyOnWrite(ta, fk, stmt.values[fk.column_no - 1],
+            if (fk.column_no == 0 || fk.column_no > values.size()) continue;
+            if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1],
                                                   view.value());
                 !s.ok()) {
-                return {ErrorReply(s), false};
+                return ErrorReply(s);
             }
         }
     }
@@ -2143,22 +2220,24 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // Pure, and before the id for FK's reason: a refused row burns nothing.
     // The reservation (step 3) happens after placement, when the entry has
     // a pk and a location to carry; nothing runs between the two on a
-    // cooperative core, so the answer holds.
-    if (Status s = enforcer_.AdmitInsert(oid.value(), stmt.values); !s.ok()) {
-        return {ErrorReply(s), false};
+    // cooperative core, so the answer holds - and in a bulk statement this
+    // row's admission sees every earlier row's reservation, which is the
+    // intra-statement accumulation BI2 exists to keep.
+    if (Status s = enforcer_.AdmitInsert(oid, values); !s.ok()) {
+        return ErrorReply(s);
     }
 
-    auto id = catalog_.AllocateRowId(oid.value());
+    auto id = catalog_.AllocateRowId(oid);
     if (!id.ok()) {
-        return {"ERR " + id.status().message(), false};
+        return "ERR " + id.status().message();
     }
 
     std::vector<exec::AppendedSpill> spills;
     auto encoded = exec::EncodeRow(
-        ta.schema, ta.layout, id.value(), stmt.values,
+        ta.schema, ta.layout, id.value(), values,
         exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills});
     if (!encoded.ok()) {
-        return {"ERR " + encoded.status().message(), false};
+        return "ERR " + encoded.status().message();
     }
 
     // Into whichever storage the relation uses - a chain of heap pages or
@@ -2174,7 +2253,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
                            std::to_string(ta.desc_page_id) +
                            " failed: " + placed.status().message());
         }
-        return {"ERR " + placed.status().message(), false};
+        return "ERR " + placed.status().message();
     }
 
     // ---- The Cabin witness (docs/feat-cabin.md §5) ----------------------
@@ -2187,7 +2266,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     //
     // `ta` is still valid here: the only thing that invalidates it is the
     // desc-page relink below, which happens after.
-    NoteCabinWrite(ta, stmt.values, /*first_col_pos=*/1, id.value(), placed.value().page_id,
+    NoteCabinWrite(ta, values, /*first_col_pos=*/1, id.value(), placed.value().page_id,
                    placed.value().slot);
 
     // ---- Index maintenance (docs/feat-index.md §2) ----------------------
@@ -2204,17 +2283,17 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // Collected only when there is a log to write to, so the unlogged path
     // stays the code it always was.
     std::vector<exec::IndexWrite> index_writes;
-    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, stmt.values,
+    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, values,
                                           /*first_col_pos=*/1, encoded.value(), id.value(),
                                           /*previous=*/{},
                                           wal_ != nullptr ? &index_writes : nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("index", "maintaining the indexes of table oid " +
-                                     std::to_string(oid.value()) + " for id " +
+                                     std::to_string(oid) + " for id " +
                                      std::to_string(id.value()) + " failed: " + s.message());
         }
-        return {"ERR " + s.message(), false};
+        return "ERR " + s.message();
     }
 
     // ---- The reservation (docs/feat-assertion.md §6.2 step 3) -----------
@@ -2225,11 +2304,11 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // the row over-reserves (compensated by the loser's rollback) rather
     // than under-reserving, which no compensation could see. A failure here
     // fails the statement; the abort path unwinds whatever was applied.
-    if (Status s = enforcer_.ReserveInsert(page_store_, wal_, WriterId(scope), oid.value(),
-                                           stmt.values, id.value(), placed.value().page_id,
+    if (Status s = enforcer_.ReserveInsert(page_store_, wal_, WriterId(scope), oid,
+                                           values, id.value(), placed.value().page_id,
                                            placed.value().slot);
         !s.ok()) {
-        return {ErrorReply(s), false};
+        return ErrorReply(s);
     }
 
     // ---- The rollback trail (docs/txn.md section 3.6) -------------------
@@ -2239,7 +2318,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // would carry nothing. Rollback of an insert retires the slot, and this
     // in-memory entry is what tells it which one.
     if (scope.txn != nullptr) {
-        txn_->NoteInsert(*scope.txn, oid.value(), placed.value().page_id, placed.value().slot,
+        txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          id.value());
     }
 
@@ -2255,7 +2334,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
             log_->Error("wal", "logging the insert of id " + std::to_string(id.value()) +
                                    " failed: " + s.message());
         }
-        return {"ERR " + s.message(), false};
+        return "ERR " + s.message();
     }
 
     // The tree grew a level, so the relation's root moved. Persisted only
@@ -2265,22 +2344,30 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // here on - the rest of this function uses only `oid`, `id` and
     // `placed`.
     if (placed.value().new_root != kInvalidPageId) {
-        if (Status s = catalog_.UpdateRelationDescPage(oid.value(), placed.value().new_root);
+        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root);
             !s.ok()) {
             if (logging(LogLevel::kError)) {
-                log_->Error("btree", "table oid " + std::to_string(oid.value()) +
+                log_->Error("btree", "table oid " + std::to_string(oid) +
                                          " grew a level but its root could not be repointed at "
                                          "page " +
                                          std::to_string(placed.value().new_root) + ": " +
                                          s.message());
             }
-            return {"ERR " + s.message(), false};
+            return "ERR " + s.message();
         }
         if (logging(LogLevel::kInfo)) {
-            log_->Info("btree", "table oid " + std::to_string(oid.value()) +
+            log_->Info("btree", "table oid " + std::to_string(oid) +
                                     " grew a level; root is now page " +
                                     std::to_string(placed.value().new_root));
         }
+        // The relink invalidated the catalog cache, so `ta` (and the
+        // caller's pointer) dangle from here on. Harmless on a statement's
+        // last row; fatal to its next one - so the borrow is refreshed
+        // before returning, which is the whole reason the pointer comes in
+        // by reference.
+        auto fresh = catalog_.InitTableAccess(oid);
+        if (!fresh.ok()) return "ERR " + fresh.status().message();
+        ta_ptr = fresh.value();
     }
 
     // A relation growing a page is rare and structural - the closest thing
@@ -2288,7 +2375,7 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // per-tuple Trace line below.
     if (placed.value().restructured() && logging(LogLevel::kDebug)) {
         log_->Debug(is_btree ? "btree" : "heap",
-                    "relation of table oid " + std::to_string(oid.value()) +
+                    "relation of table oid " + std::to_string(oid) +
                         " grew: new tuple page " + std::to_string(placed.value().page_id) +
                         " min_key=" + std::to_string(id.value()) + " pages_logged=" +
                         std::to_string(placed.value().changes().size()));
@@ -2305,13 +2392,13 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
                                 " bytes=" + std::to_string(encoded.value().size()));
     }
 
-    // The page id is part of the reply because it is no longer implied by
-    // the table: a client that wants to `SHOW PAGE` the row it just wrote
-    // would otherwise have to walk the chain to guess where it went.
-    return {"INSERTED oid=" + std::to_string(oid.value()) + " id=" + std::to_string(id.value()) +
-                " page=" + std::to_string(placed.value().page_id) +
-                " slot=" + std::to_string(placed.value().slot),
-            false};
+    // The page id rides the (single-row) reply because it is no longer
+    // implied by the table: a client that wants to `SHOW PAGE` the row it
+    // just wrote would otherwise have to walk the chain to guess.
+    out.id = id.value();
+    out.page_id = placed.value().page_id;
+    out.slot = placed.value().slot;
+    return std::nullopt;
 }
 
 StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(

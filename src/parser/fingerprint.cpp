@@ -208,6 +208,9 @@ void FingerprintAccumulator::Reset() noexcept {
     started_ = false;
     valid_ = false;
     complete_ = false;
+    insert_head_ = false;
+    first_group_closed_ = false;
+    paren_depth_ = 0;
 }
 
 void FingerprintAccumulator::Feed(const Token& tok) noexcept {
@@ -232,6 +235,13 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
         }
         if (!IsPatternableLeadingWord(tok.text)) return;
 
+        // Remembered for BI5's suppression below. Folded compare, like the
+        // allow-list's own.
+        insert_head_ = tok.text.size() == 6 && FoldAscii(tok.text[0]) == 'i' &&
+                       FoldAscii(tok.text[1]) == 'n' && FoldAscii(tok.text[2]) == 's' &&
+                       FoldAscii(tok.text[3]) == 'e' && FoldAscii(tok.text[4]) == 'r' &&
+                       FoldAscii(tok.text[5]) == 't';
+
         valid_ = true;
         Fnv1a shape(shape_);
         shape.Byte(static_cast<std::uint8_t>(ShapeTag::kIdent));
@@ -254,6 +264,51 @@ void FingerprintAccumulator::Feed(const Token& tok) noexcept {
     // Skipped, not tagged: `SELECT * FROM t;` and `SELECT * FROM t` are one
     // pattern, and the parser treats the semicolon as optional too.
     if (tok.type == TokenType::kSemicolon) return;
+
+    // ---- BI5: an INSERT's shape is its first row's ----------------------
+    //
+    // Past the first top-level paren group of an INSERT-headed stream,
+    // values keep folding into arg_hash - they are arguments wherever they
+    // sit - and everything else folds nothing, so `VALUES (1)` and
+    // `VALUES (1), (2)` share a pattern_id and row count never fragments
+    // sys.patterns (docs/spec-bulkinsert.md §2.4). Every hash this moves
+    // belongs to a statement that parsed in no production - fingerprintable
+    // but never storable - which is the fingerprint bump rule's permitted
+    // second transition (the corpus header carries the argument).
+    if (first_group_closed_) {
+        switch (tok.type) {
+            case TokenType::kIntLit: {
+                Fnv1a args(args_);
+                args.Byte(static_cast<std::uint8_t>(ArgTag::kInt));
+                args.Field(tok.text);
+                args_ = args.value();
+                ++literal_count_;
+                return;
+            }
+            case TokenType::kNumLit:
+            case TokenType::kStrLit: {
+                Fnv1a args(args_);
+                args.Byte(static_cast<std::uint8_t>(ArgTag::kStr));
+                args.Field(tok.text);
+                args_ = args.value();
+                ++literal_count_;
+                return;
+            }
+            case TokenType::kParam:
+            case TokenType::kNamedParam:
+                ++param_count_;
+                return;
+            default:
+                return;
+        }
+    }
+    if (insert_head_) {
+        if (tok.type == TokenType::kLParen) {
+            ++paren_depth_;
+        } else if (tok.type == TokenType::kRParen && paren_depth_ > 0 && --paren_depth_ == 0) {
+            first_group_closed_ = true;
+        }
+    }
 
     ShapeTag tag;
     if (!ShapeTagOf(tok.type, tag)) {

@@ -45,14 +45,14 @@ TEST(ParserTest, InsertParsesMixedValueTypes) {
     auto* ins = std::get_if<InsertStmt>(&stmt.value());
     ASSERT_NE(ins, nullptr);
     EXPECT_EQ(ins->table_name, "accounts");
-    ASSERT_EQ(ins->values.size(), 4u);
-    EXPECT_EQ(ins->values[0].type, ValueType::kInt);
-    EXPECT_EQ(ins->values[0].int_val, 1);
-    EXPECT_EQ(ins->values[1].type, ValueType::kStr);
-    EXPECT_EQ(ins->values[1].str_val, "alice");
-    EXPECT_EQ(ins->values[2].type, ValueType::kNull);
-    EXPECT_EQ(ins->values[3].type, ValueType::kInt);
-    EXPECT_EQ(ins->values[3].int_val, -9);
+    ASSERT_EQ(ins->rows[0].size(), 4u);
+    EXPECT_EQ(ins->rows[0][0].type, ValueType::kInt);
+    EXPECT_EQ(ins->rows[0][0].int_val, 1);
+    EXPECT_EQ(ins->rows[0][1].type, ValueType::kStr);
+    EXPECT_EQ(ins->rows[0][1].str_val, "alice");
+    EXPECT_EQ(ins->rows[0][2].type, ValueType::kNull);
+    EXPECT_EQ(ins->rows[0][3].type, ValueType::kInt);
+    EXPECT_EQ(ins->rows[0][3].int_val, -9);
 }
 
 TEST(ParserTest, ABareNumericLiteralIsTheQuotedStringOfItsSpelling) {
@@ -63,11 +63,11 @@ TEST(ParserTest, ABareNumericLiteralIsTheQuotedStringOfItsSpelling) {
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
     auto* ins = std::get_if<InsertStmt>(&stmt.value());
     ASSERT_NE(ins, nullptr);
-    ASSERT_EQ(ins->values.size(), 2u);
-    EXPECT_EQ(ins->values[0].type, ValueType::kStr);
-    EXPECT_EQ(ins->values[0].str_val, "12.34");
-    EXPECT_EQ(ins->values[1].type, ValueType::kStr);
-    EXPECT_EQ(ins->values[1].str_val, "-0.5");
+    ASSERT_EQ(ins->rows[0].size(), 2u);
+    EXPECT_EQ(ins->rows[0][0].type, ValueType::kStr);
+    EXPECT_EQ(ins->rows[0][0].str_val, "12.34");
+    EXPECT_EQ(ins->rows[0][1].type, ValueType::kStr);
+    EXPECT_EQ(ins->rows[0][1].str_val, "-0.5");
 
     // The byte offset is the literal's own first byte - what lets a later
     // coercion failure point at what the client wrote (TY05).
@@ -87,7 +87,7 @@ TEST(ParserTest, InsertPreservesRawIntTextForLargeLiterals) {
     ASSERT_TRUE(stmt.ok()) << stmt.status().message();
     auto* ins = std::get_if<InsertStmt>(&stmt.value());
     ASSERT_NE(ins, nullptr);
-    EXPECT_EQ(ins->values[0].raw_int_text, "18446744073709551615");
+    EXPECT_EQ(ins->rows[0][0].raw_int_text, "18446744073709551615");
 }
 
 TEST(ParserTest, InsertRequiresAtLeastOneValue) {

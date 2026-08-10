@@ -66,6 +66,15 @@ ok	a2266ff85c0a8df6	184a15bf54848454	INSERT INTO t VALUES (-5)
 ok	a2266ff85c0a8df6	67b70b73c6120ee9	INSERT INTO t VALUES (18446744073709551615)
 ok	a2266ff85c0a8df6	7a677b8bea1e608e	INSERT INTO t VALUES ('it is fine')
 ok	a2266ff85c0a8df6	b5d414774c8002cc	insert into t values (1);
+# [BLK] Multi-row VALUES (docs/spec-bulkinsert.md BI5): row count is not
+# part of the template, so the N-row statement carries the 1-row
+# statement's pattern_id - the same hash as the lines above - and later
+# rows' values fold into arg_hash only. Every pre-existing hash this
+# suppression moved belonged to a statement that parsed in no production
+# (fingerprintable, never storable), the bump rule's permitted second
+# transition; the moved lines below say so where they sit.
+ok	a2266ff85c0a8df6	78f79099c419719c	INSERT INTO t VALUES (1), (2)
+ok	c323a07930901e82	3042954c6216ee3a	INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')
 
 # ---- INSERT — rejected -----------------------------------------------------
 InvalidArgument	d6f585f4851f24f1	b5d414774c8002cc	INSERT t VALUES (1)
@@ -77,8 +86,13 @@ InvalidArgument	a438de526814732c	cbf29ce484222325	INSERT INTO t VALUES (x)
 InvalidArgument	5d4e21aff2166337	b5d414774c8002cc	INSERT INTO t VALUES (1
 InvalidArgument	91dad60465ec5af2	b5d414774c8002cc	INSERT INTO t VALUES (1,)
 InvalidArgument	a2266ff85c0a8df6	cbf29ce484222325	INSERT INTO t VALUES (?)
-InvalidArgument	d3decf486f2d0136	b5d414774c8002cc	INSERT INTO t VALUES (1) extra
-InvalidArgument	1b8e1c12b44c207a	78f79099c419719c	INSERT INTO t (a, b) VALUES (1, 2)
+# [BLK] The two hashes BI5's suppression moved, both never storable
+# (neither ever parsed): `... (1) extra` now hashes as the plain 1-row
+# insert, since `extra` sits past the first group and folds nothing; the
+# column-list form's first group is `(a, b)`, so its VALUES row became
+# args. Verdicts unchanged - the grammar still refuses both.
+InvalidArgument	a2266ff85c0a8df6	b5d414774c8002cc	INSERT INTO t VALUES (1) extra
+InvalidArgument	ce1fd11975f0684e	78f79099c419719c	INSERT INTO t (a, b) VALUES (1, 2)
 
 # ---- SELECT — accepted -----------------------------------------------------
 ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t

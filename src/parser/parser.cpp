@@ -1162,24 +1162,35 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
     stmt.table_name = std::move(name.value());
 
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;
-    if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
 
+    // One or more parenthesised rows, comma-separated (spec-bulkinsert.md
+    // BI3). The row *cap* is the dispatcher's - this layer is config-blind
+    // - so the loop is bounded only by the statement text, which the
+    // server already accepted whole.
     for (;;) {
-        auto val = ParseValue();
-        if (!val.ok()) return val.status();
-        stmt.values.push_back(std::move(val.value()));
+        if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
+
+        std::vector<AstValue> row;
+        for (;;) {
+            auto val = ParseValue();
+            if (!val.ok()) return val.status();
+            row.push_back(std::move(val.value()));
+
+            if (lexer_.Peek().type == TokenType::kComma) {
+                lexer_.Next();
+                continue;
+            }
+            break;
+        }
+
+        if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
+        stmt.rows.push_back(std::move(row));
 
         if (lexer_.Peek().type == TokenType::kComma) {
             lexer_.Next();
             continue;
         }
         break;
-    }
-
-    if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
-
-    if (stmt.values.empty()) {
-        return Status::InvalidArgument("INSERT VALUES requires at least one value");
     }
 
     ConsumeOptionalSemicolon();

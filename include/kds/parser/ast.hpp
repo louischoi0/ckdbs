@@ -297,9 +297,23 @@ struct CreateTableStmt {
     catalog::ClusteredType clustered = catalog::ClusteredType::kHeap;
 };
 
+// The per-statement row cap for a multi-row INSERT (docs/spec-bulkinsert.md
+// BI3, `[PROPOSED]`). A config key (`max_insert_rows`), not a compiled-in
+// constant - this is only the default the dispatcher starts from. It bounds
+// the id burn of an aborted bulk statement (BI9) and the memory a statement
+// holds before execution begins.
+inline constexpr std::size_t kDefaultMaxInsertRows = 1024;
+
+// `INSERT INTO <t> VALUES (…) [, (…)]*` (docs/spec-bulkinsert.md T1, BI3).
+//
+// One or more rows; the single-row statement is a rows vector of size one,
+// and its parse is byte-identical in behavior to what it always was. The
+// row cap is **not** enforced here: the parser is a pure syntax layer with
+// no config access, so the first config-aware layer (the dispatcher)
+// refuses an over-cap statement naming the cap and the count.
 struct InsertStmt {
     std::string table_name;
-    std::vector<AstValue> values;
+    std::vector<std::vector<AstValue>> rows;
 };
 
 

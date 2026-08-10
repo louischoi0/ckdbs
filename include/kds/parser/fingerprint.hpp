@@ -298,6 +298,18 @@ private:
     bool started_ = false;   // the leading word has been seen
     bool valid_ = false;     // ...and it was patternable, and nothing failed to lex
     bool complete_ = false;  // kEof has been fed
+
+    // BI5's suppression (docs/spec-bulkinsert.md §2.4): an INSERT's shape
+    // is its **first row's**. Once the first top-level paren group of an
+    // INSERT-headed stream has closed, later tokens fold literals into
+    // arg_hash and nothing into the shape - so `VALUES (1)` and
+    // `VALUES (1), (2), (3)` are one pattern_id, and row count never
+    // fragments sys.patterns. Safe for every *stored* hash: a storable
+    // 1-row statement has nothing but `;`/EOF after its group, which
+    // folded nothing before either.
+    bool insert_head_ = false;        // the leading word was INSERT
+    bool first_group_closed_ = false; // ...and its first () group has ended
+    std::uint32_t paren_depth_ = 0;
 };
 
 }  // namespace kds::parser
