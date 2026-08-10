@@ -69,6 +69,7 @@ add_library(kds
     src/server/expeditor.cpp
     src/server/config_file.cpp
     src/server/tcp_server.cpp
+    src/server/kwp_load_server.cpp
     src/parser/lexer.cpp
     src/parser/fingerprint.cpp
     src/parser/ast.cpp

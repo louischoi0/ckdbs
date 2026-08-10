@@ -29,7 +29,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "isolation",
             "wal_drain_interval_us", "relaxed_flush_interval_us",
             "log_dir",  "log_file",               "log_level",
-            "max_rows_touched",      "max_insert_rows",        "inline_cell_width",      "waystone_recording",
+            "max_rows_touched",      "max_insert_rows",        "kwp_port",
+            "inline_cell_width",      "waystone_recording",
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
             "indexes",
@@ -312,6 +313,14 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // ceiling too high to reach is the same as no ceiling, which the
         // operator has already asked for by setting it.
         max_rows_touched = v.value();
+    }
+    if (file.Has("kwp_port")) {
+        auto v = file.GetUint("kwp_port");
+        if (!v.ok()) return v.status();
+        if (v.value() > 65535) {
+            return Status::InvalidArgument("kwp_port must fit a TCP port");
+        }
+        kwp_port = static_cast<std::uint16_t>(v.value());
     }
     if (file.Has("max_insert_rows")) {
         auto v = file.GetUint("max_insert_rows");
@@ -708,6 +717,16 @@ Status Expeditor::Serve() {
     auto listener = TcpServer::Listen(config_.port);
     if (!listener.ok()) return listener.status();
 
+    // KWP v0's load endpoint (docs/workplan-kwp-load.md KW1): a second
+    // listener, existing only when asked for - kwp_port 0 means no socket
+    // is opened at all, so the default instance's surface is unchanged.
+    std::optional<KwpLoadServer> kwp_listener;
+    if (config_.kwp_port != 0) {
+        auto kwp = KwpLoadServer::Listen(config_.kwp_port);
+        if (!kwp.ok()) return kwp.status();
+        kwp_listener.emplace(std::move(kwp.value()));
+    }
+
     sched::Scheduler scheduler(clock_, io_backend.value());
     scheduler.SetLogger(&*logger_);
 
@@ -886,6 +905,11 @@ Status Expeditor::Serve() {
     }
     if (Status s = listener.value().Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
         return s;
+    }
+    if (kwp_listener.has_value()) {
+        if (Status s = kwp_listener->Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
+            return s;
+        }
     }
 
     // The `system`-group cadence of wal.md section 11. A failed checkpoint

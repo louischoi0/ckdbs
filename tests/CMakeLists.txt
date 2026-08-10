@@ -103,6 +103,7 @@ add_executable(kds_tests
     alter_table_test.cpp
     bulk_insert_test.cpp
     drop_table_test.cpp
+    kwp_load_server_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp
     type_literals_test.cpp

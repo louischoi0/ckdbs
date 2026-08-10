@@ -167,6 +167,14 @@ max_rows_touched = 100000000
 # `[PROPOSED]`.
 max_insert_rows = 1024
 
+# ---- KWP (binary protocol) -------------------------------------------------
+
+# The KWP v0 load endpoint (docs/workplan-kwp-load.md): a second, framed
+# listener carrying exactly the bulk load stream - handshake, BULK_LOAD
+# capability, C_LOAD_* session - while every query stays on the text port
+# above. 0 (the default) opens no socket at all. Loopback only.
+kwp_port = 0
+
 # ---- Waystone --------------------------------------------------------------
 
 # Whether a successful SELECT records where it found its rows, so a repeated

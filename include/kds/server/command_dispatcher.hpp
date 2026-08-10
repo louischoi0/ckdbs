@@ -652,6 +652,10 @@ public:
     // chunk and calls this.
     DispatchOutcome ExecuteInsert(const parser::InsertStmt& stmt, Session& session);
 
+    // For the sibling platform layers (the KWP load endpoint's schema
+    // reads). The catalog's own discipline applies unchanged.
+    catalog::Catalog& catalog() noexcept { return catalog_; }
+
 private:
     // `analyze` switches the reply from rows to the compiled plan plus
     // the per-step counters the run produced. Everything before that -

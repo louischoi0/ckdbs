@@ -49,11 +49,18 @@ here forecloses it.
 - **KW7, honesty**: no resume/dedup (BI14), no TLS, no cancel, no
   compression - each answers ERROR(UNSUPPORTED) where reachable.
 
-## KL01 — kwp_types.hpp registry + payload codecs for the v0 frames
-## KL02 — KwpConnection: framed read loop over the reactor, handshake, modality
-## KL03 — The load session: BEGIN/READY, CHUNK/ACK with the window, END/ABORT
-## KL04 — Dispatcher seam: a LoadSink calling the T1/T3 write path per row/batch
-## KL05 — Config (`kwp_port`) + expeditor wiring + client-manual note
-## KL06 — Tests: handshake, modality, a loopback load E2E (rows land, COUNT
-##          verified, T3 engaged on an eligible relation), abort unwinds,
-##          window refusal on a too-big chunk, unknown frame ERROR(PROTOCOL)
+## KL01 — Registry + payload codecs  **[DONE 2026-08-10]**
+## KL02 — KwpLoadServer: framed reactor loop, handshake, modality  **[DONE 2026-08-10]**
+## KL03 — The load session  **[DONE 2026-08-10]**
+## KL04 — Dispatcher seam (ExecuteInsert over the parsed half)  **[DONE 2026-08-10]**
+## KL05 — Config + expeditor wiring  **[DONE 2026-08-10]**
+## KL06 — Tests  **[DONE 2026-08-10]**
+
+Real-socket E2E in `tests/kwp_load_server_test.cpp`: a two-chunk load
+lands five rows through the one write path (the T3 gate open, COUNT and a
+point read verified over the text port), abort unwinds whole, a skipped
+chunk_seq kills the load with S_ERROR and its rows, a pre-hello frame
+refuses and closes **with the error delivered** - the one server bug the
+tests caught was CloseClient discarding the outbox under the refusal.
+The reactor is ended by the text port's STOP in every test, guarded so a
+client-side assertion failure reads as red rather than a hang.
