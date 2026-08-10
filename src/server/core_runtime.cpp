@@ -5,6 +5,8 @@
 #include <string>
 #include <utility>
 
+#include "kds/sched/send_retry.hpp"
+
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 
@@ -165,6 +167,48 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             !s.ok()) {
             return s;
         }
+    }
+
+    // The remote step server (workplan P4b): this core executes STEP_OPENs
+    // against relations it owns and streams the batches back under credit.
+    // The sender submits through the retry task - a full ring yields and
+    // retries, never drops (M7).
+    remote_steps_.emplace(
+        *catalog_, *store_, config_.core_id,
+        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            sched::MessageHeader out{};
+            out.src_core = config_.core_id;
+            out.dst_core = dst;
+            out.session_core = dst;
+            out.kind = static_cast<std::uint16_t>(kind);
+            out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+            scheduler_->Submit(sched::MakeSendRetryTask(*transport_, out, payload));
+            return Status::OK();
+        },
+        log_);
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kStepOpen,
+            [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                remote_steps_->OnStepOpen(header, payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kStepCredit,
+            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                remote_steps_->OnStepCredit(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kStepCancel,
+            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                remote_steps_->OnStepCancel(payload);
+            });
+        !s.ok()) {
+        return s;
     }
 
     // The grant side of the page-id lease (workplan P5). Registered here
