@@ -1,0 +1,161 @@
+#include "kds/wal/analysis.hpp"
+
+#include <algorithm>
+#include <string>
+
+#include "kds/wal/log_scanner.hpp"
+
+namespace kds::wal {
+
+const char* TxnOutcomeName(TxnOutcome outcome) noexcept {
+    switch (outcome) {
+        case TxnOutcome::kWinner: return "winner";
+        case TxnOutcome::kAborted: return "aborted";
+        case TxnOutcome::kLoser: return "loser";
+    }
+    return "?";
+}
+
+Lsn RedoStartFrom(Lsn floor_lsn, const std::map<PageId, Lsn>& dirty_pages) noexcept {
+    Lsn out = floor_lsn;
+    for (const auto& [page_id, rec_lsn] : dirty_pages) {
+        (void)page_id;
+        // Zero means "dirty but described by no record" - skipped, never
+        // min()ed in (wal.md §11-3).
+        if (rec_lsn != 0) {
+            out = std::min(out, rec_lsn);
+        }
+    }
+    return out;
+}
+
+Lsn RedoStartFrom(Lsn floor_lsn, std::span<const CheckpointDirtyPage> dirty_pages) noexcept {
+    Lsn out = floor_lsn;
+    for (const CheckpointDirtyPage& page : dirty_pages) {
+        if (page.rec_lsn != 0) {
+            out = std::min(out, page.rec_lsn);
+        }
+    }
+    return out;
+}
+
+StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
+                                 const AnalysisStart& start) {
+    AnalysisResult out;
+    out.scan_start_lsn = start.redo_start_lsn;
+
+    // Seen as a loser until a terminal record says otherwise. Never
+    // downgrades an outcome: a transaction that committed does not become
+    // a loser because a later record still names it.
+    const auto note_txn = [&out](std::uint64_t txn_id, TxnOutcome outcome) {
+        if (txn_id == kNoTxnId) {
+            return;
+        }
+        out.max_txn_id = std::max(out.max_txn_id, txn_id);
+        auto [it, inserted] = out.transactions.emplace(txn_id, outcome);
+        if (!inserted && outcome != TxnOutcome::kLoser) {
+            it->second = outcome;
+        }
+    };
+
+    const auto visit = [&](const DecodedRecord& record) -> Status {
+        // Every record whose envelope names a transaction implies that
+        // transaction existed, even if its TXN_BEGIN is below the scan
+        // start or its id came from a checkpoint's active list.
+        note_txn(record.header.txn_id, TxnOutcome::kLoser);
+
+        // A page mutation dirties its page as of *this* LSN, unless the
+        // page is already known dirty from earlier - the recLSN is the
+        // oldest record that must be replayed, so the first one wins.
+        if (record.header.page_id != kInvalidPageId) {
+            out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
+            out.max_page_id = (out.max_page_id == kInvalidPageId)
+                                  ? record.header.page_id
+                                  : std::max(out.max_page_id, record.header.page_id);
+        }
+
+        switch (record.type()) {
+            case RecordType::kTxnCommit:
+                note_txn(record.header.txn_id, TxnOutcome::kWinner);
+                break;
+            case RecordType::kTxnAbort:
+                // Already compensated by records this scan has passed, and
+                // redo will replay them. Not a loser (analysis.hpp).
+                note_txn(record.header.txn_id, TxnOutcome::kAborted);
+                break;
+            case RecordType::kCheckpointBegin: {
+                // The seed: both tables as they stood when the checkpoint
+                // began. This is why the record is written at all, and why
+                // analysis takes it from the scan rather than from a
+                // separate read - the scan starts at or before it.
+                auto decoded = DecodeCheckpointBegin(record.payload);
+                if (!decoded.ok()) {
+                    return decoded.status();
+                }
+                for (std::uint64_t txn_id : decoded.value().active_txns) {
+                    note_txn(txn_id, TxnOutcome::kLoser);
+                }
+                for (const CheckpointDirtyPage& page : decoded.value().dirty_pages) {
+                    out.dirty_pages.emplace(page.page_id, page.rec_lsn);
+                    out.max_page_id = (out.max_page_id == kInvalidPageId)
+                                          ? page.page_id
+                                          : std::max(out.max_page_id, page.page_id);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        return Status::OK();
+    };
+
+    auto scan = ScanLog(device, core_id, start.redo_start_lsn, visit);
+    if (!scan.ok()) {
+        return scan.status();
+    }
+
+    out.end_lsn = scan.value().end_lsn;
+    out.stopped_early = scan.value().stopped_early;
+    out.records = scan.value().records;
+
+    // The honesty check (analysis.hpp): the anchor was published with the
+    // stream's durable end, so a scan that ends before it has lost records
+    // the anchor depends on. Refuse the mount rather than replay a prefix.
+    if (start.anchor_durable_lsn != 0 && out.end_lsn < start.anchor_durable_lsn) {
+        return Status::Corruption(
+            "wal analysis: core " + std::to_string(core_id) + "'s stream ends at lsn " +
+            std::to_string(out.end_lsn) + ", before the durable point " +
+            std::to_string(start.anchor_durable_lsn) +
+            " its checkpoint anchor was published with - records the anchor depends on are "
+            "missing");
+    }
+
+    // The floor is the durable end, which is an *upper* bound rather than
+    // a lower one - and that is the difference between this caller and the
+    // checkpointer.
+    //
+    // The checkpointer computes the redo start forward, from a table whose
+    // recLSNs all predate the checkpoint it is writing, so flooring at the
+    // checkpoint's own LSN is what picks the oldest of them. Analysis
+    // recomputes it backward, from a table whose recLSNs are all at or
+    // after the point the scan began - so flooring at the scan start would
+    // return the scan start every time, and the number would say nothing.
+    //
+    // Flooring at the end instead makes the answer "the oldest page any
+    // record in this range must be replayed from", and "nothing to redo"
+    // exactly when no page was dirtied. Same shared rule about skipping a
+    // recLSN of 0; different bound, which is what the parameter is for.
+    out.redo_start_lsn = RedoStartFrom(out.end_lsn, out.dirty_pages);
+
+    for (const auto& [txn_id, outcome] : out.transactions) {
+        (void)txn_id;
+        switch (outcome) {
+            case TxnOutcome::kWinner: ++out.winners; break;
+            case TxnOutcome::kAborted: ++out.aborted; break;
+            case TxnOutcome::kLoser: ++out.losers; break;
+        }
+    }
+    return out;
+}
+
+}  // namespace kds::wal

@@ -1,6 +1,6 @@
 # WAL recovery — workplan
 
-Status: **RC01 written (unbuilt); RC02 onward not started.** Spec: `docs/wal.md` §12 (normative, and
+Status: **RC01-RC02 written (unbuilt); RC03 onward not started.** Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
@@ -181,16 +181,48 @@ cleanly and reports `stopped_early`; a sealed-then-rolled segment boundary
 is crossed with no record lost or duplicated. All three are written in
 `tests/wal_log_scanner_test.cpp` and **none has been executed.**
 
-**RC02 — Analysis.**
-From the core's `WalAnchorFields`: scan `redo_start_lsn` → durable end,
-rebuild the dirty-page table and the transaction table, classify winners
-(a `TXN_COMMIT` seen) and losers (everything else, `TXN_ABORT` included —
-an abort record means the work is already compensated, not that it is
-absent). Seed both tables from `CHECKPOINT_BEGIN`'s payload rather than
-from nothing, which is what that record is for.
+**RC02 — Analysis. WRITTEN 2026-08-10, NOT YET BUILT OR RUN**, on RC01's
+terms — no toolchain here. `wal/analysis.hpp` + `src/wal/analysis.cpp`:
+`Analyze(device, core_id, {redo_start_lsn, anchor_durable_lsn})` makes one
+forward pass and returns the dirty-page table, the transaction table, the
+redo start, and RV4's `max_page_id`/`max_txn_id`. It reads the log and
+nothing else — no page, no catalog, no write — which is what lets its
+tests be scripted logs rather than crashed databases.
+
+**This task's own text was wrong on one point and is corrected here: the
+split is three ways, not two.** It said losers were "everything else,
+`TXN_ABORT` included". They are not. `txn.md` §6 emits rollback's
+compensations as **ordinary logged mutations** and appends `TXN_ABORT`
+after them, and a stream is a durable prefix — so a durable `TXN_ABORT`
+means every compensation before it is durable too, and *redo* replays
+them. Undo owes that transaction nothing; running it again would be work
+the `page_lsn` gate silently absorbs. `TxnOutcome` is therefore
+`kWinner` / `kAborted` / `kLoser`, and only the last is undo's.
+
+Two more things it settled:
+
+- **The anchor's `durable_lsn` is what makes an empty scan honest.** A log
+  that lost the records its anchor depends on scans to zero records —
+  byte-identical to a clean shutdown right after a checkpoint. Analysis
+  requires the scan to reach the durable point the anchor was published
+  with, and fails `Corruption` otherwise. Without it, recovery's quietest
+  failure mode is a silent empty replay onto a database that needed one:
+  `txn.md` §8's partial recovery, arrived at by omission.
+- **`RedoStartFrom` is shared with the checkpointer but takes the opposite
+  bound**, which writing the tests is what surfaced. The checkpointer
+  floors at its own `CHECKPOINT_BEGIN` LSN because its recLSNs all
+  *predate* it; analysis floors at the durable end because its recLSNs all
+  *follow* the scan start — flooring analysis at the scan start returns
+  the scan start every time and says nothing. What is shared is §11-3's
+  real rule, *skip a recLSN of 0 and take the minimum*, which is the part
+  that drifts; the checkpointer's own copy of it is deleted.
+
 *Done when:* a scripted log yields the exact winner/loser split; a log with
 no checkpoint recovers from segment 0; an anchor pointing past the durable
 end is `Corruption` and refuses the mount, never a silent empty recovery.
+All three are in `tests/wal_analysis_test.cpp`, with the seeding path, the
+recLSN-of-zero rule and the torn-tail-demotes-a-commit case beside them,
+and **none has been executed.**
 
 **RC03 — Redo.**
 Replay forward under RV5, `FULL_PAGE_IMAGE` first per page, restoring a

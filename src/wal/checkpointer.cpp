@@ -4,6 +4,8 @@
 #include <string>
 #include <utility>
 
+#include "kds/wal/analysis.hpp"
+
 namespace kds::wal {
 
 Checkpointer::Checkpointer(WalManager& wal, CheckpointTarget& target, ActiveTransactions& txns,
@@ -52,14 +54,16 @@ Status Checkpointer::Start() {
     // Pages dirtied *after* this point need no special handling: their
     // recLSNs are necessarily above begin_lsn_, which is itself an upper
     // bound on what this computes.
-    pending_redo_start_ = begin_lsn_;
+    // §11-3's rule lives in RedoStartFrom (wal/analysis.hpp), shared with
+    // recovery's analysis phase, which recomputes the same number backward
+    // from the table it rebuilds. Two copies of "skip a recLSN of 0" is two
+    // chances to lose the skip, and losing it drags the redo start to zero
+    // and replays the whole stream.
+    pending_redo_start_ = RedoStartFrom(begin_lsn_, dirty);
     pending_pages_.clear();
     pending_pages_.reserve(dirty.size());
     for (const CheckpointDirtyPage& page : dirty) {
         pending_pages_.push_back(page.page_id);
-        if (page.rec_lsn != 0) {
-            pending_redo_start_ = std::min(pending_redo_start_, page.rec_lsn);
-        }
     }
 
     next_page_ = 0;
