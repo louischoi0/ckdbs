@@ -87,7 +87,7 @@ out-of-range values, each naming the file and line.
 | `access_statistics` | `on` | Per-shape access recording for `SHOW ACCESS`. +1-2% on a point lookup. |
 | `physical_optimizer` | `shadow` | `off` or `shadow`. `on` is **refused at startup** naming the three gates that block every plan (`docs/feat-physical-optimizer.md` §6). |
 | `decay_half_life` | `600` | Seconds for an untouched decay score to halve. `0` refused. |
-| `cabin_optimizer` | `off` | The Cabin controller (PHY04): `on` lets it CREATE/EXTEND/HEAL/DROP Observational Cabins for `CABIN AUTO` columns. Tuning keys (`cabin_optimizer_page_budget`, `_theta_*_pct`, `_confirm_snapshots`, `_snapshot_interval_ms`) documented in `kds.conf.sample`. |
+| `cabin_optimizer` | `off` | The Cabin controller (PHY04): `on` lets it CREATE/EXTEND/HEAL/DROP Observational Cabins for `CABIN AUTO` columns. Tuning keys (`cabin_optimizer_page_budget`, `_theta_*_pct`, `_confirm_snapshots`, `_amort_windows` — 64, the overnight-survival window ratified from `bench/results-cabin-optimizer-days.md` — and `_snapshot_interval_ms`) documented in `kds.conf.sample`. |
 | `max_insert_rows` | `1024` | Cap on rows in one multi-row `INSERT ... VALUES (...), (...)`. Over-cap refuses the whole statement, inserting nothing. |
 | `cabins` | `on` | Whether Cabins may be built and served. Does nothing until a `CREATE CABIN`. |
 | `indexes` | `on` | Whether a secondary index may be **read**. Off takes the walk instead; replies are byte-identical. There is deliberately no maintenance switch — that is `DROP INDEX`. |

@@ -218,6 +218,10 @@ public:
         std::uint32_t cabin_optimizer_theta_extend_pct = 20;
         std::uint32_t cabin_optimizer_theta_heal_pct = 10;
         std::uint32_t cabin_optimizer_confirm_snapshots = 3;
+        // T_amort in whole decay half-lives (never 0). 64 = overnight
+        // survival at the default half-life; the derivation lives on
+        // `stats::CabinOptimizerConfig::amort_windows`.
+        std::uint32_t cabin_optimizer_amort_windows = 64;
         // 0 disables the cadence, the checkpoint_interval_ms precedent.
         std::uint64_t cabin_optimizer_snapshot_interval_ms = 10'000;
 

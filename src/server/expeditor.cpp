@@ -40,6 +40,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
             "cabin_optimizer_theta_swap_pct",   "cabin_optimizer_theta_extend_pct",
             "cabin_optimizer_theta_heal_pct",   "cabin_optimizer_confirm_snapshots",
+            "cabin_optimizer_amort_windows",
             "cabin_optimizer_snapshot_interval_ms"};
 }
 
@@ -56,6 +57,8 @@ stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
     config.confirm_snapshots = cabin_optimizer_confirm_snapshots;
     config.page_budget = cabin_optimizer_page_budget;
     config.half_life_ns = decay_half_life_ns;
+    config.amort_windows = static_cast<stats::Fix16>(cabin_optimizer_amort_windows) *
+                           stats::kFixOne;
     return config;
 }
 
@@ -276,6 +279,23 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                                            "which is what N_confirm exists to prevent");
         }
         cabin_optimizer_confirm_snapshots = static_cast<std::uint32_t>(v.value());
+    }
+    if (file.Has("cabin_optimizer_amort_windows")) {
+        auto v = file.GetUint("cabin_optimizer_amort_windows");
+        if (!v.ok()) return v.status();
+        // 0 is refused rather than clamped: T_amort divides the build
+        // cost, and amortizing over nothing prices every Cabin free -
+        // create-everything wearing a configuration's clothes. The
+        // ceiling is a sanity bound; a huge window that saturates the
+        // cooldown arithmetic errs toward never dropping, which is the
+        // direction such a configuration asked for.
+        if (v.value() == 0 || v.value() > 100'000) {
+            return Status::InvalidArgument(
+                file.origin() + ": cabin_optimizer_amort_windows is outside 1..100000 - it "
+                                "amortizes a Cabin's build cost over that many decay "
+                                "half-lives, and over *zero* half-lives every Cabin is free");
+        }
+        cabin_optimizer_amort_windows = static_cast<std::uint32_t>(v.value());
     }
     if (file.Has("cabin_optimizer_snapshot_interval_ms")) {
         auto v = file.GetUint("cabin_optimizer_snapshot_interval_ms");

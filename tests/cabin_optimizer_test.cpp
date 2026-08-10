@@ -52,6 +52,11 @@ CabinOptimizerConfig TestConfig() {
     CabinOptimizerConfig config;
     config.page_budget = 6;
     config.half_life_ns = 1000;  // cooldown = 2 x amort x half-life = 2000
+    // T_amort pinned at 1 half-life: these tests pin the *rules* at the
+    // model's neutral unit, where B/C arithmetic reads off the snapshot
+    // directly. The shipped default (64, overnight survival) gets its own
+    // test below at the shipped numbers.
+    config.amort_windows = kFixOne;
     return config;
 }
 
@@ -348,10 +353,18 @@ TEST(CabinOptimizerTest, ASwapVictimSortingAfterTheCandidateIsDroppedOnce) {
 // half of a u64 before the amort_windows multiply even starts. The product
 // saturated, and the 1200-second cooldown came out as 4.29 seconds - the
 // hysteresis the θ gap buys, undone by an overflow nothing reported.
-TEST(CabinOptimizerTest, TheCooldownIsTwoAmortWindowsAtAShippedHalfLife) {
-    CabinOptimizerConfig config;  // the shipped defaults: half-life 600 s
+TEST(CabinOptimizerTest, TheShippedDefaultsSurviveAMarketOvernight) {
+    // The operator-ratified requirement (2026-08-10, from the
+    // business-days scenario): a Cabin must survive a market's
+    // close-to-open gap - ~17.5 h, ~105 half-lives at the default 600 s -
+    // and a *weekend* must still drop it. At the shipped T_amort = 64 the
+    // cooldown alone is 2 x 64 half-lives = 76,800 s = 21 h 20 m, so the
+    // night is covered by the cooldown before the log2(B/C) margin is
+    // even counted, and 48 h of silence is comfortably past it.
+    CabinOptimizerConfig config;  // the shipped defaults, deliberately
     constexpr sched::MonoTimeNs kSecond = 1'000'000'000ULL;
     ASSERT_EQ(config.half_life_ns, 600 * kSecond);
+    ASSERT_EQ(config.amort_windows, 64 * kFixOne);
     CabinOptimizer opt(config);
 
     for (std::uint64_t v = 1; v <= 3; ++v) opt.Decide(HotSnapshot(v, /*epoch=*/kSecond));
@@ -360,17 +373,23 @@ TEST(CabinOptimizerTest, TheCooldownIsTwoAmortWindowsAtAShippedHalfLife) {
     const auto cold = [&](std::uint64_t v, sched::MonoTimeNs epoch) {
         return Snap(v, epoch, {Fp(7, 0, 0, kRel, kCol, 42)}, {Quality(42, 1, 0)});
     };
-    // Traffic dies: DECAYING from here, no action.
+    // Traffic dies at the close: DECAYING from here, no action.
     ASSERT_TRUE(opt.Decide(cold(4, kSecond)).empty());
 
-    // Ten seconds later - past the saturated 4.29 s, nowhere near the
-    // configured 1200 s. A DROP here is the controller churning out a Cabin
-    // the operator asked it to hold for twenty minutes.
-    EXPECT_TRUE(opt.Decide(cold(5, 11 * kSecond)).empty())
-        << "dropped before the configured cooldown elapsed";
+    // The whole overnight passes in silence - 17.5 h after the close. A
+    // DROP here is the nightly rebuild loop the default exists to end.
+    EXPECT_TRUE(opt.Decide(cold(5, (1 + 63'000) * kSecond)).empty())
+        << "dropped during the overnight the default was sized to survive";
 
-    // Past it: the DROP the configuration actually asked for.
-    const ActionSet dropped = opt.Decide(cold(6, 1300 * kSecond));
+    // The morning rebound: the same traffic that earned the CREATE finds
+    // the entry DECAYING and recovers it - no rebuild, no action.
+    ASSERT_TRUE(opt.Decide(HotSnapshot(6, (1 + 63'060) * kSecond)).empty());
+    // And it decays again when traffic dies again.
+    ASSERT_TRUE(opt.Decide(cold(7, (1 + 63'120) * kSecond)).empty());
+
+    // A weekend of silence is past the cooldown: the DROP the model still
+    // owes - two silent days of staleness is what DROP is for.
+    const ActionSet dropped = opt.Decide(cold(8, (1 + 63'120 + 172'800) * kSecond));
     ASSERT_EQ(dropped.size(), 1u);
     EXPECT_EQ(dropped[0].action, CabinAction::kDrop);
     EXPECT_EQ(dropped[0].reason, ActionReason::kSustainedDecay);

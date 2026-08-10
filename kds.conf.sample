@@ -275,6 +275,18 @@ cabin_optimizer = off
 #cabin_optimizer_confirm_snapshots = 3
 #cabin_optimizer_snapshot_interval_ms = 10000
 
+# T_amort: how many decay half-lives a Cabin's build cost amortizes over.
+# One number, one belief - the structure's expected useful lifetime - read
+# by both sides of the cost model: the admission bar (build cost / window)
+# and the DROP cooldown (2 x window). The default 64 makes the cooldown
+# 21 h 20 m at the default 600 s half-life, so a Cabin survives a market's
+# close-to-open gap and the morning traffic recovers it without a rebuild;
+# a weekend of silence still drops it (re-nomination is cheap, staleness
+# is not). 1 restores the pre-2026-08-10 nightly-rebuild behaviour
+# (bench/results-cabin-optimizer-days.md is the measurement that moved
+# it). 0 is refused.
+#cabin_optimizer_amort_windows = 64
+
 # ---- Cabins ----------------------------------------------------------------
 
 # Whether Cabins may be built and served (docs/feat-cabin.md).
