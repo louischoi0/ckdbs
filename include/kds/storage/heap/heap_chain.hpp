@@ -104,6 +104,24 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 // Inserts `payload` (whose leading Keystone word must carry `id`) into the
 // chain, extending it if the tail page is full.
 //
+// `tail_hint`, when given, is where the tail *search* starts and where the
+// landing page is written back - the fix for what the bulk-insert bench
+// measured (bench/results-bulk-insert.md): walking to the tail from the
+// head on every insert is O(pages-resident) per row, which made bulk
+// loads quadratic in total rows and was, after T1, the whole remaining
+// per-row cost. With the hint an insert touches O(1) pages again.
+//
+// **A hint can be behind, never wrong**, and that is the whole safety
+// argument: `next_page_id` is written exactly once (kInvalid -> the new
+// tail) and a page never leaves its chain, so any page id a previous
+// ChainInsert on THIS chain reported still reaches the current tail by
+// walking forward. Two failure modes remain and both heal: a hint page
+// the store cannot fetch falls back to a walk from `head`, and a caller
+// handing in some other chain's page is a logic error upstream that this
+// layer cannot detect - which is why the contract is stated here: the
+// hint must be a value this function previously wrote back for this
+// chain, or kInvalidPageId. Null is the pre-hint behavior, byte for byte.
+//
 // Fails with:
 //   AlreadyExists  a live tuple in the tail page already carries `id`
 //   OutOfRange     `id` is below the tail page's min_key (invariant 3) -
@@ -114,7 +132,8 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 //                  allocated (e.g. OutOfSpace), in which case nothing was
 //                  written and the chain is unchanged
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
-                                        std::span<const std::byte> payload, std::uint64_t trx_id);
+                                        std::span<const std::byte> payload, std::uint64_t trx_id,
+                                        PageId* tail_hint = nullptr);
 
 // Calls `fn` once per live slot of every page in the chain, in chain order
 // (which is id order page-wise, per the ordering property above). The

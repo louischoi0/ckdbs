@@ -419,5 +419,76 @@ TEST(HeapChainTest, AVisitorReturningAnOkStatusInsteadOfContinueIsRefused) {
     EXPECT_NE(s.message().find("VisitControl"), std::string::npos) << s.message();
 }
 
+// ---- The tail hint (bench/results-bulk-insert.md's fix) -------------------
+//
+// The claim the hint rests on: a former chain page is always a valid walk
+// start, because next_page_id is write-once and a page never leaves its
+// chain - so a hint can be *behind* the tail, never wrong, and a damaged
+// one costs a retried walk from the head, never an answer.
+
+TEST(HeapChainTest, AHintedInsertMatchesTheUnhintedChainAndTracksTheTail) {
+    storage::InMemoryPageStore hinted_store(128);
+    storage::InMemoryPageStore plain_store(128);
+    const PageId hinted_head = MakeHead(hinted_store);
+    const PageId plain_head = MakeHead(plain_store);
+
+    PageId hint = kInvalidPageId;
+    for (std::uint64_t id = 1; id <= 30; ++id) {
+        auto hinted =
+            ChainInsert(hinted_store, hinted_head, id, MakeTuple(id, 1016), /*trx_id=*/1, &hint);
+        auto plain = ChainInsert(plain_store, plain_head, id, MakeTuple(id, 1016), /*trx_id=*/1);
+        ASSERT_TRUE(hinted.ok()) << hinted.status().message();
+        ASSERT_TRUE(plain.ok()) << plain.status().message();
+
+        // Identical placement decision, insert for insert...
+        EXPECT_EQ(hinted.value().slot, plain.value().slot);
+        EXPECT_EQ(hinted.value().grew_chain, plain.value().grew_chain);
+
+        // ...and the hint is the real tail after every one.
+        auto tail = ChainTail(hinted_store, hinted_head);
+        ASSERT_TRUE(tail.ok());
+        EXPECT_EQ(hint, tail.value()) << "id " << id;
+        EXPECT_EQ(hint, hinted.value().page_id);
+    }
+
+    auto len = ChainLength(hinted_store, hinted_head);
+    ASSERT_TRUE(len.ok());
+    EXPECT_GT(len.value(), 2u) << "the fixture must span pages to prove anything";
+}
+
+TEST(HeapChainTest, AStaleHintIsBehindNeverWrong) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 20, 1016);  // several pages
+
+    // The stalest possible hint: the head itself. The walk starts there,
+    // reaches the true tail, and the insert lands exactly where an
+    // unhinted one would.
+    PageId hint = head;
+    auto r = ChainInsert(store, head, 21, MakeTuple(21, 1016), /*trx_id=*/1, &hint);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+
+    auto tail = ChainTail(store, head);
+    ASSERT_TRUE(tail.ok());
+    EXPECT_EQ(r.value().page_id, tail.value());
+    EXPECT_EQ(hint, tail.value());
+}
+
+TEST(HeapChainTest, ADamagedHintFallsBackToTheHeadAndHeals) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 20, 1016);
+
+    // A page id the store cannot resolve: the hinted walk fails, the
+    // head walk answers, and the write-back repairs the hint.
+    PageId hint = 120;  // never allocated
+    auto r = ChainInsert(store, head, 21, MakeTuple(21, 1016), /*trx_id=*/1, &hint);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+
+    auto tail = ChainTail(store, head);
+    ASSERT_TRUE(tail.ok());
+    EXPECT_EQ(hint, tail.value());
+}
+
 }  // namespace
 }  // namespace kds::heap

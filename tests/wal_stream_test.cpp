@@ -512,5 +512,79 @@ TEST_F(WalStreamTest, ATransactionsRecordsReadBackInOrder) {
     EXPECT_FALSE(reader.Next().has_value());
 }
 
+// ---- The exact-fill boundary (bench/results-bulk-insert.md's wedge) -------
+//
+// An append that exactly fills a segment leaves append_lsn_ at offset 0 of
+// the *next* segment - a position no record ever legitimately occupies,
+// since every segment opens with its header block. SegmentRemaining() used
+// to answer a full segment there: the roll was skipped, the next record
+// was placed in a segment that had never been created, and every later
+// Flush refused the boundary-spanning range, wedging the stream for good.
+// These two tests fill a segment to the byte and then keep going, on the
+// live stream and through a reopen.
+
+// 64-byte records (32-byte payload): kSegmentSize and kSegmentHeaderSize
+// are both multiples of 64, so the usable span fills with no remainder.
+constexpr std::size_t kExactFillPayload = 64 - kRecordHeaderSize;
+
+TEST_F(WalStreamTest, AnExactlyFullSegmentRollsInsteadOfWedging) {
+    auto stream = OpenStream();
+    ASSERT_NE(stream, nullptr);
+
+    const std::uint64_t records = (kSegmentSize - kSegmentHeaderSize) / 64;
+    const auto payload = Pattern(kExactFillPayload, 5);
+    for (std::uint64_t i = 0; i < records; ++i) {
+        auto lsn = stream->Append(HeapInsert(1, 7), payload);
+        ASSERT_TRUE(lsn.ok()) << "record " << i << ": " << lsn.status().message();
+        if (stream->ring_used() > kMinRingCapacity / 2) {
+            ASSERT_TRUE(stream->Flush().ok());
+        }
+    }
+    // To the byte: the append cursor sits exactly on the boundary.
+    EXPECT_EQ(stream->append_lsn(), kSegmentSize);
+
+    // The wedge probe. Pre-fix this append believed a full segment
+    // remained, skipped the roll, and the stream never recovered.
+    auto rolled = stream->Append(HeapInsert(1, 7), payload);
+    ASSERT_TRUE(rolled.ok()) << rolled.status().message();
+    EXPECT_EQ(rolled.value(), kSegmentSize + kSegmentHeaderSize)
+        << "the record must open segment 1, past its header";
+    EXPECT_EQ(device_->segment_count(), 2u);
+    ASSERT_TRUE(stream->Flush().ok());
+
+    // The record is really there, at its address.
+    EXPECT_EQ(ReadRecordAt(rolled.value(), RecordType::kHeapInsert), payload);
+}
+
+TEST_F(WalStreamTest, ReopeningAtAnExactlyFullSegmentRollsToo) {
+    const auto payload = Pattern(kExactFillPayload, 5);
+    {
+        auto stream = OpenStream();
+        ASSERT_NE(stream, nullptr);
+        const std::uint64_t records = (kSegmentSize - kSegmentHeaderSize) / 64;
+        for (std::uint64_t i = 0; i < records; ++i) {
+            ASSERT_TRUE(stream->Append(HeapInsert(1, 7), payload).ok());
+            if (stream->ring_used() > kMinRingCapacity / 2) {
+                ASSERT_TRUE(stream->Flush().ok());
+            }
+        }
+        ASSERT_TRUE(stream->Flush().ok());
+        EXPECT_EQ(stream->append_lsn(), kSegmentSize);
+    }
+
+    // The mount path: ScanTail walks the exactly-full segment to its
+    // boundary and the first append afterwards must roll, exactly as the
+    // live stream did.
+    auto reopened = OpenStream();
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_EQ(reopened->append_lsn(), kSegmentSize);
+
+    auto lsn = reopened->Append(HeapInsert(2, 9), payload);
+    ASSERT_TRUE(lsn.ok()) << lsn.status().message();
+    EXPECT_EQ(lsn.value(), kSegmentSize + kSegmentHeaderSize);
+    ASSERT_TRUE(reopened->Flush().ok());
+    EXPECT_EQ(ReadRecordAt(lsn.value(), RecordType::kHeapInsert), payload);
+}
+
 }  // namespace
 }  // namespace kds::wal

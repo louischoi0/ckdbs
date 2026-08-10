@@ -157,8 +157,18 @@ private:
     std::uint64_t OffsetOf(Lsn lsn) const noexcept { return lsn % segment_size_; }
 
     // Bytes left in the current segment after append_lsn_.
+    //
+    // An offset of exactly 0 is **one past the end of a segment an append
+    // just filled**, never a position inside one - every segment opens
+    // with its header block, so no record ever sits at offset 0. The
+    // unguarded form answered a full segment there, which is the wedge
+    // the bulk-insert bench found (bench/results-bulk-insert.md): the
+    // roll was skipped, the next record was placed at the start of a
+    // segment that had never been created, and every later Flush refused
+    // the boundary-spanning range - permanently, at ~300K logged rows.
     std::uint64_t SegmentRemaining() const noexcept {
-        return segment_size_ - OffsetOf(append_lsn_);
+        const std::uint64_t offset = OffsetOf(append_lsn_);
+        return offset == 0 ? 0 : segment_size_ - offset;
     }
 
     Status StartSegment(std::uint64_t segment_no);
