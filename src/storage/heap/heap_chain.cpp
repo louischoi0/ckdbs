@@ -178,6 +178,93 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
                              /*linked_from=*/tail_id.value()};
 }
 
+StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, PageId head,
+                                                  std::uint64_t first_id,
+                                                  std::span<const std::vector<std::byte>> payloads,
+                                                  std::uint64_t trx_id, PageId* tail_hint) {
+    ChainAppendBatchResult out;
+    out.rows.reserve(payloads.size());
+
+    // Every payload's identity is checked against the contiguous range
+    // before anything is placed - ChainInsert's id/payload agreement
+    // check, once per row, ahead of the fill.
+    for (std::size_t i = 0; i < payloads.size(); ++i) {
+        auto encoded_id = PayloadKeystoneId(payloads[i]);
+        if (!encoded_id.ok()) return encoded_id.status();
+        if (encoded_id.value() != first_id + i) {
+            return Status::Corruption("batch payload " + std::to_string(i) +
+                                      " carries Keystone id " +
+                                      std::to_string(encoded_id.value()) + ", expected " +
+                                      std::to_string(first_id + i));
+        }
+    }
+
+    auto tail_id = ChainTail(store, (tail_hint != nullptr && *tail_hint != kInvalidPageId)
+                                        ? *tail_hint
+                                        : head);
+    if (!tail_id.ok() && tail_hint != nullptr && *tail_hint != kInvalidPageId) {
+        tail_id = ChainTail(store, head);
+    }
+    if (!tail_id.ok()) return tail_id.status();
+
+    PageId current = tail_id.value();
+    bool current_is_new = false;
+    PageId current_linked_from = kInvalidPageId;
+    std::size_t i = 0;
+    while (i < payloads.size()) {
+        auto bytes = store.Get(current);
+        if (!bytes.ok()) return bytes.status();
+        PageView page(bytes.value());
+
+        if (i == 0 && first_id < page.min_key()) {
+            return Status::OutOfRange("id " + std::to_string(first_id) + " is below page " +
+                                      std::to_string(current) + "'s min_key " +
+                                      std::to_string(page.min_key()) +
+                                      "; the relation's id sequence has gone backwards");
+        }
+        out.pages.push_back({current, current_is_new, current_linked_from});
+
+        // Fill this page until it refuses - one fetch, many rows.
+        bool page_full = false;
+        while (i < payloads.size()) {
+            auto slot = page.InsertTuple(payloads[i], trx_id);
+            if (slot.ok()) {
+                out.rows.push_back({current, slot.value()});
+                ++i;
+                continue;
+            }
+            if (slot.status().code() != StatusCode::kOutOfSpace) return slot.status();
+            page_full = true;
+            break;
+        }
+        if (!page_full) break;  // every row placed
+
+        // Grow, ChainInsert's rules verbatim: min_key is the id that
+        // opens the page (the sorted stream's exact best case), the link
+        // publishes only after the loop has put rows in the page? No -
+        // the link is edited here and the page filled on the next pass;
+        // the batch is one statement on one core, so no walker can
+        // interleave, and the caller's FPIs describe both pages whole.
+        auto created = store.CreateNew();
+        if (!created.ok()) return created.status();
+        auto [new_id, new_bytes] = created.value();
+        if (auto p = PageView::CreateEmpty(new_bytes, first_id + i); !p.ok()) {
+            return p.status();
+        }
+
+        auto old_again = store.Get(current);
+        if (!old_again.ok()) return old_again.status();
+        PageView(old_again.value()).set_next_page_id(new_id);
+
+        current_linked_from = current;
+        current = new_id;
+        current_is_new = true;
+    }
+
+    if (tail_hint != nullptr) *tail_hint = current;
+    return out;
+}
+
 Status ChainVisit(
     storage::PageStore& store, PageId head, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,

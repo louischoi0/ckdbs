@@ -627,6 +627,16 @@ private:
     std::optional<std::string> InsertOneRow(catalog::Oid oid, const catalog::TableAccess*& ta,
                                             const std::vector<parser::AstValue>& values,
                                             WriteScope& scope, InsertRowResult& out);
+
+    // T3, the sorted heap fill (docs/workplan-t3.md). The gate is T3-2's,
+    // conservative and only able to widen: heap-clustered, nothing that
+    // maintains per-row (no index, no Cabin, no assertion), no spillable
+    // schema. FK stays allowed - its checks run per row before anything
+    // burns. Outside the gate the row loop runs, with byte-identical
+    // replies and relation state - the equivalence test is the contract.
+    bool SortedFillEligible(const catalog::TableAccess& ta, catalog::Oid oid) const;
+    DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt, catalog::Oid oid,
+                                    const catalog::TableAccess& ta, WriteScope& scope);
     // `analyze` switches the reply from rows to the compiled plan plus
     // the per-step counters the run produced. Everything before that -
     // parse, compile, execute - is the same code on the same statement

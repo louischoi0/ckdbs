@@ -299,7 +299,24 @@ bool DevicePageStore::MayFault(PageId page_id) const noexcept {
     // The fixed system range is readable by every core: the catalog lives
     // there, and a core that cannot read it cannot serve a statement (P6).
     if (page_id < system_page_limit_) return true;
-    return lease_->Owns(page_id);
+    if (lease_->Owns(page_id)) return true;
+    // CC7: pages of a relation the catalog assigns to this core, granted at
+    // DDL publish. Read rights only - MayWrite never consults this list.
+    for (const Extent& granted : fault_granted_) {
+        if (granted.Contains(page_id)) return true;
+    }
+    return false;
+}
+
+void DevicePageStore::GrantFaultPages(Extent extent) {
+    if (extent.empty()) return;
+    for (Extent& granted : fault_granted_) {
+        if (granted.end() == extent.first) {
+            granted.count += extent.count;
+            return;
+        }
+    }
+    fault_granted_.push_back(extent);
 }
 
 bool DevicePageStore::MayWrite(PageId page_id) const noexcept {

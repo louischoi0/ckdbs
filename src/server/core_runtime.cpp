@@ -1,5 +1,7 @@
 #include "kds/server/core_runtime.hpp"
 
+#include <algorithm>
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -122,11 +124,56 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         return s;
     }
 
+    // CC7's handoff (workplan P6b): core 0 flushed a relation's pages and
+    // is handing this core fault rights over them. Ordering against
+    // kCatalogInvalidate does not matter: a statement racing either answers
+    // retryably, exactly as the invalidation window above.
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kRelationFaultGrant,
+            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                if (payload.size() != sizeof(ExtentGrantPayload)) {
+                    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                        log_->Error("core", "core " + std::to_string(config_.core_id) +
+                                                " dropped a malformed relation fault grant (" +
+                                                std::to_string(payload.size()) + " bytes)");
+                    }
+                    return;
+                }
+                ExtentGrantPayload grant{};
+                std::memcpy(&grant, payload.data(), sizeof(grant));
+                GrantRelationFault(storage::Extent{grant.first_page_id, grant.page_count});
+            });
+        !s.ok()) {
+        return s;
+    }
+
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has
     // armed anything.
     transport_ = &transport;
     return RegisterExtentGrantReceiver(*scheduler_, refill_, log_);
+}
+
+void CoreRuntime::GrantRelationFault(storage::Extent extent) {
+    store_->GrantFaultPages(extent);
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("core", "core " + std::to_string(config_.core_id) +
+                                " granted fault range [" + std::to_string(extent.first) + ", " +
+                                std::to_string(extent.end()) + ")");
+    }
+}
+
+storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
+                                      std::uint32_t extent_pages) {
+    PageId low = row.desc_page_id;
+    PageId high = row.desc_page_id;
+    if (row.varheap_page_id != kInvalidPageId) {
+        low = std::min(low, row.varheap_page_id);
+        high = std::max(high, row.varheap_page_id);
+    }
+    const PageId first = (low / extent_pages) * extent_pages;
+    const PageId end = ((high / extent_pages) + 1) * extent_pages;
+    return storage::Extent{first, end - first};
 }
 
 void CoreRuntime::InvalidateCatalog() {

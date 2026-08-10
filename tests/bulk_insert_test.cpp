@@ -8,6 +8,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/session.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 
@@ -49,6 +50,9 @@ protected:
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    std::string Run(Session& s, const std::string& sql) {
+        return dispatcher_->Dispatch(sql, &s).response;
+    }
 
     void Ok(const std::string& sql) {
         const std::string out = Run(sql);
@@ -266,6 +270,70 @@ TEST_F(BulkInsertTest, IndexesSeeEveryBulkRow) {
     const std::string plan = Run("ANALYZE SELECT id FROM t WHERE owner = 1");
     EXPECT_NE(plan.find("index_scanned="), std::string::npos) << plan;
     EXPECT_EQ(Run("SELECT id FROM t WHERE owner = 1"), "id\\n1\\n3\\n5");
+}
+
+// ---- T3: the sorted heap fill (docs/workplan-t3.md) -----------------------
+//
+// The contract is byte-identical behavior across the gate: a statement
+// that takes the sorted fill and one that takes the row loop answer the
+// same and leave the same relation state. The gate can only widen.
+
+TEST_F(BulkInsertTest, TheSortedFillMatchesTheRowLoopAcrossTheGate) {
+    // `a` is inside T3-2's gate (heap, int-only, nothing maintained);
+    // `b` is the same schema pushed outside it by a declared Cabin.
+    Ok("CREATE TABLE a (id int64, n int64, m int64)");
+    Ok("CREATE TABLE b (id int64, n int64, m int64)");
+    Ok("CREATE CABIN ON b(n)");
+
+    const std::string ins = " VALUES (1, 10), (2, 20), (3, 30)";
+    const std::string ra = Run("INSERT INTO a" + ins);
+    const std::string rb = Run("INSERT INTO b" + ins);
+    EXPECT_NE(ra.find(" rows=3 first_id=1 last_id=3"), std::string::npos) << ra;
+    EXPECT_NE(rb.find(" rows=3 first_id=1 last_id=3"), std::string::npos) << rb;
+
+    EXPECT_EQ(Run("SELECT n, m FROM a"), Run("SELECT n, m FROM b"));
+    EXPECT_EQ(Run("SELECT m FROM a WHERE id = 2"), Run("SELECT m FROM b WHERE id = 2"));
+}
+
+TEST_F(BulkInsertTest, TheSortedFillSpansPagesWithExactMinKeys) {
+    Ok("CREATE TABLE t (id int64, n int64)");
+    std::string stmt = "INSERT INTO t VALUES (0)";
+    for (int i = 1; i < 500; ++i) stmt += ", (" + std::to_string(i) + ")";
+    const std::string reply = Run(stmt);
+    EXPECT_NE(reply.find(" rows=500 first_id=1 last_id=500"), std::string::npos) << reply;
+
+    EXPECT_EQ(Run("SELECT n FROM t WHERE id = 1"), "n\\n0");
+    EXPECT_EQ(Run("SELECT n FROM t WHERE id = 500"), "n\\n499");
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n500");
+    // The pk range crosses at least one page boundary and stays exact.
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM t WHERE id BETWEEN 190 AND 210"), "count(*)\\n21");
+}
+
+TEST_F(BulkInsertTest, ASortedFillRollsBackWhole) {
+    Ok("CREATE TABLE t (id int64, n int64)");
+    Session session;
+    ASSERT_EQ(Run(session, "BEGIN").substr(0, 5), "BEGIN");
+    EXPECT_EQ(Run(session, "INSERT INTO t VALUES (1), (2), (3)").rfind("ERR", 0),
+              std::string::npos);
+    Run(session, "ROLLBACK");
+    EXPECT_EQ(Run("SELECT n FROM t"), "n");
+}
+
+// BI9 sharpened by T3: the admission-class checks run before the range is
+// allocated, so a refused statement burns *nothing* - and a failure past
+// the range (a bad literal at encode) burns exactly the range.
+TEST_F(BulkInsertTest, TheSortedFillBurnsNothingBeforeTheRangeAndTheRangeAfter) {
+    Ok("CREATE TABLE t (id int64, n int64)");
+
+    // Arity at row 2: refused before AllocateRowIdRange - no ids burned.
+    EXPECT_EQ(Run("INSERT INTO t VALUES (1), (2, 9), (3)").rfind("ERR", 0), 0u);
+    EXPECT_NE(Run("INSERT INTO t VALUES (7)").find(" id=1 "), std::string::npos);
+
+    // A literal no int column can hold, at row 2: past the range, so ids
+    // 2..4 burn and the next insert takes 5.
+    EXPECT_EQ(Run("INSERT INTO t VALUES (1), ('x'), (3)").rfind("ERR", 0), 0u);
+    EXPECT_NE(Run("INSERT INTO t VALUES (8)").find(" id=5 "), std::string::npos);
+    EXPECT_EQ(Run("SELECT n FROM t"), "n\\n7\\n8");
 }
 
 }  // namespace

@@ -74,6 +74,13 @@ enum class RingMessageKind : std::uint16_t {
     // core may use to reach another, and shutdown is not an exception to
     // that - it is the case that proves it.
     kShutdown = 20,
+
+    // core 0 -> owner core: fault rights over a relation's page range
+    // (crosscore.md CC7, workplan P6b). Sent at DDL publish, strictly
+    // after the pages are flushed - the flush-then-grant handoff. The
+    // payload is server::ExtentGrantPayload; the receiving store may fault
+    // the range and may never write or allocate from it.
+    kRelationFaultGrant = 21,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -91,6 +98,7 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kTrxIdLease:
         case RingMessageKind::kCatalogInvalidate:
         case RingMessageKind::kShutdown:
+        case RingMessageKind::kRelationFaultGrant:
             return true;
         case RingMessageKind::kUnset:
             return false;

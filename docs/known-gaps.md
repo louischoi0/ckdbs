@@ -70,10 +70,12 @@ There is no purge pass, and readers are deliberately unregistered
 
 - `cores > 1` buys parallel WAL streams only: **core 0 serves every
   statement**, peers come up alive and idle (`docs/crosscore.md`). The
-  P6 ownership question is **decided** (CC7, 2026-08-10: page ownership
-  follows the catalog, flush-then-grant handoff at DDL publish) but not
-  yet built — P6b/P6c, row-id leasing for peer INSERT, and the step
-  pipeline itself remain.
+  P6 ownership question is decided **and built** (CC7 + P6b handoff + P6c
+  `placement` key, 2026-08-10): a rotated relation's pages are grantable
+  and readable by its owner — but `placement = rotate` stays non-default,
+  because a rotated relation's *statements* are still refused retryably
+  until dispatch lands. Remaining: row-id leasing for peer INSERT, and the
+  step pipeline itself.
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
 - Cross-core writes are refused retryably (CC3): a transaction's writes

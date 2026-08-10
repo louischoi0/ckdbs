@@ -2,34 +2,35 @@
 
 `docs/spec-bulkinsert.md` §0 claimed the single-row INSERT ceiling of ~9K
 rows/s was ~21 µs/row of statement cost that never amortizes, and shipped T1
-(BLK01–BLK05) as that cost's eviction notice. This document holds **two
-runs of two engine states**, deliberately: the first run (at `9ee04e4`, the
-T1 commit) found two engine defects — an O(pages-resident) tail walk under
-every heap insert, and a WAL stream that wedged at an exactly-filled
-segment — and both were fixed the same day; the second run (at `926f422`,
-both fixes in) is the current state of the engine, re-measured whole. The
-pre-fix sections are kept as the record of why the fixes exist and what
-they were worth; every number in them describes an engine that no longer
+(BLK01–BLK05) as that cost's eviction notice. This document holds **three
+runs of three engine states**, deliberately: the first run (at `9ee04e4`,
+the T1 commit) found two engine defects — an O(pages-resident) tail walk
+under every heap insert, and a WAL stream that wedged at an exactly-filled
+segment; the second run (at `926f422`, both fixes in) re-measured the
+matrix whole; the third (at `06c8ab9`) measures **T3, the sorted heap
+fill** (`docs/workplan-t3.md`), against a gate-closed twin on the same
+statements. Earlier parts are kept as the record of why the fixes and T3
+exist; every number in them describes an engine state that no longer
 ships. Same `write_probe` row shape as the baseline
 (`bench/results-scenario1-vs-pg.md`); driver documentation:
 [`bench/docs/README.md`](docs/README.md), `bulk_insert_benchmark.py` /
 `pg_bulk_insert_benchmark.py`.
 
-**Thesis, across the two runs: T1 works as designed — it removes the round
-trip entirely and cuts the parse to ~1.1 µs/row — and what it exposed
-underneath was worth more than what it removed: with the tail walk it
-surfaced now fixed, a 1000-row INSERT costs a flat ~3.4–3.6 µs/row with no
-dependence on relation size, 278K rows/s at relaxed durability against
-PostgreSQL's 95K on the same volume, and the durability classes decompose
-to exactly one device fsync per statement. The bulk-ingestion story now
-ends where T3's territory begins: per-tuple placement itself.**
+**Thesis, across the three runs: each tier removed the cost the previous
+one exposed. T1 removed the per-row round trip and left a per-row
+pipeline; fixing the tail walk it exposed made that pipeline flat; T3
+removed the pipeline's per-row placement — one page fetch and one WAL
+image per page instead of per row — leaving a 1000-row INSERT at
+~1.45 µs/row, 675K rows/s relaxed on one connection, 7.1× PostgreSQL's
+best cell. What remains is the parse: ~1.05 of the 1.45 µs/row, which is
+T2's territory and now prices it at ~3.5×.**
 
 ---
 
 # Part I — the pre-fix run, at `9ee04e4` (superseded engine state)
 
 This part is the record of the run that found the two defects. **Both are
-fixed on `main` as of `926f422`; Part II is the current engine.** Part I's
+fixed on `main` as of `926f422`; Part III is the current engine.** Part I's
 PostgreSQL comparison verdict — PostgreSQL wins the large batches — is
 inverted by the fix and survives only as history.
 
@@ -382,7 +383,7 @@ write+fsync probe on the same volume at run end.
 
 ---
 
-# Part II — the post-fix run, at `926f422` (current engine state)
+# Part II — the post-fix run, at `926f422` (superseded by Part III)
 
 Both Part I findings were fixed on `main` the same day and the whole matrix
 was re-measured. The fixes, as landed: `heap::ChainInsert` takes a **tail
@@ -608,4 +609,187 @@ the added configurations were `--rows 400000` / `--rows 600000` at
 `--batches 1000` on one server for the boundary demonstration, and the two
 `--trace` runs for the re-fit. Orchestration log with per-configuration
 load gating: `~/bench-bulk2/matrix3.log`.
+
+---
+
+# Part III — T3, the sorted heap fill, at `06c8ab9` (current engine state)
+
+T3 landed as a fill inside the T1 statement (`docs/workplan-t3.md`,
+TS01–TS04): page-at-a-time placement, a contiguous Keystone range from one
+catalog write, and WAL as one `kFullPageImage` per touched page instead of
+per-row records. It engages automatically only inside the T3-2 gate —
+heap-clustered, no index, no Cabin, no assertion, no spillable schema —
+and falls back to the row loop otherwise, with byte-identical replies.
+
+**The driver's schema already satisfies the gate**: `write_probe` is five
+`int64` columns, so `varheap_page_id` is never allocated and the schema
+cannot spill — no schema change was needed for the eligible cells. The
+gate-closed twin is the same schema with `CREATE CABIN ON <t>(a)` issued
+after `CREATE TABLE` (`--cabin`), which sets `cabin_mask` and forces the
+row loop on the very same statements; its cells double as Part II's
+row-loop numbers re-measured at this commit (they reproduce Part II within
+the floor, so the twin carries a Cabin write-hook cost of ~nothing,
+consistent with `bench/results-cabin.md`).
+
+## The run
+
+| | |
+|---|---|
+| executed | 2026-08-10, 08:34–08:38 UTC, sequential |
+| commit measured | `06c8ab9` (merge tip of `feat-t3` == `main`; T3 = TS01–TS04) |
+| tree | clean |
+| binary | `build-release/kds_server`, rebuilt 08:19:51 UTC from this tree — mtime after HEAD, verified before the first measurement |
+| build type | Release |
+| tests | not run in this session (no engine change made here; TS04's equivalence suite rode the feature commit). In-run verification as before — `rows=`, id spans, `COUNT(*)`, zero error replies everywhere. The id-span check also pins TS03's contiguous range from the outside: `last_id − first_id + 1 == rows` held for every statement |
+| device / machine / gating | as Parts I–II. **Every configuration ran clean on its first attempt — zero retries** (log: `~/bench-bulk3/matrix4.log`) |
+| ckdbs config | as Part II; data files `/home/ec2-user/bench-bulk3/*.db` |
+| PostgreSQL | **carried over from Part I unchanged**, as in Part II |
+| WAL volume | measured directly this time: the last nonzero byte offset of the (zero-prewritten) segment files after each configuration — exact stream bytes, and byte-identical across durability classes and repeats of the same shape, which is itself evidence the fill is deterministic |
+
+## The noise floor
+
+The headline cell (eligible, relaxed, batch 1000) ran three times fresh
+(matrix, repeat, trace): p50 1,449.5 / 1,501.3 / 1,480.9 µs — **3.5 %**.
+Throughput spread on the same three is 15 % (674.6 / 580.3 / 641.4
+stmts/s): these phases are only ~0.15 s long, so a single tail statement
+moves the rate; the p50s are the numbers to compare, and rate claims below
+stay above the 15 %. The gate-closed twin reproduces Part II's row-loop
+cells (270,209 vs 278,180 rows/s at b1000 relaxed, −2.9 %; 202,686 vs
+209,876 at b100, −3.4 %) — the row loop did not move between the commits,
+which is the in-run control for everything attributed to T3.
+
+## The matrix: T3 against its gate-closed twin
+
+100,000 rows per cell, single connection, rows/s. PostgreSQL columns
+carried over from Part I.
+
+| batch | durability | T3 (eligible) | row loop (`--cabin` twin) | **T3 gain** | pg (twin class) | ck-T3/pg |
+|---:|---|---:|---:|---:|---:|---:|
+| 100 | relaxed | 368,156 | 202,686 | **1.82×** | 87,920 | **4.2×** |
+| 1,000 | relaxed | 674,570 | 270,209 | **2.50×** | 94,600 | **7.1×** |
+| 100 | group | 139,692 | 69,194 | **2.02×** | 45,630 | **3.1×** |
+| 1,000 | group | 434,683 | 205,558 | **2.11×** | 81,400 | **5.3×** |
+| 1 | relaxed (gate never opens) | 9,770 | — | 1.00× (by design) | 5,503 | 1.78× |
+
+**Batch-1 no-regression**: 9,770 rows/s against Part II's 9,328/9,638 —
+inside the floor. A single-row statement is not `bulk`, the gate never
+opens, and the row loop it takes is the one the twin re-measured.
+
+## Per-statement latency
+
+T3 eligible:
+
+| phase | durability | ops | mean µs | p0 | p25 | p50 | p95 | p99 | max | µs/row |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| bulk-100 | relaxed | 1,000 | 263.5 | 231.3 | 254.2 | 258.3 | 289.6 | 349.4 | 1,519.3 | 2.6 |
+| bulk-1000 | relaxed | 100 | 1,472.4 | 1,391.5 | 1,429.7 | 1,449.5 | 1,516.6 | 1,678.4 | 3,208.5 | 1.5 |
+| bulk-100 | group | 1,000 | 706.5 | 564.6 | 652.8 | 683.7 | 837.3 | 1,015.4 | 5,114.6 | 7.1 |
+| bulk-1000 | group | 100 | 2,289.5 | 1,930.1 | 2,041.0 | 2,103.2 | 3,282.3 | 4,447.1 | 5,618.2 | 2.3 |
+| bulk-1 | relaxed | 100,000 | 95.3 | 56.5 | 71.7 | 86.5 | 131.4 | 176.0 | 6,117.9 | 95.3 |
+
+Gate-closed twin (row loop, same statements):
+
+| phase | durability | ops | mean µs | p0 | p25 | p50 | p95 | p99 | max | µs/row |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| bulk-100 | relaxed | 1,000 | 485.0 | 414.9 | 447.0 | 460.3 | 626.8 | 854.2 | 2,763.1 | 4.9 |
+| bulk-1000 | relaxed | 100 | 3,690.5 | 3,434.3 | 3,475.7 | 3,528.1 | 4,464.2 | 4,921.6 | 5,152.9 | 3.7 |
+| bulk-100 | group | 1,000 | 1,434.4 | 787.5 | 1,403.9 | 1,527.6 | 1,784.6 | 2,326.0 | 7,489.6 | 14.3 |
+| bulk-1000 | group | 100 | 4,852.2 | 4,295.3 | 4,497.4 | 4,621.7 | 6,069.3 | 7,434.2 | 8,259.2 | 4.9 |
+
+The eligible distributions are the tightest in this document — b1000
+relaxed p99/p0 = 1.21 — and the trace fit stays dead flat
+(`1,567 − 0.4 ns × resident`, R² 0.003): the fill inherits the tail hint's
+size-independence.
+
+## Where the remaining per-row time went, and what it prices T2 at
+
+The parse probe on this binary is tight again (1000-row p50 1,137.7 µs,
+p95 1,189 — **Part II's probe widening did not reproduce** and is
+downgraded to a transient of that window). The batch-1000 relaxed
+statement decomposes by subtraction, p50 basis:
+
+| component | µs per statement | µs/row | share |
+|---|---:|---:|---:|
+| parse + dispatch (probe p50 minus its round trip) | ~1,047 | **1.05** | 72 % |
+| client + socket round trip | ~91 | 0.09 | 6 % |
+| **T3 fill: id range + page assembly + FPI WAL + reply** (statement minus probe) | **~312** | **0.31** | 22 % |
+| total | 1,449.5 | 1.45 | 100 % |
+
+Against the twin's identical decomposition (3,528.1 − 1,137.7 = 2,390 µs
+of placement), **T3 cut the placement slice 7.7×** — 2.39 → 0.31 µs/row —
+which is the whole 2.50× statement-level gain, since parse and round trip
+are common to both paths. The expected effect on the Part II pipeline
+slice (~1.9–2.2 µs/row) is confirmed and exceeded.
+
+**T2's price, updated**: the residue is now the parse, 72 % of the
+statement. A binary load stream that skips it would leave
+~0.4 µs/row — i.e. T2 is worth ~3.5× on top of T3 at batch 1000, where on
+the row loop it was worth ~1.4×. T3 inverted which tier the next
+microsecond lives in.
+
+WAL volume, measured off the segment frontier (identical bytes at both
+durability classes and across repeats):
+
+| configuration | stream bytes / 100K rows | B/row | note |
+|---|---:|---:|---|
+| T3, batch 1000 | 7,403,872 | **74** | ~8 FPIs + range/txn records per statement |
+| T3, batch 100 | 14,863,072 | **149** | see below — the FPI economy halves under one-page batches |
+| row loop, batch 1000 | 16,219,824 | 162 | per-row records |
+| row loop, batch 100 | 16,277,424 | 163 | |
+| row loop, batch 1 | 22,613,936 | 226 | + per-statement `TXN_BEGIN`/`COMMIT` |
+
+Two durability findings ride on those bytes. **The fsync got cheaper with
+the volume**: group − relaxed at batch 1000 is 817 µs/statement eligible
+against 1,162 on the twin — T3 syncs 74 KB a statement instead of 162 KB.
+So the coordinate claim "group gains more" is true in absolute time saved
+(2,562 µs/statement against relaxed's 2,218) and false as a ratio (2.11×
+against 2.50×), because the fsync floor T3 cannot remove is larger than
+the parse floor it also cannot. And **at batch 100 eligible, the group
+premium is 443 µs/statement — half a device fsync** — at 1,397
+statements/s, consistent with the 1 ms WAL drain cadence providing
+durability points that consecutive commits ride instead of paying their
+own; not directly instrumented, recorded as the plausible mechanism (the
+twin at 692 statements/s pays the full 949).
+
+**The batch-100 FPI caveat is a real finding about T3's shape**: this row
+shape packs ~125 rows a page, so a 100-row statement never fills one —
+each statement re-images the shared tail page, and T3's WAL density
+doubles (74 → 149 B/row), converging on the row loop's 163. The image-vs-
+records crossover sits at **batch ≈ rows-per-page**: below it T3 still
+wins on placement (1.82× at batch 100) but not on logged volume. An
+operator sizing batches for a T3 load should size them in pages, not
+rows — at this schema, multiples of ~125.
+
+## What Part III teaches
+
+1. **T3 does what §8 promised, measured**: 675K rows/s relaxed / 435K
+   group at batch 1000 on one connection — 2.50×/2.11× over the row loop
+   on identical statements — with placement at 0.31 µs/row, WAL at
+   74 B/row, byte-stable across durability classes, and a dead-flat
+   latency distribution (p99/p0 1.21). The whole gain is in the placement
+   slice; parse and round trip did not move, exactly as the tier table in
+   `spec-bulkinsert.md` §1 predicts.
+2. **The gate costs nothing and the fallback is intact**: batch 1 lands on
+   Part II's numbers, and the Cabin-gated twin reproduces Part II's row
+   loop within 3 % — so T3 is free where it cannot engage, and the
+   `--cabin` cells are the standing row-loop baseline for future parts.
+3. **The next microsecond is T2's, and it is most of the statement**:
+   1.05 of 1.45 µs/row is parse+dispatch. Before T3 a binary load stream
+   was a 1.4× proposition; it is now 3.5×. The pipeline itself is down to
+   ~0.3 µs/row, and nothing else in the statement path is worth a tier.
+4. **Batch size has a new unit**: T3's log economy is per *page*, so the
+   efficient batch is a multiple of rows-per-page (~125 here). `max_insert_rows`
+   = 1024 comfortably holds ~8 pages of this schema; the default stands.
+5. **Against PostgreSQL: 7.1× at the headline cell** (674,570 vs 94,600
+   relaxed-class, batch 1000), 3.1–5.3× on the durable cells — the widest
+   margin in this document's three parts, and the first one produced by a
+   mechanism PostgreSQL's INSERT path does not have rather than by the
+   absence of a defect.
+
+## Reproducing (Part III)
+
+Protocol as before (`~/bench-bulk3`, log `matrix4.log`). The eligible
+cells are the driver's defaults (the schema is already inside the gate);
+the twin adds `--cabin`; WAL bytes are the last nonzero byte of the
+prewritten segment files, summed, read after server stop.
 

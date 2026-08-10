@@ -207,6 +207,10 @@ def main():
                     help="also run the parse+dispatch probes")
     ap.add_argument("--parse-ops", type=int, default=200)
     ap.add_argument("--ping-ops", type=int, default=500)
+    ap.add_argument("--cabin", action="store_true",
+                    help="CREATE CABIN ON <table>(a) after each CREATE TABLE, "
+                         "which closes the T3 sorted-fill gate (cabin_mask) "
+                         "and forces the per-row loop - the gate-closed twin")
     ap.add_argument("--suffix", default=str(int(time.time())) )
     ap.add_argument("--trace", action="store_true",
                     help="record per-statement (arrival, latency) series "
@@ -231,6 +235,10 @@ def main():
         reply = client(f"CREATE TABLE {table} {COLUMNS}")
         if reply.startswith("ERR"):
             sys.exit(f"FATAL: CREATE TABLE {table}: {reply!r}")
+        if args.cabin:
+            reply = client(f"CREATE CABIN ON {table}(a)")
+            if not reply.startswith("CREATED CABIN"):
+                sys.exit(f"FATAL: CREATE CABIN on {table}: {reply!r}")
         phase = run_bulk_phase(client, table, batch, args.rows)
         counted = count_rows(client, table)
         if counted != args.rows:

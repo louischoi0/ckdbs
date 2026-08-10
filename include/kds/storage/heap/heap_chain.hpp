@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -134,6 +135,40 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload, std::uint64_t trx_id,
                                         PageId* tail_hint = nullptr);
+
+// One row's landing place, and the per-page facts a batch fill produces
+// for the caller's logging (docs/workplan-t3.md T3-4: a batch-filled page
+// is described by its image, so the caller needs the touched-page list).
+struct BatchPlacement {
+    PageId page_id;
+    std::uint16_t slot;
+};
+struct BatchTouchedPage {
+    PageId page_id;
+    bool is_new;               // created by this fill (min_key set once, exactly)
+    PageId linked_from;        // predecessor whose link was edited, or kInvalid
+};
+struct ChainAppendBatchResult {
+    std::vector<BatchPlacement> rows;      // one per payload, in order
+    std::vector<BatchTouchedPage> pages;   // in chain order
+};
+
+// T3's sorted fill (spec-bulkinsert.md §8, docs/workplan-t3.md): places
+// `payloads` - whose Keystone ids must be exactly first_id, first_id+1, …
+// in order, engine-issued from AllocateRowIdRange - into the chain with
+// one page fetch per *page* instead of per row. The tail fills first
+// under the same invariant-3 boundary check as ChainInsert; each new page
+// is created with min_key = the id that opens it (the sorted stream's
+// exact best case) and linked only after it holds its rows. The intra-
+// batch duplicate check is vacuous by construction (contiguous ids) and
+// is not performed; the tail page's ordinary checks stay. On any failure
+// the chain may already hold earlier rows of the batch - the caller's
+// transaction scope owns unwinding them, exactly as it owns a mid-loop
+// failure of the row path.
+StatusOr<ChainAppendBatchResult> ChainAppendBatch(
+    storage::PageStore& store, PageId head, std::uint64_t first_id,
+    std::span<const std::vector<std::byte>> payloads, std::uint64_t trx_id,
+    PageId* tail_hint = nullptr);
 
 // Calls `fn` once per live slot of every page in the chain, in chain order
 // (which is id order page-wise, per the ordering property above). The
