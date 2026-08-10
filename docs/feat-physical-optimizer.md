@@ -436,8 +436,23 @@ C(c) = P_rel / T_amort  +  h_fail(c) × f_lookup(c) × k_heal
 ```
 
 - `P_rel / T_amort` — build cost (full/partial scan of the relation's
-  pages) amortized over window `T_amort` (PROPOSED: the R1 decay
-  half-life, so build cost and benefit decay on the same clock);
+  pages) amortized over window `T_amort`, expressed in R1 decay
+  half-lives so build cost and benefit decay on the same clock. As
+  proposed, `T_amort` = 1 half-life; **ratified at 64, operator-decided
+  2026-08-10**, after the business-days scenario
+  (`bench/results-cabin-optimizer-days.md`) showed the lifecycle at 1 is
+  a *nightly rebuild loop* by this model's own arithmetic — survival is
+  log₂(B/C) + 2×T_amort half-lives of silence, and a market overnight at
+  the default 600 s half-life is ~105. At 64 the cooldown alone is 128
+  half-lives (21 h 20 m at defaults): a Cabin survives any close-to-open
+  gap DECAYING and the morning rebound recovers it, while a weekend of
+  silence still drops it — deliberate, since re-nomination costs ~3
+  ticks and two stale days is what DROP exists for. The window is **one
+  belief read by both sides**: raising it lowers the admission bar by
+  the same factor (a structure serving for a day need only pay for
+  itself over a day), and PO6's budget, not the bar, bounds the
+  population. `cabin_optimizer_amort_windows` is the key; 0 is refused
+  (a zero window prices every Cabin free);
 - `h_fail` — hint failure rate (S3), `f_lookup` — decayed lookup
   frequency, `k_heal` — pages per heal event (PROPOSED 2).
 
@@ -489,7 +504,7 @@ and any future manually-declared Cabins are invisible to it.
 | `kds.po_page_budget` | pool/8 (disk pages, per core) | PO6 |
 | `kds.po_theta_create` / `_drop` / `_swap` / `_extend` / `_heal` | 3 / 0.5 / 2 / 0.2 / 0.1 | fixed-point |
 | `kds.po_confirm_snapshots` | 3 | N_confirm |
-| `kds.po_amort_window` | R1 half-life | T_amort |
+| `kds.po_amort_window` | ~~R1 half-life~~ **64 half-lives (ratified 2026-08-10)** | T_amort — the overnight-survival sizing; see §II.4's cost note for the argument. Built as `cabin_optimizer_amort_windows`. |
 | `kds.po_snapshot_interval` | 10 s | decision cadence |
 
 ## II.7 Non-goals (v1)

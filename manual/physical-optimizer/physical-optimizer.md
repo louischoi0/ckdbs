@@ -37,8 +37,14 @@ autonomous — only when `cabin_optimizer = on`.
 
 Part II's key exists since PHY04: `cabin_optimizer = off|on` (default
 `off`), with tuning keys (`cabin_optimizer_page_budget`,
-`cabin_optimizer_theta_create_pct` / `_drop_pct` / `_swap_pct`) documented
-in `kds.conf.sample`.
+`cabin_optimizer_theta_create_pct` / `_drop_pct` / `_swap_pct`,
+`cabin_optimizer_amort_windows`) documented in `kds.conf.sample`.
+`amort_windows` deserves its own sentence: it is the structure-lifetime
+belief (default **64** half-lives, ratified 2026-08-10 from the
+business-days scenario) — at 64 a Cabin survives a market overnight in
+DECAYING and recovers on the morning rebound; at 1, the original
+proposal, the lifecycle is a nightly rebuild loop
+(`bench/results-cabin-optimizer-days.md` measured exactly that).
 
 ## 2. `SHOW RELAYOUT` — the shadow report
 

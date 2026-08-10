@@ -117,7 +117,26 @@ struct CabinOptimizerConfig {
     std::uint64_t page_budget = 1024;   // per core, optimizer-managed pages
     std::uint64_t p_cabin_pages = 2;    // pages per Cabin lookup (PROPOSED)
     std::uint64_t k_heal_pages = 2;     // pages per heal event (PROPOSED)
-    Fix16 amort_windows = kFixOne;      // T_amort in decay half-lives
+    // T_amort in decay half-lives - the one number expressing one belief:
+    // a Cabin's expected useful lifetime. It is deliberately fused into
+    // both sides of the model (PO2's "build cost and benefit decay on the
+    // same clock"): the cost C = P_rel / T_amort prices the build over
+    // the window, and the DROP cooldown is 2 x T_amort half-lives.
+    // **Default 64, operator-ratified 2026-08-10** from the business-days
+    // finding (bench/results-cabin-optimizer-days.md): at T_amort = 1 the
+    // lifecycle was a nightly rebuild loop by the model's own arithmetic
+    // (survival = log2(B/C) + 2 half-lives of silence; a market overnight
+    // at the default 600 s half-life is ~105). 64 makes the cooldown
+    // alone 128 half-lives = 21 h 20 m at defaults, so a Cabin survives
+    // any close-to-open gap and the morning rebound recovers it
+    // DECAYING -> ACTIVE without a rebuild. Two consequences, stated:
+    // a *weekend* still drops it - deliberate, since re-nomination costs
+    // ~3 ticks and two silent days of staleness is what DROP is for -
+    // and the admission bar falls by the same factor, which is the same
+    // belief read forward (a structure serving for a day need only pay
+    // for itself over a day); PO6's budget, not the bar, is what bounds
+    // the population.
+    Fix16 amort_windows = 64 * kFixOne;
     sched::MonoTimeNs half_life_ns = 600'000'000'000ULL;  // for cooldown time
     // CREATE's admission estimate: P_rel / this, floored at 1, until
     // NoteCreated reports the built size. `[PROPOSED]` 8.

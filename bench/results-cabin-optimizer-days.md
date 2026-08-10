@@ -344,6 +344,14 @@ window would let B/C stay above θ_drop through a night — a decision for
 `feat-physical-optimizer.md` §II.4's owner, not something this benchmark
 settles.
 
+*(Settled the same day, operator-decided: `T_amort` was ratified at **64
+half-lives** — `cabin_optimizer_amort_windows`, cooldown 21 h 20 m at the
+default half-life — so Cabins now survive a market overnight and recover
+DECAYING→ACTIVE on the morning rebound, while a weekend still drops them.
+This run's arms all measured the pre-ratification default of 1; a rerun at
+64 would show the on arm's day-2/day-3 hit rates approaching the declared
+arm's, since overnight amnesia was the entire gap. See spec §II.4.)*
+
 **Autonomy's price is amnesia; a declaration's price is immortality.** On
 the hot median they are the same structure (155 vs 162 µs p50 — the
 single-shot document's "a self-created Cabin is a declared Cabin plus a

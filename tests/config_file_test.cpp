@@ -284,24 +284,38 @@ TEST(ExpeditorConfigTest, CabinOptimizerParsesItsFamilyAndDefaultsOff) {
     Expeditor::Config config;
     EXPECT_FALSE(config.cabin_optimizer);  // experimental: off, §II.6
 
+    // The shipped amortization default: 64 half-lives, the overnight
+    // sizing the business-days scenario ratified (2026-08-10).
+    EXPECT_EQ(config.cabin_optimizer_amort_windows, 64u);
+
     ASSERT_TRUE(config
                     .ApplyFile(ParseOk("cabin_optimizer = on\n"
                                        "cabin_optimizer_page_budget = 128\n"
                                        "cabin_optimizer_theta_create_pct = 400\n"
                                        "cabin_optimizer_theta_drop_pct = 25\n"
-                                       "cabin_optimizer_confirm_snapshots = 5\n"))
+                                       "cabin_optimizer_confirm_snapshots = 5\n"
+                                       "cabin_optimizer_amort_windows = 12\n"))
                     .ok());
     EXPECT_TRUE(config.cabin_optimizer);
     EXPECT_EQ(config.cabin_optimizer_page_budget, 128u);
 
     // The assembled decision-core settings: percent to 16.16, half-life
-    // shared with R1's key.
+    // shared with R1's key, amort in whole half-lives to 16.16.
     const stats::CabinOptimizerConfig assembled = config.CabinOptimizerSettings();
     EXPECT_EQ(assembled.theta_create, 4 * stats::kFixOne);
     EXPECT_EQ(assembled.theta_drop, stats::kFixOne / 4);
     EXPECT_EQ(assembled.confirm_snapshots, 5u);
     EXPECT_EQ(assembled.page_budget, 128u);
     EXPECT_EQ(assembled.half_life_ns, config.decay_half_life_ns);
+    EXPECT_EQ(assembled.amort_windows, 12 * stats::kFixOne);
+}
+
+TEST(ExpeditorConfigTest, CabinOptimizerRefusesAZeroAmortWindow) {
+    // T_amort divides the build cost: over zero half-lives every Cabin is
+    // free, which is create-everything wearing a configuration's clothes.
+    Expeditor::Config config;
+    Status zero = config.ApplyFile(ParseOk("cabin_optimizer_amort_windows = 0\n"));
+    EXPECT_EQ(zero.code(), StatusCode::kInvalidArgument) << zero.message();
 }
 
 TEST(ExpeditorConfigTest, CabinOptimizerRefusesABrokenHysteresisGap) {
