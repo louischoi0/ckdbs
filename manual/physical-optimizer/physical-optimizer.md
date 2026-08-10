@@ -14,11 +14,12 @@ for. The umbrella has two parts:
   classify relations, plan physical moves, report. **Shadow-only, as a
   finding, not a hedge**: every candidate move is blocked by a named gate,
   and the report exists to price opening them.
-- **Part II — the Cabin controller** (PHY01-PHY05 and PHY07 built as of
-  2026-08-10 — **the controller runs end to end**; PHY06/PHY08 remaining):
-  the `CABIN AUTO` promotion pipeline, gated by the `cabin_optimizer`
-  config key, **default `off`** — so out of the box a column declared
+- **Part II — the Cabin controller** (complete, PHY01-PHY08, closed
+  2026-08-10 — measured in `bench/results-cabin-optimizer.md`): the
+  `CABIN AUTO` promotion pipeline, gated by the `cabin_optimizer` config
+  key, **default `off`** — so out of the box a column declared
   `CABIN AUTO` still behaves as an undeclared one.
+  `SHOW CABIN_OPTIMIZER` is the view (§5a below).
 
 There is **no mover** (Part I). Nothing moves a tuple or reclaims a page;
 relayout observes, plans and reports. Cabin creation *can* now be
@@ -131,18 +132,55 @@ cost-benefit core with hysteresis. Built so far:
 
 - **PHY04** (2026-08-10) — the controller loop runs end to end over the
   EVT03/EVT06 substrate, gated by `cabin_optimizer` (default `off`).
-  PHY06/PHY08 remain.
+- **PHY06** (2026-08-10) — observability, below.
+- **PHY08** (2026-08-10) — the E2E close-out. Measured
+  (`bench/results-cabin-optimizer.md`): with zero eligible candidates the
+  controller is unmeasurable (the tick costs 2-3 µs CPU — sub-ppm of a
+  core at the default 10 s cadence); on a hot 10-row equality over
+  10,000 rows it created a Cabin autonomously 3 ticks after switch-on
+  and served at **10.9×** the walk (1.97× at 1,000 rows, 1.17× at 200 —
+  the familiar crossover shape).
 
 Operationally: with the key at its default `off`, declare `CABIN`
 explicitly when you want one — `CABIN AUTO` acts only under
 `cabin_optimizer = on`. Bound Cabins (assertions') are permanently
 outside the controller's jurisdiction.
 
+### 5a. `SHOW CABIN_OPTIMIZER` — the controller's view
+
+One header line, then one `\n`-escaped line per managed candidate:
+
+```
+cabin_optimizer=<on|off> managed=<n> pages_committed=<n> page_budget=<n>
+  ticks=<n> creates=<n> extends=<n> heals=<n> drops=<n> deferred=<n> failures=<n>
+rel=<name> column=<name> state=<CANDIDATE|BUILDING|ACTIVE|DECAYING>
+  cabin_id=<n> pages=<n> streak=<n> benefit_q16=<n> cost_q16=<n>
+  [hint_fail_pct=<n> coverage_miss_pct=<n>] last_action=<s> reason=<s> epoch=<n>
+```
+
+How to read it: the counters are **applied** actions — what the executor
+did — while `last_action` is the newest logged **decision**, so a decided
+CREATE beside `creates=0` means the effectful half deferred (busy row,
+kill switch) or was refused by policy. `benefit_q16`/`cost_q16` are the
+last Decide pass's scores in 16.16 fixed point, stamped every pass — a
+quiet entry still shows the numbers keeping it quiet. The quality
+percentages are the rates the θ_heal and θ_extend rules compare. A server
+without the controller (`cabins = off`) answers
+`CABIN_OPTIMIZER absent (cabins = off)` rather than a zero-filled table.
+
+`ANALYZE` marks a served optimizer-owned probe with
+`cabin_optimizer=true`, so a plan always says when the structure serving
+it is one the engine may drop on its own judgement. `SET CABIN_OPTIMIZER
+ON|OFF` is the runtime switch; reading the view never advances the
+controller's snapshot sequence.
+
 ## 6. Operating notes
 
 - `SHOW ACCESS` is the raw input (`sys.access_stats`, shapes keyed by
   columns, never values); `SHOW RELAYOUT` is the same data weighted,
-  surveyed and classified. `SHOW CABINS` shows what Part II would manage.
+  surveyed and classified. `SHOW CABINS` lists every Cabin declared or
+  created; `SHOW CABIN_OPTIMIZER` shows the ones Part II manages, with
+  the scores and decisions behind them.
 - Statistics rows are never removed, and a statistic outlives its
   relation — a vanished relation prints `rel=oid=<n>`.
 - Peers (`cores > 1`) run with `access_statistics` off by design, so on a

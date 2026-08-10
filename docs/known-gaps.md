@@ -108,10 +108,13 @@ There is no purge pass, and readers are deliberately unregistered
   relation a trail recorded it from — holds until pages can be reallocated
   between relations (`docs/feat-physical-optimizer.md` §6 gate 3 owns it).
 - **`CABIN AUTO` acts only under `cabin_optimizer = on`, default `off`**:
-  the controller runs end to end since PHY04 (2026-08-10), but with the
-  key at its default a column declared `auto` still behaves exactly as an
-  undeclared one. PHY06/PHY08 remain
-  (`docs/feat-physical-optimizer.md` Part II).
+  the controller runs end to end since PHY04 and is observable since
+  PHY06 (`SHOW CABIN_OPTIMIZER`, both 2026-08-10), but with the key at
+  its default a column declared `auto` still behaves exactly as an
+  undeclared one (`docs/feat-physical-optimizer.md` Part II). Its managed
+  state and decision log are memory-resident: a restart forgets what the
+  controller was managing, and re-observation rebuilds it — the stated
+  crash posture, not a bug.
 - **The physical optimizer is shadow-only as a finding**
   (`docs/feat-physical-optimizer.md` §6): every candidate move is blocked
   by a named gate; `physical_optimizer = on` is refused at startup naming

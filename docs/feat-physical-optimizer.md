@@ -336,8 +336,13 @@ PHY06 (observability, 2026-08-10 — PO9 realized as `SHOW CABIN_OPTIMIZER`
 rather than a `sys.*` SELECT, per SHOW ASSERTIONS' rule; applied-action
 counters on the executor; ANALYZE's `cabin_optimizer=true` mark on a
 managed probe; and the `NoteExtended` completion edge, closing PHY04's
-recorded page-accounting gap) are built. PHY08 (the E2E close-out)
-remains.**
+recorded page-accounting gap) and
+PHY08 (the E2E close-out, 2026-08-10 — the full lifecycle in one scripted
+test observed through the view, and the bench note
+`bench/results-cabin-optimizer.md`: zero-candidate overhead unmeasurable
+with the tick priced at 2-3 µs CPU, and the improvement case creating
+autonomously in exactly 3 ticks and serving at 10.9× on 10,000 rows)
+are built. **The Part II series is complete.**
 
 ## II.1 Positioning
 

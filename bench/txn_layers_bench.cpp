@@ -447,7 +447,8 @@ void MeasureLayers(Instance& db, int iterations) {
         for (int i = 0; i < iterations; ++i) {
             const auto t = Clock::now();
             auto encoded = kds::exec::EncodeRow(access.value()->schema, access.value()->layout,
-                                                 /*id=*/1, stmt.values, kds::exec::VarHeapSink{});
+                                                 /*id=*/1, stmt.rows.front(),
+                                                 kds::exec::VarHeapSink{});
             samples.push_back(MicrosSince(t));
             if (!encoded.ok()) Fatal(encoded.status(), "encoding a row");
         }
