@@ -80,6 +80,34 @@ const char* ActionReasonName(ActionReason reason) noexcept {
     return "?";
 }
 
+const char* CabinOptimizer::StateName(State state) noexcept {
+    switch (state) {
+        case State::kCandidate: return "CANDIDATE";
+        case State::kBuilding: return "BUILDING";
+        case State::kActive: return "ACTIVE";
+        case State::kDecaying: return "DECAYING";
+    }
+    return "?";
+}
+
+std::vector<ManagedEntryView> CabinOptimizer::ManagedEntries() const {
+    std::vector<ManagedEntryView> out;
+    out.reserve(managed_.size());
+    for (const auto& [key, managed] : managed_) {
+        ManagedEntryView view;
+        view.rel_oid = key.rel_oid;
+        view.col_pos = key.col_pos;
+        view.state = StateName(managed.state);
+        view.cabin_id = managed.cabin_id;
+        view.pages = managed.pages;
+        view.confirm_streak = managed.confirm_streak;
+        view.benefit = managed.last_benefit;
+        view.cost = managed.last_cost;
+        out.push_back(view);
+    }
+    return out;
+}
+
 std::vector<DecisionRecord> CabinOptimizer::DecisionLog() const {
     std::vector<DecisionRecord> out;
     out.reserve(log_.size());
@@ -128,6 +156,17 @@ void CabinOptimizer::NoteBuildFailed(std::uint64_t rel_oid, std::uint16_t col_po
     // PO5: BUILDING -> discard, back to CANDIDATE from scratch. Demand, if
     // real, re-confirms.
     found->second = Managed{};
+}
+
+void CabinOptimizer::NoteExtended(std::uint64_t cabin_id, std::uint64_t pages) {
+    for (auto& [key, managed] : managed_) {
+        if (managed.cabin_id == cabin_id) {
+            managed.pages = pages;
+            return;
+        }
+    }
+    // Unknown id: the entry was dropped between the decision and the
+    // report, and its pages left the accounting with it. Nothing to update.
 }
 
 void CabinOptimizer::NoteDropped(std::uint64_t cabin_id) {
@@ -260,6 +299,11 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
         Managed& m = found->second;
         const Scored scored = score(e, &m);
         const Fix16 cost = scored.cost;
+        // PHY06's view reads these and nothing else does: the rule table
+        // below works from `scored` directly, so stashing cannot feed a
+        // decision anything the snapshot did not.
+        m.last_benefit = scored.benefit;
+        m.last_cost = cost;
 
         switch (m.state) {
             case State::kCandidate: {

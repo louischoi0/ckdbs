@@ -408,5 +408,51 @@ TEST(CabinOptimizerTest, IdenticalStreamsProduceBitIdenticalTraces) {
     }
 }
 
+TEST(CabinOptimizerTest, NoteExtendedMovesThePageAccounting) {
+    // PHY06's completion edge: an EXTEND grows the sets, so the budget's
+    // accounting must move with it - and it is a *total*, so a repeated
+    // report is idempotent rather than compounding.
+    CabinOptimizer opt(TestConfig());
+    for (std::uint64_t v = 1; v <= 3; ++v) (void)opt.Decide(HotSnapshot(v));
+    opt.NoteCreated(kRel, kCol, /*cabin_id=*/42, /*pages=*/3);
+    EXPECT_EQ(opt.pages_committed(), 3u);
+
+    opt.NoteExtended(/*cabin_id=*/42, /*pages=*/5);
+    EXPECT_EQ(opt.pages_committed(), 5u);
+    opt.NoteExtended(/*cabin_id=*/42, /*pages=*/5);
+    EXPECT_EQ(opt.pages_committed(), 5u) << "a repeated total compounded";
+
+    // An unknown id is NoteDropped's no-op: the entry left the accounting
+    // with its pages, and there is nothing to update.
+    opt.NoteExtended(/*cabin_id=*/999, /*pages=*/50);
+    EXPECT_EQ(opt.pages_committed(), 5u);
+}
+
+TEST(CabinOptimizerTest, ManagedEntriesExposeStateAndLastScores) {
+    // PHY06's view: the projection carries the key, the lifecycle state,
+    // and the *last* Decide pass's B/C - stamped every pass, so a quiet
+    // entry still shows the numbers keeping it quiet.
+    CabinOptimizer opt(TestConfig());
+    (void)opt.Decide(HotSnapshot(1));
+
+    std::vector<ManagedEntryView> entries = opt.ManagedEntries();
+    ASSERT_EQ(entries.size(), 1u);
+    EXPECT_EQ(entries[0].rel_oid, kRel);
+    EXPECT_EQ(entries[0].col_pos, kCol);
+    EXPECT_STREQ(entries[0].state, "CANDIDATE");
+    EXPECT_EQ(entries[0].cabin_id, 0u);
+    EXPECT_EQ(entries[0].confirm_streak, 1u);
+    EXPECT_EQ(entries[0].benefit, 380 * kFixOne);
+    EXPECT_EQ(entries[0].cost, 40 * kFixOne);
+
+    for (std::uint64_t v = 2; v <= 3; ++v) (void)opt.Decide(HotSnapshot(v));
+    opt.NoteCreated(kRel, kCol, /*cabin_id=*/42, /*pages=*/3);
+    entries = opt.ManagedEntries();
+    ASSERT_EQ(entries.size(), 1u);
+    EXPECT_STREQ(entries[0].state, "ACTIVE");
+    EXPECT_EQ(entries[0].cabin_id, 42u);
+    EXPECT_EQ(entries[0].pages, 3u);
+}
+
 }  // namespace
 }  // namespace kds::stats

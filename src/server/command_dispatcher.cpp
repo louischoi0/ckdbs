@@ -292,6 +292,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
         if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
         if (IEquals(sub, "RELAYOUT")) return HandleShowRelayout(sub_rest);
+        if (IEquals(sub, "CABIN_OPTIMIZER")) return HandleShowCabinOptimizer();
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
@@ -1538,6 +1539,86 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
             // than zero, and printing zeros would read as "nothing has
             // happened" when the truth is "nothing is being recorded".
             os << " observed=- entries=- hits=- misses=- (cabins = off)";
+        }
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleShowCabinOptimizer() {
+    // PO9's view (workplan PHY06). Rendering only: every number is read
+    // from a surface that exists on its own merits - the controller's
+    // managed table and decision log, the executor's applied counters, the
+    // collector's S3 quality - so the view cannot disagree with the engine
+    // about anything, only omit.
+    if (cabin_controller_ == nullptr) {
+        // Not an empty table: with no controller nothing is managing, and
+        // an empty listing would read as "managing nothing yet" when the
+        // truth is "not constructed" - SHOW CABINS' `cabins = off` rule.
+        return {"CABIN_OPTIMIZER absent (cabins = off)", false};
+    }
+
+    const stats::CabinOptimizerConfig& config = cabin_controller_->config();
+    std::ostringstream os;
+    os << "cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+       << " managed=" << cabin_controller_->managed_count()
+       << " pages_committed=" << cabin_controller_->pages_committed()
+       << " page_budget=" << config.page_budget;
+    if (cabin_executor_ != nullptr) {
+        // Applied, not decided: the per-entry `last_action` below is what
+        // Decide wanted, these are what Execute did, and the gap between
+        // the two is the diagnostic (a deferral, a policy refusal).
+        const exec::CabinOptimizerExecutor::Counters& c = cabin_executor_->counters();
+        os << " ticks=" << c.ticks << " creates=" << c.creates << " extends=" << c.extends
+           << " heals=" << c.heals << " drops=" << c.drops
+           << " deferred=" << c.builds_deferred << " failures=" << c.build_failures;
+    }
+
+    const std::vector<stats::DecisionRecord> log = cabin_controller_->DecisionLog();
+    for (const stats::ManagedEntryView& entry : cabin_controller_->ManagedEntries()) {
+        os << "\\n";
+        os << "rel=" << RelationNameOf(entry.rel_oid);
+
+        // Names resolved here rather than stored, SHOW CABINS' rule: an
+        // inspection surface can afford the lookup.
+        os << " column=";
+        auto access = catalog_.InitTableAccess(entry.rel_oid);
+        if (access.ok() && entry.col_pos < access.value()->schema.columns.size()) {
+            os << catalog::NameView(access.value()->schema.columns[entry.col_pos].name);
+        } else {
+            os << entry.col_pos;
+        }
+
+        os << " state=" << entry.state << " cabin_id=" << entry.cabin_id
+           << " pages=" << entry.pages << " streak=" << entry.confirm_streak
+           << " benefit_q16=" << entry.benefit << " cost_q16=" << entry.cost;
+
+        // S3 quality as integer percentages - the Q8 scale cancels in the
+        // ratio. Failure and miss rates rather than their complements,
+        // because they are what the θ_heal and θ_extend rules compare.
+        if (entry.cabin_id != 0 && optimizer_signals_ != nullptr) {
+            const stats::SnapshotCabin q = optimizer_signals_->QualityOf(entry.cabin_id);
+            const std::uint64_t lookups = q.lookups_q8;
+            os << " hint_fail_pct="
+               << (lookups == 0 ? 0 : (std::uint64_t{q.hint_failures_q8} * 100) / lookups)
+               << " coverage_miss_pct="
+               << (lookups == 0 ? 0 : (std::uint64_t{q.coverage_misses_q8} * 100) / lookups);
+        }
+
+        // The newest logged decision for this candidate. The log is
+        // oldest-first, so the final match wins; a candidate no decision
+        // ever fired on says so rather than printing nothing.
+        const stats::DecisionRecord* last = nullptr;
+        for (const stats::DecisionRecord& record : log) {
+            if (record.item.rel_oid == entry.rel_oid && record.item.col_pos == entry.col_pos) {
+                last = &record;
+            }
+        }
+        if (last != nullptr) {
+            os << " last_action=" << stats::CabinActionName(last->item.action)
+               << " reason=" << stats::ActionReasonName(last->item.reason)
+               << " epoch=" << last->decay_epoch;
+        } else {
+            os << " last_action=none";
         }
     }
     return {os.str(), false};

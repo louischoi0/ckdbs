@@ -218,6 +218,15 @@ struct CabinProbe {
     // evidence that waiting exists to gather, so asking traffic to prove it
     // again asks a question that was answered.
     bool declared = false;
+
+    // Whether the cabin optimizer owns this Cabin (`kCabinOriginAuto` -
+    // the promotion pipeline, workplan PHY04). Read by exactly one
+    // consumer, the plan printer, so ANALYZE can mark an
+    // optimizer-managed probe (PO9): an operator reading a plan needs to
+    // know whether the structure serving it is one they declared or one
+    // the engine may drop on its own judgement. Not `!declared`, because
+    // a legacy unset origin is neither.
+    bool managed = false;
 };
 
 // What a kIndexProbe / kIndexRange step reads, resolved at compile time.

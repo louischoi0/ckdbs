@@ -39,6 +39,7 @@ std::uint64_t CabinOptimizerExecutor::PagesProxyOf(std::uint64_t cabin_id) const
 Status CabinOptimizerExecutor::Tick(stats::OptimizerSignals& signals,
                                     const std::function<bool()>& enabled) {
     if (!enabled()) return Status::OK();  // off means off: not even a snapshot
+    ++counters_.ticks;
     const stats::OptimizerSnapshot snapshot = signals.Snapshot();
     return Apply(controller_.Decide(snapshot), enabled);
 }
@@ -209,6 +210,7 @@ Status CabinOptimizerExecutor::ApplyCreate(const stats::ActionItem& action,
             created.status().code() != StatusCode::kUnsupported &&
             created.status().code() != StatusCode::kNotFound) {
             controller_.NoteBuildFailed(action.rel_oid, action.col_pos);
+            ++counters_.build_failures;
         }
         return Status::OK();
     }
@@ -219,6 +221,7 @@ Status CabinOptimizerExecutor::ApplyCreate(const stats::ActionItem& action,
         (void)catalog_.DropCabin(cabin_id);
         cabins_.Forget(cabin_id);
         controller_.NoteBuildFailed(action.rel_oid, action.col_pos);
+        ++counters_.build_failures;
         return Status::OK();
     }
 
@@ -235,10 +238,16 @@ Status CabinOptimizerExecutor::ApplyCreate(const stats::ActionItem& action,
         (void)catalog_.DropCabin(cabin_id);
         cabins_.Forget(cabin_id);
         controller_.NoteBuildFailed(action.rel_oid, action.col_pos);
+        if (aborted) {
+            ++counters_.builds_deferred;
+        } else {
+            ++counters_.build_failures;
+        }
         return built.ok() ? Status::OK() : built.status();
     }
 
     controller_.NoteCreated(action.rel_oid, action.col_pos, cabin_id, PagesProxyOf(cabin_id));
+    ++counters_.creates;
     return Status::OK();
 }
 
@@ -250,9 +259,21 @@ Status CabinOptimizerExecutor::ApplyExtend(const stats::ActionItem& action,
     bool aborted = false;
     auto built = BuildSeededSets(*access.value(), static_cast<std::uint16_t>(action.col_pos),
                                  action.cabin_id, enabled, &aborted);
-    if (!built.ok()) return built.status();
+    if (!built.ok()) {
+        ++counters_.build_failures;
+        return built.status();
+    }
     // An aborted extend committed nothing and needs no unwinding; the
     // sighting evidence survives and the next tick may retry.
+    if (aborted) {
+        ++counters_.builds_deferred;
+        return Status::OK();
+    }
+    // The completion edge (PHY06): the widened sets moved the page proxy,
+    // and an unreported extend undercounts PO6's budget by the growth
+    // forever. The new total, not a delta - idempotent by construction.
+    controller_.NoteExtended(action.cabin_id, PagesProxyOf(action.cabin_id));
+    ++counters_.extends;
     return Status::OK();
 }
 
@@ -303,6 +324,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             ++i;
         }
     }
+    ++counters_.heals;
     return Status::OK();
 }
 
@@ -313,6 +335,7 @@ Status CabinOptimizerExecutor::ApplyDrop(const stats::ActionItem& action) {
     if (!dropped.ok() && dropped.code() != StatusCode::kNotFound) return dropped;
     cabins_.Forget(action.cabin_id);
     controller_.NoteDropped(action.cabin_id);
+    ++counters_.drops;
     return Status::OK();
 }
 

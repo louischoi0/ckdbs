@@ -518,6 +518,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
             expeditor->database_->catalog, *expeditor->store_, *expeditor->cabin_store_,
             *expeditor->cabin_controller_, &*expeditor->txn_manager_);
         expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
+        // PHY06: SHOW CABIN_OPTIMIZER reads both, read-only.
+        expeditor->dispatcher_->set_cabin_optimizer_view(&*expeditor->cabin_controller_,
+                                                         &*expeditor->cabin_executor_);
     }
     expeditor->logger_->Info("expeditor",
                              std::string("INSERT durability ") +

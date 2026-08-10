@@ -313,9 +313,12 @@ consumes the R1 lazy-decay score Part I defines and implements
 existing citation valid, Part II keeps its own id spaces: decisions `PO1`-
 `PO10`, tasks `PHY01`-`PHY08` (workplan Part II), sections `§II.n`. The
 component's runtime name stays distinct too — class `CabinOptimizer`, keys
-`kds.cabin_optimizer`/`kds.po_*`, view `sys.cabin_optimizer` — because
-Part I's built `physical_optimizer` config key already means the shadow
-report, and one key wearing two meanings is how switches lie.
+`kds.cabin_optimizer`/`kds.po_*`, view `SHOW CABIN_OPTIMIZER` (PO9 named
+it `sys.cabin_optimizer`; PHY06 realized it as a `SHOW` surface for SHOW
+ASSERTIONS' reason — the dispatcher holds the controller, the executor
+and the collector, and a `sys.*` SELECT path holds none of them) —
+because Part I's built `physical_optimizer` config key already means the
+shadow report, and one key wearing two meanings is how switches lie.
 **Status: ADOPTED (experimental); PHY01 (the S1-S3 signal plumbing and
 snapshot, `stats/optimizer_signals.hpp`), PHY02 (the pure decision core,
 `stats/cabin_optimizer.hpp` — 16.16 fixed point, the PO5 lifecycle) PHY03 (the decision-log ring, the `kCabinOriginAuto` ownership tag, and
@@ -328,8 +331,13 @@ PHY07 (the seed-driven replay harness with checked-in golden traces —
 PO10's determinism proven end to end, all 2026-08-09) and
 PHY04 (the executor, 2026-08-10 — `exec::CabinOptimizerExecutor`,
 ring-routed seeded builds, busy-row deferral, batch heal, PO8 at every
-boundary, the expeditor cadence) are built. PHY06 (observability) and
-PHY08 (the E2E close-out) remain.**
+boundary, the expeditor cadence) and
+PHY06 (observability, 2026-08-10 — PO9 realized as `SHOW CABIN_OPTIMIZER`
+rather than a `sys.*` SELECT, per SHOW ASSERTIONS' rule; applied-action
+counters on the executor; ANALYZE's `cabin_optimizer=true` mark on a
+managed probe; and the `NoteExtended` completion edge, closing PHY04's
+recorded page-accounting gap) are built. PHY08 (the E2E close-out)
+remains.**
 
 ## II.1 Positioning
 
@@ -365,7 +373,7 @@ every decision it makes is logged with the inputs that produced it.
 | PO6 | Budget: per-core page budget for optimizer-managed Cabins (`kds.po_page_budget`). Over-budget CREATE is admitted only in **exchange** for dropping the lowest-net-benefit ACTIVE Cabin (explicit replacement rule — optimization within a budget, not open-ended growth). Memory residency is the buffer pool's concern (Observational Cabin pages are evictable, EV3); this budget governs disk and upkeep. |
 | PO7 | Refresh strategy: quality surveillance, not eager maintenance. Hint-failure rate above threshold ⇒ HEAL; if quality does not recover after HEAL (e.g., mass relocation by bulk UPDATE) ⇒ DROP — demand, if real, re-nominates the candidate. "Discard and re-observe" over "repair at any cost" is the correct posture for advisory structures. |
 | PO8 | Safety: experimental status; runtime kill switch `SET kds.cabin_optimizer = on\|off`. Turning off halts new decisions and in-flight builds but leaves existing Cabins untouched (no destructive path on disable). Every action is recorded in a decision log with the input-score snapshot. |
-| PO9 | Observability: `sys.cabin_optimizer` view (per managed Cabin: state, net-benefit score, hint hit rate, coverage, pages, last action + reason); production counters per action type and budget utilization; ANALYZE Cabin-hit output gains a flag marking optimizer-managed Cabins. |
+| PO9 | Observability: a view per managed Cabin — state, net-benefit score, hint hit rate, coverage, pages, last action + reason; production counters per action type and budget utilization; ANALYZE Cabin-hit output gains a flag marking optimizer-managed Cabins. *(Named `sys.cabin_optimizer` when written; realized by PHY06 as `SHOW CABIN_OPTIMIZER` — the naming note above carries the reason.)* |
 | PO10 | Deterministic testing: seed-driven statistics streams replayed through the pure decision core reproduce identical action sequences. Structural requirement on the code: **decide (pure, side-effect free) and execute (effectful) are separate phases**. Oracles: no oscillation under stationary workloads, budget invariant, disable-switch harmlessness. |
 
 ## II.3 Architecture

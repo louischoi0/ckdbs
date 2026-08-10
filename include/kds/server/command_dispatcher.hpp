@@ -19,6 +19,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/pattern_ddl.hpp"
 #include "kds/exec/cabin_ddl.hpp"
+#include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/stats/access_stats.hpp"
@@ -547,6 +548,14 @@ private:
     DispatchOutcome HandleShowRelayout(std::string_view rest);
     DispatchOutcome HandleSetCabinOptimizer(std::string_view rest);
 
+    // `SHOW CABIN_OPTIMIZER` - PO9's view (workplan PHY06): the switch and
+    // budget line, the executor's applied-action counters, and one line
+    // per managed candidate with its state, last B/C scores, S3 quality
+    // rates and last logged action. Everything it prints already exists on
+    // an inspection surface (`ManagedEntries`, `DecisionLog`, `counters`,
+    // `QualityOf`) - this handler renders and never computes.
+    DispatchOutcome HandleShowCabinOptimizer();
+
     // ---- Foreign-key checks (docs/impl-foreign-keys.md §§2-4) -----------
     //
     // The write paths' three entry points. They live here rather than in
@@ -687,12 +696,23 @@ public:
 
     // PO8's switch, boot half (workplan PHY05): the config key seeds it,
     // SET CABIN_OPTIMIZER flips it at runtime, SHOW META reports it. The
-    // consumer is PHY04's cadence task, which does not exist yet - stated
-    // plainly, the V11 precedent.
+    // consumer is PHY04's cadence task, which reads it at every batch
+    // boundary.
     void set_cabin_optimizer_enabled(bool enabled) noexcept {
         cabin_optimizer_enabled_ = enabled;
     }
     bool cabin_optimizer_enabled() const noexcept { return cabin_optimizer_enabled_; }
+
+    // The view's two sources (workplan PHY06), a setter for
+    // `set_optimizer_signals`'s reason. Both null - every construction
+    // site without the controller - and `SHOW CABIN_OPTIMIZER` then
+    // reports the surface as absent rather than printing zeros wearing a
+    // fresh face (SHOW ASSERTIONS' rule).
+    void set_cabin_optimizer_view(const stats::CabinOptimizer* controller,
+                                  const exec::CabinOptimizerExecutor* executor) noexcept {
+        cabin_controller_ = controller;
+        cabin_executor_ = executor;
+    }
 
 private:
     // The aggregated SELECT path (docs/feat-aggregate.md AG1): the same
@@ -1049,6 +1069,13 @@ private:
     stats::OptimizerSignals* optimizer_signals_ = nullptr;
     exec::ExecStats exec_stats_;
     bool cabin_optimizer_enabled_ = false;  // §II.6: off, experimental
+
+    // PHY06's view sources: the controller's managed table and decision
+    // log, the executor's applied-action counters. Read-only - the view
+    // renders, it never drives - and null wherever the controller was
+    // never constructed (`cabins = off`, or a test that wired neither).
+    const stats::CabinOptimizer* cabin_controller_ = nullptr;
+    const exec::CabinOptimizerExecutor* cabin_executor_ = nullptr;
     CrossCoreWriteCounters cross_core_writes_;
 
     // Refuses a write to a relation this core may not write, and binds the

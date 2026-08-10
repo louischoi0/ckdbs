@@ -140,6 +140,24 @@ struct DecisionRecord {
     ActionItem item;
 };
 
+// One managed candidate as the inspection surface sees it (PO9, workplan
+// PHY06's `SHOW CABIN_OPTIMIZER`). A by-value projection of the internal
+// `Managed` entry plus its key: the view is a report, and handing out a
+// reference into the ordered map would let a reader outlive a Decide.
+// `benefit`/`cost` are the scores of the **last Decide pass** - stamped
+// every pass, not only when an action fired, so a quiet entry still shows
+// the numbers keeping it quiet.
+struct ManagedEntryView {
+    std::uint64_t rel_oid = 0;
+    std::uint16_t col_pos = 0;
+    const char* state = "";       // CANDIDATE / BUILDING / ACTIVE / DECAYING
+    std::uint64_t cabin_id = 0;   // 0 until NoteCreated
+    std::uint64_t pages = 0;      // estimate while BUILDING, real after
+    std::uint32_t confirm_streak = 0;
+    Fix16 benefit = 0;
+    Fix16 cost = 0;
+};
+
 class CabinOptimizer {
 public:
     explicit CabinOptimizer(CabinOptimizerConfig config = {}) noexcept : config_(config) {}
@@ -156,6 +174,14 @@ public:
     void NoteBuildFailed(std::uint64_t rel_oid, std::uint16_t col_pos);
     void NoteDropped(std::uint64_t cabin_id);
 
+    // The EXTEND completion edge (PHY06, closing PHY04's recorded gap): a
+    // widened Cabin's sets grew, so its page proxy moved, and an entry
+    // whose `pages` stays at the CREATE-time count undercounts the budget
+    // by every extend forever - PO6's invariant silently eroding. Executor
+    // reports the *new total*, not a delta, so a repeated report is
+    // idempotent. Unknown cabin_id is a no-op, NoteDropped's stance.
+    void NoteExtended(std::uint64_t cabin_id, std::uint64_t pages);
+
     // PO6's invariant, exposed so the budget test asserts the fact rather
     // than re-deriving it: estimated + built pages currently committed.
     std::uint64_t pages_committed() const noexcept;
@@ -165,6 +191,15 @@ public:
     // inspection surface (PHY06's view reads it), bounded by the
     // configured capacity, and never on a statement path.
     std::vector<DecisionRecord> DecisionLog() const;
+
+    // The managed table, in key order (PHY06's view). A copy, for the
+    // DecisionLog reason; never on a statement path.
+    std::vector<ManagedEntryView> ManagedEntries() const;
+
+    // The settings, for the view's budget line: utilization is
+    // pages_committed() against config().page_budget, and re-deriving the
+    // ceiling anywhere else would let the two drift.
+    const CabinOptimizerConfig& config() const noexcept { return config_; }
 
 private:
     enum class State : std::uint8_t { kCandidate, kBuilding, kActive, kDecaying };
@@ -196,7 +231,15 @@ private:
         // frequency; a dead shape still dies, because zero frequency
         // zeroes the benefit whatever the baseline says.
         Fix16 frozen_p_scan = 0;
+
+        // The last Decide pass's scores, for PHY06's view only - nothing
+        // in the rule table reads them back, so they cannot feed a
+        // decision loop the snapshot did not.
+        Fix16 last_benefit = 0;
+        Fix16 last_cost = 0;
     };
+
+    static const char* StateName(State state) noexcept;
 
     void RecordDecision(const OptimizerSnapshot& snapshot, const ActionItem& item);
 

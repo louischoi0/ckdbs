@@ -81,6 +81,17 @@ void OptimizerSignals::NoteCabinHint(std::uint64_t cabin_id, bool ok) {
     Touch(CabinFor(cabin_id)->hint_failures, clock_, half_life_ns_);
 }
 
+SnapshotCabin OptimizerSignals::QualityOf(std::uint64_t cabin_id) const {
+    SnapshotCabin out;
+    out.cabin_id = cabin_id;
+    auto found = cabins_.find(cabin_id);
+    if (found == cabins_.end()) return out;
+    out.lookups_q8 = ValueAt(found->second.lookups, clock_, half_life_ns_);
+    out.hint_failures_q8 = ValueAt(found->second.hint_failures, clock_, half_life_ns_);
+    out.coverage_misses_q8 = ValueAt(found->second.coverage_misses, clock_, half_life_ns_);
+    return out;
+}
+
 OptimizerSnapshot OptimizerSignals::Snapshot() {
     OptimizerSnapshot snapshot;
     snapshot.version = ++version_;

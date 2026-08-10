@@ -286,10 +286,9 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01-PHY05 and PHY07 are built (PHY04 on
-2026-08-10, over the EVT03/EVT06 substrate built for it); PHY06 and PHY08
-remain** — observability and the E2E close-out, both now unblocked, since
-the controller runs end to end. Part I's `stats/decay.hpp` is the R1
+dependency of PHY04), `workplan-testing.md`. **PHY01-PHY07 are built
+(PHY04 on 2026-08-10 over the EVT03/EVT06 substrate built for it; PHY06 on
+2026-08-10); PHY08 — the E2E close-out — remains.** Part I's `stats/decay.hpp` is the R1
 implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
 S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
 with no engine-effect includes, per PO10; PHY07's golden traces are
@@ -528,15 +527,41 @@ switch; thresholds boot-time in v1).
 
 **Acceptance.** Boot-validation tests; SET on/off runtime toggle test.
 
-## PHY06 — Observability (PO9)
+## PHY06 — Observability (PO9)  **[DONE 2026-08-10]**
 
-**Scope.** `sys.cabin_optimizer` view + counters + ANALYZE flag.
+**Built.** The view is **`SHOW CABIN_OPTIMIZER`**, not a `sys.*` SELECT —
+`SHOW ASSERTIONS`' rule: the surface renders through the dispatcher, which
+holds every source the view needs and the SELECT path does not. The
+handler renders and never computes: each number comes from a surface that
+exists on its own merits — `CabinOptimizer::ManagedEntries()` (a by-value
+projection of the managed table; per entry the state, pages, confirm
+streak, and the **last Decide pass's B/C**, stamped every pass so a quiet
+entry still shows the numbers keeping it quiet), `DecisionLog()` (the
+newest record per candidate renders as `last_action=/reason=/epoch=`),
+`CabinOptimizerExecutor::counters()` (**applied**, not decided — ticks,
+creates, extends, heals, drops, deferred, failures; the gap against the
+decision log is itself the diagnostic), and
+`OptimizerSignals::QualityOf()` — a **const, version-silent** S3 peek,
+because a SHOW must not advance the version sequence the decision log's
+digests are named in. Quality prints as integer percentages (`hint_fail_pct`,
+`coverage_miss_pct` — the rates θ_heal and θ_extend compare, not their
+complements; Q8 cancels in the ratio). A dispatcher with no controller
+answers `CABIN_OPTIMIZER absent (cabins = off)` — SHOW CABINS' no-zeros
+rule. ANALYZE marks an optimizer-managed probe with `cabin_optimizer=true`
+(`CabinProbe::managed`, origin `kCabinOriginAuto` at compile — not
+`!declared`, because a legacy unset origin is neither); a declared Cabin
+is deliberately unmarked, pinned by test. **The NoteExtended edge rode in**
+(PHY04's recorded gap): a completed EXTEND reports its new page-proxy
+**total** — idempotent, never a delta — or PO6's accounting undercounts by
+every extend forever; `AnExtendReportsItsNewPageTotalToTheBudget` pins it.
+
+**Scope.** `SHOW CABIN_OPTIMIZER` + counters + ANALYZE flag.
 
 **Deliverables.**
-- `sys.cabin_optimizer`: per managed Cabin — state, B, C, net, hint hit
-  rate, coverage-miss rate, pages, last action + reason code + epoch.
+- Per managed Cabin — state, B, C, hint-failure rate, coverage-miss rate,
+  pages, last action + reason code + epoch.
 - Production counters: actions by type, budget utilization, snapshot
-  cadence health.
+  cadence health (`ticks`).
 - ANALYZE: Cabin-hit line gains `cabin_optimizer=true` marking for managed
   Cabins.
 
