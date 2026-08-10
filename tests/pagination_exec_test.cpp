@@ -183,6 +183,30 @@ TEST_F(PaginationExecTest, AFilledQuotaStopsTheWalkEarly) {
     EXPECT_NE(limited.find("quota limit=1"), std::string::npos) << limited;
 }
 
+TEST(PaginationBudgetTest, TheQuotaSparesTheBudgetAndOffsetStillPaysIt) {
+    // The quota bounds *output*, the budget bounds *work* (V19), and this
+    // is the pair of cases where the difference is visible. A filled quota
+    // stops the walk before the budget is spent, so LIMIT 1 succeeds where
+    // the unlimited scan is refused; an OFFSET buys no such escape,
+    // because skipped rows are examined rows and charge like any other.
+    storage::InMemoryPageStore store{kFirstUserPageId};
+    auto boot = bootstrap::BootstrapDatabase(store, 1000);
+    ASSERT_TRUE(boot.ok());
+    CommandDispatcher d(boot.value().superblock, boot.value().catalog, store,
+                        /*log=*/nullptr, /*clock=*/nullptr, /*wal=*/nullptr,
+                        wal::DurabilityClass::kGroup, exec::Budget(10));
+    auto run = [&](const std::string& sql) { return d.Dispatch(sql).response; };
+
+    ASSERT_EQ(run("CREATE TABLE big (id int64, n int64)").substr(0, 7), "CREATED");
+    for (int i = 0; i < 30; ++i) {
+        ASSERT_EQ(run("INSERT INTO big VALUES (7)").substr(0, 8), "INSERTED");
+    }
+
+    EXPECT_EQ(run("SELECT n FROM big LIMIT 1"), "n\\n7");
+    EXPECT_EQ(run("SELECT n FROM big").substr(0, 3), "ERR");
+    EXPECT_EQ(run("SELECT n FROM big OFFSET 20").substr(0, 3), "ERR");
+}
+
 TEST_F(PaginationExecTest, AnalyzeCountsEmittedRowsAndExaminedStaysHonest) {
     Run("CREATE TABLE big (id int64, n int64)");
     for (int i = 0; i < 50; ++i) Run("INSERT INTO big VALUES (7)");

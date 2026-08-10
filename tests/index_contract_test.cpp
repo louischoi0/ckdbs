@@ -169,6 +169,22 @@ const std::vector<std::string>& Queries() {
         "SELECT owner, COUNT(*) FROM b GROUP BY owner",
         // And the whole relation, which every configuration must agree on.
         "SELECT id, owner, qty, sym FROM b",
+
+        // ---- Paginated statements (docs/parser-v2.md I11, V09) ---------
+        //
+        // A limited index step must slice, never reorder: the walk
+        // collects in index-key order and emission is pk order (§8a), so
+        // the quota keeps the first rows *by pk* - the same rows every
+        // other configuration keeps. The multi-match probe under LIMIT 1
+        // is the case where stopping the collect phase early would drop a
+        // pk-earlier row; these lines pin that it never does, in all four
+        // configurations at once.
+        "SELECT id FROM b WHERE owner = 1 LIMIT 1",
+        "SELECT id FROM b WHERE owner = 1 LIMIT 2 OFFSET 1",
+        "SELECT id FROM b WHERE owner = 2 AND qty = 2 LIMIT 1",
+        "SELECT id FROM b WHERE owner BETWEEN 1 AND 3 LIMIT 3",
+        "SELECT id FROM b WHERE owner = 42 LIMIT 1",
+        "SELECT id, owner, qty, sym FROM b LIMIT 5 OFFSET 2",
     };
     return kQueries;
 }
@@ -205,6 +221,35 @@ TEST(IndexContractTest, TheIndexedRunActuallyUsedTheIndex) {
     EXPECT_NE(plan.find("index_scanned="), std::string::npos) << plan;
     EXPECT_EQ(plan.find("examined=39"), std::string::npos)
         << "the indexed run read the whole relation: " << plan;
+}
+
+// The value of `key=<n>` in an ANALYZE reply.
+std::uint64_t MeterOf(const std::string& reply, const std::string& key) {
+    const auto at = reply.find(key + "=");
+    EXPECT_NE(at, std::string::npos) << key << " not in: " << reply;
+    if (at == std::string::npos) return 0;
+    return std::strtoull(reply.c_str() + at + key.size() + 1, nullptr, 10);
+}
+
+TEST(IndexContractTest, AFilledQuotaStopsResolvingIndexEntries) {
+    // V09's quota against the two-phase step, and the asymmetry is the
+    // point. The *collect* phase may never stop early - index-key order is
+    // not pk order, so a shortened collect could drop a pk-earlier row -
+    // but each *resolve* is a base descent, and a sink that stopped ends
+    // that loop on the row that filled the quota. `index_resolved=` is the
+    // witness the saving is real; the paginated query-set lines above are
+    // the witness the reply is still the right slice.
+    Instance db(/*indexes=*/true);
+    LoadMaintained(db);
+
+    const std::string full = db.Run("ANALYZE SELECT id FROM b WHERE owner = 1");
+    const std::string limited = db.Run("ANALYZE SELECT id FROM b WHERE owner = 1 LIMIT 1");
+
+    ASSERT_GE(MeterOf(full, "index_resolved"), 2u)
+        << "the fixture must multi-match to prove anything";
+    EXPECT_EQ(MeterOf(limited, "index_resolved"), 1u) << limited;
+    EXPECT_EQ(MeterOf(limited, "index_scanned"), MeterOf(full, "index_scanned"))
+        << "the collect phase must not shorten - it is what keeps the slice a pk-order slice";
 }
 
 // ---- MVCC: an old snapshot reads through a superseded entry --------------

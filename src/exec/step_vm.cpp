@@ -720,6 +720,12 @@ private:
             if (stopped_) break;
             NoteFetch();
             ++step_stats.pages_fetched;
+            // Counted per descent actually made, not from the scratch size:
+            // a sink that stopped mid-resolve (V09's quota) ends this loop
+            // early, and a meter that still claimed the whole set would
+            // report work not done - the exact number the quota exists to
+            // save, and the one ANALYZE prices covering with.
+            ++step_stats.index_rows_resolved;
             auto found = btree::BtreeLookup(store_, access.desc_page_id, pk);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
@@ -740,7 +746,6 @@ private:
                 return s;
             }
         }
-        step_stats.index_rows_resolved += index_scratch_.size();
         return Status::OK();
     }
 

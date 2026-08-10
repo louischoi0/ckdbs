@@ -483,6 +483,53 @@ TEST(CabinContractTest, AnUpdateThatDoesNotTouchTheKeyColumnAppendsNothing) {
     EXPECT_EQ(db.cabins().Find(*key)->size(), before + 1);
 }
 
+TEST(CabinContractTest, AQuotaStoppedWalkCommitsNoObservation) {
+    // "Only a completed walk may be committed" had no SQL that could reach
+    // it until V09 gave the sink a way to stop a walk mid-relation: a
+    // filled LIMIT ends the scan on the row that filled it. A truncated
+    // entry set committed as observed would be authoritative and *wrong* -
+    // the next unlimited execution would serve one row where three exist,
+    // the fewer-rows-plausible-answer failure §5 calls invisible without a
+    // baseline.
+    Instance db(/*cabins=*/true);
+    Load(db);
+    DeclareCabins(db);
+
+    // The limited scan stops after the first of 'aaa''s three rows...
+    ASSERT_EQ(db.Run("SELECT id FROM h WHERE sym = 'aaa' LIMIT 1"), "id\\n1");
+
+    // ...and observed nothing: no entry set exists for the value, even
+    // though the cabin is declared (n = 1) and the walk it stopped was
+    // recording.
+    auto oid = db.catalog().FindTableOidByName("h");
+    ASSERT_TRUE(oid.ok());
+    auto access = db.catalog().InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    parser::AstValue aaa;
+    aaa.type = parser::ValueType::kStr;
+    aaa.str_val = "aaa";
+    auto key = stats::MakeCabinKey(access.value()->CabinOn(1).id, aaa);
+    ASSERT_TRUE(key.has_value());
+    EXPECT_EQ(db.cabins().Find(*key), nullptr) << "a stopped walk was committed";
+
+    // The completed walk answers with every row and is the one that
+    // observes; a served execution afterwards - sliced or not - answers
+    // the same bytes the walk did.
+    const std::string all = db.Run("SELECT id FROM h WHERE sym = 'aaa'");
+    EXPECT_EQ(all, "id\\n1\\n3\\n6");
+    EXPECT_NE(db.cabins().Find(*key), nullptr);
+    EXPECT_EQ(db.Run("SELECT id FROM h WHERE sym = 'aaa'"), all);
+    EXPECT_EQ(db.Run("SELECT id FROM h WHERE sym = 'aaa' LIMIT 2"), "id\\n1\\n3");
+    EXPECT_EQ(db.Run("SELECT id FROM h WHERE sym = 'aaa' LIMIT 1 OFFSET 2"), "id\\n6");
+
+    // The btree twin, same sequence: the stopped walk commits nothing,
+    // the completed one observes, and a *served* probe under a quota
+    // resolves through the pk and slices identically.
+    ASSERT_EQ(db.Run("SELECT id FROM b WHERE sym = 'aaa' LIMIT 1"), "id\\n1");
+    EXPECT_EQ(db.Run("SELECT id FROM b WHERE sym = 'aaa'"), "id\\n1\\n3\\n6");
+    EXPECT_EQ(db.Run("SELECT id FROM b WHERE sym = 'aaa' LIMIT 2"), "id\\n1\\n3");
+}
+
 TEST(CabinContractTest, RecordingIgnoresTheStatementsOtherConjuncts) {
     // **The subtlest way this feature could be wrong**, and it leaves no
     // trace anywhere else. The set recorded for a value must be the rows
