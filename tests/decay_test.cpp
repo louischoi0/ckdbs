@@ -1,5 +1,6 @@
 #include "kds/stats/decay.hpp"
 
+#include <cmath>
 #include <cstdint>
 
 #include <gtest/gtest.h>
@@ -159,6 +160,74 @@ TEST(DecayTest, ZeroHalfLifeMeansNoDecayDefensively) {
     // The config layer refuses 0; the function must still not divide by it.
     DecayState s{4 * kDecayScoreScale, 0};
     EXPECT_EQ(DecayedScaledAt(s, 1'000'000, 0), 4 * kDecayScoreScale);
+}
+
+// ---- The log-domain read (2026-08-10) ------------------------------------
+
+TEST(DecayTest, TheLinearReadUnderflowsAndTheLogReadDoesNot) {
+    // The defect, stated as a test: Q24.8 gives a score about 16
+    // half-lives of silence before it reads zero, after which no
+    // comparison can order two cold things. The log read never bottoms
+    // out, because decay there is a subtraction.
+    sched::ManualClock clock(1);
+    DecayState small;
+    DecayState large;
+    Accumulate(small, &clock, kHalfLife, 4);
+    Accumulate(large, &clock, kHalfLife, 4096);  // 1024x the evidence
+
+    // Live, both readable and correctly ordered.
+    EXPECT_GT(ValueAt(large, &clock, kHalfLife), ValueAt(small, &clock, kHalfLife));
+
+    clock.Advance(30 * kHalfLife);
+    // Linear: both gone, and indistinguishable - the flattening that cost
+    // the cabin optimizer its retirement ordering.
+    EXPECT_EQ(ValueAt(small, &clock, kHalfLife), 0u);
+    EXPECT_EQ(ValueAt(large, &clock, kHalfLife), 0u);
+
+    // Log: still ordered, and by the right margin. 4096/4 is 1024, i.e.
+    // exactly 10 half-lives of head start, which is what the difference
+    // must come to (within the LUT's 0.78%).
+    const Log2Q16 small_log = Log2ValueAt(small, &clock, kHalfLife);
+    const Log2Q16 large_log = Log2ValueAt(large, &clock, kHalfLife);
+    EXPECT_GT(large_log, small_log);
+    const Log2Q16 gap = large_log - small_log;
+    EXPECT_NEAR(static_cast<double>(gap) / 65536.0, 10.0, 0.05);
+
+    // And the ordering holds after a silence no operator will ever wait.
+    clock.Advance(10'000 * kHalfLife);
+    EXPECT_GT(Log2ValueAt(large, &clock, kHalfLife), Log2ValueAt(small, &clock, kHalfLife));
+}
+
+TEST(DecayTest, TheLogReadTracksTheLinearOneWhileBothHaveResolution) {
+    // The two reads are projections of one state, so where the linear one
+    // still works they must agree - otherwise the consumer that consults
+    // both would see a discontinuity at the crossover.
+    sched::ManualClock clock(1);
+    DecayState s;
+    Accumulate(s, &clock, kHalfLife, 1000);
+
+    for (int i = 0; i <= 12; ++i) {
+        const std::uint32_t linear = ValueAt(s, &clock, kHalfLife);
+        if (linear == 0) break;
+        const double from_linear = std::log2(static_cast<double>(linear));
+        const double from_log = static_cast<double>(Log2ValueAt(s, &clock, kHalfLife)) / 65536.0;
+        EXPECT_NEAR(from_log, from_linear, 0.05) << "half-life " << i;
+        clock.Advance(kHalfLife);
+    }
+}
+
+TEST(DecayTest, AnUntouchedScoreIsColderThanEveryDecayedOne) {
+    // Negative infinity has to behave like one: a state nobody ever
+    // touched must sort below a state that decayed for a century, or the
+    // "coldest entry" scan would pick a live one.
+    sched::ManualClock clock(1);
+    DecayState never;
+    DecayState ancient;
+    Accumulate(ancient, &clock, kHalfLife, 1);
+    clock.Advance(100'000 * kHalfLife);
+
+    EXPECT_EQ(Log2ValueAt(never, &clock, kHalfLife), kLog2NegInf);
+    EXPECT_GT(Log2ValueAt(ancient, &clock, kHalfLife), kLog2NegInf);
 }
 
 TEST(DecayTest, TouchAndReadAllocateNothing) {

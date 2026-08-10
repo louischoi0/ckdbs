@@ -10,6 +10,15 @@ namespace {
 // The coldest entry's key, by decayed primary score at `now`. The caller
 // only asks when its map is full, so the O(n) scan is bounded by the cap
 // and paid on the eviction path alone.
+//
+// **Ranked in the log domain**, and that is a correctness point rather
+// than a refinement: a full table is mostly *idle* entries, and Q24.8
+// reads every score older than ~16 half-lives as exactly 0. Comparing
+// those, the scan found a tie and kept the first the unordered_map
+// happened to yield - so the victim was arbitrary among the cold, and a
+// fingerprint idle for an hour could outlive one idle for a week.
+// `Log2ValueAt` reads the same states through a projection that keeps
+// them ordered however long they idle (decay.hpp).
 template <typename Map, typename Primary>
 std::uint64_t ColdestOf(Map& map, const sched::Clock* clock, sched::MonoTimeNs half_life,
                         Primary primary) {
@@ -19,9 +28,9 @@ std::uint64_t ColdestOf(Map& map, const sched::Clock* clock, sched::MonoTimeNs h
     // sentinel key nothing matches, the erase would remove nothing, and the
     // cap would quietly stop being a cap.
     std::uint64_t coldest_key = map.begin()->first;
-    std::uint32_t coldest = ValueAt(primary(map.begin()->second), clock, half_life);
+    Log2Q16 coldest = Log2ValueAt(primary(map.begin()->second), clock, half_life);
     for (auto& [key, signal] : map) {
-        const std::uint32_t value = ValueAt(primary(signal), clock, half_life);
+        const Log2Q16 value = Log2ValueAt(primary(signal), clock, half_life);
         if (value < coldest) {
             coldest = value;
             coldest_key = key;
@@ -103,6 +112,11 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
         out.pattern_id = id;
         out.frequency_q8 = ValueAt(signal.executions, clock_, half_life_ns_);
         out.pages_q8 = ValueAt(signal.pages, clock_, half_life_ns_);
+        // The same reads in the log domain, for the consumer that must
+        // still order two shapes after both have decayed past Q24.8's
+        // floor. Same state, same instant - only the projection differs.
+        out.frequency_log2 = Log2ValueAt(signal.executions, clock_, half_life_ns_);
+        out.pages_log2 = Log2ValueAt(signal.pages, clock_, half_life_ns_);
         out.candidate = signal.candidate;
         snapshot.fingerprints.push_back(out);
     }
