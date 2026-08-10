@@ -74,8 +74,10 @@ There is no purge pass, and readers are deliberately unregistered
   `placement` key, 2026-08-10): a rotated relation's pages are grantable
   and readable by its owner — but `placement = rotate` stays non-default,
   because a rotated relation's *statements* are still refused retryably
-  until dispatch lands. Remaining: row-id leasing for peer INSERT, and the
-  step pipeline itself.
+  until dispatch lands. Row-id leasing for peer INSERT is also built
+  (P5-shape, 2026-08-10). **The one remaining piece is the step pipeline
+  itself** — statement dispatch plus the executor's coroutine conversion,
+  the workplan's largest single change left.
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
 - Cross-core writes are refused retryably (CC3): a transaction's writes

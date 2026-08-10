@@ -19,6 +19,7 @@
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/row_id_lease_service.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"

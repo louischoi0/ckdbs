@@ -44,6 +44,7 @@ add_library(kds
     src/server/core_runtime.cpp
     src/server/core_affinity.cpp
     src/server/extent_lease_service.cpp
+    src/server/row_id_lease_service.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
     src/catalog/keystone_budget.cpp
