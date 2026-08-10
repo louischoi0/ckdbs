@@ -2231,8 +2231,30 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     if (!std::holds_alternative<parser::InsertStmt>(parsed.value())) {
         return {"ERR expected an INSERT statement", false};
     }
-    auto& stmt = std::get<parser::InsertStmt>(parsed.value());
+    return InsertParsed(std::get<parser::InsertStmt>(parsed.value()), scope);
+}
 
+DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
+                                                 Session& session) {
+    // HandleInsert's body around the parsed half: same scope, same verdict
+    // rule, so a load chunk and a textual statement are indistinguishable
+    // from the write pipeline's side (KW5, BI2).
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return {"ERR " + opened.status().message(), false};
+    WriteScope scope = opened.value();
+
+    DispatchOutcome out = InsertParsed(stmt, scope);
+
+    const bool failed = out.response.rfind("ERR ", 0) == 0;
+    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
+    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
+        return {ErrorReply(s), false};
+    }
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
+                                                WriteScope& scope) {
     // BI3: the row cap, at the first config-aware layer (the parser is a
     // pure syntax layer and deliberately config-blind). A refusal naming
     // the cap and the count, never a truncation.
