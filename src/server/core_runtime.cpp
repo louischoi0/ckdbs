@@ -53,6 +53,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // does is *read* and cache, and drop the cache when core 0 says so.
     runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width, config.core_count);
     runtime->catalog_->SetLogger(log);
+    // A peer may not write the catalog, so its row ids come from leased
+    // blocks (P5's shape, catalog/row_id_lease.hpp): AllocateRowId() draws
+    // from this table, and a spent block is retryable exhaustion until the
+    // kRowIdLease refill lands. Core 0 keeps the direct path - it owns the
+    // page the sequence lives on.
+    if (config.core_id != 0) {
+        runtime->catalog_->SetRowIdLeases(&runtime->row_id_leases_);
+    }
 
     // The transaction stack. `superblock_` is a copy (see the header): the
     // sequence would write through it, which is why the persist callback
@@ -145,6 +153,18 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             });
         !s.ok()) {
         return s;
+    }
+
+    // The row-id lease's receive side (P5's shape), peers only: core 0
+    // owns the sequence pages and never leases from itself - and in
+    // production its scheduler carries the *grant handler* on this kind
+    // instead (row_id_lease_service.hpp).
+    if (config_.core_id != 0) {
+        if (Status s = RegisterRowIdGrantReceiver(*scheduler_, row_id_refill_, row_id_leases_,
+                                                  log_);
+            !s.ok()) {
+            return s;
+        }
     }
 
     // The grant side of the page-id lease (workplan P5). Registered here

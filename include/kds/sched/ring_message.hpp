@@ -81,6 +81,14 @@ enum class RingMessageKind : std::uint16_t {
     // payload is server::ExtentGrantPayload; the receiving store may fault
     // the range and may never write or allocate from it.
     kRelationFaultGrant = 21,
+
+    // peer <-> core 0: a block of Keystone row ids for one relation
+    // (workplan-crosscore.md P5's shape; catalog/row_id_lease.hpp). The
+    // request carries `server::RowIdLeaseRequestPayload` and the reply
+    // `server::RowIdLeaseGrantPayload`, on this one kind both ways -
+    // kExtentLease's arrangement. A zero-count grant means the relation's
+    // id space is exhausted; the requester fails honestly, never waits.
+    kRowIdLease = 22,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -99,6 +107,7 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kCatalogInvalidate:
         case RingMessageKind::kShutdown:
         case RingMessageKind::kRelationFaultGrant:
+        case RingMessageKind::kRowIdLease:
             return true;
         case RingMessageKind::kUnset:
             return false;
