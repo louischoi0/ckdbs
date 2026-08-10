@@ -392,11 +392,13 @@ TEST(CabinOptimizerExecTest, TheFullLifecycleObservedThroughTheView) {
     stats::CabinOptimizerConfig config;
     config.p_cabin_pages = 0;
     config.confirm_snapshots = 2;
-    // T_amort at the neutral unit so the lifecycle runs in test time: the
-    // scripted 50-half-life silences map to DECAYING and DROP at amort 1,
-    // where the shipped 64 exists to stretch exactly these gaps out to
-    // overnight scale (its sizing is cabin_optimizer_test's own case).
+    // T_amort and the cooldown at the neutral unit so the lifecycle runs
+    // in test time: the scripted 50-half-life silences map to DECAYING
+    // and DROP here, where the shipped 64/128 exist to stretch exactly
+    // these gaps out to overnight scale (their sizing is
+    // cabin_optimizer_test's own case).
     config.amort_windows = stats::kFixOne;
+    config.cooldown_half_lives = 2;
     stats::CabinOptimizer controller(config);
     exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
     db.dispatcher().set_cabin_optimizer_view(&controller, &executor);

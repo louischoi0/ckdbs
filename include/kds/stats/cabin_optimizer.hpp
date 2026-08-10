@@ -137,6 +137,35 @@ struct CabinOptimizerConfig {
     // for itself over a day); PO6's budget, not the bar, is what bounds
     // the population.
     Fix16 amort_windows = 64 * kFixOne;
+
+    // T_cooldown: how long a DECAYING entry is given to rebound before it
+    // is dropped, in **whole decay half-lives**. Its own parameter since
+    // 2026-08-10; it was `2 x T_amort`, and the two are different
+    // questions wearing one number - T_amort is how long a build is
+    // believed to pay for itself, T_cooldown is how much silence is
+    // proof of death. The default 128 is exactly what the old expression
+    // yielded at the shipped T_amort = 64, so decoupling changed no
+    // behaviour and `bench/results-cabin-optimizer-days.md`'s measured
+    // 128.14 s cooldown still describes the shipped configuration.
+    //
+    // **It cannot usefully be set below a workload's longest expected
+    // quiet period.** A dead Cabin and an overnight-quiet one emit the
+    // same signal - no lookups - so the only thing that separates them is
+    // waiting longer than the quiet period; a cooldown under ~105
+    // half-lives reintroduces the nightly rebuild loop the T_amort
+    // ratification removed (a market overnight is 17.5 h ~ 105 half-lives
+    // at the default 600 s). Below that floor this knob does not retire
+    // dead Cabins sooner, it retires *live* ones. A 24/7 workload with no
+    // quiet period is the case that can safely lower it.
+    //
+    // Whole half-lives, and integer on purpose: the cooldown is a clock
+    // quantity, and lifting nanoseconds into 16.16 is what once collapsed
+    // a 20-minute cooldown to 4.3 seconds. 0 means no time patience at
+    // all - the score hysteresis (theta_drop < 1 < theta_create) is then
+    // the only anti-thrash left, which is a coherent choice and not a
+    // recommended one.
+    std::uint32_t cooldown_half_lives = 128;
+
     sched::MonoTimeNs half_life_ns = 600'000'000'000ULL;  // for cooldown time
     // CREATE's admission estimate: P_rel / this, floored at 1, until
     // NoteCreated reports the built size. `[PROPOSED]` 8.

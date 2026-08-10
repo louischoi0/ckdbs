@@ -231,6 +231,31 @@ the core serve a message instead.
 - Implement `docs/crosscore.md` in full: pipeline table per core,
   STEP_OPEN/BATCH/EOF/CREDIT/CANCEL/ERROR handling, KWP batch
   encoder reuse, credit accounting, teardown-by-tag.
+
+  **Staged 2026-08-10 (P4a-P4e), every prerequisite now built:**
+  - **P4a — the pipeline data plane** (in progress): the tag, the payload
+    codecs for BATCH/EOF/CREDIT/CANCEL/ERROR, per-edge credit accounting
+    (initial 4 `[PROPOSED]`, grant-on-drain, never send without one), and
+    the batch builder over the KWP row encoder with the 32 KiB
+    `[PROPOSED]` target - pure, scheduler-free, unit-tested, `wire/`'s
+    build-the-seam-first method. The STEP_OPEN **step descriptor codec**
+    is P4a's second half: full fidelity for a compiled `Step` (kind, oid,
+    key operand, residuals, range, projection set), no
+    statement-text-as-descriptor interim - the same refusal §4 makes for
+    an interim batch format, for the same reason.
+  - **P4b — the remote step server**: an owning core executes an opened
+    step against its local state and streams batches under credit, EOF at
+    end, ERROR with the D9 mapping. Single-step chains first.
+  - **P4c — the session side**: the dispatcher (a coroutine since
+    2026-08-05) awaits remote batches for a single-relation remote read
+    and frames the reply; `CheckReadAffinity`'s refusal narrows to the
+    shapes the pipeline cannot yet run.
+  - **P4d — multi-step pipelines and the executor conversion**: step k→k+1
+    wiring, join-key forwarding, and the viral `ChainRunner` coroutine
+    conversion under the suspend-audit rule - the largest piece, last.
+  - **P4e — equivalence + the benchmark**: pipeline replies byte-identical
+    to local execution over the contract shapes; the multicore isolation
+    benchmark re-run against `bench/results-multicore.md`'s baseline.
 - Statement planner on the session core resolves owner cores from the
   catalog cache and picks fast path vs pipeline (crosscore.md §2).
 - DML statement shipping: route a write statement whole to the owner core;

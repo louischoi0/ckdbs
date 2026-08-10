@@ -454,18 +454,46 @@ C(c) = P_rel / T_amort  +  h_fail(c) × f_lookup(c) × k_heal
   population. `cabin_optimizer_amort_windows` is the key; 0 is refused
   (a zero window prices every Cabin free). **The confirming rerun
   (`bench/results-cabin-optimizer-days.md` Part II) says 64 is right and
-  possibly slightly long, and hands the next decision two facts.** The
-  cooldown is `2 × T_amort`, so it outlives the window that justified it
-  — a permanently cold Cabin sits ~21 h in DECAYING at shipped defaults —
-  which argues for decoupling the multiplier from the window rather than
-  shortening the window. And R1's Q24.8 score **underflows to zero after
-  ~16 half-lives**, so for the remaining ~89% of a 128-half-life
-  cooldown the DROP is a *timeout, not a judgement*: below the underflow
-  every candidate is indistinguishable, and no threshold comparison can
-  tell a cold Cabin from a colder one. Both are arguments about
-  `T_cooldown`'s definition, not about T_amort's value;
+  possibly slightly long**, and its two findings were about `T_cooldown`,
+  not about T_amort — see the cooldown's own entry below;
 - `h_fail` — hint failure rate (S3), `f_lookup` — decayed lookup
   frequency, `k_heal` — pages per heal event (PROPOSED 2).
+
+**`T_cooldown` is its own parameter (2026-08-10), no longer `2 × T_amort`.**
+The rerun's finding was that one number was answering two questions: how
+long a build is believed to pay for itself, and how much silence proves
+death. Decoupling them is the fix; the default is 128 half-lives —
+exactly what the old expression yielded at the shipped window, so nothing
+measured moved. `cabin_optimizer_cooldown_half_lives` is the key, in
+whole half-lives (integer on purpose: lifting a nanosecond count into
+16.16 is what once collapsed a 20-minute cooldown to 4.3 s). **0 is
+accepted** where the window's 0 is refused, and the asymmetry is
+deliberate — zero time-patience leaves the score hysteresis, which is
+coherent; a zero window prices every Cabin free, which is not.
+
+What decoupling does **not** buy is a shorter dwell for a dead Cabin,
+and the reason is worth stating because it looks like a tuning failure
+and is not: **a dead Cabin and an overnight-quiet one emit the same
+signal** — no lookups — so the only thing separating them is waiting
+longer than the quiet period. Any cooldown under ~105 half-lives (a
+market overnight at the default 600 s) reintroduces the nightly rebuild
+loop; below that floor the knob retires *live* Cabins, not dead ones.
+The ~21 h a permanently cold Cabin spends in DECAYING is therefore the
+price of overnight survival, not a mis-set parameter. The floor is a
+property of the workload, so it is documented rather than enforced — a
+24/7 workload with no quiet period is exactly the case that may lower
+it, and now can.
+
+The second finding is the one with a real remedy, and it belongs to R1
+rather than here: the Q24.8 score **underflows to zero after ~16
+half-lives**, so across most of a 128-half-life cooldown the DROP is a
+*timeout, not a judgement* — below the underflow no threshold comparison
+can tell a cold Cabin from a colder one. Closing that means giving the
+score dynamic range to cover the phenomenon (a wider fixed-point type,
+or a `decay_half_life` long enough that a night is a handful of
+half-lives rather than a hundred), which is an R1 decision with
+consumers beyond this controller. `[OPEN]`, recorded here because this
+is where it was measured.
 
 **Rules** (asymmetric margins = hysteresis; all thresholds PROPOSED,
 configuration-surfaced):
@@ -476,7 +504,7 @@ configuration-surfaced):
 | EXTEND | Cabin ACTIVE and coverage-miss share of lookups > `θ_extend` (= 20%) and the missed share's marginal `B` alone clears `θ_create × ΔC` |
 | HEAL | `h_fail > θ_heal` (= 10%) while `B > θ_drop × C` |
 | DECAYING (ACTIVE→) | `B < θ_drop × C` (θ_drop = 0.5) |
-| DROP (DECAYING→) | condition persists for `T_cooldown` (= 2 × T_amort) — or HEAL already attempted without quality recovery (PO7) |
+| DROP (DECAYING→) | condition persists for `T_cooldown` (its own parameter since 2026-08-10, default 128 half-lives; was `2 × T_amort`) — or HEAL already attempted without quality recovery (PO7) |
 | recover (DECAYING→ACTIVE) | `B > θ_create × C` again |
 
 The wide gap θ_drop ≪ 1 ≪ θ_create plus `N_confirm`/`T_cooldown` is the
@@ -515,7 +543,8 @@ and any future manually-declared Cabins are invisible to it.
 | `kds.po_page_budget` | pool/8 (disk pages, per core) | PO6 |
 | `kds.po_theta_create` / `_drop` / `_swap` / `_extend` / `_heal` | 3 / 0.5 / 2 / 0.2 / 0.1 | fixed-point |
 | `kds.po_confirm_snapshots` | 3 | N_confirm |
-| `kds.po_amort_window` | ~~R1 half-life~~ **64 half-lives (ratified 2026-08-10)** | T_amort — the overnight-survival sizing; see §II.4's cost note for the argument. Built as `cabin_optimizer_amort_windows`. |
+| `kds.po_amort_window` | ~~R1 half-life~~ **64 half-lives (ratified 2026-08-10)** | T_amort — the build-cost amortization window; see §II.4's cost note. Built as `cabin_optimizer_amort_windows`. |
+| `kds.po_cooldown` | **128 half-lives** | T_cooldown — the DECAYING dwell, decoupled from T_amort 2026-08-10 (it was `2 ×` it). Built as `cabin_optimizer_cooldown_half_lives`; 0 accepted. Cannot usefully sit below a workload's longest quiet period — §II.4. |
 | `kds.po_snapshot_interval` | 10 s | decision cadence |
 
 ## II.7 Non-goals (v1)

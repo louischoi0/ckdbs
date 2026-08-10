@@ -304,6 +304,21 @@ cabin_optimizer = off
 # it). 0 is refused.
 #cabin_optimizer_amort_windows = 64
 
+# T_cooldown: how long a DECAYING Cabin is given to rebound before it is
+# dropped, in decay half-lives. Its own parameter since 2026-08-10 - it
+# used to be hardwired to 2 x the amortization window, which answered two
+# different questions with one number. The default 128 is what that
+# expression yielded at the shipped window (21 h 20 m at a 600 s
+# half-life), so decoupling changed no behaviour.
+#
+# Lowering it does NOT retire dead Cabins sooner unless your workload has
+# no quiet period: a dead Cabin and an overnight-quiet one both emit
+# silence, so anything below one night's worth of half-lives (~105 at the
+# default) retires live Cabins and brings back the nightly rebuild loop.
+# A 24/7 workload is the case that can safely lower it. 0 means no time
+# patience at all, leaving only the theta hysteresis.
+#cabin_optimizer_cooldown_half_lives = 128
+
 # ---- Cabins ----------------------------------------------------------------
 
 # Whether Cabins may be built and served (docs/feat-cabin.md).

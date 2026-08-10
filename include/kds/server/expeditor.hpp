@@ -225,10 +225,18 @@ public:
         std::uint32_t cabin_optimizer_theta_extend_pct = 20;
         std::uint32_t cabin_optimizer_theta_heal_pct = 10;
         std::uint32_t cabin_optimizer_confirm_snapshots = 3;
-        // T_amort in whole decay half-lives (never 0). 64 = overnight
-        // survival at the default half-life; the derivation lives on
+        // T_amort in whole decay half-lives (never 0) - the build-cost
+        // amortization window; the derivation lives on
         // `stats::CabinOptimizerConfig::amort_windows`.
         std::uint32_t cabin_optimizer_amort_windows = 64;
+        // T_cooldown in whole decay half-lives - the DECAYING dwell, its
+        // own parameter since 2026-08-10 (it was `2 x T_amort`). 128 is
+        // what that expression yielded at the shipped window, so the
+        // default changed no behaviour. Read the floor note on
+        // `stats::CabinOptimizerConfig::cooldown_half_lives` before
+        // lowering it: below a workload's longest quiet period it retires
+        // live Cabins, not dead ones.
+        std::uint32_t cabin_optimizer_cooldown_half_lives = 128;
         // 0 disables the cadence, the checkpoint_interval_ms precedent.
         std::uint64_t cabin_optimizer_snapshot_interval_ms = 10'000;
 

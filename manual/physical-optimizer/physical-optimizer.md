@@ -38,13 +38,29 @@ autonomous — only when `cabin_optimizer = on`.
 Part II's key exists since PHY04: `cabin_optimizer = off|on` (default
 `off`), with tuning keys (`cabin_optimizer_page_budget`,
 `cabin_optimizer_theta_create_pct` / `_drop_pct` / `_swap_pct`,
-`cabin_optimizer_amort_windows`) documented in `kds.conf.sample`.
-`amort_windows` deserves its own sentence: it is the structure-lifetime
-belief (default **64** half-lives, ratified 2026-08-10 from the
-business-days scenario) — at 64 a Cabin survives a market overnight in
-DECAYING and recovers on the morning rebound; at 1, the original
-proposal, the lifecycle is a nightly rebuild loop
-(`bench/results-cabin-optimizer-days.md` measured exactly that).
+`cabin_optimizer_amort_windows`, `cabin_optimizer_cooldown_half_lives`)
+documented in `kds.conf.sample`. Two of those deserve their own
+sentences, because they were one number until 2026-08-10 and are two
+questions:
+
+- **`amort_windows`** (default **64** half-lives) — how long a Cabin's
+  build cost is amortized over, so it sets the admission bar. Ratified
+  from the business-days scenario; at 1, the original proposal, the
+  lifecycle is a nightly rebuild loop
+  (`bench/results-cabin-optimizer-days.md` measured exactly that).
+- **`cooldown_half_lives`** (default **128**) — how long a DECAYING
+  Cabin is given to rebound before being dropped. This is what actually
+  provides overnight survival: 128 half-lives is 21 h 20 m at the
+  default, longer than a market's ~17.5 h close-to-open gap, so a Cabin
+  crosses the night and the morning rebound recovers it.
+
+**Do not lower the cooldown expecting dead Cabins to retire sooner.** A
+dead Cabin and an overnight-quiet one both emit silence; the only thing
+that tells them apart is waiting longer than the quiet period. Below
+about one night's worth of half-lives the knob retires *live* Cabins and
+the nightly rebuild loop returns. A 24/7 workload with no quiet period
+is the case that can safely lower it — and, since the decoupling, the
+case that finally can.
 
 ## 2. `SHOW RELAYOUT` — the shadow report
 

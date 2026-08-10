@@ -156,11 +156,13 @@ std::vector<std::string> Replay(const Scenario& scenario) {
     CabinOptimizerConfig config;
     config.half_life_ns = kHalfLife;
     config.page_budget = 64;
-    // T_amort pinned at the model's neutral unit: the golden traces were
-    // recorded at 1, and the drift scenarios' decay/drop timings are part
-    // of what they pin. The shipped default's sizing has its own test
-    // (cabin_optimizer_test's overnight case).
+    // T_amort and the cooldown pinned at the values the golden traces
+    // were recorded under - the drift scenarios' decay/drop timings are
+    // part of what they pin, so both must be stated rather than
+    // inherited from a default that may move. The shipped sizing has its
+    // own test (cabin_optimizer_test's overnight case).
     config.amort_windows = kFixOne;
+    config.cooldown_half_lives = 2;
     CabinOptimizer optimizer(config);
 
     std::vector<std::string> trace;

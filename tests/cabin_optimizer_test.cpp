@@ -51,12 +51,13 @@ OptimizerSnapshot Snap(std::uint64_t version, sched::MonoTimeNs epoch,
 CabinOptimizerConfig TestConfig() {
     CabinOptimizerConfig config;
     config.page_budget = 6;
-    config.half_life_ns = 1000;  // cooldown = 2 x amort x half-life = 2000
+    config.half_life_ns = 1000;
     // T_amort pinned at 1 half-life: these tests pin the *rules* at the
     // model's neutral unit, where B/C arithmetic reads off the snapshot
-    // directly. The shipped default (64, overnight survival) gets its own
-    // test below at the shipped numbers.
+    // directly. The shipped defaults (window 64, cooldown 128 - overnight
+    // survival) get their own test below at the shipped numbers.
     config.amort_windows = kFixOne;
+    config.cooldown_half_lives = 2;  // cooldown = 2 x 1000 ns
     return config;
 }
 
@@ -357,14 +358,19 @@ TEST(CabinOptimizerTest, TheShippedDefaultsSurviveAMarketOvernight) {
     // The operator-ratified requirement (2026-08-10, from the
     // business-days scenario): a Cabin must survive a market's
     // close-to-open gap - ~17.5 h, ~105 half-lives at the default 600 s -
-    // and a *weekend* must still drop it. At the shipped T_amort = 64 the
-    // cooldown alone is 2 x 64 half-lives = 76,800 s = 21 h 20 m, so the
-    // night is covered by the cooldown before the log2(B/C) margin is
-    // even counted, and 48 h of silence is comfortably past it.
+    // and a *weekend* must still drop it. The shipped cooldown of 128
+    // half-lives is 76,800 s = 21 h 20 m, so the night is covered before
+    // the log2(B/C) margin is even counted, and 48 h of silence is
+    // comfortably past it.
+    //
+    // The cooldown is its own parameter since 2026-08-10 and this test is
+    // what stops it drifting below the requirement: 128 half-lives is not
+    // a tuning preference, it is "longer than one night" with margin.
     CabinOptimizerConfig config;  // the shipped defaults, deliberately
     constexpr sched::MonoTimeNs kSecond = 1'000'000'000ULL;
     ASSERT_EQ(config.half_life_ns, 600 * kSecond);
     ASSERT_EQ(config.amort_windows, 64 * kFixOne);
+    ASSERT_EQ(config.cooldown_half_lives, 128u);
     CabinOptimizer opt(config);
 
     for (std::uint64_t v = 1; v <= 3; ++v) opt.Decide(HotSnapshot(v, /*epoch=*/kSecond));
@@ -425,6 +431,47 @@ TEST(CabinOptimizerTest, IdenticalStreamsProduceBitIdenticalTraces) {
         EXPECT_EQ(a[i].benefit, b[i].benefit) << i;
         EXPECT_EQ(a[i].cost, b[i].cost) << i;
     }
+}
+
+TEST(CabinOptimizerTest, TheCooldownIsSettableBelowTheAmortizationWindow) {
+    // The capability decoupling adds (2026-08-10): the DECAYING dwell can
+    // now be *shorter* than the amortization window, which `2 x T_amort`
+    // made unrepresentable. The case for it is a workload with no quiet
+    // period, where waiting a night to prove death buys nothing.
+    //
+    // Note what this does and does not fix. It retires a dead Cabin
+    // promptly - but only because this configuration asserts that silence
+    // is immediately meaningful. Where a real quiet period exists, the
+    // same setting retires *live* Cabins, which is the nightly rebuild
+    // loop returning; the floor is a property of the workload and not
+    // something the engine can check, so it is documented rather than
+    // enforced.
+    CabinOptimizerConfig config;
+    config.page_budget = 6;
+    config.half_life_ns = 1000;
+    config.amort_windows = 64 * kFixOne;   // a long belief about lifetime
+    config.cooldown_half_lives = 4;        // and little patience: 4000 ns
+    CabinOptimizer opt(config);
+
+    // The wide window lowers the cost floor 64x, so this shape clears the
+    // bar in the same three snapshots.
+    for (std::uint64_t v = 1; v <= 3; ++v) opt.Decide(HotSnapshot(v, /*epoch=*/1000));
+    opt.NoteCreated(kRel, kCol, 42, 5);
+
+    const auto cold = [&](std::uint64_t v, sched::MonoTimeNs epoch) {
+        return Snap(v, epoch, {Fp(7, 0, 0, kRel, kCol, 42)}, {Quality(42, 1, 0)});
+    };
+    ASSERT_TRUE(opt.Decide(cold(4, 1000)).empty());  // DECAYING
+
+    // Inside the 4000 ns dwell: still held.
+    EXPECT_TRUE(opt.Decide(cold(5, 3000)).empty());
+
+    // Past it - and well short of the 128,000 ns the old expression would
+    // have imposed at this window.
+    const ActionSet dropped = opt.Decide(cold(6, 6000));
+    ASSERT_EQ(dropped.size(), 1u);
+    EXPECT_EQ(dropped[0].action, CabinAction::kDrop);
+    EXPECT_EQ(dropped[0].reason, ActionReason::kSustainedDecay);
 }
 
 TEST(CabinOptimizerTest, NoteExtendedMovesThePageAccounting) {
