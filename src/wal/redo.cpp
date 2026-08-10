@@ -114,39 +114,30 @@ Status ApplySlotRetire(std::span<std::byte, kPageSize> page, const DecodedRecord
     return s;
 }
 
-// UNDO_WRITE cannot be redone with today's payload, and this is a format
-// gap rather than missing work here. See the block comment in redo.hpp and
-// docs/workplan-wal-recovery.md RC03's finding.
-//
-// The on-page undo record (txn::UndoRecordFields, 28 bytes) carries
-// `target_page_id`, `target_slot` and `type` - which is how the undo phase
-// knows *which tuple* a before-image belongs to. `wal::UndoWritePayload`
-// carries only `prior_trx_id`, `prior_undo_ptr`, `offset` and `image_len`,
-// and `UndoLog::LogUndoWrite` passes the bare before-image as the record's
-// bytes. So those three fields exist on the page and nowhere in the log.
-//
-// `txn.md` §3.5 says the payload "fits without amendment" and spells the
-// mapping as `payload.image = record bytes [+16, +28 + image_len)` - the
-// record's tail *including* those three fields. **The implementation does
-// not do that**, and the difference is exactly the information recovery
-// needs. Redoing this record as-is would rebuild an undo chain whose
-// records point at page 0 slot 0, which is worse than not rebuilding it:
-// the undo phase would roll back the wrong tuple rather than fail.
-//
-// So this refuses, loudly, and the mount fails whenever an UPDATE or
-// DELETE is in the replay range. That is the honest state - the same
-// discipline `physical_optimizer = on` follows by refusing at startup and
-// naming its gates - and closing it is a decision about a persisted
-// format, which this task does not get to take.
+// The record carries the undo record's **tail** - its bytes from
+// `target_page_id` onward - plus the two chain links as payload fields
+// (docs/txn.md §3.5). Reassembling those two halves is the whole applier,
+// and it is only possible because `LogUndoWrite` was corrected on
+// 2026-08-10 to log the tail: before that the three fields naming *which
+// tuple* a before-image belongs to lived on the page and nowhere in the
+// log, and a chain rebuilt from it would have named page 0 slot 0.
 Status ApplyUndoWrite(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
-    (void)page;
-    (void)record;
-    return Status::Unsupported(
-        "redo of UNDO_WRITE is blocked on a format decision: the record carries the chain links "
-        "and the before-image but not the undo record's target_page_id, target_slot or type, so "
-        "the rebuilt chain would not name the tuple it restores. Either UndoLog::LogUndoWrite "
-        "must log the record's tail as docs/txn.md section 3.5 specifies, or UndoWritePayload "
-        "must gain the three fields (docs/workplan-wal-recovery.md RC03)");
+    auto decoded = DecodeUndoWrite(record.payload);
+    if (!decoded.ok()) {
+        return decoded.status();
+    }
+    auto tail = txn::DecodeUndoRecordTail(decoded.value().tail);
+    if (!tail.ok()) {
+        return tail.status();
+    }
+
+    // The links are the payload's; everything else is the tail's. One
+    // assembly point, so neither half can be read from the wrong place.
+    txn::UndoRecordFields fields = tail.value().fields;
+    fields.prior_trx_id = decoded.value().fields.prior_trx_id;
+    fields.prior_undo_ptr = decoded.value().fields.prior_undo_ptr;
+
+    return txn::UndoPageWriteAt(page, decoded.value().fields.offset, fields, tail.value().image);
 }
 
 Status ApplyVarHeapAppend(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {

@@ -12,6 +12,7 @@
 
 #include "kds/storage/keystone.hpp"
 #include "kds/wal/record.hpp"
+#include "kds/txn/undo_page.hpp"
 
 // Per-type payload codecs. Two things every case here is really about:
 // a round-trip that loses nothing, and a decoder that refuses bytes it
@@ -221,15 +222,26 @@ TEST(WalPayloadTest, SlotRetireRoundTrips) {
 
 // ---- UNDO_WRITE ----------------------------------------------------------
 
-TEST(WalPayloadTest, UndoWriteRoundTripsTheChainLinkAndBeforeImage) {
+TEST(WalPayloadTest, UndoWriteRoundTripsTheChainLinkAndTheRecordTail) {
+    // The payload carries the two chain links as fields and the undo
+    // record's *tail* as bytes (docs/txn.md section 3.5) - so the fields
+    // naming which tuple the image belongs to survive the round trip,
+    // which is what redo needs and what the pre-2026-08-10 writer dropped.
     UndoWritePayload fields{};
     fields.prior_trx_id = 0x00007FFFFFFFFFFFull;
     fields.prior_undo_ptr = 0xDEADBEEFull;
     fields.offset = 1024;
+
     const std::vector<std::byte> image = Pattern(200, 5);
+    txn::UndoRecordFields rec{};
+    rec.target_page_id = 4242;
+    rec.target_slot = 7;
+    rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kOverwrite);
+    std::vector<std::byte> tail(txn::UndoRecordTailSize(image.size()));
+    ASSERT_TRUE(txn::EncodeUndoRecordTail(tail, rec, image).ok());
 
     const auto record = ThroughEnvelope(RecordType::kUndoWrite, [&](std::span<std::byte> out) {
-        return EncodeUndoWrite(out, fields, image);
+        return EncodeUndoWrite(out, fields, tail);
     });
     auto decoded = DecodeUndoWrite(PayloadOf(record));
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
@@ -238,11 +250,17 @@ TEST(WalPayloadTest, UndoWriteRoundTripsTheChainLinkAndBeforeImage) {
     EXPECT_EQ(decoded.value().fields.prior_trx_id, fields.prior_trx_id);
     EXPECT_EQ(decoded.value().fields.prior_undo_ptr, fields.prior_undo_ptr);
     EXPECT_EQ(decoded.value().fields.offset, fields.offset);
-    ASSERT_EQ(decoded.value().image.size(), image.size());
-    EXPECT_TRUE(std::equal(image.begin(), image.end(), decoded.value().image.begin()));
+
+    auto back = txn::DecodeUndoRecordTail(decoded.value().tail);
+    ASSERT_TRUE(back.ok()) << back.status().message();
+    EXPECT_EQ(back.value().fields.target_page_id, rec.target_page_id);
+    EXPECT_EQ(back.value().fields.target_slot, rec.target_slot);
+    EXPECT_EQ(back.value().fields.type, rec.type);
+    ASSERT_EQ(back.value().image.size(), image.size());
+    EXPECT_TRUE(std::equal(image.begin(), image.end(), back.value().image.begin()));
 }
 
-TEST(WalPayloadTest, UndoWriteRejectsAnImageRunningPastThePage) {
+TEST(WalPayloadTest, UndoWriteRejectsATailRunningPastThePage) {
     UndoWritePayload fields{};
     fields.offset = static_cast<std::uint16_t>(kPageSize - 4);
     const std::vector<std::byte> image = Pattern(8, 2);
@@ -271,7 +289,7 @@ TEST(WalPayloadTest, UndoWriteChainTerminatesOnAZeroPointer) {
     auto decoded = DecodeUndoWrite(std::span(out).first(size.value()));
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
     EXPECT_EQ(decoded.value().fields.prior_undo_ptr, 0u);
-    EXPECT_TRUE(decoded.value().image.empty());
+    EXPECT_TRUE(decoded.value().tail.empty());
 }
 
 // ---- ALLOC / FREE --------------------------------------------------------

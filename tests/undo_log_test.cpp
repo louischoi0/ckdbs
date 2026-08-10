@@ -297,7 +297,12 @@ TEST_F(UndoLogTest, AnAppendLogsPageInitThenUndoWrite) {
     EXPECT_EQ(write.value().fields.prior_trx_id, 41u);
     EXPECT_EQ(write.value().fields.prior_undo_ptr, kNoUndoPtr);
     EXPECT_EQ(write.value().fields.offset, UndoPtrOffset(ptr.value()));
-    EXPECT_EQ(StringOf(write.value().image), "before");
+    // The payload carries the record's tail now, not the bare image: the
+    // target fields ride with it so redo can rebuild a chain that names
+    // its tuples (docs/txn.md section 3.5).
+    auto tail = DecodeUndoRecordTail(write.value().tail);
+    ASSERT_TRUE(tail.ok()) << tail.status().message();
+    EXPECT_EQ(StringOf(tail.value().image), "before");
 }
 
 TEST_F(UndoLogTest, NoFullPageImageIsEverEmittedForAnUndoPage) {
@@ -350,19 +355,25 @@ TEST_F(UndoLogTest, APageRebuiltFromItsRecordsAloneMatchesTheLivePage) {
         auto write = wal::DecodeUndoWrite(record.payload);
         ASSERT_TRUE(write.ok());
 
-        // The record header's two chain-link fields come from the payload;
-        // the target and the type are what the *image* would have to carry
-        // if they were not already on the page, and they are - which is
-        // why replay reads them back off the rebuilt page below rather
-        // than inventing them here.
-        UndoRecordFields fields{};
+        // Everything comes off the log now: the two chain links from the
+        // payload's fields, the target and the type from the record's
+        // tail. This block used to *fabricate* target_page_id, target_slot
+        // and type, because the log did not carry them - and that
+        // fabrication was the gap RC03 found, sitting in plain sight in a
+        // passing test. Reading them back is what makes this a rebuild
+        // rather than a reconstruction with the answer supplied.
+        auto tail = DecodeUndoRecordTail(write.value().tail);
+        ASSERT_TRUE(tail.ok()) << tail.status().message();
+
+        UndoRecordFields fields = tail.value().fields;
         fields.prior_trx_id = write.value().fields.prior_trx_id;
         fields.prior_undo_ptr = write.value().fields.prior_undo_ptr;
-        fields.target_page_id = 300;
-        fields.target_slot = 2;
-        fields.type = static_cast<std::uint8_t>(UndoRecordType::kOverwrite);
+        EXPECT_EQ(fields.target_page_id, 300u);
+        EXPECT_EQ(fields.target_slot, 2u);
+        EXPECT_EQ(fields.type, static_cast<std::uint8_t>(UndoRecordType::kOverwrite));
+
         ASSERT_TRUE(UndoPageWriteAt(std::span<std::byte, kPageSize>(rebuilt),
-                                    write.value().fields.offset, fields, write.value().image)
+                                    write.value().fields.offset, fields, tail.value().image)
                         .ok());
     }
     ASSERT_TRUE(initialized);

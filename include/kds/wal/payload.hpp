@@ -256,23 +256,32 @@ struct UndoWritePayload {
     std::uint64_t prior_trx_id;    // writer of the version being superseded
     std::uint64_t prior_undo_ptr;  // its own predecessor; 0 ends the chain
     std::uint16_t offset;          // byte offset within the undo page
-    std::uint16_t image_len;       // bytes of before-image that follow
+    // Bytes of the undo record's **tail** that follow - its bytes from
+    // `target_page_id` onward, not the bare before-image
+    // (docs/txn.md section 3.5). So this is
+    // `txn::kUndoRecordTailHeaderSize + image_len`, and the fields naming
+    // *which tuple* the image belongs to are inside it. Encode/decode the
+    // tail through txn::EncodeUndoRecordTail / DecodeUndoRecordTail; there
+    // is one shape and one pair of functions for it.
+    std::uint16_t tail_len;
 };
 
 inline constexpr std::size_t kUndoPriorTrxIdOffset = 0;
 inline constexpr std::size_t kUndoPriorUndoPtrOffset = 8;
 inline constexpr std::size_t kUndoOffsetOffset = 16;
-inline constexpr std::size_t kUndoImageLenOffset = 18;
+inline constexpr std::size_t kUndoTailLenOffset = 18;
 inline constexpr std::size_t kUndoWriteFixedSize = 20;
 
 static_assert(offsetof(UndoWritePayload, prior_trx_id) == kUndoPriorTrxIdOffset);
 static_assert(offsetof(UndoWritePayload, prior_undo_ptr) == kUndoPriorUndoPtrOffset);
 static_assert(offsetof(UndoWritePayload, offset) == kUndoOffsetOffset);
-static_assert(offsetof(UndoWritePayload, image_len) == kUndoImageLenOffset);
+static_assert(offsetof(UndoWritePayload, tail_len) == kUndoTailLenOffset);
 
 struct DecodedUndoWrite {
     UndoWritePayload fields;
-    std::span<const std::byte> image;
+    // The record tail, per the field note above - feed it to
+    // txn::DecodeUndoRecordTail rather than treating it as an image.
+    std::span<const std::byte> tail;
 };
 
 StatusOr<std::size_t> EncodeUndoWrite(std::span<std::byte> out, const UndoWritePayload& fields,

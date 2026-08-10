@@ -1,6 +1,6 @@
 # WAL recovery — workplan
 
-Status: **RC01-RC03 written (unbuilt; RC03 blocked on a format decision); RC04 onward not started.** Spec: `docs/wal.md` §12 (normative, and
+Status: **RC01-RC03 written (unbuilt); RC04 onward not started.** Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
@@ -224,10 +224,11 @@ All three are in `tests/wal_analysis_test.cpp`, with the seeding path, the
 recLSN-of-zero rule and the torn-tail-demotes-a-commit case beside them,
 and **none has been executed.**
 
-**RC03 — Redo. WRITTEN 2026-08-10 EXCEPT ONE APPLIER, NOT BUILT OR RUN.**
+**RC03 — Redo. WRITTEN 2026-08-10, ALL EIGHT APPLIERS, NOT BUILT OR RUN.**
 `wal/redo.hpp` + `src/wal/redo.cpp`, plus the two page primitives it
-needed. Seven of the eight appliers are written; the eighth is **blocked on
-a format decision that is not this task's**, below.
+needed. All eight appliers are written. The eighth was blocked on a format
+decision, which the operator took the same day — see the resolved blocker
+below, and `docs/txn.md` §3.5, which this closure made true.
 
 Two primitives had to be added, and which page classes already had one is
 itself the finding: **the undo path anticipated recovery and the heap and
@@ -244,8 +245,18 @@ reproduce the bytes and break every one of those references. Index entries
 need no primitive — their position is a function of their bytes (IX4b), so
 `InsertEntry` reproduces its own slot, and the applier asserts that it did.
 
-> **THE BLOCKER — `UNDO_WRITE` cannot be redone, and closing it is a
-> decision about a persisted format.**
+> **THE BLOCKER — RESOLVED 2026-08-10, operator-decided.** The chosen
+> closure was the first option below: make the writer log the record's tail
+> as `txn.md` §3.5 already specified. `UndoLog::LogUndoWrite` now does, via
+> the one `txn::EncodeUndoRecordTail` / `DecodeUndoRecordTail` pair redo
+> reads back, and `UndoWritePayload::image_len` is renamed `tail_len`
+> because it now counts `12 + image_len`. No format version moved — nothing
+> has ever read the log back, so no existing stream is reinterpreted; the
+> same change after recovery ships would be a format event. **All eight
+> appliers are written.** The original statement of the problem follows.
+>
+> ~~`UNDO_WRITE` cannot be redone, and closing it is a decision about a
+> persisted format.~~
 >
 > The on-page undo record carries `target_page_id`, `target_slot` and
 > `type` — how the undo phase knows *which tuple* a before-image belongs
@@ -285,9 +296,8 @@ undo phase possible.
 argued); a page whose `page_lsn` already exceeds a record is untouched;
 every applier has a round-trip test against the write path that produced
 the record. The first two are in `tests/wal_redo_test.cpp` with the
-primitives' own tests beside them; the third is complete for seven
-appliers and impossible for the eighth until the blocker above is
-decided. **Nothing has been executed.**
+primitives' own tests beside them; the third is complete for all
+eight. **Nothing has been executed.**
 
 **RC04 — RV4's high-water repair.**
 Raise the superblock's page high-water mark past every page id any

@@ -166,7 +166,7 @@ ever name a real undo record. `UndoPtrIsPlausible()` reports `Corruption` for
 page 0, an offset outside `[kUndoRecordsOffset, kPageSize - kUndoRecordHeaderSize]`,
 or nonzero upper 16 bits.
 
-### 3.5 WAL mapping — `UndoWritePayload` unchanged
+### 3.5 WAL mapping — the record's tail, not its image
 
 The existing payload (`include/kds/wal/payload.hpp`) fits without amendment:
 
@@ -176,13 +176,34 @@ envelope : {type = kUndoWrite, txn_id = the writing transaction,
 payload.prior_trx_id   = record +0
 payload.prior_undo_ptr = record +8
 payload.offset         = the record's offset within its undo page
-payload.image          = record bytes [+16, +28 + image_len)
+payload.tail           = record bytes [+16, +28 + image_len)
 ```
 
 The two chain-link fields are carried as payload *fields* and not repeated inside
-`image`, which is exactly why the payload's existing comment — "the one exception
+the tail, which is exactly why the payload's existing comment — "the one exception
 is `UNDO_WRITE`'s *prior* writer, which is a different transaction from the one
 that wrote the record" — is already correct.
+
+**Everything else about the record is inside the tail, and that is the point.**
+Bytes `[+16, +28)` are `target_page_id`, `target_slot`, `image_len`, `type`,
+`flags` and `reserved` — the fields that say **which tuple** a before-image
+belongs to. Without them a chain rebuilt by redo names no row, and the undo
+phase would restore the wrong one rather than fail.
+
+> **Corrected 2026-08-10.** This section was right and the code was not:
+> `UndoLog::LogUndoWrite` logged the bare before-image, so those three fields
+> lived on the page and nowhere in the log. Found building
+> `docs/workplan-wal-recovery.md` RC03, whose redo applier could not be
+> written against it. The writer now logs the tail this section always
+> specified, through the one `txn::EncodeUndoRecordTail` /
+> `DecodeUndoRecordTail` pair that redo reads back — one shape, two callers.
+> The payload's length field is renamed `tail_len` accordingly, since it now
+> counts `12 + image_len` bytes and a field called `image_len` that does not
+> hold one is the kind of trap this codebase refuses.
+>
+> **No format version moved**, and the reason is narrow: nothing has ever read
+> the log back, so no stream in existence is interpreted under the old reading.
+> The same change after recovery ships would be a format event.
 
 `lower` and `nr_records` are derivable by replaying a page's `UNDO_WRITE`s in LSN
 order, so no undo-page-header record type is needed. Page creation logs

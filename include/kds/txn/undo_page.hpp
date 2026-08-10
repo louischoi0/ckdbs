@@ -228,6 +228,39 @@ static_assert(EncodeUndoPtr(0, kUndoRecordsOffset) != kNoUndoPtr);
 // that reached here holding one has already failed to check for it.
 Status UndoPtrIsPlausible(std::uint64_t ptr);
 
+// ---- The record tail, as the WAL carries it ------------------------------
+//
+// An UNDO_WRITE record logs the undo record's bytes from `target_page_id`
+// onward - `docs/txn.md` §3.5's `payload.image = record bytes
+// [+16, +28 + image_len)`. The two chain-link fields before that offset
+// ride as payload *fields* instead, because prior_trx_id names a different
+// transaction from the record's envelope and repeating it inside the bytes
+// would store one fact twice.
+//
+// The tail therefore carries exactly what the links do not:
+// `target_page_id`, `target_slot`, `image_len`, `type`, `flags`,
+// `reserved`, then the before-image. **Those are the fields that say which
+// tuple a before-image belongs to**, which is why redo cannot rebuild a
+// chain without them (docs/workplan-wal-recovery.md RC03).
+//
+// One encoder and one decoder, used by the writer and by redo, so the two
+// cannot disagree about the shape - the rule exec/tuple_verify.hpp states
+// for its own verifier.
+
+inline constexpr std::size_t kUndoRecordTailOffset = kUndoRecTargetPageIdOffset;  // 16
+inline constexpr std::size_t kUndoRecordTailHeaderSize =
+    kUndoRecordHeaderSize - kUndoRecordTailOffset;  // 12
+static_assert(kUndoRecordTailHeaderSize == 12);
+
+// Bytes a tail occupies for an image of `image_len`.
+std::size_t UndoRecordTailSize(std::size_t image_len) noexcept;
+
+// Writes the tail into `out`. `fields.image_len` is ignored and set from
+// `image.size()`, exactly as UndoPageAppend does, so the two can never
+// disagree on disk.
+Status EncodeUndoRecordTail(std::span<std::byte> out, const UndoRecordFields& fields,
+                            std::span<const std::byte> image);
+
 // ---- Page operations -----------------------------------------------------
 
 // Formats `page` as a brand-new, empty undo page, recording `first_trx_id`
@@ -277,6 +310,12 @@ struct DecodedUndoRecord {
 // Reads the record at `offset`. Fails with Corruption for an offset outside
 // the record area, a record whose extent runs past the page, or a type
 // beyond kInsert - all of which mean a damaged chain rather than a miss.
+// Reads one back. `prior_trx_id` and `prior_undo_ptr` come from the WAL
+// payload's own fields and are left zero here - the caller fills them,
+// because they are not in these bytes. Fails with Corruption for a tail
+// shorter than the header or one whose image_len runs past it.
+StatusOr<DecodedUndoRecord> DecodeUndoRecordTail(std::span<const std::byte> tail);
+
 StatusOr<DecodedUndoRecord> UndoPageRead(std::span<const std::byte, kPageSize> page,
                                           std::uint16_t offset);
 

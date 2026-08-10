@@ -183,6 +183,79 @@ StatusOr<std::uint16_t> UndoPageAppend(std::span<std::byte, kPageSize> page,
     return offset;
 }
 
+std::size_t UndoRecordTailSize(std::size_t image_len) noexcept {
+    return kUndoRecordTailHeaderSize + image_len;
+}
+
+Status EncodeUndoRecordTail(std::span<std::byte> out, const UndoRecordFields& fields,
+                            std::span<const std::byte> image) {
+    if (image.size() > kMaxUndoImageLen) {
+        return Status::InvalidArgument("undo record image of " + std::to_string(image.size()) +
+                                       " bytes exceeds the " + std::to_string(kMaxUndoImageLen) +
+                                       " a page can hold");
+    }
+    const std::size_t total = UndoRecordTailSize(image.size());
+    if (out.size() < total) {
+        return Status::InvalidArgument("undo record tail needs " + std::to_string(total) +
+                                       " bytes, got " + std::to_string(out.size()));
+    }
+
+    // Field-wise memcpy at offsets relative to the tail's own start, which
+    // is the record's +16 (rules.md §2 - never the mirror struct).
+    const auto image_len = static_cast<std::uint16_t>(image.size());
+    std::byte* p = out.data();
+    std::memcpy(p + (kUndoRecTargetPageIdOffset - kUndoRecordTailOffset), &fields.target_page_id,
+                sizeof(fields.target_page_id));
+    std::memcpy(p + (kUndoRecTargetSlotOffset - kUndoRecordTailOffset), &fields.target_slot,
+                sizeof(fields.target_slot));
+    std::memcpy(p + (kUndoRecImageLenOffset - kUndoRecordTailOffset), &image_len,
+                sizeof(image_len));
+    std::memcpy(p + (kUndoRecTypeOffset - kUndoRecordTailOffset), &fields.type,
+                sizeof(fields.type));
+    std::memcpy(p + (kUndoRecFlagsOffset - kUndoRecordTailOffset), &fields.flags,
+                sizeof(fields.flags));
+    std::memcpy(p + (kUndoRecReservedOffset - kUndoRecordTailOffset), &fields.reserved,
+                sizeof(fields.reserved));
+    if (!image.empty()) {
+        std::memcpy(p + kUndoRecordTailHeaderSize, image.data(), image.size());
+    }
+    return Status::OK();
+}
+
+StatusOr<DecodedUndoRecord> DecodeUndoRecordTail(std::span<const std::byte> tail) {
+    if (tail.size() < kUndoRecordTailHeaderSize) {
+        return Status::Corruption("undo record tail of " + std::to_string(tail.size()) +
+                                  " bytes is shorter than its " +
+                                  std::to_string(kUndoRecordTailHeaderSize) + "-byte header");
+    }
+
+    DecodedUndoRecord out{};
+    const std::byte* p = tail.data();
+    // prior_trx_id / prior_undo_ptr are not in these bytes: they ride as
+    // fields of the WAL payload (docs/txn.md §3.5) and the caller fills
+    // them.
+    std::memcpy(&out.fields.target_page_id, p + (kUndoRecTargetPageIdOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.target_page_id));
+    std::memcpy(&out.fields.target_slot, p + (kUndoRecTargetSlotOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.target_slot));
+    std::memcpy(&out.fields.image_len, p + (kUndoRecImageLenOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.image_len));
+    std::memcpy(&out.fields.type, p + (kUndoRecTypeOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.type));
+    std::memcpy(&out.fields.flags, p + (kUndoRecFlagsOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.flags));
+    std::memcpy(&out.fields.reserved, p + (kUndoRecReservedOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.reserved));
+
+    if (UndoRecordTailSize(out.fields.image_len) != tail.size()) {
+        return Status::Corruption("undo record tail says its image is " +
+                                  std::to_string(out.fields.image_len) + " bytes, which does not "
+                                  "match the " + std::to_string(tail.size()) + " it carries");
+    }
+    out.image = tail.subspan(kUndoRecordTailHeaderSize);
+    return out;
+}
+
 Status UndoPageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t offset,
                        const UndoRecordFields& fields, std::span<const std::byte> image) {
     if (Status s = CheckRecord(fields, image); !s.ok()) return s;

@@ -37,14 +37,29 @@ Status UndoLog::LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t
                              std::span<const std::byte> image) {
     if (wal_ == nullptr) return Status::OK();
 
-    // The two chain-link fields ride as payload *fields* and are not
-    // repeated inside `image` - which is why payload.hpp's note that
-    // UNDO_WRITE's prior writer is a different transaction from the
-    // envelope's is already correct (txn.md section 3.5).
-    std::vector<std::byte> buf(UndoWriteSize(image.size()));
+    // What the record carries is the undo record's **tail** - its bytes
+    // from `target_page_id` onward - and not the bare before-image. The two
+    // chain-link fields ride as payload *fields* instead, because
+    // prior_trx_id names a different transaction from the envelope's and
+    // repeating it inside the bytes would store one fact twice.
+    //
+    // That split is txn.md section 3.5's `payload.tail = record bytes
+    // [+16, +28 + image_len)`, and until 2026-08-10 this function logged
+    // the image alone - which left `target_page_id`, `target_slot` and
+    // `type` on the page and nowhere in the log, so redo could rebuild a
+    // chain that named no tuple (docs/workplan-wal-recovery.md RC03). The
+    // spec was right and the code was not.
+    //
+    // Safe to change without a format version precisely because nothing has
+    // ever read the log back: recovery does not exist, so no stream in
+    // existence is ever interpreted under the old reading.
+    std::vector<std::byte> tail(UndoRecordTailSize(image.size()));
+    if (Status s = EncodeUndoRecordTail(tail, fields, image); !s.ok()) return s;
+
+    std::vector<std::byte> buf(UndoWriteSize(tail.size()));
     const wal::UndoWritePayload payload{fields.prior_trx_id, fields.prior_undo_ptr, offset,
-                                        static_cast<std::uint16_t>(image.size())};
-    if (auto n = wal::EncodeUndoWrite(buf, payload, image); !n.ok()) return n.status();
+                                        static_cast<std::uint16_t>(tail.size())};
+    if (auto n = wal::EncodeUndoWrite(buf, payload, tail); !n.ok()) return n.status();
 
     // The envelope's page_id is the **undo** page, not the heap page the
     // record describes. The heap page gets its own record.

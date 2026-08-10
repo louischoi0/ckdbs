@@ -11,6 +11,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/storage/varheap.hpp"
+#include "kds/txn/undo_page.hpp"
 #include "kds/wal/analysis.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
@@ -187,13 +188,13 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
 
 // ---- The UNDO_WRITE gap, asserted rather than worked around -------------
 
-TEST_F(RedoTest, RedoOfUndoWriteRefusesAndNamesTheFormatGap) {
-    // Not a wish-list item: today's UNDO_WRITE payload carries the chain
-    // links and the before-image, and *not* the undo record's
-    // target_page_id / target_slot / type. Rebuilding the chain from it
-    // would produce records naming page 0 slot 0, and the undo phase would
-    // then roll back the wrong tuple rather than fail. Until the format
-    // decision lands, the mount must fail loudly.
+TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {
+    // The case that could not be written before 2026-08-10: the record now
+    // carries the undo record's tail, so replay restores target_page_id,
+    // target_slot and type - the fields that say *which tuple* the image
+    // belongs to, and without which RC05's undo would roll back the wrong
+    // row rather than fail.
+    const auto image = Bytes(8, 0x5A);
     {
         auto s = WalStream::Open(&device_, 0);
         ASSERT_TRUE(s.ok());
@@ -202,12 +203,19 @@ TEST_F(RedoTest, RedoOfUndoWriteRefusesAndNamesTheFormatGap) {
         ASSERT_TRUE(EncodePageInit(init, f).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
 
-        const auto image = Bytes(8, 0x5A);
-        std::vector<std::byte> buf(kUndoWriteFixedSize + image.size(), std::byte{0});
-        const UndoWritePayload p{/*prior_trx_id=*/2, /*prior_undo_ptr=*/0, /*offset=*/56,
-                                 static_cast<std::uint16_t>(image.size())};
-        auto n = EncodeUndoWrite(buf, p, image);
-        ASSERT_TRUE(n.ok());
+        txn::UndoRecordFields rec{};
+        rec.target_page_id = 777;
+        rec.target_slot = 3;
+        rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kOverwrite);
+        std::vector<std::byte> tail(txn::UndoRecordTailSize(image.size()));
+        ASSERT_TRUE(txn::EncodeUndoRecordTail(tail, rec, image).ok());
+
+        std::vector<std::byte> buf(kUndoWriteFixedSize + tail.size(), std::byte{0});
+        const UndoWritePayload p{/*prior_trx_id=*/2, /*prior_undo_ptr=*/0,
+                                 static_cast<std::uint16_t>(txn::kUndoRecordsOffset),
+                                 static_cast<std::uint16_t>(tail.size())};
+        auto n = EncodeUndoWrite(buf, p, tail);
+        ASSERT_TRUE(n.ok()) << n.status().message();
         ASSERT_TRUE(
             s.value()->Append({RecordType::kUndoWrite, 1, kPage}, std::span(buf).first(n.value()))
                 .ok());
@@ -215,10 +223,17 @@ TEST_F(RedoTest, RedoOfUndoWriteRefusesAndNamesTheFormatGap) {
     }
 
     auto r = Redo(device_, 0, store_, Analyzed());
-    ASSERT_FALSE(r.ok()) << "redo accepted a record it cannot faithfully replay";
-    EXPECT_EQ(r.status().code(), StatusCode::kUnsupported) << r.status().message();
-    EXPECT_NE(r.status().message().find("target_page_id"), std::string::npos)
-        << r.status().message();
+    ASSERT_TRUE(r.ok()) << r.status().message();
+
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    auto back = txn::UndoPageRead(std::span<const std::byte, kPageSize>(page.value()),
+                                  static_cast<std::uint16_t>(txn::kUndoRecordsOffset));
+    ASSERT_TRUE(back.ok()) << back.status().message();
+    EXPECT_EQ(back.value().fields.target_page_id, 777u);
+    EXPECT_EQ(back.value().fields.target_slot, 3u);
+    EXPECT_EQ(back.value().fields.prior_trx_id, 2u);
+    EXPECT_EQ(std::vector<std::byte>(back.value().image.begin(), back.value().image.end()), image);
 }
 
 // ---- The heap primitive --------------------------------------------------

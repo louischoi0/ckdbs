@@ -282,28 +282,33 @@ StatusOr<SlotRetirePayload> DecodeSlotRetire(std::span<const std::byte> in) {
 // ---- UNDO_WRITE ----------------------------------------------------------
 
 StatusOr<std::size_t> EncodeUndoWrite(std::span<std::byte> out, const UndoWritePayload& fields,
-                                      std::span<const std::byte> image) {
-    if (image.size() > 0xFFFFu) {
+                                      std::span<const std::byte> tail) {
+    if (tail.size() > 0xFFFFu) {
         return Status::InvalidArgument(
-            "wal payload: undo before-image longer than a uint16 length field");
+            "wal payload: undo record tail longer than a uint16 length field");
     }
-    const std::size_t total = kUndoWriteFixedSize + image.size();
+    const std::size_t total = kUndoWriteFixedSize + tail.size();
     if (Status s = CheckOutputSize(out, total, "UNDO_WRITE"); !s.ok()) {
         return s;
     }
     if (fields.prior_trx_id > kMaxTxnId) {
         return Status::InvalidArgument("wal payload: UNDO_WRITE prior_trx_id exceeds 48 bits");
     }
-    if (static_cast<std::size_t>(fields.offset) + image.size() > kPageSize) {
-        return Status::InvalidArgument("wal payload: UNDO_WRITE image runs past the undo page");
+    // A sanity bound, not the authority: the record also occupies the 16
+    // bytes of chain links before its tail, and the exact extent check
+    // belongs to txn::UndoPageWriteAt, which holds the page. Stating the
+    // precise bound here would mean this layer including txn/, and wal
+    // sits below it.
+    if (static_cast<std::size_t>(fields.offset) + tail.size() > kPageSize) {
+        return Status::InvalidArgument("wal payload: UNDO_WRITE tail runs past the undo page");
     }
 
     Store<std::uint64_t>(out, kUndoPriorTrxIdOffset, fields.prior_trx_id);
     Store<std::uint64_t>(out, kUndoPriorUndoPtrOffset, fields.prior_undo_ptr);
     Store<std::uint16_t>(out, kUndoOffsetOffset, fields.offset);
-    Store<std::uint16_t>(out, kUndoImageLenOffset, static_cast<std::uint16_t>(image.size()));
-    if (!image.empty()) {
-        std::memcpy(out.data() + kUndoWriteFixedSize, image.data(), image.size());
+    Store<std::uint16_t>(out, kUndoTailLenOffset, static_cast<std::uint16_t>(tail.size()));
+    if (!tail.empty()) {
+        std::memcpy(out.data() + kUndoWriteFixedSize, tail.data(), tail.size());
     }
     return total;
 }
@@ -317,19 +322,20 @@ StatusOr<DecodedUndoWrite> DecodeUndoWrite(std::span<const std::byte> in) {
     decoded.fields.prior_trx_id = Load<std::uint64_t>(in, kUndoPriorTrxIdOffset);
     decoded.fields.prior_undo_ptr = Load<std::uint64_t>(in, kUndoPriorUndoPtrOffset);
     decoded.fields.offset = Load<std::uint16_t>(in, kUndoOffsetOffset);
-    decoded.fields.image_len = Load<std::uint16_t>(in, kUndoImageLenOffset);
+    decoded.fields.tail_len = Load<std::uint16_t>(in, kUndoTailLenOffset);
 
     if (Status s = CheckTxnId(decoded.fields.prior_trx_id, "UNDO_WRITE prior_trx_id"); !s.ok()) {
         return s;
     }
-    if (in.size() - kUndoWriteFixedSize < decoded.fields.image_len) {
-        return Status::Corruption("wal payload: UNDO_WRITE image_len runs past the payload");
+    if (in.size() - kUndoWriteFixedSize < decoded.fields.tail_len) {
+        return Status::Corruption("wal payload: UNDO_WRITE tail_len runs past the payload");
     }
-    if (static_cast<std::size_t>(decoded.fields.offset) + decoded.fields.image_len > kPageSize) {
-        // Replaying this would write outside the undo page.
-        return Status::Corruption("wal payload: UNDO_WRITE image runs past the undo page");
+    if (static_cast<std::size_t>(decoded.fields.offset) + decoded.fields.tail_len > kPageSize) {
+        // Replaying this would write outside the undo page (see the note
+        // in EncodeUndoWrite: a sanity bound, not the authority).
+        return Status::Corruption("wal payload: UNDO_WRITE tail runs past the undo page");
     }
-    decoded.image = in.subspan(kUndoWriteFixedSize, decoded.fields.image_len);
+    decoded.tail = in.subspan(kUndoWriteFixedSize, decoded.fields.tail_len);
     return decoded;
 }
 
