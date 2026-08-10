@@ -415,14 +415,28 @@ Four things this phase found, each of which had to be fixed or recorded:
 > relation the catalog says core 1 owns is built entirely out of core 0's
 > pages, and core 1 may not fault one.
 
-Closing it is a design decision, not an omission: either `CREATE TABLE`
-allocates a relation's root from its *owner's* lease — making DDL a
-cross-core allocation — or page ownership stops being a per-core lease and
-becomes a function of the catalog. A second, independent blocker sits behind
-it: **a peer cannot INSERT either**, because `AllocateRowId()` bumps
-`next_id` on a catalog page. That one is P5's shape — a leased range of row
-ids, the same mechanism as the page-id lease and as
-`docs/keystoneid-invariant.md` K-M2's bump-ahead allocator.
+**Decided 2026-08-10, operator-ratified: page ownership becomes a function
+of the catalog (crosscore.md CC7).** The lease answers "who may allocate
+this id"; the catalog answers "whose pages are these now" — and the second
+fact wins, realized at DDL publish by the flush-then-grant handoff CC7
+specifies. The remaining P6 tasks:
+
+- **P6b — the publish handoff**: at CREATE TABLE publish, core 0 flushes
+  the relation's pages, then sends the owner core an extent-granularity
+  fault grant over the ring; the peer registers it in its store. Flip
+  `CoreRuntimeTest.APeerCannotYetFaultARelationsDataPages` from the pinned
+  negative into the positive contract: after the grant, the owner faults
+  the relation's root and reads it.
+- **P6c — placement re-enable**: `AssignOwnerCore()` may return a
+  non-creating core again (M1's rotation), legal only behind P6b's
+  handoff. Do not enable before P6b lands — that exact ordering mistake is
+  recorded above.
+
+A second, independent blocker sits behind it: **a peer cannot INSERT
+either**, because `AllocateRowId()` bumps `next_id` on a catalog page.
+That one is P5's shape — a leased range of row ids, the same mechanism as
+the page-id lease and as `docs/keystoneid-invariant.md` K-M2's bump-ahead
+allocator.
 
 ### P7 — Observability
 - Per-core: everything wal.md §16 lists, now labeled by core.
