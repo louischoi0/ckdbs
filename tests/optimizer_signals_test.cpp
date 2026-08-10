@@ -111,6 +111,45 @@ TEST(OptimizerSignalsTest, TheFingerprintTableEvictsItsColdestAtTheCap) {
     EXPECT_FALSE(coldest) << "the coldest entry survived the eviction that admitted the newcomer";
 }
 
+TEST(OptimizerSignalsTest, EvictionPicksTheColdestAmongEntriesTheLinearScoreFlattens) {
+    // A full table is mostly *idle* entries, and Q24.8 reads every score
+    // older than ~16 half-lives as exactly 0 - so the eviction scan used
+    // to find a tie among all of them and keep whichever the hash map
+    // happened to yield first. The victim was arbitrary among the cold: a
+    // fingerprint idle for an hour could outlive one idle for a week.
+    // Ranking in the log domain restores the intent, and this is the case
+    // that tells the two implementations apart.
+    sched::ManualClock clock(1);
+    stats::OptimizerSignals signals(&clock, kHalfLife);
+
+    // One ancient entry, then the rest merely stale - every one of them
+    // far enough past the linear floor to read zero.
+    signals.NoteExecution(/*pattern_id=*/1, /*pages_fetched=*/1);
+    clock.Advance(60 * kHalfLife);
+    for (std::uint64_t id = 2; id <= stats::kMaxTrackedFingerprints; ++id) {
+        signals.NoteExecution(id, 1);
+    }
+    clock.Advance(25 * kHalfLife);
+    ASSERT_EQ(signals.tracked_fingerprints(), stats::kMaxTrackedFingerprints);
+
+    const stats::OptimizerSnapshot before = signals.Snapshot();
+    for (const stats::SnapshotFingerprint& fp : before.fingerprints) {
+        ASSERT_EQ(fp.frequency_q8, 0u)
+            << "fingerprint " << fp.pattern_id << " still has linear resolution; "
+            << "the tie this test is about would not arise";
+    }
+
+    signals.NoteExecution(/*pattern_id=*/999'999, 1);
+
+    const stats::OptimizerSnapshot after = signals.Snapshot();
+    bool ancient_survived = false;
+    for (const stats::SnapshotFingerprint& fp : after.fingerprints) {
+        if (fp.pattern_id == 1) ancient_survived = true;
+    }
+    EXPECT_FALSE(ancient_survived)
+        << "the eviction kept the entry idle 85 half-lives and dropped a fresher one";
+}
+
 // ---- The scripted workload (the acceptance's end-to-end half) -----------
 
 class Instance {

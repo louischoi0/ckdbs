@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 #include "kds/sched/clock.hpp"
 
@@ -130,6 +131,100 @@ inline void Accumulate(DecayState& s, const sched::Clock* clock, sched::MonoTime
 // Touch: Accumulate's one-point form, the common case.
 inline void Touch(DecayState& s, const sched::Clock* clock, sched::MonoTimeNs half_life_ns) {
     Accumulate(s, clock, half_life_ns, 1);
+}
+
+// ---- The range-preserving read (2026-08-10) ------------------------------
+//
+// `ValueAt` answers in Q24.8, so a score **underflows to zero after about
+// 16 half-lives** of silence at realistic magnitudes (a single touch is
+// 256 scaled units, and 256 >> 8 is 1). Past that point every idle score
+// reads exactly 0 and no comparison can order them - which cost the cabin
+// optimizer the thing it most wanted from a decayed score: a Cabin worth
+// 2^30 should take ~30 half-lives to fall below a threshold, not 16.
+// Measured as "for 89% of the DECAYING dwell the DROP is a timeout, not a
+// judgement" (`bench/results-cabin-optimizer-days.md`).
+//
+// **The information was never lost in the state** - only in the read.
+// `scaled` and `last_bump` still hold the whole history; it is the
+// `>> halvings` inside `DecayedScaledAt` that flushes it. So the fix is an
+// accessor, not a format: `Log2Q16` answers in the log domain, where decay
+// is a **subtraction** and therefore exact and unbounded - a score stays
+// ordered against its peers for thousands of half-lives.
+//
+// Consumers that only rank live data keep using `ValueAt` unchanged; this
+// is for the ones that must still tell two cold things apart.
+
+// Signed log2 of a decayed score, in Q16.16 (16 fractional bits). The
+// value is log2 of the **scaled** (Q24.8) score, so 0 means one scaled
+// unit and 8*65536 means one whole point - callers compare these against
+// each other and against log2 of their own thresholds, never against a
+// linear score.
+using Log2Q16 = std::int64_t;
+
+// A zero score's log2 is negative infinity; this stands in for it and is
+// below every representable result (the most negative real answer at u32
+// magnitudes and a u64 elapsed is far above it). Comparing it works
+// naturally: nothing is colder than a score that was never touched.
+inline constexpr Log2Q16 kLog2NegInf = std::numeric_limits<std::int64_t>::min() / 2;
+
+// log2(1 + k/64) in Q16, k = 0..63 - the fractional part of a log2, LUT'd
+// on the six bits below the leading one. Worst-case error is 0.78% in the
+// ratio it represents, which is under a tenth of the narrowest threshold
+// margin any consumer applies (theta_drop = 0.5 against theta_create = 3).
+inline constexpr std::uint32_t kLog2FractionQ16[64] = {
+    0, 1466, 2909, 4331, 5732, 7112, 8473, 9814,
+    11136, 12440, 13727, 14996, 16248, 17484, 18704, 19909,
+    21098, 22272, 23433, 24579, 25711, 26830, 27936, 29029,
+    30109, 31178, 32234, 33279, 34312, 35334, 36346, 37346,
+    38336, 39316, 40286, 41246, 42196, 43137, 44068, 44990,
+    45904, 46809, 47705, 48593, 49472, 50344, 51207, 52063,
+    52911, 53751, 54584, 55410, 56229, 57040, 57845, 58643,
+    59434, 60219, 60997, 61769, 62534, 63294, 64047, 64794,
+};
+
+// log2 of a positive integer, Q16.16. Zero answers kLog2NegInf.
+inline Log2Q16 Log2OfQ16(std::uint64_t value) noexcept {
+    if (value == 0) return kLog2NegInf;
+    // Index of the leading one, then the six bits under it select the
+    // fractional bucket - the mantissa normalized into [1, 2).
+    int msb = 63;
+    while (((value >> msb) & 1u) == 0) --msb;
+    const int shift = 63 - msb;
+    const std::uint64_t mantissa = value << shift;  // in [2^63, 2^64)
+    const std::uint32_t bucket = static_cast<std::uint32_t>((mantissa >> 57) & 63u);
+    return (static_cast<Log2Q16>(msb) << 16) + kLog2FractionQ16[bucket];
+}
+
+// The decayed score at `now`, in the log domain: log2(scaled) minus the
+// elapsed half-lives. **Never underflows** - decay is a subtraction here,
+// so two scores idle for a century still order correctly by how large
+// they were when the silence began. Null clock, or a clock that went
+// backwards, reads as no elapsed time, matching `DecayedScaledAt`.
+inline Log2Q16 DecayedLog2At(const DecayState& s, sched::MonoTimeNs now,
+                             sched::MonoTimeNs half_life_ns) noexcept {
+    if (s.scaled == 0) return kLog2NegInf;
+    Log2Q16 result = Log2OfQ16(s.scaled);
+    if (half_life_ns == 0 || now <= s.last_bump) return result;
+    const std::uint64_t elapsed = now - s.last_bump;
+    // Whole and fractional half-lives separately: the whole part would
+    // overflow a Q16.16 shift for long idles, and the fraction needs the
+    // division anyway.
+    const std::uint64_t whole = elapsed / half_life_ns;
+    const std::uint64_t frac_ns = elapsed % half_life_ns;
+    const Log2Q16 frac_q16 =
+        static_cast<Log2Q16>((frac_ns << 16) / half_life_ns);
+    // Saturate rather than wrap on an absurd idle: still colder than
+    // anything real, which is the only property that matters.
+    if (whole > (1ULL << 40)) return kLog2NegInf;
+    return result - (static_cast<Log2Q16>(whole) << 16) - frac_q16;
+}
+
+// Read: the decayed log2 score now. Null clock = the raw score's log2,
+// the counter degradation `ValueAt` also performs.
+inline Log2Q16 Log2ValueAt(const DecayState& s, const sched::Clock* clock,
+                           sched::MonoTimeNs half_life_ns) noexcept {
+    if (clock == nullptr) return Log2OfQ16(s.scaled);
+    return DecayedLog2At(s, clock->Now(), half_life_ns);
 }
 
 }  // namespace kds::stats
