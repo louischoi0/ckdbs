@@ -23,8 +23,10 @@ dispatcher's own commands):
 | Introspection | `SHOW META/TABLES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/RELAYOUT`, `DESCRIBE` |
 | Session | `PING`, `SYNC`, `STOP` |
 
-There is **no `DROP TABLE` and no `ALTER TABLE`**. The catalog is append-only
-apart from `DROP PATTERN`, `DROP CABIN`, `DROP INDEX` and `DROP ASSERTION`.
+There is **no `DROP TABLE`**; `ALTER TABLE` exists and is catalog-only
+(RENAME TO / RENAME COLUMN — see its section). The catalog is append-only
+apart from those renames, `DROP PATTERN`, `DROP CABIN`, `DROP INDEX` and
+`DROP ASSERTION`.
 
 ---
 
@@ -96,6 +98,32 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
   that meets an in-flight writer answers `ERR TXN_CONFLICT retryable=1 ...`.
 - `SHOW FKEYS` lists declarations. CASCADE / SET NULL do not exist (FK-M6,
   out of v1 by decision F2).
+
+### ALTER TABLE (built 2026-08-10, AL1-AL9 / ALT01-ALT05)
+
+```sql
+ALTER TABLE <t> RENAME TO <new>
+ALTER TABLE <t> RENAME COLUMN <old> TO <new>
+```
+
+v1 is **catalog-only**: a rename changes a catalog label and no tuple
+bytes. Identity is the oid, so nothing dangles — foreign keys still
+enforce, indexes and Cabins still serve, all with no re-declaration.
+
+- `ADD COLUMN` / `DROP COLUMN` / type changes answer `Unsupported` with a
+  position: the row size is a schema constant (invariant 13), so a
+  column-set change is a relation rewrite, not a catalog edit. Widening
+  is permanently out by the tagged-cell design.
+- **Assertions RESTRICT both forms**: the stored canon is the
+  declaration's text, so `ALTER` on a relation carrying one refuses,
+  naming it — drop, rename, re-declare.
+- **Patterns are allowed to die**: statements against the old name stop
+  matching stored patterns and trails, which costs replay speed, never a
+  row; new-name traffic re-registers on the ordinary path.
+- The pk column renames like any other (identity is the Keystone word,
+  not the spelling); a `sys.*` relation refuses; a taken name is
+  `AlreadyExists`.
+- Unlogged and non-transactional, like all DDL.
 
 ### CREATE INDEX / DROP INDEX (built, IX01-IX16)
 
@@ -527,10 +555,10 @@ waits on"; `InvalidArgument` means "simply wrong".
   it is honest about its class: an index is "a Cabin that observed
   everything", append-only, verified at read. `UNIQUE` is refused because it
   would turn a read accelerator into a constraint that can fail writes.
-- **No `DROP TABLE`, no `ALTER TABLE`.** Nothing reclaims catalog rows or
-  relation pages yet; the RESTRICT hook for assertions/FKs exists but has no
-  caller. `DROP` names exactly four object kinds: PATTERN, CABIN, INDEX,
-  ASSERTION.
+- **No `DROP TABLE`, and no data-moving `ALTER`.** Nothing reclaims catalog
+  rows or relation pages yet; `ALTER TABLE` is renames only (AL1), and the
+  assertion RESTRICT hook now has its first caller there. `DROP` names
+  exactly four object kinds: PATTERN, CABIN, INDEX, ASSERTION.
 - **No `SELECT *` across a join**, no duplicate FROM bindings, no
   aggregates in subqueries, no subquery nesting past depth 4 — each refused
   with the exact byte.
@@ -552,7 +580,7 @@ client library switches on, `ERR <message>` for everything else.
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | Supplying the pk in INSERT | `ERR do not supply a value for primary-key column '<name>' - it is autoincrement and engine-assigned` |
-| Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, INSERT, SELECT, UPDATE, DELETE)` |
+| Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)` |
 | Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |
 | Bare `decimal` | `ERR column '<c>' needs a precision and a scale - decimal(p, s) - at byte <n>; there is no default scale, ...` |
 | `float` column | `Unsupported` from the row-layout build: no decided on-disk encoding |

@@ -485,6 +485,12 @@ private:
     // identifiers.
     DispatchOutcome HandleCabin(std::string_view line);
 
+    // `ALTER TABLE ... RENAME TO | RENAME COLUMN` (docs/spec-alter.md,
+    // workplan ALT03). One handler for both forms, for HandleCabin's
+    // reason; the AL4 assertion RESTRICT and the AL7 system-relation
+    // refusal live here, before the catalog write.
+    DispatchOutcome HandleAlter(std::string_view line);
+
     // `SHOW CABINS` - every declared Cabin, with what it has observed.
     //
     // The line joins two sources on purpose. The catalog says which

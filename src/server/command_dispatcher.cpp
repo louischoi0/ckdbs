@@ -328,6 +328,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         }
         return {"ERR unknown CREATE target", false};
     }
+    if (IEquals(cmd, "ALTER")) {
+        return HandleAlter(Trim(line));
+    }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         // Patterns, cabins and indexes can be dropped - there is still no
@@ -1136,6 +1139,75 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     }
     if (logging(LogLevel::kInfo)) {
         log_->Info("ddl", "created cabin on " + stmt.table_name + "." + stmt.column_name);
+    }
+    return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::AlterStmt>(parsed.value())) {
+        return {"ERR expected an ALTER TABLE statement", false};
+    }
+    const auto& stmt = std::get<parser::AlterStmt>(parsed.value());
+
+    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) {
+        return {"ERR " + oid.status().message(), false};
+    }
+
+    // AL7: the catalog's own names are load-bearing for bootstrap and are
+    // nobody's to change - refused here so both forms share the answer,
+    // and RenameTable's own guard is defense rather than the door.
+    auto tables = catalog_.ListTables();
+    if (!tables.ok()) {
+        return {"ERR " + tables.status().message(), false};
+    }
+    for (const auto& row : tables.value()) {
+        if (row.oid == oid.value() && row.namespace_oid != catalog::kNamespacePublic) {
+            return {"ERR '" + stmt.table_name + "' is a system relation and cannot be altered",
+                    false};
+        }
+    }
+
+    // AL4: assertions RESTRICT both forms. The stored canon is the
+    // declaration's verbatim text (AS10), and the recovery-side registry
+    // rebuild will re-parse it - a rename would leave an *enforcing*
+    // constraint whose canon names a vanished table or column. Unlike a
+    // pattern, an assertion is not allowed to die quietly. This is
+    // AssertionsOnRelation()'s first live call site.
+    auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
+    if (!restricting.ok()) {
+        return {"ERR " + restricting.status().message(), false};
+    }
+    if (!restricting.value().empty()) {
+        return {"ERR assertion '" + restricting.value().front().name +
+                    "' stores its declaration against this relation's current names; DROP "
+                    "ASSERTION, rename, then re-declare it",
+                false};
+    }
+
+    const Status renamed =
+        stmt.rename_column
+            ? catalog_.RenameColumn(oid.value(), stmt.old_column, stmt.new_name)
+            : catalog_.RenameTable(oid.value(), stmt.new_name);
+    if (!renamed.ok()) {
+        return {"ERR " + renamed.message(), false};
+    }
+
+    std::ostringstream os;
+    if (stmt.rename_column) {
+        os << "RENAMED COLUMN " << stmt.table_name << '.' << stmt.old_column << " TO "
+           << stmt.new_name;
+    } else {
+        os << "RENAMED TABLE " << stmt.table_name << " TO " << stmt.new_name;
+    }
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "renamed " + stmt.table_name +
+                              (stmt.rename_column ? "." + stmt.old_column : std::string()) +
+                              " to " + stmt.new_name);
     }
     return {os.str(), false};
 }

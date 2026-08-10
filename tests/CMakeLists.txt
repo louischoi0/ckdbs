@@ -99,6 +99,8 @@ add_executable(kds_tests
     parser_aggregate_test.cpp
     parser_pagination_test.cpp
     pagination_exec_test.cpp
+    parser_alter_test.cpp
+    alter_table_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp
     type_literals_test.cpp

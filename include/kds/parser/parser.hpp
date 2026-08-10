@@ -70,6 +70,11 @@ private:
     StatusOr<CabinStmt> ParseCabin(bool drop);
     StatusOr<IndexStmt> ParseIndex(bool drop);
 
+    // `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
+    // (docs/spec-alter.md AL7), with `ALTER` already consumed. Every other
+    // form under ALTER is refused here, by name and position (AL1).
+    StatusOr<AlterStmt> ParseAlter();
+
     // `{CREATE | DROP} ASSERTION ...` (docs/feat-assertion.md §3), with the
     // leading two words already consumed. One production for both, for
     // ParseCabin's reason - see AssertionStmt (ast.hpp).

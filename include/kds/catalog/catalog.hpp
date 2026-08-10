@@ -165,6 +165,20 @@ public:
     // exist" without the caller already knowing a name to look up.
     StatusOr<std::vector<SysObjectRow>> ListTables();
 
+    // ALTER TABLE's two catalog writes (docs/spec-alter.md AL2, AL5,
+    // workplan ALT02): rewrite one fixed-width Name field in place - same
+    // size, no relayout - then BumpVersion(), with no in-place-cache
+    // exception, because a name is read by resolution itself. Identity is
+    // the oid, so nothing else in the catalog moves.
+    //
+    // Refusals: an empty name or one that does not fit kCatalogNameMax is
+    // InvalidArgument (SetName would truncate silently, and a truncated
+    // name is not the one that was asked for); a taken name is
+    // AlreadyExists; a relation outside the public namespace is refused -
+    // the catalog's own names are load-bearing for bootstrap (AL7).
+    Status RenameTable(Oid table_oid, std::string_view new_name);
+    Status RenameColumn(Oid table_oid, std::string_view old_name, std::string_view new_name);
+
     // Returns an owned copy, served from the cache when the relation has
     // been opened before. NotFound for a relation with no sys.columns rows
     // (the bootstrap catalog tables) - an absence, and so never cached.

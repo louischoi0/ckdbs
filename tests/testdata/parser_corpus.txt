@@ -218,6 +218,18 @@ ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
 Unsupported	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
 Unsupported	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
 
+# ---- ALTER (docs/spec-alter.md AL1, AL7) -----------------------------------
+# ALTER is not a patternable leading word, so every line is "-". The
+# refusal class is the feature: v1 is catalog-only, and ADD/DROP answer a
+# positioned Unsupported carrying invariant 13's reason.
+ok	-	-	ALTER TABLE t RENAME TO u
+ok	-	-	ALTER TABLE t RENAME COLUMN a TO b
+ok	-	-	alter table t rename to u;
+Unsupported	-	-	ALTER TABLE t ADD COLUMN x int
+Unsupported	-	-	ALTER TABLE t DROP COLUMN a
+InvalidArgument	-	-	ALTER TABLE t
+InvalidArgument	-	-	ALTER t RENAME TO u
+
 # ---- UPDATE — accepted -----------------------------------------------------
 ok	e11a9ee11c2d4d2e	b5d414774c8002cc	UPDATE t SET a = 1
 ok	dc85af0987beef36	2a44fca2241ecfc1	UPDATE t SET a = 1, b = 'x'

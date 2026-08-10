@@ -500,6 +500,30 @@ struct DeleteStmt {
     std::vector<Condition> where;  // empty = every row
 };
 
+// `ALTER TABLE <t> RENAME TO <new>` and
+// `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` (docs/spec-alter.md AL1).
+//
+// v1 is catalog-only: a rename changes a catalog label and no tuple
+// bytes. Everything else spelled under ALTER answers Unsupported at
+// parse with AL1's reason - the row size is a schema constant
+// (invariant 13), so a column-set change is a relation rewrite, not a
+// catalog edit. One struct for both forms, CabinStmt's precedent: they
+// share the resolution and differ in which catalog call they reach.
+struct AlterStmt {
+    std::string table_name;
+    std::uint32_t byte_offset = 0;  // of the table name
+
+    bool rename_column = false;  // false: RENAME TO, the relation itself
+
+    // RENAME COLUMN only: the column as written.
+    std::string old_column;
+    std::uint32_t old_column_byte_offset = 0;
+
+    // The new name - of the table or the column, by `rename_column`.
+    std::string new_name;
+    std::uint32_t new_name_byte_offset = 0;
+};
+
 // ---- CREATE PATTERN / DROP PATTERN ---------------------------------------
 //
 //   CREATE PATTERN <name> ( $p <type> [, ...] ) [WITH (<k> = <v> [, ...])]
@@ -724,7 +748,7 @@ struct AssertionStmt {
 
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt,
-                               IndexStmt, AssertionStmt>;
+                               IndexStmt, AssertionStmt, AlterStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

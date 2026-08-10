@@ -1916,6 +1916,10 @@ StatusOr<Statement> Parser::Parse() {
         auto s = ParseDelete();
         if (!s.ok()) return s.status();
         stmt = std::move(s.value());
+    } else if (IEquals(tok.text, "ALTER")) {
+        auto s = ParseAlter();
+        if (!s.ok()) return s.status();
+        stmt = std::move(s.value());
     } else if (IEquals(tok.text, "WITH")) {
         // The other half of the structural rule (spec section 2): `WITH`
         // must not lex as a statement head. It is answered here, by name,
@@ -1926,8 +1930,9 @@ StatusOr<Statement> Parser::Parse() {
                                     std::to_string(tok.byte_offset) +
                                     "); subqueries are allowed in predicate position only");
     } else {
-        return Status::InvalidArgument("unknown SQL keyword '" + std::string(tok.text) +
-                                        "' (supported: CREATE, DROP, INSERT, SELECT, UPDATE, DELETE)");
+        return Status::InvalidArgument(
+            "unknown SQL keyword '" + std::string(tok.text) +
+            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)");
     }
 
     // After a successful parse, only EOF may remain (a trailing semicolon
@@ -1938,6 +1943,70 @@ StatusOr<Statement> Parser::Parse() {
                                         "' after end of statement");
     }
 
+    return stmt;
+}
+
+// `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
+// (docs/spec-alter.md AL1, AL7), with `ALTER` already consumed.
+//
+// `TABLE`, `RENAME`, `COLUMN` and `TO` are ordinary identifiers matched by
+// text, like every clause head this grammar has grown - and the refusal
+// surface is parsed *before* the accepted form, so `ADD`/`DROP`/`MODIFY`/
+// `SET` answer with AL1's reason at their own byte rather than a syntax
+// error pointing past them.
+StatusOr<AlterStmt> Parser::ParseAlter() {
+    if (Status s = ExpectKeyword("TABLE"); !s.ok()) return s;
+
+    AlterStmt stmt;
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.table_name = std::move(name.value());
+
+    const Token verb = lexer_.Peek();
+    if (verb.type == TokenType::kIdent &&
+        (IEquals(verb.text, "ADD") || IEquals(verb.text, "MODIFY") ||
+         IEquals(verb.text, "SET"))) {
+        return Status::Unsupported(
+            "ALTER TABLE " + std::string(verb.text) +
+            " is not supported (byte " + std::to_string(verb.byte_offset) +
+            "); v1 is catalog-only - RENAME TO and RENAME COLUMN - because a relation's row "
+            "size is a schema constant (invariant 13), so changing the column set is a "
+            "relation rewrite, not a catalog edit");
+    }
+    // `DROP` under ALTER is the same class, worded for what was written:
+    // dropping a column is the rewrite, dropping the table is DROP TABLE's
+    // feature, and neither is a rename.
+    if (verb.type == TokenType::kIdent && IEquals(verb.text, "DROP")) {
+        return Status::Unsupported(
+            "ALTER TABLE DROP is not supported (byte " + std::to_string(verb.byte_offset) +
+            "); dropping a column changes the row size (invariant 13), and dropping the "
+            "relation is DROP TABLE's feature, which does not exist yet");
+    }
+    if (verb.type != TokenType::kIdent || !IEquals(verb.text, "RENAME")) {
+        return Status::InvalidArgument("expected RENAME after the table name, got '" +
+                                        std::string(Describe(verb)) + "' at byte " +
+                                        std::to_string(verb.byte_offset));
+    }
+    lexer_.Next();
+
+    if (const Token what = lexer_.Peek();
+        what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
+        lexer_.Next();
+        stmt.rename_column = true;
+        stmt.old_column_byte_offset = lexer_.Peek().byte_offset;
+        auto old_col = ParseIdent();
+        if (!old_col.ok()) return old_col.status();
+        stmt.old_column = std::move(old_col.value());
+    }
+
+    if (Status s = ExpectKeyword("TO"); !s.ok()) return s;
+    stmt.new_name_byte_offset = lexer_.Peek().byte_offset;
+    auto new_name = ParseIdent();
+    if (!new_name.ok()) return new_name.status();
+    stmt.new_name = std::move(new_name.value());
+
+    ConsumeOptionalSemicolon();
     return stmt;
 }
 

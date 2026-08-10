@@ -870,6 +870,112 @@ StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name) {
     return Status::NotFound("no table with this name");
 }
 
+// ALTER TABLE's catalog half (docs/spec-alter.md, workplan ALT02). Both
+// renames are one fixed-width Name rewrite - MutatePatternRow's shape -
+// followed by BumpVersion(): a name is read by resolution itself, so the
+// in-place-cache exception the pattern setters use does not apply.
+namespace {
+
+Status CheckRenameName(std::string_view what, std::string_view name) {
+    if (name.empty()) {
+        return Status::InvalidArgument(std::string(what) + " name is empty");
+    }
+    // `>=` rather than `>`: SetName stores at most kCatalogNameMax bytes
+    // and NameView stops at the array's end, so a name that exactly fills
+    // the array round-trips - but the check refuses at the same boundary
+    // CreateTable's rows actually hold, and never lets SetName truncate,
+    // because a truncated name is not the one that was asked for.
+    if (name.size() >= kCatalogNameMax) {
+        return Status::InvalidArgument(std::string(what) + " name '" + std::string(name) +
+                                        "' is longer than " +
+                                        std::to_string(kCatalogNameMax - 1) + " bytes");
+    }
+    return Status::OK();
+}
+
+}  // namespace
+
+Status Catalog::RenameTable(Oid table_oid, std::string_view new_name) {
+    if (Status s = CheckRenameName("table", new_name); !s.ok()) return s;
+
+    // The collision check and the write run on one core (DDL is core 0's),
+    // so check-then-write is atomic by the event loop.
+    if (auto taken = FindTableOidByName(new_name); taken.ok()) {
+        return Status::AlreadyExists("a relation named '" + std::string(new_name) +
+                                      "' already exists");
+    } else if (taken.status().code() != StatusCode::kNotFound) {
+        return taken.status();
+    }
+
+    auto acted = ForFirstRow<SysObjectRow>(
+        store_, kCatalogPageObjects,
+        [&](SysObjectRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.type_oid != kTypeTable || row.oid != table_oid) return false;
+            // The catalog's own names are load-bearing for bootstrap and
+            // are nobody's to change (AL7).
+            if (row.namespace_oid != kNamespacePublic) {
+                return Status::InvalidArgument("relation '" +
+                                                std::string(NameView(row.name)) +
+                                                "' is a system relation and cannot be renamed");
+            }
+            SetName(row.name, new_name);
+            const auto encoded = row.Encode();
+            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.objects row for this relation");
+
+    BumpVersion("rename table");
+    return Status::OK();
+}
+
+Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
+                             std::string_view new_name) {
+    if (Status s = CheckRenameName("column", new_name); !s.ok()) return s;
+
+    // Sibling collision and old-name existence in one read, before any
+    // write - the same core-local atomicity argument RenameTable makes.
+    auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns);
+    if (!rows.ok()) return rows.status();
+    bool found_old = false;
+    for (const SysColumnRow& row : rows.value()) {
+        if (row.rel_id != table_oid) continue;
+        if (NameView(row.name) == new_name) {
+            return Status::AlreadyExists("the relation already has a column named '" +
+                                          std::string(new_name) + "'");
+        }
+        if (NameView(row.name) == old_name) found_old = true;
+    }
+    if (!found_old) {
+        return Status::NotFound("the relation has no column named '" + std::string(old_name) +
+                                 "'");
+    }
+
+    auto acted = ForFirstRow<SysColumnRow>(
+        store_, kCatalogPageColumns,
+        [&](SysColumnRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.rel_id != table_oid || NameView(row.name) != old_name) return false;
+            SetName(row.name, new_name);
+            const auto encoded = row.Encode();
+            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("the column vanished between check and write");
+
+    BumpVersion("rename column");
+    return Status::OK();
+}
+
 StatusOr<std::vector<SysObjectRow>> Catalog::ListTables() {
     if (const std::vector<SysObjectRow>* cached = cache_.FindTableList(); cached != nullptr) {
         return *cached;

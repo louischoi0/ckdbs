@@ -55,9 +55,12 @@ There is no purge pass, and readers are deliberately unregistered
   (`docs/feat-index.md` §13);
 - catalog rows are never reclaimed (the column ceiling is on columns ever
   created); pages, extents and Keystone ids are never reused;
-- there is **no `DROP TABLE` and no `ALTER TABLE`** — the RESTRICT hook
-  (`AssertionsOnRelation()`, the FK reverse check) exists with no DDL to
-  call it.
+- there is **no `DROP TABLE`**, and `ALTER TABLE` is catalog-only renames
+  (`docs/spec-alter.md` AL1) — `AssertionsOnRelation()` gained its first
+  caller there (AL4's RESTRICT), while the FK reverse check still waits on
+  a `DROP TABLE`. A rename is an unlogged catalog write like all DDL: a
+  crash after it can lose it, and a crash between the write and dependent
+  traffic is the same exposure every catalog mutation carries.
 
 ## Concurrency and multicore
 
