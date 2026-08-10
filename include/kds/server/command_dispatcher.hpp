@@ -17,6 +17,7 @@
 #include "kds/exec/budget.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/server/session_step_client.hpp"
 #include "kds/exec/pattern_ddl.hpp"
 #include "kds/exec/cabin_ddl.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
@@ -140,6 +141,14 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
+
+    // A remote read this statement opened (workplan P4c): the reply is not
+    // in `response` yet - the caller awaits the read and finishes through
+    // `FinishRemoteRead()`. `DispatchAsync()` parks on it; the synchronous
+    // `Dispatch()` can finish one only when it already completed (the
+    // in-process loopback case), because with no reactor there is nothing
+    // to pump the reply through.
+    std::optional<PipelineTag> pending_remote;
 
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/wal.md
@@ -705,6 +714,12 @@ public:
         aggregate_limits_ = limits;
     }
 
+    // Arms the remote-read path (workplan P4c): a single-step star SELECT
+    // of a relation another core owns ships to that core instead of taking
+    // the affinity refusal. `client` must outlive the dispatcher. With
+    // this never called, every statement behaves exactly as before.
+    void SetRemoteReads(SessionStepClient* client) noexcept { remote_reads_ = client; }
+
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
     // with the same default posture: a dispatcher never told behaves as the
@@ -957,6 +972,11 @@ private:
     // place, rather than at every return of every handler.
     DispatchOutcome DispatchInner(std::string_view line, Session& session);
 
+    // Formats a completed remote read into the exact reply the local path
+    // would have produced (workplan P4c) - same header, same row shape -
+    // and closes the read. Call only when the read is done.
+    DispatchOutcome FinishRemoteRead(const PipelineTag& tag);
+
 
     bool logging(LogLevel level) const noexcept {
         return log_ != nullptr && log_->enabled(level);
@@ -1075,6 +1095,14 @@ private:
     // §6 asks for. 0 is the system core and the only value a single-core
     // build ever has, so every pre-multicore construction site is unchanged.
     std::uint32_t core_id_ = 0;
+
+    // The session side of remote reads (workplan P4c), null until the
+    // Expeditor wires it - with it null every cross-core chain keeps the
+    // affinity refusal it always had.
+    SessionStepClient* remote_reads_ = nullptr;
+    // Per-statement pipeline ids: sequential, never pointer-derived
+    // (crosscore.md §3, sched.md §7's determinism rule).
+    std::uint64_t next_remote_request_ = 1;
 
     // The read-path index switch (`indexes`, default on). Read-path only:
     // maintenance is not switchable, because an index that stops being

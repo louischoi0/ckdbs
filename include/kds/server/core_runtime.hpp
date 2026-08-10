@@ -15,6 +15,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/remote_step_service.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/server/superblock.hpp"
@@ -208,6 +209,10 @@ private:
     // core, and the refill state the kRowIdLease receiver releases.
     catalog::RowIdLeaseTable row_id_leases_;
     RowIdRefill row_id_refill_;
+
+    // The remote step server (P4b), armed at AttachTransport: this core
+    // answers STEP_OPENs for relations it owns.
+    std::optional<RemoteStepServer> remote_steps_;
 
     // The statement stack. A peer's `SuperBlock` is a **copy** taken on the
     // startup thread: the dispatcher needs one for SHOW-class commands, and

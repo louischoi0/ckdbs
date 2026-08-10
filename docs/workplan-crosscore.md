@@ -233,7 +233,7 @@ the core serve a message instead.
   encoder reuse, credit accounting, teardown-by-tag.
 
   **Staged 2026-08-10 (P4a-P4e), every prerequisite now built:**
-  - **P4a — the pipeline data plane** (in progress): the tag, the payload
+  - **P4a — the pipeline data plane** — **built (2026-08-10)**: the tag, the payload
     codecs for BATCH/EOF/CREDIT/CANCEL/ERROR, per-edge credit accounting
     (initial 4 `[PROPOSED]`, grant-on-drain, never send without one), and
     the batch builder over the KWP row encoder with the 32 KiB
@@ -243,10 +243,13 @@ the core serve a message instead.
     key operand, residuals, range, projection set), no
     statement-text-as-descriptor interim - the same refusal §4 makes for
     an interim batch format, for the same reason.
-  - **P4b — the remote step server**: an owning core executes an opened
+  - **P4b — the remote step server** — **built (2026-08-10)**: an owning core executes an opened
     step against its local state and streams batches under credit, EOF at
     end, ERROR with the D9 mapping. Single-step chains first.
-  - **P4c — the session side**: the dispatcher (a coroutine since
+  - **P4c — the session side** — **built (2026-08-10)**, and the
+    end-to-end test is the engine's first cross-core statement (a star
+    SELECT against an owner_core=1 relation, served remotely, reply
+    byte-identical to the local path): the dispatcher (a coroutine since
     2026-08-05) awaits remote batches for a single-relation remote read
     and frames the reply; `CheckReadAffinity`'s refusal narrows to the
     shapes the pipeline cannot yet run.
