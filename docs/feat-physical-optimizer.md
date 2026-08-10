@@ -508,8 +508,14 @@ What it fixes, exactly:
 - **The DECAYING onset's cap** at `log2(frequency × 256)` half-lives,
   independent of the saved-pages factor and T_amort. At the shipped
   T_amort = 64 the honest onset lands ~1.3 half-lives *before* the cap,
-  so this is a cliff one doubling away rather than a live defect; at
-  T_amort ≥ 256 it bites. Removing it is what lets the window be widened
+  so this is a cliff one doubling away rather than a live defect. **The
+  crossover is measured at T_amort = 130** (`bench/results-cabin-optimizer-days.md`
+  Part III, a controlled A/B against a pre-fix binary), which is nearer
+  the shipped window than the 256 first estimated here — the cliff is
+  one doubling away, not two. Post-fix the onset tracks `log2(T_amort)`
+  as the model says (+6.5 and +11.5 half-lives at windows of 4,096 and
+  100,000, against +6.0 and +10.6 predicted); pre-fix it saturated flat
+  (+1.0 and +1.5). Removing the cap is what lets the window be widened
   at all.
 - **Budget-swap victim ordering** among incumbents whose scores have
   both underflowed.

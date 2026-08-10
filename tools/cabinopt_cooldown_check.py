@@ -38,6 +38,28 @@ drift.
     ./tools/cabinopt_cooldown_check.py \
         --arm amort1:15661:1 --arm amort64:15662:64 \
         --half-life 1 --silence-seconds 200 --json cool.json
+
+**The DECAYING onset is the second thing this driver measures**, and since
+2026-08-10 it is reported against a prediction that needs no calibration.
+The controller enters DECAYING when `B < theta_drop x C`, where B decays on
+the R1 clock and `C = P_rel / T_amort` does not, so
+
+    onset(T_amort) - onset(T_amort') = log2(T_amort / T_amort') half-lives
+
+exactly - every workload-dependent term (the accumulated frequency at the
+last probe, the relation's page count, theta_drop) cancels in the
+difference. The arm with the smallest window is taken as the reference and
+every other arm's onset is printed against that prediction. Arms may
+therefore differ in `amort_windows` alone and still be a quantitative test
+rather than a qualitative one; running the same window on two *binaries*
+(different ports, same config) is how that becomes an A/B.
+
+`AMORT` and the optional `COOLDOWN` field are what the arm's config sets -
+the driver cannot read a key back, so both are stated. Since the cooldown
+became its own key (`cabin_optimizer_cooldown_half_lives`, default 128) the
+predicted DROP is that number of half-lives and no longer `2 x AMORT`;
+omitting the field keeps the old expression, which is what a pre-decoupling
+server does.
 """
 
 import argparse
@@ -65,9 +87,13 @@ def abort(message, reply=None):
 
 
 class Arm:
-    def __init__(self, name, host, port, amort, timeout):
+    def __init__(self, name, host, port, amort, timeout, cooldown=None):
         self.name = name
         self.amort = amort
+        # Whole decay half-lives of DECAYING dwell before a DROP. Its own
+        # server key since 2026-08-10; `None` means "read it the old way",
+        # i.e. the `2 x T_amort` expression a pre-decoupling build fuses.
+        self.cooldown = cooldown
         try:
             self.conn = ServerConnection(host, port, timeout=timeout)
         except OSError as e:
@@ -119,10 +145,14 @@ def load(arm, table, rows, seed):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--host", default=DEFAULT_HOST)
-    ap.add_argument("--arm", action="append", default=[], metavar="NAME:PORT:AMORT",
+    ap.add_argument("--arm", action="append", default=[],
+                    metavar="NAME:PORT:AMORT[:COOLDOWN]",
                     help="one server per arm; AMORT is what its config sets "
-                         "cabin_optimizer_amort_windows to (used only to "
-                         "print the predicted cooldown)")
+                         "cabin_optimizer_amort_windows to (the DECAYING-onset "
+                         "prediction reads it), and the optional COOLDOWN is "
+                         "cabin_optimizer_cooldown_half_lives - omitted, the "
+                         "predicted DROP falls back to the pre-decoupling "
+                         "2 x AMORT")
     ap.add_argument("--half-life", type=float, required=True,
                     help="the servers' decay_half_life in seconds; both arms "
                          "must share it or the comparison is meaningless")
@@ -143,10 +173,11 @@ def main():
     arms = []
     for spec in args.arm:
         parts = spec.split(":")
-        if len(parts) != 3:
-            abort(f"--arm wants NAME:PORT:AMORT, got '{spec}'")
+        if len(parts) not in (3, 4):
+            abort(f"--arm wants NAME:PORT:AMORT[:COOLDOWN], got '{spec}'")
         arms.append(Arm(parts[0], args.host, int(parts[1]), int(parts[2]),
-                        args.timeout))
+                        args.timeout,
+                        int(parts[3]) if len(parts) == 4 else None))
     if len(arms) < 2:
         abort("two arms minimum: the control is the measurement")
 
@@ -203,20 +234,22 @@ def main():
     # ---- the report -------------------------------------------------------
     print(f"cooldown check: {args.rows}-row relation, decay_half_life="
           f"{args.half_life}s, silence up to {args.silence_seconds}s")
-    print(f"{'arm':10s} {'amort':>6s} {'ACTIVE@warm':>12s} {'DECAYING@sil':>13s} "
+    print(f"{'arm':14s} {'amort':>7s} {'ACTIVE@warm':>12s} {'DECAYING@sil':>13s} "
           f"{'DROP@sil':>9s} {'observed cd':>12s} {'predicted cd':>13s}")
     rows_out = []
     for arm in arms:
-        predicted = 2 * arm.amort * args.half_life
+        cooldown_hl = arm.cooldown if arm.cooldown is not None else 2 * arm.amort
+        predicted = cooldown_hl * args.half_life
         observed = (round(arm.t_drop - arm.t_decaying, 2)
                     if arm.t_drop is not None and arm.t_decaying is not None
                     else None)
-        print(f"{arm.name:10s} {arm.amort:6d} {arm.t_active:11.2f}s "
+        print(f"{arm.name:14s} {arm.amort:7d} {arm.t_active:11.2f}s "
               f"{'-' if arm.t_decaying is None else f'{arm.t_decaying:12.2f}'}s "
               f"{'-' if arm.t_drop is None else f'{arm.t_drop:8.2f}'}s "
               f"{'-' if observed is None else f'{observed:11.2f}'}s "
               f"{predicted:12.1f}s")
         rows_out.append({"arm": arm.name, "amort_windows": arm.amort,
+                         "cooldown_half_lives": cooldown_hl,
                          "half_life_s": args.half_life,
                          "t_active_warm_s": arm.t_active,
                          "t_decaying_silence_s": arm.t_decaying,
@@ -226,16 +259,60 @@ def main():
                          "final": arm.trace[-1] if arm.trace else None,
                          "errors": arm.errors})
 
+    # ---- the DECAYING onset, against the calibration-free prediction ------
+    #
+    # B decays and C does not, so widening the window by a factor k pushes
+    # the onset back by exactly log2(k) half-lives. The reference arm is
+    # the narrowest window; everything workload-dependent cancels in the
+    # difference, so no fitted constant appears anywhere below.
+    ref = min((a for a in arms if a.t_decaying is not None),
+              key=lambda a: (a.amort, a.name), default=None)
+    if ref is not None:
+        import math
+        print(f"\nDECAYING onset vs the reference arm '{ref.name}' "
+              f"(amort={ref.amort}, onset {ref.t_decaying:.2f}s) - the model "
+              f"says log2(amort/{ref.amort}) half-lives later:")
+        print(f"{'arm':14s} {'amort':>7s} {'onset':>8s} {'d observed':>11s} "
+              f"{'d predicted':>12s} {'error':>8s}")
+        for arm in arms:
+            if arm.t_decaying is None:
+                print(f"{arm.name:14s} {arm.amort:7d} {'-':>8s}")
+                continue
+            d_obs = arm.t_decaying - ref.t_decaying
+            d_pred = math.log2(arm.amort / ref.amort) * args.half_life
+            print(f"{arm.name:14s} {arm.amort:7d} {arm.t_decaying:7.2f}s "
+                  f"{d_obs:10.2f}s {d_pred:11.2f}s {d_obs - d_pred:7.2f}s")
+            for row in rows_out:
+                if row["arm"] == arm.name:
+                    row["onset_delta_observed_s"] = round(d_obs, 2)
+                    row["onset_delta_predicted_s"] = round(d_pred, 2)
+                    row["onset_reference_arm"] = ref.name
+
     # The verdict is a comparison, not a threshold: the control must drop
     # and the test arm must not have dropped before its predicted cooldown.
+    # It is only *asked* when the silence window is long enough for the
+    # shortest predicted cooldown to land inside it - an onset-only run
+    # (every arm's cooldown longer than the silence) has no cooldown
+    # evidence to give, and reporting NO for it would be reporting the
+    # driver's own pacing as a failure.
     control = min(arms, key=lambda a: a.amort)
     test = max(arms, key=lambda a: a.amort)
+    shortest_cd = min((a.cooldown if a.cooldown is not None else 2 * a.amort)
+                      for a in arms) * args.half_life
+    cooldown_reachable = shortest_cd < args.silence_seconds
     live = (control.t_drop is not None and
             (test.t_drop is None or test.t_drop > control.t_drop))
-    print(f"\nkey reaches the live cooldown: "
-          f"{'YES' if live else 'NO'}  "
-          f"(control amort={control.amort} dropped at "
-          f"{control.t_drop}s; test amort={test.amort} at {test.t_drop}s)")
+    if cooldown_reachable:
+        print(f"\nkey reaches the live cooldown: "
+              f"{'YES' if live else 'NO'}  "
+              f"(control amort={control.amort} dropped at "
+              f"{control.t_drop}s; test amort={test.amort} at {test.t_drop}s)")
+    else:
+        live = None
+        print(f"\ncooldown verdict: NOT ASKED - the shortest predicted "
+              f"cooldown is {shortest_cd:.0f}s and the silence window is "
+              f"{args.silence_seconds:.0f}s, so no DROP was reachable. This "
+              f"run measures the DECAYING onset only.")
 
     if args.json:
         payload = {"meta": {"driver": "cabinopt_cooldown_check.py",
@@ -261,7 +338,11 @@ def main():
         print(f"\nERRORS: {errors}, first: "
               f"{next(a.first_error for a in arms if a.first_error)}",
               file=sys.stderr)
-    sys.exit(0 if live and not errors else 1)
+    # `live is None` means the cooldown question was not asked; the run
+    # still succeeds if every arm reached DECAYING, which is what an
+    # onset-only invocation came for.
+    ok = (all(a.t_decaying is not None for a in arms) if live is None else live)
+    sys.exit(0 if ok and not errors else 1)
 
 
 if __name__ == "__main__":

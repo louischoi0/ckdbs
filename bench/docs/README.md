@@ -300,24 +300,43 @@ the board, tape and zero-row probes is captured as evidence of the plan.
 The **amortization window is a server key, not a driver flag** — this
 scenario measures whatever `cabin_optimizer_amort_windows` the config sets,
 and `bench/results-cabin-optimizer-days.md` reports the same run at both 1
-and the shipped 64. Note that at a compressed half-life the DROP cooldown
-(`2 × T_amort` half-lives) can exceed the whole run: at `decay_half_life =
-5` and `T_amort = 64` it is 640 s against a 283 s three-day matrix, so no
-DROP is reachable and the retirement evidence has to come from
-`cabinopt_cooldown_check.py` below. Work that arithmetic out before
-choosing the pacing, not after reading an empty drops counter.
+and the shipped 64 (and, in its Part III, at 64 again on a later commit).
+Note that at a compressed half-life the DROP cooldown can exceed the whole
+run: it is `cabin_optimizer_cooldown_half_lives` (its own key since
+2026-08-10, default 128 — previously fused as `2 × T_amort`, which is the
+same number at the shipped window), so at `decay_half_life = 5` it is 640 s
+against a 283 s three-day matrix, no DROP is reachable, and the retirement
+evidence has to come from `cabinopt_cooldown_check.py` below. Work that
+arithmetic out before choosing the pacing, not after reading an empty drops
+counter.
 
-### `cabinopt_cooldown_check.py` — is `amort_windows` live, and is the cooldown the specified multiple?
+### `cabinopt_cooldown_check.py` — the DROP cooldown and the DECAYING onset, per configuration and per binary
 
-A two-arm behavioural check for one question the business-days matrix
-cannot answer: whether `cabin_optimizer_amort_windows` reaches the live
-controller's DROP cooldown or only its struct. Two servers identical except
-that key, warmed on the same hot probe over the same relation until each
-controller holds an ACTIVE Cabin of its own, then left in silence and
-polled. The control arm must go DECAYING and DROP within a couple of
-half-lives; the test arm must not drop for `2 × T_amort` half-lives after
-its own DECAYING onset. One run yields both facts — the key is live, and
-the cooldown is the specified multiple rather than some other number.
+A multi-arm behavioural check for the two lifecycle instants the
+business-days matrix cannot reach, because at any honest time compression
+they sit outside a 283 s run. N servers identical except for their
+`cabin_optimizer_*` keys, warmed on the same hot probe over the same
+relation until every controller holds an ACTIVE Cabin of its own, then left
+in silence and polled. It measures:
+
+- **the DROP cooldown** — how long a DECAYING entry is given to rebound.
+  The control arm must go DECAYING and DROP within a couple of half-lives;
+  a test arm with a longer cooldown must outlive it. One run yields both
+  facts: the key is live, and the cooldown is the number configured rather
+  than some other number.
+- **the DECAYING onset** — how long silence takes to push an ACTIVE Cabin
+  out of ACTIVE, reported against a prediction that needs no calibration.
+  `B` decays on the R1 clock and `C = P_rel / T_amort` does not, so
+  widening the amortization window by a factor k moves the onset by exactly
+  `log2(k)` half-lives; every workload-dependent term cancels in that
+  difference. The driver takes the narrowest-window arm as the reference and
+  prints observed-versus-predicted deltas for the rest.
+
+Running the **same** config against two ports served by two *different
+binaries* turns either measurement into an A/B — which is what
+`bench/results-cabin-optimizer-days.md` Part III does to show that the
+onset saturates at the Q24.8 underflow floor before the log-domain decay
+read and tracks `log2(T_amort)` after it.
 
 Nothing here is timed: every output is a wall-clock instant of a state
 transition or a counter, so there are no latencies and no percentiles. The
@@ -325,31 +344,44 @@ relation shape and row generator are **imported from
 `scenario4_cabinopt_days.py`** so the two cannot drift.
 
 The half-life is the affordability knob and is deliberately not what is
-under test — at `decay_half_life = 1` the ratified cooldown is 128 s
-instead of 21 h 20 m, and the ratio between the arms is unchanged. **Both
-arms must run the same half-life** or the comparison means nothing.
+under test — at `decay_half_life = 1` the shipped cooldown is 128 s
+instead of 21 h 20 m, and the ratio between the arms is unchanged. **Every
+arm must run the same half-life** or the comparison means nothing.
 
 ```bash
-# two configs differing in exactly one key, both decay_half_life = 1
+# cooldown: two configs differing in exactly one key, both decay_half_life = 1
 ./build-release/kds_server ~/bench-cabinopt-cool/a1.db  --port 15661 --config amort1.conf  &
 ./build-release/kds_server ~/bench-cabinopt-cool/a64.db --port 15662 --config amort64.conf &
 ./tools/cabinopt_cooldown_check.py \
-    --arm amort1:15661:1 --arm amort64:15662:64 \
+    --arm amort1:15661:1:2 --arm amort64:15662:64:128 \
     --half-life 1 --rows 10000 --warm-seconds 25 \
     --silence-seconds 200 --poll-seconds 1 --json cool.json
+
+# onset A/B: three windows x two binaries, same three config files on both
+./tools/cabinopt_cooldown_check.py \
+    --arm post-w64:15671:64:128     --arm post-w4096:15672:4096:128 \
+    --arm post-w100000:15673:100000:128 \
+    --arm pre-w64:15681:64:128      --arm pre-w4096:15682:4096:128 \
+    --arm pre-w100000:15683:100000:128 \
+    --half-life 1 --rows 10000 --warm-seconds 25 \
+    --silence-seconds 40 --poll-seconds 0.5 --json wide.json
 ```
 
 | flag | default | what it does |
 |---|---|---|
-| `--arm NAME:PORT:AMORT` | — | repeatable, two minimum (the control *is* the measurement). `AMORT` is only what the arm's config sets, used to print the predicted cooldown |
-| `--half-life S` | required | the servers' `decay_half_life`; the driver cannot read it back, so it is stated rather than inferred |
+| `--arm NAME:PORT:AMORT[:COOLDOWN]` | — | repeatable, two minimum (the control *is* the measurement). `AMORT` is the arm's `cabin_optimizer_amort_windows` — the onset prediction reads it — and the optional `COOLDOWN` is its `cabin_optimizer_cooldown_half_lives`. The driver cannot read a key back, so both are stated; omitting `COOLDOWN` falls back to the pre-decoupling `2 × AMORT`, which is what a pre-2026-08-10 build fuses |
+| `--half-life S` | required | the servers' `decay_half_life`; stated, not inferred |
 | `--rows N` | 10000 | rows in the probed relation; sets `P_rel` and so the cost floor `P_rel / T_amort` printed as `cost_q16` |
 | `--warm-seconds` / `--warm-block` | 20 / 60 | upper bound on the warm phase and probes per arm per interleave block; the phase ends early once every arm is ACTIVE |
-| `--silence-seconds` / `--poll-seconds` | 200 / 1 | the silence window and the `SHOW CABIN_OPTIMIZER` poll cadence. The poll bounds the resolution: an observed cooldown is accurate to ±1 poll |
-| `--rows`, `--suffix`, `--seed`, `--timeout`, `--json` | | as the other drivers |
+| `--silence-seconds` / `--poll-seconds` | 200 / 1 | the silence window and the `SHOW CABIN_OPTIMIZER` poll cadence. The poll bounds the resolution: an observed instant is accurate to ±1 poll, and is biased late by up to one poll plus one snapshot interval |
+| `--suffix`, `--seed`, `--timeout`, `--json` | | as the other drivers |
 
-Exit status is 0 only if the control dropped and the test arm outlived it,
-so the check is usable as a gate. The JSON carries every poll's full
+The cooldown verdict is **only asked when it is reachable**: if the
+shortest predicted cooldown exceeds `--silence-seconds`, the driver says so
+and reports the onset alone, rather than printing a failure that is really
+its own pacing. Exit status is 0 when the cooldown verdict passes, or —
+in an onset-only run — when every arm reached DECAYING, so the check is
+usable as a gate either way. The JSON carries every poll's full
 `SHOW CABIN_OPTIMIZER` capture, which is where the per-entry B/C decay
 curve and the score's Q24.8 underflow floor are readable.
 

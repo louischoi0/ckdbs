@@ -3,7 +3,9 @@
 One number — `cabin_optimizer_amort_windows`, the `T_amort` of
 `docs/feat-physical-optimizer.md` §II.4 — decides whether a Cabin lives for
 a session or for a week, and this document measures the same three-day
-workload at both settings it has had.
+workload at both settings it has had, then measures the shipped setting a
+second time to check that a change to how the controller scores retirement
+left it where it was.
 
 - **Part I — `T_amort = 1`** (measured 2026-08-10 06:39–06:53 UTC at
   `7200fa2`, the pre-ratification default). The lifecycle is a nightly
@@ -13,10 +15,18 @@ workload at both settings it has had.
   night, `DECAYING → ACTIVE` morning recovery fires for the first time
   under traffic, and the autonomous arm's throughput catches the declared
   arm's by day 3.
+- **Part III — `T_amort = 64` at `ea14b3c`** (measured 2026-08-10
+  12:48–13:01 UTC), after three scoring changes designed to be
+  behaviour-neutral at the shipped configuration. It is a **reproduction
+  measurement**: the same workload, the same setting, a later engine. It
+  also carries the one place those changes are *not* neutral — a
+  wide-amortization-window A/B against the pre-change binary.
 
-The two parts run the same driver, the same seeds, the same statement
-stream and the same arms, so the tables are comparable line for line. Each
-part carries its own stamp; neither describes the other's engine state.
+Each part carries its own stamp and describes only its own engine state.
+Parts I and II differ in **configuration** and Part III in **commit**, so
+Part III's tables are written to stand alone and its Part II comparison is
+labelled for what it is: a reproduction check against a recorded prior run,
+not a claim about either engine relative to the other.
 
 ---
 
@@ -975,3 +985,647 @@ setup on two servers rather than a business-day one. A scenario that wants
 a measured weekend needs `overnight_seconds` above
 `2 × T_amort × decay_half_life`, which at any honest compression is a run
 several times longer than this one.
+
+---
+
+# Part III — the same window at `ea14b3c`: a scoring change that moved nothing, and the one place it moves everything
+
+Three commits since Part II's engine state changed how the cabin
+optimizer *scores*, and all three were designed to change no behaviour at
+the shipped configuration. This part is the measurement that turns that
+design intent into a result. It has two arms and they answer different
+questions:
+
+- **the reproduction** — the identical three-day matrix at the identical
+  `T_amort = 64`, run twice, against Part II's recorded figures; and
+- **the wide-window A/B** — the one configuration region where the
+  changes are *supposed* to bite, measured on both the new binary and the
+  pre-change one, so the difference is observed rather than asserted.
+
+Four findings:
+
+1. **The reproduction is exact, and "exact" is not a figure of speech.**
+   Every structural outcome of the run is identical: 5 CREATEs, 0 DROPs, 0
+   HEALs, 0 failures over 546 controller ticks; `board_a` entering
+   DECAYING in day 2's ninth interleave block at `B/C = 0.25` and
+   recovering to ACTIVE in day 3's **third** block keeping `cabin_id = 1`;
+   2,091 entries at day-1 close and 4,964 at run end. Of the 29 per-day
+   per-relation hit/miss cells `SHOW CABINS` reports, **27 are
+   bit-identical to Part II's** and the other two — both on day 1 — differ
+   by two probes and by one.
+2. **The throughput deltas are a session offset, not an engine effect.**
+   The `off` arm — which has no Cabin, no controller and no code on any
+   changed path — reads **−1.8 %, −1.8 %, −2.3 %** against Part II across
+   the three days. Every other arm-day sits within ±1.2 points of that
+   same offset. Subtract the meter and the on and declared arms moved by
+   nothing; the run-to-run spread between the two repeats inside each part
+   is 4–6 %, several times larger than any cross-part delta.
+3. **The wide-window arm is where the fix is real, and the A/B measures
+   it.** Time-to-DECAYING is supposed to scale as `log2(T_amort)`. On the
+   **pre-fix** binary it does not: widening the window 64 → 4,096 → 100,000
+   moves the onset by +1.0 s and +1.5 s where the model demands +6.0 and
+   +10.6 — it saturates, because a Q24.8 benefit underflows to zero (at
+   14.1 half-lives for this warm-up's accumulated frequency) and the old
+   rule retired anything that read zero. On the
+   **post-fix** binary the same three configurations give +6.5 s and
+   +11.5 s. Both binaries agree to **13.04 s against 13.04 s** at the
+   shipped window, which is the neutrality claim measured directly rather
+   than argued.
+4. **What the exact reproduction licenses.** A scoring change on the
+   retirement path — a new decision domain, a new config key, and a new
+   eviction ranking — was made without disturbing a measured 283-second,
+   three-arm, five-relation workload in any of its 63 per-day latency
+   distributions, its lifecycle, its hit rates or its replies. The
+   mechanism that bought that is stated in the code and confirmed here:
+   the log domain is consulted **only where the linear form has
+   underflowed**, so at any configuration where linear still has
+   resolution the new code is unreachable.
+
+## Run stamp
+
+| | |
+|---|---|
+| executed | 2026-08-10, 12:48–13:01 UTC (run 2 12:48:54, run 1 12:53:56, wide-window A/B 12:59:01, PostgreSQL twin 13:00) |
+| branch / commit | `feat-assertion` @ **`ea14b3c`** (`Merge origin/main into feat-assertion (decay log-read line)`, committed 2026-08-10T10:44:36Z) |
+| second binary measured | **`b803b9b`** (`Merge origin/main into feat-assertion (cooldown decoupling line)`, committed 2026-08-10T09:44:04Z) — the pre-fix baseline for the wide-window A/B only. It carries the decoupled cooldown key and **not** the log-domain read, which is what isolates the change under test from the one before it |
+| tree | dirty at write time with this task's own additions only: `tools/cabinopt_cooldown_check.py`, `bench/docs/README.md`, four `bench/results/*.json` and this section. Nothing links into `kds_server`; the tree was clean when both binaries were built |
+| binary provenance (post-fix) | `build-release/kds_server`, Release, mtime **10:47:14 UTC**, which is *after* HEAD's commit timestamp (10:44:36). `find include src CMakeLists.txt -newer build-release/kds_server` is empty and `cmake --build --target kds_server` re-run at the start of this session compiled nothing and relinked nothing. The binary is at HEAD |
+| binary provenance (pre-fix) | `~/kds-prefix-src/build-release/kds_server`, Release, built 12:40 UTC from a `git archive b803b9b` extraction made at 12:34 — so the source tree is that commit by construction, with no working-tree state in it. Configured with `-DCMAKE_BUILD_TYPE=Release`, the same flags as the post-fix build |
+| host / device | EC2, 2 vCPU; every data file under `~/bench-cabinopt-days3/` and `~/bench-cabinopt-wide/` on the EBS root volume (`nvme0n1p1`, **xfs — not tmpfs**), ~5 MB per business-days file at run end |
+| machine state | a concurrent `kds_tests` Release build (two `cc1plus` on both vCPUs) was running when this task started and **was waited out**: no measurement began until 60 consecutive seconds of zero compiler processes and 1-minute load < 0.8. Measured at each boundary: before run 2 load 0.54 / after 0.25, after run 1 0.55, before the A/B 0.50, after 0.59; `cc1plus = 0` at all five. The in-run evidence is the `off` arm, flat at 608/608/599 (run 2) — Part I's discarded episode read 203 against 623 on the same arm under a live build |
+| server config | one file for all three arms, `~/bench-cabinopt-days3/days64.conf`: `cabin_optimizer = off` at boot, `cabin_optimizer_snapshot_interval_ms = 500`, `cabin_optimizer_amort_windows = 64`, **`cabin_optimizer_cooldown_half_lives = 128`**, `decay_half_life = 5`. Everything else default: `cores = 1`, `durability = group`, `cabins = on`, θ_create 3.0, θ_drop 0.5, confirm 3, page budget 1024. The cooldown key is named explicitly although 128 is its default, because it is a **new** key and a stamp should read off the file; 128 is exactly what Part II's fused `2 × T_amort` expression yielded at `T_amort = 64`, so the file is effectively identical to Part II's `days64.conf` |
+| arms | identical to Parts I and II — `off` (no Cabin ever), `on` (`SET CABIN_OPTIMIZER ON` at day-1 open), `declared` (`CREATE CABIN` on all five symbol columns before day 1, optimizer off). One server process and one **fresh data file per arm per run** |
+| runs | run 2 = seed 20260811 (**primary**), run 1 = seed 20260810 (repeat); 283.1 s and 283.2 s wall, **0 client errors, 0 pacing overruns** in both |
+| drivers | `tools/scenario4_cabinopt_days.py` **unchanged and invoked with default flags**, including the default `--suffix a`, so every statement in this part is byte-identical to the statement Part II measured. `tools/pg_scenario4_cabinopt_days.py` unchanged. `tools/cabinopt_cooldown_check.py` gained an optional per-arm cooldown field and a calibration-free DECAYING-onset table; both are documented in `bench/docs/README.md` |
+| raw data | `bench/results/cabinopt-days-p3-run1.json`, `-run2.json`, `-pg.json`, and `bench/results/cabinopt-wide-window-ab.json` |
+
+### What actually changed between the two engine states
+
+The three commits the reproduction is about are `1baf0cc` (the cooldown
+becomes its own key, defaulting to 128 — exactly `2 × 64`), `897d887`
+(`decay.hpp`'s `Log2ValueAt`, a range-preserving log-domain read consulted
+only where the linear `ValueAt` has underflowed) and the log-domain
+eviction ranking in `OptimizerSignals` that rode with it. They are not the
+whole delta, and saying so is part of reading the result: `ea14b3c` is a
+merge, so `6ee1ce4..ea14b3c` also carries the KWP v0 load endpoint, the
+crosscore P4a pipeline data plane and step-descriptor codec, row-id
+leasing, placement rotation, T3's `ChainAppendBatch`, and K-M3's
+compile-time refusal of a pk `UPDATE`.
+
+Exactly one of those touches a path this workload takes: `a1d8440`, which
+splits parse from execute on the INSERT path. That is the `open` phase, and
+the open phase's p50 is flat (see the noise-floor paragraph). Everything
+else is a new endpoint that is never started, a new function that is never
+called, a code path gated behind `cores > 1`, or a compile-time refusal of
+a statement this workload does not issue.
+
+## The scenario and the time compression — unchanged
+
+Five BTREE relations of `(id, symbol varchar, qty, price)`: two 10,000-row
+**boards** and three **tapes** of 200 / 1,000 / 10,000 rows (the row-set
+sweep), each symbol matching exactly 10 rows at load. Per day: **open**
+(240 logged inserts into the day's hot board), **trading** (a 45 s
+wall-paced session — 2,400 hot-board equality probes per arm drawn 80/20
+over 8 hot symbols, 396 probes per tape with 6 hot values, 240 pk-lookup
+controls), **close** (COUNT / SUM / GROUP BY full scans), **overnight**
+(45 s idle, the on arm polled every 3 s). Arms interleave per block inside
+every phase with one drawn plan replayed on all three. Boards rotate
+a-b-a with day 3's hot symbols disjoint from day 1's; tape hot *values*
+rotate disjointly while the shape stays hot.
+
+**The compression mapping is unchanged from Parts I and II and is repeated
+here so this part stands alone.** `decay_half_life` runs at 5 s against
+the 600 s default — **120×**, so one simulated hour is 30 wall seconds and
+the 45 s session and 45 s overnight are 1.5 simulated hours each. The
+snapshot interval runs at 500 ms against the 10 s default (~90 controller
+ticks per session against ~2,340 for a real 6.5 h day). The unit the
+lifecycle rules consume is the **half-life**: the compressed night is 9,
+a real 17.5 h overnight at the shipped half-life is ~105, and both sit
+under the 128-half-life cooldown, so both end in survival and the
+compressed one survives a fortiori. At this half-life the cooldown is
+2 × 64 × 5 = **640 wall seconds**, longer than the whole 283 s matrix, so
+**a DROP was arithmetically impossible inside this matrix before it
+started** — the same statement Part II makes, and the reason the
+retirement question is measured separately below.
+
+## The reproduction: throughput
+
+Busy-time TPS (timed ops ÷ summed statement latencies, single connection
+per arm, because the sessions are wall-paced and wall TPS would measure
+the pacing), 4,080 timed ops per arm per day. **Run 2, the primary**, with
+Part II's recorded run-2 figures beside each column:
+
+| day | off | (Part II) | on | (Part II) | declared | (Part II) | on/off | on vs declared |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 608 | 619 | 1,673 | 1,717 | 1,797 | 1,850 | 2.75× | −6.9 % |
+| 2 | 608 | 619 | 1,811 | 1,837 | 1,888 | 1,858 | 2.98× | −4.1 % |
+| 3 | 599 | 613 | **2,382** | 2,405 | 2,369 | 2,327 | **3.98×** | **+0.5 %** |
+
+The repeat (run 1, seed 20260810) against Part II's run 1:
+
+| day | off | (Part II) | on | (Part II) | declared | (Part II) | on/off | on vs declared |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 604 | 623 | 1,682 | 1,697 | 1,763 | 1,766 | 2.78× | −4.6 % |
+| 2 | 606 | 568 | 1,776 | 1,730 | 1,916 | 1,877 | 2.93× | −7.3 % |
+| 3 | 581 | 605 | 2,387 | 2,313 | 2,305 | 2,267 | 4.11× | **+3.5 %** |
+
+**Read the `off` arm first, because it is the drift meter.** It has no
+Cabin, no controller and no statement on any path the three commits
+touched, so whatever it moves by is what the *session* moved by. In run 2
+it reads −1.8 %, −1.8 %, −2.3 % against Part II. Every other arm-day in
+run 2 lands within 1.2 points of that: on −2.6 / −1.4 / −1.0 %, declared
+−2.9 / +1.6 / +1.8 %. Against a run-to-run spread of 4–6 % measured
+*inside* each part — Part II's own two runs disagree by 4.0 % on the
+day-3 on arm and by 6.2 % on day 2, and Part III's disagree by 0.2 % and
+2.0 % — none of these is a finding, and the ratio columns say it more
+plainly than the absolute ones: `on/off` reads 2.75 / 2.98 / 3.98 here
+against Part II's 2.77 / 2.97 / 3.93, within 1.3 % on every day.
+
+The day-3 crossing reproduces in both runs: the autonomous arm ends the
+third day **at or above** the declared arm (+0.5 % in run 2, +3.5 % in
+run 1, against Part II's +3.4 % and +2.0 %), where at `T_amort = 1` the
+declared arm led it by 38 %.
+
+## The reproduction: per-phase latency, run 2
+
+All values µs. **Day 1** (hot board `board_a`):
+
+| phase | ops | mean | p0 | p25 | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|---|---|---|
+| open[off] | 240 | 909.3 | 392.6 | 688.8 | 1,023.3 | 1,119.7 | 1,210.4 | 1,242 |
+| open[on] | 240 | 1,052.7 | 419.9 | 993.3 | 1,032.9 | 1,136.1 | 1,303.3 | 13,074 |
+| open[declared] | 240 | 1,087.2 | 921.3 | 1,023.8 | 1,052.8 | 1,299.9 | 1,640.4 | 2,926 |
+| board[off] | 2,400 | 2,218.1 | 1,997.7 | 2,064.1 | 2,087.2 | 2,913.7 | 3,313.2 | 10,628 |
+| board[on] | 2,400 | 712.6 | 87.7 | 150.1 | 159.4 | 2,701.3 | 3,335.5 | 11,927 |
+| board[declared] | 2,400 | 653.0 | 100.2 | 148.4 | 155.8 | 3,004.4 | 4,171.7 | 5,703 |
+| tape200[off] | 396 | 189.3 | 118.3 | 164.0 | 167.5 | 328.7 | 642.8 | 668 |
+| tape200[on] | 396 | 139.9 | 94.1 | 128.9 | 133.7 | 184.2 | 260.2 | 550 |
+| tape200[declared] | 396 | 137.6 | 94.5 | 128.6 | 132.9 | 181.8 | 228.0 | 342 |
+| tape1k[off] | 396 | 336.3 | 275.3 | 314.2 | 325.5 | 418.0 | 575.5 | 661 |
+| tape1k[on] | 396 | 184.2 | 95.0 | 130.4 | 134.6 | 392.5 | 528.0 | 812 |
+| tape1k[declared] | 396 | 163.8 | 94.6 | 129.0 | 133.4 | 412.2 | 489.5 | 927 |
+| tape10k[off] | 396 | 2,266.9 | 1,962.5 | 2,039.0 | 2,072.2 | 2,978.3 | 3,637.6 | 6,720 |
+| tape10k[on] | 396 | 733.6 | 99.5 | 133.8 | 139.2 | 2,740.2 | 4,127.8 | 4,334 |
+| tape10k[declared] | 396 | 667.1 | 85.6 | 130.9 | 138.4 | 2,925.1 | 4,013.6 | 4,410 |
+| pk[off] | 240 | 123.5 | 73.0 | 119.9 | 124.6 | 157.0 | 175.0 | 191 |
+| pk[on] | 240 | 125.8 | 75.4 | 120.2 | 124.6 | 154.2 | 171.6 | 254 |
+| pk[declared] | 240 | 128.6 | 91.5 | 120.2 | 124.9 | 156.1 | 175.8 | 198 |
+| close[off] | 12 | 2,370.9 | 1,499.2 | 1,514.1 | 1,913.2 | 4,112.7 | 4,112.7 | 4,113 |
+| close[on] | 12 | 2,236.5 | 1,501.1 | 1,516.2 | 1,554.3 | 4,071.3 | 4,071.3 | 4,071 |
+| close[declared] | 12 | 2,321.5 | 1,477.5 | 1,499.4 | 1,833.4 | 4,920.4 | 4,920.4 | 4,920 |
+
+**Day 2** (hot board `board_b` — the rotation day):
+
+| phase | ops | mean | p0 | p25 | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|---|---|---|
+| open[off] | 240 | 1,057.0 | 936.0 | 1,019.0 | 1,046.8 | 1,158.7 | 1,370.7 | 1,589 |
+| open[on] | 240 | 1,066.6 | 930.1 | 1,020.7 | 1,048.9 | 1,153.2 | 1,746.3 | 2,235 |
+| open[declared] | 240 | 1,047.0 | 932.7 | 1,018.1 | 1,040.9 | 1,118.6 | 1,246.7 | 1,401 |
+| board[off] | 2,400 | 2,225.8 | 2,017.8 | 2,074.1 | 2,095.8 | 2,964.5 | 3,460.3 | 11,856 |
+| board[on] | 2,400 | 680.7 | 105.1 | 150.7 | 158.8 | 2,256.2 | 3,102.4 | 12,283 |
+| board[declared] | 2,400 | 637.9 | 97.7 | 148.6 | 157.0 | 3,016.6 | 4,222.9 | 5,227 |
+| tape200[off] | 396 | 170.0 | 134.6 | 161.8 | 166.7 | 206.8 | 262.4 | 515 |
+| tape200[on] | 396 | 152.6 | 86.4 | 129.8 | 133.8 | 174.8 | 293.0 | 4,848 |
+| tape200[declared] | 396 | 136.7 | 85.3 | 129.4 | 132.9 | 164.1 | 198.3 | 360 |
+| tape1k[off] | 396 | 332.0 | 264.5 | 312.3 | 320.7 | 412.6 | 524.7 | 800 |
+| tape1k[on] | 396 | 170.4 | 95.2 | 129.3 | 134.3 | 396.1 | 606.5 | 1,300 |
+| tape1k[declared] | 396 | 156.4 | 95.6 | 129.7 | 134.1 | 399.8 | 448.9 | 590 |
+| tape10k[off] | 396 | 2,183.3 | 1,979.7 | 2,023.3 | 2,050.0 | 2,842.1 | 3,377.0 | 12,266 |
+| tape10k[on] | 396 | 444.5 | 98.2 | 131.6 | 136.8 | 2,215.4 | 3,101.2 | 3,600 |
+| tape10k[declared] | 396 | 516.2 | 84.9 | 131.0 | 136.3 | 2,904.8 | 4,058.9 | 4,401 |
+| pk[off] | 240 | 125.4 | 74.4 | 121.2 | 125.6 | 155.5 | 168.2 | 179 |
+| pk[on] | 240 | 131.9 | 78.1 | 120.5 | 123.1 | 161.6 | 206.7 | 1,171 |
+| pk[declared] | 240 | 129.3 | 77.1 | 119.6 | 125.0 | 166.0 | 256.5 | 578 |
+| close[off] | 12 | 2,224.5 | 1,498.3 | 1,525.3 | 1,599.1 | 3,896.2 | 3,896.2 | 3,896 |
+| close[on] | 12 | 2,296.4 | 1,525.6 | 1,530.7 | 1,561.6 | 4,678.8 | 4,678.8 | 4,679 |
+| close[declared] | 12 | 2,295.5 | 1,562.1 | 1,579.2 | 1,657.6 | 4,070.8 | 4,070.8 | 4,071 |
+
+**Day 3** (`board_a` again, hot symbols disjoint from day 1's — the
+morning-recovery day):
+
+| phase | ops | mean | p0 | p25 | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|---|---|---|
+| open[off] | 240 | 1,063.3 | 946.0 | 1,021.1 | 1,050.4 | 1,175.5 | 1,319.1 | 1,656 |
+| open[on] | 240 | 1,060.5 | 934.8 | 1,027.1 | 1,053.0 | 1,132.9 | 1,282.1 | 1,625 |
+| open[declared] | 240 | 1,055.3 | 962.6 | 1,019.0 | 1,042.1 | 1,168.1 | 1,345.1 | 1,485 |
+| board[off] | 2,400 | 2,263.7 | 2,058.0 | 2,114.2 | 2,138.9 | 2,999.0 | 3,451.5 | 6,211 |
+| board[on] | 2,400 | **458.7** | 99.9 | 149.6 | 156.6 | 2,273.0 | 3,128.9 | 4,711 |
+| board[declared] | 2,400 | 446.0 | 97.8 | 148.8 | 155.0 | 2,968.1 | 3,512.7 | 7,422 |
+| tape200[off] | 396 | 175.7 | 130.6 | 165.4 | 168.2 | 204.1 | 324.9 | 565 |
+| tape200[on] | 396 | 134.7 | 85.6 | 129.3 | 132.4 | 163.0 | 178.7 | 196 |
+| tape200[declared] | 396 | 140.4 | 88.3 | 130.4 | 134.2 | 165.2 | 236.9 | 660 |
+| tape1k[off] | 396 | 335.4 | 275.7 | 315.1 | 326.6 | 390.9 | 539.3 | 783 |
+| tape1k[on] | 396 | 146.9 | 95.9 | 129.3 | 133.1 | 318.5 | 408.4 | 473 |
+| tape1k[declared] | 396 | 144.6 | 96.3 | 128.8 | 130.7 | 177.3 | 476.4 | 624 |
+| tape10k[off] | 396 | 2,171.3 | 1,978.9 | 2,020.4 | 2,044.3 | 2,851.8 | 3,254.8 | 3,966 |
+| tape10k[on] | 396 | 473.0 | 85.6 | 130.8 | 137.0 | 2,121.8 | 2,843.2 | 3,191 |
+| tape10k[declared] | 396 | 559.4 | 98.8 | 133.0 | 136.8 | 2,910.4 | 3,748.8 | 4,481 |
+| pk[off] | 240 | 126.8 | 74.8 | 120.5 | 125.8 | 158.9 | 183.5 | 193 |
+| pk[on] | 240 | 128.1 | 76.2 | 119.7 | 123.9 | 156.8 | 178.1 | 200 |
+| pk[declared] | 240 | 124.7 | 82.4 | 119.1 | 121.7 | 153.7 | 186.1 | 317 |
+| close[off] | 12 | 2,912.9 | 1,467.7 | 1,537.3 | 2,085.1 | 6,371.8 | 6,371.8 | 6,372 |
+| close[on] | 12 | 2,344.1 | 1,491.3 | 1,503.0 | 1,883.7 | 4,244.4 | 4,244.4 | 4,244 |
+| close[declared] | 12 | 2,859.0 | 1,501.0 | 1,555.6 | 1,865.5 | 7,673.0 | 7,673.0 | 7,673 |
+
+The hot-board p50 is the headline row and it reproduces to within the
+floor established below:
+
+| day | off p50 | (Part II) | on p50 | (Part II) | declared p50 | (Part II) |
+|---|---|---|---|---|---|---|
+| 1 | 2,087.2 | 2,098.6 | 159.4 | 160.6 | 155.8 | 157.4 |
+| 2 | 2,095.8 | 2,099.1 | 158.8 | 160.5 | 157.0 | 158.6 |
+| 3 | 2,138.9 | 2,149.6 | 156.6 | 157.8 | 155.0 | 155.8 |
+
+**The noise floor, from inside the run.** The pk lookups touch no Cabin
+and are the control: p50 **121.7–125.8 µs across all nine arm-days, a
+4.1 µs spread**. Any p50 delta below ~4 µs in this part is not a finding —
+which covers every single cell of the table above, on and declared arms
+alike, and is why the day-3 on-versus-declared p50 (156.6 against 155.0)
+is reported as *the same number*. The close aggregates read whole
+relations through the scan path no Cabin serves: p50 1,554–2,085, with
+day 3's spread being the tail of a 12-op phase rather than an arm effect.
+The open inserts carry the write hook on two arms and not on the third:
+day-2 and day-3 p50 deltas are −8.3 to +2.6 µs on a ~1,045 µs fsync-bound
+statement — **no resolvable write-hook cost**, the third document in a row
+to reach that verdict, and the specific evidence that the INSERT
+parse/execute split named in the stamp cost nothing measurable here. Day
+1's `open[off]` is the one visibly odd cell in the matrix (p0 392.6, p25
+688.8 against a 1,023 p50): a burst of unusually fast fsyncs on the very
+first block written to a fresh file, present on `open[on]`'s p0 too and
+absent from run 1, so it is a device event on one arm's first block and
+moves no comparison.
+
+**The row-set sweep**, day 3, p50 in µs (`tape_200` / `tape_1k` /
+`tape_10k` hold 200 / 1,000 / 10,000 rows; `--tape-probes 396` per size
+per arm-day):
+
+| rows | off (walk) | on (served) | declared (served) | speedup |
+|---|---|---|---|---|
+| 200 | 168.2 | 132.4 | 134.2 | 1.27× |
+| 1,000 | 326.6 | 133.1 | 130.7 | 2.45× |
+| 10,000 | 2,044.3 | 137.0 | 136.8 | 14.9× |
+
+Fitting the three off-arm points gives **130 µs + 0.191 µs/row**, which
+predicts 321 µs at 1,000 rows against 327 measured; the served probe sits
+at 132–137 µs at every size, i.e. at the intercept. Part II's fit was
+135 µs + 0.19 µs/row. That is the same statement of what a Cabin does to a
+`FilterScan` — it deletes the per-row term and leaves the constant — and
+it *must* be unchanged, because none of the three commits is on a read
+path and `T_amort` decides which structures exist, never what one costs to
+use.
+
+## The reproduction: the lifecycle, as the controller reported it
+
+`SHOW CABIN_OPTIMIZER`, captured untimed at every phase boundary and every
+3 s overnight; t is wall seconds from run start (run 2). B/C is the
+per-entry `benefit_q16 / cost_q16`; θ_create 3.0, θ_drop 0.5, cooldown 640 s
+at this half-life. Part II's recorded instant for the same event is in the
+right-hand column.
+
+| t (s) | event | Part II |
+|---|---|---|
+| 10.4 | `SET CABIN_OPTIMIZER ON` at day-1 open; `ticks=0 managed=0` | 10.6 |
+| ≤ 19.5 | **CREATE ×4** — `board_a` (`cabin_id=1`, B/C 25,543) + all three tapes, inside the session's first 3 blocks | ≤ 19.7 |
+| 19.5–56.1 | ACTIVE, serving; **EXTENDs** (103 by day-1 close) as the 20 % uniform tail keeps observing values | 106 by close |
+| 59–101 | **overnight 1: nothing changes state.** All four ride their B/C down and every one stays above θ_drop = 0.5 | same |
+| 110.3 | day-2 trading: **CREATE ×1**, `board_b` (`cabin_id=5`). `board_a` still ACTIVE at B/C 13.3, now genuinely cold | 110.5 |
+| **132.9** | `board_a` **DECAYING** at **B/C 0.25** — and *not* dropped: 640 s of cooldown has 507 s to run | 133.1, B/C 0.25 |
+| 144–192 | `board_a` sits in DECAYING at B/C 0.00 (the Q24.8 score has underflowed) through the rest of day 2 and all of night 2, still holding its 2,091 entries | same |
+| **201.3** | day-3 trading, **block 3**: `board_a` **DECAYING → ACTIVE**, B/C 0.00 → 12,707, **`cabin_id=1` unchanged** — the morning recovery | 201.4, block 3 |
+| 223.7 | `board_b` **DECAYING** at B/C 0.25 as day 3's rotation leaves it cold; still serving, still not dropped | 223.9 |
+| 241–283 | overnight 3: `board_a` and all three tapes ACTIVE, `board_b` DECAYING. **No DROP anywhere in the run** | same |
+
+End state: `creates=5 extends=167 heals=0 drops=0 deferred=0 failures=0`,
+**546 ticks**, `pages_committed` 35 of the 1,024 budget, five managed
+entries. Part II: `creates=5 extends=172 heals=0 drops=0 deferred=0
+failures=0`, 546 ticks, 35 pages. Run 1 gives `creates=5 extends=169`,
+546 ticks, 33 pages against Part II's run 1 `creates=5 extends=164`, 545
+ticks, 32 pages — the EXTEND count is the only counter that moves at all,
+by 3 % in one direction in one run and 3 % in the other direction in the
+other, which is what a coverage-expansion counter driven by a wall-paced
+session does.
+
+**Every state transition in both runs lands in the same interleave block
+as Part II's, at the same `B/C`, keeping the same `cabin_id`:**
+
+| run | `board_a` DECAYING | `board_a` → ACTIVE | `board_b` DECAYING |
+|---|---|---|---|
+| Part III run 2 | t=132.9, d2 block 9, B/C 0.25 | t=201.3, d3 block 3, id 1 | t=223.7, d3 block 9, B/C 0.25 |
+| Part II run 2 | t=133.1, d2 block 9, B/C 0.25 | t=201.4, d3 block 3, id 1 | t=223.9, d3 block 9, B/C 0.25 |
+| Part III run 1 | t=133.0, d2 block 9, B/C 0.25 | t=201.4, d3 block 3, id 1 | t=223.8, d3 block 9, B/C 0.25 |
+| Part II run 1 | t=132.7, d2 block 9, B/C 0.25 | t=201.0, d3 block 3, id 1 | t=223.5, d3 block 9, B/C 0.25 |
+
+The four instants agree to 0.4 s on a 283 s run, which is the phase-boundary
+capture cadence and not a resolution of the transition itself.
+
+## The reproduction: hit rates, and the sense in which it is *exact*
+
+`SHOW CABINS` per day, hits/misses as per-day deltas. Auto Cabins observe
+at n=2, declared at n=1 (`feat-cabin.md`'s split, visible as
+`misses = observed` exactly on every declared row).
+
+| day | on: board | declared: board | on: tape 200/1k/10k | declared: tape 200/1k/10k |
+|---|---|---|---|---|
+| 1 | 81.4 % (1,791/410) | 83.5 % (2,005/396) | 92.3 / 85.7 / 79.4 % | 95.2 / 90.2 / 81.9 % |
+| 2 | 82.1 % (1,808/393) | 84.1 % (2,020/381) | 98.7 / 88.7 / 86.2 % | 99.7 / 93.0 / 87.2 % |
+| 3 | **87.2 %** (2,094/307) | 90.3 % (2,168/233) | 99.7 / 95.0 / 84.0 % | 100 / 96.5 / 85.5 % |
+
+Part II's table for the same run reads 81.3 % (1,789/412), 79.7 % on
+`tape_10k` day 1, and **every other cell of this table to the digit** —
+27 of the 29 `(arm, day, relation)` cells are bit-identical, and the two
+that are not — `board_a` and `tape_10k` on the on arm's day 1 — differ by
+two probes and by one. So do the derived structural
+counters: `board_a` holds 2,091 entries over 193 observed values at day-1
+close and 4,964 over 459 at run end, the declared arm 6,701 over 630, the
+on arm's whole store 9,156 entries against the declared arm's 13,503 —
+every one of those numbers is Part II's.
+
+That is stronger than "reproduced within noise", and the reason is worth
+naming: the workload is seeded and the observation rule is deterministic,
+so the only thing that can move a hit count is *when a CREATE lands
+relative to the probe stream*. It landed in the same block, so the counts
+did not move. Three probes, out of the 3,828 timed statements the on arm
+issued on day 1, are the entire measured consequence of the whole commit
+range on this workload's structural behaviour.
+
+`ANALYZE` confirms the plan on every day and arm: `FilterScan …
+pages=143–146` on off against `CabinProbe … cabin_optimizer=true,
+pages=2×rows` on the on arm (PHY06's managed mark), the declared arm's
+probe identical minus the mark.
+
+## The advisory-family contract
+
+18 verification statements per day — the eight hot board probes, six tape
+probes, a zero-row probe, two COUNTs and a SUM — executed on all three
+arms and compared **byte for byte**, through CREATE, EXTEND, DECAYING and
+recovery: **identical on every day of both runs (6/6 PASS, 108 statements
+executed on three arms each, 0 mismatches)**. A Cabin, however it was
+created and whatever state its controller thinks it is in, chooses where to
+look and never what is visible — and a change to how the controller scores
+retirement cannot reach that property, which is the point of measuring it
+anyway.
+
+## Where the latency goes
+
+The measured unit is one statement round trip from a Python client on a
+single connection. Server CPU is `/proc/<pid>/stat` deltas per interleave
+block, which is what client latency cannot resolve. Day-3 hot-board probe,
+run 2:
+
+| wait type | off (walk, 2,264 µs mean) | on (87 % served, 459 µs mean) | declared (90 % served, 446 µs mean) | how measured |
+|---|---|---|---|---|
+| server CPU | 2,167 µs (96 %) | **392 µs (85 %)** | **383 µs (86 %)** | per-block `/proc` deltas ÷ 2,400 ops |
+| client + socket | ~97 µs | ~67 µs | ~63 µs | remainder; consistent with the pk control (121.7–125.8 µs p50, itself containing a ~30 µs descent) and this harness's documented ~100 µs floor |
+| read (page-fetch) wait | 0 | 0 | 0 | every page resident after load; nothing evicts engine-wide, so a warm walk does no I/O |
+| durability / commit wait | n/a | n/a | n/a | probes are read-only. The open inserts are the durability row: ~1,050 µs p50, group-commit fsync on EBS (a batch of one is a batch), flat across arms |
+| lock / conflict wait | n/a | n/a | n/a | one connection per server; core-local latches have no contention at `cores = 1` |
+
+Part II's sharpest single number was day-3 server CPU at **388 (on)
+against 392 (declared)**. It reads **392 against 383** here — the arms are
+again indistinguishable, in the opposite order, 2.3 % apart on a meter
+whose resolution is one jiffy per read. Days 1 and 2 still separate them
+slightly (on 646 / 596 µs per probe against declared 587 / 571), the on
+arm paying its pre-CREATE walk on day 1 and a few more n=2 misses
+throughout — Part II read 629 / 613 against 567 / 563.
+
+What still cannot be decomposed with today's surfaces: the in-server split
+between queueing and execution (`docs/observability.md` is a proposal),
+and the per-probe split between a Cabin hit and the entry-set resolve
+behind it.
+
+---
+
+## The wide-window A/B: where the change is not neutral
+
+The reproduction above says the three commits changed nothing at the
+shipped configuration. That is only half a result, because a change that
+provably does nothing anywhere is a change nobody should have made. This
+arm measures the region where it does something, and measures it against
+the **pre-fix binary** rather than against a prediction.
+
+### The mechanism, stated so the measurement can falsify it
+
+A managed Cabin leaves ACTIVE when `B < θ_drop × C`, where `B` is decayed
+frequency times pages saved and `C = P_rel / T_amort` does not decay. Both
+were computed in 16.16 fixed point from a Q24.8 decay score, and **a Q24.8
+score underflows to exactly zero after `log2(F₀ × 256)` half-lives of
+silence** — at which point the old rule's first disjunct (`benefit == 0`
+decays regardless of cost) fired. So the onset was the *smaller* of the
+honest threshold crossing and that underflow cap:
+
+- honest onset ≈ `log2(F₀) + log2(T_amort) + log2(2(P_rel − P_cabin)/P_rel)`
+  half-lives, which **moves with the window**;
+- underflow cap = `log2(F₀) + 8` half-lives, which **does not**.
+
+At the shipped `T_amort = 64` the honest onset lands about one half-life
+*before* the cap, so the cap is latent. The exact crossover is
+**`T_amort = 130`** — the window above which even a Q24.8 frequency of 1,
+the smallest non-underflowed score there is, still clears `θ_drop × C`, so
+the linear comparison can never fire and only the underflow can. The
+log-domain read removes the cap
+by making the comparison a subtraction that never bottoms out, and is
+consulted only where the linear form has already reached zero. **The
+falsifiable prediction is therefore: pre-fix, the onset saturates one
+half-life past the `T_amort = 64` onset for every wider window; post-fix,
+it tracks `log2(T_amort)` without limit.**
+
+The prediction needs no fitted constant, because every workload-dependent
+term (`F₀`, `P_rel`, θ_drop) cancels in the difference between two windows
+on the same traffic: **onset(W) − onset(64) = log2(W/64) half-lives.**
+
+### The measurement
+
+`tools/cabinopt_cooldown_check.py`, six servers warmed together on one
+identical hot probe over one identical 10,000-row relation and then left
+in silence, polled every 0.5 s. Three amortization windows on each binary;
+`decay_half_life = 1 s`, so one half-life is one wall second and the onset
+is read straight off the clock. Everything else is default, cooldown
+included (128 half-lives = 128 s, longer than the 40 s silence window, so
+no arm can DROP and none did — this arm measures the onset only, and the
+driver refuses to render a cooldown verdict it did not have time to earn).
+
+| binary | commit | `T_amort` | `C = P_rel/T_amort` (pages) | ACTIVE at | **DECAYING at** | Δ vs W=64 | model Δ = log2(W/64) |
+|---|---|---|---|---|---|---|---|
+| post-fix | `ea14b3c` | 64 | 2.172 | 0.78 s | **13.04 s** | 0.00 s (ref) | — |
+| post-fix | `ea14b3c` | 4,096 | 0.0339 | 0.78 s | **19.56 s** | **+6.52 s** | +6.00 s |
+| post-fix | `ea14b3c` | 100,000 | 0.00139 | 1.28 s | **24.57 s** | **+11.53 s** | +10.61 s |
+| pre-fix | `b803b9b` | 64 | 2.172 | 1.28 s | **13.04 s** | 0.00 s | — |
+| pre-fix | `b803b9b` | 4,096 | 0.0339 | 1.28 s | **14.04 s** | **+1.00 s** | +6.00 s |
+| pre-fix | `b803b9b` | 100,000 | 0.00139 | 1.28 s | **14.54 s** | **+1.50 s** | +10.61 s |
+
+(The driver takes the single narrowest-window arm, `post-w64`, as the
+reference for every row; `pre-w64` measured the identical 13.04 s, so each
+binary is equally its own reference and the two readings coincide.)
+
+Three things fall out of that table and each is a separate claim.
+
+**The shipped window is untouched: 13.04 s against 13.04 s, on two
+different binaries, to the poll.** That is the neutrality claim measured
+rather than designed — the same relation, the same traffic, the same
+silence, the same instant. It is also the strongest single line in this
+document, because it is the reproduction result restated as a controlled
+experiment rather than as a session-to-session comparison.
+
+**The pre-fix binary saturates exactly where the arithmetic says it
+must.** Both wide arms land at 14.0–14.5 s regardless of a window that
+differs by a factor of 24 between them. Calibrating `F₀` off the reference
+arm (13.04 = log2(F₀) + 6 + 0.98 ⇒ F₀ ≈ 67) puts the predicted underflow
+cap at **log2(67) + 8 = 14.06 half-lives**, against 14.04 and 14.54
+measured. The saturation is not approximately the cap; it *is* the cap.
+
+**The post-fix binary tracks the model.** +6.52 s against +6.00 predicted
+and +11.53 against +10.61. The residual is systematic and accounted for:
+the reference arm's own onset is decided in the *linear* domain, where the
+frequency is floored to Q24.8, so it fires when the continuous score
+crosses 3 rather than its true threshold of 2.03 — `log2(3/2.03) = 0.56`
+half-lives early. Every log-domain arm therefore reads ~0.56 s late
+against it, plus up to 0.75 s of granularity from the 0.5 s poll and the
+250 ms snapshot cadence. Both residuals are inside that.
+
+The `C` column is the control for the other half of the key: it reads
+2.172, 0.0339 and 0.00139 pages, i.e. `139/64`, `139/4096` and
+`139/100000` exactly, and it is **identical on both binaries** — the cost
+side never changed, only the read of the benefit did.
+
+The practical reading for an operator: **before this change, raising
+`cabin_optimizer_amort_windows` past 130 bought nothing on the retirement
+side.** A Cabin left ACTIVE at the same moment whatever the window said,
+because the score it was being judged on had stopped existing. After it,
+the window means what §II.4 says it means at every value the config
+accepts. Nobody was running a window that wide — the shipped default is
+64 and the latent margin there is about one half-life — so this is a
+latent-defect fix, not a regression fix, and this measurement is the
+distinction made explicit.
+
+---
+
+## Against PostgreSQL
+
+PostgreSQL 17.10, the scratch cluster of `tools/pg_setup.sh` on port 15433
+**at defaults** — no tuning, on purpose — same five relations, same rows
+from the same generator and the same seed, same day-1 statement stream,
+via `tools/pg_scenario4_cabinopt_days.py`. **Re-run this session** (13:00
+UTC, on the same quiet machine, immediately after the KDS arms) rather
+than quoted from Part II. The twin runs **one** unpaced day: at defaults
+PostgreSQL builds nothing for the hot predicate and retires nothing, so
+day 300's plan is day 1's and the rotation axis has nothing to act on.
+`EXPLAIN (ANALYZE, BUFFERS)` confirmed `Seq Scan` for the board probe (76
+buffers), the tape probe (74) and the zero-row probe (76 — absence costs
+PostgreSQL a full scan, where an observed Cabin value answers from the
+entry set without opening the relation).
+
+| phase | ops | mean | p0 | p25 | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|---|---|---|
+| open[pg] | 240 | 1,147.6 | 1,044.1 | 1,109.6 | 1,137.4 | 1,231.4 | 1,317.4 | 2,092 |
+| board[pg] | 2,400 | 1,570.8 | 1,388.6 | 1,470.3 | 1,498.4 | 2,072.5 | 2,289.3 | 6,121 |
+| tape200[pg] | 396 | 258.2 | 198.1 | 242.2 | 244.2 | 313.1 | 482.6 | 602 |
+| tape1k[pg] | 396 | 364.6 | 325.1 | 344.8 | 347.6 | 448.4 | 532.2 | 595 |
+| tape10k[pg] | 396 | 1,621.2 | 1,474.9 | 1,496.4 | 1,516.1 | 2,161.3 | 2,667.8 | 3,644 |
+| pk[pg] | 240 | 202.4 | 167.6 | 189.6 | 190.9 | 216.9 | 274.3 | 1,703 |
+| close[pg] | 12 | 2,993.9 | 889.7 | 1,037.6 | 1,482.4 | 6,862.9 | 6,862.9 | 6,863 |
+
+Side by side on p50, KDS day 3 (each column carries its own client's
+socket cost — ~100 µs KDS, ~150–190 µs PG per the pk controls):
+
+| shape | KDS walk | PG seq scan | KDS served (on) | served vs PG |
+|---|---|---|---|---|
+| board 10k | 2,138.9 µs | 1,498.4 µs | 156.6 µs | **9.6×** |
+| tape 10k | 2,044.3 µs | 1,516.1 µs | 137.0 µs | **11.1×** |
+| tape 1k | 326.6 µs | 347.6 µs | 133.1 µs | **2.6×** |
+| tape 200 | 168.2 µs | 244.2 µs | 132.4 µs | **1.8×** |
+
+The two honest notes from Parts I and II both repeat, unchanged. Before
+any Cabin exists, **PostgreSQL's 10k walk beats KDS's by 26–30 %** —
+74–76 buffers against 143–146 pages for the same rows, the 64-byte
+`inline_cell_width` padding tax on row density. And an operator who
+declared an index on either engine would beat both walks; the at-defaults
+comparison is the honest one for a feature whose point is acting *without*
+the operator, which is also why the twin has no third arm.
+
+The insert row moved again and again should not be read as an engine
+result: PostgreSQL's open phase measured 1,137 µs p50 here, 521 µs in Part
+II's twin and 1,144 µs in Part I's, while KDS's stayed at ~1,040–1,050 µs
+in all three. The device is the same EBS volume and neither engine
+changed; the fsync-bound write path on this host is not stable across
+sessions, so the insert row is comparable *within* a session and not
+across them. Every read shape above is served from resident pages and does
+no I/O, which is why the probe comparisons are stable and the insert one is
+not. KDS's own insert p50 sits at 1,033–1,056 µs across all eighteen
+arm-days of Parts II and III, so the instability is the twin's client and
+the host's fsync path together rather than something either engine's write
+path is doing.
+
+---
+
+## What this run says about the engine
+
+**A change to the retirement path can be made without disturbing a
+measured workload, and this run says what buys that.** The claim is not
+"the numbers were close". It is that the run's *structure* — 5 CREATEs, 0
+DROPs, 546 ticks, the DECAYING onset at `B/C = 0.25` in day 2's ninth
+block, the recovery in day 3's third, 2,091 entries becoming 4,964, 27 of
+29 hit/miss cells to the digit — came out identical, and that the two
+binaries put the same relation into DECAYING at the same 13.04 s under a
+controlled silence. What made that possible is a design property, not
+care: the log-domain read is consulted **only where the linear form has
+underflowed to zero**, so at every configuration where linear still has
+resolution the new code is unreachable by construction. That is a pattern
+worth naming, because the alternative — replacing the linear read outright
+with a strictly better one — would have been defensible, cheaper, and
+would have moved every threshold decision in the engine by a rounding
+error nobody could have bounded. **A strictly-better projection is still a
+different projection.**
+
+**The `off` arm is the instrument this document should have named
+earlier.** Cross-session comparison is the hardest thing a benchmark
+document does, and this run has a clean answer to it: an arm that shares
+the client, the statements, the pacing, the device and the machine with
+every other arm, and shares no code with the thing under test. It read
+−1.8 / −1.8 / −2.3 % against Part II, and every other arm-day landed
+within 1.2 points of that. Without it, a −2.6 % on the day-1 on arm is an
+unfalsifiable shrug; with it, it is the session offset and nothing else.
+Any future part of this document should quote the off arm's drift before
+quoting anything else.
+
+**The 16-half-life resolution floor Part II found is now a boundary the
+code knows about, and the boundary is where the model gets interesting.**
+Part II's closing observation was that beyond ~16 half-lives of silence the
+controller has no evidence at all, only a clock — "DROP is a timeout, not
+a judgement". The wide-window A/B is the measured consequence of that
+sentence: at `T_amort ≥ 130` the *onset* was a timeout too, and one that
+ignored the operator's configured window entirely. The fix restores
+proportionality between demonstrated value and survival time across the
+whole configured range, which is exactly the property a promotion
+comparison (`docs/feat-physical-optimizer.md` R9) or a per-consumer
+half-life would have to be built on. What it does **not** restore is
+evidence: `Log2Q16` preserves the *ordering* of two cold scores forever,
+so the controller can now say which of two dead shapes was worth more, but
+a shape that has been silent for 20 half-lives and one silent for 120 are
+still both dead, and the DROP that eventually retires them is still the
+cooldown timer.
+
+**The cooldown decoupling is invisible here and that is the whole point of
+having measured it.** `cabin_optimizer_cooldown_half_lives = 128` is
+arithmetically identical to the `2 × T_amort` it replaced at the shipped
+window, so the only way it could have shown up is as a bug — a saturating
+multiply, a unit slip, a default read from the wrong struct. It did not.
+The two questions the key separates ("how long is a build believed to pay
+for itself" versus "how much silence proves death") are now independently
+settable, and Part II's own closing recommendation — *the cooldown may
+want to be shorter than the amortization window rather than twice it* —
+is now a one-key experiment instead of a code change. This run does not
+perform that experiment: it establishes that the key exists, defaults to
+the measured behaviour, and costs nothing.
+
+**What is still not exercised, unchanged from Part II.** HEAL and hint
+failures stayed at zero in both runs, because nothing here moves a row —
+no UPDATE, no DELETE, no relayout, so no page epoch ever bumps. The
+budget-swap DROP reason needs a page budget under pressure (peak 35 of
+1,024). No DROP occurred in the business-days matrix at all, by the
+arithmetic stated in the compression section, and the wide-window arm
+deliberately did not wait for one either — it measures the onset, and the
+128-half-life cooldown behind it is Part II's measurement, not this one's.
+The measurement none of the three parts has is still the same one: a
+workload with **marginal** candidates and a page budget under pressure,
+which is what would tell whether PO6's budget or the admission bar is what
+actually bounds the managed population.
