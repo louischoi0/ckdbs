@@ -59,7 +59,10 @@ client parses:
 | Statement | Success reply |
 |---|---|
 | `PING` | `PONG` |
-| `INSERT` | `INSERTED id=<n>` — the engine-assigned primary key comes back here |
+| `INSERT` (one row) | `INSERTED oid=<n> id=<n> page=<n> slot=<n>` — the engine-assigned primary key comes back as `id=` |
+| `INSERT` (multi-row `VALUES (...), (...)`) | `INSERTED oid=<n> rows=<n> first_id=<n> last_id=<n>` — the id range, with no contiguity promise; over `max_insert_rows` (1024) refuses whole |
+| `DROP TABLE` | `DROPPED TABLE <name> oid=<n>` — catalog-scoped; RESTRICTs on assertions and referencing FKs |
+| `ALTER TABLE ... RENAME ...` | `RENAMED TABLE <t> TO <new>` / `RENAMED COLUMN <t>.<old> TO <new>` — catalog-only |
 | `UPDATE` / `DELETE` | `UPDATED <n>` / `DELETED <n>` (rows affected) |
 | `SELECT` | header line, then one `\n`-escaped comma row per match (per group when aggregated; groups in first-seen order) |
 | `CREATE TABLE` (SQL form) | `CREATED oid=<n> ...` |
