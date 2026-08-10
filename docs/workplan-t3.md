@@ -36,7 +36,13 @@ relation state either way — the equivalence test is the feature's spine.
   is vacuous (engine-issued, contiguous) and the tail-page check against
   pre-existing rows is kept.
 
-## TS01 — Catalog: AllocateRowIdRange  ## TS02 — heap::ChainAppendBatch
-## TS03 — Dispatcher: the gate and the sorted-fill path + FPI logging
-## TS04 — Tests: batch==sequential byte equality; gate fallback; rollback;
-##          range burn; equivalence of replies and state
+## TS01-TS04  **[DONE 2026-08-10]**  ## TS05 — Bench  **[DONE 2026-08-10]**
+
+All built and measured the same day (`bench/results-bulk-insert.md` Part
+III): batch-1000 relaxed 674,570 rows/s, 2.50x over the row-loop twin and
+7.1x PostgreSQL; the placement slice fell 7.7x to 0.31 us/row and WAL to
+74 B/row. Two findings worth carrying: **T3 batches should be sized in
+pages** - below ~rows-per-page per statement the shared tail re-images
+and the WAL economy halves - and **the residue is the parse (72%)**, so
+T2 is now a ~3.5x proposition and the pipeline has nothing left worth a
+tier.
