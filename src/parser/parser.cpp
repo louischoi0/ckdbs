@@ -4,7 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <limits>
+#include <charconv>
 
 namespace kds::parser {
 
@@ -1397,13 +1397,12 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
 // here, so a column may carry any of those names and the fingerprint does
 // not move.
 //
-// The two class refusals repeat per clause rather than gating the
-// production once, because each names the clause the client wrote and the
-// byte it starts at - "LIMIT ... (byte 40)" against a statement whose
-// ORDER BY would also have been refused is the error that points at what
-// was typed.
+// Tokens from `Peek()` are bound **by value** throughout. A reference is
+// safe today only because `Token` is trivially copyable and `Next()`
+// leaves the peeked token intact; the day `Token` owns anything, every
+// reference held across a `Next()` becomes a use-after-move, silently.
 Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth) {
-    if (const Token& order = lexer_.Peek();
+    if (const Token order = lexer_.Peek();
         order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
         // Over aggregated output the answer predates the tail (AG's
         // `[PROPOSED]` row) and the corpus pins it, wording and all.
@@ -1426,6 +1425,15 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
         lexer_.Next();
         if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
 
+        // `ORDER BY 1` is a form this engine understands and declines -
+        // the ordinal names a select-list position, and positional naming
+        // is a second spelling of something that already has one.
+        if (const Token ordinal = lexer_.Peek(); ordinal.type == TokenType::kIntLit) {
+            return Status::Unsupported(
+                "ORDER BY an ordinal is not supported (byte " +
+                std::to_string(ordinal.byte_offset) + "); name the column");
+        }
+
         auto col = ParseColumnName();
         if (!col.ok()) return col.status();
 
@@ -1444,7 +1452,7 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
         // index leaf chain link forward only, so there is nothing it could
         // compile to - Unsupported, and I11 keeps the word in the grammar
         // so the refusal does not shift when a reverse walk lands.
-        if (const Token& dir = lexer_.Peek(); dir.type == TokenType::kIdent) {
+        if (const Token dir = lexer_.Peek(); dir.type == TokenType::kIdent) {
             if (IEquals(dir.text, "ASC")) {
                 lexer_.Next();
             } else if (IEquals(dir.text, "DESC")) {
@@ -1454,54 +1462,63 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
                     "); every chain links forward only, and a reverse walk does not exist");
             }
         }
+
+        // A second sort key would need the output sort the first one
+        // deliberately does not: the accepted form names an order the
+        // chain already has, and `pk, anything` is not one.
+        if (const Token comma = lexer_.Peek(); comma.type == TokenType::kComma) {
+            return Status::Unsupported(
+                "ORDER BY takes a single column (byte " + std::to_string(comma.byte_offset) +
+                "); ordering is the driving relation's pk, and a second key would need an "
+                "output sort this engine does not have");
+        }
     }
 
-    if (const Token& limit = lexer_.Peek();
-        limit.type == TokenType::kIdent && IEquals(limit.text, "LIMIT")) {
-        // Groups are emitted in fold order, which is deterministic and
-        // deliberately not a contract - so which rows a LIMIT would keep
-        // is a guess, and this engine's answer to "which wrong number
-        // would you like" has always been neither. Belongs with HAVING and
-        // ORDER BY in feat-aggregate.md §10's post-fold-consumer decision.
-        if (aggregated) {
-            return Status::Unsupported(
-                "LIMIT is not supported over an aggregated statement (byte " +
-                std::to_string(limit.byte_offset) +
-                "); groups are emitted in fold order, which is not a contract, so which "
-                "rows a LIMIT keeps would be a guess");
-        }
-        // AG8's shape: pagination applies at the statement's emission
-        // boundary, and a sub-chain has none - its rows feed a predicate.
-        if (depth > 0) {
-            return Status::Unsupported(
-                "LIMIT inside a subquery is not supported (byte " +
-                std::to_string(limit.byte_offset) + "); paginate the outer statement instead");
-        }
-        lexer_.Next();
-        auto n = ParsePaginationCount("LIMIT");
-        if (!n.ok()) return n.status();
-        stmt.limit = n.value();
-    }
+    std::optional<std::uint64_t> limit;
+    if (Status s = ParseCountClause("LIMIT", aggregated, depth, limit); !s.ok()) return s;
+    stmt.limit = limit;
 
-    if (const Token& offset = lexer_.Peek();
-        offset.type == TokenType::kIdent && IEquals(offset.text, "OFFSET")) {
-        if (aggregated) {
-            return Status::Unsupported(
-                "OFFSET is not supported over an aggregated statement (byte " +
-                std::to_string(offset.byte_offset) +
-                "); groups are emitted in fold order, which is not a contract, so which "
-                "rows an OFFSET skips would be a guess");
-        }
-        if (depth > 0) {
-            return Status::Unsupported(
-                "OFFSET inside a subquery is not supported (byte " +
-                std::to_string(offset.byte_offset) + "); paginate the outer statement instead");
-        }
-        lexer_.Next();
-        auto m = ParsePaginationCount("OFFSET");
-        if (!m.ok()) return m.status();
-        stmt.offset = m.value();
+    std::optional<std::uint64_t> offset;
+    if (Status s = ParseCountClause("OFFSET", aggregated, depth, offset); !s.ok()) return s;
+    if (offset.has_value()) stmt.offset = offset.value();
+
+    return Status::OK();
+}
+
+// One count clause of the tail: `<word> <n>`, absent-is-ok. The class
+// refusals live here per clause rather than gating the tail once, because
+// each names the clause the client wrote and the byte it starts at -
+// "LIMIT ... (byte 40)" against a statement whose ORDER BY would also
+// have been refused is the error that points at what was typed.
+Status Parser::ParseCountClause(std::string_view word, bool aggregated, std::uint32_t depth,
+                                std::optional<std::uint64_t>& out) {
+    const Token head = lexer_.Peek();
+    if (head.type != TokenType::kIdent || !IEquals(head.text, word)) return Status::OK();
+
+    // Groups are emitted in fold order, which is deterministic and
+    // deliberately not a contract - so which rows survive the clause would
+    // be a guess, and this engine's answer to "which wrong number would
+    // you like" has always been neither. Belongs with HAVING and ORDER BY
+    // in feat-aggregate.md §10's post-fold-consumer decision.
+    if (aggregated) {
+        return Status::Unsupported(
+            std::string(word) + " is not supported over an aggregated statement (byte " +
+            std::to_string(head.byte_offset) +
+            "); groups are emitted in fold order, which is not a contract, so which rows "
+            "survive the clause would be a guess");
     }
+    // AG8's shape: pagination applies at the statement's emission
+    // boundary, and a sub-chain has none - its rows feed a predicate.
+    if (depth > 0) {
+        return Status::Unsupported(
+            std::string(word) + " inside a subquery is not supported (byte " +
+            std::to_string(head.byte_offset) + "); paginate the outer statement instead");
+    }
+    lexer_.Next();
+
+    auto count = ParsePaginationCount(word);
+    if (!count.ok()) return count.status();
+    out = count.value();
     return Status::OK();
 }
 
@@ -1517,16 +1534,15 @@ StatusOr<std::uint64_t> Parser::ParsePaginationCount(std::string_view clause) {
                                         std::string(Describe(tok)) + "' at byte " +
                                         std::to_string(tok.byte_offset));
     }
+    // The lexer guarantees a non-empty ASCII digit run, so the only way
+    // from_chars fails here is overflow.
+    const std::string_view digits = tok.digits();
     std::uint64_t value = 0;
-    for (const char c : tok.digits()) {
-        const auto digit = static_cast<std::uint64_t>(c - '0');
-        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
-            return Status::InvalidArgument(std::string(clause) + " count '" +
-                                            std::string(tok.digits()) +
-                                            "' does not fit in 64 bits (byte " +
-                                            std::to_string(tok.byte_offset) + ")");
-        }
-        value = value * 10 + digit;
+    if (std::from_chars(digits.data(), digits.data() + digits.size(), value).ec !=
+        std::errc()) {
+        return Status::InvalidArgument(std::string(clause) + " count '" + std::string(digits) +
+                                        "' does not fit in 64 bits (byte " +
+                                        std::to_string(tok.byte_offset) + ")");
     }
     return value;
 }

@@ -139,6 +139,13 @@ private:
     // answer to what the tail admits.
     Status ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth);
 
+    // One count clause of the tail - `LIMIT <n>` or `OFFSET <m>` -
+    // absent-is-ok, refused over aggregated output and inside a subquery
+    // with the clause's own byte. One production for both, since they
+    // differ only in the word and where the count lands.
+    Status ParseCountClause(std::string_view word, bool aggregated, std::uint32_t depth,
+                            std::optional<std::uint64_t>& out);
+
     // The count in a LIMIT or OFFSET clause: a non-negative integer
     // literal, decoded from its digits so a value past int64 refuses
     // rather than wraps (token.hpp's digits() note). `clause` names the

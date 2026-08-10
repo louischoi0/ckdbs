@@ -263,6 +263,21 @@ std::string FormatPlan(const StepChain& chain) {
                << FormatColumnRef(chain.projection[i]);
         }
     }
+
+    // ---- The quota (V09) ------------------------------------------------
+    //
+    // After the projection, which is where it sits in execution order: the
+    // dispatcher's emission quota gates formatted rows. `offset` before
+    // `limit`, since rows are skipped before they are counted. Absent from
+    // an unlimited plan, whose output stays byte-identical to what it was
+    // before the tail existed - the property the fold line above keeps,
+    // kept again. (An aggregated chain never reaches here with one: the
+    // parser refuses the tail over aggregated output.)
+    if (chain.limit.has_value() || chain.offset != 0) {
+        os << "\nquota";
+        if (chain.offset != 0) os << " offset=" << chain.offset;
+        if (chain.limit.has_value()) os << " limit=" << chain.limit.value();
+    }
     return os.str();
 }
 

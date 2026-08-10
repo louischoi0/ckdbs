@@ -32,11 +32,10 @@
 //   <item>  ::= <col> | <agg> ( [DISTINCT] <col> | * )
 //   <agg>   ::= COUNT | SUM | MIN | MAX
 //
-// Deliberate limitations: no subqueries, HAVING or expressions;
-// WHERE is AND-only (no OR, NOT, or nesting) and its columns are still
-// unqualified; SELECT's column list is always * (no projection), which is
-// why a multi-relation SELECT is refused until V06 makes an explicit list
-// available. No quote-escaping in string literals.
+// Deliberate limitations: no HAVING and no expressions; WHERE is a flat
+// AND-only conjunct list (no OR; NOT only in the reserved negation forms),
+// with predicate-position subqueries per V07 and explicit select lists per
+// V06. No quote-escaping in string literals.
 // docs/parser-v2.md specifies the grammar this is growing into.
 //
 // Two decisions worth stating, because both push work downstream on

@@ -26,6 +26,7 @@
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/index_ddl.hpp"
 #include "kds/exec/index_maintain.hpp"
+#include "kds/exec/pagination.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
@@ -2572,14 +2573,28 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
         }
     }
 
+    // **The quota runs under ANALYZE too**, for AG15's reason one seam
+    // over: a limited statement's real run stops when the quota fills, so
+    // skipping the quota here would make ANALYZE describe a run - every
+    // page of a walk `LIMIT 1` never touches - that the client cannot
+    // reproduce. `rows=` therefore counts emitted rows, and `examined=`
+    // beside it is what an OFFSET's skipped rows still cost. A chain never
+    // carries both a fold and a quota - the parser refuses the tail over
+    // aggregated output - so the two wrappers cannot compose.
+    exec::EmissionQuota quota(chain);
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            const exec::QuotaVerdict verdict = quota.Note();
+            if (verdict == exec::QuotaVerdict::kStop) return storage::VisitControl::kStop;
+            if (verdict == exec::QuotaVerdict::kSkip) return storage::VisitControl::kContinue;
             ++rows;
             if (folding) {
                 if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             }
-            return storage::VisitControl::kContinue;
+            return verdict == exec::QuotaVerdict::kEmitThenStop
+                       ? storage::VisitControl::kStop
+                       : storage::VisitControl::kContinue;
         },
         &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
     if (!ran.ok()) {
@@ -2831,10 +2846,22 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return RunAggregated(compiled, os, trail, replay_ptr, instance, snapshot.value());
     }
 
+    // ---- V09: the emission quota wraps the sink, and nothing else moves --
+    //
+    // The same seam as the fold above and with the same consequence: the
+    // compile, the affinity check, the Waystone lookup and the trail
+    // collector all ran unchanged, and the quota is strictly downstream of
+    // them. `kEmitThenStop` rides `RowSink`'s kStop (V03), so the walk
+    // stops on the very tuple that filled the quota and fetches no further
+    // page - early termination is the existing stop propagation.
+    exec::EmissionQuota quota(compiled);
     exec_stats_.steps.clear();
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            const exec::QuotaVerdict verdict = quota.Note();
+            if (verdict == exec::QuotaVerdict::kStop) return storage::VisitControl::kStop;
+            if (verdict == exec::QuotaVerdict::kSkip) return storage::VisitControl::kContinue;
             os << "\\n";
             bool first_val = true;
             if (compiled.star()) {
@@ -2857,7 +2884,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                     first_val = false;
                 }
             }
-            return storage::VisitControl::kContinue;
+            return verdict == exec::QuotaVerdict::kEmitThenStop
+                       ? storage::VisitControl::kStop
+                       : storage::VisitControl::kContinue;
         },
         &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value(), indexes_enabled_);
     if (!ran.ok()) {

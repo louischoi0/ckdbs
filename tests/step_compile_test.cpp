@@ -596,5 +596,84 @@ TEST_F(StepCompileTest, ADefaultConstructedStepDecodesEverything) {
     EXPECT_EQ(fresh.filter_columns, Step::kAllColumns);
 }
 
+// ---- The pagination tail (spec I11, workplan V09) -------------------------
+//
+// The compile half of V09: `limit`/`offset` ride the chain for the
+// dispatcher's emission quota, and `ORDER BY` is validated against the
+// driving relation's pk and *discarded* - the accepted form names the
+// order the chain already emits, so no field carries it and nothing
+// downstream can come to depend on one.
+
+TEST_F(StepCompileTest, LimitAndOffsetSurviveCompilation) {
+    const StepChain chain = MustCompile("SELECT name FROM acct LIMIT 3 OFFSET 1");
+    ASSERT_TRUE(chain.limit.has_value());
+    EXPECT_EQ(chain.limit.value(), 3u);
+    EXPECT_EQ(chain.offset, 1u);
+}
+
+TEST_F(StepCompileTest, AChainWithoutATailCarriesNone) {
+    const StepChain chain = MustCompile("SELECT name FROM acct");
+    EXPECT_FALSE(chain.limit.has_value());
+    EXPECT_EQ(chain.offset, 0u);
+}
+
+// AG1's argument, applied to the quota: the tail must change nothing the
+// executor reads. Steps, kinds, keys and residuals are the unlimited
+// twin's, so every property already proved of the chain - trail trust,
+// probe equivalence, access statistics - holds for a limited statement
+// with no new proof.
+TEST_F(StepCompileTest, TheTailChangesNoStep) {
+    const StepChain plain = MustCompile("SELECT name FROM acct WHERE id = 7");
+    const StepChain limited =
+        MustCompile("SELECT name FROM acct WHERE id = 7 ORDER BY id LIMIT 1");
+    ASSERT_EQ(limited.steps.size(), plain.steps.size());
+    EXPECT_EQ(limited.steps[0].kind, plain.steps[0].kind);
+    EXPECT_EQ(limited.steps[0].residual.size(), plain.steps[0].residual.size());
+    EXPECT_EQ(limited.steps[0].key.has_value(), plain.steps[0].key.has_value());
+    EXPECT_EQ(limited.klass, plain.klass);
+}
+
+TEST_F(StepCompileTest, OrderByThePkIsAValidatedNoOp) {
+    const StepChain chain = MustCompile("SELECT name FROM acct ORDER BY id");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kScan);
+}
+
+TEST_F(StepCompileTest, OrderByTheQualifiedPkOfTheDrivingRelationCompiles) {
+    const StepChain chain = MustCompile(
+        "SELECT a.name, t.sym FROM acct AS a JOIN trade AS t ON t.acct_id = a.id "
+        "ORDER BY a.id LIMIT 5");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    ASSERT_TRUE(chain.limit.has_value());
+    EXPECT_EQ(chain.limit.value(), 5u);
+}
+
+TEST_F(StepCompileTest, OrderByANonPkColumnIsUnsupported) {
+    const std::string sql = "SELECT name FROM acct ORDER BY name";
+    const auto chain = CompileSql(sql);
+    ASSERT_FALSE(chain.ok());
+    EXPECT_EQ(chain.status().code(), StatusCode::kUnsupported);
+    const std::string want = "byte " + std::to_string(sql.find("name", sql.find("ORDER")));
+    EXPECT_NE(chain.status().message().find(want), std::string::npos)
+        << chain.status().message();
+}
+
+// The joined relation's pk is a real pk and still refused: emission order
+// is the *driving* relation's pk major (I12), and no other order exists
+// without a sort.
+TEST_F(StepCompileTest, OrderByAJoinedRelationsPkIsUnsupported) {
+    const auto chain = CompileSql(
+        "SELECT a.name, t.sym FROM acct AS a JOIN trade AS t ON t.acct_id = a.id "
+        "ORDER BY t.id");
+    ASSERT_FALSE(chain.ok());
+    EXPECT_EQ(chain.status().code(), StatusCode::kUnsupported);
+}
+
+TEST_F(StepCompileTest, OrderByAnUnknownColumnIsAResolutionError) {
+    const auto chain = CompileSql("SELECT name FROM acct ORDER BY nope");
+    ASSERT_FALSE(chain.ok());
+    EXPECT_EQ(chain.status().code(), StatusCode::kInvalidArgument);
+}
+
 }  // namespace
 }  // namespace kds::exec

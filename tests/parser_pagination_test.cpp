@@ -179,6 +179,25 @@ TEST(ParserPaginationTest, OrderByAnExpressionIsUnsupported) {
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "count")));
 }
 
+// `ORDER BY 1` and `ORDER BY a, b` are standard SQL a client will write -
+// forms this engine understands and declines, so each gets a positioned
+// Unsupported rather than the syntax error a bare grammar would give.
+TEST(ParserPaginationTest, AnOrdinalOrderByIsUnsupported) {
+    const std::string_view sql = "SELECT a FROM t ORDER BY 1";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "1")));
+}
+
+TEST(ParserPaginationTest, AMultiColumnOrderByIsUnsupported) {
+    const std::string_view sql = "SELECT a FROM t ORDER BY id, x";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, ",")));
+}
+
 // ---- Refusals: aggregated output ------------------------------------------
 
 TEST(ParserPaginationTest, LimitOverAnAggregateIsUnsupported) {

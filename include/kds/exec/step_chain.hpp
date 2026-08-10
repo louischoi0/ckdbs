@@ -585,6 +585,23 @@ struct StepChain {
     // have the dispatcher answer an aggregated statement with whole rows.
     // The same trap `parser::SelectStmt::star()` has to avoid, one layer up.
     bool star() const noexcept { return projection.empty() && !aggregated(); }
+
+    // ---- The pagination tail (docs/parser-v2.md I11, workplan V09) ------
+    //
+    // `LIMIT n` / `OFFSET m`, copied from the AST and read only by the
+    // dispatcher's emission quota - no execute path looks at either,
+    // exactly as `aggregate` above, and for AG1's reason: the quota is a
+    // sink decorator, so the steps, kinds and residuals of a limited
+    // statement are its unlimited twin's, bit for bit.
+    //
+    // `ORDER BY` deliberately does not survive compilation. The one
+    // accepted form - the driving relation's pk, ascending - names the
+    // order the chain already emits (I12: written order across steps, pk
+    // order within one), so there is nothing for an executor to do with
+    // it: the compiler validates and discards, and a field here would be
+    // a fact nothing may read.
+    std::optional<std::uint64_t> limit;
+    std::uint64_t offset = 0;
 };
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.

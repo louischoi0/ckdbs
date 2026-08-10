@@ -364,7 +364,7 @@ SELECT AVG(balance) FROM accounts;
 - Caps fail the statement rather than truncate (`aggregate_max_groups`,
   ratified at 65,536).
 
-### Pagination (parse built 2026-08-10, V09; execution lands with the compile half)
+### Pagination (built 2026-08-10, V09)
 
 ```sql
 SELECT <list> FROM ... [WHERE ...]
