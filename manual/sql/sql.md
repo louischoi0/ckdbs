@@ -364,14 +364,39 @@ SELECT AVG(balance) FROM accounts;
 - Caps fail the statement rather than truncate (`aggregate_max_groups`,
   ratified at 65,536).
 
-### Pagination
+### Pagination (parse built 2026-08-10, V09; execution lands with the compile half)
 
-**There is none.** `LIMIT` / `OFFSET` are not in the grammar — a trailing
-`LIMIT 10` answers `ERR unexpected token 'LIMIT' after end of statement`.
-`ORDER BY` does not exist for non-aggregated output either (no output sort
-exists). The designed pagination surface is KWP/1's portal suspension
-(`docs/protocol.md`), of which only the frame codec is built — nothing calls
-it. A result set is streamed whole; bound it with WHERE.
+```sql
+SELECT <list> FROM ... [WHERE ...]
+    [ORDER BY <col> [ASC]] [LIMIT <n>] [OFFSET <m>]
+```
+
+Each clause is independently optional, in that order (`OFFSET 5 LIMIT 10`
+is trailing garbage — dialect compatibility is a non-goal). `LIMIT`
+without `ORDER BY` is well-defined here in a way general SQL cannot
+promise: emission order is already a client contract — written order
+across steps, pk order within one — so `LIMIT n OFFSET m` means rows
+`[m, m+n)` of the reply the unlimited statement gives.
+
+- The counts are non-negative integer literals; a value past uint64
+  refuses rather than wraps; `LIMIT 0` is legal and answers no rows.
+- The counts are **slots**: `LIMIT 10` and `LIMIT 20` are one pattern,
+  two instances, so a limited statement fingerprints like any other.
+- `ORDER BY` may name only the driving relation's pk (checked at
+  compile — pk order is the free order and the only one). `ASC` is the
+  accepted no-op spelling; **`DESC` answers `Unsupported`** — every chain
+  links forward only, and a reverse walk does not exist.
+- The tail is refused over an aggregated statement (groups emit in fold
+  order, which is not a contract) and inside a subquery, each with a
+  byte position.
+- `OFFSET` costs what it skips — qualifying rows are examined and
+  discarded, O(offset), since no head seek exists. For deep pagination
+  prefer keyset form: `WHERE id > <last seen> LIMIT n`.
+- Nothing is reserved: columns and tables may still be named `limit`,
+  `offset`, `order`, `asc`, `desc`.
+
+KWP/1's portal suspension (`docs/protocol.md`) remains the designed
+protocol-level pagination surface; only its frame codec is built.
 
 ### ANALYZE
 
@@ -488,9 +513,11 @@ waits on"; `InvalidArgument` means "simply wrong".
   between algorithms — the query is the plan.** Written order is a client
   contract; decorrelation rewrites are forbidden, not merely unimplemented.
   A stable plan is what lets `pattern_id` name a plan and Waystone trust it.
-- **No `ORDER BY` / `LIMIT` / `HAVING`.** No output sort exists; `HAVING`
-  answers with "filter before the fold with WHERE, or filter the result
-  client-side".
+- **No `HAVING`, no `ORDER BY` over aggregated output, no `DESC`.** No
+  output sort exists; `HAVING` answers with "filter before the fold with
+  WHERE, or filter the result client-side". (`ORDER BY <pk>` / `LIMIT` /
+  `OFFSET` parse since V09 — see Pagination — because pk order is the
+  order the engine already emits; nothing here gained a sort.)
 - **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (the pk is
   already both), no `IF NOT EXISTS`, no `public.` schema qualifier, no
   bare-alias `FROM t a`, no quote-escaping in string literals. Each would be
@@ -526,7 +553,7 @@ client library switches on, `ERR <message>` for everything else.
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | Supplying the pk in INSERT | `ERR do not supply a value for primary-key column '<name>' - it is autoincrement and engine-assigned` |
 | Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, INSERT, SELECT, UPDATE, DELETE)` |
-| Anything after a complete statement (e.g. `LIMIT`) | `ERR unexpected token '<t>' after end of statement` |
+| Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |
 | Bare `decimal` | `ERR column '<c>' needs a precision and a scale - decimal(p, s) - at byte <n>; there is no default scale, ...` |
 | `float` column | `Unsupported` from the row-layout build: no decided on-disk encoding |
 | Scalar subquery returns >1 row | runtime `CardinalityViolation`, non-retryable — never a first-row pick |
