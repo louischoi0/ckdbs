@@ -93,8 +93,12 @@ The EV6 ring exists (EVT06) but nothing evicts engine-wide, so "must not
 displace the foreground working set" is vacuously true and unenforceable
 until the `PageRef` migration turns eviction on. Revisit with EVT04/05.
 
-## BLK08 — Bench  **[OPEN]**
+## BLK08 — Bench  **[DONE 2026-08-10]**
 
-Re-run `bench/results-scenario1-vs-pg.md`'s scenario with batch sizes
-1/10/100/1000 over T1 - the 21 µs/row claim's other half. The ck-tester
-owns the results file.
+Run twice, and the two runs are the record (`bench/results-bulk-insert.md`):
+Part I at `9ee04e4` measured T1 against the 21 µs claim and found the two
+engine defects that mattered more than T2 (the ChainTail walk, the WAL
+segment-boundary wedge); Part II at `926f422`, after both fixes, inverted
+the verdict - ckdbs beats PostgreSQL in every cell of the matrix, up to
+2.94x at batch 1000, and per-row cost is flat at ~3.5 µs with the
+resident-rows term dead (re-fit slope -0.009 ns, R² 0.169).

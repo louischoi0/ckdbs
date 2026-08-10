@@ -2,24 +2,36 @@
 
 `docs/spec-bulkinsert.md` §0 claimed the single-row INSERT ceiling of ~9K
 rows/s was ~21 µs/row of statement cost that never amortizes, and shipped T1
-(BLK01–BLK05) as that cost's eviction notice. This run measures what T1
-actually evicted, on the same `write_probe` row shape the baseline
-(`bench/results-scenario1-vs-pg.md`) used. Driver documentation:
+(BLK01–BLK05) as that cost's eviction notice. This document holds **two
+runs of two engine states**, deliberately: the first run (at `9ee04e4`, the
+T1 commit) found two engine defects — an O(pages-resident) tail walk under
+every heap insert, and a WAL stream that wedged at an exactly-filled
+segment — and both were fixed the same day; the second run (at `926f422`,
+both fixes in) is the current state of the engine, re-measured whole. The
+pre-fix sections are kept as the record of why the fixes exist and what
+they were worth; every number in them describes an engine that no longer
+ships. Same `write_probe` row shape as the baseline
+(`bench/results-scenario1-vs-pg.md`); driver documentation:
 [`bench/docs/README.md`](docs/README.md), `bulk_insert_benchmark.py` /
 `pg_bulk_insert_benchmark.py`.
 
-**Thesis: T1 works as designed — it removes the round trip entirely and cuts
-the parse to ~1.1 µs/row, leaving a flat per-row cost of ~4 µs against the
-old path's ~113 µs — and in doing so it exposes the next wall, which is not
-statement cost at all: every heap insert walks the page chain from the root
-to find the tail (`heap::ChainInsert` → `ChainTail`), an O(pages-resident)
-cost of ~0.32 ns × resident rows per row that comes to dominate a bulk load
-beyond ~12K resident rows and is the single reason PostgreSQL wins the large
-batches.** Two engine defects were found and are reported below: the tail
-walk, and a WAL stream that wedges permanently when an append exactly fills
-a 64 MiB segment.
+**Thesis, across the two runs: T1 works as designed — it removes the round
+trip entirely and cuts the parse to ~1.1 µs/row — and what it exposed
+underneath was worth more than what it removed: with the tail walk it
+surfaced now fixed, a 1000-row INSERT costs a flat ~3.4–3.6 µs/row with no
+dependence on relation size, 278K rows/s at relaxed durability against
+PostgreSQL's 95K on the same volume, and the durability classes decompose
+to exactly one device fsync per statement. The bulk-ingestion story now
+ends where T3's territory begins: per-tuple placement itself.**
 
 ---
+
+# Part I — the pre-fix run, at `9ee04e4` (superseded engine state)
+
+This part is the record of the run that found the two defects. **Both are
+fixed on `main` as of `926f422`; Part II is the current engine.** Part I's
+PostgreSQL comparison verdict — PostgreSQL wins the large batches — is
+inverted by the fix and survives only as history.
 
 ## The run
 
@@ -345,10 +357,10 @@ with a regression test at the boundary.
    WAL wedge that fresh-per-configuration servers then sidestepped. Neither
    failure was visible in the driver's own output.
 
-## Reproducing
+## Reproducing (Part I)
 
 Driver flags and exact invocations: [`bench/docs/README.md`](docs/README.md).
-The pattern behind every cell in this document:
+The pattern behind every cell in this part:
 
 ```bash
 # one fresh server per (durability × batch) configuration, on the block device
@@ -368,32 +380,232 @@ built the parent commit from `git archive cf4adfb` and alternated
 parent/HEAD runs in one window; the device figure is a 300-sample 8 KiB
 write+fsync probe on the same volume at run end.
 
-## Addendum: the ChainTail fix, measured (2026-08-10, same machine)
+---
 
-The finding above was acted on the same day: `heap::ChainInsert` now takes
-a tail hint - read as the tail-search start, written back with the landing
-page - carried on the cached `TableAccess`. A hint can be behind, never
-wrong (next_page_id is write-once and a page never leaves its chain), so a
-stale one heals by walking forward and a damaged one falls back to the
-head. `tests/heap_chain_test.cpp` pins all three properties.
+# Part II — the post-fix run, at `926f422` (current engine state)
 
-Spot check with this driver, Release build at the fix commit, batch 1000
-at relaxed, 100K rows, fresh file, single connection:
+Both Part I findings were fixed on `main` the same day and the whole matrix
+was re-measured. The fixes, as landed: `heap::ChainInsert` takes a **tail
+hint** carried on the cached `TableAccess` — read as the tail-search start,
+written back with the landing page; a hint can be behind, never wrong,
+since `next_page_id` is write-once and a page never leaves its chain
+(commit `e704c16`, pinned by `tests/heap_chain_test.cpp`). And
+`WalStream::SegmentRemaining()` answers **0 at an exactly-filled segment**,
+so the roll happens instead of the wedge (commit `926f422`, two wal_stream
+tests fill a segment to the byte and cross it, live and through a reopen).
+The spot-check addendum that previously ended this file is superseded by
+this part.
 
-| | pre-fix (9ee04e4) | post-fix |
-|---|---:|---:|
-| rows/s | 51,258 | **251,000** |
-| per-statement p0 / p50 / p99 (us) | ramped 6.4x intra-run | 3,255 / 3,359 / 5,862 |
-| per-row cost | 3.95 us + 0.321 ns x rows-resident | **~3.97 us flat** |
+## The run
 
-The resident-rows term is gone: latency is flat across the run (p50/p0 =
-1.03 against the pre-fix ramp), throughput at batch 1000 is 4.9x, and the
-remaining per-row cost is exactly the trace fit's flat part - parse,
-pipeline, framing. The bulk-ingestion story now ends where T3's territory
-begins (per-tuple placement itself), and PostgreSQL's batch-1000 edge
-(94.6K rows/s) is overtaken at 2.7x. The WAL segment-boundary wedge
-reported above was fixed the same day: SegmentRemaining() now answers 0
-at an exactly-filled segment (offset 0 is one past the end, never a
-position inside - a segment opens with its header), so the roll happens
-and the stream survives the boundary. Two wal_stream tests fill a
-segment to the byte and cross it, live and through a reopen.
+| | |
+|---|---|
+| executed | 2026-08-10, 06:48–07:02 UTC (matrix 06:48–07:01, WAL-boundary demonstration 07:02 — sequential, never concurrent) |
+| commit measured | `926f422` (`wal: the exact-fill boundary rolls instead of wedging the stream`, tip of `feat-drop-table` == `main`; includes `e704c16`, the tail hint) |
+| tree | clean |
+| binary | `build-release/kds_server`, rebuilt 06:45:04 UTC from this tree (commit timestamp 06:41:14) — mtime after HEAD, verified before the first measurement |
+| build type | Release (`CMAKE_BUILD_TYPE:STRING=Release`) |
+| tests | not run in this session (no engine change made here; the fix commits carry their own suites). In-run verification as in Part I: `rows=` fields, id spans, `SELECT COUNT(*)` per phase — all exact, zero error replies in every configuration |
+| device | same volume as Part I. Raw 8 KiB write+fsync p50 **946 µs** re-probed at 07:05 (Part I measured 940 at 05:53 — stable); that probe's tail (p99 8.8 ms) was taken during a live sibling-load burst and is not comparable |
+| machine / gating | as Part I: 2 vCPU shared box, load gate at 1-min ≤ 0.60 before every configuration, load recorded after. **Every configuration in this part ran in a clean window on its first attempt — zero retries** (log: `~/bench-bulk2/matrix3.log`) |
+| ckdbs config | as Part I; `durability` per configuration. Data files `/home/ec2-user/bench-bulk2/*.db` |
+| PostgreSQL | **carried over from Part I unchanged** (measured 05:34–05:38 the same day, same volume, untouched defaults). PostgreSQL's engine did not change between the parts; the ~75-minute gap is noted where a durable cell is compared |
+| relation | scenario1's `write_probe` shape, as Part I |
+
+## The noise floor
+
+The relaxed configuration was again run twice whole (A and B), fresh server
+and file per configuration:
+
+| measurement | run A | run B | spread |
+|---|---:|---:|---:|
+| bulk-1 rows/s | 9,328 | 9,638 | 3.3 % |
+| bulk-10 rows/s | 63,369 | 64,502 | 1.8 % |
+| bulk-100 rows/s | 209,876 | 205,538 | 2.1 % |
+| bulk-1000 rows/s | 278,180 | 264,030 | 5.2 % |
+| PING p50 (all servers) | 63.0–91.9 µs | | bimodal, as Part I |
+
+**Nothing under ~5 % is a finding.** The fsync-bearing batch-1000 cells get
+a wider berth still: the three durable batch-1000 configurations measured
+in different windows (group 100K / group 400K / group 600K rows) put their
+per-statement durability overhead at 1.16 / 2.38 / 1.67 ms against a device
+whose own fsync spans 0.94 (p50) to 2.2 ms (p95) — that spread is the
+device's state over time, and no group-vs-strict or size claim is made
+inside it.
+
+## The matrix: throughput
+
+100,000 rows per cell, single connection, rows/s. PostgreSQL columns are
+Part I's, carried over.
+
+| rows/statement | ck relaxed | ck group | ck strict | pg sync=off | pg sync=on | ck/pg (relaxed) | ck/pg (durable) |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 9,328 | 943 | 951 | 5,503 | 878 | **1.70×** | **1.07×** |
+| 10 | 63,369 | 9,116 | — | 36,450 | 8,080 | **1.74×** | **1.13×** |
+| 100 | 209,876 | 64,614 | — | 87,920 | 45,630 | **2.39×** | **1.42×** |
+| 1,000 | 278,180 | 210,165 | 170,894 | 94,600 | 81,400 | **2.94×** | **2.58×** |
+| **txn-1000 control** (pre-T1 batching) | 9,870 | 9,837 | — | — | 5,703 | 1.73× | 1.72× |
+
+Readings:
+
+- **The Part I verdict is inverted: ckdbs now wins every cell**, 1.07× to
+  2.94×. Part I's crossover — PostgreSQL overtaking at large batches on its
+  O(1) target-block insert — was entirely the tail walk, and with the walk
+  gone ckdbs's cheaper per-row pipeline (3.6 vs 10.6 µs/row at batch 1000
+  relaxed) decides every batch size. Caveat on the durable column: the two
+  engines' durable cells were measured ~75 minutes apart on a device whose
+  fsync tail drifts; the relaxed cells are CPU-bound and carry no such
+  caveat.
+- **Against the pre-fix engine**: batch-1000 relaxed 51,258 → 278,180
+  (5.4×), group 42,339 → 210,165 (5.0×), batch-1 relaxed 7,174 → 9,328
+  (+30 % — the walk was taxing single-row inserts too, ~35 µs at the
+  100K-row phase average). The pre-T1 control also rose 7,406 → 9,870 for
+  the same reason.
+- **T1 vs the pre-T1 best practice, post-fix, same durability**: 210,165
+  against 9,837 — **21.4×** where Part I measured 5.8×. Removing the walk
+  widened T1's own advantage, because the walk was a per-row cost T1 could
+  not amortize.
+- **`group` = `strict` at batch 1** (943 vs 951, 0.8 %), as documented. At
+  batch 1000 strict reads 19 % below group; both sit inside the durable
+  device-drift band above and the difference is not read as an engine
+  effect.
+
+## Per-statement latency
+
+ckdbs `relaxed` (run A; per-row mean = mean ÷ B):
+
+| phase | ops | mean µs | p0 | p25 | p50 | p95 | p99 | max | µs/row |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| bulk-1 | 100,000 | 100.0 | 56.3 | 76.2 | 92.0 | 134.9 | 201.1 | 11,489.5 | 100.0 |
+| bulk-10 | 10,000 | 149.0 | 82.3 | 132.9 | 141.9 | 185.4 | 245.7 | 9,740.5 | 14.9 |
+| bulk-100 | 1,000 | 467.1 | 369.2 | 430.4 | 450.6 | 556.4 | 778.6 | 2,159.6 | 4.7 |
+| bulk-1000 | 100 | 3,581.3 | 3,281.1 | 3,331.8 | 3,388.7 | 4,493.0 | 6,128.4 | 6,334.3 | 3.6 |
+| txn-1000 (per INSERT) | 100,000 | 98.6 | 54.6 | 73.6 | 104.7 | 137.5 | 178.6 | 17,353.5 | 98.6 |
+
+ckdbs `group`:
+
+| phase | ops | mean µs | p0 | p25 | p50 | p95 | p99 | max | µs/row |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| bulk-1 | 100,000 | 1,051.8 | 378.1 | 1,017.2 | 1,044.2 | 1,137.2 | 1,328.7 | 12,359.2 | 1,051.8 |
+| bulk-10 | 10,000 | 1,086.2 | 398.2 | 1,050.6 | 1,082.8 | 1,216.0 | 1,462.0 | 26,116.4 | 108.6 |
+| bulk-100 | 1,000 | 1,536.2 | 766.0 | 1,468.8 | 1,515.7 | 1,848.8 | 2,324.9 | 4,608.3 | 15.4 |
+| bulk-1000 | 100 | 4,744.5 | 4,079.2 | 4,244.0 | 4,413.2 | 6,575.4 | 7,596.6 | 7,611.4 | 4.7 |
+| txn-1000 (per INSERT) | 100,000 | 98.4 | 54.8 | 73.8 | 105.5 | 136.8 | 170.7 | 15,458.0 | 98.4 |
+
+ckdbs `strict`:
+
+| phase | ops | mean µs | p0 | p25 | p50 | p95 | p99 | max | µs/row |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| bulk-1 | 100,000 | 1,043.7 | 385.4 | 1,003.4 | 1,031.5 | 1,127.4 | 1,313.3 | 9,143.1 | 1,043.7 |
+| bulk-1000 | 100 | 5,838.6 | 5,038.5 | 5,458.6 | 5,571.0 | 7,550.2 | 7,914.6 | 8,488.5 | 5.8 |
+
+**The Part I spread is gone.** bulk-1000 relaxed reads p50/p0 = 1.03
+(3,389/3,281) where the pre-fix engine read 5.2 (19,540/3,728) — one
+hundred byte-identical statements now cost the same, which is what
+PostgreSQL's tables looked like in Part I and ckdbs's did not.
+
+## The re-fit: the resident-rows term is dead
+
+The same `--trace` protocol as Part I, batch 1000 relaxed, 100 statements,
+fresh server (phase CPU-bound: 0.38 s server CPU over 0.36 s phase wall):
+
+```
+pre-fix  (9ee04e4): statement_µs = 3,949 + 0.321 ns × resident_rows   R² = 0.967
+post-fix (926f422): statement_µs = 4,036 − 0.009 ns × resident_rows   R² = 0.169
+```
+
+A slope statistically indistinguishable from zero with no explanatory
+power — the fit is now just the mean. The twenty-statement means run
+4,221 / 3,506 / 3,305 / 3,629 / 3,332 µs across the phase: no trend, only
+window noise. The batch-1 trace says the same thing at 100× the sample
+count: decade means 105.5 → 112.9 µs over 100K rows (p50 pinned at
+110.4–111.1 across all ten decades), a residual drift of ~0.07 ns per
+resident row — 5–15× below the pre-fix slope, at the edge of what the
+client can resolve, consistent with page-cache dilution rather than any
+per-insert scan.
+
+**The batch-1 hint price, on a one-page relation**: the first trace decade
+(rows 0–10K, relation one to ~57 pages) reads 105.5 µs mean post-fix
+against 102.0 pre-fix — +3.4 µs nominal, inside the between-window client
+floor drift (PING means ranged 73.7–95.3 µs across this part's servers),
+and the statement floor is identical (p0 56.3 vs 56.8). The hint is one
+pointer read and one write per insert; the data cannot distinguish its
+cost from zero, which is what "should be ~zero" predicted.
+
+## Wait accounting, post-fix
+
+Anchored at batch 1000 relaxed as in Part I:
+
+| wait type | how measured | per row at batch 1000 |
+|---|---|---:|
+| client + socket round trip | PING p50 (86.3 µs) ÷ 1000 | **0.09 µs** |
+| parse + dispatch | parse probe marginal: 1000-row p50 1,455 − 1-row p50 101, ÷ 999 = 1.36; on p25 (1,168 − 63) ÷ 999 = 1.11 | **~1.1–1.4 µs** |
+| write pipeline (id, encode, place-with-hint, witness hooks, WAL append) | statement p50 3,389 ÷ 1000, minus the above | **~1.9–2.2 µs** |
+| chain tail walk | trace fit slope | **0** (−0.009 ns × N, R² 0.17) |
+| durability / commit | group − relaxed statement mean, per batch: 952 (b1) / 937 (b10) / 1,069 (b100) / 1,163 µs (b1000) — one device fsync (p50 940–946) plus 10–20 % for the larger dirty range | **1.16 µs** amortized |
+| lock / conflict wait | error counts, single connection | 0, structurally |
+
+Two notes. The durability row is the quiet vindication of the re-run:
+Part I's group−relaxed deltas at batch ≥ 100 (428 / 4,114 µs) were
+ramp-noise artifacts, and post-fix every batch size shows the same clean
+"one fsync per statement" the manual describes. And the parse probe's
+1000-row body **widened** relative to Part I (p50 1,157 → 1,455 µs, p25
+nearly unchanged at 1,140 → 1,168): the probe conflates parse with the
+unknown-relation refusal path, which `DROP TABLE`'s oid tombstone work
+(`20d5dca`, landed between the two parts) touched. It is recorded as
+observed, not attributed; the p25 marginal (1.11 µs/row) is the parse
+figure most comparable to Part I's 1.05.
+
+## The WAL boundary, crossed on purpose
+
+One configuration was sized to cross the 64 MiB segment boundary that
+wedged the pre-fix stream: batch 1000 at `group`, **600,000 rows** on one
+server — beyond both the pre-fix wedge point (~300K logged rows) and the
+~430K rows a single segment holds at this row shape.
+
+| | |
+|---|---|
+| rows | 600,000 in 600 statements, `COUNT(*)` verified, zero errors |
+| throughput | 189,796 rows/s |
+| per-statement | mean 5,255 / p0 3,968 / p25 4,281 / p50 4,614 / p95 6,691 / p99 7,663 µs |
+| WAL on disk | `wal-0-0.log` **and `wal-0-1.log`**, 64 MiB each — the stream rolled and kept going |
+
+The 400K-row configuration run first for this purpose stayed inside one
+segment (~150 B of WAL per row at batch 1000 — batching also amortizes the
+per-statement `TXN_BEGIN`/`TXN_COMMIT` records, so the pre-fix ~220 B/row
+estimate from mixed batches overestimates a pure batch-1000 stream), which
+is itself worth recording: the demonstration had to be re-sized on the
+measured WAL density, not the assumed one.
+
+## What the re-run teaches
+
+1. **The fix bought exactly what the fit predicted, and then some.** Part I
+   priced the walk at 0.321 ns × resident rows; removing it took batch-1000
+   relaxed from 51K to 278K rows/s (5.4×) and made per-statement latency
+   flat (p50/p0 1.03). Nothing else moved: the flat per-row cost the
+   pre-fix fit put at 3.95 µs is measured post-fix at 3.4–3.6 µs — the fit
+   decomposed the engine correctly from the outside.
+2. **The bulk-INSERT picture is now three clean numbers**: ~3.6 µs/row of
+   CPU-bound statement-and-pipeline work at batch 1000, one device fsync
+   per durable statement (1.16 µs/row amortized), and a client round trip
+   per statement (0.09 µs/row). T2's remaining prize is the ~1.1–1.4 µs/row
+   parse; T3's is the ~2 µs pipeline. BI8's relaxed recommendation and
+   `max_insert_rows = 1024` both stand — batch 100 reaches 75 % of
+   batch 1000's throughput, and batch 1000 sits past the knee.
+3. **ckdbs beats PostgreSQL in every cell of the matrix it lost half of in
+   Part I** — 2.9× at the headline batch-1000 relaxed cell — and the reason
+   is the one the 2026-08-07 document already named: ckdbs's fixed and
+   per-row costs are both lower once no O(N) term is hiding in the loop.
+4. **A 600K-row single-server load is now routine** where ~300K wedged the
+   engine permanently two hours earlier. Nothing reclaims segments, so the
+   WAL still grows monotonically (128 MiB for the demo) — retention is
+   recovery's open decision, unchanged by the fix.
+
+## Reproducing (Part II)
+
+Identical protocol to Part I (`~/bench-bulk2` instead of `~/bench-bulk`);
+the added configurations were `--rows 400000` / `--rows 600000` at
+`--batches 1000` on one server for the boundary demonstration, and the two
+`--trace` runs for the re-fit. Orchestration log with per-configuration
+load gating: `~/bench-bulk2/matrix3.log`.
+
