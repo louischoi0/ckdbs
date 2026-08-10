@@ -130,11 +130,14 @@ nothing else.
   `id=<n>`. Supplying it is a dedicated error. `UPDATE` cannot change it.
 - **No NULL storage yet**: `NULL` parses as a literal, but rows with NULLs
   are not storable today.
-- **No pagination**: no `LIMIT`, no `ORDER BY` (outside the aggregate
-  refusals), no cursors. A SELECT streams every match in one reply — bound
-  result sets with `WHERE`. Rows come back in primary-key order per
-  relation (chain/tree order), first-seen order for groups; treat any
-  other ordering expectation as the client's job.
+- **Pagination is `[ORDER BY <pk> [ASC]] [LIMIT <n>] [OFFSET <m>]`**
+  (built 2026-08-10, V09), each clause optional, in that order, on
+  non-aggregated top-level SELECTs. `ORDER BY` accepts only the primary
+  key (a validated no-op — rows already come back in pk order per
+  relation); any other column, and `DESC`, are refused. No cursors: a
+  reply still streams whole, so prefer keyset form
+  (`WHERE id > <last seen> LIMIT n`) over a growing `OFFSET`. Groups come
+  back in first-seen order; any other ordering is the client's job.
 - **Decimals render at declared scale, always** — a client that parses
   `avg(amt)` at scale 2 can rely on scale 2 forever. `DATE` renders
   `YYYY-MM-DD`, `TIMESTAMP` as UTC.

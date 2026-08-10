@@ -14,13 +14,15 @@ for. The umbrella has two parts:
   classify relations, plan physical moves, report. **Shadow-only, as a
   finding, not a hedge**: every candidate move is blocked by a named gate,
   and the report exists to price opening them.
-- **Part II — the Cabin controller** (PHY01-PHY02 built): the `CABIN AUTO`
-  promotion pipeline. The signal plumbing and the pure decision core
-  exist; **no controller runs yet**, so a column declared `CABIN AUTO`
-  behaves exactly as an undeclared one.
+- **Part II — the Cabin controller** (PHY01-PHY05 and PHY07 built as of
+  2026-08-10 — **the controller runs end to end**; PHY06/PHY08 remaining):
+  the `CABIN AUTO` promotion pipeline, gated by the `cabin_optimizer`
+  config key, **default `off`** — so out of the box a column declared
+  `CABIN AUTO` still behaves as an undeclared one.
 
-There is **no mover**. Nothing moves a tuple, reclaims a page, or creates
-a Cabin on its own today. The optimizer observes, plans and reports.
+There is **no mover** (Part I). Nothing moves a tuple or reclaims a page;
+relayout observes, plans and reports. Cabin creation *can* now be
+autonomous — only when `cabin_optimizer = on`.
 
 ---
 
@@ -32,9 +34,10 @@ a Cabin on its own today. The optimizer observes, plans and reports.
 | `decay_half_life` | `600` | Seconds for an untouched heat score to lose half its weight. One instance-wide value; `0` is refused (instant decay is "no score"). |
 | `access_statistics` | `on` | The input feed: per-shape access recording into `sys.access_stats`. With it off, no new shapes are recorded and the report goes stale rather than wrong. |
 
-The spec names a `kds.cabin_optimizer` key for Part II; it is **not yet a
-config key** — `kds.conf.sample` does not carry it, and nothing would
-consume it.
+Part II's key exists since PHY04: `cabin_optimizer = off|on` (default
+`off`), with tuning keys (`cabin_optimizer_page_budget`,
+`cabin_optimizer_theta_create_pct` / `_drop_pct` / `_swap_pct`) documented
+in `kds.conf.sample`.
 
 ## 2. `SHOW RELAYOUT` — the shadow report
 
@@ -126,11 +129,14 @@ cost-benefit core with hysteresis. Built so far:
   16.16 fixed point, deterministic (golden sets, hysteresis, budget
   invariant and bit-identical traces are tested).
 
-Not built: the controller loop that would call `Decide` (PHY04,
-hard-blocked on the eviction workplan's EVT06 scan ring) and everything
-after it. Operationally that means: declare `CABIN` explicitly when you
-want one now; `CABIN AUTO` is a recorded intention. Bound Cabins
-(assertions') are permanently outside the controller's jurisdiction.
+- **PHY04** (2026-08-10) — the controller loop runs end to end over the
+  EVT03/EVT06 substrate, gated by `cabin_optimizer` (default `off`).
+  PHY06/PHY08 remain.
+
+Operationally: with the key at its default `off`, declare `CABIN`
+explicitly when you want one — `CABIN AUTO` acts only under
+`cabin_optimizer = on`. Bound Cabins (assertions') are permanently
+outside the controller's jurisdiction.
 
 ## 6. Operating notes
 

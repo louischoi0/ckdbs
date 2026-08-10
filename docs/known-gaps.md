@@ -83,9 +83,10 @@ There is no purge pass, and readers are deliberately unregistered
 
 - **No NULL storage**: `NULL` parses as a literal; rows holding one are
   not storable today (`docs/client-manual.md`).
-- **No pagination**: no `LIMIT`/`OFFSET`, no `ORDER BY` outside the
-  aggregate refusals, no cursors. The designed surface is KWP/1 portal
-  suspension, of which only the frame codec exists (`docs/protocol.md`).
+- **Pagination is LIMIT/OFFSET only** (V09, built 2026-08-10):
+  `ORDER BY` accepts the primary key alone (a validated no-op) and no
+  `DESC`; there are no cursors, and KWP/1 portal suspension is still
+  unbuilt — only the frame codec exists (`docs/protocol.md`).
 - **`IN (value list)`** is unbuilt — the open half of parser workplan V08;
   it currently reports "expected a subquery".
 - **Per-transaction durability class** is a KWP/1 protocol field; the text
@@ -102,10 +103,11 @@ There is no purge pass, and readers are deliberately unregistered
   One validation gap remains: nothing verifies a page still belongs to the
   relation a trail recorded it from — holds until pages can be reallocated
   between relations (`docs/feat-physical-optimizer.md` §6 gate 3 owns it).
-- **`CABIN AUTO` is stored and consumed by nothing**
-  (`docs/feat-cabin.md` §8.1): a column declared `auto` behaves exactly as
-  an undeclared one until the promotion pipeline (Part II, PHY04+) is
-  wired.
+- **`CABIN AUTO` acts only under `cabin_optimizer = on`, default `off`**:
+  the controller runs end to end since PHY04 (2026-08-10), but with the
+  key at its default a column declared `auto` still behaves exactly as an
+  undeclared one. PHY06/PHY08 remain
+  (`docs/feat-physical-optimizer.md` Part II).
 - **The physical optimizer is shadow-only as a finding**
   (`docs/feat-physical-optimizer.md` §6): every candidate move is blocked
   by a named gate; `physical_optimizer = on` is refused at startup naming
