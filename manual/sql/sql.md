@@ -452,9 +452,11 @@ An unknown target answers `ERR unknown SHOW target`. The `sys.*` views
 `SELECT ... FROM sys.<name>` — but not aggregatable (AG12).
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
-list** creates an empty-schema relation and answers `CREATED oid=<n>` (or
-`EXISTS oid=<n>` if the name is taken). The dispatcher routes on the
-presence of `(`. A debug surface predating the SQL grammar; not for use.
+list** routes to a pre-SQL handler (the dispatcher routes on the presence
+of `(`). It answers `EXISTS oid=<n>` if the name is taken; otherwise the
+catalog refuses the empty schema — `ERR relation has no columns; the first
+column is the mandatory Keystone primary key` — so the form can no longer
+create anything.
 
 ---
 
