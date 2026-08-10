@@ -290,13 +290,16 @@ TEST(ParserAggregateTest, OrderByOverAggregatedOutputIsRefused) {
     EXPECT_TRUE(MentionsByte(parsed.status(), 37));
 }
 
-TEST(ParserAggregateTest, ANonAggregatedOrderByKeepsTheAnswerItAlwaysHad) {
-    // ORDER BY is not supported anywhere, but only the aggregated form is
-    // this clause's business. Moving the other one would be a language
-    // change smuggled in as an aggregation change - and the corpus pins it.
+TEST(ParserAggregateTest, ANonAggregatedOrderByParsesSinceV09) {
+    // This test used to pin the opposite: ORDER BY was not supported
+    // anywhere, and only the aggregated refusal was this clause's
+    // business. V09 made the non-aggregated form parse - the verdict
+    // flipped with its task, exactly as the corpus comment schedules it -
+    // while the aggregated refusal above kept its answer. The tail's own
+    // grammar lives in parser_pagination_test.cpp; what this file still
+    // holds down is the boundary between the two forms.
     const StatusOr<Statement> parsed = Parse("SELECT * FROM t ORDER BY id");
-    ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
 }
 
 TEST(ParserAggregateTest, AnAggregateInsideASubqueryIsRefused) {

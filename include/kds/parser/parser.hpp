@@ -132,6 +132,19 @@ private:
     // `GROUP BY <col> [, ...]`, with the two words already consumed.
     Status ParseGroupBy(SelectStmt& stmt);
 
+    // The pagination tail of a query block: `[ORDER BY <col> [ASC]]
+    // [LIMIT <n>] [OFFSET <m>]` (spec I11, workplan V09). Every refusal
+    // lives here with the production - aggregated output, subquery
+    // position, `DESC`, an expression after ORDER BY - so there is one
+    // answer to what the tail admits.
+    Status ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth);
+
+    // The count in a LIMIT or OFFSET clause: a non-negative integer
+    // literal, decoded from its digits so a value past int64 refuses
+    // rather than wraps (token.hpp's digits() note). `clause` names the
+    // clause in every error.
+    StatusOr<std::uint64_t> ParsePaginationCount(std::string_view clause);
+
     StatusOr<AstValue> ParseValue();
     StatusOr<CompareOp> ParseCompareOp();
     StatusOr<Condition> ParseOneCondition(std::uint32_t depth);

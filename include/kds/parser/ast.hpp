@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -14,7 +15,8 @@
 //   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE];
 //   INSERT INTO  <name> VALUES (<val> [, ...]);
 //   SELECT <list> FROM  <rel> [<join>]* [WHERE <cond> [AND <cond>]*]
-//       [GROUP BY <col> [, ...]];
+//       [GROUP BY <col> [, ...]]
+//       [ORDER BY <col> [ASC]] [LIMIT <int>] [OFFSET <int>];
 //   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*];
 //   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
 //       OF <select>;
@@ -30,7 +32,7 @@
 //   <item>  ::= <col> | <agg> ( [DISTINCT] <col> | * )
 //   <agg>   ::= COUNT | SUM | MIN | MAX
 //
-// Deliberate limitations: no subqueries, ORDER BY, HAVING or expressions;
+// Deliberate limitations: no subqueries, HAVING or expressions;
 // WHERE is AND-only (no OR, NOT, or nesting) and its columns are still
 // unqualified; SELECT's column list is always * (no projection), which is
 // why a multi-relation SELECT is refused until V06 makes an explicit list
@@ -420,6 +422,36 @@ struct SelectStmt {
     // The GROUP BY list in written order. Column references only (AG9) -
     // the grammar has no expressions and GROUP BY does not grow one.
     std::vector<ColumnName> group_by;
+
+    // ---- The pagination tail (docs/parser-v2.md I11, workplan V09) ------
+    //
+    // `[ORDER BY <col> [ASC]] [LIMIT <n>] [OFFSET <m>]`, clauses in that
+    // order and each independently optional, parsed only on a
+    // non-aggregated depth-0 block - an aggregated statement's tail and a
+    // subquery's are refused at parse with a position.
+    //
+    // `LIMIT` without `ORDER BY` is well-defined here in a way general SQL
+    // cannot promise: emission order is already a client contract (I12 -
+    // written order across steps, pk order within one), so the clause
+    // takes a prefix of an order the statement has, not one it hopes for.
+    //
+    // `order_by` carries the written column for the *compiler* to judge:
+    // pk-ness is catalog knowledge, so accepting `ORDER BY <pk> [ASC]` as
+    // the validated no-op it is - and refusing every other column with the
+    // stored byte - happens at compile, not here. `DESC` never reaches the
+    // AST: every chain links forward only, and the parser refuses what no
+    // walk can produce.
+    std::optional<ColumnName> order_by;
+
+    // `LIMIT n`: how many rows the statement emits, nullopt when no LIMIT
+    // was written. 0 is a real value - a legal statement that emits
+    // nothing - which is why this is optional rather than 0-defaulted.
+    std::optional<std::uint64_t> limit;
+
+    // `OFFSET m`: qualifying rows skipped before the first emitted one.
+    // 0 when absent, and `OFFSET 0` means exactly that, so no flag is
+    // needed to tell the two apart.
+    std::uint64_t offset = 0;
 
     // Every relation's binding is distinct - the parser refuses the
     // statement otherwise, rather than picking one silently. That refusal

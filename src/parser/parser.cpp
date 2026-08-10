@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 
 namespace kds::parser {
 
@@ -1388,6 +1389,148 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
     }
 }
 
+// The pagination tail (spec I11, workplan V09): `[ORDER BY <col> [ASC]]
+// [LIMIT <n>] [OFFSET <m>]`, clause order fixed as written and each clause
+// independently optional. `ORDER`, `BY`, `ASC`, `DESC`, `LIMIT` and
+// `OFFSET` are ordinary identifiers matched by text at clause position,
+// like `GROUP` above and for its reason: no column reference can stand
+// here, so a column may carry any of those names and the fingerprint does
+// not move.
+//
+// The two class refusals repeat per clause rather than gating the
+// production once, because each names the clause the client wrote and the
+// byte it starts at - "LIMIT ... (byte 40)" against a statement whose
+// ORDER BY would also have been refused is the error that points at what
+// was typed.
+Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth) {
+    if (const Token& order = lexer_.Peek();
+        order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
+        // Over aggregated output the answer predates the tail (AG's
+        // `[PROPOSED]` row) and the corpus pins it, wording and all.
+        if (aggregated) {
+            return Status::Unsupported(
+                "ORDER BY is not supported over an aggregated statement (byte " +
+                std::to_string(order.byte_offset) +
+                "); an aggregated statement's output rows are not chain rows, and sorting them "
+                "needs an output sort this engine does not have");
+        }
+        // A subquery's rows feed a predicate - IN's set, EXISTS's witness,
+        // a scalar's one value - and no order of them is observable, so an
+        // ORDER BY there is a clause with nothing to mean.
+        if (depth > 0) {
+            return Status::Unsupported(
+                "ORDER BY inside a subquery is not supported (byte " +
+                std::to_string(order.byte_offset) +
+                "); a subquery's rows feed a predicate, and no order of them is observable");
+        }
+        lexer_.Next();
+        if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
+
+        auto col = ParseColumnName();
+        if (!col.ok()) return col.status();
+
+        // AG9's argument, one clause over: a paren here reads as an
+        // expression - `ORDER BY count(x)` - and refusing it by position
+        // beats a trailing-garbage error pointing past it.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            return Status::Unsupported(
+                "ORDER BY takes a column reference only, not an expression (byte " +
+                std::to_string(col.value().byte_offset) + ")");
+        }
+        stmt.order_by = std::move(col.value());
+
+        // `ASC` names the order the engine already emits and is accepted
+        // as written. `DESC` is a reverse walk: the heap chain and the
+        // index leaf chain link forward only, so there is nothing it could
+        // compile to - Unsupported, and I11 keeps the word in the grammar
+        // so the refusal does not shift when a reverse walk lands.
+        if (const Token& dir = lexer_.Peek(); dir.type == TokenType::kIdent) {
+            if (IEquals(dir.text, "ASC")) {
+                lexer_.Next();
+            } else if (IEquals(dir.text, "DESC")) {
+                return Status::Unsupported(
+                    "descending order is not supported (byte " +
+                    std::to_string(dir.byte_offset) +
+                    "); every chain links forward only, and a reverse walk does not exist");
+            }
+        }
+    }
+
+    if (const Token& limit = lexer_.Peek();
+        limit.type == TokenType::kIdent && IEquals(limit.text, "LIMIT")) {
+        // Groups are emitted in fold order, which is deterministic and
+        // deliberately not a contract - so which rows a LIMIT would keep
+        // is a guess, and this engine's answer to "which wrong number
+        // would you like" has always been neither. Belongs with HAVING and
+        // ORDER BY in feat-aggregate.md §10's post-fold-consumer decision.
+        if (aggregated) {
+            return Status::Unsupported(
+                "LIMIT is not supported over an aggregated statement (byte " +
+                std::to_string(limit.byte_offset) +
+                "); groups are emitted in fold order, which is not a contract, so which "
+                "rows a LIMIT keeps would be a guess");
+        }
+        // AG8's shape: pagination applies at the statement's emission
+        // boundary, and a sub-chain has none - its rows feed a predicate.
+        if (depth > 0) {
+            return Status::Unsupported(
+                "LIMIT inside a subquery is not supported (byte " +
+                std::to_string(limit.byte_offset) + "); paginate the outer statement instead");
+        }
+        lexer_.Next();
+        auto n = ParsePaginationCount("LIMIT");
+        if (!n.ok()) return n.status();
+        stmt.limit = n.value();
+    }
+
+    if (const Token& offset = lexer_.Peek();
+        offset.type == TokenType::kIdent && IEquals(offset.text, "OFFSET")) {
+        if (aggregated) {
+            return Status::Unsupported(
+                "OFFSET is not supported over an aggregated statement (byte " +
+                std::to_string(offset.byte_offset) +
+                "); groups are emitted in fold order, which is not a contract, so which "
+                "rows an OFFSET skips would be a guess");
+        }
+        if (depth > 0) {
+            return Status::Unsupported(
+                "OFFSET inside a subquery is not supported (byte " +
+                std::to_string(offset.byte_offset) + "); paginate the outer statement instead");
+        }
+        lexer_.Next();
+        auto m = ParsePaginationCount("OFFSET");
+        if (!m.ok()) return m.status();
+        stmt.offset = m.value();
+    }
+    return Status::OK();
+}
+
+// The count in a LIMIT or OFFSET clause. Decoded from the digits, not from
+// `int_val`: the signed decode wraps past 64 bits (token.hpp), and TY11's
+// lesson stands one layer down - a wrapped count silently means a number
+// the client did not write, so past-uint64 refuses instead.
+StatusOr<std::uint64_t> Parser::ParsePaginationCount(std::string_view clause) {
+    const Token tok = lexer_.Next();
+    if (tok.type != TokenType::kIntLit || tok.negative) {
+        return Status::InvalidArgument(std::string(clause) +
+                                        " takes a non-negative integer literal, got '" +
+                                        std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
+    }
+    std::uint64_t value = 0;
+    for (const char c : tok.digits()) {
+        const auto digit = static_cast<std::uint64_t>(c - '0');
+        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+            return Status::InvalidArgument(std::string(clause) + " count '" +
+                                            std::string(tok.digits()) +
+                                            "' does not fit in 64 bits (byte " +
+                                            std::to_string(tok.byte_offset) + ")");
+        }
+        value = value * 10 + digit;
+    }
+    return value;
+}
+
 // No `depth`: a join's relations are relation references, and a relation
 // reference is never a subquery (ParseRelationRef refuses one outright).
 Status Parser::ParseJoins(SelectStmt& stmt) {
@@ -1555,18 +1698,12 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
             "); filter before the fold with WHERE, or filter the result client-side");
     }
 
-    // ORDER BY over aggregated output, and only over aggregated output
-    // (spec §2 `[PROPOSED]`). A non-aggregated ORDER BY is not this
-    // clause's business and keeps the answer it has always had, which the
-    // corpus pins.
-    if (const Token& order = lexer_.Peek();
-        aggregated && order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
-        return Status::Unsupported(
-            "ORDER BY is not supported over an aggregated statement (byte " +
-            std::to_string(order.byte_offset) +
-            "); an aggregated statement's output rows are not chain rows, and sorting them "
-            "needs an output sort this engine does not have");
-    }
+    // ---- The pagination tail: ORDER BY, LIMIT, OFFSET (I11, V09) --------
+    //
+    // Parsed here and refused here - over aggregated output, in a
+    // subquery, `DESC` - so the aggregated ORDER BY answer the corpus pins
+    // did not move when the non-aggregated form became parseable.
+    if (Status s = ParsePaginationTail(stmt, aggregated, depth); !s.ok()) return s;
 
     // AG8 / J2: a fold inside a sub-chain puts an aggregation boundary
     // where the execution model has none. Refused with the position of

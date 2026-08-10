@@ -1,0 +1,348 @@
+#include <cstdint>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <variant>
+
+#include <gtest/gtest.h>
+
+#include "kds/parser/parser.hpp"
+
+// V09 - the pagination tail (docs/parser-v2.md I11,
+// docs/parser-v2-workplan.md V09).
+//
+// Three things this file holds down, in descending order of how expensive
+// they would be to get wrong:
+//
+//   1. **Nothing is reserved.** `ORDER`, `BY`, `ASC`, `DESC`, `LIMIT` and
+//      `OFFSET` are ordinary identifiers matched by text at clause
+//      position, so a column or table may carry any of those names, every
+//      previously-parsing statement lexes to the same token stream, and
+//      `kFingerprintVersion` does not move. The golden corpus pins the
+//      hashes; this file pins the grammar that keeps them true.
+//
+//   2. **The counts are slots** (I11): `LIMIT 10` and `LIMIT 20` share a
+//      pattern_id and differ in arg_hash, so a limited statement is one
+//      pattern rather than one per count - which is what lets a Waystone
+//      trail serve it per instance.
+//
+//   3. **Every refusal carries a position**: `DESC`, an aggregated
+//      statement's tail, a subquery's tail, a count that is not a
+//      non-negative integer.
+//
+// What the parser deliberately does not decide: whether `order_by` names
+// the driving relation's pk. Pk-ness is catalog knowledge, so that check -
+// and the acceptance of `ORDER BY <pk> [ASC]` as the validated no-op it is
+// - lives in the compiler (V09's execution half), pointed at the byte the
+// AST stored here.
+
+namespace kds::parser {
+namespace {
+
+// By value, for the reason parser_projection_test.cpp gives: the StatusOr
+// is a temporary and a reference into it dangles at the call site.
+SelectStmt MustSelect(const StatusOr<Statement>& parsed) {
+    EXPECT_TRUE(parsed.ok()) << parsed.status().message();
+    if (!parsed.ok()) return SelectStmt{};
+    return std::get<SelectStmt>(parsed.value());
+}
+
+// A refusal's message must name the byte the offending token starts at.
+// Checked as a substring rather than by parsing the message, because the
+// wording is allowed to improve and the position is not.
+::testing::AssertionResult MentionsByte(const Status& status, std::uint32_t offset) {
+    const std::string& msg = status.message();
+    const std::string want = "byte " + std::to_string(offset);
+    if (msg.find(want) != std::string::npos) return ::testing::AssertionSuccess();
+    return ::testing::AssertionFailure()
+           << "expected the message to name '" << want << "', got: " << msg;
+}
+
+// The byte a word starts at, so a test's expected position comes from the
+// statement itself rather than from a hand count that rots when the
+// statement is edited.
+std::uint32_t ByteOf(std::string_view sql, std::string_view word) {
+    const auto at = sql.find(word);
+    EXPECT_NE(at, std::string_view::npos) << word << " not in: " << sql;
+    return static_cast<std::uint32_t>(at);
+}
+
+// ---- Accepted forms -------------------------------------------------------
+
+TEST(ParserPaginationTest, LimitAlone) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t LIMIT 10"));
+    ASSERT_TRUE(sel.limit.has_value());
+    EXPECT_EQ(sel.limit.value(), 10u);
+    EXPECT_EQ(sel.offset, 0u);
+    EXPECT_FALSE(sel.order_by.has_value());
+}
+
+TEST(ParserPaginationTest, OffsetAlone) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t OFFSET 5"));
+    EXPECT_FALSE(sel.limit.has_value());
+    EXPECT_EQ(sel.offset, 5u);
+}
+
+TEST(ParserPaginationTest, LimitThenOffset) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t LIMIT 10 OFFSET 5"));
+    ASSERT_TRUE(sel.limit.has_value());
+    EXPECT_EQ(sel.limit.value(), 10u);
+    EXPECT_EQ(sel.offset, 5u);
+}
+
+// LIMIT 0 is a legal statement that emits nothing - a real value, not an
+// absent clause, which is the whole reason the AST field is optional.
+TEST(ParserPaginationTest, LimitZeroIsAValueNotAnAbsence) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t LIMIT 0"));
+    ASSERT_TRUE(sel.limit.has_value());
+    EXPECT_EQ(sel.limit.value(), 0u);
+}
+
+TEST(ParserPaginationTest, OrderByBareColumn) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY id"));
+    ASSERT_TRUE(sel.order_by.has_value());
+    EXPECT_EQ(sel.order_by->name, "id");
+    EXPECT_FALSE(sel.order_by->qualified());
+}
+
+TEST(ParserPaginationTest, OrderByQualifiedWithAsc) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY t.id ASC"));
+    ASSERT_TRUE(sel.order_by.has_value());
+    EXPECT_EQ(sel.order_by->qualifier, "t");
+    EXPECT_EQ(sel.order_by->name, "id");
+}
+
+TEST(ParserPaginationTest, TheFullTail) {
+    const std::string_view sql =
+        "SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 10 OFFSET 5";
+    const SelectStmt sel = MustSelect(Parse(sql));
+    ASSERT_TRUE(sel.order_by.has_value());
+    EXPECT_EQ(sel.order_by->name, "id");
+    ASSERT_TRUE(sel.limit.has_value());
+    EXPECT_EQ(sel.limit.value(), 10u);
+    EXPECT_EQ(sel.offset, 5u);
+    EXPECT_EQ(sel.where.size(), 1u);
+}
+
+TEST(ParserPaginationTest, TailAfterAJoin) {
+    const SelectStmt sel = MustSelect(
+        Parse("SELECT a.x, b.y FROM a JOIN b ON a.id = b.aid LIMIT 3"));
+    ASSERT_TRUE(sel.limit.has_value());
+    EXPECT_EQ(sel.limit.value(), 3u);
+    EXPECT_EQ(sel.relation_count(), 2u);
+}
+
+// The count is decoded from its digits, so the full unsigned range is
+// representable - int_val's signed decode could not judge this literal.
+TEST(ParserPaginationTest, LimitTakesTheFullUnsignedRange) {
+    const SelectStmt sel =
+        MustSelect(Parse("SELECT a FROM t LIMIT 18446744073709551615"));
+    ASSERT_TRUE(sel.limit.has_value());
+    EXPECT_EQ(sel.limit.value(), std::numeric_limits<std::uint64_t>::max());
+}
+
+// ---- Nothing is reserved --------------------------------------------------
+
+TEST(ParserPaginationTest, ColumnsMayBeNamedLimitAndOffset) {
+    const SelectStmt sel = MustSelect(Parse("SELECT limit, offset FROM t"));
+    ASSERT_EQ(sel.projection.size(), 2u);
+    EXPECT_EQ(sel.projection[0].name, "limit");
+    EXPECT_EQ(sel.projection[1].name, "offset");
+}
+
+TEST(ParserPaginationTest, ATableMayBeNamedOrder) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM order LIMIT 1"));
+    EXPECT_EQ(sel.from.table_name, "order");
+}
+
+TEST(ParserPaginationTest, AWhereColumnMayBeNamedLimit) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t WHERE limit = 1"));
+    ASSERT_EQ(sel.where.size(), 1u);
+    EXPECT_EQ(sel.where[0].col.name, "limit");
+}
+
+// ---- Refusals: DESC and expressions ---------------------------------------
+
+TEST(ParserPaginationTest, DescIsUnsupportedWithItsPosition) {
+    const std::string_view sql = "SELECT a FROM t ORDER BY id DESC";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "DESC")));
+}
+
+TEST(ParserPaginationTest, OrderByAnExpressionIsUnsupported) {
+    const std::string_view sql = "SELECT a FROM t ORDER BY count(x)";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "count")));
+}
+
+// ---- Refusals: aggregated output ------------------------------------------
+
+TEST(ParserPaginationTest, LimitOverAnAggregateIsUnsupported) {
+    const std::string_view sql = "SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "LIMIT")));
+}
+
+TEST(ParserPaginationTest, OffsetOverAnAggregateIsUnsupported) {
+    const std::string_view sql = "SELECT COUNT(*) FROM t OFFSET 2";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "OFFSET")));
+}
+
+// `SELECT b FROM t GROUP BY b` names no function and is still a fold - the
+// tail's aggregated refusal keys on the same test the items landing does.
+TEST(ParserPaginationTest, AGroupByAloneIsAggregatedForTheTail) {
+    const auto parsed = Parse("SELECT b FROM t GROUP BY b LIMIT 1");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+}
+
+// The pre-V09 answer, byte for byte where the corpus pins it: moving the
+// ORDER BY refusal into the tail production must not have moved what an
+// aggregated statement is told.
+TEST(ParserPaginationTest, OrderByOverAnAggregateKeepsItsAnswer) {
+    const std::string_view sql = "SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "ORDER")));
+}
+
+// ---- Refusals: subquery position ------------------------------------------
+
+TEST(ParserPaginationTest, LimitInASubqueryIsUnsupported) {
+    const std::string_view sql =
+        "SELECT a FROM t WHERE id IN (SELECT id FROM u LIMIT 3)";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "LIMIT")));
+}
+
+TEST(ParserPaginationTest, OrderByInASubqueryIsUnsupported) {
+    const std::string_view sql =
+        "SELECT a FROM t WHERE EXISTS (SELECT x FROM u ORDER BY id)";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "ORDER")));
+}
+
+// The depth rule reaches every WHERE, not just a SELECT's: UPDATE and
+// DELETE parse their predicates through the same production.
+TEST(ParserPaginationTest, DeleteWhereSubqueryTailIsRefusedToo) {
+    const auto parsed =
+        Parse("DELETE FROM t WHERE EXISTS (SELECT x FROM u LIMIT 1)");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+}
+
+// ---- Refusals: the count --------------------------------------------------
+
+TEST(ParserPaginationTest, ANegativeLimitIsInvalid) {
+    const auto parsed = Parse("SELECT a FROM t LIMIT -1");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+}
+
+// `1.5` lexes as one numeric token since TY10, so this is a typed refusal
+// naming the literal, not a syntax error at the dot.
+TEST(ParserPaginationTest, ADecimalLimitIsInvalid) {
+    const auto parsed = Parse("SELECT a FROM t LIMIT 1.5");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+}
+
+TEST(ParserPaginationTest, AStringOffsetIsInvalid) {
+    const auto parsed = Parse("SELECT a FROM t OFFSET 'x'");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+}
+
+TEST(ParserPaginationTest, AMissingCountIsInvalid) {
+    const auto parsed = Parse("SELECT a FROM t LIMIT");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+}
+
+TEST(ParserPaginationTest, ABindParameterCountIsInvalid) {
+    const auto parsed = Parse("SELECT a FROM t LIMIT ?");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+}
+
+// One past uint64 max: refused, never wrapped - TY11's lesson one layer
+// down, and the message names the digits the client wrote.
+TEST(ParserPaginationTest, AnOverflowingLimitRefusesRatherThanWraps) {
+    const auto parsed = Parse("SELECT a FROM t LIMIT 18446744073709551616");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(parsed.status().message().find("does not fit"), std::string::npos)
+        << parsed.status().message();
+}
+
+// ---- Refusals: clause order -----------------------------------------------
+
+// The clause order is the grammar (I11): OFFSET before LIMIT is trailing
+// garbage, not an alternate spelling. Dialect compatibility is a non-goal
+// (I13), and the MySQL comma form falls out the same way.
+TEST(ParserPaginationTest, OffsetBeforeLimitIsTrailingGarbage) {
+    const auto parsed = Parse("SELECT a FROM t OFFSET 5 LIMIT 10");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+}
+
+TEST(ParserPaginationTest, TheMysqlCommaFormIsRefused) {
+    const auto parsed = Parse("SELECT a FROM t LIMIT 10, 5");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+}
+
+// ---- The counts are slots (I11) -------------------------------------------
+
+std::optional<Fingerprint> FingerprintFor(std::string_view sql) {
+    Parser parser(sql);
+    auto parsed = parser.Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status().message();
+    return parser.fingerprint();
+}
+
+TEST(ParserPaginationTest, LimitCountsShareAPattern) {
+    const auto ten = FingerprintFor("SELECT a FROM t LIMIT 10");
+    const auto twenty = FingerprintFor("SELECT a FROM t LIMIT 20");
+    ASSERT_TRUE(ten.has_value());
+    ASSERT_TRUE(twenty.has_value());
+    EXPECT_EQ(ten->pattern_id, twenty->pattern_id);
+    EXPECT_NE(ten->arg_hash, twenty->arg_hash);
+}
+
+TEST(ParserPaginationTest, OffsetCountsShareAPatternToo) {
+    const auto five = FingerprintFor("SELECT a FROM t LIMIT 10 OFFSET 5");
+    const auto six = FingerprintFor("SELECT a FROM t LIMIT 10 OFFSET 6");
+    ASSERT_TRUE(five.has_value());
+    ASSERT_TRUE(six.has_value());
+    EXPECT_EQ(five->pattern_id, six->pattern_id);
+    EXPECT_NE(five->arg_hash, six->arg_hash);
+}
+
+// Writing the clause is part of the shape: a limited statement and its
+// unlimited twin are different patterns, so a trail recorded under one is
+// never consulted for the other.
+TEST(ParserPaginationTest, WritingLimitChangesThePattern) {
+    const auto limited = FingerprintFor("SELECT a FROM t LIMIT 10");
+    const auto unlimited = FingerprintFor("SELECT a FROM t");
+    ASSERT_TRUE(limited.has_value());
+    ASSERT_TRUE(unlimited.has_value());
+    EXPECT_NE(limited->pattern_id, unlimited->pattern_id);
+}
+
+}  // namespace
+}  // namespace kds::parser

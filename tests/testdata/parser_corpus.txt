@@ -174,9 +174,25 @@ ok	4aa155c62d488ef9	78f78f99c4196fe9	SELECT * FROM t AS a WHERE a.id BETWEEN 1 A
 InvalidArgument	5be869c8076bff1f	b5d414774c8002cc	SELECT * FROM t WHERE id BETWEEN 1
 InvalidArgument	97eadbe49c827e47	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 5
 InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 OR id = 2
-# [V09] pagination.
-InvalidArgument	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
-InvalidArgument	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
+# [V09] pagination. The tail parses since 2026-08-10, and the two hashes
+# that predate it did not move: `order`, `by`, `asc`, `limit` and `offset`
+# were always ordinary identifiers, so becoming parseable changed no shape
+# stream - the verdicts flipped with their task, the V08 precedent. The
+# counts are slots (I11): LIMIT 10 and LIMIT 20 share a pattern_id below.
+# DESC, an aggregated statement's tail and a subquery's stay refused.
+ok	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
+ok	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
+ok	cfd92d5cf2657bf9	183288bf5470b5dc	SELECT * FROM t LIMIT 20
+ok	a2ab37bd0b9912d1	6a2936eff68a8d8a	SELECT * FROM t LIMIT 10 OFFSET 5
+ok	d1d97970aff68c0c	b5d410774c7ffc00	SELECT * FROM t OFFSET 5
+ok	9e51e28ff0f77902	90e9577200715765	SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 2 OFFSET 1
+ok	7f56cd80953c49c8	cbf29ce484222325	SELECT limit, offset FROM t
+Unsupported	44d61d637a45b7d0	cbf29ce484222325	SELECT * FROM t ORDER BY id DESC
+Unsupported	53268d89f9272838	b5d410774c7ffc00	SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5
+Unsupported	da3c546ef95221a8	b5d416774c800632	SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 3)
+InvalidArgument	cfd92d5cf2657bf9	184a11bf54847d88	SELECT * FROM t LIMIT -1
+InvalidArgument	cfd92d5cf2657bf9	064a8a899bed480c	SELECT * FROM t LIMIT 1.5
+InvalidArgument	7a69afcc608c62f9	935e8a7428e56318	SELECT * FROM t OFFSET 5 LIMIT 10
 # [AG01] Aggregates. I14 is resolved by docs/feat-aggregate.md, so this
 # parses now — and the hash did not move, which is the whole of §2's
 # fingerprint argument: nothing was reserved and no token type was added,
