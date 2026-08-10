@@ -75,6 +75,21 @@ namespace kds::exec {
 
 class CabinOptimizerExecutor {
 public:
+    // PO9's production counters (workplan PHY06), monotonic over the
+    // process. **Applied**, not decided: the decision log already records
+    // what Decide wanted, so counting there again would answer the same
+    // question twice - these count what Execute actually did, and the gap
+    // between the two surfaces (a decided CREATE beside zero `creates`) is
+    // itself the diagnostic: the effectful half is refusing or deferring.
+    struct Counters {
+        std::uint64_t ticks = 0;            // enabled Tick() passes (cadence health)
+        std::uint64_t creates = 0;          // CREATEs that built and reported
+        std::uint64_t extends = 0;          // EXTENDs whose walk completed
+        std::uint64_t heals = 0;            // HEAL passes run
+        std::uint64_t drops = 0;            // DROPs applied
+        std::uint64_t builds_deferred = 0;  // busy-row / kill-switch build aborts
+        std::uint64_t build_failures = 0;   // failed builds (errors; deferrals excluded)
+    };
     // `txn` may be null - the no-manager configuration reads everything,
     // exactly as the assertion builder's check view does.
     CabinOptimizerExecutor(catalog::Catalog& catalog, storage::PageStore& store,
@@ -89,6 +104,8 @@ public:
 
     // Applies `actions` in order, checking `enabled` between actions.
     Status Apply(const stats::ActionSet& actions, const std::function<bool()>& enabled);
+
+    const Counters& counters() const noexcept { return counters_; }
 
 private:
     Status ApplyCreate(const stats::ActionItem& action, const std::function<bool()>& enabled);
@@ -115,6 +132,7 @@ private:
     stats::CabinStore& cabins_;
     stats::CabinOptimizer& controller_;
     txn::TransactionManager* txn_;
+    Counters counters_;
 };
 
 }  // namespace kds::exec

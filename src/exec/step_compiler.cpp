@@ -634,6 +634,7 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
         probe.col_pos = pred.lhs.col_pos;
         probe.value = pred.rhs.literal;
         probe.declared = cabin.origin == catalog::kCabinOriginUser;
+        probe.managed = cabin.origin == catalog::kCabinOriginAuto;
         return probe;
     }
     return std::nullopt;

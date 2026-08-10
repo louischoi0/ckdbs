@@ -46,6 +46,7 @@ public:
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    CommandDispatcher& dispatcher() { return *dispatcher_; }
     catalog::Catalog& catalog() { return boot_->catalog; }
     storage::InMemoryPageStore& store() { return store_; }
     stats::CabinStore& cabins() { return *cabins_; }
@@ -293,6 +294,82 @@ TEST(CabinOptimizerExecTest, DropRemovesTheRowTheSetsAndTheControllerEntry) {
     }
     EXPECT_TRUE(db.cabins().ObservedValuesOf(cabin_id).empty());
     EXPECT_EQ(controller.pages_committed(), 0u);
+}
+
+// ---- PHY06: the view, the counters, the completion edges -----------------
+
+TEST(CabinOptimizerExecTest, AnExtendReportsItsNewPageTotalToTheBudget) {
+    Instance db;
+    LoadBtree(db);
+    const std::uint64_t cabin_id = MakeAutoCabin(db, "b");
+    db.Run("SELECT * FROM b WHERE sym = 'aaa'");  // seed one value
+
+    stats::CabinOptimizer controller;
+    exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
+    // A deliberately wrong CREATE-time count, so the edge is visible: the
+    // report is the proxy's *total* (1 page for these sets), not a delta on
+    // top of whatever the estimate said.
+    controller.NoteCreated(db.catalog().FindTableOidByName("b").value(), 1, cabin_id, 7);
+    ASSERT_EQ(controller.pages_committed(), 7u);
+
+    ASSERT_TRUE(executor.Apply({ExtendAction(db, "b", cabin_id)}, kAlwaysOn).ok());
+    EXPECT_EQ(controller.pages_committed(), 1u)
+        << "the completed extend did not report the new total";
+    EXPECT_EQ(executor.counters().extends, 1u);
+}
+
+TEST(CabinOptimizerExecTest, TheViewReportsTheLifecycleAndTheCountersCount) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO h VALUES ('aaa')").substr(0, 8), "INSERTED");
+
+    // No view wired yet: the surface reports absence, never a zero-filled
+    // table wearing a fresh face.
+    EXPECT_EQ(db.Run("SHOW CABIN_OPTIMIZER").substr(0, 23), "CABIN_OPTIMIZER absent ");
+
+    stats::CabinOptimizerConfig config;
+    config.p_cabin_pages = 0;
+    config.confirm_snapshots = 2;
+    stats::CabinOptimizer controller(config);
+    exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
+    db.dispatcher().set_cabin_optimizer_view(&controller, &executor);
+    ASSERT_EQ(db.Run("SET CABIN_OPTIMIZER on").substr(0, 2), "OK");
+
+    const std::string probe = "SELECT * FROM h WHERE sym = 'aaa'";
+    for (int tick = 0; tick < 3; ++tick) {
+        for (int i = 0; i < 5; ++i) db.Run(probe);
+        ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
+    }
+
+    // The applied-action counters: three enabled ticks, one CREATE landed.
+    EXPECT_EQ(executor.counters().ticks, 3u);
+    EXPECT_EQ(executor.counters().creates, 1u);
+    EXPECT_EQ(executor.counters().drops, 0u);
+
+    // The view: header with the budget line, one managed entry in ACTIVE,
+    // named by relation and column, carrying its last logged action.
+    const std::string view = db.Run("SHOW CABIN_OPTIMIZER");
+    EXPECT_EQ(view.substr(0, 19), "cabin_optimizer=on ") << view;
+    EXPECT_NE(view.find("managed=1"), std::string::npos) << view;
+    EXPECT_NE(view.find("page_budget=1024"), std::string::npos) << view;
+    EXPECT_NE(view.find("rel=h column=sym state=ACTIVE"), std::string::npos) << view;
+    EXPECT_NE(view.find("last_action=CREATE reason=sustained-benefit"), std::string::npos)
+        << view;
+
+    // ANALYZE marks the optimizer-managed probe (PO9): the operator can
+    // see the serving structure is one the engine may drop on its own.
+    const std::string analyzed = db.Run("ANALYZE " + probe);
+    EXPECT_NE(analyzed.find("cabin_optimizer=true"), std::string::npos) << analyzed;
+}
+
+TEST(CabinOptimizerExecTest, ADeclaredCabinIsNeverMarkedAsManaged) {
+    Instance db;
+    LoadBtree(db);
+    ASSERT_EQ(db.Run("CREATE CABIN ON b(sym)").substr(0, 7), "CREATED");
+    const std::string analyzed = db.Run("ANALYZE SELECT * FROM b WHERE sym = 'aaa'");
+    ASSERT_NE(analyzed.find(" cabin="), std::string::npos) << analyzed;
+    EXPECT_EQ(analyzed.find("cabin_optimizer=true"), std::string::npos)
+        << "a user-declared Cabin wore the optimizer's tag: " << analyzed;
 }
 
 }  // namespace

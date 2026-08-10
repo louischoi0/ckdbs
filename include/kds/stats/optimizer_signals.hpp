@@ -146,6 +146,15 @@ public:
     // The one read (see the header). A single home-core step.
     OptimizerSnapshot Snapshot();
 
+    // A single Cabin's decayed S3 state, for the inspection surface
+    // (workplan PHY06's `SHOW CABIN_OPTIMIZER`). Const and version-silent
+    // where `Snapshot()` is neither: a SHOW must not advance the version
+    // sequence the decision log's digests are named in, or two operator
+    // reads would make two ticks' records look one snapshot apart. An
+    // untracked id answers zeros - indistinguishable from "tracked and
+    // fully decayed", which is the honest reading either way.
+    SnapshotCabin QualityOf(std::uint64_t cabin_id) const;
+
     std::size_t tracked_fingerprints() const noexcept { return fingerprints_.size(); }
     std::size_t tracked_cabins() const noexcept { return cabins_.size(); }
 
