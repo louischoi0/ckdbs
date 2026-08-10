@@ -2,28 +2,30 @@
 
 `docs/spec-bulkinsert.md` §0 claimed the single-row INSERT ceiling of ~9K
 rows/s was ~21 µs/row of statement cost that never amortizes, and shipped T1
-(BLK01–BLK05) as that cost's eviction notice. This document holds **three
-runs of three engine states**, deliberately: the first run (at `9ee04e4`,
+(BLK01–BLK05) as that cost's eviction notice. This document holds **four
+runs of four engine states**, deliberately: the first run (at `9ee04e4`,
 the T1 commit) found two engine defects — an O(pages-resident) tail walk
 under every heap insert, and a WAL stream that wedged at an exactly-filled
 segment; the second run (at `926f422`, both fixes in) re-measured the
-matrix whole; the third (at `06c8ab9`) measures **T3, the sorted heap
-fill** (`docs/workplan-t3.md`), against a gate-closed twin on the same
-statements. Earlier parts are kept as the record of why the fixes and T3
-exist; every number in them describes an engine state that no longer
-ships. Same `write_probe` row shape as the baseline
-(`bench/results-scenario1-vs-pg.md`); driver documentation:
-[`bench/docs/README.md`](docs/README.md), `bulk_insert_benchmark.py` /
-`pg_bulk_insert_benchmark.py`.
+matrix whole; the third (at `06c8ab9`) measured **T3, the sorted heap
+fill** (`docs/workplan-t3.md`) against a gate-closed twin; the fourth (at
+`3175824`) measures **T2, the KWP binary load stream** (KL02–KL06), which
+closes the tier table. Earlier parts are kept as the record of why each
+next step exists; every number in them describes an engine state that no
+longer ships. Same `write_probe` row shape throughout; driver
+documentation: [`bench/docs/README.md`](docs/README.md),
+`bulk_insert_benchmark.py` / `pg_bulk_insert_benchmark.py` /
+`kwp_load_benchmark.py`.
 
-**Thesis, across the three runs: each tier removed the cost the previous
-one exposed. T1 removed the per-row round trip and left a per-row
-pipeline; fixing the tail walk it exposed made that pipeline flat; T3
-removed the pipeline's per-row placement — one page fetch and one WAL
-image per page instead of per row — leaving a 1000-row INSERT at
-~1.45 µs/row, 675K rows/s relaxed on one connection, 7.1× PostgreSQL's
-best cell. What remains is the parse: ~1.05 of the 1.45 µs/row, which is
-T2's territory and now prices it at ~3.5×.**
+**Thesis, across the four runs: each tier removed the cost the previous
+one exposed, and the ledger closed where the spec said it would. T1
+removed the per-row round trip; the tail-hint fix made the pipeline flat;
+T3 removed per-row placement (0.31 µs/row of fill remains); T2 removed
+the parse — and replaced it with a smaller binary-decode cost the parse-
+share estimate had priced at zero, so T2 delivers 1.69× against Part III's
+~3.5× prediction, landing at 1.14M rows/s on one connection, 1.6× the
+PostgreSQL COPY twin, with the durability class within noise of free
+because a load session is one transaction.**
 
 ---
 
@@ -612,7 +614,7 @@ load gating: `~/bench-bulk2/matrix3.log`.
 
 ---
 
-# Part III — T3, the sorted heap fill, at `06c8ab9` (current engine state)
+# Part III — T3, the sorted heap fill, at `06c8ab9` (superseded by Part IV)
 
 T3 landed as a fill inside the T1 statement (`docs/workplan-t3.md`,
 TS01–TS04): page-at-a-time placement, a contiguous Keystone range from one
@@ -792,4 +794,205 @@ Protocol as before (`~/bench-bulk3`, log `matrix4.log`). The eligible
 cells are the driver's defaults (the schema is already inside the gate);
 the twin adds `--cabin`; WAL bytes are the last nonzero byte of the
 prewritten segment files, summed, read after server stop.
+
+---
+
+# Part IV — T2, the KWP load stream, at `3175824` (current engine state)
+
+T2 landed as the KWP v0 load endpoint (`kwp_port`, frames
+`C_LOAD_BEGIN/CHUNK/END` + `S_LOAD_READY/ACK/COMPLETE`, capability bit
+`BULK_LOAD`): pre-encoded D5 row chunks, windowed acknowledgment
+(window 4, max chunk 256 KiB), one implicit transaction committing at
+`LOAD_END`. Part III priced it from the parse share at **~3.5× on top of
+T3**; this run claims or refutes that number. The driver is new —
+`tools/kwp_load_benchmark.py`, a dependency-free KWP v0 client speaking
+the layouts in `wire/kwp.hpp` / `kwp_types.hpp` / `row_codec` — and the
+schema and row values are Part III's exactly, so every delta against
+Part III's T1 cells is the parse + text-decode + per-statement round-trip
+removal and nothing else. T3's gate stays open through the load: the WAL
+frontier densities below are byte-for-byte Part III's (74 B/row at
+chunk 1000, 149 at chunk 100), which is the fill engaging per chunk.
+
+## The run
+
+| | |
+|---|---|
+| executed | 2026-08-10, 10:40–10:42 UTC (ckdbs), 10:42 UTC (PostgreSQL COPY twin) — sequential |
+| commit measured | `3175824` (merge tip of `feat-kwp-server` == `main`; T2 = KL02–KL06 at `6ca9ec9`) |
+| tree | clean of engine changes; the session's driver and doc files are the working-tree delta |
+| binary | `build-release/kds_server`, rebuilt 10:36:17 UTC from this tree — mtime after HEAD, verified before the first measurement |
+| build type | Release |
+| tests | not run in this session (no engine change made here). In-run verification: every `S_LOAD_ACK` sequence-checked, `S_COMPLETE.rows_affected` == rows sent, and `SELECT COUNT(*)` over the text port per configuration — all exact, zero errors |
+| device / machine / gating | as Parts I–III. **Zero retries; every configuration's window was clean** (log: `~/bench-bulk4/matrix5.log`) |
+| ckdbs config | as before, plus `kwp_port` enabling the endpoint; fresh server + fresh file per configuration; data files `/home/ec2-user/bench-bulk4/*.db` |
+| PostgreSQL | 17.10, same scratch cluster, untouched defaults. The honest T2 peer is **`COPY FROM STDIN`** (via `psql \copy`, text CSV — the common operational form); `synchronous_commit = off` as the session-GUC relaxed twin. **COPY BINARY was not measured** — a binary-format COPY twin would need a generator this session did not build, and its absence is stated rather than papered over |
+| relation | `write_probe` shape (5 × int64, heap) — T3-eligible, as Part III |
+
+## The noise floor
+
+The pipelined relaxed configuration ran twice whole: chunk-1000
+1,140,045 vs 1,147,397 rows/s (**0.6 %**), chunk-100 615,061 vs 664,222
+(**8 %** — that phase is 0.16 s long, and the floor scales accordingly).
+Rate claims below respect the 8 % on chunk-100 cells and ~2 % on
+chunk-1000 cells; per-chunk p50s are tighter (serial p50s repeat within
+1 %).
+
+## The matrix: T2 against T1, and against COPY
+
+100,000 rows per configuration, one connection, rows/s. T1 columns are
+Part III's eligible (T3) cells — same schema, same values, same machine.
+
+| chunk/batch rows | durability | **T2 (KWP, window 4)** | T1 (Part III) | **T2/T1** | T2 serial (window 1) | PG COPY twin |
+|---:|---|---:|---:|---:|---:|---:|
+| 100 | relaxed | 615,061 | 368,156 | **1.67×** | 453,370 | — |
+| 1,000 | relaxed | **1,140,045** | 674,570 | **1.69×** | 1,057,871 | 722,437 |
+| 100 | group | 621,732 | 139,692 | **4.45×** | — | — |
+| 1,000 | group | 1,116,048 | 434,683 | **2.57×** | — | 706,180 |
+
+*(The COPY figures are the warm repeats — 138.4 / 141.6 ms per 100K rows;
+the first, cold invocations read 218 / 410 ms and are recorded as cold.
+COPY has no chunk size; its rows sit beside chunk-1000 for scale only.)*
+
+Five readings:
+
+- **The ~3.5× prediction is refuted: measured 1.69× at the cell that made
+  it.** Part III's estimate removed the parse (1.05 µs/row) and assumed
+  binary ingestion costs nothing; it does not. The decomposition below
+  puts the D5 decode + per-chunk apply at ~0.46 µs/row — the estimate's
+  missing term, and now the largest slice of what remains.
+- **The durability class is free under T2** (group = relaxed − 2 %,
+  inside noise): a load session is one transaction (BI11), so 100K rows
+  cost one fsync where T1 paid one per statement. That is why T2's win is
+  1.7× at relaxed and 2.6–4.5× at group — T2 amortizes the durability
+  point *further* than a statement can.
+- **The window is worth 1.36× at chunk 100 and 1.08× at chunk 1000**
+  (pipelined over serial). At chunk 1000 the server is already the
+  bottleneck (serial per-chunk p50 859.6 µs against a ~90 µs round trip),
+  so there is little RTT left to hide; at chunk 100 the fixed per-chunk
+  costs are a third of the service time and overlap pays.
+- **Against PostgreSQL's COPY: 1.58–1.61×** on the warm numbers, with the
+  caveat that the twin parses CSV text while KWP ships binary — the
+  format asymmetry is inherent to comparing each engine's native bulk
+  surface, and COPY BINARY is the unmeasured control.
+- **A 1M-row session sustains 891,069 rows/s** and crosses a WAL segment
+  boundary mid-load (frontier 74,016,064 bytes = 74.0 B/row exactly, two
+  segments) — the Part II fix exercised through the new path. The rate is
+  22 % below the 100K-row cell; the max-latency chunk (71.4 ms against a
+  3.7 ms p50) is consistent with the segment roll's `CreateSegment`,
+  which prewrites and fsyncs 64 MiB of zeros — a one-off p100 event the
+  session otherwise amortizes. The residual gap (p99 18.7 ms) is recorded
+  unattributed; candidates are the per-row rollback trail and the
+  checkpoint cadence, and nothing in this run separates them.
+
+## Per-chunk latency
+
+Latencies are per **chunk**. Pipelined figures include deliberate
+queueing behind the window — the throughput column above is the number to
+read; the serial rows are the clean per-chunk service time.
+
+| configuration | phase | ops | mean µs | p0 | p25 | p50 | p95 | p99 | max | µs/row (p50) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| relaxed, pipelined | load-100 | 1,000 | 639.7 | 244.6 | 534.3 | 549.8 | 939.2 | 1,755.5 | 5,425.4 | 5.5 |
+| relaxed, pipelined | load-1000 | 100 | 3,421.5 | 1,823.7 | 3,117.9 | 3,205.6 | 4,721.0 | 6,588.9 | 6,591.9 | 3.2 |
+| group, pipelined | load-100 | 1,000 | 628.5 | 252.7 | 532.6 | 547.7 | 915.6 | 1,568.7 | 5,581.3 | 5.5 |
+| group, pipelined | load-1000 | 100 | 3,430.2 | 1,450.0 | 3,116.5 | 3,241.4 | 4,658.9 | 6,307.4 | 6,415.8 | 3.2 |
+| relaxed, **serial** | load-100 | 1,000 | 215.9 | 165.6 | 191.3 | 198.2 | 267.6 | 432.6 | 3,939.9 | 1.98 |
+| relaxed, **serial** | load-1000 | 100 | 935.0 | 814.3 | 838.0 | 859.6 | 1,227.6 | 2,376.1 | 4,057.5 | **0.86** |
+| relaxed, 1M rows, pipelined | load-1000 | 1,000 | 4,428.9 | 1,381.3 | 3,550.1 | 3,734.6 | 6,425.8 | 18,742.8 | 71,374.3 | 3.7 |
+| relaxed, pipelined, **--no-quickack** | load-1000 | 100 | 4,348.5 | 1,421.8 | 2,866.1 | 3,354.5 | 6,180.8 | **43,478.7** | 44,220.1 | 3.4 |
+
+The pipelined p50 sits at ~3.7× the serial p50 at chunk 1000 — a chunk's
+in-flight time is roughly the window times the service time, which is the
+window working as designed, not a regression.
+
+## Where the remaining per-row time went
+
+Anchored on the serial chunk-1000 p50 (859.6 µs per 1,000 rows — the
+clean, unoverlapped cost), against Part III's T1 decomposition of the
+same rows:
+
+| component | T1 statement (Part III) | T2 serial chunk | note |
+|---|---:|---:|---|
+| parse + dispatch | ~1,047 µs | **0** | what T2 exists to remove |
+| D5 decode + per-chunk apply | — | **~460 µs** | the term the ~3.5× estimate priced at zero: chunk header, batch decode, per-row value materialization into the same `InsertOneRow`-shaped fill input |
+| T3 fill (id range, page assembly, FPI WAL) | ~312 µs | ~312 µs | unchanged — the same fill, engaged per chunk (WAL densities byte-identical to Part III) |
+| round trip / framing | ~91 µs | ~88 µs | one ACK per chunk; hidden by the window in pipelined mode |
+| **total per 1,000 rows** | **1,449.5** | **859.6** | |
+
+So the per-row residue at T2×T3 is **~0.86 µs serial / ~0.88 µs
+pipelined-throughput**, of which the binary decode+apply (~0.46) is now
+the majority and the fill itself (~0.31) the rest. The parse's 1.05 µs
+was removed in full; ~44 % of it came back as decode. **What is left
+worth building is no longer a tier**: the spec's three-tier program is
+complete, and the remaining costs are (a) the D5 decode's per-value
+materialization — an optimization inside one function family, not a
+surface — and (b) the endpoint defect below, which is a one-line fix
+worth up to a third of pipelined throughput.
+
+## Found by this run: the KWP endpoint does not set TCP_NODELAY
+## [FIXED same day: kwp_load_server.cpp now sets it on accept, the text
+## server's comment carried over - the tables above already measure the
+## fixed behavior via the driver's client-side QUICKACK workaround]
+
+`tcp_server.cpp` sets `TCP_NODELAY` unconditionally on the text port —
+its comment explains why — but `kwp_load_server.cpp` never does, so the
+endpoint's small `S_LOAD_ACK` frames are Nagle-held against the client's
+delayed ACKs whenever the pipeline drains: the classic ~40 ms stall,
+visible in this driver's first smoke run as p95 = 42.6 ms on 100-row
+chunks. The driver defeats the interaction from the client side
+(`TCP_QUICKACK` re-armed around every read — on by default, documented in
+the driver) so the benchmark measures the engine rather than the
+artifact; the `--no-quickack` demonstration row above shows the artifact
+retained: p99 43.5 ms and **−33 % throughput** (761,640 vs 1,140,045
+rows/s) on an otherwise identical configuration. Not fixed in this
+session; the fix is the same `setsockopt` the text server already
+carries, and it belongs beside a regression check that a load session's
+ACK latency has no 40 ms mode.
+
+## What Part IV teaches
+
+1. **T2 delivers 1.69× at relaxed, not the predicted ~3.5×, and the gap
+   is a lesson in estimating**: the parse-share arithmetic priced what T2
+   removes and assumed what T2 adds costs nothing. Binary ingestion is
+   cheaper than parsing — 0.46 vs 1.05 µs/row — but it is not free, and
+   the estimate's error (2×) is entirely that term. A prediction from a
+   subtraction should carry the replacement cost of the thing subtracted.
+2. **T2's larger win is transactional, not textual**: at group durability
+   it is 2.57–4.45× over T1, because one load session pays one fsync
+   where T1 paid one per statement. For a durable bulk load, the session
+   shape matters more than the encoding — BI11 quietly beat BI6.
+3. **The endgame number: ~1.14M rows/s on one connection, one core**
+   (0.88 µs/row), 1.6× PostgreSQL's warm COPY on the same volume, with
+   T3's fill engaged per chunk and WAL at 74 B/row. The spec's tier table
+   is now fully measured: round trip (T1) → placement (T3) → parse (T2),
+   each removal exposing the next, ending at a residue where the largest
+   slice is a binary decode.
+4. **The window is insurance, not speed, at large chunks**: 1.08× at
+   chunk 1000 against 1.36× at chunk 100. An operator should size chunks
+   toward the 256 KiB cap and not count on the window to rescue small
+   ones.
+5. **One new defect (missing `TCP_NODELAY`, −33 % pipelined, 40 ms ACK
+   stalls) and one prior fix re-proven** (the segment roll, crossed
+   mid-load at 1M rows with a 71 ms p100 that is the 64 MiB prewrite).
+   The roll's prewrite cost is now a measured, foreseeable p100 event for
+   any load longer than a segment — worth remembering when a latency SLO
+   meets a bulk load.
+
+## Reproducing (Part IV)
+
+```bash
+# server with the endpoint enabled
+printf 'durability = relaxed\nkwp_port = 15499\n' > kwp.conf
+./build-release/kds_server ~/f.db --port 15432 --config kwp.conf
+python3 tools/kwp_load_benchmark.py --port 15432 --kwp-port 15499 \
+    --rows 100000 --chunk-rows 100,1000 --mode pipelined --json out.json
+# --mode serial for stop-and-wait; --no-quickack to exhibit the Nagle stalls
+
+# the COPY twin (psql \timing, warm = second run)
+./tools/pg_setup.sh start && psql -h 127.0.0.1 -p 15433 -d bench \
+    -f pg_copy_on.sql   # DROP/CREATE + \copy 100K CSV rows + COUNT
+```
+
+Orchestration log with load gating and per-configuration WAL frontiers:
+`~/bench-bulk4/matrix5.log`.
 
