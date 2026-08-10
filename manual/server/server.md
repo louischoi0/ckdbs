@@ -155,29 +155,11 @@ design. Leave it at 1 until the cross-core pipeline lands
 
 ## 6. What a restart loses — known gaps
 
-Honest list, each owned by a doc:
-
-- **No WAL recovery** (`docs/wal.md`): the log is written and never read.
-  A crash loses everything since the last checkpoint/`SYNC`/clean shutdown.
-  Do not attempt a partial recovery — `docs/txn.md` §8's instruction.
-- **MVCC ships before recovery** (`docs/txn.md` §8): an uncommitted row
-  that survives a crash reads as *committed* on the next boot. Known,
-  accepted, closable only by real recovery.
-- **Cabin entry sets are memory-resident** (`docs/feat-cabin.md` §9): a
-  restart keeps the `sys.cabins` row and loses the sets; they re-observe
-  from traffic.
-- **Assertions report `enforcing=0` after a restart**
-  (`docs/feat-assertion.md`): the durable Bound Cabin pages survive but the
-  in-memory registry/directory cannot be rebuilt until recovery replays the
-  assertion records. The catalog row survives; enforcement does not.
-- **DDL and catalog writes are unlogged**: `CREATE TABLE` inside a
-  transaction is not rolled back, and catalog changes are protected only by
-  page flushes.
-- **Keystone K1 does not hold across a crash**
-  (`docs/keystoneid-k0-findings.md`): the durable log can name ids the
-  unlogged `sys.tables.next_id` has forgotten.
-- **No purge**: undo, var-heap values, superseded index/Cabin entries and
-  delete-marked tuples all grow monotonically; there is no reclamation of
-  anything yet.
-- **No auth, no TLS, loopback only** — by design until KWP/1's handshake
-  exists (`docs/protocol.md`).
+The engine-wide list lives in **`docs/known-gaps.md`** — durability and
+recovery gaps, what a restart loses, the no-purge rule, multicore limits
+and protocol gaps, each entry naming its owning doc. The three an operator
+must know before trusting this server with data: **WAL recovery is not
+implemented** (a crash loses everything since the last
+checkpoint/`SYNC`/clean shutdown), **an uncommitted row surviving a crash
+reads as committed on the next boot**, and **assertions report
+`enforcing=0` after a restart** until recovery exists.

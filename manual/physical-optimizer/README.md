@@ -1,4 +1,5 @@
 # Physical optimizer manual
 
-Placeholder. Will cover the shadow planner, `SHOW RELAYOUT`, the decay score,
-the Cabin controller, and the §6 gates (docs/feat-physical-optimizer.md).
+`physical-optimizer.md` — the shadow planner and `SHOW RELAYOUT`, the
+decay score, the three enactment gates, and the Cabin controller's status.
+Verified against code 2026-08-10.
