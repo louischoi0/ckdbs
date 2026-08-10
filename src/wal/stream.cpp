@@ -3,6 +3,8 @@
 #include <string>
 #include <utility>
 
+#include "kds/wal/log_scanner.hpp"
+
 namespace kds::wal {
 
 WalStream::WalStream(LogDevice* device, std::uint32_t core_id, std::size_t ring_capacity)
@@ -85,22 +87,13 @@ Status WalStream::ScanTail(std::uint64_t segment_no) {
     if (Status s = device_->ReadAt(segment_no, 0, header_block_); !s.ok()) {
         return s;
     }
-    auto header = DecodeSegmentHeader(header_block_);
-    if (!header.ok()) {
+    // Shared with the recovery scanner (wal/log_scanner.hpp): "is this
+    // segment mine, and does it start where I think it does" is one
+    // question, and the append path and the replay path must not answer it
+    // two ways.
+    if (auto header = ValidateSegmentHeader(header_block_, core_id_, segment_no, segment_size_);
+        !header.ok()) {
         return header.status();
-    }
-    // The header says which stream and which position these bytes belong
-    // to; appending past one that disagrees would interleave two streams.
-    if (header.value().core_id != core_id_) {
-        return Status::Corruption("WalStream: segment " + std::to_string(segment_no) +
-                                  " belongs to core " + std::to_string(header.value().core_id) +
-                                  ", not " + std::to_string(core_id_));
-    }
-    if (header.value().segment_no != segment_no || header.value().start_lsn != start_lsn) {
-        return Status::Corruption("WalStream: segment " + std::to_string(segment_no) +
-                                  " is stamped as segment " +
-                                  std::to_string(header.value().segment_no) + " at lsn " +
-                                  std::to_string(header.value().start_lsn));
     }
 
     // The whole body at once. Fine at the sizes recovery sees today; when

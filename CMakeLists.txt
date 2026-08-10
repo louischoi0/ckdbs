@@ -81,6 +81,7 @@ add_library(kds
     src/wal/record.cpp
     src/wal/payload.cpp
     src/wal/stream.cpp
+    src/wal/log_scanner.cpp
     src/wal/manager.cpp
     src/wal/checkpointer.cpp
     src/wal/log_device.cpp

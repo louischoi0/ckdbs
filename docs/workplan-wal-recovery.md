@@ -1,6 +1,6 @@
 # WAL recovery — workplan
 
-Status: **PLAN. Nothing started.** Spec: `docs/wal.md` §12 (normative, and
+Status: **RC01 written (unbuilt); RC02 onward not started.** Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
@@ -145,15 +145,41 @@ Order is dependency order. Each ships with its tests in the same change,
 deterministic, over `MemoryLogDevice`/`MemoryPageDevice` with injected
 faults (`rules.md` §4).
 
-**RC01 — The segment-spanning reader.**
-`wal::LogScanner` over `LogDevice`: open at an LSN, yield `DecodedRecord`s
-to the durable end across segment rolls, skip `PAD`, stop at the first bad
-CRC or impossible `total_len` (§4.2). Built on `RecordReader`, which
-already answers for one buffer.
+**RC01 — The segment-spanning reader. WRITTEN 2026-08-10, NOT YET BUILT
+OR RUN** — the environment it was written in has no C++ toolchain, so
+every claim below is an argument until `scripts/test.sh` says otherwise.
+`wal/log_scanner.hpp` + `src/wal/log_scanner.cpp`: `ScanLog(device,
+core_id, from_lsn, visitor)` walks segments to the durable end, and
+`ScanLogToEnd` is the same walk with an accept-everything visitor rather
+than a second one. Built on `RecordReader`, which already answers for one
+buffer.
+
+Four decisions it made, none of them in the task's own text:
+
+- **A `PAD` is framing and never reaches the visitor.** It seals a
+  segment, so the walk continues in the next one — and it is the single
+  place a scan must ignore bytes that decode cleanly.
+- **A torn record ends the scan; a bad segment *header* fails it.** The
+  distinction is the reliability argument: a torn tail is the expected
+  shape of a crash, a segment stamped for another core means the file set
+  is not the stream it claims to be, and replaying a plausible prefix of
+  that is the partial recovery `txn.md` §8 forbids.
+- **The visitor may veto.** Returning a non-ok Status stops the scan and
+  is returned — which is how a phase above will make an unknown record
+  type the hard error `wal.md` §5.2 requires, without the scanner needing
+  to know the type list.
+- **`ValidateSegmentHeader` is shared with `WalStream::ScanTail`**, whose
+  copy is deleted. "Is this segment mine and does it start where I think
+  it does" is one question, and the append path and the replay path
+  answering it two ways is the drift `exec/tuple_verify.hpp` exists to
+  prevent. Two tests assert the two paths agree about the durable end,
+  sealed tail included.
+
 *Done when:* a scripted multi-segment stream reads back exactly what was
 appended; truncation at **every byte offset** of the last record stops
 cleanly and reports `stopped_early`; a sealed-then-rolled segment boundary
-is crossed with no record lost or duplicated.
+is crossed with no record lost or duplicated. All three are written in
+`tests/wal_log_scanner_test.cpp` and **none has been executed.**
 
 **RC02 — Analysis.**
 From the core's `WalAnchorFields`: scan `redo_start_lsn` → durable end,
