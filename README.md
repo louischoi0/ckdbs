@@ -604,7 +604,9 @@ on this 2-vCPU class of box; and re-measure a premise before building on it.
 
 ## Status
 
-Under active development. The design is specification-first: every subsystem has a spec with explicit open decisions and required tests in [`docs/`](docs/) — start with `rules.md`, then `page.md`, `wal.md`, `txn.md`, `protocol.md`, `parser.md`, `waystone-concpets.md`, and `step-chain.md`.
+Under active development. The design is specification-first: every subsystem has a spec with explicit open decisions and required tests in [`docs/`](docs/) — start with `heap-and-tuple.md` (the authoritative spec) and `rules.md`, then `page.md`, `wal.md`, `txn.md`, `protocol.md`, `parser-v2.md`, and `waystone-concpets.md`. [`docs/known-gaps.md`](docs/known-gaps.md) is the engine-wide list of what is missing and what a restart loses; [`manual/`](manual/) is the user-facing surface, verified against code rather than against specs.
+
+Note `parser.md` and `step-chains.md` are **superseded** by `parser-v2.md` and kept only as history — this list named the first and a `step-chain.md` that never existed.
 
 ```bash
 ./build.sh        # build

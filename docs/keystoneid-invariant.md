@@ -4,7 +4,17 @@ Status: **DECIDED** (K1–K5 below). **K-M1 done 2026-08-03** —
 `docs/keystoneid-k0-findings.md` is what it found, and its four proposed
 amendments are **applied here** (2026-08-03): K3's wording, §1's min_key
 aside, §5's milestone order, and §1.2's oid claim. Read the findings before
-starting K-M2; three of them change what K-M2 is. K-M2..K-M6 not started.
+starting K-M2; three of them change what K-M2 is.
+
+**Milestone state (corrected 2026-08-10 — this line read "K-M2..K-M6 not
+started", which §5 below already contradicted for K-M4):**
+**K-M1 done**, **K-M4 done** (both 2026-08-03), **K-M3 partly** — the
+refusal exists and holds, as a dispatcher-level
+`ERR primary-key column '<c>' cannot be updated`
+(`src/server/command_dispatcher.cpp`), not the compile-time `Unsupported`
+K-M3 specifies, so the *behaviour* is built and the *layer and status code*
+are not. **K-M2a, K-M2, K-M5, K-M6 not started**, and K-M2 stays blocked on
+K-M2a, which is blocked on work in `docs/wal.md`.
 Depends on: Keystone super-column contract (40-bit id + 8-bit flags +
 16-bit meta id), per-relation catalog metadata, WAL, core-ownership
 dispatch.
@@ -254,10 +264,19 @@ decide two things K-M2 would otherwise guess at:
   at ~949/s: that is the shape a crash-safe implementation reaches for
   when it skips bump-ahead, and it is the one outcome to design against.
 
-**K-M3 — Enforce K2 (immutability).**
+**K-M3 — Enforce K2 (immutability). PARTLY BUILT.**
 Compiler/executor: an UPDATE whose SET list touches the super column
 returns Unsupported at compile time (J2 policy — no slow path).
 Acceptance: negative tests at parser, compiler, and wire levels.
+
+*What exists (verified 2026-08-10):* the SET list is checked in
+`CommandDispatcher`'s UPDATE path and answers
+`ERR primary-key column '<c>' cannot be updated`. So K2 holds — no path
+mutates a Keystone id — but two clauses of this milestone do not: the
+check is at the **dispatcher**, not the compiler, and the code is a plain
+error rather than `kUnsupported`. Closing it is moving one check and
+changing one status code; the acceptance tests at compiler and wire level
+are what would pin it.
 
 **K-M4 — Budget observability. DONE 2026-08-03.**
 Expose per-relation issued-count and remaining budget (derived from

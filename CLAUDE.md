@@ -33,9 +33,9 @@ statements, not style.
 |---|---|---|
 | Pages, semi-sorted heap, Keystone, fixed-length tuples, var-heap | Built | `docs/heap-and-tuple.md` (authoritative), `docs/rule-fixed-length-tuple.md`, `docs/page.md` |
 | Clustered B+ tree | Built | `docs/heap-and-tuple.md` |
-| WAL | INSERT/UPDATE/DELETE logged; **recovery not implemented** — nothing reads the log back | `docs/wal.md` |
+| WAL | Every data mutation logged (heap, undo, var-heap, index, assertions); **catalog/DDL writes are not**, and **recovery not implemented** — nothing reads the log back | `docs/wal.md` |
 | Transactions & MVCC | Built (T01-T14); no purge, and MVCC ships before recovery (see §8's gap) | `docs/txn.md`, `docs/txn-workplan.md` |
-| Query language, parser, step chains, joins, subqueries | Built (V01-V18; V09 pagination — ORDER BY pk / LIMIT / OFFSET — done 2026-08-10); V20 (written-order doc) open | `docs/parser-v2.md`, `docs/parser-v2-workplan.md` |
+| Query language, parser, step chains, joins, subqueries | Built (V01-V19; V09 pagination — ORDER BY pk / LIMIT / OFFSET — done 2026-08-10). Open: V08's `IN (value list)`, V11 (`WITH (...)` table options), V12 (`SET DURABILITY`, the session/admin classes), V20's test, and phase V-6's blueprint parser | `docs/parser-v2.md`, `docs/parser-v2-workplan.md` |
 | Aggregation (GROUP BY, COUNT/SUM/MIN/MAX/AVG) | Built (AG01-AG10) | `docs/feat-aggregate.md`, `docs/workplan-aggregate.md` |
 | Aggregate performance | AP01-AP03 built, AP05 next | `docs/workplan-aggregate-perf.md` (start at "Where to pick this up") |
 | Types: DATE, TIMESTAMP, DECIMAL, DECIMAL128 | Built (TY01-TY11); `float` stays refused | `docs/spec-types.md`, `docs/workplan-types.md` |
@@ -55,7 +55,7 @@ statements, not style.
 | Cross-core execution | P0, P1, P2, P6 (catalog half + CC7 decision + P6b handoff + P6c placement), P5-shape row-id leasing, P4 restriction half — all built by 2026-08-10. **The one remaining piece is the step pipeline itself** (statement dispatch + the executor's coroutine conversion) | `docs/crosscore.md`, `docs/workplan-crosscore.md`, `docs/sched.md` |
 | Task representation | Decided and built: C++20 stackless coroutines | `docs/sched.md` §3 |
 | Wire protocol KWP/1 | Frame codec only; the server speaks the newline text protocol | `docs/protocol.md`, `docs/protocol-wp.md`, `docs/client-manual.md` |
-| Keystone id issue-once contract | K-M1, K-M4 built; K1 does not hold across a crash — read the findings before quoting the invariant | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
+| Keystone id issue-once contract | K-M1, K-M4 built; K-M3 partly (pk-update refused, but at the dispatcher and not as `Unsupported`); K1 does not hold across a crash — read the findings before quoting the invariant | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
 | User manual | `manual/` — SQL surface written, verified against code | `manual/sql/sql.md` |
 
