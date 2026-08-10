@@ -28,6 +28,16 @@ the owner's workplan.
   surviving a crash reads as **committed** on the next boot — its writer id
   is below the new high-water mark and in no live set. No cheap mitigation
   exists; closing it requires a persisted commit watermark, i.e. recovery.
+- **`UNDO_WRITE` is not replayable** (found 2026-08-10 building
+  `docs/workplan-wal-recovery.md` RC03): the record carries the chain
+  links and the before-image, but not the undo record's
+  `target_page_id`/`target_slot`/`type`, so a chain rebuilt from the log
+  would not name the tuples it restores. `docs/txn.md` §3.5 specifies the
+  payload's `image` as the record's tail *including* those fields and the
+  implementation passes the bare before-image — **the spec and the code
+  disagree, and the code's version loses what recovery needs.** Redo
+  refuses the record rather than rebuilding a chain that points at page 0
+  slot 0. Closing it is a format decision, unowned.
 - **DDL and catalog writes are unlogged**, and DDL is not transactional
   (`docs/txn.md` §7): `CREATE TABLE` inside a transaction is not rolled
   back.

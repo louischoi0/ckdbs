@@ -321,6 +321,41 @@ public:
     // snapshot still needs the space). Fails with NotFound if `slot` is already out of range/dead.
     Status RetireSlot(std::uint16_t slot);
 
+    // Writes a tuple at a **named** slot, for redo
+    // (docs/workplan-wal-recovery.md RC03). The counterpart of
+    // txn::UndoPageWriteAt, and it exists for the same reason: replay must
+    // reproduce the exact position the original write chose, because that
+    // position is *durably referenced elsewhere* - an undo record names
+    // `target_page_id` + `target_slot`, so a tuple that came back at a
+    // different slot would leave every undo chain pointing at the wrong
+    // row. InsertTuple() cannot be used for this: it allocates the next
+    // slot and returns it, which is the right contract for a writer and
+    // the wrong one for a replayer.
+    //
+    // Three cases, and only the first two are reachable from a correct
+    // stream:
+    //
+    //   slot == nr_slots   append, exactly as InsertTuple does - the new
+    //                      slot index is `slot` by construction;
+    //   slot <  nr_slots   the slot exists, so this is a re-application:
+    //                      overwrite in place. **This is what makes redo
+    //                      idempotent** - replaying a record twice writes
+    //                      identical bytes the second time and moves no
+    //                      header field;
+    //   slot >  nr_slots   a gap. Slots are allocated densely and in order,
+    //                      so no writer could have produced this: Corruption.
+    //
+    // A dead slot is also Corruption rather than a resurrection: retirement
+    // follows its insert in LSN order, so redo reaching a dead slot means
+    // the page is not the page the record was written against.
+    //
+    // Fails with OutOfSpace if the payload does not fit the existing slot's
+    // capacity (an append that does not fit fails the same way InsertTuple
+    // does). Under invariant 13 a relation's rows are one size, so that is
+    // a corruption signal in practice rather than a resize request.
+    Status RedoWriteTuple(std::uint16_t slot, std::span<const std::byte> payload,
+                          std::uint64_t trx_id, std::uint64_t undo_ptr);
+
     // Raw slot-directory contents for `slot_idx`, dead or alive - unlike
     // ReadTuple()/SlotCapacity(), a dead slot is reported (dead=true)
     // rather than treated as NotFound. For development/inspection tooling

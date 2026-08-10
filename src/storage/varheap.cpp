@@ -127,6 +127,58 @@ StatusOr<std::uint16_t> PageAppend(std::span<std::byte, kPageSize> page,
     return slot;
 }
 
+Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
+                   std::span<const std::byte> value) {
+    if (value.size() > kMaxValueSize) {
+        return Status::Unsupported("var-heap value of " + std::to_string(value.size()) +
+                                    " bytes exceeds the " + std::to_string(kMaxValueSize) +
+                                    " a page can hold");
+    }
+
+    VarHeapPageHeaderFields h = ReadHeader(page);
+
+    if (slot > h.nr_slots) {
+        return Status::Corruption("redo names var-heap slot " + std::to_string(slot) +
+                                  " on a page holding " + std::to_string(h.nr_slots) +
+                                  "; slots are dense, so this record is not this page's");
+    }
+
+    // Re-application. A var-heap value is immutable per version (invariant
+    // 14), so the only legal second write is the same bytes - which makes
+    // this a verified no-op rather than a rewrite.
+    if (slot < h.nr_slots) {
+        auto existing = PageRead(page, slot);
+        if (!existing.ok()) {
+            return existing.status();
+        }
+        if (existing.value().size() != value.size()) {
+            return Status::Corruption("redo would change var-heap slot " + std::to_string(slot) +
+                                      " from " + std::to_string(existing.value().size()) +
+                                      " bytes to " + std::to_string(value.size()) +
+                                      "; values are immutable per version");
+        }
+        return Status::OK();
+    }
+
+    const std::size_t needed = kSlotOnDiskSize + value.size();
+    const std::size_t avail = h.upper > h.lower ? (h.upper - h.lower) : 0;
+    if (avail < needed) {
+        return Status::OutOfSpace("var-heap page has no room for this value");
+    }
+
+    const auto new_upper = static_cast<std::uint16_t>(h.upper - value.size());
+    if (!value.empty()) {
+        std::memcpy(page.data() + new_upper, value.data(), value.size());
+    }
+    WriteSlot(page, slot, VarHeapSlotFields{new_upper, static_cast<std::uint16_t>(value.size())});
+
+    h.nr_slots = static_cast<std::uint16_t>(h.nr_slots + 1);
+    h.lower = static_cast<std::uint16_t>(h.lower + kSlotOnDiskSize);
+    h.upper = new_upper;
+    WriteHeader(page, h);
+    return Status::OK();
+}
+
 StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSize> page,
                                                std::uint16_t slot) {
     VarHeapPageHeaderFields h = ReadHeader(page);

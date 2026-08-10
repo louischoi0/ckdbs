@@ -354,4 +354,72 @@ Status PageView::RetireSlot(std::uint16_t slot_idx) {
     return Status::OK();
 }
 
+Status PageView::RedoWriteTuple(std::uint16_t slot_idx, std::span<const std::byte> payload,
+                                std::uint64_t trx_id, std::uint64_t undo_ptr) {
+    if (payload.size() > kPageSize) {
+        return Status::InvalidArgument("payload larger than a page");
+    }
+    if (trx_id > kMaxTrxId) {
+        return Status::InvalidArgument("trx_id exceeds 48 bits");
+    }
+
+    HeapPageHeaderFields h = ReadHeader();
+
+    if (slot_idx > h.nr_slots) {
+        // Slots are dense and allocated in order, so no writer produced
+        // this. Replaying it would leave the skipped slots as garbage the
+        // directory claims exist.
+        return Status::Corruption("redo names slot " + std::to_string(slot_idx) +
+                                  " on a page holding " + std::to_string(h.nr_slots) +
+                                  "; heap slots are dense, so this record is not this page's");
+    }
+
+    // Re-application: the slot already exists, so write the same bytes into
+    // the same place. Idempotent by construction - no header field moves.
+    if (slot_idx < h.nr_slots) {
+        HeapSlotFields existing = ReadSlot(slot_idx);
+        if ((existing.flags & kSlotFlagDead) != 0 || existing.length == 0) {
+            return Status::Corruption("redo names retired slot " + std::to_string(slot_idx) +
+                                      "; retirement follows its insert in LSN order");
+        }
+        return OverwriteTuple(slot_idx, payload, trx_id, undo_ptr);
+    }
+
+    // Append. Identical arithmetic to InsertTuple, whose returned slot is
+    // `h.nr_slots` - which is `slot_idx` here, checked above.
+    const auto payload_len = static_cast<std::uint16_t>(payload.size());
+    const std::size_t needed = kSlotOnDiskSize + kTupleHeaderOnDiskSize + payload_len;
+    const std::size_t avail = h.upper > h.lower ? (h.upper - h.lower) : 0;
+    if (avail < needed) {
+        return Status::OutOfSpace("heap page has no room for this tuple");
+    }
+
+    const auto new_upper =
+        static_cast<std::uint16_t>(h.upper - (kTupleHeaderOnDiskSize + payload_len));
+
+    std::byte* tuple_base = page_.data() + new_upper;
+    std::memcpy(tuple_base + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
+    std::memcpy(tuple_base + kTupleUndoPtrOffset, &undo_ptr, sizeof(undo_ptr));
+    std::memcpy(tuple_base + kTupleDataLenOffset, &payload_len, sizeof(payload_len));
+    const std::uint8_t tuple_flags = 0;
+    const std::uint8_t tuple_reserved = 0;
+    std::memcpy(tuple_base + kTupleFlagsOffset, &tuple_flags, sizeof(tuple_flags));
+    std::memcpy(tuple_base + kTupleReservedOffset, &tuple_reserved, sizeof(tuple_reserved));
+    if (payload_len > 0) {
+        std::memcpy(tuple_base + kTupleHeaderOnDiskSize, payload.data(), payload_len);
+    }
+
+    HeapSlotFields slot{};
+    slot.offset = new_upper;
+    slot.length = static_cast<std::uint16_t>(kTupleHeaderOnDiskSize + payload_len);
+    slot.flags = 0;
+    WriteSlot(slot_idx, slot);
+
+    h.nr_slots = static_cast<std::uint16_t>(h.nr_slots + 1);
+    h.lower = static_cast<std::uint16_t>(h.lower + kSlotOnDiskSize);
+    h.upper = new_upper;
+    WriteHeader(h);
+    return Status::OK();
+}
+
 }  // namespace kds::heap

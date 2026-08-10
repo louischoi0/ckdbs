@@ -190,6 +190,21 @@ Status FormatPage(std::span<std::byte, kPageSize> page);
 StatusOr<std::uint16_t> PageAppend(std::span<std::byte, kPageSize> page,
                                     std::span<const std::byte> value);
 
+// Writes a value at a **named** slot, for redo
+// (docs/workplan-wal-recovery.md RC03). The counterpart of
+// PageView::RedoWriteTuple and txn::UndoPageWriteAt, and it exists for the
+// reason VARHEAP_APPEND records its slot at all: the tuple cell that points
+// here already carries `(page_id, slot)`, so a value that came back at a
+// different slot would be a value silently swapped for another.
+//
+// `slot == nr_slots` appends exactly as PageAppend does; `slot < nr_slots`
+// is a re-application and must find the same length already there, which is
+// what makes replaying a record twice a no-op (values are immutable per
+// version - invariant 14 - so identical bytes are the only legal
+// re-application). A slot past the end is Corruption: slots are dense.
+Status PageWriteAt(std::span<std::byte, kPageSize> page, std::uint16_t slot,
+                   std::span<const std::byte> value);
+
 // Reads the value at `slot`. The returned span points into `page` itself,
 // so it is valid only while those bytes stay alive and untouched - callers
 // that keep the value must copy it. Fails with Corruption for a slot that

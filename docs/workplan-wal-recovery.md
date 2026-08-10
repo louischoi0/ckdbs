@@ -1,6 +1,6 @@
 # WAL recovery — workplan
 
-Status: **RC01-RC02 written (unbuilt); RC03 onward not started.** Spec: `docs/wal.md` §12 (normative, and
+Status: **RC01-RC03 written (unbuilt; RC03 blocked on a format decision); RC04 onward not started.** Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
@@ -224,7 +224,56 @@ All three are in `tests/wal_analysis_test.cpp`, with the seeding path, the
 recLSN-of-zero rule and the torn-tail-demotes-a-commit case beside them,
 and **none has been executed.**
 
-**RC03 — Redo.**
+**RC03 — Redo. WRITTEN 2026-08-10 EXCEPT ONE APPLIER, NOT BUILT OR RUN.**
+`wal/redo.hpp` + `src/wal/redo.cpp`, plus the two page primitives it
+needed. Seven of the eight appliers are written; the eighth is **blocked on
+a format decision that is not this task's**, below.
+
+Two primitives had to be added, and which page classes already had one is
+itself the finding: **the undo path anticipated recovery and the heap and
+var-heap paths did not.** `txn::UndoPageWriteAt` already existed with
+exactly the redo contract, comment included. `PageView::InsertTuple` and
+`varheap::PageAppend` both *allocate* a position and return it, which is
+the right contract for a writer and the wrong one for a replayer — so
+`PageView::RedoWriteTuple` and `varheap::PageWriteAt` are new. Redo must
+place at the position the record names because those positions are
+**durably referenced elsewhere**: an undo record names
+`(target_page_id, target_slot)`, and a spilled cell names
+`(page_id, slot)`. A replay that appended "wherever the page ends" would
+reproduce the bytes and break every one of those references. Index entries
+need no primitive — their position is a function of their bytes (IX4b), so
+`InsertEntry` reproduces its own slot, and the applier asserts that it did.
+
+> **THE BLOCKER — `UNDO_WRITE` cannot be redone, and closing it is a
+> decision about a persisted format.**
+>
+> The on-page undo record carries `target_page_id`, `target_slot` and
+> `type` — how the undo phase knows *which tuple* a before-image belongs
+> to. `wal::UndoWritePayload` carries only `prior_trx_id`,
+> `prior_undo_ptr`, `offset` and `image_len`, and `UndoLog::LogUndoWrite`
+> passes the bare before-image. **Those three fields exist on the page and
+> nowhere in the log.**
+>
+> `txn.md` §3.5 says the payload "fits without amendment" and spells the
+> mapping as `payload.image = record bytes [+16, +28 + image_len)` — the
+> record's tail *including* those fields. The implementation does not do
+> that. The spec and the code disagree, and the difference is exactly what
+> recovery needs.
+>
+> Redoing it as-is would rebuild a chain whose records name page 0 slot 0,
+> so **RC05's undo would roll back the wrong tuple rather than fail** —
+> which is why the applier refuses loudly instead, and the mount fails
+> whenever an UPDATE or DELETE is in the replay range. That is the honest
+> state, and the same discipline `physical_optimizer = on` follows.
+>
+> Two ways to close it, and **the choice is the owner's**: make
+> `LogUndoWrite` log the record's tail as §3.5 specifies, or give
+> `UndoWritePayload` the three fields. The first matches the spec and
+> changes no struct; the second is explicit and costs a format-version
+> event. Either way `txn.md` §3.5 needs correcting, because one of its
+> sentences is currently false.
+
+Original scope, for reference:
 Replay forward under RV5, `FULL_PAGE_IMAGE` first per page, restoring a
 checksum-failed page from its FPI (`page.md` §10 — checksum detects, FPI
 heals). One applier per record type: `HEAP_INSERT`, `HEAP_OVERWRITE`,
@@ -235,7 +284,10 @@ undo phase possible.
 *Done when:* replaying twice is a no-op (the property, asserted, not
 argued); a page whose `page_lsn` already exceeds a record is untouched;
 every applier has a round-trip test against the write path that produced
-the record.
+the record. The first two are in `tests/wal_redo_test.cpp` with the
+primitives' own tests beside them; the third is complete for seven
+appliers and impossible for the eighth until the blocker above is
+decided. **Nothing has been executed.**
 
 **RC04 — RV4's high-water repair.**
 Raise the superblock's page high-water mark past every page id any
