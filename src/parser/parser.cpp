@@ -1795,6 +1795,10 @@ StatusOr<UpdateStmt> Parser::ParseUpdate() {
     for (;;) {
         Assignment a;
 
+        // Taken before the ident is consumed: the compiler reports the
+        // column's own byte, not the one after it.
+        a.byte_offset = lexer_.Peek().byte_offset;
+
         auto col_name = ParseIdent();
         if (!col_name.ok()) return col_name.status();
         a.col_name = std::move(col_name.value());

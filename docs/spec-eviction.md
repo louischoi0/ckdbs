@@ -1,10 +1,16 @@
 # Page Eviction — Buffer Pool Replacement and Writeback
 
 Status: **ADOPTED**
-Related documents: `storage.md` (S1 common header, S2 PageRef, S7 per-core
-buffer pool, S9 checksums, S11 mmap rejection), `wal.md` (WAL-before-data),
-`assertion.md` §5 (Bound Cabin pinned class), `scheduler.md` (scheduling
-groups), `analyze.md`, `testing-workplan.md`.
+Related documents: `docs/page.md` (S1 common header, S2 PageRef, S7 per-core
+buffer pool, S9 checksums, S11 mmap rejection), `docs/wal.md`
+(WAL-before-data), `docs/feat-assertion.md` §5 (Bound Cabin pinned class),
+`docs/sched.md` (scheduling groups), `docs/workplan-testing.md`.
+
+*(Filenames corrected 2026-08-10: this list was written against names that
+were never in this repository — `storage.md`, `assertion.md`,
+`scheduler.md`, `testing-workplan.md`. `analyze.md` is dropped rather than
+repointed: **no document owns ANALYZE**, and the surface is described in
+`manual/sql/sql.md` §4.)*
 
 ---
 

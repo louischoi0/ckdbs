@@ -2,7 +2,9 @@
 
 How KDS makes a mutation durable, and how it will replay one. `[PROPOSED]` marks a default to confirm or amend before the affected part is built; `[OPEN]` must not be assumed. Companion specs: `docs/page.md` (page header, flush gate, file layout), `docs/txn.md` (transactions and MVCC), `docs/heap-and-tuple.md`, `docs/rules.md`, `docs/sched.md`.
 
-**Status: logging works for INSERT; recovery is not implemented.** Nothing reads the log back, so a restart is protected only by `PageStore::Sync()` at `SYNC` or clean shutdown. §11a states exactly which mutations are logged today; §12 specifies the replay that does not exist yet.
+**Status: every data mutation is logged; recovery is not implemented.** Nothing reads the log back, so a restart is protected only by `PageStore::Sync()` at `SYNC` or clean shutdown. §11a states exactly which mutations are logged today; §12 specifies the replay that does not exist yet.
+
+*(Corrected 2026-08-10. This line read "logging works for INSERT" from before the transaction work, and understated the first half by four subsystems while the second half — the important one — stayed right, which is probably why it went unrevised.)*
 
 ---
 
@@ -132,9 +134,24 @@ Cadence is the RTO knob: more frequent ⇒ shorter recovery + more FPI volume.
 
 ## 11a. What logs today
 
-**`INSERT` and nothing else.** `CommandDispatcher::HandleInsert` runs one implicit transaction per statement and appends `TXN_BEGIN` → (`FULL_PAGE_IMAGE` + `PAGE_INIT`, only when the heap chain grows) → `HEAP_INSERT` → `TXN_COMMIT`, stamps `page_lsn` on every page it touched, and applies the class from the `durability` config key before replying. `CREATE TABLE`, `UPDATE`, and every catalog row underneath them still mutate pages outside the log.
+**Every data mutation; no catalog mutation.** *(Corrected 2026-08-10 — this section read "`INSERT` and nothing else", which was true before `docs/txn.md`'s work and has not been since.)*
 
-Three properties of that first path are worth stating, because they are the shape the remaining paths should copy or deliberately not copy:
+Verified against the emission sites:
+
+| Path | Records |
+|---|---|
+| `INSERT` | `TXN_BEGIN` → (`FULL_PAGE_IMAGE` + `PAGE_INIT` when the heap chain grows) → `VARHEAP_APPEND` per spilled cell → `INDEX_INSERT` per index → `HEAP_INSERT` → `TXN_COMMIT` |
+| `UPDATE` | `UNDO_WRITE` (before-image) → `INDEX_INSERT` per touched index → `HEAP_OVERWRITE` |
+| `DELETE` | `UNDO_WRITE` → `HEAP_DELETE_MARK` |
+| rollback | the compensations of `docs/txn.md` §6 — `SLOT_RETIRE` / `HEAP_OVERWRITE` / `HEAP_DELETE_MARK` — then `TXN_ABORT` |
+| assertions | `ASSERT_BUILD` at CREATE, `ASSERT_RESERVE` / `ASSERT_COMMIT` / `ASSERT_ROLLBACK` on the write paths, `ASSERT_DROP` at teardown |
+| checkpointer | `CHECKPOINT_BEGIN` / `CHECKPOINT_END` |
+
+Ordering rules that are load-bearing and already enforced: `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/feat-index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one.
+
+**Still outside the log**, and this is the gap that matters: `CREATE TABLE` and every other DDL, and every catalog row underneath them, mutate pages unlogged and reach the platter only at a checkpoint. That is what makes `docs/keystoneid-k0-findings.md` §4's K1 crash exposure reachable, and closing it is K-M2a's prerequisite. `ALLOC`/`FREE` are likewise reserved in the record enum and emitted by nothing — the SpaceManager of `docs/page.md` §5 is unbuilt.
+
+Three properties of the INSERT path are worth stating, because they are the shape the remaining paths should copy or deliberately not copy:
 
 - **The `FULL_PAGE_IMAGE` on chain growth is a placeholder for a missing record type.** Growth mutates two pages: the new page, and the *old* tail whose `next_page_id` now reaches it. §5.2 has no record for a link edit, so the old tail is logged whole. It costs one page of log per page of heap — about +50% log volume on small rows, paid once per 8 KB of tuples, never per tuple. A `HEAP_CHAIN_LINK` record type would remove it and is the obvious first entry the next time the record enum is extended (record.hpp's enum is frozen and append-only, so it is a format-version event and not something the insert path decides on its own).
 - **Records are appended after the page is mutated, not while it is latched.** §8-1 asks for the latter. What makes the former sound *here* is narrow: the server is a single cooperative thread, no flush can interleave between the mutation and the `page_lsn` stamp, and the store's gate covers every instant after it. Any path that suspends mid-statement must generate its record under the latch instead.

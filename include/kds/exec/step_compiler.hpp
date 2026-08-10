@@ -64,4 +64,24 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                             std::string_view binding,
                             const std::vector<parser::Condition>& where);
 
+// Resolve an UPDATE's SET list against the relation, before any storage is
+// touched (keystoneid-invariant.md K-M3).
+//
+// Two refusals, and the distinction between their codes is the policy
+// rules.md states: `kInvalidArgument` for a column the relation has not
+// got - simply wrong - and **`kUnsupported` for the primary key**, which
+// is understood and declined. K2 makes a Keystone id immutable for the
+// life of the tuple: the clustered tree, every secondary index entry,
+// every Cabin entry and every recorded trail address the row by that id,
+// so changing it in place would retarget all of them at once and no
+// per-tuple validation could detect it. The refusal is not a missing
+// feature to be implemented later - it is the invariant - which is why
+// this is J2's `Unsupported`-with-a-position and never a slow path.
+//
+// Both messages carry `Assignment::byte_offset`. Called at compile time,
+// once per statement, so the row loop below it can assume every target is
+// a real, assignable column.
+Status CompileAssignments(const catalog::TableAccess& access,
+                          const std::vector<parser::Assignment>& assignments);
+
 }  // namespace kds::exec

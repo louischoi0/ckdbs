@@ -4,6 +4,22 @@ Date: 2026-08-08. Report only: **no document was corrected by this audit and no
 code was touched.** The index workplan is being corrected separately; the rest
 need a human to read this list before any prose moves.
 
+> **Follow-up 2026-08-10: all three STALE findings are now fixed at the
+> source**, plus a fourth this audit did not look for. `docs/parser-v2.md:9`
+> carries a real status with the unbuilt remainder itemized;
+> `docs/keystoneid-invariant.md:7` reports K-M4 done and K-M3 partly (the
+> refusal exists at the dispatcher rather than the compiler);
+> `docs/wal.md:5` and §11a now list every logged path and name the catalog
+> writes as the ones still outside the log. The fourth: a sweep of every
+> cited filename found **eleven references to documents that were never in
+> this repository** — `storage.md`, `assertion.md`, `cabin.md`, `fk.md`,
+> `scheduler.md`, `eviction.md`, `assertion-workplan.md`,
+> `testing-workplan.md`, `unique-index.md`, `analyze.md`, `step-chain.md` —
+> in the eviction, assertion and README headers; each is repointed or, where
+> the document genuinely does not exist (`analyze.md`, `unique-index.md`),
+> dropped with the absence stated. This report is left otherwise unedited:
+> it is the record of what was true on 2026-08-08.
+
 **How this was verified, and what it is worth.** Every claim below was checked
 by reading the repository — the header, source file, test file or benchmark
 document the claim itself names — and by `Grep` for the named symbol where a

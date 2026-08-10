@@ -6,7 +6,19 @@ Written as *instructions*: each item states what to build and when it counts as 
 
 **Why one document.** Two specs were written for one subject: a parser blueprint that declared nested structures out of scope, and a step-chain spec that reversed exactly that. Both were partly right, and reconciling them per-reader is how a codebase ends up with two half-built languages. The step-chain model wins on everything it covered — it is the more recent decision, it has a ratified decision record, and its execution model is better. The parser blueprint's architecture items survive intact, and four engine-level gaps that neither document named are now items here.
 
-**Status of the work: unbuilt.** The parser in the tree is a recursive-descent implementation with an owning AST and a copying lexer, over `CREATE TABLE` / `INSERT` / `SELECT *` / `UPDATE` with AND-only `col op literal` filters. There is no join execution anywhere — the scan primitive takes exactly one relation. The one piece of this document that exists is the fingerprint (`include/kds/parser/fingerprint.hpp`), a separate pass over the same lexer.
+**Status of the work: built, less the items named below** (corrected 2026-08-10 — this line read "unbuilt" long after it stopped being true, which `docs/status-audit-2026-08-08.md` called the most misleading line in `docs/`; per-task state is in `docs/parser-v2-workplan.md`, which was right throughout).
+
+The language runs. The step compiler (`src/exec/step_compiler.cpp`), the step VM (`src/exec/step_vm.cpp`), joins, predicate-position subqueries, the tri-state collapse, the row-touch budget (`include/kds/exec/budget.hpp`) and pagination are in the tree with `tests/exec_chain_test.cpp`, `tests/exec_subquery_test.cpp`, `tests/exec_budget_test.cpp` and `tests/pagination_exec_test.cpp` beside them. Two of phase V-6's items landed early out of Waystone's cost work (2026-08-03): the fingerprint rides the parse rather than lexing a second time, and tokens are zero-copy views.
+
+What is **not** built, each named so it is not read as shipped:
+
+- **V08's `IN (value list)`** — the open half; it still reports "expected a subquery".
+- **V11** — `CREATE TABLE ... WITH (PHYSICAL_OPTIMIZER = ON|OFF)`. No option table exists in the parser, which is why `docs/feat-physical-optimizer.md` R12 says "once both exist".
+- **V12** — `SET DURABILITY` and the `kSessionSet`/`kAdminShow` classes. `SHOW META`/`SHOW TABLES` exist as *dispatcher* commands, not as parser statements, and no spelling selects a durability class per transaction.
+- **V20** — the written-order contract's test (`tests/exec_order_test.cpp` does not exist); the manual half is written.
+- **Phase V-6's remainder** — the arena, the flat AST, the slot table, binding at PARSE, named statements (V24, V26-V28, V30-V32).
+
+The historical baseline this document was written against — recursive descent over an owning AST and a copying lexer, `SELECT *` with AND-only `col op literal` filters, no join execution anywhere — is what phases V-2 through V-5 replaced.
 
 ---
 
