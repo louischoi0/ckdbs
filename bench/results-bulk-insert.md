@@ -392,4 +392,8 @@ remaining per-row cost is exactly the trace fit's flat part - parse,
 pipeline, framing. The bulk-ingestion story now ends where T3's territory
 begins (per-tuple placement itself), and PostgreSQL's batch-1000 edge
 (94.6K rows/s) is overtaken at 2.7x. The WAL segment-boundary wedge
-reported above is untouched and still owed.
+reported above was fixed the same day: SegmentRemaining() now answers 0
+at an exactly-filled segment (offset 0 is one past the end, never a
+position inside - a segment opens with its header), so the roll happens
+and the stream survives the boundary. Two wal_stream tests fill a
+segment to the byte and cross it, live and through a reopen.
