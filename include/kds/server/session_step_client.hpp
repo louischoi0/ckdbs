@@ -42,6 +42,7 @@ public:
     struct RemoteRead {
         PipelineTag tag{};
         std::uint32_t owner_core = 0;
+        catalog::Oid rel_oid = 0;  // what the batches are rows of
         bool done = false;
         Status error = Status::OK();
         std::vector<std::vector<std::byte>> batches;

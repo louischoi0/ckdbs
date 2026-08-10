@@ -28,6 +28,7 @@ StatusOr<PipelineTag> SessionStepClient::Open(const exec::Step& step, std::uint3
     RemoteRead read;
     read.tag = head.tag;
     read.owner_core = owner_core;
+    read.rel_oid = step.rel_oid;
     reads_.push_back(std::move(read));
 
     if (Status s = send_(owner_core, sched::RingMessageKind::kStepOpen,
