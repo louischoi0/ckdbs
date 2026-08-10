@@ -15,7 +15,15 @@ the owner's workplan.
 - **WAL recovery is not implemented.** The log is written and never read
   back; a crash is protected only by the last checkpoint / `SYNC` / clean
   shutdown. Do not attempt a partial recovery (`docs/wal.md`,
-  `docs/txn.md` §8's instruction).
+  `docs/txn.md` §8's instruction). **Planned 2026-08-10:**
+  `docs/workplan-wal-recovery.md` (RV1-RV9, RC01-RC10) — and its survey
+  corrects the impression this entry gives, that the substrate is missing
+  too. It is not: the scan with torn-tail detection, both checkpoint
+  tables, the per-core anchors, the `page_lsn` gate, FPI and the
+  acceptance tests all exist. What is missing is the phases, the
+  per-record appliers, and **a durable record of an INSERT** — rollback
+  walks an in-memory trail that a crash destroys, so a loser's inserts
+  cannot be undone from the log today.
 - **MVCC ships before recovery** (`docs/txn.md` §8): an uncommitted row
   surviving a crash reads as **committed** on the next boot — its writer id
   is below the new high-water mark and in no live set. No cheap mitigation
