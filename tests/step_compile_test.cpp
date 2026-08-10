@@ -675,5 +675,81 @@ TEST_F(StepCompileTest, OrderByAnUnknownColumnIsAResolutionError) {
     EXPECT_EQ(chain.status().code(), StatusCode::kInvalidArgument);
 }
 
+// ---- The SET list: K-M3's compiler half ---------------------------------
+//
+// `CompileAssignments` is the other half of an UPDATE's compile, beside
+// CompileWhere. The tests below are about the *codes*, not the messages:
+// the split between kUnsupported and kInvalidArgument is the policy
+// rules.md states, and it is what a client library reads.
+
+class CompileAssignmentsTest : public StepCompileTest {
+protected:
+    Status Check(const std::string& sql) {
+        auto parsed = parser::Parse(sql);
+        EXPECT_TRUE(parsed.ok()) << sql << ": " << parsed.status().message();
+        if (!parsed.ok()) return parsed.status();
+        const auto& up = std::get<parser::UpdateStmt>(parsed.value());
+
+        auto oid = boot_->catalog.FindTableOidByName(up.table_name);
+        EXPECT_TRUE(oid.ok()) << oid.status().message();
+        if (!oid.ok()) return oid.status();
+
+        auto access = boot_->catalog.InitTableAccess(oid.value());
+        EXPECT_TRUE(access.ok()) << access.status().message();
+        if (!access.ok()) return access.status();
+        return CompileAssignments(*access.value(), up.assignments);
+    }
+};
+
+TEST_F(CompileAssignmentsTest, AssigningThePrimaryKeyIsUnsupportedNotInvalid) {
+    // K2: the id names the tuple in the clustered tree, in every index and
+    // Cabin entry, and in every recorded trail. The column exists and the
+    // value would encode - the statement is understood and declined, which
+    // is exactly what kUnsupported means and kInvalidArgument does not.
+    const Status s = Check("UPDATE acct SET id = 99");
+    ASSERT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kUnsupported) << s.message();
+    EXPECT_NE(s.message().find("at byte "), std::string::npos) << s.message();
+}
+
+TEST_F(CompileAssignmentsTest, ThePkIsRefusedWhereverItSitsInTheSetList) {
+    // The loop must not stop at the first legal target.
+    const Status s = Check("UPDATE acct SET name = 'x', tier = 'y', id = 99");
+    ASSERT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kUnsupported) << s.message();
+}
+
+TEST_F(CompileAssignmentsTest, TheRefusalNamesTheColumnsOwnByte) {
+    // "UPDATE acct SET name = 'x', id = 99"
+    //  0123456789...
+    const std::string sql = "UPDATE acct SET name = 'x', id = 99";
+    const Status s = Check(sql);
+    ASSERT_FALSE(s.ok());
+    EXPECT_NE(s.message().find("at byte " + std::to_string(sql.find("id = 99"))),
+              std::string::npos)
+        << s.message();
+}
+
+TEST_F(CompileAssignmentsTest, AnUnknownColumnIsInvalidArgumentAndCarriesItsByte) {
+    const std::string sql = "UPDATE acct SET nope = 1";
+    const Status s = Check(sql);
+    ASSERT_FALSE(s.ok());
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument) << s.message();
+    EXPECT_NE(s.message().find("at byte " + std::to_string(sql.find("nope"))), std::string::npos)
+        << s.message();
+}
+
+TEST_F(CompileAssignmentsTest, AnOrdinarySetListCompiles) {
+    // The control. Without it every assertion above would pass against a
+    // function that refused everything.
+    EXPECT_TRUE(Check("UPDATE acct SET name = 'x', tier = 'y'").ok());
+}
+
+TEST_F(CompileAssignmentsTest, APkNamedOnAnotherRelationIsNotThisRelationsPk) {
+    // `acct_id` is trade's second column and an ordinary field. Nothing
+    // about the *name* is what makes a column refusable - position 0 is.
+    EXPECT_TRUE(Check("UPDATE trade SET acct_id = 3").ok());
+}
+
 }  // namespace
 }  // namespace kds::exec

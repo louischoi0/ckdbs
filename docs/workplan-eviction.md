@@ -1,8 +1,11 @@
 # Page Eviction — Workplan (EVT01–EVT08)
 
 Status: **READY FOR EXECUTION**
-Spec: `eviction.md` (normative). Related: `storage.md`, `wal.md`,
-`assertion-workplan.md` (AST06 depends on EVT06), `testing-workplan.md`.
+Spec: `docs/spec-eviction.md` (normative). Related: `docs/page.md`,
+`docs/wal.md`, `docs/workplan-assertion.md` (AST06 depends on EVT06),
+`docs/workplan-testing.md`. *(Filenames corrected 2026-08-10 — none of
+`eviction.md`, `storage.md`, `assertion-workplan.md` or
+`testing-workplan.md` has ever existed under those names.)*
 
 Execution order is the numbering order unless a dependency says otherwise.
 All new code follows the engine rules: explicit Status error types (no
@@ -265,8 +268,9 @@ ANALYZE snapshot tests.
 - Benchmark note: INSERT/SELECT throughput with eviction active vs the
   pre-eviction baseline at standard pool size (regression budget: noise
   level; eviction must be free when the working set fits).
-- Docs cross-check: `storage.md` gains a pointer to `eviction.md`;
-  `assertion-workplan.md` AST06 gains the EVT06 dependency note.
+- Docs cross-check: `docs/page.md` gains a pointer to
+  `docs/spec-eviction.md`; `docs/workplan-assertion.md` AST06 gains the
+  EVT06 dependency note.
 
 **Acceptance.** Green CI on the tiny-pool job; benchmark recorded in the
 perf log; oracle wired into the harness integrity sweep.

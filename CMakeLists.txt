@@ -45,6 +45,7 @@ add_library(kds
     src/server/core_affinity.cpp
     src/server/extent_lease_service.cpp
     src/server/row_id_lease_service.cpp
+    src/server/step_descriptor.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
     src/catalog/keystone_budget.cpp
@@ -69,11 +70,13 @@ add_library(kds
     src/server/expeditor.cpp
     src/server/config_file.cpp
     src/server/tcp_server.cpp
+    src/server/kwp_load_server.cpp
     src/parser/lexer.cpp
     src/parser/fingerprint.cpp
     src/parser/ast.cpp
     src/parser/parser.cpp
     src/wire/frame_codec.cpp
+    src/wire/kwp_types.cpp
     src/wire/row_codec.cpp
     src/wal/record.cpp
     src/wal/payload.cpp

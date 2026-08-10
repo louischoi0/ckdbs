@@ -1,7 +1,9 @@
 # ASSERTION — Group-Level Declarative Constraints
 
 Status: **ADOPTED (v1 scope)**
-Related documents: `cabin.md` (requires rev. for Bound Cabin class split), `wal.md`, `txn.md`, `unique-index.md`, `fk.md`, `analyze.md`
+Related documents: `docs/feat-cabin.md` (§12 is the Bound Cabin class split this spec required, landed at AST01), `docs/wal.md`, `docs/txn.md`, `docs/impl-foreign-keys.md`.
+
+*(Filenames corrected 2026-08-10. The list was written against names that were never in this repository: `cabin.md`, `fk.md`, and two documents that do not exist at all — `unique-index.md`, whose U5 durability tier §5 cites is a design reference with no owning doc, since v1 has no unique index (`docs/feat-index.md` IX11), and `analyze.md`, since **nothing owns ANALYZE**; its surface is `manual/sql/sql.md` §4.)*
 
 ---
 
@@ -191,7 +193,8 @@ AssertionViolation: assertion "user_product_purchase_limit"
 
 ## 5. Bound Cabin (Cabin class split)
 
-This section is normative for the required revision of `cabin.md`.
+This section is normative for the required revision of `docs/feat-cabin.md`,
+which landed at AST01 as that document's §12.
 
 The Cabin structure splits into two classes with a shared page format and
 shared lookup machinery but different lifecycle contracts:

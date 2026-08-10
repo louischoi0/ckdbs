@@ -453,8 +453,33 @@ TEST_F(CommandDispatcherTest, UpdatingThePrimaryKeyIsRefused) {
     auto out = d.Dispatch("UPDATE acct SET id = 99");
     EXPECT_EQ(out.response.substr(0, 4), "ERR ") << out.response;
     EXPECT_NE(out.response.find("cannot be updated"), std::string::npos) << out.response;
+    // K-M3: the refusal is `Unsupported`, so it carries a byte position
+    // and reaches the wire as a plain `ERR` - none of the three coded
+    // tokens, because a client cannot fix this by retrying or by changing
+    // an argument. Asserting the absence is what keeps the compatibility
+    // surface one bit wide.
+    EXPECT_NE(out.response.find("at byte "), std::string::npos) << out.response;
+    EXPECT_EQ(out.response.find("retryable="), std::string::npos) << out.response;
 
     // The row is untouched, key included.
+    EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("1,alice"), std::string::npos);
+}
+
+// The other half of the same compile step, at the wire: an unknown SET
+// target is `InvalidArgument` - simply wrong - and must stay
+// distinguishable from the refusal above rather than collapsing into one
+// "bad UPDATE" reply.
+TEST_F(CommandDispatcherTest, UpdatingAnUnknownColumnIsRefusedWithItsByte) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int32, name varchar)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO acct VALUES ('alice')").response.substr(0, 8), "INSERTED");
+
+    auto out = d.Dispatch("UPDATE acct SET nope = 1");
+    EXPECT_EQ(out.response.substr(0, 4), "ERR ") << out.response;
+    EXPECT_NE(out.response.find("unknown column 'nope'"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("at byte "), std::string::npos) << out.response;
+
     EXPECT_NE(d.Dispatch("SELECT * FROM acct").response.find("1,alice"), std::string::npos);
 }
 

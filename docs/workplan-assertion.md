@@ -1,8 +1,11 @@
 # ASSERTION — Workplan (AST01–AST10)
 
 Status: **READY FOR EXECUTION**
-Spec: `assertion.md` (normative). Related: `cabin.md` (rev required),
-`wal.md`, `txn.md`, `analyze.md`, `testing-workplan.md`.
+Spec: `docs/feat-assertion.md` (normative). Related: `docs/feat-cabin.md`
+(the rev landed at AST01 as its §12), `docs/wal.md`, `docs/txn.md`,
+`docs/workplan-testing.md`. *(Filenames corrected 2026-08-10;
+`analyze.md` is dropped because no document owns ANALYZE — see AST09,
+which records the same finding from the other side.)*
 
 Execution order is the numbering order unless a dependency says otherwise.
 Each item lists scope, deliverables, and acceptance criteria. All new code
@@ -12,20 +15,20 @@ memcpy page access (no reinterpret_cast overlays).
 
 ---
 
-## AST01 — `cabin.md` revision: Bound Cabin class split  **[PREREQUISITE]**
+## AST01 — `docs/feat-cabin.md` revision: Bound Cabin class split  **[PREREQUISITE]**
 
 **Scope.** Amend the Cabin spec to define the two-class model exactly as in
-`assertion.md` §5: Observational (existing contract unchanged) vs Bound
+`docs/feat-assertion.md` §5: Observational (existing contract unchanged) vs Bound
 (full coverage, pinned, logged/headered authority, 32 B entries with inline
 aggregate value, group headers with running aggregates).
 
 **Deliverables.**
-- `cabin.md` rev: class table, entry layouts (24 B observational / 32 B
+- `docs/feat-cabin.md` rev: class table, entry layouts (24 B observational / 32 B
   bound), group directory + group header definition, lifecycle contracts.
 - Explicit statement that Observational Cabin semantics are untouched
   (eviction, dangling-entry discard, advisory hints).
 
-**Acceptance.** Spec review only; no code. `assertion.md` §5 and `cabin.md`
+**Acceptance.** Spec review only; no code. `docs/feat-assertion.md` §5 and `docs/feat-cabin.md`
 must not contradict each other on any property in the class table.
 
 ---
@@ -489,7 +492,7 @@ amortize under fsync at strict/group and show under relaxed.
 - Confirm `Unsupported` surfaces for every reserved form one final time.
 
 **Acceptance.** Green E2E in CI; benchmark numbers recorded in the perf log;
-docs cross-references (`assertion.md` ↔ `cabin.md` rev) consistent.
+docs cross-references (`docs/feat-assertion.md` ↔ `docs/feat-cabin.md` rev) consistent.
 
 ---
 

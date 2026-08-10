@@ -319,7 +319,15 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
 
 - Grammar: `UPDATE <table> SET <col> = <val> [, ...] [WHERE ...]`.
 - The WHERE is the same production SELECT uses, subqueries included.
-- The primary key cannot be assigned. An UPDATE never migrates a tuple.
+- **The primary key cannot be assigned**, and the refusal is
+  `Unsupported` with the column's byte — understood and declined, not a
+  feature awaiting work (K2). The id names the tuple in the clustered
+  tree, in every index and Cabin entry and in every recorded trail, so an
+  in-place change would retarget all of them at once. An unknown SET
+  target is `InvalidArgument`, also with its byte; both are decided at
+  compile, before any storage is touched, so a refused UPDATE writes
+  nothing.
+- An UPDATE never migrates a tuple.
 - Reply: `UPDATED <n>`.
 
 ### DELETE (verified — it exists)
@@ -621,6 +629,8 @@ client library switches on, `ERR <message>` for everything else.
 | `BEGIN` inside a transaction | `ERR a transaction is already open; COMMIT or ROLLBACK first` |
 | `COMMIT`/`ROLLBACK` with none open | `ERR no transaction is open` |
 | Supplying the pk in INSERT | `ERR do not supply a value for primary-key column '<name>' - it is autoincrement and engine-assigned` |
+| Assigning the pk in UPDATE | `Unsupported` — `ERR primary-key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
+| Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)` |
 | Anything after a complete statement (e.g. `OFFSET 5 LIMIT 10`'s reversed tail) | `ERR unexpected token '<t>' after end of statement` |
 | Bare `decimal` | `ERR column '<c>' needs a precision and a scale - decimal(p, s) - at byte <n>; there is no default scale, ...` |

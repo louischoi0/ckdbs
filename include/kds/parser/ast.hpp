@@ -490,6 +490,16 @@ struct SelectStmt {
 struct Assignment {
     std::string col_name;
     AstValue val;
+
+    // Where `col_name` was written. Carried for the same reason
+    // `AstValue::byte_offset` is (spec-types.md TY05): the SET list is
+    // resolved against the catalog at compile, and both refusals it can
+    // produce - an unknown column, and the primary key, which is the
+    // tuple's identity and not a field of it (keystoneid-invariant.md K2)
+    // - owe the client an exact position. Nothing compares this field, so
+    // adding it moved no fingerprint: the hash folds from the token
+    // stream, not from the AST.
+    std::uint32_t byte_offset = 0;
 };
 
 struct UpdateStmt {

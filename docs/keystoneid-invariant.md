@@ -4,7 +4,13 @@ Status: **DECIDED** (K1–K5 below). **K-M1 done 2026-08-03** —
 `docs/keystoneid-k0-findings.md` is what it found, and its four proposed
 amendments are **applied here** (2026-08-03): K3's wording, §1's min_key
 aside, §5's milestone order, and §1.2's oid claim. Read the findings before
-starting K-M2; three of them change what K-M2 is. K-M2..K-M6 not started.
+starting K-M2; three of them change what K-M2 is.
+
+**Milestone state (corrected 2026-08-10 — this line read "K-M2..K-M6 not
+started", which §5 below already contradicted for K-M4):**
+**K-M1 done**, **K-M4 done** (both 2026-08-03), **K-M3 done 2026-08-10**.
+**K-M2a, K-M2, K-M5, K-M6 not started**, and K-M2 stays blocked on K-M2a,
+which is blocked on work in `docs/wal.md`.
 Depends on: Keystone super-column contract (40-bit id + 8-bit flags +
 16-bit meta id), per-relation catalog metadata, WAL, core-ownership
 dispatch.
@@ -254,10 +260,45 @@ decide two things K-M2 would otherwise guess at:
   at ~949/s: that is the shape a crash-safe implementation reaches for
   when it skips bump-ahead, and it is the one outcome to design against.
 
-**K-M3 — Enforce K2 (immutability).**
+**K-M3 — Enforce K2 (immutability). DONE 2026-08-10.**
 Compiler/executor: an UPDATE whose SET list touches the super column
 returns Unsupported at compile time (J2 policy — no slow path).
 Acceptance: negative tests at parser, compiler, and wire levels.
+
+*Built as `exec::CompileAssignments`* (`src/exec/step_compiler.cpp`),
+called from `UpdateInner` before any storage is touched. It sits beside
+`CompileWhere` because those are the two halves of an UPDATE's compile,
+and a check the dispatcher owns is one a second write path can be written
+without.
+
+Four things it settled, three of them beyond moving the existing check:
+
+- **The code is `kUnsupported`, and the split from `kInvalidArgument` is
+  the point.** An unknown SET target is simply wrong; the primary key is
+  *understood and declined* — the column exists and the value would
+  encode, and what cannot happen is the write, because the id names the
+  tuple in the clustered tree, in every index and Cabin entry, and in
+  every recorded trail. It is not a missing feature that a later release
+  implements; it is the invariant.
+- **Both refusals now carry a byte.** `parser::Assignment` gained a
+  `byte_offset` for the reason `AstValue::byte_offset` has one
+  (`spec-types.md` TY05) — and for the same reason it was safe: nothing
+  compares the field, the fingerprint folds from the token stream and not
+  from the AST, so no stored `pattern_id` moved.
+- **The parser deliberately does not refuse it.** Which column is the pk
+  is catalog knowledge; a parser that guessed from the name `id` would
+  refuse a legal statement on a relation whose *second* column is called
+  that. So the parser-level acceptance test is a **negative** one — the
+  statement parses — and the refusal is the compiler's.
+- **Case sensitivity is left exactly as it was, and is a finding rather
+  than a fix.** `Schema::FindColumn` matches a SET target exactly, while
+  the step compiler resolves a WHERE column through `IEquals`. So
+  `SET ID = 99` against a pk named `id` is refused as an *unknown column*
+  rather than as the pk. K2 holds either way — no path reaches the write
+  — which is why this was not smuggled in here: making SET targets
+  case-insensitive is a change to the engine's identifier rule, it
+  contradicts `manual/sql/sql.md`'s "statements are case-insensitive", and
+  it belongs to whoever owns that rule.
 
 **K-M4 — Budget observability. DONE 2026-08-03.**
 Expose per-relation issued-count and remaining budget (derived from
@@ -302,7 +343,7 @@ its inputs.
 
 Order, revised after M1:
 
-> **K-M1 (done) → K-M4 (done) → K-M3 → K-M2a → K-M2 → K-M5**
+> **K-M1 (done) → K-M4 (done) → K-M3 (done) → K-M2a → K-M2 → K-M5**
 
 K-M4 moved ahead of K-M3 and was built on 2026-08-03. It was listed after
 K-M2 because it reads "the HWM", but it only ever needed *a* sequence

@@ -2231,8 +2231,30 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     if (!std::holds_alternative<parser::InsertStmt>(parsed.value())) {
         return {"ERR expected an INSERT statement", false};
     }
-    auto& stmt = std::get<parser::InsertStmt>(parsed.value());
+    return InsertParsed(std::get<parser::InsertStmt>(parsed.value()), scope);
+}
 
+DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
+                                                 Session& session) {
+    // HandleInsert's body around the parsed half: same scope, same verdict
+    // rule, so a load chunk and a textual statement are indistinguishable
+    // from the write pipeline's side (KW5, BI2).
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return {"ERR " + opened.status().message(), false};
+    WriteScope scope = opened.value();
+
+    DispatchOutcome out = InsertParsed(stmt, scope);
+
+    const bool failed = out.response.rfind("ERR ", 0) == 0;
+    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
+    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
+        return {ErrorReply(s), false};
+    }
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
+                                                WriteScope& scope) {
     // BI3: the row cap, at the first config-aware layer (the parser is a
     // pure syntax layer and deliberately config-blind). A refusal naming
     // the cap and the count, never a truncation.
@@ -3568,22 +3590,14 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         return {"ERR " + affinity.message(), false};
     }
 
-    // Validate every SET target names a real column before touching
-    // storage, so a bad column name fails clean with no partial update.
-    const std::string pk_name =
-        ta.schema.columns.empty()
-            ? std::string()
-            : std::string(catalog::NameView(ta.schema.columns.front().name));
-    for (const auto& assignment : stmt.assignments) {
-        if (ta.schema.FindColumn(assignment.col_name) == nullptr) {
-            return {"ERR unknown column '" + assignment.col_name + "'", false};
-        }
-        // The pk is the tuple's identity, not a field of it: the btree and
-        // Waystone address a tuple by this id, so changing it
-        // in place would silently retarget every reference to the row.
-        if (assignment.col_name == pk_name) {
-            return {"ERR primary-key column '" + pk_name + "' cannot be updated", false};
-        }
+    // Resolve the SET list before touching storage, so a bad target fails
+    // clean with no partial update. Both refusals - an unknown column, and
+    // the primary key (K2, `Unsupported`) - live in the compiler beside
+    // CompileWhere rather than here: the two halves of an UPDATE's compile
+    // belong at one layer, and a check the dispatcher owns is one a second
+    // write path can be written without.
+    if (Status s = exec::CompileAssignments(ta, stmt.assignments); !s.ok()) {
+        return {ErrorReply(s), false};
     }
 
     // The WHERE clause compiles to the same resolved predicates a chain

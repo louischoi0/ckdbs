@@ -38,6 +38,8 @@ add_executable(kds_tests
     extent_lease_test.cpp
     extent_lease_service_test.cpp
     core_runtime_test.cpp
+    step_pipeline_test.cpp
+    step_descriptor_test.cpp
     core_affinity_test.cpp
     coro_test.cpp
     spsc_ring_test.cpp
@@ -103,6 +105,7 @@ add_executable(kds_tests
     alter_table_test.cpp
     bulk_insert_test.cpp
     drop_table_test.cpp
+    kwp_load_server_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp
     type_literals_test.cpp

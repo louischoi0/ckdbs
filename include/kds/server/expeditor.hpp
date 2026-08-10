@@ -24,6 +24,7 @@
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
+#include "kds/server/kwp_load_server.hpp"
 #include "kds/server/tcp_server.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/page_device.hpp"
@@ -138,6 +139,11 @@ public:
         // (docs/spec-bulkinsert.md, `max_insert_rows`). A refusal, never a
         // truncation; must be at least 1.
         std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows;
+
+        // KWP v0's load endpoint (`kwp_port`, docs/workplan-kwp-load.md).
+        // 0 - the default - opens no socket at all: the endpoint exists
+        // only when asked for. Loopback only, like the text port.
+        std::uint16_t kwp_port = 0;
 
         // ---- `isolation` (docs/txn.md section 1) -----------------------
         //

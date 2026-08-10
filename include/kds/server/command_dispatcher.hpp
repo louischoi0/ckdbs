@@ -637,6 +637,26 @@ private:
     bool SortedFillEligible(const catalog::TableAccess& ta, catalog::Oid oid) const;
     DispatchOutcome SortedFillInner(const parser::InsertStmt& stmt, catalog::Oid oid,
                                     const catalog::TableAccess& ta, WriteScope& scope);
+
+    // The already-parsed half of InsertInner: everything after the parse -
+    // cap, manager guard, resolution, affinity, the T3 gate, the row loop.
+    // Split out for the KWP load session (docs/workplan-kwp-load.md KW5),
+    // whose rows arrive binary and never had text - BI2's "same write
+    // path" made literal, since this IS the path a T1 statement takes.
+    DispatchOutcome InsertParsed(const parser::InsertStmt& stmt, WriteScope& scope);
+
+public:
+    // KW5's public seam: run one parsed INSERT under `session` exactly as
+    // HandleInsert runs a textual one - same write scope, same verdict
+    // rule, same atomicity. The load session synthesizes an InsertStmt per
+    // chunk and calls this.
+    DispatchOutcome ExecuteInsert(const parser::InsertStmt& stmt, Session& session);
+
+    // For the sibling platform layers (the KWP load endpoint's schema
+    // reads). The catalog's own discipline applies unchanged.
+    catalog::Catalog& catalog() noexcept { return catalog_; }
+
+private:
     // `analyze` switches the reply from rows to the compiled plan plus
     // the per-step counters the run produced. Everything before that -
     // parse, compile, execute - is the same code on the same statement
