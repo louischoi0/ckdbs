@@ -163,6 +163,38 @@ void CabinStore::Unobserve(const CabinKey& key) {
     ++stats_.unobserved;
 }
 
+namespace {
+
+// Deterministic worklist order: a build's Commit sequence and a heal's
+// walk order must not depend on hash-map iteration.
+bool CabinKeyLess(const CabinKey& a, const CabinKey& b) noexcept {
+    if (a.type != b.type) return a.type < b.type;
+    if (a.int_val != b.int_val) return a.int_val < b.int_val;
+    return a.str_val < b.str_val;
+}
+
+}  // namespace
+
+std::vector<CabinKey> CabinStore::SightedUnobservedOf(std::uint64_t cabin_id) const {
+    std::vector<CabinKey> keys;
+    for (const auto& [key, count] : sightings_) {
+        if (key.cabin_id != cabin_id) continue;
+        if (observed_.find(key) != observed_.end()) continue;
+        keys.push_back(key);
+    }
+    std::sort(keys.begin(), keys.end(), CabinKeyLess);
+    return keys;
+}
+
+std::vector<CabinKey> CabinStore::ObservedValuesOf(std::uint64_t cabin_id) const {
+    std::vector<CabinKey> keys;
+    for (const auto& [key, entries] : observed_) {
+        if (key.cabin_id == cabin_id) keys.push_back(key);
+    }
+    std::sort(keys.begin(), keys.end(), CabinKeyLess);
+    return keys;
+}
+
 void CabinStore::Forget(std::uint64_t cabin_id) {
     for (auto it = observed_.begin(); it != observed_.end();) {
         it = it->first.cabin_id == cabin_id ? observed_.erase(it) : std::next(it);

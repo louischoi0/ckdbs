@@ -130,6 +130,8 @@ public:
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
     stats::OptimizerSignals& signals() { return signals_; }
+    catalog::Catalog& catalog() { return boot_->catalog; }
+    storage::InMemoryPageStore& store() { return store_; }
 
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
@@ -191,6 +193,58 @@ TEST(OptimizerSignalsTest, AScriptedWorkloadLandsInTheSnapshot) {
     // sanity-checked by a human.
     const std::string analyzed = db.Run("ANALYZE " + scan);
     EXPECT_NE(analyzed.find(" pages="), std::string::npos) << analyzed;
+}
+
+// ---- PHY05: the runtime switch --------------------------------------------
+
+TEST(OptimizerSignalsTest, SetCabinOptimizerTogglesAndShowMetaReports) {
+    Instance db;
+    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=off"), std::string::npos);
+
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER ON"), "OK cabin_optimizer=on");
+    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=on"), std::string::npos);
+
+    // Both spellings read naturally on a terminal; both work.
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER = OFF"), "OK cabin_optimizer=off");
+    EXPECT_NE(db.Run("SHOW META").find("cabin_optimizer=off"), std::string::npos);
+
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER maybe").substr(0, 3), "ERR");
+    EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER on off").substr(0, 3), "ERR");
+}
+
+// ---- PHY03's catalog half: the ownership tag ------------------------------
+
+TEST(OptimizerSignalsTest, AnOptimizerOwnedCabinRowSurvivesARestartWithItsTag) {
+    // PO1's ownership tag is `kCabinOriginAuto` - the value sys.cabins
+    // reserved for "a future promotion pipeline", which the cabin
+    // optimizer is. No new catalog format was needed; this pins that the
+    // tag round-trips a restart, which is the whole of PHY03's stated
+    // crash posture: the row persists as any Observational Cabin's does,
+    // the memory-resident sets and controller state re-derive from
+    // re-observation, and a BUILDING that nothing persisted is discarded
+    // by construction.
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar) BTREE").substr(0, 7), "CREATED");
+    auto oid = db.catalog().FindTableOidByName("b");
+    ASSERT_TRUE(oid.ok());
+
+    auto created = db.catalog().CreateCabin(oid.value(), /*col_pos=*/1,
+                                            catalog::kCabinOriginAuto);
+    ASSERT_TRUE(created.ok()) << created.status().message();
+
+    // A second Catalog over the same pages is what a restart looks like.
+    catalog::Catalog reopened(db.store());
+    auto rows = reopened.ListCabins();
+    ASSERT_TRUE(rows.ok());
+    bool found = false;
+    for (const catalog::SysCabinRow& row : rows.value()) {
+        if (row.cabin_id != created.value()) continue;
+        found = true;
+        EXPECT_EQ(row.origin, catalog::kCabinOriginAuto);
+        EXPECT_EQ(row.rel_oid, oid.value());
+        EXPECT_EQ(row.column_no, 1u);
+    }
+    EXPECT_TRUE(found) << "the optimizer-owned row did not survive the restart";
 }
 
 }  // namespace

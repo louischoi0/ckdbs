@@ -152,6 +152,68 @@ public:
     Status Flush();
     Status Sync() override;
 
+    // ---- The writeback primitive (docs/spec-eviction.md §4, EVT03) ------
+    //
+    // Durable → checksum → write → clean, for exactly these ids, skipping
+    // any that are non-resident or already clean. **The single code path**
+    // §4 requires: Flush(), FlushPages() (the checkpointer's route) and
+    // the dirty-queue drain all run through here, so the checkpointer is a
+    // consumer of the writeback machinery rather than a parallel
+    // implementation. Neither syncs the device nor touches the maps - the
+    // callers own those, because when they happen is what distinguishes a
+    // checkpoint from a background drain.
+    //
+    // Ascending contiguous runs are coalesced into one WritePageRun of at
+    // most kWritebackRunPages, through a bounded copy into scratch -
+    // best-effort, never a correctness property (§4). The copy exists
+    // because frames are separate heap allocations; the zero-copy run
+    // arrives with page.md §9's preallocated slab, not here.
+    //
+    // Returns how many pages it wrote.
+    StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids);
+
+    // Pages one coalesced run may span, and so the scratch bound: 8 pages
+    // = 64 KiB, chosen as the largest single write the background task
+    // should hold the core for under run-to-completion. `[PROPOSED]` -
+    // nothing may depend on the number.
+    static constexpr std::uint32_t kWritebackRunPages = 8;
+
+    // Drains §4's dirty queue through WriteBack(): the sweep found these
+    // dirty at usage zero and queued them instead of reclaiming (§3.2's
+    // fourth branch); once written clean here, the sweep's next visit may
+    // reclaim them - "keeping the page cached until frames are actually
+    // needed", exactly as §4 words it. Returns how many it wrote.
+    StatusOr<std::size_t> DrainDirtyEvictionQueue();
+
+    // §4's watermark loop: sweep rotations (each followed by a drain, so
+    // queued dirt becomes reclaimable on the next lap) until the free
+    // reserve - `pool_frames` minus resident frames - meets `watermark`,
+    // or a full rotation reclaims nothing and drains nothing. Returns
+    // frames reclaimed.
+    //
+    // The pool size and watermark are **parameters, not fields**: no
+    // bounded pool exists yet (EVT02's unbuilt half), so this layer owns
+    // the loop's shape and EVT02/EVT04 will own its numbers. Nothing calls
+    // it in production until then - the same stance the sweep itself takes.
+    std::size_t MaintainFreeReserve(std::size_t pool_frames, std::size_t watermark);
+
+    // ---- Scan ring (docs/spec-eviction.md §5, EVT06) --------------------
+    //
+    // The real cyclic ring: a page absent from the pool is faulted into
+    // the ring's next slot, whose previous occupant is dropped from the
+    // page table - **unless the foreground got there**. A pin, a usage
+    // bump (only foreground accessors bump; ring fetches never do), a
+    // dirty write, or pinned-class membership each abandon the frame to
+    // the table instead of dropping it, which is §5's interaction rule and
+    // the whole of pin-safety. A page already resident - foreground's or a
+    // ring slot's - is used in place, with no usage bump and no rotation.
+    //
+    // What this bounds: a full scan grows residency by at most the ring's
+    // size, whatever the relation's. The frames are ordinary frames in the
+    // page table while resident, so a foreground hit on one behaves as a
+    // hit anywhere - only the lifecycle differs.
+    std::unique_ptr<ScanFetcher> OpenScanRing(std::size_t frames = kScanRingFrames) override;
+
     // Installs the WAL-before-data gate described above. Null (the
     // default) disables it. `gate` must outlive the store.
     void SetWalGate(wal::WalDurability* gate) noexcept { wal_gate_ = gate; }
@@ -474,8 +536,19 @@ private:
 
     // `mark_dirty` is false only for a read-only fetch: a frame faulted in
     // by a reader has not been modified, so it enters the map clean and
-    // nothing writes it back.
-    StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty);
+    // nothing writes it back. `bump_usage` is false only for a ring fetch
+    // (§5: a scan's touch must not look like heat).
+    StatusOr<std::span<std::byte, kPageSize>> ResidentBytes(PageId page_id, bool mark_dirty,
+                                                            bool bump_usage = true);
+
+    // The ring's rotation half: drops `page_id`'s frame unless the
+    // foreground claimed it (dirty, pinned, usage-bumped, or pinned-class)
+    // - in which case the frame is abandoned to the page table, having
+    // graduated to ordinary life. kInvalidPageId and non-resident ids are
+    // no-ops.
+    void ReleaseScanSlot(PageId page_id) noexcept;
+
+    class ScanRing;  // the ScanFetcher over this store; defined in the .cpp
 
     // PageRef's two callbacks. Private because a pin is only ever taken and
     // dropped by a handle - a caller that could unpin by hand could unpin

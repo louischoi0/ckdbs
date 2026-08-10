@@ -35,7 +35,7 @@ statements, not style.
 | Clustered B+ tree | Built | `docs/heap-and-tuple.md` |
 | WAL | INSERT/UPDATE/DELETE logged; **recovery not implemented** — nothing reads the log back | `docs/wal.md` |
 | Transactions & MVCC | Built (T01-T14); no purge, and MVCC ships before recovery (see §8's gap) | `docs/txn.md`, `docs/txn-workplan.md` |
-| Query language, parser, step chains, joins, subqueries | Built (V01-V18); V20 (written-order doc) open | `docs/parser-v2.md`, `docs/parser-v2-workplan.md` |
+| Query language, parser, step chains, joins, subqueries | Built (V01-V18; V09 pagination — ORDER BY pk / LIMIT / OFFSET — done 2026-08-10); V20 (written-order doc) open | `docs/parser-v2.md`, `docs/parser-v2-workplan.md` |
 | Aggregation (GROUP BY, COUNT/SUM/MIN/MAX/AVG) | Built (AG01-AG10) | `docs/feat-aggregate.md`, `docs/workplan-aggregate.md` |
 | Aggregate performance | AP01-AP03 built, AP05 next | `docs/workplan-aggregate-perf.md` (start at "Where to pick this up") |
 | Types: DATE, TIMESTAMP, DECIMAL, DECIMAL128 | Built (TY01-TY11); `float` stays refused | `docs/spec-types.md`, `docs/workplan-types.md` |
@@ -47,8 +47,8 @@ statements, not style.
 | Assertions (group-level constraints) | **Complete and enforcing** (AST01-AST10); recovery-side registry rebuild outside the series | `docs/feat-assertion.md`, `docs/workplan-assertion.md` |
 | Access statistics | Built (`SHOW ACCESS`) | `docs/heap-and-tuple.md` §7 |
 | Physical optimizer, Part I: relayout | Built and measured (PX01-PX08), **shadow-only as a finding** — every move blocked by a named §6 gate | `docs/feat-physical-optimizer.md`, `docs/workplan-physical-optimizer.md` |
-| Physical optimizer, Part II: Cabin controller | PHY01-PHY02 built (signals + decision core); PHY04 blocked on EVT06 | same docs, Part II / §II.1-§II.7 |
-| Buffer-pool eviction | EVT01/EVT02 partly built; **nothing calls the sweep** — the `PageRef` migration is a hard prerequisite | `docs/spec-eviction.md`, `docs/workplan-eviction.md`, `docs/page.md` §3 |
+| Physical optimizer, Part II: Cabin controller | PHY01-PHY05 and PHY07 built — the controller runs end to end (PHY04, 2026-08-10, over the EVT03/EVT06 substrate); PHY06/PHY08 remaining | same docs, Part II / §II.1-§II.7 |
+| Buffer-pool eviction | EVT01/EVT02 partly, EVT03 (writeback) and EVT06 (scan ring) built; full CLOCK reclamation still gated on the `PageRef` migration | `docs/spec-eviction.md`, `docs/workplan-eviction.md`, `docs/page.md` §3 |
 | Cross-core execution | P0, P1, P2, P6 catalog half, P4 restriction half built; the pipeline is not (blocked on relation-vs-page ownership) | `docs/crosscore.md`, `docs/workplan-crosscore.md`, `docs/sched.md` |
 | Task representation | Decided and built: C++20 stackless coroutines | `docs/sched.md` §3 |
 | Wire protocol KWP/1 | Frame codec only; the server speaks the newline text protocol | `docs/protocol.md`, `docs/protocol-wp.md`, `docs/client-manual.md` |

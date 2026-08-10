@@ -298,6 +298,15 @@ public:
     CabinInfo InfoFor(std::uint64_t cabin_id) const;
     std::size_t observed_value_count() const noexcept { return observed_.size(); }
 
+    // The cabin optimizer's two worklists (workplan PHY04), sorted for
+    // deterministic builds. `SightedUnobservedOf` is EXTEND's seed - the
+    // values traffic has probed that no set answers for yet, exactly
+    // §II.5's "the predicate values that generated the evidence" - and
+    // `ObservedValuesOf` is HEAL's, the sets whose hints a batch
+    // re-validation walks.
+    std::vector<CabinKey> SightedUnobservedOf(std::uint64_t cabin_id) const;
+    std::vector<CabinKey> ObservedValuesOf(std::uint64_t cabin_id) const;
+
 private:
     // A whole entry set arriving or leaving, so `values` and `entries` are
     // maintained in one place rather than at each of the four sites that can

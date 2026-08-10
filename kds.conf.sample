@@ -240,6 +240,31 @@ physical_optimizer = shadow
 # parses, validates, and steers nothing.
 decay_half_life = 600
 
+# The cabin optimizer - Part II of docs/feat-physical-optimizer.md: the
+# background controller that CREATEs/EXTENDs/HEALs/DROPs Observational
+# Cabins under a cost-benefit rule. **Off by default, experimental** - the
+# opposite default from `physical_optimizer` above, because a controller
+# that acts is not a report. `SET CABIN_OPTIMIZER ON|OFF` flips it at
+# runtime, non-destructively in both directions.
+#
+# The decision task that consumes these does not exist yet (workplan
+# PHY04, gated on the eviction track's scan ring); until it does the keys
+# parse, validate, and steer nothing - stated plainly.
+cabin_optimizer = off
+
+# The controller's tuning, every number `[PROPOSED]` (spec section II.6).
+# Thresholds are percent integers - 300 means a benefit/cost ratio of 3.0 -
+# and the one rule validation enforces is the hysteresis gap the
+# anti-thrash design stands on: theta_drop < 100 < theta_create.
+#cabin_optimizer_page_budget = 1024
+#cabin_optimizer_theta_create_pct = 300
+#cabin_optimizer_theta_drop_pct = 50
+#cabin_optimizer_theta_swap_pct = 200
+#cabin_optimizer_theta_extend_pct = 20
+#cabin_optimizer_theta_heal_pct = 10
+#cabin_optimizer_confirm_snapshots = 3
+#cabin_optimizer_snapshot_interval_ms = 10000
+
 # ---- Cabins ----------------------------------------------------------------
 
 # Whether Cabins may be built and served (docs/feat-cabin.md).

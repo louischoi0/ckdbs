@@ -867,17 +867,13 @@ private:
             // Healed in place. The hint was wrong and the pk was right,
             // which is C6's whole shape: authority in the pk, speed in the
             // location, and the location repaired from the authority. The
-            // healed page's *current* epoch is stamped with it - a heal
-            // that wrote 0 against a bumped page would miss on every later
-            // resolve and re-heal forever. One extra fetch, on the heal
-            // path only, which storage-stability makes rare.
+            // healed page's *current* epoch is stamped with it (the rule
+            // lives in CurrentRelayoutEpoch, beside the check that reads
+            // it). One extra fetch, on the heal path only, which
+            // storage-stability makes rare.
             entry.page_id = found.value().page_id;
             entry.slot = found.value().slot;
-            entry.page_epoch = 0;
-            if (auto healed = store_.GetForRead(entry.page_id); healed.ok()) {
-                entry.page_epoch = static_cast<std::uint32_t>(
-                    storage::GetRelayoutEpoch(healed.value()));
-            }
+            entry.page_epoch = CurrentRelayoutEpoch(store_, entry.page_id);
             entry.flags |= stats::kCabinHintValid;
             serve_scratch_.push_back(Located{entry.page_id, entry.slot});
         }

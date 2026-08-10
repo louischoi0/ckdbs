@@ -104,8 +104,10 @@ struct RelayoutPlan {
 
     std::uint64_t predicted_pages_saved = 0;
     // R9: pages saved per execution x the decayed weight of the shapes that
-    // walk the chain, in the weight's Q24.8 - i.e. weighted page-touches
-    // avoided. 0 for `cluster` (its input, a hot set, is Waystone's and no
+    // walk the chain - weighted page-touches avoided, in **whole units**,
+    // the weight's Q24.8 having been divided out by PredictedBenefit (one
+    // page saved under one undecayed execution reads as 1, not as 256).
+    // 0 for `cluster` (its input, a hot set, is Waystone's and no
     // collector supplies it yet - R2) and for `defrag` (it saves no pages;
     // its benefit is sequential I/O, which R9's metric does not express -
     // stated rather than faked with a number).
@@ -160,8 +162,8 @@ bool IsChainWalkKind(exec::AccessKind kind) noexcept;
 // Sum of the walk-kind shapes' decayed weights, saturating.
 std::uint64_t WalkWeightOf(std::span<const ShapeWeight> shapes) noexcept;
 
-// R9: pages saved x decayed walk weight, kept in the weight's Q24.8 (the
-// product is >> 8, so one page saved under one undecayed execution is 1).
+// R9: pages saved x decayed walk weight, with the weight's Q24.8 divided
+// out (>> 8), so one page saved under one undecayed execution is 1.
 std::uint64_t PredictedBenefit(std::uint64_t pages_saved, std::uint64_t walk_weight) noexcept;
 
 // ---- The planner ---------------------------------------------------------

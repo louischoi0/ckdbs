@@ -35,7 +35,28 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "indexes",
             "cabin_max_entries_per_value", "cores",
             "aggregate_max_groups",  "aggregate_max_distinct",
-            "decay_half_life",       "physical_optimizer"};
+            "decay_half_life",       "physical_optimizer",
+            "cabin_optimizer",       "cabin_optimizer_page_budget",
+            "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
+            "cabin_optimizer_theta_swap_pct",   "cabin_optimizer_theta_extend_pct",
+            "cabin_optimizer_theta_heal_pct",   "cabin_optimizer_confirm_snapshots",
+            "cabin_optimizer_snapshot_interval_ms"};
+}
+
+stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
+    stats::CabinOptimizerConfig config;
+    const auto pct = [](std::uint32_t p) {
+        return (static_cast<stats::Fix16>(p) * stats::kFixOne) / 100;
+    };
+    config.theta_create = pct(cabin_optimizer_theta_create_pct);
+    config.theta_drop = pct(cabin_optimizer_theta_drop_pct);
+    config.theta_swap = pct(cabin_optimizer_theta_swap_pct);
+    config.theta_extend = pct(cabin_optimizer_theta_extend_pct);
+    config.theta_heal = pct(cabin_optimizer_theta_heal_pct);
+    config.confirm_snapshots = cabin_optimizer_confirm_snapshots;
+    config.page_budget = cabin_optimizer_page_budget;
+    config.half_life_ns = decay_half_life_ns;
+    return config;
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -183,6 +204,85 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                 " (seconds; docs/feat-physical-optimizer.md R1)");
         }
         decay_half_life_ns = v.value() * 1'000'000'000ULL;
+    }
+    if (file.Has("cabin_optimizer")) {
+        auto v = file.GetBool("cabin_optimizer");
+        if (!v.ok()) return v.status();
+        cabin_optimizer = v.value();
+    }
+    if (file.Has("cabin_optimizer_page_budget")) {
+        auto v = file.GetUint("cabin_optimizer_page_budget");
+        if (!v.ok()) return v.status();
+        if (v.value() == 0) {
+            return Status::InvalidArgument(
+                file.origin() +
+                ": cabin_optimizer_page_budget must be positive - a zero budget admits "
+                "nothing, which is what cabin_optimizer = off already says");
+        }
+        cabin_optimizer_page_budget = v.value();
+    }
+    // The five thresholds, as percent integers (300 = θ 3.0): the config
+    // file parses no decimals, and a percent is the coarsest unit at which
+    // every proposed value stays expressible.
+    const auto theta = [&](const char* key, std::uint32_t& out) -> Status {
+        if (!file.Has(key)) return Status::OK();
+        auto v = file.GetUint(key);
+        if (!v.ok()) return v.status();
+        if (v.value() == 0 || v.value() > 100'000) {
+            return Status::InvalidArgument(file.origin() + ": " + key +
+                                           " is outside 1..100000 (percent)");
+        }
+        out = static_cast<std::uint32_t>(v.value());
+        return Status::OK();
+    };
+    if (Status s = theta("cabin_optimizer_theta_create_pct", cabin_optimizer_theta_create_pct);
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = theta("cabin_optimizer_theta_drop_pct", cabin_optimizer_theta_drop_pct);
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = theta("cabin_optimizer_theta_swap_pct", cabin_optimizer_theta_swap_pct);
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = theta("cabin_optimizer_theta_extend_pct", cabin_optimizer_theta_extend_pct);
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = theta("cabin_optimizer_theta_heal_pct", cabin_optimizer_theta_heal_pct);
+        !s.ok()) {
+        return s;
+    }
+    // The rule the anti-thrash hysteresis stands on (§II.4): the gap
+    // θ_drop < 1 < θ_create must exist, whatever the numbers. Checked
+    // whenever either key appears, against the pair's final values.
+    if (cabin_optimizer_theta_drop_pct >= 100 || cabin_optimizer_theta_create_pct <= 100) {
+        return Status::InvalidArgument(
+            file.origin() +
+            ": cabin_optimizer thetas must satisfy drop < 100 < create (the hysteresis "
+            "gap); got drop=" +
+            std::to_string(cabin_optimizer_theta_drop_pct) +
+            " create=" + std::to_string(cabin_optimizer_theta_create_pct));
+    }
+    if (file.Has("cabin_optimizer_confirm_snapshots")) {
+        auto v = file.GetUint("cabin_optimizer_confirm_snapshots");
+        if (!v.ok()) return v.status();
+        if (v.value() == 0 || v.value() > 1'000) {
+            return Status::InvalidArgument(file.origin() +
+                                           ": cabin_optimizer_confirm_snapshots is outside "
+                                           "1..1000 - 0 would create on a single reading, "
+                                           "which is what N_confirm exists to prevent");
+        }
+        cabin_optimizer_confirm_snapshots = static_cast<std::uint32_t>(v.value());
+    }
+    if (file.Has("cabin_optimizer_snapshot_interval_ms")) {
+        auto v = file.GetUint("cabin_optimizer_snapshot_interval_ms");
+        if (!v.ok()) return v.status();
+        // 0 keeps its documented meaning: no cadence (the
+        // checkpoint_interval_ms precedent).
+        cabin_optimizer_snapshot_interval_ms = v.value();
     }
     if (file.Has("max_rows_touched")) {
         auto v = file.GetUint("max_rows_touched");
@@ -398,7 +498,15 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->optimizer_signals_.emplace(&expeditor->clock_,
                                           expeditor->config_.decay_half_life_ns);
     expeditor->dispatcher_->set_optimizer_signals(&*expeditor->optimizer_signals_);
+    expeditor->dispatcher_->set_cabin_optimizer_enabled(expeditor->config_.cabin_optimizer);
+    // PHY04: the decision core and its executor, only where a Cabin can
+    // exist at all. The cadence task registers in Serve() beside the
+    // checkpointer's.
     if (expeditor->cabin_store_) {
+        expeditor->cabin_controller_.emplace(expeditor->config_.CabinOptimizerSettings());
+        expeditor->cabin_executor_.emplace(
+            expeditor->database_->catalog, *expeditor->store_, *expeditor->cabin_store_,
+            *expeditor->cabin_controller_, &*expeditor->txn_manager_);
         expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
     }
     expeditor->logger_->Info("expeditor",
@@ -693,6 +801,43 @@ Status Expeditor::Serve() {
         logger_->Warn("expeditor",
                       "checkpoint cadence disabled; durability is SYNC and shutdown only");
     }
+
+    // PHY04's cadence: snapshot → Decide → Apply, PO8's switch read at
+    // every boundary inside Tick. Registered only when the executor exists
+    // and the interval is non-zero (0 = no cadence, the standing meaning);
+    // with the boot switch off the tick is one predicate and a return.
+    if (cabin_executor_ && config_.cabin_optimizer_snapshot_interval_ms > 0) {
+        const sched::MonoTimeNs interval =
+            config_.cabin_optimizer_snapshot_interval_ms * 1'000'000ULL;
+        scheduler.SubmitEvery(interval, [this] {
+            Status ticked = cabin_executor_->Tick(
+                *optimizer_signals_, [this] { return dispatcher_->cabin_optimizer_enabled(); });
+            if (!ticked.ok() && logger_->enabled(LogLevel::kWarn)) {
+                logger_->Warn("expeditor", "cabin optimizer tick failed: " + ticked.message());
+            }
+        });
+        logger_->Info("expeditor",
+                      "cabin optimizer cadence " +
+                          std::to_string(config_.cabin_optimizer_snapshot_interval_ms) +
+                          "ms, switch " + (config_.cabin_optimizer ? "on" : "off"));
+    }
+
+    // EVT03's background writeback: drains spec-eviction §4's dirty queue -
+    // pages a sweep found dirty at usage zero and queued instead of
+    // reclaiming. One bounded batch per tick is the cooperative-yield
+    // boundary. **Idle today by construction**: the queue only fills when
+    // the sweep runs, and nothing calls the sweep until the PageRef
+    // migration lands - so this registration is the task existing ahead of
+    // its work, the same stance the sweep itself takes. The watermark loop
+    // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
+    // it real numbers; a cadence key follows with EVT04's protocol.
+    constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]
+    scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
+        auto drained = store_->DrainDirtyEvictionQueue();
+        if (!drained.ok() && logger_->enabled(LogLevel::kWarn)) {
+            logger_->Warn("expeditor", "writeback drain failed: " + drained.status().message());
+        }
+    });
 
     // The other `system`-group task of wal.md section 6-2/6-3. It is what
     // bounds a kRelaxed commit's loss window and what resolves a kGroup

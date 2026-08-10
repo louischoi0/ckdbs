@@ -106,4 +106,22 @@ struct VerifiedTuple {
 VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint16_t slot,
                             std::uint64_t expected_pk, std::uint32_t recorded_epoch);
 
+// The epoch to stamp on a location being *written*: `page_id`'s current
+// relayout epoch, truncated to the entry formats' u32, and 0 for a page
+// that cannot be read.
+//
+// The one producer, beside `VerifyTupleAt`'s one consumer, and here for the
+// same reason that one is: a writer that stamps 0 against a bumped page
+// records a hint that misses on every later resolve and is re-healed
+// forever. Its callers are the three sites that mint or repair a hint - the
+// read path's in-place heal, the optimizer's batch heal, and the Cabin
+// write hook - and a fourth that spelled the rule again would be where the
+// two came to disagree.
+//
+// 0 on an unreadable page is deliberately the same value "never relayouted"
+// carries: the entry is about to be verified against the page anyway, so
+// the harmless direction is the one that re-checks rather than the one that
+// rejects.
+std::uint32_t CurrentRelayoutEpoch(storage::PageStore& store, PageId page_id);
+
 }  // namespace kds::exec

@@ -1,0 +1,9 @@
+rising-star step=5 CREATE reason=sustained-benefit rel=4101 col=1 cabin=0 benefit=20447225 cost=2667162
+fading-star step=2 CREATE reason=sustained-benefit rel=4102 col=1 cabin=0 benefit=42270707 cost=2546541
+fading-star step=15 DROP reason=sustained-decay rel=4102 col=1 cabin=100 benefit=179273 cost=2546541
+quality-collapse step=2 CREATE reason=sustained-benefit rel=4104 col=1 cabin=0 benefit=43745275 cost=2630802
+quality-collapse step=8 HEAL reason=quality-heal rel=4104 col=1 cabin=100 benefit=49896954 cost=3024000
+quality-collapse step=9 DROP reason=quality-collapse rel=4104 col=1 cabin=100 benefit=49945777 cost=3220596
+quality-collapse step=12 CREATE reason=sustained-benefit rel=4104 col=1 cabin=0 benefit=49240820 cost=2593594
+quality-collapse step=13 HEAL reason=quality-heal rel=4104 col=1 cabin=101 benefit=49240820 cost=2986794
+served-cheaply step=2 CREATE reason=sustained-benefit rel=4105 col=1 cabin=0 benefit=42598395 cost=2565266

@@ -286,11 +286,14 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01 and PHY02 are built (2026-08-09); PHY03
-onward are not.** Part I's `stats/decay.hpp` is the R1 implementation
-PHY01's S1 reuses (it grew the N-point `Accumulate` for S2's decayed
-sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp` with no
-engine-effect includes, per PO10.
+dependency of PHY04), `workplan-testing.md`. **PHY01-PHY05 and PHY07 are built (PHY04 on
+2026-08-10, over the EVT03/EVT06 substrate built for it); PHY06 and PHY08
+remain** — observability and the E2E close-out, both now unblocked, since
+the controller runs end to end. Part I's `stats/decay.hpp` is the R1
+implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
+S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
+with no engine-effect includes, per PO10; PHY07's golden traces are
+`tests/testdata/cabin_optimizer_traces.txt`.
 
 Engine rules apply throughout: explicit Status errors, thread-per-core
 core-local state, deterministic tests, decide/execute phase separation
@@ -396,7 +399,33 @@ create/drop oscillation over long sequences); budget invariant test
 (Σ pages ≤ budget after every ActionSet); arithmetic determinism test
 (identical snapshots ⇒ bit-identical ActionSets).
 
-## PHY03 — Catalog state and decision log
+## PHY03 — Catalog state and decision log  **[DONE 2026-08-09]**
+
+**Built, sized to what the engine can honestly persist.** Observational
+Cabin sets are memory-resident by design (`feat-cabin.md` §9: only the
+`sys.cabins` row persists), so "persistence of lifecycle state" means
+exactly three things here, and each landed. **The ownership tag costs
+nothing**: `sys.cabins.origin` already reserved `kCabinOriginAuto` for "a
+future promotion pipeline" - which this controller is - so PO1's tag is
+that value, pinned by a restart round-trip test (a second `Catalog` over
+the same pages reads the row back, origin intact). **The decision log**
+is the controller's own bounded ring (`decision_log_capacity`, 1024
+`[PROPOSED]`; the wrap and oldest-first order tested at capacity 2), each
+record = the ActionItem plus the `{snapshot version, decay_epoch}` digest
+- PO8's "logged with the inputs", memory-resident, loss-on-crash
+documented as acceptable because the state machine re-derives from
+re-observation. **The frozen P_scan baseline** landed as the load-bearing
+piece: frozen at the CREATE decision, it prices an ACTIVE/DECAYING entry's
+B and C (live frequency × frozen mean), because an ACTIVE Cabin makes the
+very scans it replaced cheap and a live-priced benefit collapses the
+moment the Cabin works - the controller would drop its own success and
+churn. The harness gained the `served-cheaply` scenario proving it:
+post-CREATE the observed page cost collapses to the probe cost and the
+trace is **one action, ever**; a dead shape still dies, since zero
+frequency zeroes the frozen-priced benefit too. The budget swap's victim
+ranking prices incumbents on the same frozen basis it defends them with.
+Crash posture: BUILDING is discarded by construction (nothing persists
+it); ACTIVE persists as its catalog row and re-derives the rest.
 
 **Scope.** Persistence of managed-Cabin lifecycle state and the decision
 log (PO5, PO8).
@@ -416,7 +445,40 @@ log (PO5, PO8).
 **Acceptance.** Restart tests: ACTIVE survives, BUILDING discarded,
 CANDIDATE evidence resets cleanly; log ring wraps correctly.
 
-## PHY04 — Executor (background task)
+## PHY04 — Executor (background task)  **[DONE 2026-08-10]**
+
+**Built.** `exec::CabinOptimizerExecutor` (`Apply(ActionSet)` + the
+`Tick()` that strings snapshot → Decide → Apply for the expeditor's
+cadence, registered beside the checkpointer's at
+`cabin_optimizer_snapshot_interval_ms`, 0 = no cadence). What each action
+means here, sized to the engine: **CREATE** is the catalog row (origin
+`kCabinOriginAuto`) plus the seeded build — empty for a first-time column
+*by construction* (no Cabin meant no CabinKey sightings), so §II.5's
+"observation-based population" applies literally and traffic fills it via
+n=2; a **policy refusal** parks the candidate in BUILDING rather than
+resetting it, or a settled "no" would be retried every confirm cycle
+forever. **EXTEND** is where the ring earns its keep: the seed is
+`SightedUnobservedOf`, and **one complete walk through the scan ring**
+(PO4, structural — the build fetches through `OpenScanRing()`) collects
+every seed's set at once, committing each only after the walk finished —
+empty sets included, the authoritative zero-rows answer. The build judges
+by latest settled state and **aborts on a busy row** (counted, its abort
+leaves a phantom; skipped, its commit already passed the write hook
+unobserved — AST06's argument verbatim), committing nothing; demand
+re-nominates. **HEAL** is the batch form of the read path's heal through
+the same primitives — `VerifyTupleAt`, `BtreeLookup` + current-epoch
+stamp, dangling pks erased on sight (K1), heap sets un-observed.
+**DROP** is row → `Forget` → `NoteDropped`, in that order ("late is
+fine"). **PO8** is consulted at every boundary — tick, action, and build
+*page* — so OFF lands mid-build and discards cleanly, commit being
+walk-completion-only. One controller amendment rode in: `NoteCreated`
+adopts an entry it no longer tracks rather than dropping the pages from
+the budget's accounting. Tests: the full loop (hot filter-scan traffic →
+tick → catalog row, origin auto), the seeded build with the empty-set
+case and the served `cabin_hits=1` after it, kill-switch mid-build
+discard with surviving evidence, the busy-row deferral settling to the
+three-row set after COMMIT, heal repairing broken hints and erasing a
+planted dangling pk, and drop removing row, sets and controller entry.
 
 **Scope.** `CabinOptimizer::Execute(ActionSet)` on the home core's
 background group. **Depends on EVT06 (scan ring).**
@@ -437,7 +499,26 @@ relations; interruption mid-build discards cleanly; foreground working-set
 protection test (build over large relation does not evict scripted hot
 set — reuses the EVT06 oracle); disable-switch harmlessness.
 
-## PHY05 — Configuration surface
+## PHY05 — Configuration surface  **[DONE 2026-08-09]**
+
+**Built.** The switch: `cabin_optimizer` boot key (default **off**,
+experimental - the opposite default from Part I's `physical_optimizer`,
+because a controller that acts is not a report), `SET CABIN_OPTIMIZER
+[=] ON|OFF` at runtime (non-destructive both ways, PO8), `SHOW META`
+reporting it. The tuning family, translated to this engine's conventions:
+`cabin_optimizer_page_budget`, the five `_theta_*_pct` thresholds as
+**percent integers** (the config file parses no decimals; 300 = θ 3.0),
+`_confirm_snapshots`, `_snapshot_interval_ms` (0 = no cadence, the
+checkpoint-interval precedent) - all parsed and validated at boot, with
+the one cross-key rule enforced that the hysteresis stands on:
+**θ_drop < 100 < θ_create**, whatever the numbers.
+`Config::CabinOptimizerSettings()` assembles them into the decision
+core's 16.16 config, sharing R1's `decay_half_life` as T_amort (§II.6's
+own default; no separate key until a workload argues for one). Consumed
+by PHY04's task when it exists and by nothing until then - stated in the
+sample, the manual, and the keys' comments, the V11 precedent. Tests:
+defaults + parse + assembly, the broken-gap/zero-budget/zero-confirm
+refusals, and the runtime toggle with both spellings.
 
 **Scope.** Spec §II.6 settings wired through boot + runtime (`SET` for the
 switch; thresholds boot-time in v1).
@@ -462,7 +543,30 @@ switch; thresholds boot-time in v1).
 **Acceptance.** View snapshot tests under PHY04 scenarios; ANALYZE golden
 output.
 
-## PHY07 — Deterministic replay harness (PO10)
+## PHY07 — Deterministic replay harness (PO10)  **[DONE 2026-08-09]**
+
+**Built.** `tests/cabin_optimizer_replay_test.cpp` +
+`tests/testdata/cabin_optimizer_traces.txt` (golden, regenerated via
+`KDS_TRACE_REGEN=1` — the parser corpus's arrangement). The harness runs
+the **real pipeline**, not a mock: splitmix64-seeded streams (chosen over
+`<random>` because the standard's *distributions* are
+implementation-defined, and byte-identical traces are the point) feed
+PHY01's `OptimizerSignals` under a ManualClock, each period snapshots and
+runs PHY02's `Decide`, and a simulated Execute applies the completion
+edges with deterministic ids and page counts. Four scenarios (rising
+star, fading star, stationary noise, quality collapse), each also
+carrying a foreign Cabin with miserable quality for the jurisdiction
+oracle. All four oracles wired and green: no-oscillation (sixty jittering
+periods inside the θ gap produce **zero** actions), the budget invariant
+after every executed set, jurisdiction (the foreign Cabin is never
+touched; Bound Cabins cannot appear at all — the snapshot is fed by
+Observational counting alone), and PO7's HEAL-before-DROP ordering. One
+observation the golden trace surfaced, recorded rather than hidden:
+after a quality-collapse DROP, still-hot demand **re-nominates and
+re-creates** (steps 12-13 of that scenario) and heals again — PO7's
+"demand, if real, re-nominates" working as written, and the churn a
+persistent per-key cooldown (PHY03's state) could dampen if measurement
+ever says it should.
 
 **Scope.** Seed-driven statistics streams replayed through Decide.
 
