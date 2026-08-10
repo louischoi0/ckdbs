@@ -40,7 +40,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
             "cabin_optimizer_theta_swap_pct",   "cabin_optimizer_theta_extend_pct",
             "cabin_optimizer_theta_heal_pct",   "cabin_optimizer_confirm_snapshots",
-            "cabin_optimizer_amort_windows",
+            "cabin_optimizer_amort_windows", "cabin_optimizer_cooldown_half_lives",
             "cabin_optimizer_snapshot_interval_ms"};
 }
 
@@ -59,6 +59,7 @@ stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
     config.half_life_ns = decay_half_life_ns;
     config.amort_windows = static_cast<stats::Fix16>(cabin_optimizer_amort_windows) *
                            stats::kFixOne;
+    config.cooldown_half_lives = cabin_optimizer_cooldown_half_lives;
     return config;
 }
 
@@ -296,6 +297,22 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                                 "half-lives, and over *zero* half-lives every Cabin is free");
         }
         cabin_optimizer_amort_windows = static_cast<std::uint32_t>(v.value());
+    }
+    if (file.Has("cabin_optimizer_cooldown_half_lives")) {
+        auto v = file.GetUint("cabin_optimizer_cooldown_half_lives");
+        if (!v.ok()) return v.status();
+        // 0 is *accepted* where the amortization window's 0 is refused,
+        // and the asymmetry is the point: a zero window prices every
+        // Cabin free, which is nonsense, while zero time-patience is a
+        // coherent (if brittle) choice - the score hysteresis remains.
+        // The ceiling keeps `half_lives x half_life_ns` clear of u64.
+        if (v.value() > 100'000) {
+            return Status::InvalidArgument(
+                file.origin() + ": cabin_optimizer_cooldown_half_lives is above 100000 - it "
+                                "is the DECAYING dwell in decay half-lives, and a cooldown "
+                                "that long is 'never drop' spelled the long way");
+        }
+        cabin_optimizer_cooldown_half_lives = static_cast<std::uint32_t>(v.value());
     }
     if (file.Has("cabin_optimizer_snapshot_interval_ms")) {
         auto v = file.GetUint("cabin_optimizer_snapshot_interval_ms");

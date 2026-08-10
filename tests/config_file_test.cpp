@@ -284,9 +284,12 @@ TEST(ExpeditorConfigTest, CabinOptimizerParsesItsFamilyAndDefaultsOff) {
     Expeditor::Config config;
     EXPECT_FALSE(config.cabin_optimizer);  // experimental: off, §II.6
 
-    // The shipped amortization default: 64 half-lives, the overnight
-    // sizing the business-days scenario ratified (2026-08-10).
+    // The shipped amortization window and the cooldown that is no longer
+    // derived from it: 64 and 128 half-lives, the overnight sizing the
+    // business-days scenario ratified (2026-08-10). 128 is what the old
+    // `2 x T_amort` expression yielded, so decoupling moved nothing.
     EXPECT_EQ(config.cabin_optimizer_amort_windows, 64u);
+    EXPECT_EQ(config.cabin_optimizer_cooldown_half_lives, 128u);
 
     ASSERT_TRUE(config
                     .ApplyFile(ParseOk("cabin_optimizer = on\n"
@@ -294,7 +297,8 @@ TEST(ExpeditorConfigTest, CabinOptimizerParsesItsFamilyAndDefaultsOff) {
                                        "cabin_optimizer_theta_create_pct = 400\n"
                                        "cabin_optimizer_theta_drop_pct = 25\n"
                                        "cabin_optimizer_confirm_snapshots = 5\n"
-                                       "cabin_optimizer_amort_windows = 12\n"))
+                                       "cabin_optimizer_amort_windows = 12\n"
+                                       "cabin_optimizer_cooldown_half_lives = 7\n"))
                     .ok());
     EXPECT_TRUE(config.cabin_optimizer);
     EXPECT_EQ(config.cabin_optimizer_page_budget, 128u);
@@ -308,6 +312,31 @@ TEST(ExpeditorConfigTest, CabinOptimizerParsesItsFamilyAndDefaultsOff) {
     EXPECT_EQ(assembled.page_budget, 128u);
     EXPECT_EQ(assembled.half_life_ns, config.decay_half_life_ns);
     EXPECT_EQ(assembled.amort_windows, 12 * stats::kFixOne);
+    EXPECT_EQ(assembled.cooldown_half_lives, 7u);
+}
+
+TEST(ExpeditorConfigTest, TheAmortWindowAndTheCooldownAreIndependent) {
+    // They were one number (`cooldown = 2 x T_amort`) and are two
+    // questions: how long a build is believed to pay for itself, versus
+    // how much silence proves death. Moving one must not move the other -
+    // otherwise an operator lengthening the amortization to admit
+    // marginal shapes also doubles how long a dead Cabin lingers.
+    Expeditor::Config config;
+    ASSERT_TRUE(config.ApplyFile(ParseOk("cabin_optimizer_amort_windows = 4\n")).ok());
+    EXPECT_EQ(config.CabinOptimizerSettings().cooldown_half_lives, 128u)
+        << "the cooldown followed the amortization window";
+
+    // And the cooldown may sit below the window, which the old expression
+    // made unrepresentable - a 24/7 workload with no quiet period is the
+    // case that wants it.
+    Expeditor::Config shorter;
+    ASSERT_TRUE(shorter
+                    .ApplyFile(ParseOk("cabin_optimizer_amort_windows = 64\n"
+                                       "cabin_optimizer_cooldown_half_lives = 8\n"))
+                    .ok());
+    const stats::CabinOptimizerConfig assembled = shorter.CabinOptimizerSettings();
+    EXPECT_EQ(assembled.amort_windows, 64 * stats::kFixOne);
+    EXPECT_EQ(assembled.cooldown_half_lives, 8u);
 }
 
 TEST(ExpeditorConfigTest, CabinOptimizerRefusesAZeroAmortWindow) {
@@ -316,6 +345,13 @@ TEST(ExpeditorConfigTest, CabinOptimizerRefusesAZeroAmortWindow) {
     Expeditor::Config config;
     Status zero = config.ApplyFile(ParseOk("cabin_optimizer_amort_windows = 0\n"));
     EXPECT_EQ(zero.code(), StatusCode::kInvalidArgument) << zero.message();
+
+    // A zero *cooldown* is accepted, deliberately: it means no time
+    // patience, leaving the score hysteresis as the only anti-thrash -
+    // coherent, unlike a zero window, which prices every Cabin free.
+    Expeditor::Config no_patience;
+    EXPECT_TRUE(
+        no_patience.ApplyFile(ParseOk("cabin_optimizer_cooldown_half_lives = 0\n")).ok());
 }
 
 TEST(ExpeditorConfigTest, CabinOptimizerRefusesABrokenHysteresisGap) {

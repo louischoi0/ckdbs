@@ -40,20 +40,19 @@ Fix16 FromWhole(std::uint64_t whole) noexcept {
     return whole << 16;
 }
 
-// A whole quantity scaled by a 16.16 factor: (whole x factor) >> 16, and
-// **without lifting `whole` into 16.16 first**. That distinction is the
-// whole reason this exists rather than `MulFix(FromWhole(w), f) >> 16`: a
-// nanosecond count is not a model quantity. 600 seconds is 6e11, which in
-// 16.16 is 3.9e16 - a quarter of u64's range before any multiply - so the
-// lifted form saturated for every half-life above about two seconds and
-// answered 4.29 s (u32's ceiling, shifted back) whatever was configured.
-// Saturating here too, at a threshold no clock reaches: 39 hours at the
-// default amort_windows.
-std::uint64_t ScaleWhole(std::uint64_t whole, Fix16 factor) noexcept {
-    if (whole != 0 && factor > std::numeric_limits<std::uint64_t>::max() / whole) {
+// The DECAYING dwell in nanoseconds: whole half-lives x the half-life.
+// **Both operands are integers and neither passes through 16.16**, which
+// is the point - this used to be `2 x amort_windows` in fixed point, and
+// lifting a nanosecond count into 16.16 saturated for every half-life
+// above about two seconds, collapsing a configured 20-minute cooldown to
+// 4.29 s. Saturating rather than wrapping: a cooldown so long it
+// overflows u64 is a configuration asking never to drop, which is the
+// direction it should err.
+sched::MonoTimeNs CooldownNs(std::uint32_t half_lives, sched::MonoTimeNs half_life_ns) noexcept {
+    if (half_lives != 0 && half_life_ns > std::numeric_limits<std::uint64_t>::max() / half_lives) {
         return std::numeric_limits<std::uint64_t>::max();
     }
-    return (whole * factor) >> 16;
+    return half_life_ns * half_lives;
 }
 
 }  // namespace
@@ -244,10 +243,11 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
         RecordDecision(snapshot, item);
         actions.push_back(item);
     };
-    // Two amort windows of wall time, in nanoseconds. `half_life_ns` is a
-    // clock quantity and never enters 16.16 - see ScaleWhole.
-    const sched::MonoTimeNs cooldown_ns = static_cast<sched::MonoTimeNs>(
-        ScaleWhole(config_.half_life_ns, 2 * config_.amort_windows));
+    // The DECAYING dwell, from its own parameter rather than from
+    // T_amort: how much silence proves death is not the same question as
+    // how long a build is believed to pay for itself.
+    const sched::MonoTimeNs cooldown_ns =
+        CooldownNs(config_.cooldown_half_lives, config_.half_life_ns);
 
     // The effective score for one entry: live means for a candidate, the
     // frozen pre-Cabin baseline once one exists - an ACTIVE Cabin makes
