@@ -56,6 +56,9 @@ statements, not style.
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
 | User manual | `manual/` — SQL surface written, verified against code | `manual/sql/sql.md` |
 
+**Engine-wide known gaps** — what is missing, what a restart loses, and
+stale claims found in docs — live in `docs/known-gaps.md`.
+
 Superseded and kept only as history — do not build from them:
 `docs/parser.md`, `docs/parser-workplan.md`, `docs/step-chains.md` (all →
 `docs/parser-v2.md`); `docs/page.md` §7's eviction proposal (→
