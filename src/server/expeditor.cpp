@@ -33,7 +33,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
             "indexes",
-            "cabin_max_entries_per_value", "cores",
+            "cabin_max_entries_per_value", "cores", "placement",
             "aggregate_max_groups",  "aggregate_max_distinct",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
@@ -351,6 +351,18 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         inline_cell_width = width;
     }
+    if (file.Has("placement")) {
+        auto v = file.GetString("placement");
+        if (!v.ok()) return v.status();
+        if (v.value() == "creating") {
+            placement = catalog::PlacementPolicy::kCreatingCore;
+        } else if (v.value() == "rotate") {
+            placement = catalog::PlacementPolicy::kRotate;
+        } else {
+            return Status::InvalidArgument(file.origin() + ": placement '" + v.value() +
+                                            "' is not a policy; use creating or rotate");
+        }
+    }
     if (file.Has("cores")) {
         auto v = file.GetUint("cores");
         if (!v.ok()) return v.status();
@@ -458,6 +470,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // along, but re-setting it keeps that fact local instead of depending
     // on a copy elsewhere staying a copy.
     expeditor->database_->catalog.SetLogger(&*expeditor->logger_);
+    // The placement rule, before any DDL can run (workplan P6c). At
+    // cores = 1 rotate degrades to the creating core by the formula, so no
+    // validation couples the two keys.
+    expeditor->database_->catalog.SetPlacementPolicy(expeditor->config_.placement);
 
     // The WAL stack, before the dispatcher: INSERT logs through it, so the
     // dispatcher cannot be built until it exists.
@@ -804,6 +820,48 @@ Status Expeditor::Serve() {
         database_->catalog.SetInvalidationHook([this, &scheduler] {
             BroadcastCatalogInvalidation(scheduler);
         });
+
+        // The send side of CC7's flush-then-grant handoff (workplan P6c):
+        // a relation placed on a peer gets that peer fault rights over its
+        // pages, flush strictly first - a grant to unflushed pages would
+        // hand the owner stale bytes.
+        database_->catalog.SetRelationPublishHook(
+            [this, &scheduler](catalog::Oid oid, std::uint32_t owner_core, PageId root,
+                               PageId varheap_root) {
+                catalog::SysTableRow row{};
+                row.desc_page_id = root;
+                row.varheap_page_id = varheap_root;
+                const storage::Extent range =
+                    RelationFaultExtentOf(row, storage::kDefaultExtentPages);
+
+                std::vector<PageId> pages;
+                pages.reserve(range.count);
+                for (PageId id = range.first; id < range.end(); ++id) pages.push_back(id);
+                if (Status s = store_->FlushPages(pages); !s.ok()) {
+                    // Reported, not propagated: the DDL succeeded, and an
+                    // ungranted relation is refused retryably rather than
+                    // served wrong - BroadcastCatalogInvalidation's stance.
+                    logger_->Error("catalog", "flushing relation oid=" + std::to_string(oid) +
+                                                  " before its fault grant failed: " +
+                                                  s.message());
+                    return;
+                }
+
+                ExtentGrantPayload grant{range.first, range.count};
+                std::byte payload[sizeof(grant)];
+                std::memcpy(payload, &grant, sizeof(grant));
+
+                sched::MessageHeader header{};
+                header.src_core = 0;
+                header.dst_core = owner_core;
+                header.session_core = 0;
+                header.kind =
+                    static_cast<std::uint16_t>(sched::RingMessageKind::kRelationFaultGrant);
+                header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+                // The task copies the payload (send_retry.hpp owns it), so a
+                // stack buffer is enough.
+                scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, payload));
+            });
 
         // Spawned only after every core is built, so a failure above leaves
         // no thread to unwind.

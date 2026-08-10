@@ -99,6 +99,23 @@ public:
     using InvalidationHook = std::function<void()>;
     void SetInvalidationHook(InvalidationHook hook) { on_invalidate_ = std::move(hook); }
 
+    // Called at the end of a CreateTable whose owner is **not** the system
+    // core (workplan P6c) - the send side of CC7's flush-then-grant
+    // handoff. The system core's installer flushes the relation's pages and
+    // sends the owner a `kRelationFaultGrant`; with no hook installed a
+    // rotated relation is created and never granted, which the affinity
+    // check already refuses honestly. Arguments: the relation's oid, its
+    // owner core, its root page and its var-heap root (kInvalidPageId when
+    // none).
+    using RelationPublishHook =
+        std::function<void(Oid, std::uint32_t, PageId, PageId)>;
+    void SetRelationPublishHook(RelationPublishHook hook) { on_publish_ = std::move(hook); }
+
+    // The placement rule CreateTable hands to catalog::AssignOwnerCore()
+    // (workplan P6c, the `placement` config key). Default kCreatingCore;
+    // set once at startup, before any DDL.
+    void SetPlacementPolicy(PlacementPolicy policy) noexcept { placement_ = policy; }
+
     // Drops every cached fact without bumping the version. What a **peer**
     // does on receiving `kCatalogInvalidate`: the version counter is
     // per-instance and means nothing across cores, but the cache contents
@@ -708,6 +725,8 @@ private:
 
     Logger* log_ = nullptr;
     InvalidationHook on_invalidate_;
+    RelationPublishHook on_publish_;
+    PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;
     // Unset until the first GenerateUserOid() recovers it from the catalog.
     // An optional rather than a sentinel value, because every integer in
     // this type's range is a legal oid and a sentinel would be one more

@@ -387,6 +387,75 @@ TEST_F(CoreRuntimeTest, AGrantedPeerFaultsARelationsDataPagesReadOnly) {
     EXPECT_TRUE(peer.value()->catalog().InitTableAccess(oid.value()).ok());
 }
 
+// ---- P6c: placement -----------------------------------------------------
+
+TEST(CorePlacementTest, RotationSkipsTheSystemCoreAndCreatingStaysPut) {
+    using catalog::AssignOwnerCore;
+    using catalog::PlacementPolicy;
+    // The default policy pins to the creating core whatever the count.
+    static_assert(AssignOwnerCore(PlacementPolicy::kCreatingCore, 0, 4, 7) == 0);
+    // Rotation walks the non-system cores in relation order...
+    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 0) == 1);
+    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 1) == 2);
+    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 2) == 3);
+    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 4, 3) == 1);
+    // ...never lands on core 0...
+    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 2, 5) == 1);
+    // ...and degrades to the creating core when there is nowhere to rotate.
+    static_assert(AssignOwnerCore(PlacementPolicy::kRotate, 0, 1, 5) == 0);
+    SUCCEED();
+}
+
+TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
+    // The catalog half of P6c end to end: rotation chooses a peer, the
+    // publish hook fires with the facts the send needs, and the grant it
+    // implies lets that peer fault the relation - the same grant P6b's
+    // test drives, now produced by the placement path rather than by hand.
+    //
+    // A two-core catalog over the same store, because the fixture's was
+    // bootstrapped at core_count = 1 and rotation correctly degrades to
+    // the creating core there - which the placement unit test pins.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+
+    struct Published {
+        catalog::Oid oid = 0;
+        std::uint32_t owner = 0;
+        PageId root = kInvalidPageId;
+        PageId varheap = kInvalidPageId;
+        int calls = 0;
+    } published;
+    catalog2.SetRelationPublishHook(
+        [&](catalog::Oid oid, std::uint32_t owner, PageId root, PageId varheap) {
+            published = {oid, owner, root, varheap, published.calls + 1};
+        });
+
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
+                                    TwoColumnSchema(), catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // The catalog recorded the rotated owner, and the hook saw the same
+    // facts the row carries.
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    EXPECT_EQ(row.value().owner_core, 1u);
+    EXPECT_EQ(published.calls, 1);
+    EXPECT_EQ(published.oid, oid.value());
+    EXPECT_EQ(published.owner, 1u);
+    EXPECT_EQ(published.root, row.value().desc_page_id);
+
+    // The grant the hook's installer would send reaches the peer, and the
+    // relation resolves there - CC7's whole point, driven by placement.
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    EXPECT_TRUE(peer.value()->store().MayFault(row.value().desc_page_id));
+    EXPECT_TRUE(peer.value()->catalog().InitTableAccess(oid.value()).ok());
+}
+
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     // P6's deliberate cost, pinned so it stays a decision rather than
     // becoming a surprise: sys.patterns and sys.access_stats are catalog

@@ -165,6 +165,10 @@ not a re-interpretation.
 | Aggregation scaling | 1 → thousands of groups | +46% | +454% (HashAggregate) | fold cost tracks group count better | `docs/workplan-aggregate-perf.md` |
 | Aggregation, no index-only scan | `COUNT(*)` over indexed col | costs a full resolve | PG Index Only Scan ~10% cheaper | honest structural gap, gated on a visibility witness | `results-index.md` §7 |
 | Multi-core | 4 isolated relations, cores=1 vs 2 | 1.05× | — | parity, as designed — core 0 serves everything until the pipeline lands | `results-multicore.md` |
+| Bulk INSERT, durable | 1,000-row `VALUES`, rows/s | **210,165** | 81,400 (`sync=on`) | 2.6× at the widest batch, 1.07× at batch 1 | `results-bulk-insert.md` |
+| Freight booking | whole transaction, mean | **3,663 µs** | 4,072 µs | KDS ahead 10%; the *decomposition* is the finding | `results-scenario2-freight.md` |
+| Non-pk equality | 15 shape×size cells, p50 ratio | 1.14×-1.99× faster | — | KDS ahead in every cell, walk or index | `results-scenario3-library.md` |
+| Cabin controller | 3 business days, day-1 TPS | 1,680 (auto) vs 608 (off) | twin in `results/cabinopt-days-pg.json` | **2.8×**, matching declared-by-hand (1,724) | `results-cabin-optimizer-days.md` |
 
 ### 1. Point access by primary key — the headline result
 
@@ -359,6 +363,138 @@ the CC7 ownership decision and its P6b handoff are in; dispatch is not), so
 parity is the *correct* current result and this file is the baseline the
 pipeline will be measured against.
 
+### 8. Bulk INSERT — the batch ladder against PostgreSQL
+
+[`bench/results-bulk-insert.md`](bench/results-bulk-insert.md), 2026-08-10.
+Multi-row `INSERT ... VALUES (...), (...)` at batch sizes 1 / 10 / 100 /
+1,000, 100,000 rows per configuration, three durability classes, against
+PostgreSQL 17.10 with `synchronous_commit` as the equivalent per-transaction
+knob (`off` twins `relaxed`; `on` twins `group`/`strict`). Rows per second,
+post-fix engine state (the file's Part I records the slower pre-fix run and
+what the fix was — the history is kept, not overwritten):
+
+| rows/statement | KDS `relaxed` | KDS `group` | KDS `strict` | PG `sync=off` | PG `sync=on` | KDS/PG (relaxed) | KDS/PG (durable) |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 9,328 | 943 | 951 | 5,503 | 878 | **1.70×** | **1.07×** |
+| 10 | 63,369 | 9,116 | — | 36,450 | 8,080 | **1.74×** | **1.13×** |
+| 100 | 209,876 | 64,614 | — | 87,920 | 45,630 | **2.39×** | **1.42×** |
+| 1,000 | 278,180 | 210,165 | 170,894 | 94,600 | 81,400 | **2.94×** | **2.58×** |
+
+Two things the file is careful about, kept here: the batch-1 durable column
+is the fsync ladder both engines pay (943 vs 878 — the device's ~940 µs
+write+fsync p50 is measured in the same file, so neither engine has room to
+win there), and the run was made under a load gate on a shared box — every
+configuration started only below a load threshold, contaminated attempts
+were discarded *and listed*, and the noise floor was established from
+interleaved A/B repeats (0.06-3.5% by batch size).
+
+### 9. The freight booking — where a transaction spends its time
+
+[`bench/results-scenario2-freight.md`](bench/results-scenario2-freight.md),
+2026-08-07. A booking is one transaction: four reads, ~6.6 writes, one
+COMMIT, FK-checked throughout. 1,500 bookings per engine, `--verify` on 25.
+The wait breakdown — the table this results format exists for:
+
+| wait type | KDS | share | PostgreSQL | share |
+|---|---:|---:|---:|---:|
+| durability wait (COMMIT, one fsync) | **1,836 µs** | **50.1%** | 1,135 µs | 27.9% |
+| write statements (~6.6 inserts, 2 updates) | 967 µs | 26.4% | 1,717 µs | 42.2% |
+| reads (4 statements) | 598 µs | 16.3% | 967 µs | 23.7% |
+| client, framing, `BEGIN` (residual) | 262 µs | 7.1% | 253 µs | 6.2% |
+| **whole booking** | **3,663 µs** | 100% | **4,072 µs** | 100% |
+
+KDS ends ~10% ahead, but the decomposition is the useful part: KDS spends
+**half the booking waiting on one fsync** where PostgreSQL spends 28% —
+PostgreSQL's write *statements* cost 1.8× more, and its commit costs 1.6×
+less. A single-connection run cannot amortize a group commit on either side
+(a batch of one is a batch), so the fsync share is the ceiling story for
+both engines, told at different points of the transaction.
+
+### 10. Non-pk equality — walk, index and Cabin against PostgreSQL
+
+[`bench/results-scenario3-library.md`](bench/results-scenario3-library.md),
+2026-08-08. Five query shapes over a library schema at 200 / 1,000 / 10,000
+loans — **442,847 operations across 44 cells, zero errors**, every KDS reply
+verified against a client-side-filtered full scan (the check that would
+catch an index or Cabin serving an incomplete set), and every indexed cell's
+*plan* asserted through `ANALYZE`, so a silent regression to a scan fails
+the run rather than passing as a flat number. p50 ratios, above 1.00 = KDS
+faster:
+
+| shape | rows | KDS walk | PG seqscan | ratio | KDS index | PG index | ratio |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `pk-user` | 10,000 | 128 µs | 187 µs | 1.46× | 122 µs | 194 µs | 1.59× |
+| `loans-by-user` | 200 | 153 | 255 | 1.66× | 132 | 263 | **1.99×** |
+| `loans-by-user` | 10,000 | 1,420 | 1,671 | 1.18× | 141 | 237 | 1.68× |
+| `loans-by-book` | 10,000 | 1,415 | 1,671 | 1.18× | 140 | 228 | 1.63× |
+| `resv-by-user` | 10,000 | 773 | 885 | 1.14× | 137 | 215 | 1.57× |
+| `books-by-author` | 10,000 | 425 | 538 | 1.27× | 136 | 224 | 1.65× |
+
+KDS is ahead in every cell, walking or indexed — the walk ratios narrow with
+size (a per-row race KDS wins by less than it wins the fixed cost), the
+indexed ratios do not, because both engines are flat and KDS's constant is
+smaller. Two findings the file insists on: **KDS chooses the same plan at
+every cardinality** (the plan table shows `IndexProbe` at 200 rows where
+PostgreSQL declines its own index — the stable-plan trade, visible in data),
+and the **Cabin's hit-rate cliff**: (90.6% hits, 14.3% faster than the walk)
+at 200 rows becomes (9.1% hits, 172.3% *slower*) at 10,000 — a Cabin pays in
+proportion to how often a value is probed again, and this workload's uniform
+draw stops re-probing as the value space grows. The file also carries a
+status header stating exactly which commit the numbers describe and why a
+same-evening refresh was aborted (a concurrent build held the machine) —
+the provenance discipline every file in `bench/` follows.
+
+### 11. The business stress mix — the honesty benchmark
+
+[`bench/results-business-stress.md`](bench/results-business-stress.md).
+10,000 users, 20,012 accounts, 4 trader processes over disjoint partitions,
+120 s measured. Its first table is the most important number in `bench/`
+because of what it *removes*:
+
+| | tmpfs (`/tmp`) | real disk (xfs) |
+|---|---:|---:|
+| TPS | **1,730.6** | **166.8** |
+| committed in 120 s | 207,670 | 20,015 |
+| txn p50 | 1.78 ms | 11.80 ms |
+| INSERT p50 (server-side) | 129 µs | 987 µs |
+
+A 10× swing from the filesystem alone. This is why every results file above
+states its device and refuses tmpfs: any number measured where fsync is free
+describes a different engine. The same file prices the reporting job (TPS
+166.8 with the reporter on, 321.7 without; p99 211 ms vs 49 ms) — the
+scan-vs-writes interference that the Cabin and index work exists to reduce.
+
+### 12. The Cabin controller over three business days
+
+[`bench/results-cabin-optimizer-days.md`](bench/results-cabin-optimizer-days.md),
+2026-08-10 — the newest file, measuring PHY01-PHY08 end to end: three
+compressed business days, hot symbol sets rotating nightly, three arms on
+identical data — `off` (no Cabin ever), `on` (`SET CABIN_OPTIMIZER ON`,
+the controller decides), `declared` (an operator hand-declares Cabins on
+all five symbol columns). Day-1 TPS: **608 off, 1,680 controller (2.8×),
+1,724 declared** — the controller reaches parity with a human who knew the
+answer in advance, and the file's thesis is the nightly pattern: retirement
+(the hot set moving on) is the norm the controller must handle, not an edge
+case. A PostgreSQL twin ran in the same session
+(`bench/results/cabinopt-days-pg.json`); its comparison lives in the file.
+Two runs with different seeds; the quiet-machine run is primary and the
+file says which and why.
+
+### 13. Assertions — measured without a twin, and why
+
+[`bench/results-assertion.md`](bench/results-assertion.md), 2026-08-09.
+Nine configurations across three durability classes, enforcement stamped in
+every run (`SHOW ASSERTIONS` must report `enforcing=on` or the driver
+refuses to measure), the violation phase refusing **200/200** attempts with
+the exact wire error, and the assertion's own aggregate verified identical
+across five comparison relations. **No PostgreSQL twin exists** — the file's
+§6 says why rather than leaving it implied: PostgreSQL has no enforced
+`CREATE ASSERTION`, and the honest equivalents (triggers, materialized
+counters) each measure a different mechanism with different guarantees, so a
+"comparison" would be a chart of unlike things. The INSERT-path overhead of
+an enforcing assertion is the file's own number; it is a KDS-vs-KDS
+measurement by construction.
+
 ### Caveats — what these numbers do not show
 
 Stated once, applying to everything above:
@@ -382,6 +518,65 @@ Stated once, applying to everything above:
    are noise. Server-side numbers are quoted where files record them.
 6. **Shared 2-vCPU host.** Engines ran sequentially, never concurrently,
    and each results file records load averages and compiler activity.
+
+### The provenance discipline
+
+Every results file in `bench/` carries the same evidence block, and it is
+worth knowing what to expect before opening one, because it is what makes
+these numbers quotable at all:
+
+- **The commit measured, and the binary's provenance** — mtime against
+  HEAD's commit time, with the delta spelled out when they differ. Where a
+  binary predates HEAD, the file proves no engine source differs
+  (`results-scenario3-library.md` and `results-bulk-insert.md` both do this
+  explicitly, diff by diff); where the tree was dirty, the dirt is listed
+  file by file with why none of it is on the measured path.
+- **The device, stated and refused when wrong** — every file names the block
+  device and states "not tmpfs"; §11's 10× swing is why.
+- **Machine state** — load averages before and after every cell, `pgrep`
+  for compilers, and in the newest files a hard load gate: a configuration
+  starts only below a load threshold, and discarded attempts are listed
+  rather than silently retried.
+- **A noise floor from inside the run** — interleaved A/B repeats or
+  replicate cells, so "X% faster" claims can be read against the spread the
+  same harness produced on the same day (0.06-3.5% for bulk insert,
+  0.6-8.7% median for scenario3's replicates).
+- **Verification before measurement** — `--verify` comparing engines
+  row-for-row, plan assertions through `ANALYZE`, enforcement stamps; a run
+  that cannot prove it measured the right thing is aborted, and two files
+  (`results-scenario3-library.md`'s refresh, a scenario2 contaminated run)
+  record aborts as findings rather than deleting them.
+- **Supersession is recorded, never overwritten** — `results.md` opens with
+  which of its own premises expired and where the replacement lives;
+  `results-bulk-insert.md` keeps its pre-fix Part I beside the post-fix
+  numbers. A results file is history, and history does not get edited.
+
+### Reproducing
+
+Each comparison has a driver pair under [`tools/`](tools/), sharing one
+harness (`tools/bench_common.py`) so the two sides measure identically;
+[`bench/docs/README.md`](bench/docs/) records exact invocations per results
+file. The pattern:
+
+```bash
+tools/pg_setup.sh init                      # scratch PostgreSQL 17 cluster, port 15433
+build-release/kds_server --config kds.conf  # KDS on 15432 — Release build, never ./build
+
+tools/benchmark.py            # the four-phase client path (KDS side)
+tools/pg_benchmark.py         # its PostgreSQL twin
+tools/scenario1_backtest.py   # joins/ranges ladder     (+ pg_scenario1_backtest.py)
+tools/scenario2_freight.py    # FK-checked bookings     (+ pg_scenario2_freight.py)
+tools/scenario3_library.py    # non-pk equality matrix  (+ pg_scenario3_library.py)
+tools/index_benchmark.py      # secondary indexes       (+ pg_index_benchmark.py)
+tools/bulk_insert_benchmark.py    # batch ladder        (+ pg_bulk_insert_benchmark.py)
+tools/multicore_benchmark.py  # the 4-relation isolation baseline (no PG twin)
+```
+
+Ground rules, learned the hard way and enforced by the files above: measure
+`build-release` only (`./build` is Debug and has reported the wrong *sign*
+twice — `docs/workplan-aggregate-perf.md`); put data files on a real
+filesystem, never `/tmp`; run the engines sequentially, never concurrently,
+on this 2-vCPU class of box; and re-measure a premise before building on it.
 
 ### Full results index
 

@@ -79,10 +79,25 @@ inline constexpr std::uint32_t kSystemCore = 0;
 // deliberately not the oid: oids restart at kUserOidStart every boot
 // (docs/keystoneid-k0-findings.md), so a placement keyed on one would
 // re-walk the same rotation after every restart.
-constexpr std::uint32_t AssignOwnerCore(std::uint32_t creating_core, std::uint32_t core_count,
+// Which placement rule CreateTable applies (workplan P6c, config key
+// `placement`). `kCreatingCore` is the default and the only mode a
+// statement-serving instance should run until cross-core dispatch exists:
+// rotation places relations on cores that CAN fault their pages now (CC7's
+// flush-then-grant handoff, P6b) but CANNOT serve statements yet - core 0's
+// affinity check refuses them retryably, which is honest and useless.
+// `kRotate` exists so the handoff can be exercised end to end on a live
+// multi-core instance, and becomes the real policy when dispatch lands.
+enum class PlacementPolicy : std::uint8_t { kCreatingCore, kRotate };
+
+constexpr std::uint32_t AssignOwnerCore(PlacementPolicy policy, std::uint32_t creating_core,
+                                        std::uint32_t core_count,
                                         std::uint64_t relation_seq) noexcept {
-    (void)core_count;
-    (void)relation_seq;
+    if (policy == PlacementPolicy::kRotate && core_count > 1) {
+        // M1's rotation over the non-system cores. Legal since CC7/P6b:
+        // ownership follows the catalog, and the publish handoff grants the
+        // owner fault rights over pages the system core allocated.
+        return kSystemCore + 1 + static_cast<std::uint32_t>(relation_seq % (core_count - 1));
+    }
     return creating_core;
 }
 

@@ -389,31 +389,31 @@ TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {
 
 // ---- Placement (core_placement.hpp) ----------------------------------
 
-TEST(CorePlacementTest, ARelationIsOwnedByTheCoreThatCreatesIt) {
+TEST(CorePlacementTest, TheDefaultPolicyOwnsARelationByItsCreatingCore) {
     // The invariant placement has to satisfy: ownership names the core that
-    // may run statements against a relation, and a page belongs to whichever
-    // core's lease it came from. A relation owned by a core that cannot
-    // fault its own pages is not a placement, it is an unreachable relation.
+    // may run statements against a relation, and a relation owned by a core
+    // that cannot reach its pages is not a placement, it is an unreachable
+    // relation. Under the default policy that means the creating core,
+    // whatever the count and whatever the sequence.
     for (std::uint32_t cores : {1u, 2u, 4u}) {
         for (std::uint64_t seq = 0; seq < 8; ++seq) {
-            EXPECT_EQ(AssignOwnerCore(kSystemCore, cores, seq), kSystemCore);
+            EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kCreatingCore, kSystemCore, cores, seq),
+                      kSystemCore);
         }
     }
 }
 
-TEST(CorePlacementTest, TheRotationIsNotPerformedWhileDdlOwnsAllocation) {
-    // M1's round-robin is `[PROPOSED]` and is deliberately *not* applied:
-    // DDL runs on the system core and allocates from its free map, so every
-    // relation's pages are the system core's.
-    //
-    // It was applied, from P0 until the affinity guard existed, and nothing
-    // detected it - core 0 allocated and faulted the pages regardless, and
-    // no code compared the two facts. The moment CheckReadAffinity started
-    // asking, every statement on a two-core instance failed. This test is
-    // what would have caught it.
-    EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 0), kSystemCore);
-    EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 1), kSystemCore);
-    EXPECT_EQ(AssignOwnerCore(kSystemCore, 4, 2), kSystemCore);
+TEST(CorePlacementTest, TheRotationIsOptInAndNeverTheDefault) {
+    // M1's round-robin was once applied unconditionally, from P0 until the
+    // affinity guard existed, and every statement on a two-core instance
+    // failed - placement said core 1, execution ran on core 0. Since CC7
+    // the rotation is *legal* (the publish handoff grants the owner fault
+    // rights, workplan P6b/P6c) but statements still all run on core 0, so
+    // it stays behind the `placement = rotate` key and the default answers
+    // exactly as it did before the policy existed.
+    EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kCreatingCore, kSystemCore, 4, 0), kSystemCore);
+    EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kRotate, kSystemCore, 4, 0), 1u);
+    EXPECT_EQ(AssignOwnerCore(PlacementPolicy::kRotate, kSystemCore, 4, 1), 2u);
 }
 
 // ---- decimal(p, s) packed into `len` (TY02) -----------------------------

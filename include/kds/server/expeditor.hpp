@@ -346,6 +346,14 @@ public:
         // this engine's cooperative, never-blocking task model survives.
         std::uint32_t cores = 1;
 
+        // Relation placement (workplan P6c, `placement` config key):
+        // `creating` (default) pins every relation to the creating core;
+        // `rotate` spreads user relations over the non-system cores. Until
+        // cross-core dispatch exists a rotated relation's statements are
+        // refused retryably by the affinity check, so rotate is for
+        // exercising CC7's handoff, not for serving traffic.
+        catalog::PlacementPolicy placement = catalog::PlacementPolicy::kCreatingCore;
+
         // Diagnostic log (base/log.hpp). `log_dir` empty means "next to
         // wherever the process runs"; the two are joined into one path, so
         // an absolute `log_file` is honoured on its own.
