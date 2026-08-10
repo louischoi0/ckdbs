@@ -805,8 +805,8 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // DDL runs on the system core and allocates from its free map, so the
     // relation's pages are the system core's - and a relation must be owned
     // by the core that can fault its pages (core_placement.hpp).
-    const std::uint32_t owner_core =
-        AssignOwnerCore(kSystemCore, core_count_, existing_relations.value().size());
+    const std::uint32_t owner_core = AssignOwnerCore(placement_, kSystemCore, core_count_,
+                                                     existing_relations.value().size());
 
     if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name); !s.ok()) {
         return s;
@@ -834,6 +834,14 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
                                   std::to_string(new_oid) + " root_page=" +
                                   std::to_string(root_id) + " columns=" +
                                   std::to_string(schema.columns.size()));
+    }
+
+    // The send side of CC7's handoff (workplan P6c): a relation placed on a
+    // core other than the creator's needs that core granted fault rights,
+    // or it is unreachable - the pre-CC7 defect, now closed at the one site
+    // that knows a non-creating owner was chosen.
+    if (owner_core != kSystemCore && on_publish_) {
+        on_publish_(new_oid, owner_core, root_id, varheap_root);
     }
     return new_oid;
 }

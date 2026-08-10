@@ -421,16 +421,28 @@ this id"; the catalog answers "whose pages are these now" — and the second
 fact wins, realized at DDL publish by the flush-then-grant handoff CC7
 specifies. The remaining P6 tasks:
 
-- **P6b — the publish handoff**: at CREATE TABLE publish, core 0 flushes
-  the relation's pages, then sends the owner core an extent-granularity
-  fault grant over the ring; the peer registers it in its store. Flip
-  `CoreRuntimeTest.APeerCannotYetFaultARelationsDataPages` from the pinned
-  negative into the positive contract: after the grant, the owner faults
-  the relation's root and reads it.
-- **P6c — placement re-enable**: `AssignOwnerCore()` may return a
-  non-creating core again (M1's rotation), legal only behind P6b's
-  handoff. Do not enable before P6b lands — that exact ordering mistake is
-  recorded above.
+- **P6b — the publish handoff — built (2026-08-10)**:
+  `DevicePageStore::GrantFaultPages` holds CC7 fault grants (consulted by
+  `MayFault`, never `MayWrite`), `kRelationFaultGrant` (21) carries an
+  `ExtentGrantPayload`, `CoreRuntime::GrantRelationFault` is the receive
+  side, and `RelationFaultExtentOf` computes the extent-aligned cover of a
+  relation's roots. The pinned negative became the positive contract
+  (`CoreRuntimeTest.AGrantedPeerFaultsARelationsDataPagesReadOnly`): after
+  the grant the peer faults the root read-only and `InitTableAccess`
+  resolves.
+- **P6c — placement re-enable — built (2026-08-10)**:
+  `AssignOwnerCore(policy, ...)` takes a `PlacementPolicy` — `kCreatingCore`
+  (default, unchanged behavior) or `kRotate` (M1's rotation over non-system
+  cores) — selected by the **`placement` config key** (`creating` |
+  `rotate`, default `creating`). `Catalog::SetRelationPublishHook` fires at
+  the end of any CreateTable whose owner is not the system core, and the
+  Expeditor's installed hook flushes the relation's extent range and sends
+  the `kRelationFaultGrant` — the production send P6b deferred. Rotate is
+  deliberately **not** the default: statements still all run on core 0, so
+  a rotated relation is refused retryably by the affinity check until
+  dispatch (P4's remaining half) lands — the key exists to exercise the
+  handoff end to end, and the placement tests pin both the rotation math
+  and the default staying put.
 
 A second, independent blocker sits behind it: **a peer cannot INSERT
 either**, because `AllocateRowId()` bumps `next_id` on a catalog page.
