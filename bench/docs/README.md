@@ -297,6 +297,62 @@ at defaults PostgreSQL builds nothing for the hot predicate and retires
 nothing, so day 1 stands for every day, and `EXPLAIN (ANALYZE, BUFFERS)` of
 the board, tape and zero-row probes is captured as evidence of the plan.
 
+The **amortization window is a server key, not a driver flag** — this
+scenario measures whatever `cabin_optimizer_amort_windows` the config sets,
+and `bench/results-cabin-optimizer-days.md` reports the same run at both 1
+and the shipped 64. Note that at a compressed half-life the DROP cooldown
+(`2 × T_amort` half-lives) can exceed the whole run: at `decay_half_life =
+5` and `T_amort = 64` it is 640 s against a 283 s three-day matrix, so no
+DROP is reachable and the retirement evidence has to come from
+`cabinopt_cooldown_check.py` below. Work that arithmetic out before
+choosing the pacing, not after reading an empty drops counter.
+
+### `cabinopt_cooldown_check.py` — is `amort_windows` live, and is the cooldown the specified multiple?
+
+A two-arm behavioural check for one question the business-days matrix
+cannot answer: whether `cabin_optimizer_amort_windows` reaches the live
+controller's DROP cooldown or only its struct. Two servers identical except
+that key, warmed on the same hot probe over the same relation until each
+controller holds an ACTIVE Cabin of its own, then left in silence and
+polled. The control arm must go DECAYING and DROP within a couple of
+half-lives; the test arm must not drop for `2 × T_amort` half-lives after
+its own DECAYING onset. One run yields both facts — the key is live, and
+the cooldown is the specified multiple rather than some other number.
+
+Nothing here is timed: every output is a wall-clock instant of a state
+transition or a counter, so there are no latencies and no percentiles. The
+relation shape and row generator are **imported from
+`scenario4_cabinopt_days.py`** so the two cannot drift.
+
+The half-life is the affordability knob and is deliberately not what is
+under test — at `decay_half_life = 1` the ratified cooldown is 128 s
+instead of 21 h 20 m, and the ratio between the arms is unchanged. **Both
+arms must run the same half-life** or the comparison means nothing.
+
+```bash
+# two configs differing in exactly one key, both decay_half_life = 1
+./build-release/kds_server ~/bench-cabinopt-cool/a1.db  --port 15661 --config amort1.conf  &
+./build-release/kds_server ~/bench-cabinopt-cool/a64.db --port 15662 --config amort64.conf &
+./tools/cabinopt_cooldown_check.py \
+    --arm amort1:15661:1 --arm amort64:15662:64 \
+    --half-life 1 --rows 10000 --warm-seconds 25 \
+    --silence-seconds 200 --poll-seconds 1 --json cool.json
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `--arm NAME:PORT:AMORT` | — | repeatable, two minimum (the control *is* the measurement). `AMORT` is only what the arm's config sets, used to print the predicted cooldown |
+| `--half-life S` | required | the servers' `decay_half_life`; the driver cannot read it back, so it is stated rather than inferred |
+| `--rows N` | 10000 | rows in the probed relation; sets `P_rel` and so the cost floor `P_rel / T_amort` printed as `cost_q16` |
+| `--warm-seconds` / `--warm-block` | 20 / 60 | upper bound on the warm phase and probes per arm per interleave block; the phase ends early once every arm is ACTIVE |
+| `--silence-seconds` / `--poll-seconds` | 200 / 1 | the silence window and the `SHOW CABIN_OPTIMIZER` poll cadence. The poll bounds the resolution: an observed cooldown is accurate to ±1 poll |
+| `--rows`, `--suffix`, `--seed`, `--timeout`, `--json` | | as the other drivers |
+
+Exit status is 0 only if the control dropped and the test arm outlived it,
+so the check is usable as a gate. The JSON carries every poll's full
+`SHOW CABIN_OPTIMIZER` capture, which is where the per-entry B/C decay
+curve and the score's Q24.8 underflow floor are readable.
+
 ### `index_benchmark.py` — secondary indexes, priced
 
 The four questions `docs/workplan-index.md` IX14 asks, answered in one process

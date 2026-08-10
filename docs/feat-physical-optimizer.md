@@ -452,7 +452,18 @@ C(c) = P_rel / T_amort  +  h_fail(c) × f_lookup(c) × k_heal
   the same factor (a structure serving for a day need only pay for
   itself over a day), and PO6's budget, not the bar, bounds the
   population. `cabin_optimizer_amort_windows` is the key; 0 is refused
-  (a zero window prices every Cabin free);
+  (a zero window prices every Cabin free). **The confirming rerun
+  (`bench/results-cabin-optimizer-days.md` Part II) says 64 is right and
+  possibly slightly long, and hands the next decision two facts.** The
+  cooldown is `2 × T_amort`, so it outlives the window that justified it
+  — a permanently cold Cabin sits ~21 h in DECAYING at shipped defaults —
+  which argues for decoupling the multiplier from the window rather than
+  shortening the window. And R1's Q24.8 score **underflows to zero after
+  ~16 half-lives**, so for the remaining ~89% of a 128-half-life
+  cooldown the DROP is a *timeout, not a judgement*: below the underflow
+  every candidate is indistinguishable, and no threshold comparison can
+  tell a cold Cabin from a colder one. Both are arguments about
+  `T_cooldown`'s definition, not about T_amort's value;
 - `h_fail` — hint failure rate (S3), `f_lookup` — decayed lookup
   frequency, `k_heal` — pages per heal event (PROPOSED 2).
 
