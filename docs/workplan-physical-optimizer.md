@@ -286,9 +286,13 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01-PHY07 are built
-(PHY04 on 2026-08-10 over the EVT03/EVT06 substrate built for it; PHY06 on
-2026-08-10); PHY08 — the E2E close-out — remains.** Part I's `stats/decay.hpp` is the R1
+dependency of PHY04), `workplan-testing.md`. **PHY01-PHY08 are all built
+— the series closed 2026-08-10** (PHY04/PHY06/PHY08 that day, over the
+EVT03/EVT06 substrate built for it; the close-out's numbers are
+`bench/results-cabin-optimizer.md`). What remains sits outside the
+series: the restart posture (managed state and decision log are
+memory-resident, re-observation rebuilds them — stated, not owned) and
+the tuning follow-ups recorded under PHY08's honest tails. Part I's `stats/decay.hpp` is the R1
 implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
 S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
 with no engine-effect includes, per PO10; PHY07's golden traces are
@@ -607,7 +611,35 @@ ever says it should.
 **Acceptance.** Golden traces stable across runs and platforms
 (fixed-point determinism proven here); scenario matrix green in CI.
 
-## PHY08 — End-to-end validation and close-out
+## PHY08 — End-to-end validation and close-out  **[DONE 2026-08-10]**
+
+**Built.** The E2E is `CabinOptimizerExecTest.TheFullLifecycleObservedThroughTheView`:
+one scripted run under a manual clock — hot traffic earns the CREATE
+(view: `state=ACTIVE`, `last_action=CREATE reason=sustained-benefit`),
+the Cabin serves (`cabin_hits=1`, the managed mark, reply byte-identical
+to the pre-optimizer baseline), 50 half-lives of silence move the entry
+to DECAYING, the cooldown elapses and the DROP retires the row, the sets
+and the controller entry (`managed=0`, `cabins=0`), and the reply still
+never moved. **The bench note is `bench/results-cabin-optimizer.md`**
+(driver `tools/cabin_optimizer_benchmark.py`, PostgreSQL twin beside it):
+overhead with zero eligible candidates is **unmeasurable, confirmed** —
+ON−OFF deltas sit inside the same-configuration noise floor at a 10 ms
+tick cadence (1,000× default), the tick itself priced at **2–3 µs CPU**
+from idle-server accounting, ~0.025 % of a core at 10 ms and sub-ppm at
+the default 10 s; the improvement case had the controller create
+**exactly 3 ticks after switch-on** (confirm_snapshots working as
+declared) and serve at n=2 (`misses=2` exactly, at every size), walk→served
+p50 1,439→132 µs = **10.9× client / 19.4× server CPU at 10,000 rows**
+(1.97× at 1K, 1.17× at 200 — the index crossover's shape, as expected),
+with the served probe 9.4× under PostgreSQL 17's seq-scan on the same
+data. Two honest tails recorded in the document: this run's B/C margins
+say nothing about where θ_create bites on a *marginal* shape, and the
+DECAYING/DROP paths are exercised by the E2E and PHY07's replay, not by
+the bench. Docs cross-check done: `feat-cabin.md` §8.1 amended in place
+("auto is a name, not a behaviour" — dated, and corrected now that it is
+one) with the `kCabinOriginAuto` ownership-tag mention, README carries
+the low-key clause (advisory structures, wrong decisions cost performance
+only), and the operator manual gained §5a for the view.
 
 **Scope.** System-level pass + docs.
 

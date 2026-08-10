@@ -255,7 +255,7 @@ to decide that this column carries a Cabin?**
 | written | policy | meaning |
 |---|---|---|
 | `col type NO CABIN` | disabled | No Cabin on this column, ever, by any route. `CREATE CABIN` is refused; auto-creation will never consider it. |
-| `col type CABIN AUTO` | auto | The engine may create one when its own signals say the column has earned it (§7's promotion pipeline). **Not implemented** — see below. |
+| `col type CABIN AUTO` | auto | The engine may create one when its own signals say the column has earned it. **Consumed since 2026-08-10** by the cabin optimizer (`docs/feat-physical-optimizer.md` Part II) — see below. |
 | `col type CABIN` | enabled | A Cabin is created at `CREATE TABLE`, and its values are observed on **first** selection. |
 | `col type` | unset | Read as *auto* by every reader, and stored distinctly so "nothing was said" stays distinguishable from "the engine may decide". |
 
@@ -276,15 +276,22 @@ that waiting exists to gather*. An operator who wrote `CABIN` on a column
 has already said it is probed by value; asking traffic to prove it again
 asks a question that was answered.
 
-**`auto` is a name, not a behaviour.** No code creates a Cabin on that
-policy: the promotion pipeline that would judge it (§7 — Waystone's
-`use_count` and the recording scan's measured cardinality feeding
-`cold → trail → Cabin`) does not exist, and its threshold is `[OPEN]`,
-belonging to the retention/policy spec alongside tracking levels. A column
-declared `auto` today behaves exactly as an undeclared one: no Cabin until
-someone writes `CREATE CABIN`. The value is stored so the decision has a
-name and a durable representation *before* the machinery that consumes it —
-not so that it quietly behaves like `enabled`.
+**`auto` is a name, not a behaviour** — *as written 2026-08-03; amended
+2026-08-10, when it became one.* The promotion pipeline exists now: the
+**cabin optimizer** (`docs/feat-physical-optimizer.md` Part II, PO1-PO10)
+is a per-core background controller that CREATEs, EXTENDs, HEALs and
+DROPs Observational Cabins under a fixed-point cost-benefit core — its
+threshold is the θ_create hysteresis margin over measured scan cost and
+frequency, not the `use_count` × cardinality pair this section originally
+imagined. It creates through the single `Catalog::CreateCabin` door (so
+the policy check below could not be forgotten — exactly the future
+auto-creator that sentence anticipated), stamps its rows **origin
+`kCabinOriginAuto`** — the ownership tag its jurisdiction rule and
+ANALYZE's `cabin_optimizer=true` mark both read, and what separates a
+Cabin the engine may drop on its own judgement from one an operator
+declared — and is **off by default** (`cabin_optimizer`, experimental,
+PO8's kill switch). With the controller off, a column declared `auto`
+still behaves exactly as an undeclared one.
 
 A policy on the **primary-key column is refused**, not ignored: the pk's
 Cabin is the clustered tree (§2), so any of the three would be a statement
@@ -332,15 +339,19 @@ sys.cabins
 ```
 
 `CREATE CABIN ON trade(sym)` / `DROP CABIN` for the user path, mirroring
-the pattern feature's origin axis; auto-creation arrives with the
-promotion pipeline (§7). Details deferred to a workplan.
+the pattern feature's origin axis; auto-creation arrived 2026-08-10 with
+the cabin optimizer (`docs/feat-physical-optimizer.md` Part II), whose
+rows carry `origin = auto` — the tag that marks a Cabin the engine may
+drop on its own judgement.
 
 ## 11. Out of scope / open
 
 - Expression / predicate-scoped cabins (C3 — revisit after v1).
-- The `CABIN AUTO` threshold (§8.1): what `use_count` × cardinality earns a
-  column a Cabin, and what un-earns it. The policy has a name and a stored
-  value; nothing consumes them.
+- ~~The `CABIN AUTO` threshold (§8.1)~~ — **consumed 2026-08-10** by the
+  cabin optimizer (`docs/feat-physical-optimizer.md` Part II): earning is
+  the θ_create margin sustained over N confirm snapshots, un-earning the
+  θ_drop cooldown, both against measured scan cost × decayed frequency.
+  What stays open moved with it (§II.7's tuning and PHY08's follow-ups).
 - Multi-column keys; range observation.
 - Budget, per-value caps, demotion of write-hot values (`[OPEN]`, §8).
 - Background pruning cadence and batching (§5 fixes the gates;

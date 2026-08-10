@@ -29,7 +29,11 @@ constexpr sched::MonoTimeNs kHalfLife = 600'000'000'000ULL;
 
 class Instance {
 public:
-    Instance() : signals_(/*clock=*/nullptr, kHalfLife) {
+    // The signals run under a manual clock parked at t=1: parked, decay is
+    // a no-op and every earlier test reads exactly as it did under a null
+    // clock; advanced, scores decay - which is what the lifecycle E2E
+    // needs a workload shift to look like.
+    Instance() : signals_(&clock_, kHalfLife) {
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         EXPECT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
@@ -51,10 +55,12 @@ public:
     storage::InMemoryPageStore& store() { return store_; }
     stats::CabinStore& cabins() { return *cabins_; }
     stats::OptimizerSignals& signals() { return signals_; }
+    sched::ManualClock& clock() { return clock_; }
     txn::TransactionManager& txn() { return *txn_; }
 
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
+    sched::ManualClock clock_{1};
     stats::OptimizerSignals signals_;
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<stats::CabinStore> cabins_;
@@ -335,14 +341,19 @@ TEST(CabinOptimizerExecTest, TheViewReportsTheLifecycleAndTheCountersCount) {
     db.dispatcher().set_cabin_optimizer_view(&controller, &executor);
     ASSERT_EQ(db.Run("SET CABIN_OPTIMIZER on").substr(0, 2), "OK");
 
+    // Two ticks: the streak confirms on the second and the CREATE lands,
+    // and the view is read *at* that tick - a third tick would already
+    // have decided the next action (an EXTEND, from the misses the
+    // pre-observation probes left) and the newest log record would
+    // truthfully name it instead.
     const std::string probe = "SELECT * FROM h WHERE sym = 'aaa'";
-    for (int tick = 0; tick < 3; ++tick) {
+    for (int tick = 0; tick < 2; ++tick) {
         for (int i = 0; i < 5; ++i) db.Run(probe);
         ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
     }
 
-    // The applied-action counters: three enabled ticks, one CREATE landed.
-    EXPECT_EQ(executor.counters().ticks, 3u);
+    // The applied-action counters: two enabled ticks, one CREATE landed.
+    EXPECT_EQ(executor.counters().ticks, 2u);
     EXPECT_EQ(executor.counters().creates, 1u);
     EXPECT_EQ(executor.counters().drops, 0u);
 
@@ -360,6 +371,73 @@ TEST(CabinOptimizerExecTest, TheViewReportsTheLifecycleAndTheCountersCount) {
     // see the serving structure is one the engine may drop on its own.
     const std::string analyzed = db.Run("ANALYZE " + probe);
     EXPECT_NE(analyzed.find("cabin_optimizer=true"), std::string::npos) << analyzed;
+}
+
+// PHY08's E2E: the whole lifecycle in one scripted run, observed through
+// the view at every stage - hot traffic earns a CREATE, the Cabin serves,
+// the workload shifts and the entry DECAYs, the cooldown elapses and the
+// DROP retires everything, and the reply never moves at any point. The
+// advisory family's standing assertion, run across an entire lifetime.
+TEST(CabinOptimizerExecTest, TheFullLifecycleObservedThroughTheView) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE h (id int64, sym varchar)").substr(0, 7), "CREATED");
+    const char* kSyms[] = {"aaa", "aaa", "bbb", "ccc"};
+    for (const char* sym : kSyms) {
+        ASSERT_EQ(db.Run(std::string("INSERT INTO h VALUES ('") + sym + "')").substr(0, 8),
+                  "INSERTED");
+    }
+    const std::string probe = "SELECT * FROM h WHERE sym = 'aaa'";
+    const std::string baseline = db.Run(probe);
+
+    stats::CabinOptimizerConfig config;
+    config.p_cabin_pages = 0;
+    config.confirm_snapshots = 2;
+    stats::CabinOptimizer controller(config);
+    exec::CabinOptimizerExecutor executor(db.catalog(), db.store(), db.cabins(), controller);
+    db.dispatcher().set_cabin_optimizer_view(&controller, &executor);
+    ASSERT_EQ(db.Run("SET CABIN_OPTIMIZER on").substr(0, 2), "OK");
+
+    // Phase 1 - hot: sustained traffic confirms twice and the CREATE lands.
+    for (int tick = 0; tick < 2; ++tick) {
+        for (int i = 0; i < 5; ++i) db.Run(probe);
+        ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
+    }
+    ASSERT_EQ(executor.counters().creates, 1u);
+    std::string view = db.Run("SHOW CABIN_OPTIMIZER");
+    EXPECT_NE(view.find("state=ACTIVE"), std::string::npos) << view;
+    EXPECT_NE(view.find("last_action=CREATE reason=sustained-benefit"), std::string::npos)
+        << view;
+
+    // Phase 2 - the Cabin serves: two probes observe the value (auto is
+    // n=2), the next is a served hit on a marked-managed probe, and the
+    // reply is byte-identical to the pre-optimizer baseline.
+    db.Run(probe);
+    db.Run(probe);
+    const std::string analyzed = db.Run("ANALYZE " + probe);
+    EXPECT_NE(analyzed.find("cabin_hits=1"), std::string::npos) << analyzed;
+    EXPECT_NE(analyzed.find("cabin_optimizer=true"), std::string::npos) << analyzed;
+    EXPECT_EQ(db.Run(probe), baseline);
+
+    // Phase 3 - the workload shifts: 50 half-lives of silence zero every
+    // score, and the next tick moves the entry to DECAYING.
+    db.clock().Advance(50 * kHalfLife);
+    ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
+    view = db.Run("SHOW CABIN_OPTIMIZER");
+    EXPECT_NE(view.find("state=DECAYING"), std::string::npos) << view;
+
+    // Phase 4 - the cooldown elapses and the DROP retires the catalog row,
+    // the entry sets and the controller entry.
+    db.clock().Advance(50 * kHalfLife);
+    ASSERT_TRUE(executor.Tick(db.signals(), kAlwaysOn).ok());
+    EXPECT_EQ(executor.counters().drops, 1u);
+    view = db.Run("SHOW CABIN_OPTIMIZER");
+    EXPECT_NE(view.find("managed=0"), std::string::npos) << view;
+
+    // No residue: the catalog is clean, the probe compiles back to the
+    // walk it started as, and the reply still never moved.
+    EXPECT_EQ(db.Run("SHOW CABINS").substr(0, 8), "cabins=0");
+    EXPECT_EQ(db.Run("ANALYZE " + probe).find(" cabin="), std::string::npos);
+    EXPECT_EQ(db.Run(probe), baseline);
 }
 
 TEST(CabinOptimizerExecTest, ADeclaredCabinIsNeverMarkedAsManaged) {
