@@ -854,6 +854,37 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
     return CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0);
 }
 
+Status CompileAssignments(const catalog::TableAccess& access,
+                          const std::vector<parser::Assignment>& assignments) {
+    // An empty schema cannot happen for a relation the catalog resolved
+    // (invariant 11 makes column 0 mandatory), but the pk name is read
+    // from `front()` and a check costs nothing against a wrong answer.
+    if (access.schema.columns.empty()) {
+        return Status::Corruption("relation oid " + std::to_string(access.oid) +
+                                  " has no columns");
+    }
+    const std::string_view pk_name = catalog::NameView(access.schema.columns.front().name);
+
+    for (const parser::Assignment& a : assignments) {
+        if (access.schema.FindColumn(a.col_name) == nullptr) {
+            return Status::InvalidArgument("unknown column '" + a.col_name + "' at byte " +
+                                           std::to_string(a.byte_offset));
+        }
+        // K2, and the reason it is `Unsupported` rather than
+        // `InvalidArgument`: the statement is understood and declined. The
+        // column exists and the value would encode; what cannot happen is
+        // the write, because the id names the tuple everywhere else in the
+        // engine.
+        if (a.col_name == pk_name) {
+            return Status::Unsupported("primary-key column '" + std::string(pk_name) +
+                                       "' cannot be updated at byte " +
+                                       std::to_string(a.byte_offset) +
+                                       "; it is the tuple's identity, not a field of it");
+        }
+    }
+    return Status::OK();
+}
+
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
                             const std::vector<parser::Condition>& where) {

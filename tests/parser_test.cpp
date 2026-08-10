@@ -173,6 +173,35 @@ TEST(ParserTest, UpdateMultipleAssignmentsWithWhere) {
     EXPECT_EQ(upd->where[0].col.name, "id");
 }
 
+// K-M3's parser half, and it is a *negative* obligation: assigning the
+// primary key must reach the compiler, because which column is the pk is
+// catalog knowledge and the parser has no catalog. A parser that guessed
+// - by the name `id`, say - would refuse a legal statement on a relation
+// whose second column happens to be called that.
+TEST(ParserTest, AssigningThePrimaryKeyParses) {
+    auto stmt = Parse("UPDATE accounts SET id = 99");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+
+    auto* upd = std::get_if<UpdateStmt>(&stmt.value());
+    ASSERT_NE(upd, nullptr);
+    ASSERT_EQ(upd->assignments.size(), 1u);
+    EXPECT_EQ(upd->assignments[0].col_name, "id");
+}
+
+// The byte the compiler's refusal reports comes from here, so it is pinned
+// here: the column's own first byte, not the token after it.
+TEST(ParserTest, EachAssignmentRecordsItsColumnsByteOffset) {
+    const std::string sql = "UPDATE t SET a = 1, bb = 2";
+    auto stmt = Parse(sql);
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+
+    auto* upd = std::get_if<UpdateStmt>(&stmt.value());
+    ASSERT_NE(upd, nullptr);
+    ASSERT_EQ(upd->assignments.size(), 2u);
+    EXPECT_EQ(upd->assignments[0].byte_offset, sql.find("a = 1"));
+    EXPECT_EQ(upd->assignments[1].byte_offset, sql.find("bb = 2"));
+}
+
 TEST(ParserTest, TrailingSemicolonIsOptional) {
     EXPECT_TRUE(Parse("SELECT * FROM t;").ok());
     EXPECT_TRUE(Parse("SELECT * FROM t").ok());

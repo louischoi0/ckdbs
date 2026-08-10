@@ -55,7 +55,7 @@ statements, not style.
 | Cross-core execution | P0, P1, P2, P6 (catalog half + CC7 decision + P6b handoff + P6c placement), P5-shape row-id leasing, P4 restriction half — all built by 2026-08-10. **The one remaining piece is the step pipeline itself** (statement dispatch + the executor's coroutine conversion) | `docs/crosscore.md`, `docs/workplan-crosscore.md`, `docs/sched.md` |
 | Task representation | Decided and built: C++20 stackless coroutines | `docs/sched.md` §3 |
 | Wire protocol KWP/1 | Frame codec only; the server speaks the newline text protocol | `docs/protocol.md`, `docs/protocol-wp.md`, `docs/client-manual.md` |
-| Keystone id issue-once contract | K-M1, K-M4 built; K-M3 partly (pk-update refused, but at the dispatcher and not as `Unsupported`); K1 does not hold across a crash — read the findings before quoting the invariant | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
+| Keystone id issue-once contract | K-M1, K-M3, K-M4 built (K-M3 2026-08-10: `exec::CompileAssignments` refuses a pk UPDATE at compile with `Unsupported` and a byte); K1 does not hold across a crash — read the findings before quoting the invariant | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
 | User manual | `manual/` — SQL surface written, verified against code | `manual/sql/sql.md` |
 
