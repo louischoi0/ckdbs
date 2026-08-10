@@ -1354,6 +1354,31 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
     }
 
+    // ---- 5a. The pagination tail (spec I11, workplan V09) ----------------
+    //
+    // `ORDER BY` is validated and discarded. The one accepted form - the
+    // driving relation's pk, ascending - names the order the chain already
+    // emits (I12: written order across steps, pk order within one), so
+    // accepting it changes nothing and refusing everything else is the
+    // whole job. The parser already refused `DESC`, an aggregated
+    // statement's tail and a subquery's, so what arrives here is a
+    // non-aggregated depth-0 statement's clause; `up != 0` is likewise
+    // unreachable today and checked so the predicate stays total rather
+    // than resting on a parser guarantee two files away.
+    if (stmt.order_by.has_value()) {
+        auto ref = ResolveColumn(scope, *stmt.order_by);
+        if (!ref.ok()) return ref.status();
+        if (ref.value().up != 0 || ref.value().rel_slot != 0 || !IsPrimaryKey(ref.value())) {
+            return Status::Unsupported(
+                "ORDER BY is supported only on the driving relation's primary key" +
+                Position(stmt.order_by->byte_offset) +
+                "; pk order is the order the chain already emits, and any other "
+                "order needs an output sort this engine does not have");
+        }
+    }
+    chain.limit = stmt.limit;
+    chain.offset = stmt.offset;
+
     // ---- 6. Class --------------------------------------------------------
     //
     // J3: every step-chain statement is kJoinSelect, read as "step-chain

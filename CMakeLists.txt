@@ -148,6 +148,29 @@ if(KDS_BUILD_BENCH)
     target_link_libraries(kds_txn_bench PRIVATE kds)
 endif()
 
+# The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the
+# engine driven in-process through CommandDispatcher over crashable
+# in-memory devices, every random choice derived from one --seed. A
+# library so the unit tests can drive the same loop the standalone binary
+# runs; the binary itself must not link gtest (the workplan's
+# [OPEN: harness home] note - a framework's fixture lifecycle fights
+# crash-restart iteration).
+option(KDS_BUILD_SIM "Build the ckdbs simulation harness" ON)
+if(KDS_BUILD_SIM)
+    add_library(kds_sim
+        sim/instance.cpp
+        sim/integrity.cpp
+        sim/workload.cpp
+        sim/oracle.cpp
+        sim/loop.cpp
+    )
+    target_include_directories(kds_sim PUBLIC ${CMAKE_SOURCE_DIR})
+    target_link_libraries(kds_sim PUBLIC kds)
+
+    add_executable(ckdbs-sim sim/sim_main.cpp)
+    target_link_libraries(ckdbs-sim PRIVATE kds_sim)
+endif()
+
 option(KDS_BUILD_TESTS "Build ckdbs unit tests" ON)
 if(KDS_BUILD_TESTS)
     enable_testing()

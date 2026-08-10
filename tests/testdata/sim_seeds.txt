@@ -1,0 +1,12 @@
+# The committed simulation seed corpus (bench/workplan-teststrategy SIM04).
+# Every seed here is run by tests/sim_loop_test.cpp on every CI run,
+# forever. Append a seed when a run of ckdbs-sim finds a failure (after the
+# engine fix lands, the seed stays as the regression); removing one takes
+# the same justification as deleting a test.
+#
+# Format: one decimal seed per line; '#' comments.
+1
+2
+3
+4
+5

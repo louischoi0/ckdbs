@@ -149,6 +149,30 @@ const std::vector<std::string>& Queries() {
         "SELECT id FROM b WHERE v = 50",
         "SELECT COUNT(*) FROM b WHERE v = 50",
         "SELECT a.label FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.v = 50",
+
+        // ---- Paginated statements (docs/parser-v2.md I11, V09) ---------
+        //
+        // Here for the aggregates' reason a third time: the emission
+        // quota is a sink decorator, so a limited statement's exposure to
+        // a trail is exactly its chain's, and the five configurations
+        // already compared here answer "can a trail change a limited
+        // reply?" at the cost of lines in a list.
+        //
+        // The slice cases are the sharp ones. A trail that changed the
+        // *order* rows arrive in would move which rows survive the quota
+        // - an unlimited statement shows that as the same set reordered,
+        // which invariant 8's byte-for-byte comparison already refuses,
+        // but a sliced statement shows it as *different rows*, which is
+        // the louder failure and the one a client would file.
+        "SELECT * FROM b WHERE id = 3 LIMIT 1",
+        "SELECT * FROM b LIMIT 4",
+        "SELECT * FROM b LIMIT 3 OFFSET 2",
+        "SELECT * FROM h OFFSET 5",
+        "SELECT * FROM b ORDER BY id ASC LIMIT 2",
+        "SELECT * FROM b WHERE v = 50 LIMIT 1",
+        "SELECT * FROM b WHERE id = 99 LIMIT 1",
+        "SELECT label FROM b LIMIT 0",
+        "SELECT a.label, c.w FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4 LIMIT 1",
     };
     return kQueries;
 }

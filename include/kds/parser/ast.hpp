@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -14,7 +15,8 @@
 //   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE];
 //   INSERT INTO  <name> VALUES (<val> [, ...]);
 //   SELECT <list> FROM  <rel> [<join>]* [WHERE <cond> [AND <cond>]*]
-//       [GROUP BY <col> [, ...]];
+//       [GROUP BY <col> [, ...]]
+//       [ORDER BY <col> [ASC]] [LIMIT <int>] [OFFSET <int>];
 //   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*];
 //   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
 //       OF <select>;
@@ -30,11 +32,10 @@
 //   <item>  ::= <col> | <agg> ( [DISTINCT] <col> | * )
 //   <agg>   ::= COUNT | SUM | MIN | MAX
 //
-// Deliberate limitations: no subqueries, ORDER BY, HAVING or expressions;
-// WHERE is AND-only (no OR, NOT, or nesting) and its columns are still
-// unqualified; SELECT's column list is always * (no projection), which is
-// why a multi-relation SELECT is refused until V06 makes an explicit list
-// available. No quote-escaping in string literals.
+// Deliberate limitations: no HAVING and no expressions; WHERE is a flat
+// AND-only conjunct list (no OR; NOT only in the reserved negation forms),
+// with predicate-position subqueries per V07 and explicit select lists per
+// V06. No quote-escaping in string literals.
 // docs/parser-v2.md specifies the grammar this is growing into.
 //
 // Two decisions worth stating, because both push work downstream on
@@ -296,9 +297,23 @@ struct CreateTableStmt {
     catalog::ClusteredType clustered = catalog::ClusteredType::kHeap;
 };
 
+// The per-statement row cap for a multi-row INSERT (docs/spec-bulkinsert.md
+// BI3, `[PROPOSED]`). A config key (`max_insert_rows`), not a compiled-in
+// constant - this is only the default the dispatcher starts from. It bounds
+// the id burn of an aborted bulk statement (BI9) and the memory a statement
+// holds before execution begins.
+inline constexpr std::size_t kDefaultMaxInsertRows = 1024;
+
+// `INSERT INTO <t> VALUES (…) [, (…)]*` (docs/spec-bulkinsert.md T1, BI3).
+//
+// One or more rows; the single-row statement is a rows vector of size one,
+// and its parse is byte-identical in behavior to what it always was. The
+// row cap is **not** enforced here: the parser is a pure syntax layer with
+// no config access, so the first config-aware layer (the dispatcher)
+// refuses an over-cap statement naming the cap and the count.
 struct InsertStmt {
     std::string table_name;
-    std::vector<AstValue> values;
+    std::vector<std::vector<AstValue>> rows;
 };
 
 
@@ -421,6 +436,36 @@ struct SelectStmt {
     // the grammar has no expressions and GROUP BY does not grow one.
     std::vector<ColumnName> group_by;
 
+    // ---- The pagination tail (docs/parser-v2.md I11, workplan V09) ------
+    //
+    // `[ORDER BY <col> [ASC]] [LIMIT <n>] [OFFSET <m>]`, clauses in that
+    // order and each independently optional, parsed only on a
+    // non-aggregated depth-0 block - an aggregated statement's tail and a
+    // subquery's are refused at parse with a position.
+    //
+    // `LIMIT` without `ORDER BY` is well-defined here in a way general SQL
+    // cannot promise: emission order is already a client contract (I12 -
+    // written order across steps, pk order within one), so the clause
+    // takes a prefix of an order the statement has, not one it hopes for.
+    //
+    // `order_by` carries the written column for the *compiler* to judge:
+    // pk-ness is catalog knowledge, so accepting `ORDER BY <pk> [ASC]` as
+    // the validated no-op it is - and refusing every other column with the
+    // stored byte - happens at compile, not here. `DESC` never reaches the
+    // AST: every chain links forward only, and the parser refuses what no
+    // walk can produce.
+    std::optional<ColumnName> order_by;
+
+    // `LIMIT n`: how many rows the statement emits, nullopt when no LIMIT
+    // was written. 0 is a real value - a legal statement that emits
+    // nothing - which is why this is optional rather than 0-defaulted.
+    std::optional<std::uint64_t> limit;
+
+    // `OFFSET m`: qualifying rows skipped before the first emitted one.
+    // 0 when absent, and `OFFSET 0` means exactly that, so no flag is
+    // needed to tell the two apart.
+    std::uint64_t offset = 0;
+
     // Every relation's binding is distinct - the parser refuses the
     // statement otherwise, rather than picking one silently. That refusal
     // is what makes a self-join expressible: `FROM t AS a JOIN t AS b` is
@@ -467,6 +512,30 @@ struct UpdateStmt {
 struct DeleteStmt {
     std::string table_name;
     std::vector<Condition> where;  // empty = every row
+};
+
+// `ALTER TABLE <t> RENAME TO <new>` and
+// `ALTER TABLE <t> RENAME COLUMN <old> TO <new>` (docs/spec-alter.md AL1).
+//
+// v1 is catalog-only: a rename changes a catalog label and no tuple
+// bytes. Everything else spelled under ALTER answers Unsupported at
+// parse with AL1's reason - the row size is a schema constant
+// (invariant 13), so a column-set change is a relation rewrite, not a
+// catalog edit. One struct for both forms, CabinStmt's precedent: they
+// share the resolution and differ in which catalog call they reach.
+struct AlterStmt {
+    std::string table_name;
+    std::uint32_t byte_offset = 0;  // of the table name
+
+    bool rename_column = false;  // false: RENAME TO, the relation itself
+
+    // RENAME COLUMN only: the column as written.
+    std::string old_column;
+    std::uint32_t old_column_byte_offset = 0;
+
+    // The new name - of the table or the column, by `rename_column`.
+    std::string new_name;
+    std::uint32_t new_name_byte_offset = 0;
 };
 
 // ---- CREATE PATTERN / DROP PATTERN ---------------------------------------
@@ -551,6 +620,14 @@ struct CreatePatternStmt {
 
 struct DropPatternStmt {
     std::string name;
+    std::uint32_t byte_offset = 0;
+};
+
+// `DROP TABLE <name>` (docs/spec-drop-table.md). Catalog-scoped: the
+// relation becomes unreachable and its oid is tombstoned, never reissued
+// (DT2); pages orphan until reclamation exists (DT1).
+struct DropTableStmt {
+    std::string table_name;
     std::uint32_t byte_offset = 0;
 };
 
@@ -693,7 +770,7 @@ struct AssertionStmt {
 
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt,
-                               IndexStmt, AssertionStmt>;
+                               IndexStmt, AssertionStmt, AlterStmt, DropTableStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);

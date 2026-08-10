@@ -97,6 +97,12 @@ add_executable(kds_tests
     parser_join_test.cpp
     parser_projection_test.cpp
     parser_aggregate_test.cpp
+    parser_pagination_test.cpp
+    pagination_exec_test.cpp
+    parser_alter_test.cpp
+    alter_table_test.cpp
+    bulk_insert_test.cpp
+    drop_table_test.cpp
     aggregate_contract_test.cpp
     aggregate_test.cpp
     type_literals_test.cpp
@@ -118,8 +124,10 @@ add_executable(kds_tests
     wal_checkpointer_test.cpp
     memory_log_device_test.cpp
     file_log_device_test.cpp
+    sim_rng_test.cpp
+    sim_loop_test.cpp
 )
-target_link_libraries(kds_tests PRIVATE kds GTest::gtest GTest::gtest_main Threads::Threads)
+target_link_libraries(kds_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main Threads::Threads)
 
 # The V01 golden corpus is data, not source: the test reads it at run time
 # so a corpus edit does not force a rebuild. The path is baked in rather

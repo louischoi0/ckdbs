@@ -13,12 +13,13 @@ StatusOr<std::unique_ptr<MemoryLogDevice>> MemoryLogDevice::Create(std::uint64_t
 }
 
 Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no) {
-    if (segment_no != segments_.size()) {
+    if (segment_no != base_.size()) {
         return Status::InvalidArgument("MemoryLogDevice: segments are created in order (expected " +
-                                       std::to_string(segments_.size()) + ", got " +
+                                       std::to_string(base_.size()) + ", got " +
                                        std::to_string(segment_no) + ")");
     }
-    segments_.emplace_back();
+    base_.emplace_back();
+    pending_.emplace_back();
     ++stats_.segments_created;
     trace_.push_back({OpKind::kCreate, segment_no, 0, 0});
     return Status::OK();
@@ -26,7 +27,7 @@ Status MemoryLogDevice::CreateSegment(std::uint64_t segment_no) {
 
 Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
                                 std::span<const std::byte> in) {
-    if (Status s = CheckSegmentRange(segment_no, offset, in.size(), segments_.size(), segment_size_);
+    if (Status s = CheckSegmentRange(segment_no, offset, in.size(), base_.size(), segment_size_);
         !s.ok()) {
         return s;
     }
@@ -46,7 +47,7 @@ Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
     }
 
     for (std::size_t i = 0; i < transferred; ++i) {
-        segments_[segment_no][offset + i] = in[i];
+        pending_[segment_no][offset + i] = in[i];
     }
 
     ++stats_.writes;
@@ -57,17 +58,23 @@ Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
 Status MemoryLogDevice::ReadAt(std::uint64_t segment_no, std::uint64_t offset,
                                std::span<std::byte> out) {
     if (Status s =
-            CheckSegmentRange(segment_no, offset, out.size(), segments_.size(), segment_size_);
+            CheckSegmentRange(segment_no, offset, out.size(), base_.size(), segment_size_);
         !s.ok()) {
         return s;
     }
 
-    const Segment& segment = segments_[segment_no];
+    const Segment& pending = pending_[segment_no];
+    const Segment& base = base_[segment_no];
     for (std::size_t i = 0; i < out.size(); ++i) {
-        auto it = segment.find(offset + i);
-        // Never-written bytes read as zeroes, matching the sparse file
-        // FileLogDevice gets from the filesystem.
-        out[i] = it == segment.end() ? std::byte{0} : it->second;
+        // Un-synced overlay first, then the durable base. Never-written
+        // bytes read as zeroes, matching the sparse file FileLogDevice
+        // gets from the filesystem.
+        if (auto it = pending.find(offset + i); it != pending.end()) {
+            out[i] = it->second;
+            continue;
+        }
+        auto it = base.find(offset + i);
+        out[i] = it == base.end() ? std::byte{0} : it->second;
     }
 
     ++stats_.reads;
@@ -84,8 +91,15 @@ Status MemoryLogDevice::Sync() {
         return failure;
     }
 
-    durable_ = segments_;
-    durable_segment_count_ = segments_.size();
+    // Merge the overlay down: cost proportional to bytes written since the
+    // last sync, never to the log's history.
+    for (std::size_t seg = 0; seg < pending_.size(); ++seg) {
+        for (const auto& [offset, value] : pending_[seg]) {
+            base_[seg][offset] = value;
+        }
+        pending_[seg].clear();
+    }
+    durable_segment_count_ = base_.size();
     ++stats_.syncs;
     return Status::OK();
 }
@@ -95,8 +109,11 @@ void MemoryLogDevice::FailNextSync(Status status) { fail_next_sync_ = std::move(
 void MemoryLogDevice::TearNextWrite(std::size_t prefix_bytes) { tear_next_write_ = prefix_bytes; }
 
 void MemoryLogDevice::Crash() {
-    segments_ = durable_;
-    segments_.resize(durable_segment_count_);
+    // Everything un-synced dies: the overlay whole, and the segments
+    // created since the last sync with it.
+    base_.resize(durable_segment_count_);
+    pending_.clear();
+    pending_.resize(durable_segment_count_);
 }
 
 }  // namespace kds::wal

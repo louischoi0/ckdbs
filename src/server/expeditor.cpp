@@ -29,7 +29,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "isolation",
             "wal_drain_interval_us", "relaxed_flush_interval_us",
             "log_dir",  "log_file",               "log_level",
-            "max_rows_touched",      "inline_cell_width",      "waystone_recording",
+            "max_rows_touched",      "max_insert_rows",        "inline_cell_width",      "waystone_recording",
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
             "indexes",
@@ -293,6 +293,16 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // operator has already asked for by setting it.
         max_rows_touched = v.value();
     }
+    if (file.Has("max_insert_rows")) {
+        auto v = file.GetUint("max_insert_rows");
+        if (!v.ok()) return v.status();
+        // A cap of 0 would refuse every INSERT, which no operator means;
+        // 1 is the honest spelling of "single-row only".
+        if (v.value() == 0) {
+            return Status::InvalidArgument("max_insert_rows must be at least 1");
+        }
+        max_insert_rows = v.value();
+    }
     if (file.Has("wal_drain_interval_us")) {
         auto v = file.GetUint("wal_drain_interval_us");
         if (!v.ok()) return v.status();
@@ -485,7 +495,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
         expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
         &*expeditor->txn_manager_, expeditor->config_.isolation, /*core_id=*/0,
-        expeditor->config_.indexes);
+        expeditor->config_.indexes, expeditor->config_.max_insert_rows);
     expeditor->dispatcher_->set_aggregate_limits(
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});

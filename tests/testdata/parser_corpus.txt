@@ -66,6 +66,15 @@ ok	a2266ff85c0a8df6	184a15bf54848454	INSERT INTO t VALUES (-5)
 ok	a2266ff85c0a8df6	67b70b73c6120ee9	INSERT INTO t VALUES (18446744073709551615)
 ok	a2266ff85c0a8df6	7a677b8bea1e608e	INSERT INTO t VALUES ('it is fine')
 ok	a2266ff85c0a8df6	b5d414774c8002cc	insert into t values (1);
+# [BLK] Multi-row VALUES (docs/spec-bulkinsert.md BI5): row count is not
+# part of the template, so the N-row statement carries the 1-row
+# statement's pattern_id - the same hash as the lines above - and later
+# rows' values fold into arg_hash only. Every pre-existing hash this
+# suppression moved belonged to a statement that parsed in no production
+# (fingerprintable, never storable), the bump rule's permitted second
+# transition; the moved lines below say so where they sit.
+ok	a2266ff85c0a8df6	78f79099c419719c	INSERT INTO t VALUES (1), (2)
+ok	c323a07930901e82	3042954c6216ee3a	INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')
 
 # ---- INSERT — rejected -----------------------------------------------------
 InvalidArgument	d6f585f4851f24f1	b5d414774c8002cc	INSERT t VALUES (1)
@@ -77,8 +86,13 @@ InvalidArgument	a438de526814732c	cbf29ce484222325	INSERT INTO t VALUES (x)
 InvalidArgument	5d4e21aff2166337	b5d414774c8002cc	INSERT INTO t VALUES (1
 InvalidArgument	91dad60465ec5af2	b5d414774c8002cc	INSERT INTO t VALUES (1,)
 InvalidArgument	a2266ff85c0a8df6	cbf29ce484222325	INSERT INTO t VALUES (?)
-InvalidArgument	d3decf486f2d0136	b5d414774c8002cc	INSERT INTO t VALUES (1) extra
-InvalidArgument	1b8e1c12b44c207a	78f79099c419719c	INSERT INTO t (a, b) VALUES (1, 2)
+# [BLK] The two hashes BI5's suppression moved, both never storable
+# (neither ever parsed): `... (1) extra` now hashes as the plain 1-row
+# insert, since `extra` sits past the first group and folds nothing; the
+# column-list form's first group is `(a, b)`, so its VALUES row became
+# args. Verdicts unchanged - the grammar still refuses both.
+InvalidArgument	a2266ff85c0a8df6	b5d414774c8002cc	INSERT INTO t VALUES (1) extra
+InvalidArgument	ce1fd11975f0684e	78f79099c419719c	INSERT INTO t (a, b) VALUES (1, 2)
 
 # ---- SELECT — accepted -----------------------------------------------------
 ok	0455e27e7d802f0c	cbf29ce484222325	SELECT * FROM t
@@ -174,9 +188,27 @@ ok	4aa155c62d488ef9	78f78f99c4196fe9	SELECT * FROM t AS a WHERE a.id BETWEEN 1 A
 InvalidArgument	5be869c8076bff1f	b5d414774c8002cc	SELECT * FROM t WHERE id BETWEEN 1
 InvalidArgument	97eadbe49c827e47	78f78f99c4196fe9	SELECT * FROM t WHERE id BETWEEN 1 5
 InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 OR id = 2
-# [V09] pagination.
-InvalidArgument	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
-InvalidArgument	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
+# [V09] pagination. The tail parses since 2026-08-10, and the two hashes
+# that predate it did not move: `order`, `by`, `asc`, `limit` and `offset`
+# were always ordinary identifiers, so becoming parseable changed no shape
+# stream - the verdicts flipped with their task, the V08 precedent. The
+# counts are slots (I11): LIMIT 10 and LIMIT 20 share a pattern_id below.
+# DESC, an aggregated statement's tail and a subquery's stay refused.
+ok	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
+ok	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
+ok	cfd92d5cf2657bf9	183288bf5470b5dc	SELECT * FROM t LIMIT 20
+ok	a2ab37bd0b9912d1	6a2936eff68a8d8a	SELECT * FROM t LIMIT 10 OFFSET 5
+ok	d1d97970aff68c0c	b5d410774c7ffc00	SELECT * FROM t OFFSET 5
+ok	9e51e28ff0f77902	90e9577200715765	SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 2 OFFSET 1
+ok	7f56cd80953c49c8	cbf29ce484222325	SELECT limit, offset FROM t
+Unsupported	44d61d637a45b7d0	cbf29ce484222325	SELECT * FROM t ORDER BY id DESC
+Unsupported	e967d58b511229ec	b5d414774c8002cc	SELECT * FROM t ORDER BY 1
+Unsupported	f54a1f175f7d80c0	cbf29ce484222325	SELECT * FROM t ORDER BY id, name
+Unsupported	53268d89f9272838	b5d410774c7ffc00	SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5
+Unsupported	da3c546ef95221a8	b5d416774c800632	SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 3)
+InvalidArgument	cfd92d5cf2657bf9	184a11bf54847d88	SELECT * FROM t LIMIT -1
+InvalidArgument	cfd92d5cf2657bf9	064a8a899bed480c	SELECT * FROM t LIMIT 1.5
+InvalidArgument	7a69afcc608c62f9	935e8a7428e56318	SELECT * FROM t OFFSET 5 LIMIT 10
 # [AG01] Aggregates. I14 is resolved by docs/feat-aggregate.md, so this
 # parses now — and the hash did not move, which is the whole of §2's
 # fingerprint argument: nothing was reserved and no token type was added,
@@ -199,6 +231,18 @@ ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
 # position (AG7, and §2's [PROPOSED] ORDER BY row).
 Unsupported	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
 Unsupported	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
+
+# ---- ALTER (docs/spec-alter.md AL1, AL7) -----------------------------------
+# ALTER is not a patternable leading word, so every line is "-". The
+# refusal class is the feature: v1 is catalog-only, and ADD/DROP answer a
+# positioned Unsupported carrying invariant 13's reason.
+ok	-	-	ALTER TABLE t RENAME TO u
+ok	-	-	ALTER TABLE t RENAME COLUMN a TO b
+ok	-	-	alter table t rename to u;
+Unsupported	-	-	ALTER TABLE t ADD COLUMN x int
+Unsupported	-	-	ALTER TABLE t DROP COLUMN a
+InvalidArgument	-	-	ALTER TABLE t
+InvalidArgument	-	-	ALTER t RENAME TO u
 
 # ---- UPDATE — accepted -----------------------------------------------------
 ok	e11a9ee11c2d4d2e	b5d414774c8002cc	UPDATE t SET a = 1
@@ -340,10 +384,11 @@ InvalidArgument	-	-	42
 InvalidArgument	-	-	*
 InvalidArgument	-	-	?
 InvalidArgument	-	-	(SELECT * FROM t)
-# [CREATE PATTERN] `DROP` became a statement head, so this moved from
-# "unknown SQL keyword" to a truthful refusal naming what DROP does take.
-# Only patterns can be dropped; there is no DROP TABLE.
-Unsupported	-	-	DROP TABLE t
+# [CREATE PATTERN] `DROP` became a statement head; [DT01] made TABLE one
+# of its objects (docs/spec-drop-table.md), so the verdict flipped with
+# its task - `DROP` is not a patternable head and the hashes stay "-".
+ok	-	-	DROP TABLE t
+ok	-	-	drop table t;
 InvalidArgument	-	-	SELECTX * FROM t
 # [txn T10] DELETE became a statement head - the transaction work needed it
 # (docs/txn.md section 10 tests it), so the flip is owned by that task

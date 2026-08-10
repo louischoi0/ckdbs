@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 
 namespace kds::parser {
 
@@ -1161,24 +1162,35 @@ StatusOr<InsertStmt> Parser::ParseInsert() {
     stmt.table_name = std::move(name.value());
 
     if (Status s = ExpectKeyword("VALUES"); !s.ok()) return s;
-    if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
 
+    // One or more parenthesised rows, comma-separated (spec-bulkinsert.md
+    // BI3). The row *cap* is the dispatcher's - this layer is config-blind
+    // - so the loop is bounded only by the statement text, which the
+    // server already accepted whole.
     for (;;) {
-        auto val = ParseValue();
-        if (!val.ok()) return val.status();
-        stmt.values.push_back(std::move(val.value()));
+        if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
+
+        std::vector<AstValue> row;
+        for (;;) {
+            auto val = ParseValue();
+            if (!val.ok()) return val.status();
+            row.push_back(std::move(val.value()));
+
+            if (lexer_.Peek().type == TokenType::kComma) {
+                lexer_.Next();
+                continue;
+            }
+            break;
+        }
+
+        if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
+        stmt.rows.push_back(std::move(row));
 
         if (lexer_.Peek().type == TokenType::kComma) {
             lexer_.Next();
             continue;
         }
         break;
-    }
-
-    if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
-
-    if (stmt.values.empty()) {
-        return Status::InvalidArgument("INSERT VALUES requires at least one value");
     }
 
     ConsumeOptionalSemicolon();
@@ -1388,6 +1400,164 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
     }
 }
 
+// The pagination tail (spec I11, workplan V09): `[ORDER BY <col> [ASC]]
+// [LIMIT <n>] [OFFSET <m>]`, clause order fixed as written and each clause
+// independently optional. `ORDER`, `BY`, `ASC`, `DESC`, `LIMIT` and
+// `OFFSET` are ordinary identifiers matched by text at clause position,
+// like `GROUP` above and for its reason: no column reference can stand
+// here, so a column may carry any of those names and the fingerprint does
+// not move.
+//
+// Tokens from `Peek()` are bound **by value** throughout. A reference is
+// safe today only because `Token` is trivially copyable and `Next()`
+// leaves the peeked token intact; the day `Token` owns anything, every
+// reference held across a `Next()` becomes a use-after-move, silently.
+Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth) {
+    if (const Token order = lexer_.Peek();
+        order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
+        // Over aggregated output the answer predates the tail (AG's
+        // `[PROPOSED]` row) and the corpus pins it, wording and all.
+        if (aggregated) {
+            return Status::Unsupported(
+                "ORDER BY is not supported over an aggregated statement (byte " +
+                std::to_string(order.byte_offset) +
+                "); an aggregated statement's output rows are not chain rows, and sorting them "
+                "needs an output sort this engine does not have");
+        }
+        // A subquery's rows feed a predicate - IN's set, EXISTS's witness,
+        // a scalar's one value - and no order of them is observable, so an
+        // ORDER BY there is a clause with nothing to mean.
+        if (depth > 0) {
+            return Status::Unsupported(
+                "ORDER BY inside a subquery is not supported (byte " +
+                std::to_string(order.byte_offset) +
+                "); a subquery's rows feed a predicate, and no order of them is observable");
+        }
+        lexer_.Next();
+        if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
+
+        // `ORDER BY 1` is a form this engine understands and declines -
+        // the ordinal names a select-list position, and positional naming
+        // is a second spelling of something that already has one.
+        if (const Token ordinal = lexer_.Peek(); ordinal.type == TokenType::kIntLit) {
+            return Status::Unsupported(
+                "ORDER BY an ordinal is not supported (byte " +
+                std::to_string(ordinal.byte_offset) + "); name the column");
+        }
+
+        auto col = ParseColumnName();
+        if (!col.ok()) return col.status();
+
+        // AG9's argument, one clause over: a paren here reads as an
+        // expression - `ORDER BY count(x)` - and refusing it by position
+        // beats a trailing-garbage error pointing past it.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            return Status::Unsupported(
+                "ORDER BY takes a column reference only, not an expression (byte " +
+                std::to_string(col.value().byte_offset) + ")");
+        }
+        stmt.order_by = std::move(col.value());
+
+        // `ASC` names the order the engine already emits and is accepted
+        // as written. `DESC` is a reverse walk: the heap chain and the
+        // index leaf chain link forward only, so there is nothing it could
+        // compile to - Unsupported, and I11 keeps the word in the grammar
+        // so the refusal does not shift when a reverse walk lands.
+        if (const Token dir = lexer_.Peek(); dir.type == TokenType::kIdent) {
+            if (IEquals(dir.text, "ASC")) {
+                lexer_.Next();
+            } else if (IEquals(dir.text, "DESC")) {
+                return Status::Unsupported(
+                    "descending order is not supported (byte " +
+                    std::to_string(dir.byte_offset) +
+                    "); every chain links forward only, and a reverse walk does not exist");
+            }
+        }
+
+        // A second sort key would need the output sort the first one
+        // deliberately does not: the accepted form names an order the
+        // chain already has, and `pk, anything` is not one.
+        if (const Token comma = lexer_.Peek(); comma.type == TokenType::kComma) {
+            return Status::Unsupported(
+                "ORDER BY takes a single column (byte " + std::to_string(comma.byte_offset) +
+                "); ordering is the driving relation's pk, and a second key would need an "
+                "output sort this engine does not have");
+        }
+    }
+
+    std::optional<std::uint64_t> limit;
+    if (Status s = ParseCountClause("LIMIT", aggregated, depth, limit); !s.ok()) return s;
+    stmt.limit = limit;
+
+    std::optional<std::uint64_t> offset;
+    if (Status s = ParseCountClause("OFFSET", aggregated, depth, offset); !s.ok()) return s;
+    if (offset.has_value()) stmt.offset = offset.value();
+
+    return Status::OK();
+}
+
+// One count clause of the tail: `<word> <n>`, absent-is-ok. The class
+// refusals live here per clause rather than gating the tail once, because
+// each names the clause the client wrote and the byte it starts at -
+// "LIMIT ... (byte 40)" against a statement whose ORDER BY would also
+// have been refused is the error that points at what was typed.
+Status Parser::ParseCountClause(std::string_view word, bool aggregated, std::uint32_t depth,
+                                std::optional<std::uint64_t>& out) {
+    const Token head = lexer_.Peek();
+    if (head.type != TokenType::kIdent || !IEquals(head.text, word)) return Status::OK();
+
+    // Groups are emitted in fold order, which is deterministic and
+    // deliberately not a contract - so which rows survive the clause would
+    // be a guess, and this engine's answer to "which wrong number would
+    // you like" has always been neither. Belongs with HAVING and ORDER BY
+    // in feat-aggregate.md §10's post-fold-consumer decision.
+    if (aggregated) {
+        return Status::Unsupported(
+            std::string(word) + " is not supported over an aggregated statement (byte " +
+            std::to_string(head.byte_offset) +
+            "); groups are emitted in fold order, which is not a contract, so which rows "
+            "survive the clause would be a guess");
+    }
+    // AG8's shape: pagination applies at the statement's emission
+    // boundary, and a sub-chain has none - its rows feed a predicate.
+    if (depth > 0) {
+        return Status::Unsupported(
+            std::string(word) + " inside a subquery is not supported (byte " +
+            std::to_string(head.byte_offset) + "); paginate the outer statement instead");
+    }
+    lexer_.Next();
+
+    auto count = ParsePaginationCount(word);
+    if (!count.ok()) return count.status();
+    out = count.value();
+    return Status::OK();
+}
+
+// The count in a LIMIT or OFFSET clause. Decoded from the digits, not from
+// `int_val`: the signed decode wraps past 64 bits (token.hpp), and TY11's
+// lesson stands one layer down - a wrapped count silently means a number
+// the client did not write, so past-uint64 refuses instead.
+StatusOr<std::uint64_t> Parser::ParsePaginationCount(std::string_view clause) {
+    const Token tok = lexer_.Next();
+    if (tok.type != TokenType::kIntLit || tok.negative) {
+        return Status::InvalidArgument(std::string(clause) +
+                                        " takes a non-negative integer literal, got '" +
+                                        std::string(Describe(tok)) + "' at byte " +
+                                        std::to_string(tok.byte_offset));
+    }
+    // The lexer guarantees a non-empty ASCII digit run, so the only way
+    // from_chars fails here is overflow.
+    const std::string_view digits = tok.digits();
+    std::uint64_t value = 0;
+    if (std::from_chars(digits.data(), digits.data() + digits.size(), value).ec !=
+        std::errc()) {
+        return Status::InvalidArgument(std::string(clause) + " count '" + std::string(digits) +
+                                        "' does not fit in 64 bits (byte " +
+                                        std::to_string(tok.byte_offset) + ")");
+    }
+    return value;
+}
+
 // No `depth`: a join's relations are relation references, and a relation
 // reference is never a subquery (ParseRelationRef refuses one outright).
 Status Parser::ParseJoins(SelectStmt& stmt) {
@@ -1555,18 +1725,12 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
             "); filter before the fold with WHERE, or filter the result client-side");
     }
 
-    // ORDER BY over aggregated output, and only over aggregated output
-    // (spec §2 `[PROPOSED]`). A non-aggregated ORDER BY is not this
-    // clause's business and keeps the answer it has always had, which the
-    // corpus pins.
-    if (const Token& order = lexer_.Peek();
-        aggregated && order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
-        return Status::Unsupported(
-            "ORDER BY is not supported over an aggregated statement (byte " +
-            std::to_string(order.byte_offset) +
-            "); an aggregated statement's output rows are not chain rows, and sorting them "
-            "needs an output sort this engine does not have");
-    }
+    // ---- The pagination tail: ORDER BY, LIMIT, OFFSET (I11, V09) --------
+    //
+    // Parsed here and refused here - over aggregated output, in a
+    // subquery, `DESC` - so the aggregated ORDER BY answer the corpus pins
+    // did not move when the non-aggregated form became parseable.
+    if (Status s = ParsePaginationTail(stmt, aggregated, depth); !s.ok()) return s;
 
     // AG8 / J2: a fold inside a sub-chain puts an aggregation boundary
     // where the execution model has none. Refused with the position of
@@ -1741,11 +1905,23 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/true);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "TABLE")) {
+            // docs/spec-drop-table.md DT6: catalog-scoped, oid tombstoned,
+            // pages orphaned - the refusals live in the dispatcher, which
+            // is the layer that can name a blocker.
+            lexer_.Next();
+            DropTableStmt drop;
+            drop.byte_offset = lexer_.Peek().byte_offset;
+            auto name = ParseIdent();
+            if (!name.ok()) return name.status();
+            drop.table_name = std::move(name.value());
+            ConsumeOptionalSemicolon();
+            stmt = std::move(drop);
         } else {
             return Status::Unsupported(
-                "only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported "
-                "(byte " +
-                                        std::to_string(what.byte_offset) + ")");
+                "only DROP TABLE, DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION "
+                "are supported (byte " +
+                std::to_string(what.byte_offset) + ")");
         }
     } else if (IEquals(tok.text, "INSERT")) {
         auto s = ParseInsert();
@@ -1763,6 +1939,10 @@ StatusOr<Statement> Parser::Parse() {
         auto s = ParseDelete();
         if (!s.ok()) return s.status();
         stmt = std::move(s.value());
+    } else if (IEquals(tok.text, "ALTER")) {
+        auto s = ParseAlter();
+        if (!s.ok()) return s.status();
+        stmt = std::move(s.value());
     } else if (IEquals(tok.text, "WITH")) {
         // The other half of the structural rule (spec section 2): `WITH`
         // must not lex as a statement head. It is answered here, by name,
@@ -1773,8 +1953,9 @@ StatusOr<Statement> Parser::Parse() {
                                     std::to_string(tok.byte_offset) +
                                     "); subqueries are allowed in predicate position only");
     } else {
-        return Status::InvalidArgument("unknown SQL keyword '" + std::string(tok.text) +
-                                        "' (supported: CREATE, DROP, INSERT, SELECT, UPDATE, DELETE)");
+        return Status::InvalidArgument(
+            "unknown SQL keyword '" + std::string(tok.text) +
+            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE)");
     }
 
     // After a successful parse, only EOF may remain (a trailing semicolon
@@ -1785,6 +1966,70 @@ StatusOr<Statement> Parser::Parse() {
                                         "' after end of statement");
     }
 
+    return stmt;
+}
+
+// `ALTER TABLE <t> RENAME TO <new> | RENAME COLUMN <old> TO <new>`
+// (docs/spec-alter.md AL1, AL7), with `ALTER` already consumed.
+//
+// `TABLE`, `RENAME`, `COLUMN` and `TO` are ordinary identifiers matched by
+// text, like every clause head this grammar has grown - and the refusal
+// surface is parsed *before* the accepted form, so `ADD`/`DROP`/`MODIFY`/
+// `SET` answer with AL1's reason at their own byte rather than a syntax
+// error pointing past them.
+StatusOr<AlterStmt> Parser::ParseAlter() {
+    if (Status s = ExpectKeyword("TABLE"); !s.ok()) return s;
+
+    AlterStmt stmt;
+    stmt.byte_offset = lexer_.Peek().byte_offset;
+    auto name = ParseIdent();
+    if (!name.ok()) return name.status();
+    stmt.table_name = std::move(name.value());
+
+    const Token verb = lexer_.Peek();
+    if (verb.type == TokenType::kIdent &&
+        (IEquals(verb.text, "ADD") || IEquals(verb.text, "MODIFY") ||
+         IEquals(verb.text, "SET"))) {
+        return Status::Unsupported(
+            "ALTER TABLE " + std::string(verb.text) +
+            " is not supported (byte " + std::to_string(verb.byte_offset) +
+            "); v1 is catalog-only - RENAME TO and RENAME COLUMN - because a relation's row "
+            "size is a schema constant (invariant 13), so changing the column set is a "
+            "relation rewrite, not a catalog edit");
+    }
+    // `DROP` under ALTER is the same class, worded for what was written:
+    // dropping a column is the rewrite, dropping the table is DROP TABLE's
+    // feature, and neither is a rename.
+    if (verb.type == TokenType::kIdent && IEquals(verb.text, "DROP")) {
+        return Status::Unsupported(
+            "ALTER TABLE DROP is not supported (byte " + std::to_string(verb.byte_offset) +
+            "); dropping a column changes the row size (invariant 13), and dropping the "
+            "relation is DROP TABLE's feature, which does not exist yet");
+    }
+    if (verb.type != TokenType::kIdent || !IEquals(verb.text, "RENAME")) {
+        return Status::InvalidArgument("expected RENAME after the table name, got '" +
+                                        std::string(Describe(verb)) + "' at byte " +
+                                        std::to_string(verb.byte_offset));
+    }
+    lexer_.Next();
+
+    if (const Token what = lexer_.Peek();
+        what.type == TokenType::kIdent && IEquals(what.text, "COLUMN")) {
+        lexer_.Next();
+        stmt.rename_column = true;
+        stmt.old_column_byte_offset = lexer_.Peek().byte_offset;
+        auto old_col = ParseIdent();
+        if (!old_col.ok()) return old_col.status();
+        stmt.old_column = std::move(old_col.value());
+    }
+
+    if (Status s = ExpectKeyword("TO"); !s.ok()) return s;
+    stmt.new_name_byte_offset = lexer_.Peek().byte_offset;
+    auto new_name = ParseIdent();
+    if (!new_name.ok()) return new_name.status();
+    stmt.new_name = std::move(new_name.value());
+
+    ConsumeOptionalSemicolon();
     return stmt;
 }
 
