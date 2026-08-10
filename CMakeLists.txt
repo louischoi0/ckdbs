@@ -73,6 +73,7 @@ add_library(kds
     src/parser/ast.cpp
     src/parser/parser.cpp
     src/wire/frame_codec.cpp
+    src/wire/kwp_types.cpp
     src/wire/row_codec.cpp
     src/wal/record.cpp
     src/wal/payload.cpp
