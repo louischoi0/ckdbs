@@ -10,7 +10,6 @@
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
-#include "kds/storage/page_header.hpp"
 #include "kds/txn/visibility.hpp"
 
 namespace kds::exec {
@@ -296,11 +295,10 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
             }
             entry.page_id = found.value().page_id;
             entry.slot = found.value().slot;
-            entry.page_epoch = 0;
-            if (auto healed = store_.GetForRead(entry.page_id); healed.ok()) {
-                entry.page_epoch =
-                    static_cast<std::uint32_t>(storage::GetRelayoutEpoch(healed.value()));
-            }
+            // The healed page's current epoch, through the one producer the
+            // read path's in-place heal also uses - a stamp of 0 against a
+            // bumped page misses on every later resolve and re-heals forever.
+            entry.page_epoch = CurrentRelayoutEpoch(store_, entry.page_id);
             entry.flags |= stats::kCabinHintValid;
             ++i;
         }

@@ -293,6 +293,89 @@ TEST(CabinOptimizerTest, JurisdictionIgnoresUnownedCabins) {
     EXPECT_EQ(opt.pages_committed(), 0u);
 }
 
+// The swap is the one rule that emits against a key other than the one
+// being decided, so it is the one rule that can collide with the pass's own
+// iteration. `TheBudgetInvariantHoldsAndSwapEvictsTheWeakest` above cannot
+// see it: its victim sorts *before* the candidate and is already past. With
+// the order reversed the victim was reached again while still carrying the
+// DROP just emitted for it, and the DECAYING arm fired a second time - a
+// `sustained-decay` DROP for the same cabin, whose cooldown had "elapsed"
+// only because the swap left `decaying_since` at 0.
+TEST(CabinOptimizerTest, ASwapVictimSortingAfterTheCandidateIsDroppedOnce) {
+    CabinOptimizer opt(TestConfig());
+    constexpr std::uint64_t kVictimRel = 5000;  // sorts AFTER the candidate
+    constexpr std::uint64_t kCandRel = 4000;
+    constexpr sched::MonoTimeNs kEpoch = 100'000;  // >> the 2000ns cooldown
+
+    // The victim: hot enough to build (B = 4 x 8 = 32 > 3 x 10), and weak
+    // enough afterwards to be the swap's choice.
+    for (std::uint64_t v = 1; v <= 3; ++v) {
+        opt.Decide(Snap(v, kEpoch, {Fp(7, 4, 40, kVictimRel, kCol)}));
+    }
+    opt.NoteCreated(kVictimRel, kCol, /*cabin_id=*/42, /*pages=*/5);
+    ASSERT_EQ(opt.pages_committed(), 5u);
+
+    ActionSet swap;
+    for (std::uint64_t v = 4; swap.empty() && v <= 8; ++v) {
+        swap = opt.Decide(Snap(v, kEpoch,
+                               {Fp(7, 3, 30, kVictimRel, kCol, 42),
+                                Fp(9, 20, 2000, kCandRel, kCol)},
+                               {Quality(42, 10, 0)}));
+    }
+
+    ASSERT_EQ(swap.size(), 2u) << "the victim was decided twice in one pass";
+    EXPECT_EQ(swap[0].action, CabinAction::kDrop);
+    EXPECT_EQ(swap[0].reason, ActionReason::kBudgetSwap);
+    EXPECT_EQ(swap[0].cabin_id, 42u);
+    EXPECT_EQ(swap[1].action, CabinAction::kCreate);
+    EXPECT_EQ(swap[1].rel_oid, kCandRel);
+
+    // And the log says the same thing: one decision per cabin per pass, or
+    // PO8's "recorded with the inputs that produced it" records a decision
+    // no input produced.
+    int drops_of_42 = 0;
+    for (const DecisionRecord& record : opt.DecisionLog()) {
+        if (record.item.action == CabinAction::kDrop && record.item.cabin_id == 42) {
+            ++drops_of_42;
+        }
+    }
+    EXPECT_EQ(drops_of_42, 1);
+}
+
+// The cooldown at a *shipped* half-life. Every other case in this file runs
+// at nanosecond half-lives, where the 16.16 arithmetic has room; the
+// default is 600 seconds, and lifting 6e11 nanoseconds into 16.16 fills
+// half of a u64 before the amort_windows multiply even starts. The product
+// saturated, and the 1200-second cooldown came out as 4.29 seconds - the
+// hysteresis the θ gap buys, undone by an overflow nothing reported.
+TEST(CabinOptimizerTest, TheCooldownIsTwoAmortWindowsAtAShippedHalfLife) {
+    CabinOptimizerConfig config;  // the shipped defaults: half-life 600 s
+    constexpr sched::MonoTimeNs kSecond = 1'000'000'000ULL;
+    ASSERT_EQ(config.half_life_ns, 600 * kSecond);
+    CabinOptimizer opt(config);
+
+    for (std::uint64_t v = 1; v <= 3; ++v) opt.Decide(HotSnapshot(v, /*epoch=*/kSecond));
+    opt.NoteCreated(kRel, kCol, 42, 5);
+
+    const auto cold = [&](std::uint64_t v, sched::MonoTimeNs epoch) {
+        return Snap(v, epoch, {Fp(7, 0, 0, kRel, kCol, 42)}, {Quality(42, 1, 0)});
+    };
+    // Traffic dies: DECAYING from here, no action.
+    ASSERT_TRUE(opt.Decide(cold(4, kSecond)).empty());
+
+    // Ten seconds later - past the saturated 4.29 s, nowhere near the
+    // configured 1200 s. A DROP here is the controller churning out a Cabin
+    // the operator asked it to hold for twenty minutes.
+    EXPECT_TRUE(opt.Decide(cold(5, 11 * kSecond)).empty())
+        << "dropped before the configured cooldown elapsed";
+
+    // Past it: the DROP the configuration actually asked for.
+    const ActionSet dropped = opt.Decide(cold(6, 1300 * kSecond));
+    ASSERT_EQ(dropped.size(), 1u);
+    EXPECT_EQ(dropped[0].action, CabinAction::kDrop);
+    EXPECT_EQ(dropped[0].reason, ActionReason::kSustainedDecay);
+}
+
 TEST(CabinOptimizerTest, IdenticalStreamsProduceBitIdenticalTraces) {
     const auto run = [] {
         CabinOptimizer opt(TestConfig());

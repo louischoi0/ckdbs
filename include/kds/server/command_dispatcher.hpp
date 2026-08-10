@@ -674,6 +674,15 @@ private:
                                   const std::optional<stats::InstanceKey>& instance,
                                   const txn::Snapshot& snapshot);
 
+    // **The success-path recording point.** Three collectors observe the
+    // same moment - a completed execution - and they are called from one
+    // place so a fourth cannot be added to two of the three sites. Every
+    // caller reaches here only after the execution succeeded; there is
+    // deliberately no failure-path form (see RecordTrail).
+    void RecordExecution(const std::optional<stats::InstanceKey>& instance,
+                         exec::TrailCollector* trail, const exec::StepChain& chain,
+                         const exec::ExecStats& stats);
+
     // Hands a successful execution's trail to the recorder. Shared by the
     // row-returning path and ANALYZE so the two cannot come to disagree
     // about when a trail is written.

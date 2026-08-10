@@ -13,8 +13,13 @@ namespace {
 template <typename Map, typename Primary>
 std::uint64_t ColdestOf(Map& map, const sched::Clock* clock, sched::MonoTimeNs half_life,
                         Primary primary) {
-    std::uint64_t coldest_key = 0;
-    std::uint32_t coldest = std::numeric_limits<std::uint32_t>::max();
+    if (map.empty()) return 0;
+    // Seeded from a real entry rather than from the type's maximum: a table
+    // whose every score has saturated at the ceiling would leave a
+    // sentinel key nothing matches, the erase would remove nothing, and the
+    // cap would quietly stop being a cap.
+    std::uint64_t coldest_key = map.begin()->first;
+    std::uint32_t coldest = ValueAt(primary(map.begin()->second), clock, half_life);
     for (auto& [key, signal] : map) {
         const std::uint32_t value = ValueAt(primary(signal), clock, half_life);
         if (value < coldest) {

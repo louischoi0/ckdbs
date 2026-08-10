@@ -507,8 +507,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->cabin_executor_.emplace(
             expeditor->database_->catalog, *expeditor->store_, *expeditor->cabin_store_,
             *expeditor->cabin_controller_, &*expeditor->txn_manager_);
-    }
-    if (expeditor->cabin_store_) {
         expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
     }
     expeditor->logger_->Info("expeditor",
@@ -804,15 +802,6 @@ Status Expeditor::Serve() {
                       "checkpoint cadence disabled; durability is SYNC and shutdown only");
     }
 
-    // EVT03's background writeback: drains spec-eviction §4's dirty queue -
-    // pages a sweep found dirty at usage zero and queued instead of
-    // reclaiming. One bounded batch per tick is the cooperative-yield
-    // boundary. **Idle today by construction**: the queue only fills when
-    // the sweep runs, and nothing calls the sweep until the PageRef
-    // migration lands - so this registration is the task existing ahead of
-    // its work, the same stance the sweep itself takes. The watermark loop
-    // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
-    // it real numbers; a cadence key follows with EVT04's protocol.
     // PHY04's cadence: snapshot → Decide → Apply, PO8's switch read at
     // every boundary inside Tick. Registered only when the executor exists
     // and the interval is non-zero (0 = no cadence, the standing meaning);
@@ -833,6 +822,15 @@ Status Expeditor::Serve() {
                           "ms, switch " + (config_.cabin_optimizer ? "on" : "off"));
     }
 
+    // EVT03's background writeback: drains spec-eviction §4's dirty queue -
+    // pages a sweep found dirty at usage zero and queued instead of
+    // reclaiming. One bounded batch per tick is the cooperative-yield
+    // boundary. **Idle today by construction**: the queue only fills when
+    // the sweep runs, and nothing calls the sweep until the PageRef
+    // migration lands - so this registration is the task existing ahead of
+    // its work, the same stance the sweep itself takes. The watermark loop
+    // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
+    // it real numbers; a cadence key follows with EVT04's protocol.
     constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
         auto drained = store_->DrainDirtyEvictionQueue();

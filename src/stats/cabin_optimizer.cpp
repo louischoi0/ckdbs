@@ -40,6 +40,22 @@ Fix16 FromWhole(std::uint64_t whole) noexcept {
     return whole << 16;
 }
 
+// A whole quantity scaled by a 16.16 factor: (whole x factor) >> 16, and
+// **without lifting `whole` into 16.16 first**. That distinction is the
+// whole reason this exists rather than `MulFix(FromWhole(w), f) >> 16`: a
+// nanosecond count is not a model quantity. 600 seconds is 6e11, which in
+// 16.16 is 3.9e16 - a quarter of u64's range before any multiply - so the
+// lifted form saturated for every half-life above about two seconds and
+// answered 4.29 s (u32's ceiling, shifted back) whatever was configured.
+// Saturating here too, at a threshold no clock reaches: 39 hours at the
+// default amort_windows.
+std::uint64_t ScaleWhole(std::uint64_t whole, Fix16 factor) noexcept {
+    if (whole != 0 && factor > std::numeric_limits<std::uint64_t>::max() / whole) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    return (whole * factor) >> 16;
+}
+
 }  // namespace
 
 const char* CabinActionName(CabinAction action) noexcept {
@@ -189,8 +205,10 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
         RecordDecision(snapshot, item);
         actions.push_back(item);
     };
+    // Two amort windows of wall time, in nanoseconds. `half_life_ns` is a
+    // clock quantity and never enters 16.16 - see ScaleWhole.
     const sched::MonoTimeNs cooldown_ns = static_cast<sched::MonoTimeNs>(
-        MulFix(2 * config_.amort_windows, FromWhole(config_.half_life_ns)) >> 16);
+        ScaleWhole(config_.half_life_ns, 2 * config_.amort_windows));
 
     // The effective score for one entry: live means for a candidate, the
     // frozen pre-Cabin baseline once one exists - an ACTIVE Cabin makes
@@ -216,8 +234,23 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
         return s;
     };
 
+    // "At most one action per candidate per call" is stated in the header,
+    // and the budget swap is the one rule that emits against a key other
+    // than the one being decided. Without this test its victim - when it
+    // sorts *after* the candidate in key order - reaches the switch below
+    // still carrying an emitted DROP, and either emits a second one for the
+    // same cabin (a fabricated `sustained-decay`, since the cooldown is
+    // measured from a `decaying_since` the swap had not stamped) or rebounds
+    // to ACTIVE against the DROP the same ActionSet already carries.
+    const auto acted_on_this_pass = [&actions](const CandidateKey& key) {
+        return std::any_of(actions.begin(), actions.end(), [&key](const ActionItem& item) {
+            return item.rel_oid == key.rel_oid && item.col_pos == key.col_pos;
+        });
+    };
+
     for (auto& [key, e] : evidence) {
         if (e.served_by_unowned) continue;
+        if (acted_on_this_pass(key)) continue;
 
         auto found = managed_.find(key);
         if (found == managed_.end()) {
@@ -269,6 +302,11 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                                     vm.cabin_id, victim->rel_oid, victim->col_pos,
                                     victim_net, cost});
                     vm.state = State::kDecaying;  // dropped on execution edge
+                    // Stamped, like every other entry into DECAYING. An
+                    // unstamped victim measures its cooldown from epoch 0,
+                    // so a later pass that never saw the drop executed would
+                    // find the whole cooldown already elapsed.
+                    vm.decaying_since = snapshot.decay_epoch;
                 }
                 m.state = State::kBuilding;
                 m.pages = estimate;

@@ -29,6 +29,7 @@
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/exec/tuple_verify.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
@@ -424,11 +425,11 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
 
 DispatchOutcome CommandDispatcher::HandleSetCabinOptimizer(std::string_view rest) {
     // PO8's runtime kill switch (workplan PHY05). Non-destructive in both
-    // directions by construction: the flag is what PHY04's cadence task
-    // will check at batch boundaries, and until that task exists flipping
-    // it changes bookkeeping and nothing else - which is stated rather
-    // than discovered, the V11 precedent. An optional '=' is accepted
-    // because both spellings read naturally on a terminal.
+    // directions by construction: PHY04's cadence task reads this flag at
+    // every batch boundary - before the tick's snapshot, between actions,
+    // and between a build's pages - so OFF lands mid-build and the build
+    // discards cleanly, nothing having been committed. An optional '=' is
+    // accepted because both spellings read naturally on a terminal.
     auto [value, extra] = SplitFirstToken(Trim(rest));
     if (IEquals(value, "=")) std::tie(value, extra) = SplitFirstToken(Trim(extra));
     if (!Trim(extra).empty()) {
@@ -2558,11 +2559,9 @@ DispatchOutcome CommandDispatcher::RunAggregated(
     }
 
     // Recorded after a *complete* execution, and unconditionally - the fold
-    // is downstream of both, so an aggregated statement records the trail
-    // and the access shape its unaggregated twin would.
-    RecordTrail(instance, trail, chain);
-    RecordAccessShapes(chain);
-    RecordOptimizerSignals(instance, chain, exec_stats_);
+    // is downstream of all three, so an aggregated statement records the
+    // trail, the access shape and the signals its unaggregated twin would.
+    RecordExecution(instance, trail, chain, exec_stats_);
     return {os.str(), false};
 }
 
@@ -2613,9 +2612,7 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     if (!ran.ok()) {
         return {"ERR " + ran.message(), false};
     }
-    RecordTrail(instance, trail, chain);
-    RecordAccessShapes(chain);
-    RecordOptimizerSignals(instance, chain, stats);
+    RecordExecution(instance, trail, chain, stats);
 
     const exec::StepStats total = stats.Total();
     std::ostringstream os;
@@ -2896,9 +2893,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         return {"ERR " + ran.message(), false};
     }
 
-    RecordTrail(instance, trail, compiled);
-    RecordAccessShapes(compiled);
-    RecordOptimizerSignals(instance, compiled, exec_stats_);
+    RecordExecution(instance, trail, compiled, exec_stats_);
 
     if (logging(LogLevel::kTrace)) {
         log_->Trace("query", "chain of " + std::to_string(compiled.steps.size()) +
@@ -2906,6 +2901,15 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                                  std::to_string(static_cast<int>(compiled.klass)));
     }
     return {os.str(), false};
+}
+
+void CommandDispatcher::RecordExecution(const std::optional<stats::InstanceKey>& instance,
+                                        exec::TrailCollector* trail,
+                                        const exec::StepChain& chain,
+                                        const exec::ExecStats& stats) {
+    RecordTrail(instance, trail, chain);
+    RecordAccessShapes(chain);
+    RecordOptimizerSignals(instance, chain, stats);
 }
 
 void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
@@ -2994,13 +2998,11 @@ void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,
         // The page's current epoch, fetched lazily - once per statement
         // that actually appends, and only then - so a relation whose write
         // touches no cabined column pays nothing new. A buffer hit: the
-        // page was written by this very statement moments ago.
+        // page was written by this very statement moments ago. Through the
+        // one producer both heal sites use, so a hint minted here and a
+        // hint repaired there carry the same stamp by construction.
         if (!write_epoch.has_value()) {
-            write_epoch = 0;
-            if (auto bytes = page_store_.GetForRead(page_id); bytes.ok()) {
-                write_epoch =
-                    static_cast<std::uint32_t>(storage::GetRelayoutEpoch(bytes.value()));
-            }
+            write_epoch = exec::CurrentRelayoutEpoch(page_store_, page_id);
         }
         entry.page_epoch = *write_epoch;
         entry.slot = slot;
