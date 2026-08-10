@@ -1,4 +1,5 @@
 # Client manual
 
-Placeholder. Will cover connecting, the newline text protocol, error/reply
-formats, and retry guidance (docs/client-manual.md is the current source).
+`client.md` — connecting, the newline wire protocol, reply shapes, error
+handling and retries, the bundled client tools, and writing your own
+client. Verified against code 2026-08-10.
