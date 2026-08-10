@@ -26,6 +26,15 @@ inline constexpr Oid kTypeAttribute = 18;
 inline constexpr Oid kTypeColumn = 19;
 inline constexpr Oid kTypePage = 20;
 inline constexpr Oid kTypeTable = 21;
+
+// A dropped relation's sys.objects row is *retyped* to this, never
+// retired (docs/spec-drop-table.md DT2): GenerateUserOid() recovers its
+// floor from the highest oid on the catalog pages - the rows are the
+// counter - so the row must stay to keep the dead oid from being
+// reissued, while every name lookup filters on kTypeTable and so frees
+// the name immediately. A value, not a format change: type_oid was
+// always data.
+inline constexpr Oid kTypeDroppedTable = 22;
 inline constexpr Oid kTypeOperator = 22;
 inline constexpr Oid kTypeIndex = 23;
 inline constexpr Oid kTypeChar = 24;

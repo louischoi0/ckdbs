@@ -23,9 +23,10 @@ dispatcher's own commands):
 | Introspection | `SHOW META/TABLES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/RELAYOUT`, `DESCRIBE` |
 | Session | `PING`, `SYNC`, `STOP` |
 
-There is **no `DROP TABLE`**; `ALTER TABLE` exists and is catalog-only
-(RENAME TO / RENAME COLUMN — see its section). The catalog is append-only
-apart from those renames, `DROP PATTERN`, `DROP CABIN`, `DROP INDEX` and
+`DROP TABLE` and `ALTER TABLE` exist and are **catalog-only** (see their
+sections): a drop tombstones the oid and orphans the pages — no space is
+reclaimed — and a rename edits a label. The catalog is append-only apart
+from those, `DROP PATTERN`, `DROP CABIN`, `DROP INDEX` and
 `DROP ASSERTION`.
 
 ---
@@ -98,6 +99,29 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
   that meets an in-flight writer answers `ERR TXN_CONFLICT retryable=1 ...`.
 - `SHOW FKEYS` lists declarations. CASCADE / SET NULL do not exist (FK-M6,
   out of v1 by decision F2).
+
+### DROP TABLE (built 2026-08-10, DT1-DT6 / DT01-DT05)
+
+```sql
+DROP TABLE <name>
+```
+
+**Catalog-scoped**: the relation becomes unreachable, its name frees
+immediately, and its oid is tombstoned — never reissued — so stale
+advisory structures keyed by the dead oid can never mis-attribute. The
+pages **orphan** (heap chain, var-heap, index pages): no space is
+reclaimed, deliberately, until the free-map-reuse and reader-horizon
+decisions land.
+
+- **RESTRICT, named**: a foreign key referencing the relation as parent
+  blocks (declared-level — an empty child still blocks; drop the child
+  first), and so does an assertion on it (drop it first).
+- **Dependents drop with it**: its indexes, Cabins (catalog rows and
+  in-memory sets), columns and child-side foreign keys.
+- Patterns and trails naming the dead relation die quietly (advisory);
+  `sys.access_stats` ghosts stay, keyed by an oid that cannot return.
+- Unlogged and non-transactional like all DDL — `ROLLBACK` does not
+  resurrect a dropped table.
 
 ### ALTER TABLE (built 2026-08-10, AL1-AL9 / ALT01-ALT05)
 
@@ -570,10 +594,12 @@ waits on"; `InvalidArgument` means "simply wrong".
   it is honest about its class: an index is "a Cabin that observed
   everything", append-only, verified at read. `UNIQUE` is refused because it
   would turn a read accelerator into a constraint that can fail writes.
-- **No `DROP TABLE`, and no data-moving `ALTER`.** Nothing reclaims catalog
-  rows or relation pages yet; `ALTER TABLE` is renames only (AL1), and the
-  assertion RESTRICT hook now has its first caller there. `DROP` names
-  exactly four object kinds: PATTERN, CABIN, INDEX, ASSERTION.
+- **No space reclamation, and no data-moving `ALTER`.** `DROP TABLE`
+  exists but is catalog-scoped (DT1): the pages orphan, because returning
+  them to the free map is gated on trail-validation and reader-horizon
+  decisions owned elsewhere. `ALTER TABLE` is renames only (AL1). The
+  RESTRICT predicates (assertions, referencing fkeys) now have their
+  callers in both.
 - **No `SELECT *` across a join**, no duplicate FROM bindings, no
   aggregates in subqueries, no subquery nesting past depth 4 — each refused
   with the exact byte.

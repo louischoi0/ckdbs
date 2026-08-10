@@ -349,7 +349,11 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ASSERTION")) {
             return HandleAssertion(Trim(line));
         }
-        return {"ERR only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported",
+        if (IEquals(sub, "TABLE")) {
+            return HandleDropTable(Trim(line));
+        }
+        return {"ERR only DROP TABLE, DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION "
+                "are supported",
                 false};
     }
     if (IEquals(cmd, "INSERT")) {
@@ -1210,6 +1214,67 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line) {
                               " to " + stmt.new_name);
     }
     return {os.str(), false};
+}
+
+DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line) {
+    auto parsed = parser::Parse(line);
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::DropTableStmt>(parsed.value())) {
+        return {"ERR expected a DROP TABLE statement", false};
+    }
+    const auto& stmt = std::get<parser::DropTableStmt>(parsed.value());
+
+    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    if (!oid.ok()) {
+        return {"ERR " + oid.status().message(), false};
+    }
+
+    // DT3's RESTRICT, both blockers named. A referencing foreign key
+    // blocks at the *declared* level - the constraint exists whether or
+    // not rows do - which is the check known-gaps.md said was waiting for
+    // exactly this caller.
+    auto fkeys = catalog_.ListForeignKeys();
+    if (!fkeys.ok()) {
+        return {"ERR " + fkeys.status().message(), false};
+    }
+    for (const catalog::SysFkeyRow& fk : fkeys.value()) {
+        if (fk.parent_rel_oid != oid.value()) continue;
+        return {"ERR relation '" + stmt.table_name + "' is referenced by a foreign key on '" +
+                    RelationNameOf(fk.child_rel_oid) + "'; drop the referencing relation first",
+                false};
+    }
+
+    // An enforcing constraint is not allowed to die quietly - ALTER's AL4
+    // argument, same predicate, third caller.
+    auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
+    if (!restricting.ok()) {
+        return {"ERR " + restricting.status().message(), false};
+    }
+    if (!restricting.value().empty()) {
+        return {"ERR assertion '" + restricting.value().front().name +
+                    "' is declared on this relation; DROP ASSERTION first",
+                false};
+    }
+
+    std::vector<std::uint64_t> dropped_cabins;
+    if (Status s = catalog_.DropTable(oid.value(), dropped_cabins); !s.ok()) {
+        return {"ERR " + s.message(), false};
+    }
+    // The catalog rows are gone and the compiler stops emitting probes;
+    // the in-memory sets would only leak, so they are forgotten, not
+    // protected (feat-cabin.md - un-observing is always legal).
+    if (cabins_ != nullptr) {
+        for (const std::uint64_t cabin_id : dropped_cabins) cabins_->Forget(cabin_id);
+    }
+
+    if (logging(LogLevel::kInfo)) {
+        log_->Info("ddl", "dropped table " + stmt.table_name + " (oid " +
+                              std::to_string(oid.value()) +
+                              "); pages orphaned pending reclamation");
+    }
+    return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
 }
 
 DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {

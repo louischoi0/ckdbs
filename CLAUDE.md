@@ -47,6 +47,8 @@ statements, not style.
 | Assertions (group-level constraints) | **Complete and enforcing** (AST01-AST10); recovery-side registry rebuild outside the series | `docs/feat-assertion.md`, `docs/workplan-assertion.md` |
 | Access statistics | Built (`SHOW ACCESS`) | `docs/heap-and-tuple.md` §7 |
 | ALTER TABLE | Built 2026-08-10 (AL1-AL9, ALT01-ALT05): catalog-only — RENAME TO / RENAME COLUMN; assertions RESTRICT; everything data-moving refused | `docs/spec-alter.md`, `docs/workplan-alter.md` |
+| DROP TABLE | Built 2026-08-10 (DT1-DT6, DT01-DT05): catalog-scoped — oid tombstoned and never reissued, pages orphan (reclamation gated), fkeys/assertions RESTRICT | `docs/spec-drop-table.md`, `docs/workplan-drop-table.md` |
+| Bulk insert | T1 built 2026-08-10 (BLK01-BLK05): multi-row VALUES, full pipeline per row, BI5 fingerprint rule; T2 gated on the KWP server | `docs/spec-bulkinsert.md`, `docs/workplan-bulk-insert.md` |
 | Physical optimizer, Part I: relayout | Built and measured (PX01-PX08), **shadow-only as a finding** — every move blocked by a named §6 gate | `docs/feat-physical-optimizer.md`, `docs/workplan-physical-optimizer.md` |
 | Physical optimizer, Part II: Cabin controller | PHY01-PHY05 and PHY07 built — the controller runs end to end (PHY04, 2026-08-10, over the EVT03/EVT06 substrate); PHY06/PHY08 remaining | same docs, Part II / §II.1-§II.7 |
 | Buffer-pool eviction | EVT01/EVT02 partly, EVT03 (writeback) and EVT06 (scan ring) built; full CLOCK reclamation still gated on the `PageRef` migration | `docs/spec-eviction.md`, `docs/workplan-eviction.md`, `docs/page.md` §3 |

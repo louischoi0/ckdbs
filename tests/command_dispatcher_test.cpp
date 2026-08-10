@@ -213,14 +213,15 @@ TEST_F(CommandDispatcherTest, DropIsAKnownVerbWithANamedTargetList) {
     // is meant to be edited when one is added - that is what pins the list to
     // reality rather than to whatever it happened to say.
     //
-    // `DROP TABLE` is still in the second case and still refused, which is
-    // also why AST03 could not wire its RESTRICT hook: the statement that
-    // would consult it does not exist.
+    // `DROP TABLE` joined the list with docs/spec-drop-table.md (DT01) -
+    // the edit this comment scheduled - and the RESTRICT hook AST03 could
+    // not wire finally has its DDL. An unknown table now answers NotFound
+    // from resolution, not a target-list refusal.
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     EXPECT_EQ(d.Dispatch("DROP EVERYTHING").response,
-              "ERR only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported");
-    EXPECT_EQ(d.Dispatch("DROP TABLE t").response,
-              "ERR only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported");
+              "ERR only DROP TABLE, DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION "
+              "are supported");
+    EXPECT_EQ(d.Dispatch("DROP TABLE t").response, "ERR no table with this name");
 }
 
 TEST_F(CommandDispatcherTest, EmptyLineIsError) {

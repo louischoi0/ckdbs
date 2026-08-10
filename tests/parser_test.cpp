@@ -195,7 +195,9 @@ TEST(ParserTest, BindParameterIsRejected) {
 }
 
 TEST(ParserTest, UnknownKeywordIsError) {
-    auto stmt = Parse("DROP TABLE t");
+    // `DROP TABLE` parses since DT01, so the probe is a head the grammar
+    // has never heard of - the case this test was always about.
+    auto stmt = Parse("TRUNCATE t");
     EXPECT_FALSE(stmt.ok());
 }
 

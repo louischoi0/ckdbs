@@ -493,6 +493,12 @@ private:
     // refusal live here, before the catalog write.
     DispatchOutcome HandleAlter(std::string_view line);
 
+    // `DROP TABLE <name>` (docs/spec-drop-table.md, workplan DT03). The
+    // DT3 RESTRICT gate lives here - a referencing foreign key and an
+    // assertion each refuse naming the blocker - before the catalog's
+    // tombstone-and-retire; the in-memory Cabin sets are forgotten after.
+    DispatchOutcome HandleDropTable(std::string_view line);
+
     // `SHOW CABINS` - every declared Cabin, with what it has observed.
     //
     // The line joins two sources on purpose. The catalog says which

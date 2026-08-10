@@ -384,10 +384,11 @@ InvalidArgument	-	-	42
 InvalidArgument	-	-	*
 InvalidArgument	-	-	?
 InvalidArgument	-	-	(SELECT * FROM t)
-# [CREATE PATTERN] `DROP` became a statement head, so this moved from
-# "unknown SQL keyword" to a truthful refusal naming what DROP does take.
-# Only patterns can be dropped; there is no DROP TABLE.
-Unsupported	-	-	DROP TABLE t
+# [CREATE PATTERN] `DROP` became a statement head; [DT01] made TABLE one
+# of its objects (docs/spec-drop-table.md), so the verdict flipped with
+# its task - `DROP` is not a patternable head and the hashes stay "-".
+ok	-	-	DROP TABLE t
+ok	-	-	drop table t;
 InvalidArgument	-	-	SELECTX * FROM t
 # [txn T10] DELETE became a statement head - the transaction work needed it
 # (docs/txn.md section 10 tests it), so the flip is owned by that task

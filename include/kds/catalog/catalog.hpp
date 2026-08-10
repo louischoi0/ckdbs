@@ -179,6 +179,21 @@ public:
     Status RenameTable(Oid table_oid, std::string_view new_name);
     Status RenameColumn(Oid table_oid, std::string_view old_name, std::string_view new_name);
 
+    // DROP TABLE's catalog half (docs/spec-drop-table.md DT1-DT3, workplan
+    // DT02). The sys.objects row is **retyped to kTypeDroppedTable, never
+    // retired** - the rows are GenerateUserOid()'s counter, so the row
+    // must stay to keep the dead oid from being reissued, while name
+    // resolution's kTypeTable filter frees the name at once. Everything
+    // the relation owns retires: its sys.tables row, every sys.columns /
+    // sys.indexes / sys.cabins row and its child-side sys.fkeys rows.
+    // Pages are NOT reclaimed (DT1 - reclamation is gated elsewhere).
+    // The dropped cabin ids land in `dropped_cabins` for the caller's
+    // in-memory CabinStore::Forget. RESTRICT checks (a referencing fk, an
+    // assertion) are the dispatcher's, made *before* this call - this
+    // function only refuses a non-public relation and an unknown oid.
+    // One BumpVersion() at the end.
+    Status DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins);
+
     // Returns an owned copy, served from the cache when the relation has
     // been opened before. NotFound for a relation with no sys.columns rows
     // (the bootstrap catalog tables) - an absence, and so never cached.

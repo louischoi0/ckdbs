@@ -976,6 +976,93 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     return Status::OK();
 }
 
+Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins) {
+    // 1. The tombstone (DT2): retype, never retire. The row is the oid
+    //    floor's evidence, and a reissued oid could serve a dead table's
+    //    row as a live answer through a stale advisory structure.
+    auto retyped = ForFirstRow<SysObjectRow>(
+        store_, kCatalogPageObjects,
+        [&](SysObjectRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.type_oid != kTypeTable || row.oid != table_oid) return false;
+            if (row.namespace_oid != kNamespacePublic) {
+                return Status::InvalidArgument("relation '" +
+                                                std::string(NameView(row.name)) +
+                                                "' is a system relation and cannot be dropped");
+            }
+            row.type_oid = kTypeDroppedTable;
+            const auto encoded = row.Encode();
+            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            return true;
+        });
+    if (!retyped.ok()) return retyped.status();
+    if (!retyped.value()) return Status::NotFound("no sys.objects row for this relation");
+
+    // 2. Everything the relation owns retires (DT3's "dependents out").
+    //    Retired, not delete-marked - RetirePattern() states the argument:
+    //    catalog reads have no snapshot to filter a mark against. Each
+    //    sweep loops ForFirstRow until nothing matches, because a relation
+    //    owns many columns and may own several indexes and cabins.
+    // One loop shape, four row types: the tag parameter names the type and
+    // the predicate is the one line that differs per sweep.
+    const auto sweep = [&](auto row_tag, PageId root, auto matches) -> Status {
+        using RowT = decltype(row_tag);
+        for (;;) {
+            auto acted = ForFirstRow<RowT>(
+                store_, root,
+                [&](RowT& row, heap::PageView& page, std::uint16_t i,
+                    const heap::PageView::Tuple&) -> StatusOr<bool> {
+                    if (!matches(row)) return false;
+                    if (Status s = page.RetireSlot(i); !s.ok()) return s;
+                    return true;
+                });
+            if (!acted.ok()) return acted.status();
+            if (!acted.value()) return Status::OK();
+        }
+    };
+
+    if (Status s = sweep(SysTableRow{}, kCatalogPageTables,
+                         [&](const SysTableRow& r) { return r.oid == table_oid; });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = sweep(SysColumnRow{}, kCatalogPageColumns,
+                         [&](const SysColumnRow& r) { return r.rel_id == table_oid; });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = sweep(SysIndexRow{}, kCatalogPageIndexes,
+                         [&](const SysIndexRow& r) { return r.table_oid == table_oid; });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = sweep(SysFkeyRow{}, kCatalogPageFkeys,
+                         [&](const SysFkeyRow& r) { return r.child_rel_oid == table_oid; });
+        !s.ok()) {
+        return s;
+    }
+
+    // Cabins: the ids are collected first so the in-memory store can
+    // forget them - the catalog row is what makes the compiler emit a
+    // probe, but the entry sets live beside the dispatcher.
+    auto cabin_rows = ScanAll<SysCabinRow>(store_, kCatalogPageCabins);
+    if (!cabin_rows.ok()) return cabin_rows.status();
+    for (const SysCabinRow& row : cabin_rows.value()) {
+        if (row.rel_oid == table_oid) dropped_cabins.push_back(row.cabin_id);
+    }
+    if (Status s = sweep(SysCabinRow{}, kCatalogPageCabins,
+                         [&](const SysCabinRow& r) { return r.rel_oid == table_oid; });
+        !s.ok()) {
+        return s;
+    }
+
+    BumpVersion("drop table");
+    return Status::OK();
+}
+
 StatusOr<std::vector<SysObjectRow>> Catalog::ListTables() {
     if (const std::vector<SysObjectRow>* cached = cache_.FindTableList(); cached != nullptr) {
         return *cached;

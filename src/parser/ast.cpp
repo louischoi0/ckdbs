@@ -23,6 +23,7 @@ const char* StatementTypeName(const Statement& stmt) {
                 return s.drop ? "DROP ASSERTION" : "CREATE ASSERTION";
             }
             if constexpr (std::is_same_v<T, AlterStmt>) return "ALTER TABLE";
+            if constexpr (std::is_same_v<T, DropTableStmt>) return "DROP TABLE";
         },
         stmt);
 }

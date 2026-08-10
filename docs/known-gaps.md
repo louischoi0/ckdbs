@@ -55,12 +55,16 @@ There is no purge pass, and readers are deliberately unregistered
   (`docs/feat-index.md` §13);
 - catalog rows are never reclaimed (the column ceiling is on columns ever
   created); pages, extents and Keystone ids are never reused;
-- there is **no `DROP TABLE`**, and `ALTER TABLE` is catalog-only renames
-  (`docs/spec-alter.md` AL1) — `AssertionsOnRelation()` gained its first
-  caller there (AL4's RESTRICT), while the FK reverse check still waits on
-  a `DROP TABLE`. A rename is an unlogged catalog write like all DDL: a
-  crash after it can lose it, and a crash between the write and dependent
-  traffic is the same exposure every catalog mutation carries.
+- `DROP TABLE` exists (`docs/spec-drop-table.md`) but is **catalog-scoped**:
+  the relation's pages, var-heap chain and index pages orphan — leaked
+  space, deliberately, because free-map reuse is gated (a reallocated page
+  breaks trail validation, `feat-physical-optimizer.md` §6 gate 3) and no
+  reader horizon exists. The oid is tombstoned in `sys.objects` and never
+  reissued, which is what keeps dead-oid advisory structures harmless.
+  `ALTER TABLE` is catalog-only renames (`docs/spec-alter.md` AL1). Both
+  RESTRICT on assertions; DROP also RESTRICTs on referencing foreign keys.
+  Every one of these is an unlogged catalog write like all DDL: a crash
+  after it can lose it.
 
 ## Concurrency and multicore
 

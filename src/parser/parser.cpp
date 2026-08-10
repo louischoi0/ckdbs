@@ -1905,11 +1905,23 @@ StatusOr<Statement> Parser::Parse() {
             auto s = ParseAssertion(/*drop=*/true);
             if (!s.ok()) return s.status();
             stmt = std::move(s.value());
+        } else if (what.type == TokenType::kIdent && IEquals(what.text, "TABLE")) {
+            // docs/spec-drop-table.md DT6: catalog-scoped, oid tombstoned,
+            // pages orphaned - the refusals live in the dispatcher, which
+            // is the layer that can name a blocker.
+            lexer_.Next();
+            DropTableStmt drop;
+            drop.byte_offset = lexer_.Peek().byte_offset;
+            auto name = ParseIdent();
+            if (!name.ok()) return name.status();
+            drop.table_name = std::move(name.value());
+            ConsumeOptionalSemicolon();
+            stmt = std::move(drop);
         } else {
             return Status::Unsupported(
-                "only DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION are supported "
-                "(byte " +
-                                        std::to_string(what.byte_offset) + ")");
+                "only DROP TABLE, DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION "
+                "are supported (byte " +
+                std::to_string(what.byte_offset) + ")");
         }
     } else if (IEquals(tok.text, "INSERT")) {
         auto s = ParseInsert();

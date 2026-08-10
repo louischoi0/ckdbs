@@ -623,6 +623,14 @@ struct DropPatternStmt {
     std::uint32_t byte_offset = 0;
 };
 
+// `DROP TABLE <name>` (docs/spec-drop-table.md). Catalog-scoped: the
+// relation becomes unreachable and its oid is tombstoned, never reissued
+// (DT2); pages orphan until reclamation exists (DT1).
+struct DropTableStmt {
+    std::string table_name;
+    std::uint32_t byte_offset = 0;
+};
+
 // `CREATE CABIN ON <table>(<column>)` / `DROP CABIN ON <table>(<column>)`
 // (docs/feat-cabin.md §10).
 //
@@ -762,7 +770,7 @@ struct AssertionStmt {
 
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, CreatePatternStmt, DropPatternStmt, CabinStmt,
-                               IndexStmt, AssertionStmt, AlterStmt>;
+                               IndexStmt, AssertionStmt, AlterStmt, DropTableStmt>;
 
 // Human-readable statement type name, for logging.
 const char* StatementTypeName(const Statement& stmt);
