@@ -284,6 +284,18 @@ public:
     // but never torn by a second writer.
     bool MayWrite(PageId page_id) const noexcept;
 
+    // Fault rights over a page range this core does **not** own by lease
+    // (crosscore.md CC7, workplan P6b): a relation the catalog assigns to
+    // this core is built from another core's allocations, and this is how
+    // page ownership becomes a function of the catalog. MayFault consults
+    // these ranges; MayWrite deliberately never does - a grant is
+    // read-only, and the write path arrives only with statement dispatch.
+    //
+    // Contiguous grants merge, LeasedIdSource::Grant's rule, so the common
+    // case stays one range. Nothing revokes a grant: revocation is
+    // ownership rebalance, which M3 keeps out of v1.
+    void GrantFaultPages(Extent extent);
+
     // The live free-map page, for the one caller that carves extents out of
     // it (storage/extent_lease.hpp's ExtentAllocator). Exposed rather than
     // wrapped because reservation is *policy* about who gets which ids,
@@ -577,6 +589,8 @@ private:
     // every construction site that predates multicore keeps its behaviour.
     std::uint32_t core_id_ = 0;
     LeasedIdSource* lease_ = nullptr;
+    // CC7 fault grants, merged where contiguous. See GrantFaultPages.
+    std::vector<Extent> fault_granted_;
     // First non-system page id; 0 means no readable system range. See
     // SetCoreOwnership.
     PageId system_page_limit_ = 0;

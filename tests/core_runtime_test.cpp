@@ -332,40 +332,31 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
     EXPECT_TRUE(peer.value()->store().MayWrite(own.value().first));
 }
 
-// ---- The blocker P6 stops at -----------------------------------------
+// ---- CC7: the ownership reconciliation (workplan P6b) -----------------
 //
-// A peer can now read the **catalog**. It still cannot read a relation's
-// **data**, and the two tests below pin exactly why so the next person does
-// not rediscover it from a confusing error.
+// The blocker P6 stopped at - relation ownership and page ownership were
+// different facts nothing reconciled - is decided (crosscore.md CC7,
+// operator-ratified 2026-08-10): **page ownership is a function of the
+// catalog**, realized at DDL publish by the flush-then-grant handoff. The
+// test below is the positive contract that replaced the pinned negative
+// (`APeerCannotYetFaultARelationsDataPages`): after the grant, the owner
+// faults the relation's pages read-only and its schema resolves.
 //
-// The cause is that **relation ownership and page ownership are different
-// facts and nothing reconciles them.** `sys.tables.owner_core` says which
-// core owns a relation (M1); a page belongs to whichever core's lease it
-// came from (P2). Every relation's pages are allocated by core 0, because
-// DDL is core 0's - so a relation the catalog says core 1 owns is built
-// entirely out of core 0's pages, and core 1 may not fault one.
-//
-// Closing it needs a decision this phase cannot make on its own. Either
-// CREATE TABLE allocates a relation's root from its *owner's* lease - which
-// makes DDL a cross-core allocation - or page ownership stops being a
-// per-core lease and becomes a function of the catalog. Both are real
-// designs; neither is P6.
-//
-// A second, independent blocker sits behind it: **a peer cannot INSERT
-// either**, because `Catalog::AllocateRowId()` bumps `next_id` on the
-// sys.tables page, and a peer may not write the catalog. That one is P5's
-// shape - a leased range of row ids, exactly like the page-id lease - and
+// A second, independent blocker remains: **a peer cannot INSERT**, because
+// `Catalog::AllocateRowId()` bumps `next_id` on the sys.tables page, and a
+// peer may not write the catalog. That one is P5's shape - a leased range
+// of row ids, exactly like the page-id lease - and
 // `docs/keystoneid-invariant.md` K-M2's bump-ahead allocator is the same
 // mechanism.
 
-TEST_F(CoreRuntimeTest, APeerCannotYetFaultARelationsDataPages) {
-    // Pinned as the current state, not as desired behaviour. When the
-    // ownership question above is settled this test changes with it - and a
-    // silent change of behaviour here is exactly what it exists to prevent.
+TEST_F(CoreRuntimeTest, AGrantedPeerFaultsARelationsDataPagesReadOnly) {
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
                                            catalog::ClusteredType::kHeap);
     ASSERT_TRUE(oid.ok());
-    FlushCatalog();
+    // The flush half of flush-then-grant: the relation's pages must be on
+    // the device before the grant makes them reachable, or the peer faults
+    // stale bytes. Sync() covers the catalog pages and the relation's own.
+    ASSERT_TRUE(core0_store_->Sync().ok());
 
     auto row = core0_->catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
@@ -373,14 +364,27 @@ TEST_F(CoreRuntimeTest, APeerCannotYetFaultARelationsDataPages) {
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    // The catalog resolves - that is what P6 bought.
+    // The catalog resolves - that is what P6's catalog half bought.
     EXPECT_TRUE(peer.value()->catalog().FindTableOidByName("t").ok());
 
-    // The relation's root page does not: core 0 allocated it, so it is not
-    // in this peer's lease.
-    EXPECT_FALSE(peer.value()->store().MayFault(row.value().desc_page_id))
-        << "page ownership and relation ownership have been reconciled - update this test "
-           "and the note above it";
+    // Before the grant: the old pinned state. Core 0 allocated the root, so
+    // it is in no lease of this peer's - the check must still refuse it, or
+    // the grant below is not what made the difference.
+    EXPECT_FALSE(peer.value()->store().MayFault(row.value().desc_page_id));
+
+    // The grant (what a kRelationFaultGrant message delivers; called
+    // directly for the reason InvalidateCatalog is callable directly).
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+
+    // Readable, never writable: CC7 grants fault rights only. The write
+    // path arrives with statement dispatch, not with this grant.
+    EXPECT_TRUE(peer.value()->store().MayFault(row.value().desc_page_id));
+    EXPECT_FALSE(peer.value()->store().MayWrite(row.value().desc_page_id));
+
+    // And the schema resolves now: InitTableAccess reads the relation's
+    // root page, which is exactly what the old test pinned as impossible.
+    EXPECT_TRUE(peer.value()->catalog().InitTableAccess(oid.value()).ok());
 }
 
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {

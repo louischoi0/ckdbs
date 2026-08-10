@@ -151,6 +151,12 @@ public:
     // flight at a time.
     void MaybeRefillLease();
 
+    // The receive side of CC7's flush-then-grant handoff (workplan P6b):
+    // fault rights over a relation's page range, granted by core 0 at DDL
+    // publish. What the `kRelationFaultGrant` handler calls; exposed so a
+    // test can drive it without a reactor, InvalidateCatalog's pattern.
+    void GrantRelationFault(storage::Extent extent);
+
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     sched::Scheduler& scheduler() noexcept { return *scheduler_; }
     wal::WalManager& wal() noexcept { return *wal_; }
@@ -202,5 +208,16 @@ private:
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
 };
+
+// The extent-aligned page range covering a relation's fixed roots (the
+// desc/root page and the var-heap root when one exists) - what core 0
+// grants the owner at DDL publish (crosscore.md CC7). Extent-aligned
+// because the store's ownership unit is the extent; the alignment may
+// cover pages of other core-0 relations, the superset assertion CC7
+// accepts, since the enforced mechanism is statement dispatch and never
+// this check. The production send lands with P6c, when a non-creating
+// owner first becomes possible; until then the contract test drives it.
+storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
+                                      std::uint32_t extent_pages);
 
 }  // namespace kds::server
