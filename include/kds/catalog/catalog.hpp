@@ -194,6 +194,13 @@ public:
     // One BumpVersion() at the end.
     Status DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins);
 
+    // T3's contiguous id range (docs/workplan-t3.md T3-3): one catalog
+    // write bumps next_id by `count` and returns the first id - issuance
+    // inside the range is monotone by construction. Refused whole when it
+    // would cross the 40-bit ceiling; an aborted statement burns the whole
+    // range (K3: a burned id is free). Never cached, like every sequence.
+    StatusOr<std::uint64_t> AllocateRowIdRange(Oid table_oid, std::uint64_t count);
+
     // Returns an owned copy, served from the cache when the relation has
     // been opened before. NotFound for a relation with no sys.columns rows
     // (the bootstrap catalog tables) - an absence, and so never cached.

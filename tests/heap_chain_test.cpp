@@ -490,5 +490,59 @@ TEST(HeapChainTest, ADamagedHintFallsBackToTheHeadAndHeals) {
     EXPECT_EQ(hint, tail.value());
 }
 
+// ---- ChainAppendBatch (docs/workplan-t3.md TS02) --------------------------
+
+// The strongest claim available: the batch fill and the sequential row
+// loop produce byte-identical pages. Same payloads, two fresh stores,
+// every touched page compared whole.
+TEST(HeapChainTest, ABatchFillEqualsTheSequentialChainByteForByte) {
+    storage::InMemoryPageStore batch_store(128);
+    storage::InMemoryPageStore seq_store(128);
+    const PageId batch_head = MakeHead(batch_store);
+    const PageId seq_head = MakeHead(seq_store);
+    ASSERT_EQ(batch_head, seq_head);
+
+    constexpr std::uint64_t kRows = 25;
+    std::vector<std::vector<std::byte>> payloads;
+    for (std::uint64_t id = 1; id <= kRows; ++id) {
+        payloads.push_back(MakeTuple(id, 1016));
+    }
+
+    auto batched = ChainAppendBatch(batch_store, batch_head, /*first_id=*/1, payloads,
+                                    /*trx_id=*/1);
+    ASSERT_TRUE(batched.ok()) << batched.status().message();
+    ASSERT_EQ(batched.value().rows.size(), kRows);
+
+    for (std::uint64_t id = 1; id <= kRows; ++id) {
+        auto r = ChainInsert(seq_store, seq_head, id, payloads[id - 1], /*trx_id=*/1);
+        ASSERT_TRUE(r.ok()) << r.status().message();
+        // Placement decisions agree row for row.
+        EXPECT_EQ(batched.value().rows[id - 1].page_id, r.value().page_id) << "id " << id;
+        EXPECT_EQ(batched.value().rows[id - 1].slot, r.value().slot) << "id " << id;
+    }
+
+    ASSERT_GT(batched.value().pages.size(), 2u)
+        << "the fixture must span pages to prove anything";
+    for (const BatchTouchedPage& page : batched.value().pages) {
+        auto a = batch_store.Get(page.page_id);
+        auto b = seq_store.Get(page.page_id);
+        ASSERT_TRUE(a.ok());
+        ASSERT_TRUE(b.ok());
+        EXPECT_TRUE(std::equal(a.value().begin(), a.value().end(), b.value().begin()))
+            << "page " << page.page_id << " diverged";
+    }
+}
+
+TEST(HeapChainTest, ABatchWhosePayloadIdsDisagreeIsCorruption) {
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    std::vector<std::vector<std::byte>> payloads;
+    payloads.push_back(MakeTuple(1, 56));
+    payloads.push_back(MakeTuple(9, 56));  // expected 2
+    auto r = ChainAppendBatch(store, head, /*first_id=*/1, payloads, /*trx_id=*/1);
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption);
+}
+
 }  // namespace
 }  // namespace kds::heap

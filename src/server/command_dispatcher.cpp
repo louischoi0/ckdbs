@@ -2287,6 +2287,15 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // rather than prefixed so the wire's leading compatibility tokens
     // (TXN_CONFLICT, FK_VIOLATION, ASSERTION_VIOLATION) never move.
     const bool bulk = stmt.rows.size() > 1;
+
+    // ---- T3: the sorted heap fill (docs/workplan-t3.md) -----------------
+    //
+    // Page-at-a-time placement and one image per touched page, engaged
+    // only inside T3-2's gate; everything else takes the row loop below.
+    if (bulk && SortedFillEligible(*ta, oid.value())) {
+        return SortedFillInner(stmt, oid.value(), *ta, scope);
+    }
+
     InsertRowResult first{};
     InsertRowResult last{};
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
@@ -2314,6 +2323,119 @@ DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope
     // The single-row reply, byte-identical to what it always was.
     return {"INSERTED oid=" + std::to_string(oid.value()) + " id=" + std::to_string(last.id) +
                 " page=" + std::to_string(last.page_id) + " slot=" + std::to_string(last.slot),
+            false};
+}
+
+bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
+                                           catalog::Oid oid) const {
+    return ta.clustered_type == catalog::ClusteredType::kHeap &&
+           ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
+           !enforcer_.AnyOn(oid);
+}
+
+DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stmt,
+                                                   catalog::Oid oid,
+                                                   const catalog::TableAccess& ta,
+                                                   WriteScope& scope) {
+    const std::size_t ncols = ta.schema.columns.size();
+
+    // Admission-class checks for every row, before anything burns (BI9) -
+    // arity, the pk rule, FK - in the row loop's order, so a refused
+    // statement answers identically down to the ordinal.
+    for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
+        const auto& values = stmt.rows[k];
+        std::string err;
+        if (ncols > 0 && values.size() == ncols) {
+            err = "ERR do not supply a value for primary-key column '" +
+                  std::string(catalog::NameView(ta.schema.columns.front().name)) +
+                  "' - it is autoincrement and engine-assigned";
+        } else if (ncols > 0 && values.size() != ncols - 1) {
+            err = "ERR expected " + std::to_string(ncols - 1) +
+                  " value(s) after the primary key, got " + std::to_string(values.size());
+        } else if (!ta.fkeys_out.empty()) {
+            auto view = CheckView(scope);
+            if (!view.ok()) {
+                err = ErrorReply(view.status());
+            } else {
+                for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
+                    if (fk.column_no == 0 || fk.column_no > values.size()) continue;
+                    if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1],
+                                                          view.value());
+                        !s.ok()) {
+                        err = ErrorReply(s);
+                        break;
+                    }
+                }
+            }
+        }
+        if (!err.empty()) {
+            return {err + " (row " + std::to_string(k + 1) + ")", false};
+        }
+    }
+
+    auto first = catalog_.AllocateRowIdRange(oid, stmt.rows.size());
+    if (!first.ok()) {
+        return {"ERR " + first.status().message(), false};
+    }
+
+    // Encoded up front, ids contiguous from the range. The gate excluded
+    // spillable schemas, so the sink is never reached.
+    std::vector<std::vector<std::byte>> payloads;
+    payloads.reserve(stmt.rows.size());
+    std::vector<exec::AppendedSpill> no_spills;
+    for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
+        auto encoded =
+            exec::EncodeRow(ta.schema, ta.layout, first.value() + k, stmt.rows[k],
+                            exec::VarHeapSink{&page_store_, ta.varheap_page_id, &no_spills});
+        if (!encoded.ok()) {
+            return {"ERR " + encoded.status().message() + " (row " + std::to_string(k + 1) + ")",
+                    false};
+        }
+        payloads.push_back(std::move(encoded.value()));
+    }
+
+    auto filled = heap::ChainAppendBatch(page_store_, ta.desc_page_id, first.value(), payloads,
+                                         WriterId(scope), &ta.heap_tail_hint);
+    if (!filled.ok()) {
+        return {"ERR " + filled.status().message(), false};
+    }
+
+    // The rollback trail, row for row - BI4's unwind is the manager's,
+    // which the bulk guard above this path already required.
+    if (scope.txn != nullptr) {
+        for (std::size_t k = 0; k < filled.value().rows.size(); ++k) {
+            txn_->NoteInsert(*scope.txn, oid, filled.value().rows[k].page_id,
+                             filled.value().rows[k].slot, first.value() + k);
+        }
+    }
+
+    // T3-4: one image per touched page, in chain order. Only an image
+    // describes a page assembled off the per-row path - the chain-growth
+    // and index-split precedent - and at a page's worth of rows it is
+    // smaller than the records it replaces. TXN framing is the manager's.
+    if (wal_ != nullptr) {
+        for (const heap::BatchTouchedPage& page : filled.value().pages) {
+            auto bytes = page_store_.Get(page.page_id);
+            if (!bytes.ok()) return {"ERR " + bytes.status().message(), false};
+            std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+            if (auto n = wal::EncodeFullPageImage(
+                    image, std::span<const std::byte, kPageSize>(bytes.value()));
+                !n.ok()) {
+                return {"ERR " + n.status().message(), false};
+            }
+            auto fpi = wal_->Append(
+                wal::RecordSpec{wal::RecordType::kFullPageImage, WriterId(scope), page.page_id},
+                image);
+            if (!fpi.ok()) return {"ERR " + fpi.status().message(), false};
+            if (Status s = page_store_.StampPageLsn(page.page_id, fpi.value()); !s.ok()) {
+                return {"ERR " + s.message(), false};
+            }
+        }
+    }
+
+    return {"INSERTED oid=" + std::to_string(oid) + " rows=" + std::to_string(stmt.rows.size()) +
+                " first_id=" + std::to_string(first.value()) + " last_id=" +
+                std::to_string(first.value() + stmt.rows.size() - 1),
             false};
 }
 

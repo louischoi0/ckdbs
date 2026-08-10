@@ -1275,6 +1275,37 @@ StatusOr<SysTypeRow> Catalog::ResolveTypeByVal(std::uint32_t type_val) {
     return Status::NotFound("no sys.types row for this type_val");
 }
 
+StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t count) {
+    if (count == 0) return Status::InvalidArgument("a row-id range of zero has no first id");
+    std::uint64_t first = 0;
+    auto acted = ForFirstRow<SysTableRow>(
+        store_, kCatalogPageTables,
+        [&](SysTableRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.oid != table_oid) return false;
+            // Exhaustion checked against the range's *last* id: a range
+            // that would cross the ceiling is refused whole, never split.
+            if (row.next_id > kMaxKeystoneId - (count - 1)) {
+                return Status::OutOfRange("relation has exhausted the Keystone id space");
+            }
+            first = row.next_id;
+            // Bumped and persisted before anything is placed, exactly as
+            // the single-id allocator: an abort burns the range, which K3
+            // calls free and BI9's class already accepted
+            // (docs/workplan-t3.md T3-3).
+            row.next_id = first + count;
+            const auto encoded = row.Encode();
+            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
+                !s.ok()) {
+                return s;
+            }
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.tables row for this relation");
+    return first;
+}
+
 StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
     std::uint64_t issued = 0;
     auto acted = ForFirstRow<SysTableRow>(
