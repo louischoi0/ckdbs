@@ -323,10 +323,13 @@ the frozen P_scan baseline — load-bearing, or the controller drops its own
 success) and
 PHY05 (the §II.6 config surface — the `cabin_optimizer` switch with its
 runtime `SET`, and the percent-integer tuning family validated against
-the hysteresis gap) and
+the hysteresis gap),
 PHY07 (the seed-driven replay harness with checked-in golden traces —
-PO10's determinism proven end to end) are built, 2026-08-09. What remains
-is gated: PHY04 on EVT06's scan ring, PHY06 and PHY08 on PHY04.**
+PO10's determinism proven end to end, all 2026-08-09) and
+PHY04 (the executor, 2026-08-10 — `exec::CabinOptimizerExecutor`,
+ring-routed seeded builds, busy-row deferral, batch heal, PO8 at every
+boundary, the expeditor cadence) are built. PHY06 (observability) and
+PHY08 (the E2E close-out) remain.**
 
 ## II.1 Positioning
 

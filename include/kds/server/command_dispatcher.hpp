@@ -653,6 +653,7 @@ public:
     void set_cabin_optimizer_enabled(bool enabled) noexcept {
         cabin_optimizer_enabled_ = enabled;
     }
+    bool cabin_optimizer_enabled() const noexcept { return cabin_optimizer_enabled_; }
 
 private:
     // The aggregated SELECT path (docs/feat-aggregate.md AG1): the same

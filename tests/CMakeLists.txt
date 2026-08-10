@@ -66,6 +66,7 @@ add_executable(kds_tests
     optimizer_signals_test.cpp
     cabin_optimizer_test.cpp
     cabin_optimizer_replay_test.cpp
+    cabin_optimizer_exec_test.cpp
     trail_store_test.cpp
     trail_recorder_test.cpp
     waystone_replay_test.cpp

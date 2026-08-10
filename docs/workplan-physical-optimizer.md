@@ -286,11 +286,10 @@ shadow-built/mover-absent honestly.
 Part II divider carries the history). Spec: `feat-physical-optimizer.md`
 Part II (`§II.1`-`§II.7`, decisions PO1-PO10 — normative). Related:
 `feat-cabin.md`, `workplan-eviction.md` (EVT06 scan ring is a hard
-dependency of PHY04), `workplan-testing.md`. **PHY01, PHY02, PHY03, PHY05 and PHY07 are built
-(2026-08-09); PHY04, PHY06 and PHY08 are not — but PHY04's gate is open:
-EVT06's scan ring landed the same day (`workplan-eviction.md`), with
-EVT03's writeback under it, so the executor is the next buildable task and
-its build scans are ring consumers from birth (PO4).** Part I's `stats/decay.hpp` is the R1
+dependency of PHY04), `workplan-testing.md`. **PHY01-PHY05 and PHY07 are built (PHY04 on
+2026-08-10, over the EVT03/EVT06 substrate built for it); PHY06 and PHY08
+remain** — observability and the E2E close-out, both now unblocked, since
+the controller runs end to end. Part I's `stats/decay.hpp` is the R1
 implementation PHY01's S1 reuses (it grew the N-point `Accumulate` for
 S2's decayed sums); PHY02's pure core sits in `stats/cabin_optimizer.hpp`
 with no engine-effect includes, per PO10; PHY07's golden traces are
@@ -446,7 +445,40 @@ log (PO5, PO8).
 **Acceptance.** Restart tests: ACTIVE survives, BUILDING discarded,
 CANDIDATE evidence resets cleanly; log ring wraps correctly.
 
-## PHY04 — Executor (background task)
+## PHY04 — Executor (background task)  **[DONE 2026-08-10]**
+
+**Built.** `exec::CabinOptimizerExecutor` (`Apply(ActionSet)` + the
+`Tick()` that strings snapshot → Decide → Apply for the expeditor's
+cadence, registered beside the checkpointer's at
+`cabin_optimizer_snapshot_interval_ms`, 0 = no cadence). What each action
+means here, sized to the engine: **CREATE** is the catalog row (origin
+`kCabinOriginAuto`) plus the seeded build — empty for a first-time column
+*by construction* (no Cabin meant no CabinKey sightings), so §II.5's
+"observation-based population" applies literally and traffic fills it via
+n=2; a **policy refusal** parks the candidate in BUILDING rather than
+resetting it, or a settled "no" would be retried every confirm cycle
+forever. **EXTEND** is where the ring earns its keep: the seed is
+`SightedUnobservedOf`, and **one complete walk through the scan ring**
+(PO4, structural — the build fetches through `OpenScanRing()`) collects
+every seed's set at once, committing each only after the walk finished —
+empty sets included, the authoritative zero-rows answer. The build judges
+by latest settled state and **aborts on a busy row** (counted, its abort
+leaves a phantom; skipped, its commit already passed the write hook
+unobserved — AST06's argument verbatim), committing nothing; demand
+re-nominates. **HEAL** is the batch form of the read path's heal through
+the same primitives — `VerifyTupleAt`, `BtreeLookup` + current-epoch
+stamp, dangling pks erased on sight (K1), heap sets un-observed.
+**DROP** is row → `Forget` → `NoteDropped`, in that order ("late is
+fine"). **PO8** is consulted at every boundary — tick, action, and build
+*page* — so OFF lands mid-build and discards cleanly, commit being
+walk-completion-only. One controller amendment rode in: `NoteCreated`
+adopts an entry it no longer tracks rather than dropping the pages from
+the budget's accounting. Tests: the full loop (hot filter-scan traffic →
+tick → catalog row, origin auto), the seeded build with the empty-set
+case and the served `cabin_hits=1` after it, kill-switch mid-build
+discard with surviving evidence, the busy-row deferral settling to the
+three-row set after COMMIT, heal repairing broken hints and erasing a
+planted dangling pk, and drop removing row, sets and controller entry.
 
 **Scope.** `CabinOptimizer::Execute(ActionSet)` on the home core's
 background group. **Depends on EVT06 (scan ring).**

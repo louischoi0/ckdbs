@@ -95,8 +95,11 @@ std::uint64_t CabinOptimizer::pages_committed() const noexcept {
 
 void CabinOptimizer::NoteCreated(std::uint64_t rel_oid, std::uint16_t col_pos,
                                  std::uint64_t cabin_id, std::uint64_t pages) {
-    auto found = managed_.find(CandidateKey{rel_oid, col_pos});
-    if (found == managed_.end()) return;
+    // Insert-if-absent, deliberately: Execute reports a Cabin that exists,
+    // and a controller that no longer tracks the candidate must adopt it
+    // rather than let its pages fall out of the budget's accounting -
+    // whoever forgot whom, the frames are real.
+    auto found = managed_.emplace(CandidateKey{rel_oid, col_pos}, Managed{}).first;
     found->second.state = State::kActive;
     found->second.cabin_id = cabin_id;
     found->second.pages = pages;

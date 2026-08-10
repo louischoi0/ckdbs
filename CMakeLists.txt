@@ -105,6 +105,7 @@ add_library(kds
     src/exec/assertion_replay.cpp
     src/exec/assertion_violation.cpp
     src/exec/bound_cabin.cpp
+    src/exec/cabin_optimizer_exec.cpp
     src/exec/index_maintain.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp

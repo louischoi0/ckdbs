@@ -499,6 +499,15 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                           expeditor->config_.decay_half_life_ns);
     expeditor->dispatcher_->set_optimizer_signals(&*expeditor->optimizer_signals_);
     expeditor->dispatcher_->set_cabin_optimizer_enabled(expeditor->config_.cabin_optimizer);
+    // PHY04: the decision core and its executor, only where a Cabin can
+    // exist at all. The cadence task registers in Serve() beside the
+    // checkpointer's.
+    if (expeditor->cabin_store_) {
+        expeditor->cabin_controller_.emplace(expeditor->config_.CabinOptimizerSettings());
+        expeditor->cabin_executor_.emplace(
+            expeditor->database_->catalog, *expeditor->store_, *expeditor->cabin_store_,
+            *expeditor->cabin_controller_, &*expeditor->txn_manager_);
+    }
     if (expeditor->cabin_store_) {
         expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
     }
@@ -804,6 +813,26 @@ Status Expeditor::Serve() {
     // its work, the same stance the sweep itself takes. The watermark loop
     // (MaintainFreeReserve) joins the body when EVT02's bounded pool gives
     // it real numbers; a cadence key follows with EVT04's protocol.
+    // PHY04's cadence: snapshot → Decide → Apply, PO8's switch read at
+    // every boundary inside Tick. Registered only when the executor exists
+    // and the interval is non-zero (0 = no cadence, the standing meaning);
+    // with the boot switch off the tick is one predicate and a return.
+    if (cabin_executor_ && config_.cabin_optimizer_snapshot_interval_ms > 0) {
+        const sched::MonoTimeNs interval =
+            config_.cabin_optimizer_snapshot_interval_ms * 1'000'000ULL;
+        scheduler.SubmitEvery(interval, [this] {
+            Status ticked = cabin_executor_->Tick(
+                *optimizer_signals_, [this] { return dispatcher_->cabin_optimizer_enabled(); });
+            if (!ticked.ok() && logger_->enabled(LogLevel::kWarn)) {
+                logger_->Warn("expeditor", "cabin optimizer tick failed: " + ticked.message());
+            }
+        });
+        logger_->Info("expeditor",
+                      "cabin optimizer cadence " +
+                          std::to_string(config_.cabin_optimizer_snapshot_interval_ms) +
+                          "ms, switch " + (config_.cabin_optimizer ? "on" : "off"));
+    }
+
     constexpr sched::MonoTimeNs kWritebackIntervalNs = 50'000'000;  // 50 ms [PROPOSED]
     scheduler.SubmitEvery(kWritebackIntervalNs, [this] {
         auto drained = store_->DrainDirtyEvictionQueue();

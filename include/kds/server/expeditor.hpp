@@ -15,6 +15,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/core_runtime.hpp"
+#include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/extent_lease_service.hpp"
@@ -469,6 +470,16 @@ private:
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
+
+    // The cabin optimizer's decision core and executor (workplan PHY04).
+    // After everything they hold references into - the catalog (via
+    // database_), the store, the Cabin store, the txn manager - and before
+    // the dispatcher, whose kill switch the cadence lambda reads. Both
+    // exist only when Cabins do: a controller over a store that cannot
+    // hold a Cabin would decide about nothing.
+    std::optional<stats::CabinOptimizer> cabin_controller_;
+    std::optional<exec::CabinOptimizerExecutor> cabin_executor_;
+
     std::optional<CommandDispatcher> dispatcher_;
 
     std::unique_ptr<wal::FileLogDevice> log_device_;
