@@ -367,3 +367,29 @@ The relaxed configuration was run twice whole for the noise floor; the A/B
 built the parent commit from `git archive cf4adfb` and alternated
 parent/HEAD runs in one window; the device figure is a 300-sample 8 KiB
 write+fsync probe on the same volume at run end.
+
+## Addendum: the ChainTail fix, measured (2026-08-10, same machine)
+
+The finding above was acted on the same day: `heap::ChainInsert` now takes
+a tail hint - read as the tail-search start, written back with the landing
+page - carried on the cached `TableAccess`. A hint can be behind, never
+wrong (next_page_id is write-once and a page never leaves its chain), so a
+stale one heals by walking forward and a damaged one falls back to the
+head. `tests/heap_chain_test.cpp` pins all three properties.
+
+Spot check with this driver, Release build at the fix commit, batch 1000
+at relaxed, 100K rows, fresh file, single connection:
+
+| | pre-fix (9ee04e4) | post-fix |
+|---|---:|---:|
+| rows/s | 51,258 | **251,000** |
+| per-statement p0 / p50 / p99 (us) | ramped 6.4x intra-run | 3,255 / 3,359 / 5,862 |
+| per-row cost | 3.95 us + 0.321 ns x rows-resident | **~3.97 us flat** |
+
+The resident-rows term is gone: latency is flat across the run (p50/p0 =
+1.03 against the pre-fix ramp), throughput at batch 1000 is 4.9x, and the
+remaining per-row cost is exactly the trace fit's flat part - parse,
+pipeline, framing. The bulk-ingestion story now ends where T3's territory
+begins (per-tuple placement itself), and PostgreSQL's batch-1000 edge
+(94.6K rows/s) is overtaken at 2.7x. The WAL segment-boundary wedge
+reported above is untouched and still owed.

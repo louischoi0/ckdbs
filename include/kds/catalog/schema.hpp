@@ -134,6 +134,19 @@ struct TableAccess {
     PageId desc_page_id;
     ClusteredType clustered_type;
 
+    // Where a heap relation's chain last placed a tuple - heap::ChainInsert
+    // reads it as the tail-search start and writes the landing page back,
+    // which is what keeps an insert O(1) pages instead of a head-to-tail
+    // walk per row (bench/results-bulk-insert.md's finding). **Advisory
+    // and self-healing**: the chain grows only at the tail and a page
+    // never leaves it, so a stale value is behind, never wrong, and a
+    // damaged one costs one retried walk. Mutable on a cached, const-
+    // borrowed entry deliberately - the cache is core-local and statements
+    // run to completion, the same license the in-place root updates rely
+    // on - and it dies with the entry on BumpVersion, so it never
+    // survives DDL. kInvalidPageId for a btree relation, which descends.
+    mutable PageId heap_tail_hint = kInvalidPageId;
+
     // Root of this relation's var-heap chain, or kInvalidPageId when the
     // schema has nothing that could spill. Cacheable for the reason
     // rows.hpp gives: it is fixed at CREATE TABLE and the chain grows

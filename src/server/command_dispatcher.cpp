@@ -2559,7 +2559,8 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // one page rather than failing. Duplicate-key and min_key
             // enforcement live in there - they are heap invariants, not
             // dispatcher policy.
-            auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id, payload, trx_id);
+            auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id, payload,
+                                            trx_id, &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
 
             out.page_id = placed.value().page_id;

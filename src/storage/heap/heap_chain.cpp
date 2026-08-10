@@ -69,7 +69,7 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head) {
 
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload,
-                                        std::uint64_t trx_id) {
+                                        std::uint64_t trx_id, PageId* tail_hint) {
     // The caller passes `id` separately from the payload that encodes it;
     // disagreeing copies of a tuple's identity is the kind of thing that
     // is silent for months, so they are checked against each other once,
@@ -82,7 +82,17 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
                                   std::to_string(id) + ")");
     }
 
-    auto tail_id = ChainTail(store, head);
+    // From the hint when one is offered (the header's argument: a former
+    // chain page is always a valid start, because next_page_id is
+    // write-once and pages never leave a chain), from the head otherwise -
+    // and from the head again if the hinted walk fails, so a damaged hint
+    // costs one retry and never an answer.
+    auto tail_id = ChainTail(store, (tail_hint != nullptr && *tail_hint != kInvalidPageId)
+                                        ? *tail_hint
+                                        : head);
+    if (!tail_id.ok() && tail_hint != nullptr && *tail_hint != kInvalidPageId) {
+        tail_id = ChainTail(store, head);
+    }
     if (!tail_id.ok()) return tail_id.status();
 
     auto tail_bytes = store.Get(tail_id.value());
@@ -121,6 +131,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 
     auto slot = tail.InsertTuple(payload, trx_id);
     if (slot.ok()) {
+        if (tail_hint != nullptr) *tail_hint = tail_id.value();
         return ChainInsertResult{tail_id.value(), slot.value(), /*grew_chain=*/false,
                                  /*linked_from=*/kInvalidPageId};
     }
@@ -162,6 +173,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
     if (!tail_again.ok()) return tail_again.status();
     PageView(tail_again.value()).set_next_page_id(new_id);
 
+    if (tail_hint != nullptr) *tail_hint = new_id;
     return ChainInsertResult{new_id, new_slot.value(), /*grew_chain=*/true,
                              /*linked_from=*/tail_id.value()};
 }
