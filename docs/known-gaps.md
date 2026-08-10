@@ -70,9 +70,10 @@ There is no purge pass, and readers are deliberately unregistered
 
 - `cores > 1` buys parallel WAL streams only: **core 0 serves every
   statement**, peers come up alive and idle (`docs/crosscore.md`). The
-  pipeline is blocked on a design decision — relation ownership and page
-  ownership are different facts and nothing reconciles them (P6), and a
-  peer cannot INSERT (row-id allocation writes a catalog page).
+  P6 ownership question is **decided** (CC7, 2026-08-10: page ownership
+  follows the catalog, flush-then-grant handoff at DDL publish) but not
+  yet built — P6b/P6c, row-id leasing for peer INSERT, and the step
+  pipeline itself remain.
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
 - Cross-core writes are refused retryably (CC3): a transaction's writes

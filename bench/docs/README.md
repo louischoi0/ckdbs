@@ -239,6 +239,64 @@ which is itself worth recording. There is **no Cabin equivalent** on the
 PostgreSQL side and the twin does not invent one; a `--cabin` run simply has
 no twin column in the comparison.
 
+### `scenario4_cabinopt_days.py` — the cabin optimizer over rotating business days
+
+Simulated consecutive trading days for the cabin optimizer
+(`docs/feat-physical-optimizer.md` Part II), built to exercise the lifecycle
+past CREATE — DECAYING, DROP, re-nomination — which the single-shot PHY08
+cases (`cabin_optimizer_benchmark.py`) never reach. Five BTREE relations:
+two 10,000-row *boards* whose hot day rotates (day 1 `board_a`, day 2
+`board_b`, day 3 `board_a` with a disjoint hot-symbol set — a whole
+`(relation, column)` shape going cold overnight, the only rotation that can
+trigger a DROP), and three *tapes* of 200 / 1,000 / 10,000 rows (the row-set
+sweep) probed every day with hot **values** rotating disjointly — the shape
+stays hot, so the per-column Cabin should persist and pay only per-value
+re-observation. Each day: an `open` insert burst into the hot board, a
+wall-paced `trading` session of skewed hot-symbol equality probes plus a
+pk-lookup control, a `close` of COUNT/SUM/GROUP BY full scans, then an idle
+overnight during which the on arm is polled every 3 s for state transitions.
+
+Arms are one server and one fresh disk-backed data file each, identical
+configs, interleaved per block inside every phase: `off` (no Cabin ever),
+`on` (`SET CABIN_OPTIMIZER ON` at day 1 open), and optionally `declared`
+(`CREATE CABIN` on every symbol column up front, optimizer off — the static
+ceiling, and the arm that cannot retire anything). Time compression lives in
+the server config, not the driver: lower `decay_half_life` (e.g. 5 s = 120×
+against the 600 s default) and `cabin_optimizer_snapshot_interval_ms` (e.g.
+500), and state both in the results file. Evidence captured untimed at every
+phase boundary: `SHOW CABIN_OPTIMIZER` (states, action counters, budget,
+per-entry B/C), `SHOW CABINS` (hits/misses), `ANALYZE` of the hot probes,
+and a per-day byte-identical-reply verification across arms.
+
+```bash
+# three servers, one config (lowered half-life + snapshot interval), fresh files
+for arm in off on declared; do
+  ./build-release/kds_server ~/bench-cabinopt-days/$arm.db --port <port> \
+      --config days.conf &
+done
+./tools/scenario4_cabinopt_days.py \
+    --port-off 15651 --port-on 15652 --port-declared 15653 \
+    --pid-off <pid> --pid-on <pid> --pid-declared <pid> --json days.json
+./tools/pg_scenario4_cabinopt_days.py --port 15433 --database bench --json pg.json
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `--days N` | 3 | simulated business days; the board rotation is a-b-a-… |
+| `--session-seconds` | 45 | paced wall length of one trading session (the controller's decay clock needs wall time, so the session is slotted and the slack slept) |
+| `--overnight-seconds` | 45 | the idle gap; at a 5 s half-life this is 9 half-lives of cold |
+| `--blocks N` | 12 | interleave granularity: every phase runs block-by-block across all arms |
+| `--board-probes` / `--tape-probes` / `--pk-ops` / `--open-inserts` / `--close-rounds` | 2400 / 396 / 240 / 240 / 3 | per arm per day; equal work across arms by construction (one drawn plan, replayed per arm) |
+| `--port-*` / `--pid-*` | | one server per arm; pids enable `/proc` server-CPU sampling per phase; `--port-declared 0` skips the third arm |
+| `--suffix`, `--seed`, `--json` | | as the other scenarios |
+
+TPS is reported per arm per day over **busy time** (summed statement
+latencies), because the sessions are wall-paced and wall TPS would measure
+the pacing. The twin runs **one** unpaced day of the same statement shapes:
+at defaults PostgreSQL builds nothing for the hot predicate and retires
+nothing, so day 1 stands for every day, and `EXPLAIN (ANALYZE, BUFFERS)` of
+the board, tape and zero-row probes is captured as evidence of the plan.
+
 ### `index_benchmark.py` — secondary indexes, priced
 
 The four questions `docs/workplan-index.md` IX14 asks, answered in one process
