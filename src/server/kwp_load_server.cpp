@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -141,6 +142,14 @@ void KwpLoadServer::OnListenerReadable() {
             ::close(client_fd);
             continue;
         }
+        // TCP_NODELAY, unconditionally - tcp_server.cpp's lesson, relearned
+        // by measurement (bench/results-bulk-insert.md Part IV): a small
+        // ACK frame held by Nagle against the peer's delayed-ACK timer
+        // cost a pipelined load 33% of its throughput, ~40 ms per stall.
+        // There is nothing for Nagle to coalesce that the outbox does not
+        // already coalesce better.
+        int nodelay = 1;
+        ::setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
         clients_.emplace(client_fd, Connection{});
         Status s = scheduler_->RegisterIoHandler(
             client_fd, sched::IoInterest::kReadable,
