@@ -112,6 +112,77 @@ Numbered to match `docs/heap-and-tuple.md` §8.
   `kFingerprintVersion` moves only per `fingerprint.hpp`'s bump rule (the
   golden corpus pins it).
 
+## Session Workflow — the loop every task runs
+
+Four steps. The first three run unprompted; the fourth stops.
+
+**1. Work in a worktree, named for the work.** Before touching the tree,
+`EnterWorktree` with a name taken from the task, not from the date or a
+counter — `rc04-high-water`, `fix-varheap-checksum`, `bench-agg-p99`. A
+name that says what is being attempted is what makes a stale worktree
+recognizable a week later. Read-only questions and pure doc lookups need
+no worktree.
+
+**2. Every completed step gets a `critics-developer` review.** Per step,
+not once at the end: the point is to catch a wrong contract before the
+next step is built on it. Correctness first, then duplication,
+over-engineering, bloat. Apply what it finds and sharpen where the code
+gets leaner for it; say plainly which findings were rejected and why —
+a review whose findings are all silently accepted was not read.
+
+**3. Every feature gets a `ck-tester` run, and the question is
+overhead.** Not only "is the suite green": does the change cost
+measurable per-statement or system-level overhead? `build-release`,
+interleaved A/B, per the measurement rule above. A regression is a
+finding to report with its number, never a line to bury. **If the
+environment cannot build or run, say so in the report** — an unrun
+measurement is never reported as a pass, and a suite that was not
+executed is stated as "not executed", not implied green.
+
+**4. Land — sync unprompted, push only on the word.** Sync and resolve on
+the work branch, never on `main`:
+
+```
+git fetch origin
+git merge origin/main        # on the work branch; resolve conflicts here
+```
+
+Then **stop** and report: what the review found, what ck-tester measured,
+what the merge resolved. On the go-ahead, and not before:
+
+```
+git checkout main
+git merge --no-ff <branch>
+git push origin main
+```
+
+A failed review, a measured regression, or an unrun test suite stops the
+chain before the merge. Say which, and do not offer the push as though
+the gate had passed.
+
+## Every claim carries its worktree and commit — in the middle of the text
+
+Not a header, not a footer, not a preamble: **the worktree name and the
+short commit id go inside the sentence that makes the claim.** Reports
+outlive the tree they were written against, and a finding quoted a week
+later must still say what it was true of:
+
+> On `rc04-high-water` at `f837e6a`, redo's `CreateAt` already covers the
+> PAGE_INIT case, so the gap is the checkpoint's recLSN-of-zero entry.
+
+Three consequences, because this is a rule about honesty and not about
+formatting:
+
+- **When a step moves the commit, the next claim carries the new id.** One
+  reply may name three, and should.
+- **With no worktree in use, say so by name** — *"in the main checkout on
+  `feat-wal-recovery` at `f837e6a`"*. Silence reads as "a worktree", which
+  the Session Workflow above requires and which would then be a false
+  report of compliance.
+- **A measurement names the commit it was measured at**, which
+  `bench/results-*.md` already requires of a results file; this extends the
+  same discipline to the reply that quotes it.
+
 ## Open Decisions — DO NOT assume or silently pick
 
 The full statements, options and constraints live in the owning docs; this
