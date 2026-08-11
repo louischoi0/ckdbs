@@ -20,6 +20,20 @@ StatusOr<std::span<std::byte, kPageSize>> InMemoryPageStore::CreateAt(PageId pag
 }
 
 StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> InMemoryPageStore::CreateNew() {
+    // Skip ids `CreateAt` already placed. The cursor is where to *start*
+    // looking, not a claim that everything from it upward is free, and
+    // nothing advances it when a page is placed by id.
+    //
+    // DevicePageStore gets this for free: its CreateAt marks the free map
+    // and its CreateNew searches that map, so a placed page is simply never
+    // offered. This store has no map, so the skip has to be written out -
+    // and without it the two stores disagree about a sequence every recovery
+    // test performs, `CreateAt` some pages then `CreateNew` another. The
+    // failure is not subtle but it is misleading: CreateNew reports "page id
+    // already in use" about the page it is standing on.
+    while (pages_.contains(next_new_page_id_)) {
+        ++next_new_page_id_;
+    }
     PageId id = next_new_page_id_;
     auto created = CreateAt(id);
     if (!created.ok()) {

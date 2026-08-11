@@ -212,16 +212,21 @@ static_assert(offsetof(UndoRecordFields, image_len) == kUndoRecImageLenOffset);
 static_assert(offsetof(UndoRecordFields, type) == kUndoRecTypeOffset);
 static_assert(offsetof(UndoRecordFields, flags) == kUndoRecFlagsOffset);
 static_assert(offsetof(UndoRecordFields, reserved) == kUndoRecReservedOffset);
-// RV10's two fields are **not** asserted against offsetof, and cannot be: a
-// uint64_t appended after a 28-byte prefix takes the struct's 8-byte
-// alignment, so the compiler places them at 32 and 40 while the record places
-// them at 28 and 36. That divergence is harmless for exactly the reason the
-// sizeof note below gives - every field crosses the page through a memcpy at
-// the constants above, never as a struct image - but it does mean these two
-// offsets are pinned against the unpadded layout they encode instead.
-static_assert(kUndoRecTxnPrevUndoPtrOffset == kUndoRecReservedOffset + sizeof(std::uint16_t));
-static_assert(kUndoRecPkOffset == kUndoRecTxnPrevUndoPtrOffset + sizeof(std::uint64_t));
-static_assert(kUndoRecordHeaderSize == kUndoRecPkOffset + sizeof(std::uint64_t));
+// **RV10's two fields get no offsetof assert, and cannot have one.** The
+// record is deliberately unpadded (see kUndoRecordHeaderSize below), so
+// `txn_prev_undo_ptr` sits at on-disk offset 28 and `pk` at 36 - neither
+// 8-byte aligned. The compiler cannot place a `uint64_t` member there, so
+// it pads the *struct* to 32 and 40, and asserting the two against each
+// other compares an in-memory offset with an on-disk one.
+//
+// The asserts above survive only because every field before these happens
+// to be naturally aligned; that was luck, not a property, and it ran out
+// here. Nothing is lost by dropping them: the codec never lays the struct
+// over page bytes, it memcpy's each field through the constant above
+// (`undo_page.cpp`, and the tail encoder at kUndoRecordTailOffset), which
+// is exactly what makes the unpadded layout legal. `catalog/rows.hpp`
+// carries the same note for the same reason - everything from `next_id` on
+// is unasserted there.
 // sizeof(UndoRecordFields) is 48, not 44: the u64 members give the struct
 // 8-byte alignment, so its size rounds up. Deliberately not asserted
 // against - those four tail bytes are never touched, because fields are
@@ -233,15 +238,17 @@ static_assert(kUndoRecordHeaderSize == kUndoRecPkOffset + sizeof(std::uint64_t))
 //
 // **Known ceiling, recorded rather than hidden** (txn.md section 3.3): undo
 // overhead is 32 + 24 + 44 = 100 bytes against the heap page's
-// 32 + 16 + 5 + 20 + 4 = 77, so a tuple within ~23 bytes of the maximum heap
+// 32 + 16 + 5 + 20 + 4 = 77, so a tuple within 23 bytes of the maximum heap
 // payload cannot be updated - the undo append fails OutOfSpace naming the
-// *undo* page. **RV10 widened that band from ~7 bytes to ~23** by growing the
-// record header 28 -> 44, which is the same 16 bytes the header's own note
-// prices, reaching a second consequence. The deferred fix is a spilling image
-// or a long-image record type; neither is invented here to answer a question
-// nobody has hit.
+// *undo* page. **The band was ~7 bytes before RV10** and widened with the
+// record header; `UndoPageTest.TheWidestHeapTupleCannotBeUndone` pins the
+// number so it cannot drift again unnoticed. The deferred fix is a spilling image or a long-image record
+// type; neither is invented here to answer a question nobody has hit.
 inline constexpr std::size_t kMaxUndoImageLen = kUndoPageCapacity - kUndoRecordHeaderSize;
 
+// 8136 - 44. **Was 8108**, which is 8136 - 28: the literal was left behind
+// when RV10 grew the header by its two fields. Derived-then-asserted only
+// works if the literal moves with the derivation.
 static_assert(kMaxUndoImageLen == 8092);
 
 // ---- undo_ptr ------------------------------------------------------------

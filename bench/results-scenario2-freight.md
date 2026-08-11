@@ -712,6 +712,508 @@ allocates for real even where `posix_fallocate` is unsupported).
 
 ---
 
+# 2026-08-11 — the options matrix at 100,000 cargos
+
+**A twenty-fold larger cargo book changes nothing this workload can measure,
+and the reason is that it was never reading the cargo book.** Every read a
+booking issues is either a primary-key descent — whose cost is a page count,
+not a row count — or a scan of a relation whose size is set by `--bookings`
+rather than by `--cargos`. What is left is one fsync, which now accounts for
+**65% of a booking**, and whose run-to-run drift on this device is wide enough
+that it, and not any knob in the matrix, decides the ranking of the rows. Six
+of the eight rows below are inside the noise floor. Only autocommit is not.
+
+> **This section does not supersede the 2026-08-07 one above and is not a
+> before/after of the engine.** It measures a different scale (100,000 cargos
+> against 5,000) on a different machine, with a different compiler, at a
+> different commit. The two sets of timings are not comparable and are not
+> compared here except where a quantity is deterministic; that boundary is
+> drawn explicitly in "Against the 5,000-cargo run" below.
+
+## The run
+
+| | |
+|---|---|
+| executed | **2026-08-11 07:34:05 → 08:42:50 UTC** |
+| branch | `worktree-fix-undo-record-asserts`, in the worktree `fix-undo-record-asserts` |
+| commit measured | **`c500d4a`** — tree clean (`git status --porcelain` empty) |
+| why not `main` | `main` at `393b5a4` **does not compile.** `c09353e` (RC06/RV10) was committed unbuilt and left five compile errors across `include/kds/txn/undo_page.hpp`, `src/server/command_dispatcher.cpp` and `src/wal/redo.cpp`. `c500d4a` repairs all five with no behaviour change. No number in this section could have been taken on `main` itself |
+| **binary measured** | `build-release/kds_server`, built **2026-08-11 07:04:38 UTC**. That is *earlier* than `c500d4a`'s commit timestamp (07:15:51), because the fix was built from the working tree and committed afterwards. It is **not stale**: the newest file under `src/` and `include/` is `src/wal/redo.cpp` at 07:03:54, 44 s before the link, and the tree is clean at `c500d4a`. The binary is the tree at `c500d4a` |
+| device | `/dev/root` — Azure, ext4, 247 GB with 242 GB free. **Not tmpfs**; every data file under `$HOME/bench-s2-100k/` |
+| build | `-DCMAKE_BUILD_TYPE=Release` (`-O3 -DNDEBUG`), gcc 13.3.0 |
+| kernel / host | 6.17.0-1022-azure, Ubuntu 24.04, **2 cores** |
+| KDS server | `cores = 1`, `durability = group`, `placement = creating`, all other keys default. Row 7 adds `waystone_recording = off` and changes nothing else |
+| port | **15487**, not the documented 15432. Another process on this box binds 15432 intermittently; an early attempt at row 2 reached *that* server and measured its data file instead of its own. Every row below verifies after the fact that the server it started is the one that grew the file |
+| client | one connection, one booker process, plus the default analytic reporter process, Python driver |
+| scale | 2,000 organizations, 200 ships, 2,000 voyages, **100,000 cargos** — identical in every row |
+| work | `--bookings 1500 --seed 1 --verify 25` — identical in every row. Equal work, not equal time |
+| isolation | fresh server **and** fresh data file per configuration |
+| machine quiet | `uptime` and `pgrep cc1plus` before every row, **and sampled every 5 s for the life of every row**. Two rows (`--cabin`, `--isolation repeatable-read`) had a foreign `cmake --build` start mid-run; both were discarded and re-run. The numbers below are from the clean re-runs |
+| test suite | **not executed — does not build.** `tests/wal_log_scanner_test.cpp` (64, 159, 176) and `tests/wal_analysis_test.cpp` (50, 346) construct `MemoryLogDevice` directly, but construction moved behind a fallible `MemoryLogDevice::Create` factory. A separate known defect, handled outside this run |
+| PostgreSQL | **not executed on this host** — see "Versus PostgreSQL" below |
+
+Every row committed exactly 1,500 bookings, wrote exactly 8,430 charge rows
+(5.62 fees per booking), rejected nothing, conflicted nothing, and passed
+`--verify 25` at 100 invariant checks with 0 failures.
+
+**Nothing was rejected, and that is a property of the scale.** The driver
+derives each voyage's capacity and each customer's credit from `--cargos`, so
+a 20× larger cargo book with the same 1,500 bookings of work leaves both
+limits 20× looser than the run can reach. The refusal path — three rejections
+out of 1,503 attempts in the 5,000-cargo run — is **not exercised at all
+here**, which also means the "p0 of a booking is a rejected booking" reading
+from that run does not apply to this one. p0 here is a genuinely fast
+acceptance.
+
+## The noise floor is ±11%, and it is the fsync
+
+Established from inside the run, twice over, because the first method
+disagreed with the second.
+
+Four runs of the **identical** configuration and one run of a control that
+cannot change a result — `--isolation repeatable-read` on a single connection
+with no concurrent writer changes *when* a read view is taken and nothing
+else:
+
+| run | what it is | TPS | commit mean µs |
+|---|---|---:|---:|
+| base 1 | baseline | 547.1 | 1,167.5 |
+| base 2 | baseline, fresh file | 536.3 | 1,227.6 |
+| base 3 | baseline, fresh file | **582.4** | **1,089.7** |
+| base 4 | baseline, fresh file (the ladder's top rung) | 555.2 | 1,169.5 |
+| control | `--isolation repeatable-read` | **492.7** | **1,397.2** |
+
+The four baselines span **8.6%** peak to peak. Add the control, which by
+construction must land on top of them, and the five span **18.2%** — so the
+floor is **±11.3% about the baseline mean of 555.3 TPS**. Anything smaller
+than that is not a finding.
+
+**The floor has a single mechanism and the decomposition names it.** Sum the
+nine statements a booking issues, per row, and compare against that row's
+commit:
+
+| row | TPS | nine statements, summed µs | commit mean µs | commit p50 µs |
+|---|---:|---:|---:|---:|
+| base 3 | 582.4 | 510.0 | 1,089.7 | 1,041.8 |
+| base 4 | 555.2 | 515.0 | 1,169.5 | 1,062.6 |
+| `waystone_recording = off` | 550.6 | 506.4 | 1,196.0 | 1,156.9 |
+| base 1 | 547.1 | 536.5 | 1,167.5 | 1,089.1 |
+| base 2 | 536.3 | 511.9 | 1,227.6 | 1,168.6 |
+| `--cabin` | 526.5 | 558.7 | 1,222.0 | 1,179.2 |
+| `--fk` | 518.7 | 528.9 | 1,269.6 | 1,175.2 |
+| `--capacity-mode scan` | 513.8 | 531.2 | 1,282.0 | 1,122.2 |
+| `--isolation repeatable-read` | 492.7 | 514.0 | 1,397.2 | 1,343.2 |
+
+The rows are sorted by throughput, and **sorting by throughput sorts them by
+commit latency almost exactly**, while the engine-side work — the nine
+statements — sits in a 10% band (506–559 µs) with no relationship to the
+ordering at all. The control is the cleanest case: every one of its nine
+statements matches the baseline within a microsecond or two, and its entire
+10% throughput deficit is 230 µs of extra fsync. That is device drift, not an
+isolation level.
+
+## Where a booking's time goes
+
+Every wait is measured client-side as a statement's round trip, so each
+carries the socket and the Python driver. KDS exposes no server-side
+wait-event instrumentation, so *within* a statement the split between page
+I/O, latch and CPU is not visible from here — that gap is
+`docs/observability.md`'s, and it is unbuilt.
+
+| wait type | µs | share |
+|---|---:|---:|
+| **durability wait** (`COMMIT`, one fsync) | **1,167.5** | **64.9%** |
+| write-statement wait (1 freight + 5.62 charges, 2 updates) | 339.1 | 18.8% |
+| read wait (4 statements) | 197.4 | 11.0% |
+| client, framing and `BEGIN` (residual) | 95.0 | 5.3% |
+| **whole booking** | **1,799.0** | 100% |
+
+*(baseline, mean per booking; the residual is what the booking's own timer
+sees beyond the nine statements it brackets)*
+
+**Two wait types are absent, and both for structural reasons.** *Conflict
+wait* is zero because one booker means first-updater-wins never fires — 0
+conflicts and 0 retries in every row. *Lock wait* does not exist in this
+engine at all: `docs/txn.md` specifies no lock manager and no waiting, so a
+write conflict is an immediate retryable error rather than a queue. Both are
+exercised by the multi-booker section above, not here.
+
+Nearly two thirds of a business transaction is one fsync. That is the single
+most important number in this section, and it is *higher* than the ~50%
+recorded at 5,000 cargos — not because the commit got slower, but because
+everything else got faster (see the machine caveat below).
+
+## Per-statement distributions, baseline
+
+`charge-insert` has 8,430 operations because a booking writes 5.62 of them;
+every other booking row is once per booking. The three reporter rows are the
+analytic reader running beside the booker.
+
+| statement | ops | mean | p0 | p25 | p50 | p95 | p99 | max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| cargo-lookup | 1,500 | 55.3 | 41.8 | 47.9 | 49.0 | 60.6 | 115.5 | 2,128.8 |
+| credit-lookup | 1,500 | 49.1 | 30.8 | 39.9 | 41.2 | 52.6 | 103.0 | 1,989.5 |
+| capacity-read | 1,500 | 42.9 | 28.4 | 38.4 | 39.6 | 52.9 | 87.1 | 648.9 |
+| recipe-read | 1,500 | 50.1 | 38.2 | 47.4 | 48.4 | 59.1 | 77.1 | 797.1 |
+| freight-insert | 1,500 | 46.8 | 30.5 | 38.9 | 39.7 | 49.4 | 129.4 | 1,984.5 |
+| charge-insert | 8,430 | 37.2 | 23.2 | 32.8 | 33.6 | 42.2 | 78.1 | 2,033.0 |
+| operation-update | 1,500 | 41.8 | 29.1 | 37.5 | 38.3 | 46.6 | 69.4 | 2,052.0 |
+| org-update | 1,500 | 41.4 | 26.5 | 36.0 | 36.8 | 47.5 | 75.4 | 1,763.3 |
+| **commit** | 1,500 | **1,167.5** | **945.6** | **1,045.4** | **1,089.1** | 1,332.7 | **2,282.1** | 39,185.2 |
+| whole booking | 1,500 | 1,799.0 | 1,419.0 | 1,609.4 | 1,671.2 | 2,462.7 | 3,875.5 | 39,762.9 |
+| manifest-scan | 60 | 107.5 | 26.6 | 28.7 | 79.7 | 124.0 | 1,080.2 | 1,080.2 |
+| voyage-rollup | 60 | 115.5 | 28.2 | 30.0 | 80.4 | 135.1 | 1,307.0 | 1,307.0 |
+| customer-statement | 30 | 451.1 | 30.5 | 31.7 | 315.1 | 1,626.7 | 1,978.4 | 1,978.4 |
+| load-cargos | 100,000 | 1,117.9 | 849.4 | 986.0 | 1,026.8 | 1,388.6 | 2,536.2 | 204,823.6 |
+
+*(µs, one connection, latencies include the client's socket cost)*
+
+Four things in that table are worth more than the means.
+
+**The commit is no longer bimodal.** p25 1,045 µs, p50 1,089 µs, p0 946 µs —
+one population sitting on the device's flush floor, which is what the
+zero-fill-plus-`fdatasync` change documented above was meant to produce and is
+here confirmed at a second scale on a second device. What remains is a tail:
+p99 2,282 µs, 2.4× p0, and a single 39 ms outlier that is a checkpoint landing
+inside a commit.
+
+**Every non-commit statement is tight and nearly identical.** Eight
+statements, four of them reads and four of them writes, all between 37 and
+55 µs in the mean and all with p99 inside 3× of p0. At this speed the engine's
+own work is at or below the driver's resolution, which is why the wait table
+above — not these rows — is the honest unit of analysis. It is also why the
+matrix cannot resolve any of its knobs.
+
+**The reporter's reads are the only shape with a real spread.** p0 27 µs
+against p99 1,080 µs for `manifest-scan` — a 40× range on one statement —
+because it walks a `freights` ledger that grows from 0 to 1,500 rows during
+the run, and because it contends with the booker on a single-threaded
+dispatcher. `customer-statement`, the join with the fold on its second step,
+has a p50 of 315 µs against a p0 of 31 µs for the same reason.
+
+**The load phase is the run.** 100,000 cargo inserts at a p50 of 1,027 µs is
+103 s of the row's 121 s wall clock, and every one of those inserts is its own
+durability point. The load is, in shape, exactly the `--no-txn` configuration
+measured in row 8 — which is why a 100,000-row load costs almost exactly
+100,000 fsyncs' worth of time and nothing else.
+
+## The options matrix
+
+One knob at a time. Equal work in every row: 1,500 committed bookings, 8,430
+charge rows, `--seed 1`, 100 invariant checks. "vs base" is against the **mean
+of the four baseline runs, 555.3 TPS**, not against any single one of them,
+because no single one of them is more authoritative than the others.
+
+| # | configuration | TPS | vs base | outside the ±11.3% floor? | verify |
+|---|---|---:|---:|---|---|
+| 1 | **baseline** — `BEGIN`/`COMMIT`, `--capacity-mode cached` | 547.1 | −1.5% | no — it *is* the floor | 100/0 |
+| 2 | baseline, repeated (fresh file) | 536.3 | −3.4% | no — it *is* the floor | 100/0 |
+| 3 | `--capacity-mode scan` | 513.8 | −7.5% | **no** | 100/0 |
+| 4 | `--fk` — three foreign keys declared | 518.7 | −6.6% | **no** | 100/0 |
+| 5 | `--cabin` — Cabin on `recipes.cargo_type` | 526.5 | −5.2% | **no** | 100/0 |
+| 6 | `--isolation repeatable-read` *(control)* | 492.7 | −11.3% | **no** — it *defines* the floor | 100/0 |
+| 7 | `waystone_recording = off` | 550.6 | −0.8% | **no** | 100/0 |
+| 8 | **`--no-txn`** — eight autocommitted statements | **95.7** | **−82.8%** | **yes** | 100/0 |
+| — | baseline, third repeat | 582.4 | +4.9% | no — it *is* the floor | 100/0 |
+| — | baseline, fourth repeat | 555.2 | −0.0% | no — it *is* the floor | 100/0 |
+
+**Rows 3 through 7 are all inside the floor, and so is row 6, which cannot be
+anything else.** The correct reading of this matrix is not that the capacity
+mode costs 7.5% or that the Cabin costs 5.2%; it is that **this workload at
+this scale cannot resolve any of them**, because each touches at most 50 µs of
+a 1,799 µs booking whose dominant term drifts by ±230 µs between runs. A
+document that reported −7.5% for `scan` here would be reporting the device.
+
+That is itself the finding: the workload has become a *durability* benchmark.
+At 5,000 cargos on the earlier host the nine statements cost 1,827 µs against
+a 1,836 µs commit — half and half, and a knob that moved a statement could
+show. Here the nine cost 536 µs against 1,167 µs, so a knob has to be worth
+more than a fifth of the whole statement budget before the commit's own
+variance stops hiding it.
+
+Row 8 is the one that is not close.
+
+### Autocommit costs 5.8×, and the per-statement table says why
+
+| statement | baseline | `--no-txn` | ratio |
+|---|---:|---:|---:|
+| cargo-lookup | 55.3 | 69.5 | 1.3× |
+| credit-lookup | 49.1 | 53.7 | 1.1× |
+| capacity-read | 42.9 | 49.1 | 1.1× |
+| recipe-read | 50.1 | 56.5 | 1.1× |
+| **freight-insert** | **46.8** | **1,186.4** | **25.4×** |
+| **charge-insert** | **37.2** | **1,171.4** | **31.5×** |
+| **operation-update** | **41.8** | **1,174.9** | **28.1×** |
+| **org-update** | **41.4** | **1,186.9** | **28.7×** |
+| whole booking | 1,799.0 | 10,418.8 | **5.8×** |
+
+*(µs, mean)*
+
+The four reads are unchanged. Every write is 25–32× slower, because under
+autocommit each is its own transaction and therefore its own fsync — 9.6 of
+them per booking instead of 1. The wait profile inverts completely: writes go
+from 18.8% of a booking to **97.2%**, reads from 11.0% to 2.2%, and every
+write statement's p50 lands near 1,110 µs, which is the baseline commit's own
+p50. A write under autocommit *is* a commit.
+
+**The ratio is larger here than the 3.3× the 5,000-cargo run recorded, and the
+reason is arithmetic rather than engine.** A booking's fsync count does not
+change with scale, but its statement cost is roughly 3× smaller on this host;
+the cheaper the statements, the more completely the fsync count decides the
+answer. `docs/scenario2-freight.md`'s decision S2-2 chose explicit
+transactions for **correctness** — eight statements that must be one unit. On
+this machine they are also a 5.8× throughput win, and nothing trades against
+it.
+
+### What the derived column buys, and what sets its value
+
+`operations.booked_cbm` is a running total maintained by every booking so the
+capacity check can be a pk lookup instead of an aggregate over the freight
+ledger.
+
+| | `cached` | `scan` |
+|---|---:|---:|
+| capacity-read mean | 42.9 µs | **82.1 µs** (+91%) |
+| capacity-read p0 | 28.4 | 30.2 |
+| capacity-read p25 | 38.4 | 52.3 |
+| capacity-read p50 | 39.6 | 73.5 |
+| capacity-read p95 | 52.9 | 109.3 |
+| capacity-read p99 | 87.1 | 148.6 |
+| whole booking mean | 1,799.0 | 1,915.2 |
+| whole booking p99 | 3,875.5 | 5,049.3 |
+| TPS | 547.1 | 513.8 (inside the floor) |
+
+The statement itself nearly doubles — that part is real, and well outside its
+own p25-to-p50 spread. What it does *not* do is change throughput outside the
+noise floor, because 40 µs on a 1,799 µs booking is 2%.
+
+**The value of the derived column is set by `--bookings`, not by `--cargos`.**
+What `scan` walks is `freights`, a HEAP relation with no pk index, which grows
+to exactly 1,500 rows in every row of this matrix regardless of how large the
+cargo book is. So a twentyfold larger reference data set left this comparison
+almost exactly where the 5,000-cargo run found it (+85% there, +91% here). The
+conclusion that run drew stands and is now measured at a second scale: the
+derived column is not compensating for the absence of an aggregate, it is
+compensating for **the absence of a secondary access path to a non-pk column**
+— and a run that books 100,000 freights instead of 1,500 would find `scan`
+proportionally worse while `cached` stayed one descent.
+
+## The row-set sweep: 2,000 / 10,000 / 100,000 cargos
+
+The size axis this document is required to carry, measured on one machine in
+one window rather than inferred across hosts. `--organizations`, `--ships`,
+`--operations` and the work are held at 2,000 / 200 / 2,000 and
+`--bookings 1500`; only `--cargos` moves, and `--cargos N` is the row count of
+`cargos` exactly.
+
+**Why the ladder starts at 2,000 and not at 200.** A cargo ships once, so a
+run of 1,500 bookings needs at least 1,500 cargos in the pool; at 200 or 1,000
+the driver would exhaust the pool and abandon, which is unequal work rather
+than a smaller measurement. 2,000 is the smallest rung that holds the work
+identical, and the ladder is 50× wide as a result.
+
+**The business limits are held constant across the ladder**, not left to scale
+with it: the driver derives per-voyage capacity and per-customer credit from
+`--cargos`, so each rung passes `--capacity-headroom` and `--credit-headroom`
+scaled inversely (50 / 10 / 1). Without that the ladder would move relation
+size and rejection rate together and settle nothing. All three rungs rejected
+nothing and passed 100 invariant checks.
+
+| statement | 2,000 p0 | p50 | p99 | 10,000 p0 | p50 | p99 | 100,000 p0 | p50 | p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **cargo-lookup** (pk, the growing relation) | 41.0 | **47.0** | 75.7 | 40.8 | **47.5** | 70.2 | 37.7 | **47.9** | 75.7 |
+| credit-lookup (pk, fixed relation) | 30.3 | 40.5 | 78.4 | 30.0 | 40.3 | 96.1 | 30.3 | 40.4 | 81.8 |
+| capacity-read (pk, fixed relation) | 28.8 | 39.4 | 67.8 | 28.2 | 39.0 | 86.9 | 28.5 | 39.2 | 71.9 |
+| recipe-read (FilterScan, 93 rows) | 38.3 | 48.0 | 74.9 | 37.0 | 48.0 | 87.4 | 37.9 | 48.2 | 68.1 |
+| freight-insert | 30.6 | 39.8 | 71.9 | 29.9 | 39.5 | 73.4 | 30.1 | 39.6 | 74.6 |
+| charge-insert | 23.3 | 33.7 | 73.9 | 23.3 | 33.6 | 74.4 | 23.3 | 33.9 | 60.8 |
+| operation-update | 29.2 | 38.3 | 53.9 | 28.5 | 38.2 | 60.9 | 29.1 | 38.3 | 53.5 |
+| org-update | 26.6 | 36.7 | 59.6 | 26.2 | 36.8 | 87.0 | 26.5 | 36.7 | 60.0 |
+| commit | 1,028.8 | 1,174.6 | 2,247.3 | 1,054.7 | 1,212.9 | 2,489.3 | 939.7 | 1,062.6 | 2,452.6 |
+| whole booking | 1,504.6 | 1,735.4 | 3,424.4 | 1,512.0 | 1,778.0 | 3,587.0 | 1,446.0 | 1,637.0 | 3,523.4 |
+
+| rung | TPS | rows resident | data file, pages |
+|---|---:|---:|---:|
+| 2,000 cargos | 540.8 | 16,251 | 1,015 |
+| 10,000 cargos | 532.5 | 24,264 | 1,151 |
+| 100,000 cargos | 555.2 | 114,235 | 2,560 |
+
+**A 50× larger `cargos` relation moves its own primary-key lookup by 1.9% at
+p50** — 47.0 → 47.9 µs — which is inside the run-to-run variation of every
+other row in the same table. Nothing else moves at all: the three TPS figures
+span 4.3%, well inside the floor.
+
+This is the shape a size sweep exists to catch, and it catches it in the
+useful direction. `cargos` is `BTREE`-clustered, so `WHERE id = <n>` is a
+descent whose cost is the *height* of the tree. Going from 2,000 to 100,000
+rows adds at most one level to a tree with a fan-out in the hundreds, and one
+level is one buffer-pool hit — tens of nanoseconds against a 47 µs round trip.
+The relation grew 50×; the file grew 2.5×; the statement grew 0.9 µs.
+
+The counter-case is in the same table by construction: `recipe-read` is a
+`FilterScan` over a relation pinned at 93 rows and `capacity-read` is a pk
+descent into a relation pinned at 2,000, and both are flat across the ladder
+for the *opposite* reason — they were never on the axis. That is what makes
+the cargo-lookup row evidence rather than a coincidence.
+
+## The data file, and what Waystone costs at this scale
+
+Pages allocated at clean shutdown, from the server's own `allocated_pages()`.
+Identical writes in every row: 1,500 freights, 8,430 charges, 3,000 updates.
+
+| configuration | pages | file | data pages | trail pages |
+|---|---:|---:|---:|---:|
+| baseline (`cached`) | 2,560 | 22.02 MB | 1,889 | **671** |
+| `--capacity-mode scan` | 2,202 | 19.40 MB | 1,889 | **313** |
+| `waystone_recording = off` | **1,889** | 16.78 MB | 1,889 | 0 |
+| `--fk`, `--cabin`, `--isolation repeatable-read` | 2,560 | 22.02 MB | 1,889 | 671 |
+| `--no-txn` | 2,564 | 22.02 MB | 1,889 | 671 (+4) |
+
+Deterministic — the four baseline runs and the three knob rows that do not
+touch the read path all persisted exactly 2,560 pages. Switching recording off
+collapses both capacity modes to the same 1,889 pages, so the whole difference
+is Waystone state: **671 trail pages against 1,889 data pages, a 1.36×
+multiplier**, for a run of 1,500 transactions. Recording cost no measurable
+throughput (row 7, −0.8%, inside the floor) and 5.5 MB of file.
+
+The 358-page difference between `cached` and `scan` is the mechanism the
+5,000-cargo run identified: adding `booked_cbm` turns the capacity check from
+a search-class statement, which is never recorded, into a lookup-class one,
+which is. A physical-design decision that never mentions Waystone moves trail
+volume by 2.1× here.
+
+## Against the 5,000-cargo run — what can and cannot be compared
+
+The 2026-08-07 section above ran on Amazon EBS gp3 under amzn2023 with
+gcc 11.5.0, at commit `8e0f8d5`, on 5,000 cargos. **This run is a different
+machine, a different filesystem, a different compiler and a different commit.
+No timing delta between the two is an engine delta**, and none is claimed
+below. Two kinds of quantity survive the change of host because they are
+deterministic, and only those are compared:
+
+| quantity | 5,000 cargos, 2026-08-07 | 100,000 cargos, this run | comparable? |
+|---|---:|---:|---|
+| bookings committed | 1,500 | 1,500 | yes — the work is defined identically |
+| charge rows written | 8,425 (5.617/booking) | 8,430 (5.620/booking) | yes — same rule set, different draw |
+| rejections (capacity + credit) | 3 | **0** | yes, and it is a scale effect: the limits derive from `--cargos` |
+| trail pages, `cached` − `scan` | 358 | **358** | yes — deterministic, and identical |
+| trail pages, `scan` mode | 204 | 313 | yes — deterministic |
+| data pages | 230 | 1,889 | yes — 8.2× the pages for 20× the cargos |
+| any latency, any statement, TPS | — | — | **no** |
+
+**The identical 358 is the interesting one.** The trail pages attributable to
+the capacity read on `operations` are *exactly* the same at 400 voyages and at
+2,000 voyages. Trail volume is not a function of how many distinct voyages
+exist; it is a function of how many distinct instances a pattern actually
+observes twice, and with 1,500 bookings that count saturates well below the
+relation's cardinality in both runs. The rest of the trail — 204 → 313 pages
+with `organizations` growing 200 → 2,000 — moved the way the same model
+predicts: more distinct customers drawn means more instances recorded, even
+though each is drawn *fewer* times.
+
+That is a second measured input to `docs/waystone-concpets.md` §9's retention
+and eviction decision (workplan P15–P17), and it sharpens the first one. The
+5,000-cargo run concluded the cost axis is "distinct arguments per pattern".
+This run refines it: the axis is **distinct arguments that recur within the
+run's own window** — the trail did not grow when the relation grew, it grew
+when the number of *repeat-drawn* keys grew. A retention bound written against
+relation cardinality would be bounding the wrong quantity.
+
+## Versus PostgreSQL
+
+**Not executed on this host.** PostgreSQL is not installed and cannot be
+installed here: there is no `psql`, `initdb` or `pg_ctl`, no docker or podman,
+and `sudo` requires a password that is not available. `tools/pg_setup.sh` was
+not attempted.
+
+The twin exists and is not the missing piece — `tools/pg_scenario2_freight.py`
+takes the same flags, and `tools/compare_scenario2.py` refuses a pair that did
+not run identical work. What is missing is a host with a scratch cluster. On
+one, this section is three commands:
+
+```bash
+./tools/pg_setup.sh init                      # port 15433, default tuning
+./tools/pg_scenario2_freight.py --port 15433 --database bench \
+    --organizations 2000 --ships 200 --operations 2000 --cargos 100000 \
+    --bookings 1500 --seed 1 --verify 25 --json pg-100k.json
+./tools/compare_scenario2.py bench/results/scenario2-100k-base1.json pg-100k.json
+```
+
+**The 2026-08-07 PostgreSQL numbers above are not carried into this section
+and must not be read as this run's baseline.** They were taken on a different
+machine against a KDS binary that predates the durability fix; setting them
+beside the KDS column here would produce a difference that is mostly EBS
+against Azure.
+
+## What this run teaches about the engine
+
+Four things, in descending order of how much they should change someone's
+plans.
+
+1. **This workload is now a durability benchmark, and the matrix it was built
+   to drive can no longer resolve its own knobs.** Sixty-five percent of a
+   booking is one fsync; the nine statements together are 30%; and the fsync's
+   own run-to-run drift (±11%) is larger than any knob's effect. Rows 3
+   through 7 are not "small results", they are *unmeasurable* on this shape.
+   Making them measurable needs either many more bookings per fsync — more
+   connections, so `group` durability has a batch to amortise, where the
+   multi-booker section above shows 1.9× available — or a statement mix that
+   is not one commit per eight statements. Adding scale to the reference data,
+   which is what this run did, does the opposite.
+
+2. **A primary-key read does not care how large its relation is, and this is
+   the first clean measurement of that in this document.** 50× the rows, +1.9%
+   at p50, with two fixed-size relations in the same table as controls. The
+   B+ tree is doing exactly what `docs/heap-and-tuple.md` expects of it. The
+   corollary is the sharper half: the statements in this workload that *do*
+   grow — `manifest-scan` and `voyage-rollup` over the `freights` HEAP, and
+   `capacity-read` under `--capacity-mode scan` — grow with `--bookings`, not
+   with `--cargos`, so **no amount of reference data will ever exercise the
+   engine's one genuinely size-sensitive path.** A scale test for this engine
+   has to grow the *ledger*.
+
+3. **The commit is unimodal here, at a second scale on a second device.** p0
+   946 µs, p25 1,045 µs, p50 1,089 µs — a 15% band across the body of the
+   distribution, against the two-population 1,046-to-2,098 µs shape the
+   pre-fix run recorded. The zero-fill-plus-`fdatasync` change documented above
+   holds up outside the conditions it was found in. What is left is a 2.4×
+   p0-to-p99 tail and a 39 ms maximum, which is a checkpoint landing inside a
+   commit — the loss-window knob (`checkpoint_interval_ms`, an `[OPEN]`
+   decision in `docs/wal.md` §13) priced from the latency side for the first
+   time.
+
+4. **Waystone's trail volume tracks recurrence, not cardinality.** The
+   `operations` trail was 358 pages at 400 voyages and 358 pages at 2,000.
+   Anyone settling `docs/waystone-concpets.md` §9's retention bound should
+   bound *observed recurring instances*, not relation size — the two diverge
+   by 5× in this pair of runs alone.
+
+## What this run does not answer
+
+- **Any PostgreSQL comparison.** Not run, for the host reason above. This is
+  the largest gap in the section, and it is a property of the machine rather
+  than of the workload.
+- **Whether the control's 10% is repeatable.** One clean
+  `--isolation repeatable-read` run was taken; two further repeats of it and
+  of the baseline were queued and **stopped before they ran**. The floor is
+  therefore established from five runs, not the seven intended. A tighter
+  floor would need them.
+- **The correctness suite.** Not executed — it does not build on this tree
+  (`MemoryLogDevice::Create`, five call sites in two test files). No claim
+  about correctness beyond `--verify 25`'s 100 invariant checks per row, which
+  passed in all twelve runs, is supported by this section.
+- **`--cabin` and `--fk` at a scale that could price them.** Both inside the
+  floor, as at 5,000 cargos. The recipe read is 2.8% of a booking here — down
+  from 4% — so serving it perfectly is even further below the resolution than
+  it was. Pricing the Cabin needs a workload that reads far more often than it
+  commits.
+- **Anything at more than one connection, or on more than one core.** One
+  booker, `cores = 1`, throughout.
+- **Row counts below 2,000 cargos.** Structurally unreachable at 1,500
+  bookings of equal work, for the reason given in the ladder section.
+
+---
+
 # 2026-08-11: a 20× cargo book, on a machine that was not quiet
 
 A second run of the same freight workload with the cargo relation grown from
@@ -753,7 +1255,7 @@ compiler. Only within-section comparisons mean anything.
 | executed | **2026-08-11 07:36:08 → 08:42:49 UTC** |
 | worktree / branch | `fix-undo-record-asserts` / `worktree-fix-undo-record-asserts` |
 | **commit measured** | **`c500d4a`** |
-| **why not `main`** | `main` at `393b5a4` **does not compile.** `c09353e` (RC06/RV10) was committed unbuilt and left five compile errors; `a00c727`, `ee2250a` and `393b5a4` all inherited that tree. `c500d4a` repairs exactly those five, none behaviour-changing. There is no way to measure `main` itself |
+| **why not `main`** | **At the time of the run, `main` at `393b5a4` did not compile.** `c09353e` (RC06/RV10) was committed unbuilt and left five compile errors; `a00c727`, `ee2250a` and `393b5a4` all inherited that tree. `c500d4a` repaired exactly those five, none behaviour-changing, so that something could be measured at all. **This has since been fixed on `main` independently** — `c1370e8` repairs the same five, and `b11cc81` then fixes 11 recovery-test failures the repair exposed (two engine bugs, two wrong tests). A re-run should be taken on `main` |
 | device | `/dev/root`, 243G free — a real block device, not tmpfs |
 | build | `-DCMAKE_BUILD_TYPE=Release` (`-O3 -DNDEBUG`), gcc 13.3.0 |
 | host | Azure, **2 cores**, Ubuntu 24.04 |
@@ -886,3 +1388,9 @@ relation sizes is on the table.
 - **Whether the commit's 1,167 µs has the same composition** as the second
   millisecond the 2026-08-07 section found and removed. Not investigated;
   `strace -T` on the live server is the tool that answered it before.
+- **Whether any of it still holds after `b11cc81`.** These numbers were taken
+  at `c500d4a`, whose engine differs from today's `main`: `b11cc81` fixed two
+  *engine* bugs in the recovery undo path after this run finished. Nothing
+  here exercises recovery, so the booking path should be unaffected — but
+  "should be" is not a measurement, and the re-run this section already needs
+  for its noise floor is the place to settle it.

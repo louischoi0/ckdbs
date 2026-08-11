@@ -141,9 +141,13 @@ TEST(UndoPageTest, AppendFillsThePageAndThenReportsOutOfSpace) {
     PageBuf buf{};
     ASSERT_TRUE(FormatUndoPage(AsSpan(buf), 91, kInvalidPageId).ok());
 
-    // 100-byte images: 128 bytes per record, so the 8136-byte record area
-    // takes 63 of them with 72 bytes left - not enough for a 64th.
+    // 100-byte images. Derived rather than written out: the count moved
+    // from 63 to 56 when RV10 grew the record header from 28 to 44 bytes,
+    // and a literal here would have to be chased every time the record
+    // changes shape - which is the thing this test exists to notice.
     const std::vector<std::byte> image(100, std::byte{0xAB});
+    const int kFits = static_cast<int>(kUndoPageCapacity /
+                                       (kUndoRecordHeaderSize + image.size()));
     int appended = 0;
     for (;;) {
         auto offset = UndoPageAppend(AsSpan(buf), OverwriteRecord(77, kNoUndoPtr), image);
@@ -158,8 +162,8 @@ TEST(UndoPageTest, AppendFillsThePageAndThenReportsOutOfSpace) {
         ++appended;
         ASSERT_LT(appended, 1000) << "the page never filled";
     }
-    EXPECT_EQ(appended, 63);
-    EXPECT_EQ(ReadUndoPageHeader(AsConstSpan(buf)).nr_records, 63);
+    EXPECT_EQ(appended, kFits);
+    EXPECT_EQ(ReadUndoPageHeader(AsConstSpan(buf)).nr_records, kFits);
 }
 
 TEST(UndoPageTest, AMaxLengthImageFitsAndOneMoreByteDoesNot) {
@@ -187,7 +191,9 @@ TEST(UndoPageTest, AMaxLengthImageFitsAndOneMoreByteDoesNot) {
 // layout moves.
 TEST(UndoPageTest, TheWidestHeapTupleCannotBeUndone) {
     EXPECT_GT(heap::kMaxTuplePayloadSize, kMaxUndoImageLen);
-    EXPECT_EQ(heap::kMaxTuplePayloadSize - kMaxUndoImageLen, 7u);
+    // 23 since RV10, 7 before it: the two fields it added to every undo
+    // record widen the band of heap tuples that cannot be updated.
+    EXPECT_EQ(heap::kMaxTuplePayloadSize - kMaxUndoImageLen, 23u);
 }
 
 TEST(UndoPtrTest, PackingRoundTripsOverTheWholePageIdRange) {

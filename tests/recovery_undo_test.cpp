@@ -274,10 +274,19 @@ TEST_F(RecoveryUndoTest, AChainThatDoesNotTerminateIsCorruptionRatherThanAHang) 
     rec.target_slot = 0;
     rec.type = static_cast<std::uint8_t>(UndoRecordType::kDeleteMark);
     rec.pk = 42;
-    rec.txn_prev_undo_ptr = EncodeUndoPtr(kUndoPage, kUndoRecordsOffset);
+    // Appended first, then pointed at itself. Predicting the pointer instead
+    // - `EncodeUndoPtr(kUndoPage, kUndoRecordsOffset)` - guesses which page
+    // `UndoLog::Append` will allocate, and it does not use the fixture's
+    // undo page at all: it calls `CreateNew()`, which lands wherever the
+    // store's cursor is. The self-link is the point of the test; where the
+    // record physically sits is not.
     auto ptr = undo_.Append(kLoser, rec, {});
     ASSERT_TRUE(ptr.ok()) << ptr.status().message();
-    ASSERT_EQ(ptr.value(), rec.txn_prev_undo_ptr) << "the record must link to itself";
+
+    rec.txn_prev_undo_ptr = ptr.value();
+    auto landed = store_.Get(UndoPtrPageId(ptr.value()));
+    ASSERT_TRUE(landed.ok()) << landed.status().message();
+    ASSERT_TRUE(UndoPageWriteAt(landed.value(), UndoPtrOffset(ptr.value()), rec, {}).ok());
 
     RecoveryUndo undo(undo_);
     auto s = undo.RollBack(store_, Losing(ptr.value()));

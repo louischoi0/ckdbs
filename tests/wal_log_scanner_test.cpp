@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -62,11 +63,8 @@ struct Collected {
 
 class LogScannerTest : public ::testing::Test {
 protected:
-    // Construction is fallible and behind a factory, so the fixture holds
-    // the owner and hands the tests the reference they already used.
-    StatusOr<std::unique_ptr<MemoryLogDevice>> owned_device_ =
-        MemoryLogDevice::Create(kSegmentSize);
-    MemoryLogDevice& device_ = *owned_device_.value();
+    std::unique_ptr<MemoryLogDevice> device_ =
+        std::move(MemoryLogDevice::Create(kSegmentSize).value());
 };
 
 // ---- 1. Round trip, including across a roll ------------------------------
@@ -74,7 +72,7 @@ protected:
 TEST_F(LogScannerTest, ReadsBackExactlyWhatWasAppended) {
     std::vector<Lsn> appended;
     {
-        auto stream = WalStream::Open(&device_, /*core_id=*/0);
+        auto stream = WalStream::Open(device_.get(), /*core_id=*/0);
         ASSERT_TRUE(stream.ok()) << stream.status().message();
         for (int i = 0; i < 8; ++i) {
             auto lsn = stream.value()->Append(
@@ -87,7 +85,7 @@ TEST_F(LogScannerTest, ReadsBackExactlyWhatWasAppended) {
     }
 
     Collected got;
-    auto outcome = ScanLog(device_, /*core_id=*/0, /*from_lsn=*/0, got.Visitor());
+    auto outcome = ScanLog((*device_), /*core_id=*/0, /*from_lsn=*/0, got.Visitor());
     ASSERT_TRUE(outcome.ok()) << outcome.status().message();
 
     EXPECT_EQ(outcome.value().records, appended.size());
@@ -107,7 +105,7 @@ TEST_F(LogScannerTest, CrossesASegmentBoundaryLosingAndDuplicatingNothing) {
     constexpr std::size_t kBig = 3000;
     std::vector<Lsn> appended;
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok()) << stream.status().message();
         for (int i = 0; i < 20; ++i) {
             auto lsn = stream.value()->Append({RecordType::kHeapInsert, 7, 1},
@@ -117,10 +115,10 @@ TEST_F(LogScannerTest, CrossesASegmentBoundaryLosingAndDuplicatingNothing) {
         }
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
-    ASSERT_GT(device_.segment_count(), 1u) << "the fixture did not roll; the test proves nothing";
+    ASSERT_GT(device_->segment_count(), 1u) << "the fixture did not roll; the test proves nothing";
 
     Collected got;
-    auto outcome = ScanLog(device_, 0, 0, got.Visitor());
+    auto outcome = ScanLog((*device_), 0, 0, got.Visitor());
     ASSERT_TRUE(outcome.ok()) << outcome.status().message();
 
     EXPECT_EQ(got.lsns, appended);
@@ -133,7 +131,7 @@ TEST_F(LogScannerTest, CrossesASegmentBoundaryLosingAndDuplicatingNothing) {
 
 TEST_F(LogScannerTest, APadMarkerIsFramingAndNeverReachesTheVisitor) {
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}).ok());
         ASSERT_TRUE(stream.value()->Seal().ok());  // writes the PAD
@@ -142,7 +140,7 @@ TEST_F(LogScannerTest, APadMarkerIsFramingAndNeverReachesTheVisitor) {
     }
 
     Collected got;
-    auto outcome = ScanLog(device_, 0, 0, got.Visitor());
+    auto outcome = ScanLog((*device_), 0, 0, got.Visitor());
     ASSERT_TRUE(outcome.ok()) << outcome.status().message();
 
     ASSERT_EQ(got.types.size(), 2u);
@@ -161,9 +159,9 @@ TEST_F(LogScannerTest, ATornTailStopsCleanlyAtEveryByteOffsetOfTheLastRecord) {
     Lsn last_lsn = 0;
     std::uint64_t last_len = 0;
     {
-        auto owned = MemoryLogDevice::Create(kSegmentSize);
-        ASSERT_TRUE(owned.ok());
-        MemoryLogDevice& device = *owned.value();
+        auto device_owned = MemoryLogDevice::Create(kSegmentSize);
+        ASSERT_TRUE(device_owned.ok()) << device_owned.status().message();
+        MemoryLogDevice& device = *device_owned.value();
         auto stream = WalStream::Open(&device, 0);
         ASSERT_TRUE(stream.ok());
         for (int i = 0; i < 4; ++i) {
@@ -180,9 +178,9 @@ TEST_F(LogScannerTest, ATornTailStopsCleanlyAtEveryByteOffsetOfTheLastRecord) {
     ASSERT_GT(last_len, 0u);
 
     for (std::uint64_t cut = 1; cut <= last_len; ++cut) {
-        auto owned = MemoryLogDevice::Create(kSegmentSize);
-        ASSERT_TRUE(owned.ok());
-        MemoryLogDevice& device = *owned.value();
+        auto device_owned = MemoryLogDevice::Create(kSegmentSize);
+        ASSERT_TRUE(device_owned.ok()) << device_owned.status().message();
+        MemoryLogDevice& device = *device_owned.value();
         ASSERT_TRUE(device.CreateSegment(0).ok());
         // Everything up to the last record, plus `last_len - cut` of it.
         std::vector<std::byte> truncated = good_segment;
@@ -206,12 +204,12 @@ TEST_F(LogScannerTest, AZeroedTailIsACleanEndNotATornOne) {
     // Bytes never written read as zeroes, which is what a fresh segment's
     // slack is. That must read as "the stream ends here", not as damage.
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}).ok());
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
-    auto outcome = ScanLogToEnd(device_, 0, 0);
+    auto outcome = ScanLogToEnd((*device_), 0, 0);
     ASSERT_TRUE(outcome.ok()) << outcome.status().message();
     EXPECT_EQ(outcome.value().records, 1u);
     EXPECT_FALSE(outcome.value().stopped_early);
@@ -221,14 +219,14 @@ TEST_F(LogScannerTest, AZeroedTailIsACleanEndNotATornOne) {
 
 TEST_F(LogScannerTest, ASegmentBelongingToAnotherCoreIsCorruptionNotAnEnd) {
     {
-        auto stream = WalStream::Open(&device_, /*core_id=*/3);
+        auto stream = WalStream::Open(device_.get(), /*core_id=*/3);
         ASSERT_TRUE(stream.ok());
         ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}).ok());
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
 
     // Scanned as core 0's stream: same bytes, wrong owner.
-    auto outcome = ScanLogToEnd(device_, /*core_id=*/0, 0);
+    auto outcome = ScanLogToEnd((*device_), /*core_id=*/0, 0);
     ASSERT_FALSE(outcome.ok());
     EXPECT_EQ(outcome.status().code(), StatusCode::kCorruption) << outcome.status().message();
     EXPECT_NE(outcome.status().message().find("belongs to core 3"), std::string::npos)
@@ -240,7 +238,7 @@ TEST_F(LogScannerTest, ASegmentBelongingToAnotherCoreIsCorruptionNotAnEnd) {
 TEST_F(LogScannerTest, AScanStartsAtTheGivenLsnAndNotBefore) {
     std::vector<Lsn> appended;
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         for (int i = 0; i < 6; ++i) {
             auto lsn = stream.value()->Append(
@@ -252,7 +250,7 @@ TEST_F(LogScannerTest, AScanStartsAtTheGivenLsnAndNotBefore) {
     }
 
     Collected got;
-    auto outcome = ScanLog(device_, 0, appended[3], got.Visitor());
+    auto outcome = ScanLog((*device_), 0, appended[3], got.Visitor());
     ASSERT_TRUE(outcome.ok()) << outcome.status().message();
     EXPECT_EQ(outcome.value().records, 3u);
     ASSERT_EQ(got.lsns.size(), 3u);
@@ -262,30 +260,30 @@ TEST_F(LogScannerTest, AScanStartsAtTheGivenLsnAndNotBefore) {
 
 TEST_F(LogScannerTest, AnLsnInsideTheHeaderBlockIsRefusedRatherThanRounded) {
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}).ok());
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
-    auto outcome = ScanLogToEnd(device_, 0, /*from_lsn=*/64);
+    auto outcome = ScanLogToEnd((*device_), 0, /*from_lsn=*/64);
     ASSERT_FALSE(outcome.ok());
     EXPECT_EQ(outcome.status().code(), StatusCode::kInvalidArgument);
 }
 
 TEST_F(LogScannerTest, AnLsnPastEveryCreatedSegmentIsRefused) {
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}).ok());
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
-    auto outcome = ScanLogToEnd(device_, 0, /*from_lsn=*/kSegmentSize * 9 + kSegmentHeaderSize);
+    auto outcome = ScanLogToEnd((*device_), 0, /*from_lsn=*/kSegmentSize * 9 + kSegmentHeaderSize);
     ASSERT_FALSE(outcome.ok());
     EXPECT_EQ(outcome.status().code(), StatusCode::kInvalidArgument);
 }
 
 TEST_F(LogScannerTest, AnEmptyDeviceScansToTheFirstLegalRecordPosition) {
-    auto outcome = ScanLogToEnd(device_, 0, 0);
+    auto outcome = ScanLogToEnd((*device_), 0, 0);
     ASSERT_TRUE(outcome.ok()) << outcome.status().message();
     EXPECT_EQ(outcome.value().records, 0u);
     EXPECT_EQ(outcome.value().end_lsn, kSegmentHeaderSize);
@@ -298,7 +296,7 @@ TEST_F(LogScannerTest, AVisitorsErrorStopsTheScanAndIsReturned) {
     // recovery error, never skipped. The scanner does not decide that - it
     // gives the phase above it a way to say so.
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         for (int i = 0; i < 4; ++i) {
             ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}).ok());
@@ -307,7 +305,7 @@ TEST_F(LogScannerTest, AVisitorsErrorStopsTheScanAndIsReturned) {
     }
 
     int seen = 0;
-    auto outcome = ScanLog(device_, 0, 0, [&seen](const DecodedRecord&) {
+    auto outcome = ScanLog((*device_), 0, 0, [&seen](const DecodedRecord&) {
         if (++seen == 2) return Status::Corruption("visitor said stop");
         return Status::OK();
     });
@@ -324,7 +322,7 @@ TEST_F(LogScannerTest, TheScannerAndTheAppendPathAgreeAboutTheDurableEnd) {
     // append resumes exactly where a scan says the records end. Without it
     // recovery could replay a record the writer is about to overwrite.
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         for (int i = 0; i < 5; ++i) {
             ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}, Payload(80, 1))
@@ -333,10 +331,10 @@ TEST_F(LogScannerTest, TheScannerAndTheAppendPathAgreeAboutTheDurableEnd) {
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
 
-    auto scanned = ScanLogToEnd(device_, 0, 0);
+    auto scanned = ScanLogToEnd((*device_), 0, 0);
     ASSERT_TRUE(scanned.ok()) << scanned.status().message();
 
-    auto reopened = WalStream::Open(&device_, 0);
+    auto reopened = WalStream::Open(device_.get(), 0);
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
     EXPECT_EQ(scanned.value().end_lsn, reopened.value()->append_lsn());
 }
@@ -345,18 +343,18 @@ TEST_F(LogScannerTest, TheyAlsoAgreeAfterASealedTailSegment) {
     // The sealed case has its own arithmetic on both sides (the stream
     // jumps to the next segment boundary), so it gets its own assertion.
     {
-        auto stream = WalStream::Open(&device_, 0);
+        auto stream = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(stream.ok());
         ASSERT_TRUE(stream.value()->Append({RecordType::kHeapInsert, 1, 1}).ok());
         ASSERT_TRUE(stream.value()->Seal().ok());
         ASSERT_TRUE(stream.value()->Sync().ok());
     }
 
-    auto scanned = ScanLogToEnd(device_, 0, 0);
+    auto scanned = ScanLogToEnd((*device_), 0, 0);
     ASSERT_TRUE(scanned.ok()) << scanned.status().message();
     EXPECT_TRUE(scanned.value().sealed);
 
-    auto reopened = WalStream::Open(&device_, 0);
+    auto reopened = WalStream::Open(device_.get(), 0);
     ASSERT_TRUE(reopened.ok()) << reopened.status().message();
     EXPECT_EQ(scanned.value().end_lsn, reopened.value()->append_lsn());
 }

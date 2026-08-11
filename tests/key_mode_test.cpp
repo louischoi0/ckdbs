@@ -57,6 +57,119 @@ protected:
     std::optional<bootstrap::BootstrapResult> boot_;
 };
 
+// ---- The config value ----------------------------------------------------
+
+TEST(KeyModeConfigTest, TheTwoWordsParseInAnyCase) {
+    for (const char* text : {"assigned", "ASSIGNED", "Assigned"}) {
+        auto parsed = catalog::ParseKeyMode(text);
+        ASSERT_TRUE(parsed.ok()) << text << ": " << parsed.status().message();
+        EXPECT_EQ(parsed.value(), catalog::KeyMode::kAssigned) << text;
+    }
+    for (const char* text : {"explicit", "EXPLICIT", "Explicit"}) {
+        auto parsed = catalog::ParseKeyMode(text);
+        ASSERT_TRUE(parsed.ok()) << text << ": " << parsed.status().message();
+        EXPECT_EQ(parsed.value(), catalog::KeyMode::kExplicit) << text;
+    }
+}
+
+TEST(KeyModeConfigTest, TheNameAndTheParserAgree) {
+    // The round trip, so a rename cannot leave a config file that no longer
+    // parses the word DESCRIBE prints.
+    for (catalog::KeyMode mode : {catalog::KeyMode::kAssigned, catalog::KeyMode::kExplicit}) {
+        auto parsed = catalog::ParseKeyMode(catalog::KeyModeName(mode));
+        ASSERT_TRUE(parsed.ok()) << catalog::KeyModeName(mode);
+        EXPECT_EQ(parsed.value(), mode);
+    }
+}
+
+TEST(KeyModeConfigTest, AnUnknownWordIsRefusedNamingWhatWasGiven) {
+    // Not a silent fall back to the default: a misspelled mode would leave
+    // an instance quietly creating the wrong kind of relation, and the first
+    // sign of it would be an INSERT arity refusal nobody can explain.
+    auto parsed = catalog::ParseKeyMode("explict");
+    EXPECT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(parsed.status().message().find("explict"), std::string::npos)
+        << parsed.status().message();
+}
+
+// ---- `default_key_mode`: what silence means ------------------------------
+//
+// The setting decides what a CREATE TABLE naming no key-mode word does, and
+// nothing else. A written word always wins, or the statement would not mean
+// what it says.
+
+class ExplicitDefaultTest : public KeyModeSqlTest {
+protected:
+    // The same dispatcher, on an instance configured `default_key_mode =
+    // explicit`.
+    CommandDispatcher Dispatcher() {
+        return CommandDispatcher(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                                 /*clock=*/nullptr, /*wal=*/nullptr,
+                                 wal::DurabilityClass::kGroup, exec::Budget(),
+                                 /*recorder=*/nullptr, /*replay_enabled=*/false,
+                                 /*access_statistics=*/true, /*cabins=*/nullptr, /*txn=*/nullptr,
+                                 txn::IsolationLevel::kReadCommitted, /*core_id=*/0,
+                                 /*indexes=*/true, parser::kDefaultMaxInsertRows,
+                                 catalog::KeyMode::kExplicit);
+    }
+};
+
+TEST_F(ExplicitDefaultTest, ABareCreateTableBecomesExplicitAndBtree) {
+    auto d = Dispatcher();
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, qty int64)").response.substr(0, 7), "CREATED");
+
+    // Both halves: the mode came from configuration, and the storage
+    // followed it. Defaulting the storage is not decoration - HEAP is the
+    // shipped storage default, so without it every unqualified statement on
+    // an explicit-default instance would be refused.
+    auto described = d.Dispatch("DESCRIBE t");
+    EXPECT_NE(described.response.find("clustered_type=BTREE key_mode=EXPLICIT"),
+              std::string::npos)
+        << described.response;
+
+    // And it behaves as one: the caller names the key, descending.
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (900, 1)").response.substr(0, 8), "INSERTED");
+    EXPECT_EQ(d.Dispatch("INSERT INTO t VALUES (100, 2)").response.substr(0, 8), "INSERTED");
+}
+
+TEST_F(ExplicitDefaultTest, AWrittenWordBeatsTheSetting) {
+    auto d = Dispatcher();
+    ASSERT_EQ(d.Dispatch("CREATE TABLE a (id int64, qty int64) ASSIGNED").response.substr(0, 7),
+              "CREATED");
+
+    auto described = d.Dispatch("DESCRIBE a");
+    EXPECT_NE(described.response.find("key_mode=ASSIGNED"), std::string::npos)
+        << described.response;
+    // Storage follows the *written* mode's default, not the setting's.
+    EXPECT_NE(described.response.find("clustered_type=HEAP"), std::string::npos)
+        << described.response;
+
+    // The engine issues its keys, so VALUES omits the pk.
+    EXPECT_NE(d.Dispatch("INSERT INTO a VALUES (7)").response.find("id=1"), std::string::npos);
+}
+
+TEST_F(ExplicitDefaultTest, AWrittenStorageWordStillContradictsAndIsRefused) {
+    auto d = Dispatcher();
+    // The writer asked for a heap and the setting asks for explicit keys.
+    // Resolution never pairs them itself, so this can only come from the
+    // statement - and it is still refused rather than silently re-pointed.
+    auto refused = d.Dispatch("CREATE TABLE h (id int64, qty int64) HEAP");
+    EXPECT_EQ(refused.response.substr(0, 3), "ERR") << refused.response;
+    EXPECT_NE(refused.response.find("must be BTREE"), std::string::npos) << refused.response;
+}
+
+TEST_F(KeyModeSqlTest, TheShippedDefaultIsAssignedAndHeap) {
+    // The other side of the setting: with no configuration, silence means
+    // exactly what it did before the amendment.
+    auto d = Dispatcher();
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, qty int64)").response.substr(0, 7), "CREATED");
+
+    auto described = d.Dispatch("DESCRIBE t");
+    EXPECT_NE(described.response.find("clustered_type=HEAP key_mode=ASSIGNED"), std::string::npos)
+        << described.response;
+}
+
 // ---- The claim itself ----------------------------------------------------
 
 TEST_F(KeyModeSqlTest, ACallerNamesTheKeyAndItIsTheRowsIdentity) {
@@ -516,13 +629,21 @@ TEST_F(KeyModeSqlTest, AnAssignedRelationStillIssuesItsOwnKeys) {
 TEST_F(KeyModeSqlTest, AnExplicitHeapRelationIsRefusedAtCreate) {
     auto d = Dispatcher();
 
-    // HEAP is the default, so the bare form is refused too - a heap chain
-    // grows only at its tail and cannot place a key that sorts behind it.
+    // A heap chain grows only at its tail and cannot place a key that sorts
+    // behind it, so this pairing is refused - and it is refused because the
+    // *writer* asked for a heap, not because of a default.
     auto named = d.Dispatch("CREATE TABLE h (id int64, qty int64) HEAP EXPLICIT");
     EXPECT_EQ(named.response.substr(0, 3), "ERR") << named.response;
+    EXPECT_NE(named.response.find("must be BTREE"), std::string::npos) << named.response;
 
+    // Naming only the mode is a different statement: storage follows it to
+    // btree, since that is the one storage the mode can use. Resolution
+    // never pairs an explicit mode with a heap it chose itself, which is why
+    // the refusal above can only ever come from a written word.
     auto defaulted = d.Dispatch("CREATE TABLE h2 (id int64, qty int64) EXPLICIT");
-    EXPECT_EQ(defaulted.response.substr(0, 3), "ERR") << defaulted.response;
+    EXPECT_EQ(defaulted.response.substr(0, 7), "CREATED") << defaulted.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE h2").response.find("clustered_type=BTREE key_mode=EXPLICIT"),
+              std::string::npos);
 }
 
 TEST_F(KeyModeSqlTest, TheKeyIsStillNotUpdatable) {

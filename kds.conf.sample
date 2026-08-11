@@ -431,3 +431,26 @@ log_level = info
 # with `SET ISOLATION LEVEL`, and one transaction with
 # `BEGIN ISOLATION LEVEL`.
 # isolation = read committed
+
+# What a CREATE TABLE that names no key-mode word means
+# (docs/heap-and-tuple.md section 4.1).
+#
+#   assigned    (default) the engine issues each row's primary key from the
+#               relation's cursor, and INSERT supplies the columns after it
+#   explicit    the caller names each row's primary key, and it need not
+#               ascend
+#
+# A written word always wins - `CREATE TABLE t (...) ASSIGNED` means
+# assigned on an explicit-default instance - so this changes only what
+# silence means. Set it when the keys come from outside: a migration, an
+# upstream system, natural keys that are already unique.
+#
+# Setting it to `explicit` also moves the *storage* default for a statement
+# that named neither word, from heap to btree, because an explicit relation
+# must be btree-clustered. Without that, every unqualified CREATE TABLE on
+# such an instance would be refused, which is not a default.
+#
+# What an explicit-default instance gives up: the semi-sorted heap, and with
+# it every relayout candidate - the physical optimizer plans only for
+# heap-clustered relations. Waystone is unaffected.
+# default_key_mode = assigned

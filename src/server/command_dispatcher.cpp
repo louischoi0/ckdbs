@@ -814,18 +814,6 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args) {
     return {"CREATED oid=" + std::to_string(oid.value()), false};
 }
 
-namespace {
-
-// The word a CREATE TABLE clause spells, for the same reason
-// `clustered_type` is rendered rather than numbered: DESCRIBE is read by a
-// person, and mapping 0 and 1 back onto heap-and-tuple.md section 4.1's two
-// modes is work the engine can do once here.
-const char* KeyModeName(catalog::KeyMode mode) {
-    return mode == catalog::KeyMode::kExplicit ? "EXPLICIT" : "ASSIGNED";
-}
-
-}  // namespace
-
 DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
     if (args.empty()) {
         return {"ERR DESCRIBE requires a table name", false};
@@ -863,7 +851,7 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
     std::ostringstream os;
     os << "oid=" << oid.value() << " root_page_id=" << table_row.value().desc_page_id
        << " clustered_type=" << clustered
-       << " key_mode=" << KeyModeName(table_row.value().key_mode)
+       << " key_mode=" << catalog::KeyModeName(table_row.value().key_mode)
        << " next_id=" << table_row.value().next_id
        << " owner_core=" << table_row.value().owner_core
        << " columns=" << schema.columns.size();
@@ -1992,17 +1980,42 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
                                                   parent_oid.value(), col.references_table});
     }
 
-    // ---- The key mode against the storage (docs/heap-and-tuple.md §4.1) --
+    // ---- Resolving the two trailing words (docs/heap-and-tuple.md §4.1) --
     //
+    // A written word always wins; `default_key_mode` decides only what
+    // silence means. The instance-wide setting exists so a database whose
+    // keys come from outside says so once instead of on every statement,
+    // and it must never be able to change what a statement that *did* name
+    // a mode does.
+    const catalog::KeyMode key_mode =
+        stmt.key_mode_given ? stmt.key_mode : default_key_mode_;
+
+    // Storage follows the resolved mode when the statement named neither.
+    // An explicit relation must be btree-clustered, so under an explicit
+    // default a bare `CREATE TABLE t (...)` has to mean BTREE EXPLICIT -
+    // otherwise the default would be a configuration whose every
+    // unqualified statement is refused, which is not a default at all.
+    // A written storage word still wins, including one that contradicts the
+    // mode: that is the refusal below, and it belongs to the writer.
+    const catalog::ClusteredType clustered =
+        stmt.clustered_given ? stmt.clustered
+        : (key_mode == catalog::KeyMode::kExplicit ? catalog::ClusteredType::kBtree
+                                                   : catalog::ClusteredType::kHeap);
+
     // **An EXPLICIT relation must be BTREE-clustered**, and the refusal is
     // here rather than in the parser because it is a statement about where
     // rows can be put, not about how the words go together: the grammar
     // takes the two trailing words in either order and neither one's
     // meaning depends on the other. Unsupported, not InvalidArgument - the
-    // combination is understood and declined, and HEAP being the default is
-    // why a bare `EXPLICIT` lands here too.
-    if (stmt.key_mode == catalog::KeyMode::kExplicit &&
-        stmt.clustered != catalog::ClusteredType::kBtree) {
+    // combination is understood and declined.
+    //
+    // Only reachable now when the writer named the storage themselves,
+    // since the resolution above never pairs an explicit mode with a heap
+    // it chose. The byte points at the key-mode word when there is one and
+    // at the statement's start when the mode came from configuration - a
+    // refusal about a word nobody wrote has no byte of its own to name.
+    if (key_mode == catalog::KeyMode::kExplicit &&
+        clustered != catalog::ClusteredType::kBtree) {
         return {ErrorReply(Status::Unsupported(
                     "an EXPLICIT relation must be BTREE (byte " +
                     std::to_string(stmt.key_mode_byte_offset) +
@@ -2011,11 +2024,11 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
                 false};
     }
 
-    // The mode the statement asked for (PK03). Passed by name rather than
-    // defaulted, per PK01's rule: a defaulted mode is how the wrong one
-    // reaches a relation without anyone reading the line.
+    // Passed by name rather than defaulted, per PK01's rule: a defaulted
+    // mode is how the wrong one reaches a relation without anyone reading
+    // the line.
     auto oid = catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema,
-                                     stmt.clustered, stmt.key_mode);
+                                     clustered, key_mode);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }

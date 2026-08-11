@@ -153,6 +153,32 @@ std::optional<DecodedRecord> RecordReader::Next() {
         return std::nullopt;
     }
 
+    // ---- Slack is an end; damage is a torn tail -------------------------
+    //
+    // A segment's never-written bytes read as zeroes, and a zeroed header
+    // decodes as `total_len == 0` - which is "impossible total_len", the
+    // same failure a torn record gives. Telling them apart matters because
+    // `stopped_early` is what a caller reads to decide whether the stream
+    // ended where the writer left it or was cut short: every clean scan ends
+    // on slack, so treating slack as damage marks *every* stream torn.
+    //
+    // Zeroes mean nothing was durably written here, so there is nothing that
+    // could have been torn. Only a header with content that fails to decode
+    // is a real torn tail - which is still reported, because it means bytes
+    // reached the device and did not survive.
+    const std::size_t remaining = buffer_.size() - cursor_;
+    const std::size_t header_span = remaining < kRecordHeaderSize ? remaining : kRecordHeaderSize;
+    bool all_zero = true;
+    for (std::size_t i = 0; i < header_span; ++i) {
+        if (buffer_[cursor_ + i] != std::byte{0}) {
+            all_zero = false;
+            break;
+        }
+    }
+    if (all_zero) {
+        return std::nullopt;  // the writer stopped here
+    }
+
     auto decoded = DecodeRecord(buffer_.subspan(cursor_));
     if (!decoded.ok()) {
         // A bad length or CRC is the durable end of the stream, not an

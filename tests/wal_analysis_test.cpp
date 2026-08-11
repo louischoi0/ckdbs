@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -48,14 +49,11 @@ Lsn AppendCheckpointBegin(WalStream& stream, std::span<const CheckpointActiveTxn
 
 class AnalysisTest : public ::testing::Test {
 protected:
-    // Construction is fallible and behind a factory, so the fixture holds
-    // the owner and hands the tests the reference they already used.
-    StatusOr<std::unique_ptr<MemoryLogDevice>> owned_device_ =
-        MemoryLogDevice::Create(kSegmentSize);
-    MemoryLogDevice& device_ = *owned_device_.value();
+    std::unique_ptr<MemoryLogDevice> device_ =
+        std::move(MemoryLogDevice::Create(kSegmentSize).value());
 
     StatusOr<AnalysisResult> Run(Lsn redo_start = 0, Lsn anchor_durable = 0) {
-        return Analyze(device_, /*core_id=*/0, AnalysisStart{redo_start, anchor_durable});
+        return Analyze((*device_), /*core_id=*/0, AnalysisStart{redo_start, anchor_durable});
     }
 };
 
@@ -63,7 +61,7 @@ protected:
 
 TEST_F(AnalysisTest, WinnersLosersAndAbortedAreSplitExactly) {
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         WalStream& w = *s.value();
 
@@ -101,7 +99,7 @@ TEST_F(AnalysisTest, ACommitIsNotDowngradedByALaterRecordNamingIt) {
     // overwrite a terminal outcome - which it would if it wrote kLoser
     // unconditionally.
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnBegin, 7, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnCommit, 7, kInvalidPageId}).ok());
@@ -121,7 +119,7 @@ TEST_F(AnalysisTest, ACommitIsNotDowngradedByALaterRecordNamingIt) {
 TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
     Lsn checkpoint_lsn = 0;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         WalStream& w = *s.value();
 
@@ -149,7 +147,7 @@ TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
 TEST_F(AnalysisTest, ARecLsnIsTheFirstTimeAPageWasDirtiedNotTheLast) {
     std::vector<Lsn> lsns;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         for (int i = 0; i < 3; ++i) {
             auto lsn = s.value()->Append({RecordType::kHeapOverwrite, 5, 800});
@@ -172,7 +170,7 @@ TEST_F(AnalysisTest, TheRedoStartIsTheOldestRecLsn) {
     // really have, and the shape that makes the floor argument checkable.
     std::vector<Lsn> lsns;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         for (PageId page : {PageId{10}, PageId{11}, PageId{12}}) {
             auto lsn = s.value()->Append({RecordType::kHeapInsert, 1, page});
@@ -204,7 +202,7 @@ TEST_F(AnalysisTest, ARecLsnOfZeroIsSkippedAndDoesNotDragTheRedoStartToZero) {
     // whole stream.
     Lsn second = 0;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 1, 11}).ok());
         auto lsn = s.value()->Append({RecordType::kHeapInsert, 1, 11});
@@ -245,7 +243,7 @@ TEST(RedoStartFromTest, TheSharedRuleSkipsZeroAndFloorsAtTheCheckpoint) {
 
 TEST_F(AnalysisTest, ALogWithNoCheckpointIsAnalyzedFromTheStart) {
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnBegin, 1, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 1, 128}).ok());
@@ -268,7 +266,7 @@ TEST_F(AnalysisTest, AStreamShorterThanItsAnchorClaimsIsCorruption) {
     // comparison, recovery's quietest failure is a silent empty replay
     // onto a database that needed one.
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 1, 128}).ok());
         ASSERT_TRUE(s.value()->Sync().ok());
@@ -284,7 +282,7 @@ TEST_F(AnalysisTest, AStreamThatReachesItsAnchorsDurablePointIsAccepted) {
     // The control: the same check must not refuse a healthy stream.
     Lsn durable = 0;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 1, 128}).ok());
         ASSERT_TRUE(s.value()->Sync().ok());
@@ -301,7 +299,7 @@ TEST_F(AnalysisTest, TheLargestPageAndTransactionIdAreReported) {
     // RV4: the superblock's high-water mark is unlogged, so a crash can
     // revert it below a page the log names. Recovery raises it past this.
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 4, 300}).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 91, 4096}).ok());
@@ -316,7 +314,7 @@ TEST_F(AnalysisTest, TheLargestPageAndTransactionIdAreReported) {
 
 TEST_F(AnalysisTest, RecordsWithNoPageDoNotEnterTheDirtyTable) {
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnBegin, 1, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnCommit, 1, kInvalidPageId}).ok());
@@ -334,7 +332,7 @@ TEST_F(AnalysisTest, ATornTailIsMeteredAndTheRecordsBeforeItStand) {
     std::vector<std::byte> segment;
     Lsn last_lsn = 0;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnBegin, 1, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kHeapInsert, 1, 128}).ok());
@@ -343,14 +341,14 @@ TEST_F(AnalysisTest, ATornTailIsMeteredAndTheRecordsBeforeItStand) {
         last_lsn = lsn.value();
         ASSERT_TRUE(s.value()->Sync().ok());
         segment.resize(static_cast<std::size_t>(kSegmentSize));
-        ASSERT_TRUE(device_.ReadAt(0, 0, segment).ok());
+        ASSERT_TRUE(device_->ReadAt(0, 0, segment).ok());
     }
 
     // Wipe the commit record: the transaction becomes a loser, which is
     // the whole point of a durable commit being the thing that decides.
-    auto owned_torn = MemoryLogDevice::Create(kSegmentSize);
-    ASSERT_TRUE(owned_torn.ok());
-    MemoryLogDevice& torn = *owned_torn.value();
+    auto torn_owned = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(torn_owned.ok()) << torn_owned.status().message();
+    MemoryLogDevice& torn = *torn_owned.value();
     ASSERT_TRUE(torn.CreateSegment(0).ok());
     for (std::size_t i = static_cast<std::size_t>(last_lsn); i < segment.size(); ++i) {
         segment[i] = std::byte{0};
@@ -372,7 +370,7 @@ TEST_F(AnalysisTest, ACheckpointSeedsALosersUndoChainHead) {
     // the checkpoint recorded is the only route to it.
     const std::uint64_t kHead = 0x00020038ull;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         const CheckpointActiveTxn active[] = {{77, kHead}};
         const CheckpointDirtyPage dirty[] = {{500, 0}};
@@ -395,7 +393,7 @@ TEST_F(AnalysisTest, AnUndoWriteInRangeAdvancesTheHeadPastTheCheckpoints) {
     constexpr PageId kUndoPage = 9;
     constexpr std::uint16_t kOffset = 56;
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         const CheckpointActiveTxn active[] = {{77, kStale}};
         AppendCheckpointBegin(*s.value(), active, {});

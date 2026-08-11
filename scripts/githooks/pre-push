@@ -1,0 +1,63 @@
+#!/bin/sh
+# Refuse a push that does not build and pass its tests.
+#
+# ---- Why this exists ------------------------------------------------------
+#
+# main has twice received commits that were never compiled. The second time
+# cost six compile errors and eleven test failures, and none of them were
+# subtle - the tests had been written, they had simply never been run. A
+# gate here is cheaper than diagnosing that after the fact, because after the
+# fact the breakage is on the branch everyone else is building from.
+#
+# ---- What it checks -------------------------------------------------------
+#
+# The working tree, through scripts/test.sh: configure, build, ctest. That is
+# the tree you are about to push *plus* anything uncommitted, which is a
+# slightly stronger check than the push itself needs and never a weaker one -
+# a dirty tree that passes says nothing false about the commits.
+#
+# Deleting a remote ref (`git push --delete`, or pushing an empty local ref)
+# builds nothing, so it is allowed straight through.
+#
+# ---- Getting out of it ----------------------------------------------------
+#
+#   git push --no-verify
+#
+# Legitimate when the push is documentation only, when you are pushing a
+# known-broken branch deliberately for someone else to look at, or when the
+# toolchain is unavailable. Not legitimate for "it probably still builds".
+
+set -e
+
+# The worktree being pushed from. Not derived from $0: with core.hooksPath
+# the hook may live outside the worktree entirely, and every git worktree
+# shares one hooks directory.
+ROOT="$(git rev-parse --show-toplevel)"
+
+# A push whose local ref is all zeroes is a deletion - nothing to build.
+deleting_only=1
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    [ -z "$local_sha" ] && continue
+    case "$local_sha" in
+        *[!0]*) deleting_only=0 ;;
+    esac
+done
+if [ "$deleting_only" -eq 1 ]; then
+    exit 0
+fi
+
+if ! command -v cmake >/dev/null 2>&1; then
+    echo "pre-push: cmake is not on PATH, so the build gate cannot run." >&2
+    echo "          Install the toolchain, or push with --no-verify and say so." >&2
+    exit 1
+fi
+
+echo "pre-push: building and testing $ROOT ..."
+if ! "$ROOT/scripts/test.sh"; then
+    echo >&2
+    echo "pre-push: REFUSED - the tree does not build, or a test failed." >&2
+    echo "          Fix it, or push with --no-verify if you mean to." >&2
+    exit 1
+fi
+
+echo "pre-push: green."
