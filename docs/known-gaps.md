@@ -2,9 +2,11 @@
 
 The engine-wide list of what is missing, what does not survive a restart,
 and what the code does differently from what a spec or older doc claims.
-Verified against code 2026-08-10. Each entry names the owning doc — the
-full argument and any workplan live there, not here. Manuals link here
-instead of carrying their own copies.
+Verified against code 2026-08-10; the "Storage and key modes" section and
+the `ORDER BY` entry added and then closed on 2026-08-11 with the
+`EXPLICIT` key mode. Each
+entry names the owning doc — the full argument and any workplan live
+there, not here. Manuals link here instead of carrying their own copies.
 
 Scope note: an entry here is a *known, accepted* state, usually with a
 named owner. It is not a bug list; a gap whose fix is decided belongs in
@@ -80,16 +82,25 @@ There is no purge pass, and readers are deliberately unregistered
 
 ## Concurrency and multicore
 
-- `cores > 1` buys parallel WAL streams only: **core 0 serves every
-  statement**, peers come up alive and idle (`docs/crosscore.md`). The
-  P6 ownership question is decided **and built** (CC7 + P6b handoff + P6c
+- **Cross-core execution has started, and is exactly one shape wide.**
+  P4a-P4c are built (2026-08-10, `docs/workplan-crosscore.md`): a
+  single-relation remote read — a star `SELECT` against an `owner_core=1`
+  relation — is opened as a step on its owning core, streamed back under
+  credit, and framed by the session core, with the reply byte-identical to
+  the local path. **Every other statement is still served by core 0**:
+  `CheckReadAffinity` now refuses the shapes the pipeline cannot yet run,
+  retryably, rather than all of them. What remains is **P4d** — multi-step
+  wiring, join-key forwarding, and the viral `ChainRunner` coroutine
+  conversion, the workplan's largest single change — and **P4e**, the
+  equivalence pass plus the benchmark re-run. Until P4e runs,
+  `bench/results-multicore.md`'s 1.05× is a *parity baseline*, not a
+  measurement of the pipeline.
+- Relation ownership is decided **and built** (CC7 + P6b handoff + P6c
   `placement` key, 2026-08-10): a rotated relation's pages are grantable
-  and readable by its owner — but `placement = rotate` stays non-default,
-  because a rotated relation's *statements* are still refused retryably
-  until dispatch lands. Row-id leasing for peer INSERT is also built
-  (P5-shape, 2026-08-10). **The one remaining piece is the step pipeline
-  itself** — statement dispatch plus the executor's coroutine conversion,
-  the workplan's largest single change left.
+  and readable by its owner. `placement` still defaults to `creating` —
+  `rotate` places relations on cores that can serve one statement shape and
+  must refuse the rest, so it stays an exercise mode until P4d lands.
+  Row-id leasing for peer INSERT is also built (P5-shape, 2026-08-10).
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
 - Cross-core writes are refused retryably (CC3): a transaction's writes
@@ -100,6 +111,27 @@ There is no purge pass, and readers are deliberately unregistered
   `PageRef` migration (~257 call sites) is a hard prerequisite
   (`docs/spec-eviction.md`, `docs/page.md` §3).
 
+## Storage and key modes
+
+- ~~**Dividing a full btree *internal* node is not implemented**~~ —
+  **built 2026-08-11** (`docs/workplan-key-mode.md` PK09). A separator
+  promoted into a full parent now divides that node's entries when it sorts
+  inside them: the median moves up, its child becomes the new node's
+  leftmost, and the lower half is written back. The cheap
+  right-split-with-no-movement is kept for the append case it correctly
+  serves. Struck rather than deleted because the refusal it replaced was a
+  named `OutOfSpace` some reader may still be holding.
+- **A heap relation cannot be `EXPLICIT`**, refused at
+  `Catalog::CreateTable` and at the statement layer. Not a defect: a heap
+  chain grows only at its tail and has no descent to prove a supplied key
+  unused. Lifting it is the heap page split policy
+  (`docs/heap-and-tuple.md` §3.1b), which stays open.
+- **A `DELETE`d row's primary key cannot be re-supplied** on an
+  `EXPLICIT` relation. The uniqueness check scans the landing leaf's live
+  slots, and a delete-marked slot is live until retirement — and nothing
+  retires (see reclamation above). Consistent with K1 issue-once, and a
+  restriction a caller doing delete-then-reinsert will meet.
+
 ## SQL surface and protocol
 
 - **No NULL storage**: `NULL` parses as a literal; rows holding one are
@@ -108,6 +140,17 @@ There is no purge pass, and readers are deliberately unregistered
   `ORDER BY` accepts the primary key alone (a validated no-op) and no
   `DESC`; there are no cursors, and KWP/1 portal suspension is still
   unbuilt — only the frame codec exists (`docs/protocol.md`).
+- ~~**`ORDER BY <pk>` no longer means key order on an `EXPLICIT`
+  relation**~~ — **closed 2026-08-11.** The clause used to be validated and
+  discarded, on the claim that "pk order is the order the chain already
+  emits": true while every id was appended in ascending order, and false
+  once a caller names them. The fix is a **per-page emission order**, not an
+  output sort, because the disorder was bounded by one page — ordering
+  *across* pages was never at risk, since a leaf division preserves
+  page-wise `min_key` ordering. `Step::emit_in_key_order` is set only when
+  the statement asked for pk order *and* the relation is `EXPLICIT`; the
+  walk is untouched everywhere else. Covered by emission-order tests,
+  including under `LIMIT`/`OFFSET`.
 - **`IN (value list)`** is unbuilt — the open half of parser workplan V08;
   it currently reports "expected a subquery".
 - **Per-transaction durability class** is a KWP/1 protocol field; the text

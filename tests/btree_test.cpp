@@ -1,6 +1,8 @@
 #include "kds/storage/btree/btree.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -685,23 +687,324 @@ TEST(BtreeTest, APayloadWhoseKeystoneDisagreesWithTheIdIsRefused) {
         << "two disagreeing copies of a tuple's identity is a defect, not a choice of which wins";
 }
 
-TEST(BtreeTest, AFullLeafIsNotDividedToMakeRoomForALowerId) {
+// ---- Dividing a full leaf (docs/heap-and-tuple.md §4.1, PK04) ------------
+//
+// Reached only by a caller-supplied id that sorts inside a full leaf. Until
+// the key-mode amendment these inserts were refused outright, because ids
+// were monotonic and nothing could produce one.
+
+// Inserts an ascending, gapped run until the *first* leaf is full, and
+// returns every id placed. Fullness is detected by the insert that had to
+// grow the tree: ascending inserts never fail, they append-split, so a
+// "fill until OutOfSpace" loop would run until the page store did. Every id
+// but the last therefore sits in the first leaf, which is what a later
+// interior insert divides.
+std::vector<std::uint64_t> FillFirstLeaf(Tree& tree) {
+    std::vector<std::uint64_t> placed;
+    for (std::uint64_t id = 100; placed.size() < 500; id += 10) {
+        auto r = tree.Insert(id, kSmallFiller);
+        EXPECT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
+        if (!r.ok()) break;
+        placed.push_back(id);
+        if (r.value().restructured()) break;  // this one opened a second leaf
+    }
+    EXPECT_GE(placed.size(), 4u) << "need a first leaf with room to divide";
+    return placed;
+}
+
+TEST(BtreeTest, AFullLeafDividesToMakeRoomForALowerId) {
     storage::InMemoryPageStore store(128);
     Tree tree(store);
 
-    // Fill the root leaf, leaving a gap in the sequence, then try to insert
-    // into that gap. Making room would mean dividing a full page's
-    // contents, which is the heap page split policy - an open decision in
-    // CLAUDE.md. Refusing is correct; guessing a boundary would decide it
-    // as a side effect.
+    std::vector<std::uint64_t> placed = FillFirstLeaf(tree);
+
+    // Land in the gap between the first two ids, which routes back into the
+    // now-full first leaf. Before PK04 this was an OutOfSpace naming the
+    // open split policy.
+    const std::uint64_t interior = placed.front() + 5;
+    auto divided = tree.Insert(interior, kSmallFiller);
+    ASSERT_TRUE(divided.ok()) << divided.status().message();
+
+    // Every id is still reachable - the whole claim of a division.
+    auto rows = ScanAll(store, tree.root);
+    std::vector<std::uint64_t> want = placed;
+    want.push_back(interior);
+    std::sort(want.begin(), want.end());
+
+    std::vector<std::uint64_t> got;
+    got.reserve(rows.size());
+    for (const ScannedRow& row : rows) got.push_back(row.id);
+    // Sorted before comparing, deliberately: **within** a page tuples are
+    // unordered (invariant 4), and a division appends the incoming tuple
+    // after the half it wrote back, so it lands at the end of its page's
+    // slots. What must hold is that nothing was lost or duplicated.
+    std::sort(got.begin(), got.end());
+    EXPECT_EQ(got, want) << "a division must lose nothing and duplicate nothing";
+
+    std::set<PageId> pages;
+    for (const ScannedRow& row : rows) pages.insert(row.page_id);
+    EXPECT_GT(pages.size(), 1u);
+}
+
+// Every id on a page sorts below every id on the page after it. That is the
+// ordering a division must preserve - not order within a page, which
+// invariant 4 says nothing about, but the page-wise ordering that makes
+// `min_key` pruning sound.
+void ExpectPagesKeyOrdered(const std::vector<ScannedRow>& rows) {
+    PageId current = kInvalidPageId;
+    std::uint64_t highest_before = 0;
+    std::uint64_t highest_here = 0;
+    for (const ScannedRow& row : rows) {
+        if (row.page_id != current) {
+            highest_before = highest_here;
+            current = row.page_id;
+        }
+        EXPECT_GT(row.id, highest_before)
+            << "id " << row.id << " on page " << row.page_id
+            << " sorts below a key on an earlier page";
+        highest_here = std::max(highest_here, row.id);
+    }
+}
+
+TEST(BtreeTest, ADivisionLeavesBothLeavesInsideInvariantsTwoAndThree) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    const PageId original_leaf = tree.root;
+    const std::uint64_t root_min_key = MinKeyOf(store, original_leaf);
+
+    std::vector<std::uint64_t> placed = FillFirstLeaf(tree);
+    ASSERT_TRUE(tree.Insert(placed.front() + 5, kSmallFiller).ok());
+
+    // Invariant 2: the divided leaf's min_key is untouched. This is what
+    // makes a division legal at all - it moves tuples out, it never rewrites
+    // a low bound, and a rewritten one would invalidate every reader that
+    // pruned by it without a latch.
+    EXPECT_EQ(MinKeyOf(store, original_leaf), root_min_key);
+
+    // Invariant 3: no tuple sits below its page's min_key, on either side.
+    for (const ScannedRow& row : ScanAll(store, tree.root)) {
+        EXPECT_GE(row.id, MinKeyOf(store, row.page_id))
+            << "id " << row.id << " is below page " << row.page_id << "'s min_key";
+    }
+}
+
+TEST(BtreeTest, ADivisionBumpsTheRelayoutEpochOfThePageItRebuilt) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    const PageId original_leaf = tree.root;
+    std::vector<std::uint64_t> placed = FillFirstLeaf(tree);
+
+    auto before = store.Get(original_leaf);
+    ASSERT_TRUE(before.ok());
+    const std::uint64_t epoch_before = heap::PageView(before.value()).RelayoutEpoch();
+
+    ASSERT_TRUE(tree.Insert(placed.front() + 5, kSmallFiller).ok());
+
+    auto after = store.Get(original_leaf);
+    ASSERT_TRUE(after.ok());
+    // Every tuple on this page changed slot and half of them changed page,
+    // which is a relayout in everything but name (§3.1a). Without the bump a
+    // Waystone trail entry or Cabin hint recorded before the division would
+    // still compare equal and send a reader to a slot holding another row.
+    EXPECT_EQ(heap::PageView(after.value()).RelayoutEpoch(), epoch_before + 1)
+        << "the rebuild must carry the epoch forward, not restart it at 1";
+}
+
+TEST(BtreeTest, ADividedLeafKeepsADeleteMarkOnTheVersionItMoved) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    std::vector<std::uint64_t> placed = FillFirstLeaf(tree);
+
+    // The highest id still inside the first leaf - `placed.back()` opened the
+    // second one - so it is certain to be in the half that moves.
+    const std::uint64_t marked = placed[placed.size() - 2];
+    {
+        auto found = BtreeLookup(store, tree.root, marked);
+        ASSERT_TRUE(found.ok()) << found.status().message();
+        auto bytes = store.Get(found.value().page_id);
+        ASSERT_TRUE(bytes.ok());
+        ASSERT_TRUE(heap::PageView(bytes.value()).DeleteMark(found.value().slot, 99).ok());
+    }
+
+    ASSERT_TRUE(tree.Insert(placed.front() + 5, kSmallFiller).ok());
+
+    auto moved = BtreeLookup(store, tree.root, marked);
+    ASSERT_TRUE(moved.ok()) << moved.status().message();
+    auto bytes = store.Get(moved.value().page_id);
+    ASSERT_TRUE(bytes.ok());
+    auto tuple = heap::PageView(bytes.value()).ReadTuple(moved.value().slot);
+    ASSERT_TRUE(tuple.ok()) << tuple.status().message();
+    // Re-inserting the payload alone would resurrect a row that a snapshot
+    // has already been told is gone.
+    EXPECT_TRUE(tuple.value().deleted) << "the delete mark did not travel with the version";
+    EXPECT_EQ(tuple.value().trx_id, 99u) << "the deleter's identity did not travel either";
+}
+
+// ---- Dividing a full internal node (workplan-key-mode.md PK09) -----------
+
+TEST(BtreeTest, AFullInternalNodeDividesWhenAnInteriorSeparatorArrives) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    // The shape that reaches it: one tuple per leaf, so every insert splits
+    // and every split promotes a separator. `kInternalMaxEntries` of those
+    // fill the root's internal node; the next interior key has to divide it.
+    //
+    // Ascending first, spaced so there is room to come back between the
+    // keys - this half only builds the full node.
+    const std::uint64_t kSpacing = 10;
+    for (std::uint64_t k = 1; k <= kInternalMaxEntries + 8; ++k) {
+        auto r = tree.Insert(k * kSpacing, kOnePerLeafFiller);
+        ASSERT_TRUE(r.ok()) << "id " << k * kSpacing << ": " << r.status().message();
+    }
+
+    // Every id must still be reachable before the interesting part, or a
+    // failure below is ambiguous.
+    for (std::uint64_t k = 1; k <= kInternalMaxEntries + 8; ++k) {
+        ASSERT_TRUE(BtreeLookup(store, tree.root, k * kSpacing).ok())
+            << "lost id " << k * kSpacing << " while building the full node";
+    }
+
+    // Now an interior key. It divides a leaf, and the separator that comes
+    // out sorts *inside* the full internal node - the case the cheap
+    // right-split cannot serve and which used to be refused outright.
+    auto interior = tree.Insert(kSpacing + kSpacing / 2, kOnePerLeafFiller);
+    ASSERT_TRUE(interior.ok()) << interior.status().message();
+
+    // Everything is still findable by descent, which is the property an
+    // internal division has to preserve: a separator promoted to the wrong
+    // side would strand a whole subtree, and only a descent notices.
+    for (std::uint64_t k = 1; k <= kInternalMaxEntries + 8; ++k) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, k * kSpacing).ok())
+            << "the internal division stranded id " << k * kSpacing;
+    }
+    EXPECT_TRUE(BtreeLookup(store, tree.root, kSpacing + kSpacing / 2).ok());
+
+    // And the leaf chain still holds them all, in page-wise key order.
+    auto rows = ScanAll(store, tree.root);
+    EXPECT_EQ(rows.size(), kInternalMaxEntries + 9);
+    ExpectPagesKeyOrdered(rows);
+}
+
+TEST(BtreeTest, RepeatedInteriorSeparatorsDivideInternalNodesOverAndOver) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    // One division proves the mechanism; this proves it composes. After the
+    // root's internal node is full, *every* interior key promotes a
+    // separator that has to divide a node - and the nodes those divisions
+    // create fill and divide in turn, which is what grows the tree past two
+    // levels.
+    const std::uint64_t kSpacing = 10;
+    const std::uint64_t kBuilt = kInternalMaxEntries + 8;
+    for (std::uint64_t k = 1; k <= kBuilt; ++k) {
+        ASSERT_TRUE(tree.Insert(k * kSpacing, kOnePerLeafFiller).ok());
+    }
+
+    std::vector<std::uint64_t> interior;
+    for (std::uint64_t k = 1; k <= 200; ++k) {
+        const std::uint64_t id = k * kSpacing + kSpacing / 2;
+        auto r = tree.Insert(id, kOnePerLeafFiller);
+        ASSERT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
+        interior.push_back(id);
+    }
+
+    for (std::uint64_t k = 1; k <= kBuilt; ++k) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, k * kSpacing).ok())
+            << "an internal division stranded id " << k * kSpacing;
+    }
+    for (std::uint64_t id : interior) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost interior id " << id;
+    }
+
+    auto rows = ScanAll(store, tree.root);
+    EXPECT_EQ(rows.size(), kBuilt + interior.size());
+    ExpectPagesKeyOrdered(rows);
+}
+
+TEST(BtreeTest, ALeafHoldingOneOversizedTupleIsRefusedRatherThanDivided) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    // One tuple per leaf: there is no division that makes room, because
+    // both halves cannot be non-empty. Reported as the space failure it is.
     ASSERT_TRUE(tree.Insert(10, kOnePerLeafFiller).ok());
 
     auto backwards = tree.Insert(5, kOnePerLeafFiller);
     EXPECT_FALSE(backwards.ok());
     EXPECT_EQ(backwards.status().code(), StatusCode::kOutOfSpace);
-    EXPECT_NE(backwards.status().message().find("open design decision"), std::string::npos)
-        << "the refusal has to name why, or it reads as a capacity bug: "
+    EXPECT_NE(backwards.status().message().find("fewer than two live tuples"), std::string::npos)
+        << "the refusal has to name why, or it reads as a split bug: "
         << backwards.status().message();
+}
+
+TEST(BtreeTest, ADescendingRunEndsUpFullyOrderedAndFullyReachable) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    // The shape a caller-supplied key mode makes possible and a monotonic
+    // one cannot: ids arriving strictly backwards, across enough leaves to
+    // force repeated divisions.
+    std::vector<std::uint64_t> want;
+    for (std::uint64_t id = 400; id >= 1; --id) {
+        auto r = tree.Insert(id, kSmallFiller);
+        ASSERT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
+        want.push_back(id);
+    }
+    std::sort(want.begin(), want.end());
+
+    auto rows = ScanAll(store, tree.root);
+    std::vector<std::uint64_t> got;
+    for (const ScannedRow& row : rows) got.push_back(row.id);
+    std::sort(got.begin(), got.end());  // unordered within a page (invariant 4)
+    EXPECT_EQ(got, want);
+
+    // The ordering that does have to survive: page by page.
+    ExpectPagesKeyOrdered(rows);
+
+    // And every id is still findable by descent, which is the property the
+    // separators have to have kept.
+    for (std::uint64_t id : want) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost id " << id;
+    }
+}
+
+TEST(BtreeTest, AnAppendSplitInsideTheChainKeepsTheLeafToItsRight) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    // One tuple per leaf, so every insert after the first grows the tree
+    // and the three leaves are exactly the three ids.
+    //
+    // The shape: 10 fills the root leaf, 30 appends a second leaf past it,
+    // and 20 lands in a full leaf it sorts *above* - so it takes the
+    // append-split path, which was only ever reached at the right edge of
+    // the chain while ids were monotonic. A caller-supplied id reaches it in
+    // the middle, and the new leaf has to inherit the right sibling it is
+    // being spliced in front of. Dropping that link truncates the chain, and
+    // every leaf past the splice - here the one holding 30 - disappears from
+    // every sequential scan while still answering a descent, which is the
+    // most silent shape data loss has.
+    ASSERT_TRUE(tree.Insert(10, kOnePerLeafFiller).ok());
+    ASSERT_TRUE(tree.Insert(30, kOnePerLeafFiller).ok());
+    ASSERT_TRUE(tree.Insert(20, kOnePerLeafFiller).ok());
+
+    auto leaves = BtreeLeafCount(store, tree.root);
+    ASSERT_TRUE(leaves.ok()) << leaves.status().message();
+    EXPECT_EQ(leaves.value(), 3u) << "the leaf chain lost a page to the splice";
+
+    std::vector<std::uint64_t> got;
+    for (const ScannedRow& row : ScanAll(store, tree.root)) got.push_back(row.id);
+    std::sort(got.begin(), got.end());
+    EXPECT_EQ(got, (std::vector<std::uint64_t>{10, 20, 30}))
+        << "a sequential scan must still see every id the tree answers a lookup for";
+
+    for (std::uint64_t id : {10u, 20u, 30u}) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost id " << id;
+    }
 }
 
 TEST(BtreeTest, AnIdBelowItsLeafsMinKeyIsRefused) {

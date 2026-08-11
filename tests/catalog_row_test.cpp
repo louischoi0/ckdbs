@@ -251,6 +251,10 @@ SysTableRow SampleTableRow() {
     row.next_id = 0x2122232425262728ull;
     row.varheap_page_id = 0xB1B2B3B4u;
     row.owner_core = 0xC1C2C3C4u;
+    // kExplicit rather than the default, so a codec that dropped the field
+    // fails the round trip instead of passing on a zero that happens to be
+    // the right answer.
+    row.key_mode = KeyMode::kExplicit;
     return row;
 }
 
@@ -348,6 +352,23 @@ TEST(SysTableRowTest, RoundTripsEveryFieldIncludingTheOwnerCore) {
     EXPECT_EQ(out.value().next_id, in.next_id);
     EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
     EXPECT_EQ(out.value().owner_core, in.owner_core);
+    EXPECT_EQ(out.value().key_mode, in.key_mode);
+}
+
+TEST(SysTableRowTest, TheKeyModeOccupiesItsOwnByte) {
+    // Same check `owner_core` gets, for the same reason: a round trip
+    // through one codec cannot catch an offset that overlaps a neighbour,
+    // because both halves make the same mistake.
+    SysTableRow row = SampleTableRow();
+    const auto baseline = row.Encode();
+
+    row.key_mode = KeyMode::kAssigned;
+    const auto zeroed = row.Encode();
+
+    for (std::size_t i = 0; i < SysTableRow::kOnDiskSize; ++i) {
+        if (i == SysTableRow::kKeyModeOffset) continue;
+        EXPECT_EQ(baseline[i], zeroed[i]) << "key_mode disturbed byte " << i;
+    }
 }
 
 TEST(SysTableRowTest, TheOwnerCoreOccupiesItsOwnBytes) {
@@ -368,13 +389,16 @@ TEST(SysTableRowTest, TheOwnerCoreOccupiesItsOwnBytes) {
 }
 
 TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
-    // The row grew by four bytes, which is a format-version event - the
-    // superblock bump to 10 is the other half of it. Pinned so the next
-    // person to add a field cannot do so quietly.
+    // The row grew by four bytes for `owner_core` and by one more for
+    // `key_mode`, each a format-version event - the superblock bumps to 10
+    // and to 14 are the other half of them. Pinned so the next person to add
+    // a field cannot do so quietly.
     EXPECT_EQ(SysTableRow::kOwnerCoreOffset,
               SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
-    EXPECT_EQ(SysTableRow::kOnDiskSize,
+    EXPECT_EQ(SysTableRow::kKeyModeOffset,
               SysTableRow::kOwnerCoreOffset + sizeof(std::uint32_t));
+    EXPECT_EQ(SysTableRow::kOnDiskSize,
+              SysTableRow::kKeyModeOffset + sizeof(std::uint8_t));
 }
 
 TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {

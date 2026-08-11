@@ -33,6 +33,41 @@ Fix16 DivFix(Fix16 a, Fix16 b) noexcept {
 // Q24.8 (the snapshot's decayed scores) to 16.16.
 Fix16 FromQ8(std::uint32_t q8) noexcept { return std::uint64_t{q8} << 8; }
 
+// ---- The log-domain shadow of the model (2026-08-10) ---------------------
+//
+// 16.16 underflows at the same place Q24.8 does, ~16 half-lives into a
+// silence, and below that floor every cold candidate reads exactly 0 -
+// so the rule table cannot tell a Cabin that was worth 2^30 from one
+// worth 2^10, and both fall out of ACTIVE at the same moment. The fix is
+// to carry the same quantities in the log domain, where decay is a
+// subtraction that never bottoms out, and to consult them **only where
+// the linear form has run out of resolution**. Linear stays authoritative
+// wherever it still has any, which is what keeps every measured
+// threshold decision and PHY07's golden traces exactly as they were.
+//
+// Everything below is "log2 of the real value" - the Q24.8 and 16.16
+// scalings divided out - so the three sources compose by addition.
+
+// log2 of a 16.16 quantity, as a real number.
+Log2Q16 LogOfFix(Fix16 v) noexcept {
+    if (v == 0) return kLog2NegInf;
+    return Log2OfQ16(v) - (Log2Q16{16} << 16);
+}
+
+// log2 of a snapshot's Q24.8 score, as a real number. The snapshot's
+// `*_log2` fields are log2 of the *scaled* integer, and one whole point
+// is 256 of those.
+Log2Q16 LogOfQ8Score(Log2Q16 scaled_log2) noexcept {
+    if (scaled_log2 == kLog2NegInf) return kLog2NegInf;
+    return scaled_log2 - (Log2Q16{8} << 16);
+}
+
+// a + b in the log domain, either side possibly negative infinity.
+Log2Q16 LogAdd(Log2Q16 a, Log2Q16 b) noexcept {
+    if (a == kLog2NegInf || b == kLog2NegInf) return kLog2NegInf;
+    return a + b;
+}
+
 Fix16 FromWhole(std::uint64_t whole) noexcept {
     if (whole > (std::numeric_limits<std::uint64_t>::max() >> 16)) {
         return std::numeric_limits<std::uint64_t>::max();
@@ -189,6 +224,14 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
         Fix16 fail_rate = 0;
         Fix16 coverage_share = 0;
         bool served_by_unowned = false;
+
+        // Σ f_i in the log domain, approximated by its **largest term**.
+        // A sum is not a log-domain operation without a second LUT, and
+        // the approximation costs at most log2(n) - under one threshold
+        // margin for any n a core tracks, and irrelevant to the thing
+        // this field exists for, which is ordering two cold shapes
+        // decades of half-lives after the linear form gave up.
+        Log2Q16 freq_log = kLog2NegInf;
     };
     std::map<CandidateKey, Evidence> evidence;
 
@@ -213,6 +256,7 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
         if (mean > p_cabin) e.benefit += MulFix(f, mean - p_cabin);
         e.p_rel = std::max(e.p_rel, mean);
         e.freq += f;
+        e.freq_log = std::max(e.freq_log, LogOfQ8Score(fp.frequency_log2));
     }
 
     // Every managed candidate gets an evidence entry even when its shape
@@ -256,6 +300,12 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
     struct Scored {
         Fix16 benefit = 0;
         Fix16 cost = 0;
+        // The same pair in the log domain. Consulted only where `benefit`
+        // has underflowed to zero, and always monotone in it, so ordering
+        // by `benefit_log` orders by benefit - including among candidates
+        // the linear form has flattened to a tie at zero.
+        Log2Q16 benefit_log = kLog2NegInf;
+        Log2Q16 cost_log = kLog2NegInf;
     };
     const auto score = [&](const Evidence& e, const Managed* m) {
         Scored s;
@@ -270,7 +320,26 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
             s.benefit = basis > p_cabin ? MulFix(e.freq, basis - p_cabin) : 0;
         }
         s.cost = DivFix(basis, config_.amort_windows) + quality_upkeep;
+        // The log-domain twin. The saved-pages factor is a *ratio* of
+        // co-decaying quantities (or, for an ACTIVE entry, the frozen
+        // baseline), so it never underflows and can be read from the
+        // linear side; only the frequency needed rescuing.
+        if (basis > p_cabin) {
+            s.benefit_log = LogAdd(e.freq_log, LogOfFix(basis - p_cabin));
+        }
+        s.cost_log = LogOfFix(s.cost);
         return s;
+    };
+
+    // "Is benefit below `theta x cost`?" - answered in whichever domain
+    // still has resolution. Linear is authoritative whenever it has any,
+    // which is what leaves every measured decision untouched; the log
+    // domain answers only the question linear cannot, having flattened
+    // both sides to zero.
+    const auto below = [](const Scored& s, Fix16 theta) {
+        if (s.benefit != 0) return s.benefit < MulFix(theta, s.cost);
+        if (s.benefit_log == kLog2NegInf || s.cost_log == kLog2NegInf) return true;
+        return s.benefit_log < LogOfFix(theta) + s.cost_log;
     };
 
     // "At most one action per candidate per call" is stated in the header,
@@ -325,14 +394,23 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                     // incumbent the same way it defends one.
                     const CandidateKey* victim = nullptr;
                     Fix16 victim_net = std::numeric_limits<std::uint64_t>::max();
+                    Log2Q16 victim_log = std::numeric_limits<std::int64_t>::max();
                     for (auto& [vkey, ve] : evidence) {
                         auto vm = managed_.find(vkey);
                         if (vm == managed_.end() || vm->second.state != State::kActive) {
                             continue;
                         }
-                        const Fix16 vnet = score(ve, &vm->second).benefit;
-                        if (vnet < victim_net) {
-                            victim_net = vnet;
+                        const Scored vscored = score(ve, &vm->second);
+                        // Ordered in the log domain, which is monotone in
+                        // the linear benefit and - unlike it - still
+                        // separates two incumbents that have both decayed
+                        // past zero. Picking among them by linear benefit
+                        // was a tie broken by map order, so the swap
+                        // evicted an arbitrary cold Cabin rather than the
+                        // coldest one.
+                        if (vscored.benefit_log < victim_log) {
+                            victim_log = vscored.benefit_log;
+                            victim_net = vscored.benefit;
                             victim = &vkey;
                         }
                     }
@@ -366,11 +444,16 @@ ActionSet CabinOptimizer::Decide(const OptimizerSnapshot& snapshot) {
                 break;  // Execute owns the transition; nothing to decide
             case State::kActive: {
                 assert(m.cabin_id != 0);
-                // Zero benefit decays regardless of cost: with no observed
-                // traffic both sides read 0 and the threshold comparison
-                // goes vacuous, which must not keep a dead Cabin alive.
-                if (scored.benefit == 0 ||
-                    scored.benefit < MulFix(config_.theta_drop, cost)) {
+                // The onset test, and the one place the log domain earns
+                // its keep. It used to read "zero benefit decays whatever
+                // the cost", because a linear zero made the comparison
+                // vacuous - and that flattened every deeply-idle Cabin
+                // into the same instant, so a shape worth 2^30 left ACTIVE
+                // exactly when one worth 2^10 did. In the log domain the
+                // margin survives, so time-to-DECAYING is proportional to
+                // demonstrated value again. A score that is *truly* zero
+                // still decays: its log is negative infinity.
+                if (below(scored, config_.theta_drop)) {
                     m.state = State::kDecaying;
                     m.decaying_since = snapshot.decay_epoch;
                     break;

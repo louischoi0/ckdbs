@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -25,15 +26,24 @@ namespace {
 
 constexpr PageId kFirstUserPageId = 128;
 
-std::vector<std::byte> BytesOf(std::string_view s) {
-    std::vector<std::byte> out(s.size());
-    std::memcpy(out.data(), s.data(), s.size());
+// A well-formed tuple payload: the Keystone word carrying `pk`, then the
+// test's text. Rollback identifies a row by the id in that word before it
+// compensates (txn/manager.hpp's RowLocator), so a payload without one is
+// not a row this manager could ever be asked to unwind - these used to be
+// bare text, and the check had nothing to read.
+std::vector<std::byte> BytesOf(std::string_view s, std::uint64_t pk = 1) {
+    std::vector<std::byte> out(kKeystoneWordSize + s.size());
+    const std::uint64_t word = Keystone::Encode(pk, 0, 0).value();
+    std::memcpy(out.data(), &word, kKeystoneWordSize);
+    std::memcpy(out.data() + kKeystoneWordSize, s.data(), s.size());
     return out;
 }
 
+// The text half, without the Keystone word the payload opens with.
 std::string StringOf(std::span<const std::byte> b) {
-    std::string out(b.size(), '\0');
-    std::memcpy(out.data(), b.data(), b.size());
+    if (b.size() < kKeystoneWordSize) return std::string();
+    std::string out(b.size() - kKeystoneWordSize, '\0');
+    std::memcpy(out.data(), b.data() + kKeystoneWordSize, out.size());
     return out;
 }
 
@@ -59,12 +69,12 @@ protected:
         std::uint16_t slot = 0;
     };
 
-    Row PlaceRow(std::string_view payload, std::uint64_t writer) {
+    Row PlaceRow(std::string_view payload, std::uint64_t writer, std::uint64_t pk = 1) {
         auto created = store_.CreateNew();
         EXPECT_TRUE(created.ok());
         auto page = heap::PageView::CreateEmpty(created.value().second, /*min_key=*/0);
         EXPECT_TRUE(page.ok());
-        auto slot = page.value().InsertTuple(BytesOf(payload), writer, kNoUndoPtr);
+        auto slot = page.value().InsertTuple(BytesOf(payload, pk), writer, kNoUndoPtr);
         EXPECT_TRUE(slot.ok());
         return Row{created.value().first, slot.value()};
     }

@@ -103,6 +103,22 @@ struct SysTableRow {
     // DDL.
     std::uint32_t owner_core;
 
+    // Who names this relation's Keystone ids (well_known.hpp's KeyMode,
+    // docs/heap-and-tuple.md section 4.1). Like `clustered_type` and
+    // `owner_core` this is fixed at CREATE TABLE and cannot change without
+    // DDL, which is what makes it cacheable on TableAccess.
+    //
+    // Appended after `owner_core` rather than placed beside `clustered_type`
+    // where it reads better: every offset below is a fixed on-disk position,
+    // so inserting a field in the middle would move four of them.
+    //
+    // The one byte it adds is a **format-version event** - superblock 13 ->
+    // 14, the same call `varheap_page_id` and `owner_core` each forced
+    // before it. Decode() below refuses any size but the exact one, so an
+    // older file without the bump would mount and then fail on its first
+    // catalog read naming a size instead of a version.
+    KeyMode key_mode;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kNameOffset = 16;
@@ -113,7 +129,8 @@ struct SysTableRow {
     static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kVarHeapPageIdOffset = kNextIdOffset + sizeof(std::uint64_t);
     static constexpr std::size_t kOwnerCoreOffset = kVarHeapPageIdOffset + sizeof(PageId);
-    static constexpr std::size_t kOnDiskSize = kOwnerCoreOffset + sizeof(std::uint32_t);
+    static constexpr std::size_t kKeyModeOffset = kOwnerCoreOffset + sizeof(std::uint32_t);
+    static constexpr std::size_t kOnDiskSize = kKeyModeOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
@@ -124,6 +141,13 @@ static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOid
 static_assert(offsetof(SysTableRow, name) == SysTableRow::kNameOffset);
 static_assert(offsetof(SysTableRow, desc_page_id) == SysTableRow::kDescPageIdOffset);
 static_assert(offsetof(SysTableRow, clustered_type) == SysTableRow::kClusteredTypeOffset);
+// `key_mode` gets no offsetof assert, for the same reason `next_id`,
+// `varheap_page_id` and `owner_core` have none: everything from `next_id`
+// on sits behind the compiler's alignment padding, so its in-memory offset
+// and its on-disk offset are different numbers by design. Encode/Decode
+// address the buffer through the constants above, field by field, which is
+// what makes that difference harmless - this file's discipline, stated at
+// the top.
 
 // The first id any relation issues. Zero stays reserved for "no id".
 inline constexpr std::uint64_t kFirstRowId = 1;

@@ -80,13 +80,17 @@ inline constexpr std::uint32_t kSystemCore = 0;
 // (docs/keystoneid-k0-findings.md), so a placement keyed on one would
 // re-walk the same rotation after every restart.
 // Which placement rule CreateTable applies (workplan P6c, config key
-// `placement`). `kCreatingCore` is the default and the only mode a
-// statement-serving instance should run until cross-core dispatch exists:
-// rotation places relations on cores that CAN fault their pages now (CC7's
-// flush-then-grant handoff, P6b) but CANNOT serve statements yet - core 0's
-// affinity check refuses them retryably, which is honest and useless.
-// `kRotate` exists so the handoff can be exercised end to end on a live
-// multi-core instance, and becomes the real policy when dispatch lands.
+// `placement`). `kCreatingCore` is the default and the mode a
+// statement-serving instance should run until the step pipeline is
+// finished: rotation places relations on cores that CAN fault their pages
+// (CC7's flush-then-grant handoff, P6b) and, since P4a-P4c (2026-08-10),
+// CAN serve exactly one statement shape - a single-step star SELECT with
+// no aggregate, no quota, no sub-chain and a descriptor-encodable step,
+// opened on the owning core and streamed back under credit. Every other
+// shape still meets core 0's retryable affinity refusal, so rotation is
+// one shape wide rather than useless. `kRotate` stays an exercise mode
+// and becomes the real policy when P4d wires multi-step pipelines and
+// converts the executor.
 enum class PlacementPolicy : std::uint8_t { kCreatingCore, kRotate };
 
 constexpr std::uint32_t AssignOwnerCore(PlacementPolicy policy, std::uint32_t creating_core,

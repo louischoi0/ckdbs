@@ -12,7 +12,8 @@
 
 // AST for the KDS SQL subset. The whole grammar:
 //
-//   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE];
+//   CREATE TABLE <name> (<col> <type> [, ...])
+//       [HEAP | BTREE] [ASSIGNED | EXPLICIT];   -- either order, each once
 //   INSERT INTO  <name> VALUES (<val> [, ...]);
 //   SELECT <list> FROM  <rel> [<join>]* [WHERE <cond> [AND <cond>]*]
 //       [GROUP BY <col> [, ...]]
@@ -295,6 +296,19 @@ struct CreateTableStmt {
     std::string table_name;
     std::vector<ColumnDef> columns;
     catalog::ClusteredType clustered = catalog::ClusteredType::kHeap;
+
+    // Who names the relation's pk (docs/heap-and-tuple.md §4.1), from an
+    // optional trailing `ASSIGNED` | `EXPLICIT` word written in the same
+    // slot as the storage clause and in either order with it. kAssigned is
+    // both the default and what every relation predating the amendment is,
+    // so a statement that says nothing means exactly what it always did.
+    catalog::KeyMode key_mode = catalog::KeyMode::kAssigned;
+
+    // Where the key-mode word was written, for the refusals that point at
+    // it. Which storage a mode can be stored on is a catalog rule rather
+    // than a grammar one, so the dispatcher - not the parser - is what
+    // needs this.
+    std::uint32_t key_mode_byte_offset = 0;
 };
 
 // The per-statement row cap for a multi-row INSERT (docs/spec-bulkinsert.md

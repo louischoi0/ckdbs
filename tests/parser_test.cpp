@@ -1,5 +1,9 @@
 #include "kds/parser/parser.hpp"
 
+#include <cstddef>
+#include <string>
+#include <string_view>
+
 #include <gtest/gtest.h>
 
 namespace kds::parser {
@@ -26,6 +30,91 @@ TEST(ParserTest, CreateTableExplicitBtree) {
     auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
     ASSERT_NE(ct, nullptr);
     EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree);
+}
+
+// ---- The key-mode word (PK03, docs/heap-and-tuple.md §4.1) ---------------
+
+TEST(ParserTest, CreateTableDefaultsToAssigned) {
+    // A statement that names no mode means what every statement written
+    // before the amendment meant, and that is what makes this additive.
+    auto stmt = Parse("CREATE TABLE t (id int64)");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
+    ASSERT_NE(ct, nullptr);
+    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kHeap);
+    EXPECT_EQ(ct->key_mode, catalog::KeyMode::kAssigned);
+}
+
+TEST(ParserTest, CreateTableTakesTheStorageAndKeyModeWordsInEitherOrder) {
+    for (std::string_view sql : {"CREATE TABLE t (id int64) BTREE EXPLICIT",
+                                 "CREATE TABLE t (id int64) EXPLICIT BTREE",
+                                 "CREATE TABLE t (id int64) explicit btree"}) {
+        auto stmt = Parse(sql);
+        ASSERT_TRUE(stmt.ok()) << sql << ": " << stmt.status().message();
+        auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
+        ASSERT_NE(ct, nullptr) << sql;
+        EXPECT_EQ(ct->clustered, catalog::ClusteredType::kBtree) << sql;
+        EXPECT_EQ(ct->key_mode, catalog::KeyMode::kExplicit) << sql;
+    }
+}
+
+TEST(ParserTest, CreateTableAcceptsHeapAssigned) {
+    // Both defaults said out loud. Accepted rather than refused as
+    // redundant: saying what you are relying on is not an error.
+    auto stmt = Parse("CREATE TABLE t (id int64) HEAP ASSIGNED");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
+    ASSERT_NE(ct, nullptr);
+    EXPECT_EQ(ct->clustered, catalog::ClusteredType::kHeap);
+    EXPECT_EQ(ct->key_mode, catalog::KeyMode::kAssigned);
+}
+
+TEST(ParserTest, CreateTableRecordsWhereTheKeyModeWordWasWritten) {
+    // The dispatcher refuses HEAP EXPLICIT and needs a byte to point at.
+    auto stmt = Parse("CREATE TABLE t (id int64) EXPLICIT");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
+    ASSERT_NE(ct, nullptr);
+    EXPECT_EQ(ct->key_mode, catalog::KeyMode::kExplicit);
+    EXPECT_EQ(ct->key_mode_byte_offset,
+              std::string_view("CREATE TABLE t (id int64) ").size());
+}
+
+TEST(ParserTest, CreateTableRefusesARepeatedWordInEitherCategory) {
+    struct Case {
+        std::string_view sql;
+        std::size_t offending_byte;
+    };
+    for (const Case& c : {Case{"CREATE TABLE t (id int64) HEAP BTREE", 31},
+                          Case{"CREATE TABLE t (id int64) BTREE BTREE", 32},
+                          Case{"CREATE TABLE t (id int64) ASSIGNED EXPLICIT", 35},
+                          Case{"CREATE TABLE t (id int64) EXPLICIT EXPLICIT", 35}}) {
+        auto stmt = Parse(c.sql);
+        ASSERT_FALSE(stmt.ok()) << c.sql;
+        EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument) << c.sql;
+        // The byte names the *second* word, which is the one that could not
+        // be honored - pointing at the first would blame the word that was
+        // read.
+        EXPECT_NE(stmt.status().message().find("byte " + std::to_string(c.offending_byte)),
+                  std::string::npos)
+            << c.sql << ": " << stmt.status().message();
+    }
+}
+
+TEST(ParserTest, CreateTableLeavesAnUnknownTrailingWordToTheGarbageCheck) {
+    // The loop must stop at a word it does not know rather than consuming
+    // it, so the pre-existing refusal is what an unknown word still gets -
+    // before this task and after it.
+    auto bare = Parse("CREATE TABLE t (id int64) FOO");
+    ASSERT_FALSE(bare.ok());
+    EXPECT_EQ(bare.status().code(), StatusCode::kInvalidArgument);
+
+    auto after_both = Parse("CREATE TABLE t (id int64) BTREE EXPLICIT FOO");
+    ASSERT_FALSE(after_both.ok());
+    EXPECT_EQ(after_both.status().code(), StatusCode::kInvalidArgument);
+    // Word for word the same refusal: the two known words are consumed and
+    // the unknown one lands where it always did.
+    EXPECT_EQ(after_both.status().message(), bare.status().message());
 }
 
 TEST(ParserTest, CreateTableRequiresAtLeastOneColumn) {

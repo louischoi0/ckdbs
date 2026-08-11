@@ -516,18 +516,55 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         return Status::InvalidArgument("CREATE TABLE requires at least one column");
     }
 
-    // Optional storage clause: HEAP | BTREE. Peek ahead - if neither
-    // keyword follows, default to HEAP; any other identifier is left for
-    // the trailing-garbage check at the top level.
-    const Token& peek = lexer_.Peek();
-    if (peek.type == TokenType::kIdent) {
-        if (IEquals(peek.text, "HEAP")) {
-            lexer_.Next();
-            stmt.clustered = catalog::ClusteredType::kHeap;
-        } else if (IEquals(peek.text, "BTREE")) {
-            lexer_.Next();
-            stmt.clustered = catalog::ClusteredType::kBtree;
+    // Optional trailing words: the storage clause (HEAP | BTREE) and the
+    // key mode (ASSIGNED | EXPLICIT, docs/heap-and-tuple.md §4.1). Both are
+    // facts about the whole relation, both are matched as identifiers and
+    // neither is reserved, so this is one loop over bare words rather than
+    // two peeks. Order between the two categories is free - unlike a
+    // column's suffixes, these are not two clauses on one thing whose
+    // spellings would both have to hash, since CREATE is not patternable.
+    // Anything else is left untouched for the trailing-garbage check at the
+    // top level.
+    bool storage_given = false;
+    bool key_mode_given = false;
+    for (;;) {
+        const Token word = lexer_.Peek();
+        if (word.type != TokenType::kIdent) break;
+
+        const bool is_heap = IEquals(word.text, "HEAP");
+        const bool is_btree = IEquals(word.text, "BTREE");
+        const bool is_assigned = IEquals(word.text, "ASSIGNED");
+        const bool is_explicit = IEquals(word.text, "EXPLICIT");
+        if (!is_heap && !is_btree && !is_assigned && !is_explicit) break;
+
+        // A category given twice is refused rather than last-one-wins:
+        // `HEAP BTREE` names two different relations and `ASSIGNED
+        // EXPLICIT` two different insert arities, so silently keeping one
+        // of them would be the parser deciding what the writer meant.
+        if (is_heap || is_btree) {
+            if (storage_given) {
+                return Status::InvalidArgument(
+                    "CREATE TABLE takes one storage word - HEAP or BTREE - and this is the "
+                    "second (byte " +
+                    std::to_string(word.byte_offset) + ")");
+            }
+            storage_given = true;
+            stmt.clustered = is_heap ? catalog::ClusteredType::kHeap
+                                     : catalog::ClusteredType::kBtree;
+        } else {
+            if (key_mode_given) {
+                return Status::InvalidArgument(
+                    "CREATE TABLE takes one key-mode word - ASSIGNED or EXPLICIT - and this is "
+                    "the second (byte " +
+                    std::to_string(word.byte_offset) + ")");
+            }
+            key_mode_given = true;
+            stmt.key_mode_byte_offset = word.byte_offset;
+            stmt.key_mode = is_assigned ? catalog::KeyMode::kAssigned
+                                        : catalog::KeyMode::kExplicit;
         }
+
+        lexer_.Next();
     }
 
     ConsumeOptionalSemicolon();

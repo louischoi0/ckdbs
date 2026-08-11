@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstring>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <string>
 
@@ -14,6 +16,7 @@
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/index/index_page.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/storage/index/index_tree.hpp"
 
 namespace kds::exec {
@@ -971,6 +974,11 @@ private:
         // to search for it - which is the search the trail exists to avoid
         // (workplan P09).
         PageId walk_last_page = kInvalidPageId;
+        // The page whose rows have already been emitted whole, in key order.
+        // Only used when `emit_in_key_order` is set - see below.
+        PageId ordered_page = kInvalidPageId;
+        std::vector<std::pair<std::uint64_t, std::uint16_t>> by_key;
+
         auto visitor = [&](PageId page_id, heap::PageView& page,
                            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (stopped_) return storage::VisitControl::kStop;
@@ -990,6 +998,47 @@ private:
             if (pruning && page.min_key() > range_high) {
                 ++stats_.For(step.step_id).range_pages_pruned;
                 return storage::VisitControl::kStop;
+            }
+
+            // ---- Emitting a page in key order (step_chain.hpp) -----------
+            //
+            // The walk has no per-page hook, so the first slot of a page
+            // stands in for one: it emits every live slot of that page in key
+            // order and marks the page done, and the remaining slots of the
+            // same page are then no-ops. Across pages nothing changes -
+            // they are already visited in ascending `min_key`.
+            if (step.emit_in_key_order) {
+                if (page_id == ordered_page) return storage::VisitControl::kContinue;
+
+                by_key.clear();
+                const std::uint16_t n = page.slot_count();
+                by_key.reserve(n);
+                for (std::uint16_t i = 0; i < n; ++i) {
+                    auto payload = page.PayloadAt(i, n);
+                    if (!payload.ok()) continue;  // retired or out-of-range slot
+                    auto id = KeystoneIdOfPayload(payload.value());
+                    if (!id.ok()) {
+                        inner = id.status();
+                        return id.status();
+                    }
+                    by_key.emplace_back(id.value(), i);
+                }
+                std::sort(by_key.begin(), by_key.end());
+
+                // Marked before emitting, not after: AcceptTupleAt can stop
+                // the walk mid-page (a LIMIT filling up), and a page left
+                // unmarked would be re-emitted from its next slot.
+                ordered_page = page_id;
+                for (const auto& [key, ordered_slot] : by_key) {
+                    auto ok = AcceptTupleAt(steps, index, step, access, page_id, page,
+                                            ordered_slot);
+                    if (!ok.ok()) {
+                        inner = ok;
+                        return ok;
+                    }
+                    if (stopped_) return storage::VisitControl::kStop;
+                }
+                return storage::VisitControl::kContinue;
             }
 
             auto accepted = AcceptTupleAt(steps, index, step, access, page_id, page, slot);

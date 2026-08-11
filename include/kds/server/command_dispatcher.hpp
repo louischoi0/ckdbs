@@ -17,6 +17,7 @@
 #include "kds/exec/budget.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/server/session_step_client.hpp"
 #include "kds/exec/pattern_ddl.hpp"
 #include "kds/exec/cabin_ddl.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
@@ -140,6 +141,14 @@ enum class PhysicalOptimizerMode : std::uint8_t {
 struct DispatchOutcome {
     std::string response;
     bool should_stop = false;
+
+    // A remote read this statement opened (workplan P4c): the reply is not
+    // in `response` yet - the caller awaits the read and finishes through
+    // `FinishRemoteRead()`. `DispatchAsync()` parks on it; the synchronous
+    // `Dispatch()` can finish one only when it already completed (the
+    // in-process loopback case), because with no reactor there is nothing
+    // to pump the reply through.
+    std::optional<PipelineTag> pending_remote;
 
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/wal.md
@@ -324,16 +333,20 @@ public:
     //                            zero-column relation cannot have one.
     //                            Kept only so the failure names the
     //                            reason; use the column-list form.
-    //   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE]
+    //   CREATE TABLE <name> (<col> <type> [, ...])
+    //       [HEAP | BTREE] [ASSIGNED | EXPLICIT]
     //                         -> same CREATED/EXISTS response as above,
     //                            but with real columns: parsed via
     //                            src/parser, types resolved through
-    //                            Catalog::ResolveTypeByName(). The trailing
-    //                            keyword picks the storage: HEAP (default)
-    //                            is a chain of heap pages, BTREE is a
-    //                            clustered B+ tree on the Keystone pk. See
-    //                            src/exec/row_codec.hpp for the supported
-    //                            column type set.
+    //                            Catalog::ResolveTypeByName(). The storage
+    //                            word: HEAP (default) is a chain of heap
+    //                            pages, BTREE is a clustered B+ tree on the
+    //                            Keystone pk. The key-mode word (§4.1):
+    //                            ASSIGNED (default) has the engine issue the
+    //                            pk, EXPLICIT has the caller supply it and
+    //                            requires BTREE. Either order, each at most
+    //                            once. See src/exec/row_codec.hpp for the
+    //                            supported column type set.
     //   INSERT INTO <name> VALUES (<val> [, ...])
     //                         -> "INSERTED oid=<table_oid> id=<n> slot=<n>"
     //                            or "ERR ...". Values are positional, one
@@ -705,6 +718,12 @@ public:
         aggregate_limits_ = limits;
     }
 
+    // Arms the remote-read path (workplan P4c): a single-step star SELECT
+    // of a relation another core owns ships to that core instead of taking
+    // the affinity refusal. `client` must outlive the dispatcher. With
+    // this never called, every statement behaves exactly as before.
+    void SetRemoteReads(SessionStepClient* client) noexcept { remote_reads_ = client; }
+
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,
     // with the same default posture: a dispatcher never told behaves as the
@@ -926,6 +945,11 @@ private:
     };
     PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
 
+    // The row-relocation callback a rollback needs when a leaf division has
+    // moved rows this transaction wrote (txn/manager.hpp's RowLocator).
+    // Built per abort, never stored on the manager - see the definition.
+    txn::TransactionManager::RowLocator RowLocatorForRollback();
+
     // The bytes of the page a located tuple sits on, for a reader. Reuses
     // the span the locator carried out when it has one, and fetches
     // read-only when it does not.
@@ -956,6 +980,11 @@ private:
     // Dispatch() wraps this to time it and log the outcome once, in one
     // place, rather than at every return of every handler.
     DispatchOutcome DispatchInner(std::string_view line, Session& session);
+
+    // Formats a completed remote read into the exact reply the local path
+    // would have produced (workplan P4c) - same header, same row shape -
+    // and closes the read. Call only when the read is done.
+    DispatchOutcome FinishRemoteRead(const PipelineTag& tag);
 
 
     bool logging(LogLevel level) const noexcept {
@@ -1075,6 +1104,14 @@ private:
     // §6 asks for. 0 is the system core and the only value a single-core
     // build ever has, so every pre-multicore construction site is unchanged.
     std::uint32_t core_id_ = 0;
+
+    // The session side of remote reads (workplan P4c), null until the
+    // Expeditor wires it - with it null every cross-core chain keeps the
+    // affinity refusal it always had.
+    SessionStepClient* remote_reads_ = nullptr;
+    // Per-statement pipeline ids: sequential, never pointer-derived
+    // (crosscore.md §3, sched.md §7's determinism rule).
+    std::uint64_t next_remote_request_ = 1;
 
     // The read-path index switch (`indexes`, default on). Read-path only:
     // maintenance is not switchable, because an index that stops being

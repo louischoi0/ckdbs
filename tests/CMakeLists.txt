@@ -40,6 +40,8 @@ add_executable(kds_tests
     core_runtime_test.cpp
     step_pipeline_test.cpp
     step_descriptor_test.cpp
+    remote_step_service_test.cpp
+    session_step_client_test.cpp
     core_affinity_test.cpp
     coro_test.cpp
     spsc_ring_test.cpp
@@ -91,6 +93,7 @@ add_executable(kds_tests
     bootstrap_test.cpp
     page_mgr_test.cpp
     command_dispatcher_test.cpp
+    key_mode_test.cpp
     tcp_server_test.cpp
     lexer_test.cpp
     fingerprint_test.cpp

@@ -1,5 +1,6 @@
 #include "kds/stats/cabin_store.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 

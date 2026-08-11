@@ -1,5 +1,6 @@
 #include "kds/stats/cabin_optimizer.hpp"
 
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -23,6 +24,11 @@ SnapshotFingerprint Fp(std::uint64_t pattern, std::uint32_t freq_points,
     fp.pattern_id = pattern;
     fp.frequency_q8 = freq_points * kDecayScoreScale;
     fp.pages_q8 = page_points * kDecayScoreScale;
+    // Both projections of the one state, exactly as `Snapshot()` fills
+    // them - a fixture that set only the linear pair would hand the core
+    // a snapshot no collector can produce.
+    fp.frequency_log2 = Log2OfQ16(fp.frequency_q8);
+    fp.pages_log2 = Log2OfQ16(fp.pages_q8);
     fp.candidate = CandidateRef{rel, col, cabin_id};
     return fp;
 }
@@ -431,6 +437,152 @@ TEST(CabinOptimizerTest, IdenticalStreamsProduceBitIdenticalTraces) {
         EXPECT_EQ(a[i].benefit, b[i].benefit) << i;
         EXPECT_EQ(a[i].cost, b[i].cost) << i;
     }
+}
+
+// ---- What the log-domain score buys (2026-08-10) -------------------------
+
+namespace {
+
+// Runs one Cabin at `freq` executions x `pages` pages until it is ACTIVE,
+// then goes silent and returns how many half-lives it took to leave
+// ACTIVE for DECAYING. One shape, one relation, so nothing interferes.
+std::uint64_t HalfLivesUntilDecaying(std::uint32_t freq, std::uint32_t pages,
+                                     std::uint64_t amort = 1) {
+    CabinOptimizerConfig config = TestConfig();
+    config.amort_windows = amort * kFixOne;
+    CabinOptimizer opt(config);
+    const sched::MonoTimeNs hl = config.half_life_ns;
+
+    std::uint64_t version = 0;
+    const auto hot = [&](sched::MonoTimeNs epoch) {
+        return Snap(++version, epoch, {Fp(7, freq, pages)});
+    };
+    for (int i = 0; i < 4; ++i) (void)opt.Decide(hot(hl));
+    opt.NoteCreated(kRel, kCol, /*cabin_id=*/42, /*pages=*/1);
+
+    // Silence: the snapshot keeps reporting the same *state*, decayed by
+    // the epoch, which is what a real collector does for a shape nobody
+    // executes. Frequency and pages decay together, the mean does not.
+    for (std::uint64_t n = 1; n <= 200; ++n) {
+        SnapshotFingerprint fp = Fp(7, freq, pages);
+        // Decay both halves by n half-lives, linear and log alike.
+        fp.frequency_q8 = n >= 24 ? 0 : fp.frequency_q8 >> n;
+        fp.pages_q8 = n >= 24 ? 0 : fp.pages_q8 >> n;
+        fp.frequency_log2 -= static_cast<Log2Q16>(n) << 16;
+        fp.pages_log2 -= static_cast<Log2Q16>(n) << 16;
+        (void)opt.Decide(Snap(++version, hl + n * hl, {fp}, {Quality(42, 0, 0)}));
+        for (const ManagedEntryView& entry : opt.ManagedEntries()) {
+            if (std::string(entry.state) == "DECAYING") return n;
+        }
+    }
+    return 0;  // never decayed
+}
+
+}  // namespace
+
+TEST(CabinOptimizerTest, TheOnsetIsNotCappedByTheScoreWidth) {
+    // What the log domain actually removes, stated exactly. The DECAYING
+    // onset should arrive at log2(B/C) half-lives of silence, which grows
+    // with the frequency, the saved-pages factor **and** T_amort. Q24.8
+    // caps it instead at log2(frequency x 256) - the score's own bit
+    // width - because past that every read is 0 and the comparison goes
+    // vacuous. The cap sits about 1.3 half-lives above the onset at the
+    // shipped T_amort = 64, so it is a cliff one doubling away rather
+    // than a live defect; at 512 it bites, which is where this pins it.
+    //
+    // freq = 4 scales to 1024, so the linear score reads zero from the
+    // 11th half-life; the honest onset at T_amort = 512 is ~11.7, i.e.
+    // the 12th. One half-life apart, and that single step is the whole
+    // difference between a verdict and a running-out-of-digits - pinned
+    // exactly, because a looser bound passes against the old code.
+    const std::uint64_t onset = HalfLivesUntilDecaying(/*freq=*/4, /*pages=*/40, /*amort=*/512);
+    ASSERT_GT(onset, 0u) << "the Cabin never decayed";
+    EXPECT_GE(onset, 12u)
+        << "the onset stopped at the score's bit width (" << onset
+        << " half-lives), so a wider amortization window bought nothing";
+
+    // And it still tracks the evidence: 1024x the frequency is 10 more
+    // half-lives of silence before the same verdict.
+    const std::uint64_t bigger =
+        HalfLivesUntilDecaying(/*freq=*/4096, /*pages=*/40960, /*amort=*/512);
+    ASSERT_GT(bigger, 0u);
+    EXPECT_NEAR(static_cast<double>(bigger) - static_cast<double>(onset), 10.0, 1.5);
+}
+
+TEST(CabinOptimizerTest, TheSwapEvictsTheColdestEvenWhenBothHaveUnderflowed) {
+    // Victim selection used to read the linear benefit, so two incumbents
+    // decayed past Q24.8's floor tied at zero and the swap took whichever
+    // sorted first by key - an arbitrary Cabin, not the coldest. Ordering
+    // in the log domain restores the intent.
+    // The warm incumbent sorts **first** by key, deliberately: a scan that
+    // ties at zero keeps whichever it met first, so this arrangement is
+    // the one where the linear comparison evicts the wrong Cabin and the
+    // log comparison does not. Reversed, both implementations agree and
+    // the test proves nothing.
+    constexpr std::uint64_t kWarmRel = 4000;
+    constexpr std::uint64_t kColdRel = 4002;
+    constexpr std::uint64_t kNewRel = 4004;
+    constexpr sched::MonoTimeNs kEpoch = 100'000;
+
+    CabinOptimizerConfig config = TestConfig();
+    config.page_budget = 2;        // room for exactly the two incumbents
+    config.amort_windows = 4096 * kFixOne;  // see below
+    CabinOptimizer opt(config);
+
+    constexpr std::uint64_t kWarmCabin = 92;
+    constexpr std::uint64_t kColdCabin = 91;
+
+    // A wide amortization window is what makes this state reachable at
+    // all: an incumbent stays ACTIVE while its *linear* score reads zero
+    // only when the cost floor it is measured against is itself tiny.
+    // That is the same corner the onset cap lives in, approached from the
+    // other side.
+    //
+    // Two incumbents, differing in what they were worth when built: the
+    // warm one saves 8 pages a scan, the cold one 4. They are **created
+    // by the controller**, not injected, because the frozen baseline the
+    // comparison rests on is written by the CREATE decision - an injected
+    // NoteCreated leaves it zero and both entries collapse together, for
+    // an entirely different reason than the one under test.
+    for (std::uint64_t v = 1; v <= 4; ++v) {
+        (void)opt.Decide(Snap(v, 0, {Fp(7, 10, 80, kWarmRel, kCol),
+                                     Fp(8, 10, 40, kColdRel, kCol)}));
+    }
+    opt.NoteCreated(kWarmRel, kCol, kWarmCabin, /*pages=*/1);
+    opt.NoteCreated(kColdRel, kCol, kColdCabin, /*pages=*/1);
+    ASSERT_EQ(opt.pages_committed(), 2u);
+
+    // Now both idle past the linear floor - `frequency_q8` zero is exactly
+    // what the collector reports there - at a frequency (2^-9 executions)
+    // that still clears each one's own drop threshold. Their benefits
+    // differ by the frozen saving, tenfold, and the linear form cannot
+    // see it: both read 0.
+    const auto faded = [&](std::uint64_t pattern, std::uint64_t rel, std::uint64_t cabin,
+                           Log2Q16 mean_log) {
+        SnapshotFingerprint fp = Fp(pattern, 10, 400, rel, kCol, cabin);
+        fp.frequency_q8 = 0;
+        fp.pages_q8 = 0;
+        fp.frequency_log2 = -(Log2Q16{1} << 16);  // scaled 0.5: real 2^-9
+        fp.pages_log2 = fp.frequency_log2 + mean_log;  // the mean is decay-invariant
+        return fp;
+    };
+    for (std::uint64_t v = 5; v <= 12; ++v) {
+        const ActionSet actions = opt.Decide(
+            Snap(v, kEpoch,
+                 {faded(7, kWarmRel, kWarmCabin, /*mean_log=*/Log2Q16{3} << 16),
+                  faded(8, kColdRel, kColdCabin, /*mean_log=*/Log2Q16{2} << 16),
+                  Fp(9, 400, 16000, kNewRel, kCol)},
+                 {Quality(kWarmCabin, 0, 0), Quality(kColdCabin, 0, 0)}));
+        for (const ActionItem& a : actions) {
+            if (a.action != CabinAction::kDrop) continue;
+            EXPECT_EQ(a.cabin_id, kColdCabin)
+                << "the swap evicted the warmer incumbent (cabin " << a.cabin_id
+                << "), which is what a tie at zero broken by key order does";
+            EXPECT_EQ(a.reason, ActionReason::kBudgetSwap);
+            return;
+        }
+    }
+    FAIL() << "the budget swap never fired";
 }
 
 TEST(CabinOptimizerTest, TheCooldownIsSettableBelowTheAmortizationWindow) {

@@ -527,6 +527,10 @@ private:
     // it was before this existed. That asymmetry is deliberate - it is what
     // makes the single-core path unchanged rather than merely equivalent.
     std::optional<sched::RealRingTransport> transport_;
+
+    // The session side of remote reads (workplan P4c), armed with the
+    // transport: core 0 ships eligible single-step reads to owning cores.
+    std::optional<SessionStepClient> remote_reads_;
     std::vector<std::unique_ptr<CoreRuntime>> cores_;
 
     // Core 0's page-id allocator (M5): the only thing that carves the free

@@ -46,6 +46,8 @@ add_library(kds
     src/server/extent_lease_service.cpp
     src/server/row_id_lease_service.cpp
     src/server/step_descriptor.cpp
+    src/server/remote_step_service.cpp
+    src/server/session_step_client.cpp
     src/catalog/oid.cpp
     src/catalog/rows.cpp
     src/catalog/keystone_budget.cpp

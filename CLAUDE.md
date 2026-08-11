@@ -52,10 +52,11 @@ statements, not style.
 | Physical optimizer, Part I: relayout | Built and measured (PX01-PX08), **shadow-only as a finding** — every move blocked by a named §6 gate | `docs/feat-physical-optimizer.md`, `docs/workplan-physical-optimizer.md` |
 | Physical optimizer, Part II: Cabin controller | **Complete** (PHY01-PHY08, closed 2026-08-10): controller end to end over the EVT03/EVT06 substrate, `SHOW CABIN_OPTIMIZER` observability, E2E lifecycle test, measured in `bench/results-cabin-optimizer.md` (zero-candidate overhead unmeasurable, 10.9× on the 10k improvement case); managed state is memory-resident — restart forgets, re-observation rebuilds | same docs, Part II / §II.1-§II.7 |
 | Buffer-pool eviction | EVT01/EVT02 partly, EVT03 (writeback) and EVT06 (scan ring) built; full CLOCK reclamation still gated on the `PageRef` migration | `docs/spec-eviction.md`, `docs/workplan-eviction.md`, `docs/page.md` §3 |
-| Cross-core execution | P0, P1, P2, P6 (catalog half + CC7 decision + P6b handoff + P6c placement), P5-shape row-id leasing, P4 restriction half — all built by 2026-08-10. **The one remaining piece is the step pipeline itself** (statement dispatch + the executor's coroutine conversion) | `docs/crosscore.md`, `docs/workplan-crosscore.md`, `docs/sched.md` |
+| Cross-core execution | P0, P1, P2, P6 (catalog half + CC7 decision + P6b handoff + P6c placement), P5-shape row-id leasing, P4 restriction half — all built by 2026-08-10. P4a-P4c built 2026-08-10 — the engine's first cross-core statement executes (single-step star SELECT, served by the owning core). **Remaining: P4d (multi-step wiring + the executor's coroutine conversion) and P4e (equivalence + the benchmark re-run)** | `docs/crosscore.md`, `docs/workplan-crosscore.md`, `docs/sched.md` |
 | Task representation | Decided and built: C++20 stackless coroutines | `docs/sched.md` §3 |
 | Wire protocol KWP/1 | Frame codec only; the server speaks the newline text protocol | `docs/protocol.md`, `docs/protocol-wp.md`, `docs/client-manual.md` |
 | Keystone id issue-once contract | K-M1, K-M3, K-M4 built (K-M3 2026-08-10: `exec::CompileAssignments` refuses a pk UPDATE at compile with `Unsupported` and a byte); K1 does not hold across a crash — read the findings before quoting the invariant | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
+| Key mode (`EXPLICIT` pk) | **Built 2026-08-11** (PK01-PK07): the caller may supply a pk and it need not ascend; uniqueness is proved by the btree descent, so the mode is `BTREE`-only and a full leaf now divides. The pk stays non-updatable. **Complete** — PK09 (dividing a full internal node) landed the same day, so no part of the feature is refused for being unbuilt | `docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` |
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
 | User manual | `manual/` — SQL surface written, verified against code | `manual/sql/sql.md` |
 
@@ -84,7 +85,7 @@ Numbered to match `docs/heap-and-tuple.md` §8.
 8. Waystone is advisory: deleting it wholesale may cost performance but must never change a query result.
 9. Waystone is never **authoritative**: a reader may consult it for *where to look* only, with the miss/Keystone/MVCC/fall-through discipline `docs/heap-and-tuple.md` §8 spells out. It chooses where to look, never what is visible.
 10. No single canonical in-memory tuple; consistency comes from page pin and latch discipline.
-11. **Every** relation's pk is system-generated autoincrement, issued by `Catalog::AllocateRowId()`, carried only by the Keystone word, never updatable. A caller-supplied pk on insert is a defect. First column must be integer-typed.
+11. **Every** relation's pk is a unique 40-bit id, carried only by the Keystone word, never rebound, **never updatable**. First column must be integer-typed. **Amended and built 2026-08-11** (`docs/heap-and-tuple.md` §4.1): the mode is fixed at `CREATE TABLE` — `ASSIGNED` (default) issues from `sys.tables.next_id` and ids ascend; `EXPLICIT` takes the caller's id, **which need not ascend**, proves uniqueness by btree descent, and must therefore be `BTREE`-clustered. Heap chains stay `ASSIGNED`-only. Read §4.1 before relying on ordering — monotonicity is now per-relation, never engine-wide.
 12. The tuple MVCC header is exactly `trx_id:48 | undo_ptr | data_len | flags` = 20 bytes. There is no `xmax`.
 13. **Every tuple is fixed-length**: row size is a schema constant, variable-width values occupy one tagged cell of `kds.inline_cell_width` bytes. A disagreeing length is `Corruption`, never interpreted.
 14. **Var-heap values are immutable per version** and `kVarHeap` pages are never relocated. Authoritative data — advisory rules do not apply to it.
@@ -193,7 +194,8 @@ interface that keeps every listed option viable.
   `docs/rule-fixed-length-tuple.md`): heap page split policy;
   `inline_cell_width` default; spilled-value size cap; prefix-inlining
   trigger; purge cadence; the 16 reserved Keystone bits; id reuse; I/O
-  backend; whether invariants 3/11 are ever relaxed.
+  backend; whether invariant 3 is ever relaxed; whether a heap relation may
+  ever be `EXPLICIT` (that is the split policy, not a pk rule).
 - **Waystone** (`docs/waystone-concpets.md` §9): per-pattern retention and
   eviction; persistence class of trail pages; `arg_hash` collisions; decay
   and sampling; whether invariant 9 is ever amended.

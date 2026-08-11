@@ -1406,6 +1406,22 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 "; pk order is the order the chain already emits, and any other "
                 "order needs an output sort this engine does not have");
         }
+        // ...and on a kExplicit relation "the order the chain already emits"
+        // is not quite true (docs/heap-and-tuple.md §4.1): a page's slots are
+        // in insertion order, which equals key order only because an
+        // engine-issued id is appended above every id already there. A
+        // caller-supplied id can be appended below them.
+        //
+        // The divergence is **within a page only** - pages stay key-ordered
+        // by `min_key`, which a leaf division preserves - so the fix is a
+        // per-page emission order, not an output sort. Asked for here rather
+        // than always, because reading every live slot's Keystone word up
+        // front is a real cost on a walk that otherwise reads one per row.
+        if (!chain.steps.empty() && !scope.relations.empty() &&
+            scope.relations[0].access != nullptr &&
+            scope.relations[0].access->key_mode == catalog::KeyMode::kExplicit) {
+            chain.steps[0].emit_in_key_order = true;
+        }
     }
     chain.limit = stmt.limit;
     chain.offset = stmt.offset;

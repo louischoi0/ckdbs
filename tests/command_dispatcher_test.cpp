@@ -172,6 +172,40 @@ TEST_F(CommandDispatcherTest, DescribeListsColumnsAndMarksThePrimaryKey) {
     EXPECT_EQ(out.response.find('\n'), std::string::npos);
 }
 
+// ---- The key mode in DESCRIBE (PK06, heap-and-tuple.md §4.1) ------------
+//
+// Two facts, and the second is the reason the first is printed at all:
+// which mode the relation was created in, and whether its pk column is
+// something the engine issues.
+
+TEST_F(CommandDispatcherTest, DescribeReportsAnAssignedRelationsKeyMode) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE acct (id int64, qty int64)").response.substr(0, 7),
+              "CREATED");
+
+    auto out = d.Dispatch("DESCRIBE acct");
+    // Beside the storage, which is the other DDL-only fact on the line.
+    EXPECT_NE(out.response.find("clustered_type=HEAP key_mode=ASSIGNED"), std::string::npos)
+        << out.response;
+    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=yes"),
+              std::string::npos)
+        << out.response;
+}
+
+TEST_F(CommandDispatcherTest, DescribeReportsAnExplicitRelationsKeyMode) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto created = d.Dispatch("CREATE TABLE t (id int64, qty int64) BTREE EXPLICIT");
+    ASSERT_EQ(created.response.substr(0, 7), "CREATED") << created.response;
+
+    auto out = d.Dispatch("DESCRIBE t");
+    EXPECT_NE(out.response.find("clustered_type=BTREE key_mode=EXPLICIT"), std::string::npos)
+        << out.response;
+    // Still the pk - the caller names it, so nothing autoincrements it.
+    EXPECT_NE(out.response.find("name=id type=int64 notnull=yes pk=yes autoincrement=no"),
+              std::string::npos)
+        << out.response;
+}
+
 TEST_F(CommandDispatcherTest, DescAbbreviationIsAccepted) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     EXPECT_EQ(d.Dispatch("DESC tables").response.substr(0, 4), "oid=");
@@ -354,6 +388,41 @@ TEST_F(CommandDispatcherTest, CreateTableRejectsANonIntegerPrimaryKey) {
     auto out = d.Dispatch("CREATE TABLE bad (name varchar, id int64)");
     EXPECT_EQ(out.response.substr(0, 4), "ERR ");
     EXPECT_NE(out.response.find("must be an integer type"), std::string::npos) << out.response;
+}
+
+// ---- The key mode against the storage (PK03, heap-and-tuple.md §4.1) ----
+//
+// The grammar takes the two trailing words in either order and says
+// nothing about which pairs a relation can be stored as. That is this
+// layer's question, and these pin where it is answered.
+
+TEST_F(CommandDispatcherTest, CreateTableAcceptsAnExplicitBtreeRelation) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    EXPECT_EQ(d.Dispatch("CREATE TABLE t (id int64) BTREE EXPLICIT").response.substr(0, 8),
+              "CREATED ");
+    EXPECT_EQ(d.Dispatch("CREATE TABLE u (id int64) EXPLICIT BTREE").response.substr(0, 8),
+              "CREATED ");
+}
+
+TEST_F(CommandDispatcherTest, CreateTableRefusesAnExplicitHeapRelation) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    // Written out, and written by omission - HEAP is the default, so a bare
+    // EXPLICIT asks for the same relation and gets the same refusal at the
+    // same byte.
+    auto spelled = d.Dispatch("CREATE TABLE t (id int64) HEAP EXPLICIT");
+    EXPECT_EQ(spelled.response.substr(0, 4), "ERR ") << spelled.response;
+    EXPECT_NE(spelled.response.find("must be BTREE"), std::string::npos) << spelled.response;
+    EXPECT_NE(spelled.response.find("byte 31"), std::string::npos) << spelled.response;
+
+    auto implied = d.Dispatch("CREATE TABLE t (id int64) EXPLICIT");
+    EXPECT_EQ(implied.response.substr(0, 4), "ERR ") << implied.response;
+    EXPECT_NE(implied.response.find("must be BTREE"), std::string::npos) << implied.response;
+    EXPECT_NE(implied.response.find("byte 26"), std::string::npos) << implied.response;
+
+    // Refused before anything is written: no relation is left behind under
+    // either spelling.
+    EXPECT_EQ(d.Dispatch("DESCRIBE t").response.substr(0, 4), "ERR ");
 }
 
 TEST_F(CommandDispatcherTest, CreateTableIsIdempotentWhenAlreadyExists) {

@@ -6,6 +6,15 @@ amendments are **applied here** (2026-08-03): K3's wording, §1's min_key
 aside, §5's milestone order, and §1.2's oid claim. Read the findings before
 starting K-M2; three of them change what K-M2 is.
 
+**Amended 2026-08-11 by `docs/heap-and-tuple.md` §4.1** (the `EXPLICIT` key
+mode, **built** the same day). K1, K2, K4 and K5 are untouched. **K3 and §2
+are not**: the amendment removed monotonicity for explicit relations, which
+K3 had reserved as a separate decision, and it did **not** ship the
+explicit-id gate §2 had written for it. Both are corrected below, in place,
+with the difference stated rather than smoothed over — §2's rule and the
+shipped rule are not the same rule, and a reader who quotes the old one will
+be wrong about what the engine accepts.
+
 **Milestone state (corrected 2026-08-10 — this line read "K-M2..K-M6 not
 started", which §5 below already contradicted for K-M4):**
 **K-M1 done**, **K-M4 done** (both 2026-08-03), **K-M3 done 2026-08-10**.
@@ -26,13 +35,26 @@ Decisions fixed here:
 - **K2 — Immutable.** A tuple's Keystone id never changes after
   insert. An UPDATE that targets the super column is **Unsupported**
   (V5-style hard rejection, no slow path).
-- **K3 — No density promise.** Gaps are legal and expected
-  (bump-ahead recovery, aborted inserts); nothing may rely on ids
-  being contiguous. Issue-once does not *by itself* promise ordering
-  — but the allocator (§2) never moves its cursor backward, and the
-  semi-sorted heap, the clustered btree and range pruning rely on
-  that. Removing monotonicity is a separate decision with its own
-  blast radius, not a consequence of this one.
+- **K3 — No density promise, and since 2026-08-11 no ordering promise
+  either.** Gaps are legal and expected (bump-ahead recovery, aborted
+  inserts); nothing may rely on ids being contiguous. Issue-once does
+  not *by itself* promise ordering, and this clause used to close with
+  "removing monotonicity is a separate decision with its own blast
+  radius, not a consequence of this one."
+  **That decision has now been made**, by `docs/heap-and-tuple.md`
+  §4.1's `EXPLICIT` key mode: on such a relation the caller names the
+  id and **it need not ascend**. So K3's subject widens twice over —
+  ids may be sparse *and* out of order — and the blast radius was paid
+  where it lands rather than avoided. It landed entirely inside the
+  clustered btree: a full leaf now divides, a full internal node divides
+  too, and the leaf slot search no longer assumes key order. Nothing outside the btree
+  changed, because nothing outside it depended on issuance order —
+  see the corrected list in §1.
+  **What did not move:** an `ASSIGNED` relation's cursor still never
+  goes backward, and every heap-clustered relation is `ASSIGNED`, so
+  the semi-sorted heap chain keeps monotonic ids unconditionally.
+  Monotonicity is now a **per-relation property, not an engine-wide
+  one** — code that needs it must read `key_mode`, never assume it.
 - **K4 — Lifetime budget is a documented product constraint.** 2^40
   ids per relation is the relation's lifetime insert budget, stated
   openly in product docs rather than engineered around.
@@ -91,33 +113,62 @@ What this buys, engine-wide:
 What it deliberately does **not** promise (K3): no gap-freeness, and no
 correlation between id order and insert order across crashes.
 
-It does not promise **ordering** either — but the engine has it anyway,
-from §2's allocator, and four things already depend on it. Worth naming,
-because the earlier wording here claimed the opposite:
+It does not promise **ordering** either. The engine used to have it
+anyway, from §2's allocator, and four things depended on it. **Corrected
+2026-08-11**, when the `EXPLICIT` key mode dropped the ascent for
+btree-clustered relations and each of the four had to be settled:
 
 - the semi-sorted heap chain refuses an id below the tail page's
   `min_key` (`heap_chain.hpp`), which is invariant 3 enforced at the one
   place tuples enter — so it depends on *issuance* order, not only on
-  values;
-- the clustered btree **refuses a non-monotonic id outright**, with
-  `OutOfSpace` naming the open split-policy decision rather than guessing
-  (`btree.hpp`) — a hard failure, not a lost optimization, and the
-  strongest of the four;
+  values. **Kept, by scoping**: an `EXPLICIT` relation must be
+  btree-clustered, so every heap chain is still fed a monotonic
+  sequence. This is the dependency that decided the shape of the whole
+  feature.
+- the clustered btree used to **refuse a non-monotonic id outright**,
+  with `OutOfSpace` naming the open split-policy decision rather than
+  guessing — the strongest of the four. **Paid off**: `SplitLeafAndInsert`
+  divides a full leaf instead (`src/storage/btree/btree.cpp`,
+  `heap-and-tuple.md` §4.1). One refusal of this class survives, and it is
+  narrower still, and then closed: a separator promoted into a *full
+  internal node* below that node's highest divides its entries (PK09),
+  which leaves no refusal of this class at all.
 - `keystone.hpp` derives uniqueness *from* monotonicity ("unique and
-  monotonic by construction rather than by a uniqueness check");
+  monotonic by construction rather than by a uniqueness check").
+  **Replaced, per mode**: on `ASSIGNED` that derivation stands; on
+  `EXPLICIT` uniqueness comes from the descent, which scans the one leaf
+  that may hold the key and answers `AlreadyExists`.
 - `kRange`'s `min_key` tail pruning stops a walk on the strength of it
-  (`src/exec/step_vm.cpp`).
+  (`src/exec/step_vm.cpp`). **Untouched**: it rests on *page-wise*
+  `min_key` ordering, which a leaf division preserves — the old leaf keeps
+  its bound and the new one takes the split key. Value order across pages
+  never required issuance order.
 
-None of that is a promise this document makes. All of it is a promise
-something would have to re-make before monotonicity could be dropped.
+None of that is a promise this document makes. All of it was a promise
+something had to re-make before monotonicity could be dropped, and this is
+the record of which ones were re-made and how.
 
 ## 2. Allocator contract
 
 Per relation, the allocator maintains a persisted **high-water mark**
-(HWM): the smallest id never yet issued. Rules:
+(HWM) in `sys.tables.next_id`. **What that number means is now
+mode-dependent** (`heap-and-tuple.md` §4.1), and conflating the two
+readings is the mistake this section previously made:
+
+- on an **`ASSIGNED`** relation it is *the smallest id never yet issued*,
+  and it is both the source of ids and the proof they are unique;
+- on an **`EXPLICIT`** relation it is *a ceiling at or above every id
+  placed so far*, and it is neither. It issues nothing and gates nothing;
+  it exists so K4's budget and the 40-bit exhaustion check stay truthful
+  about the id space consumed.
+
+Rules:
 
 - Issue = return current cursor, advance. The cursor never moves
-  backward, and no free-list of any kind exists for Keystone ids.
+  backward, and no free-list of any kind exists for Keystone ids. This is
+  the `ASSIGNED` path; `Catalog::AllocateRowId` and
+  `Catalog::AllocateRowIdRange` both refuse a `kExplicit` relation with
+  `Unsupported`, so there is no path on which the two readings meet.
 - **Bump-ahead persistence** `[PROPOSED]`: the HWM is persisted in
   chunks — the durable record always holds a *ceiling* at or above
   every id actually issued (persist `cursor + N`, hand out ids up to
@@ -142,11 +193,50 @@ Per relation, the allocator maintains a persisted **high-water mark**
 - Concurrency: the relation's owning core is the only issuer
   (core-ownership dispatch), so the allocator is single-writer by
   construction — no atomics, no cross-core coordination.
-- Explicit-id inserts, if any path allows them, must go through the
-  same gate: an explicit id ≥ HWM advances the HWM past it; an
-  explicit id < HWM is rejected (it may collide with an issued id,
-  and proving otherwise would require the free-list this design
-  forbids).
+- **Explicit-id inserts — corrected 2026-08-11, and this bullet used to
+  be wrong about what shipped.** It reserved a gate: *an explicit id ≥
+  HWM advances the HWM past it; an explicit id < HWM is rejected, since
+  it may collide with an issued id and proving otherwise would require
+  the free-list this design forbids.* When `heap-and-tuple.md` §4.1
+  built the `EXPLICIT` key mode it did **not** spend that clause. It
+  deleted the second half.
+
+  **What `Catalog::AdmitExplicitRowId` actually does:** it checks that
+  the id is *spellable* — inside `[kFirstRowId, kMaxKeystoneId]`, else
+  `InvalidArgument` — and that the relation is `kExplicit`, else
+  `Unsupported`. Then it advances the mark with `max()`: at or above,
+  `next_id = id + 1`, persisted before the row is placed; **below, it
+  returns having written nothing**. There is no ordering check and no
+  `OutOfRange`.
+
+  **Why the reserved rule had to go.** It rested on "HWM is the smallest
+  id never issued, so `id ≥ HWM` proves non-collision with no page
+  read". True — but it is a proof about ids *the allocator* issued, and
+  on a relation where the caller issues them the mark stops being
+  evidence: nothing says the ids below it were used. Enforcing it would
+  refuse correct inserts (a backfill of older keys) while proving
+  nothing about the ones it admitted, since a caller can name an id
+  above the mark that a *previous* caller already placed above the mark
+  in the same way. So **uniqueness moved to the descent**: `BtreeInsert`
+  scans the one leaf the descent lands on and answers `AlreadyExists`.
+  That is a page read the insert was making anyway, and it is why the
+  mode is restricted to btree-clustered relations — a heap chain has no
+  such walk, and the reserved rule's cheapness was the only thing that
+  would have made one unnecessary.
+
+  **What the mark still owes.** Because it never falls below an id
+  placed while the process was up, K4's budget and the 40-bit
+  exhaustion check stay honest, and an `EXPLICIT` relation cannot later
+  be read as if its ids were dense. Persisting *before* the row is
+  placed is kept for `AllocateRowId`'s reason and with a weaker
+  consequence: a crash in between leaves a ceiling that is too high,
+  which burns space K3 calls free, where the reverse leaves one too low.
+  A too-low mark on an explicit relation cannot reissue anything — the
+  mark issues nothing — so the K1 break this ordering exists to prevent
+  is an `ASSIGNED`-only hazard. When bump-ahead (K-M2) lands, the
+  explicit path needs the same treatment for the same reason it needs it
+  now: only to keep the ceiling truthful, never to keep an admission
+  decision sound.
 
 ## 3. Lifetime budget (K4) — the honest math
 
@@ -217,7 +307,7 @@ that a permanently-red test is one that gets ignored.
 
 **K-M2 — HWM + bump-ahead allocator. BLOCKED on K-M2a.**
 Implement §2: persisted per-relation HWM, chunked bump-ahead, recovery
-resume-from-ceiling, explicit-id gate. Deterministic tests: crash
+resume-from-ceiling. Deterministic tests: crash
 between chunk persist and issuance (sim-crash via IoBackend seam)
 must never re-issue; gaps appear and are harmless.
 
@@ -228,8 +318,12 @@ property this milestone cannot deliver on its own, at any chunk size:
   catalog row once per chunk rather than once per id;
 - a restart resumes from the persisted ceiling, never below it, and the
   skipped remainder appears as a gap;
-- an explicit id below the HWM is rejected and one at or above it
-  advances the HWM past it;
+- ~~an explicit id below the HWM is rejected and one at or above it
+  advances the HWM past it~~ — **dropped 2026-08-11.** Half of it never
+  shipped: `AdmitExplicitRowId` admits any spellable id and advances the
+  mark with `max()` (§2). What K-M2 owes the explicit path is only that
+  the ceiling stay at or above every placed id, which is a budget
+  obligation, not an admission one;
 - the insert hot path adds no per-id durability wait;
 - **K1 across a crash is K-M2a's criterion, not this one.** With the
   ceiling written through today's unlogged catalog path, this milestone

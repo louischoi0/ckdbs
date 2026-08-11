@@ -295,7 +295,8 @@ TEST(SubsystemLoggingTest, CreateTableIsLoggedWithItsRootPage) {
 
     catalog::Schema schema = TwoColumnSchema();
     auto oid = database.value().catalog.CreateTable(catalog::kNamespacePublic, "ledger", schema,
-                                                    catalog::ClusteredType::kHeap);
+                                                    catalog::ClusteredType::kHeap,
+                                                    catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // Debug, so the Info log keeps exactly one line per DDL statement (the
@@ -310,7 +311,8 @@ TEST(SubsystemLoggingTest, RowIdIssueIsATraceEvent) {
 
     catalog::Schema schema = TwoColumnSchema();
     auto oid = database.value().catalog.CreateTable(catalog::kNamespacePublic, "seq", schema,
-                                                    catalog::ClusteredType::kHeap);
+                                                    catalog::ClusteredType::kHeap,
+                                                    catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     CapturedLog log;

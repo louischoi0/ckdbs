@@ -5,6 +5,7 @@
 #include <string>
 
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/keystone.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
@@ -213,17 +214,61 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     return lsn;
 }
 
-Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx_id) {
-    auto bytes = store_.Get(entry.page_id);
+Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx_id,
+                                      const RowLocator& locate_row) {
+    // ---- Where the row is *now* -----------------------------------------
+    //
+    // The trail recorded an address, and a btree leaf division can have
+    // moved the row since (manager.hpp's RowLocator). So the address is
+    // checked against the identity it is supposed to reach before a single
+    // byte is written: `pk` is the row, `(page_id, slot)` is only where it
+    // was last seen.
+    //
+    // The check is one payload read on a page already in hand, and it is
+    // paid on every compensation rather than only on relations that can
+    // move rows - a rollback is rare, and a check that runs only where a
+    // bug is expected is a check nobody trusts.
+    PageId page_id = entry.page_id;
+    std::uint16_t slot = entry.slot;
+    {
+        auto probe = store_.Get(page_id);
+        if (!probe.ok()) return probe.status();
+        heap::PageView view(probe.value());
+        bool matches = false;
+        if (auto payload = view.PayloadAt(slot, view.slot_count()); payload.ok()) {
+            if (auto id = KeystoneIdOfPayload(payload.value()); id.ok()) {
+                matches = id.value() == entry.pk;
+            }
+        }
+        if (!matches) {
+            if (!locate_row) {
+                // Reported, never guessed. Compensating here would retire or
+                // overwrite whichever row now occupies the slot - a write to
+                // a row this transaction never touched, which is worse than
+                // an unwound rollback that says so.
+                return Status::Corruption(
+                    "row id " + std::to_string(entry.pk) + " of relation oid " +
+                    std::to_string(entry.rel_oid) + " is no longer at page " +
+                    std::to_string(page_id) + " slot " + std::to_string(slot) +
+                    ", and no row locator is installed to find it");
+            }
+            auto found = locate_row(entry.rel_oid, entry.pk);
+            if (!found.ok()) return found.status();
+            page_id = found.value().page_id;
+            slot = found.value().slot;
+        }
+    }
+
+    auto bytes = store_.Get(page_id);
     if (!bytes.ok()) return bytes.status();
     heap::PageView page(bytes.value());
 
     switch (entry.action) {
         case TrailAction::kInsert: {
-            if (Status s = page.RetireSlot(entry.slot); !s.ok()) return s;
+            if (Status s = page.RetireSlot(slot); !s.ok()) return s;
             if (wal_ == nullptr) return Status::OK();
             std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
-            const wal::SlotRetirePayload fields{entry.slot};
+            const wal::SlotRetirePayload fields{slot};
             if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
             // **The aborting transaction's id, not kNoTxnId.** payload.hpp
             // says no transaction owns a SLOT_RETIRE; that is true of a
@@ -231,13 +276,13 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
             // kNoTxnId would hide the rollback from recovery's analysis
             // phase (section 6's amendment).
             auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kSlotRetire, trx_id, entry.page_id}, buf);
+                wal::RecordSpec{wal::RecordType::kSlotRetire, trx_id, page_id}, buf);
             if (!rec.ok()) return rec.status();
-            return store_.StampPageLsn(entry.page_id, rec.value());
+            return store_.StampPageLsn(page_id, rec.value());
         }
 
         case TrailAction::kOverwrite: {
-            if (Status s = page.OverwriteTuple(entry.slot, entry.image, entry.prior_trx_id,
+            if (Status s = page.OverwriteTuple(slot, entry.image, entry.prior_trx_id,
                                                 entry.prior_undo_ptr);
                 !s.ok()) {
                 return s;
@@ -245,37 +290,37 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
             if (wal_ == nullptr) return Status::OK();
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + entry.image.size());
             const wal::HeapWritePayload fields{entry.prior_trx_id, entry.prior_undo_ptr,
-                                               entry.slot,
+                                               slot,
                                                static_cast<std::uint16_t>(entry.image.size())};
             if (auto n = wal::EncodeHeapWrite(buf, fields, entry.image); !n.ok()) {
                 return n.status();
             }
             auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapOverwrite, trx_id, entry.page_id}, buf);
+                wal::RecordSpec{wal::RecordType::kHeapOverwrite, trx_id, page_id}, buf);
             if (!rec.ok()) return rec.status();
-            return store_.StampPageLsn(entry.page_id, rec.value());
+            return store_.StampPageLsn(page_id, rec.value());
         }
 
         case TrailAction::kDeleteMark: {
-            if (Status s = page.ClearDeleteMark(entry.slot, entry.prior_trx_id,
+            if (Status s = page.ClearDeleteMark(slot, entry.prior_trx_id,
                                                  entry.prior_undo_ptr);
                 !s.ok()) {
                 return s;
             }
             if (wal_ == nullptr) return Status::OK();
             std::array<std::byte, wal::kDeleteMarkPayloadSize> buf{};
-            const wal::HeapDeleteMarkPayload fields{entry.prior_trx_id, entry.slot};
+            const wal::HeapDeleteMarkPayload fields{entry.prior_trx_id, slot};
             if (auto n = wal::EncodeHeapDeleteMark(buf, fields); !n.ok()) return n.status();
             auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapDeleteMark, trx_id, entry.page_id}, buf);
+                wal::RecordSpec{wal::RecordType::kHeapDeleteMark, trx_id, page_id}, buf);
             if (!rec.ok()) return rec.status();
-            return store_.StampPageLsn(entry.page_id, rec.value());
+            return store_.StampPageLsn(page_id, rec.value());
         }
     }
     return Status::Corruption("trail entry with an unknown action");
 }
 
-Status TransactionManager::Abort(Transaction& txn) {
+Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row) {
     if (!txn.active_) return Status::OK();  // aborting twice is not an error
 
     // **In reverse**, and as ordinary logged page mutations - the shape
@@ -283,7 +328,7 @@ Status TransactionManager::Abort(Transaction& txn) {
     // reuses this path verbatim.
     Status first_failure = Status::OK();
     for (std::size_t i = txn.trail_.size(); i > 0; --i) {
-        if (Status s = Compensate(txn.trail_[i - 1], txn.id_); !s.ok()) {
+        if (Status s = Compensate(txn.trail_[i - 1], txn.id_, locate_row); !s.ok()) {
             // Keep unwinding. A compensation that fails leaves one row
             // wrong; stopping here would leave every earlier row wrong too,
             // and there is nothing to retry into.

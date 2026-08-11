@@ -225,6 +225,15 @@ have to be reconstructed from a diff.
 sequential or contiguous"* is contradicted by four subsystems that rely on
 ids being **ordered**:
 
+> **This list is a 2026-08-03 finding and is preserved as one.** Three of
+> the four were re-settled on 2026-08-11 when the `EXPLICIT` key mode
+> dropped monotonicity for btree-clustered relations — notably the second,
+> whose "refuses a non-monotonic id outright" is no longer true: a full leaf
+> now divides. `docs/keystoneid-invariant.md` §1 carries the corrected list
+> and says which dependency was kept, paid off, or replaced. Quote that one,
+> not this one.
+
+
 - the semi-sorted heap chain refuses an id below the tail page's `min_key`
   (`heap_chain.hpp:32-35`), which is invariant 3 enforced at the one place
   tuples enter;
