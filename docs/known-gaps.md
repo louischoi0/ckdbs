@@ -85,11 +85,8 @@ There is no purge pass, and readers are deliberately unregistered
   `placement` key, 2026-08-10): a rotated relation's pages are grantable
   and readable by its owner. `placement` still defaults to `creating` —
   `rotate` places relations on cores that can serve one statement shape and
-  must refuse the rest, so it stays an exercise mode until P4d lands. The
-  header comment on `PlacementPolicy` (`include/kds/catalog/core_placement.hpp`)
-  still says a rotated relation *cannot serve statements yet*; that is the
-  pre-P4c wording, and the sentence above is the current one. Row-id
-  leasing for peer INSERT is also built (P5-shape, 2026-08-10).
+  must refuse the rest, so it stays an exercise mode until P4d lands.
+  Row-id leasing for peer INSERT is also built (P5-shape, 2026-08-10).
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
 - Cross-core writes are refused retryably (CC3): a transaction's writes
