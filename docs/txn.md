@@ -227,6 +227,42 @@ rather than an undo record, which keeps the insert path's cost unchanged.
 insert trail — which recovery-driven rollback will need — is a code change and
 not a format-version event.
 
+> **Reversed 2026-08-11 by RV10** (`docs/workplan-wal-recovery.md` §3), and
+> the trade is being paid rather than merely reconsidered. The paragraph
+> above is correct about *visibility* — an insert genuinely needs no undo
+> record to be read correctly — and that is what made "no record" look like
+> a free choice. It is not free for **recovery**, and for a reason wider
+> than the insert itself.
+>
+> This engine has two undo chains and `undo_log.hpp` says outright that they
+> are not the same chain: `prev_page_id` (page → page, creation order) and
+> `prior_undo_ptr` (record → record, **one tuple's versions**). Neither is
+> per-transaction, `UndoRecordFields` carries no owning transaction id, and
+> `CHECKPOINT_BEGIN`'s active list is bare ids. So after a crash the only
+> way to learn what a loser wrote is the WAL records inside the replay
+> range — and that range does not cover it. A page written back before a
+> checkpoint has its recLSN cleared, so the redo start can advance past a
+> still-uncommitted write, and the record naming it is never scanned. The
+> row survives, and §8's gap then reads it as **committed**.
+>
+> RV10's answer is a third chain: `UndoRecordFields` gains
+> `txn_prev_undo_ptr`, `CHECKPOINT_BEGIN`'s active-transaction table gains
+> each transaction's `last_undo_ptr` as the durable head, and `kInsert` is
+> written — carrying the row's `pk`, since an insert has no before-image for
+> the identity check `Compensate` now makes (§6). An insert that wrote no
+> record would break the chain and orphan everything the transaction did
+> before it, which is the reason the record exists that "somewhere to put
+> the fact" never gave it.
+>
+> **The cost §3.6 avoided is real and is now measured**:
+> `bench/results-txn-layers.md` puts the WAL-append phase at 0.95 µs for
+> INSERT against 5.38 µs for UPDATE, on a 951 µs logged statement whose
+> fsync is 933.69 µs — so ~0.5 % at the shipped `group` default, and up to
+> ~29 % unlogged, where the same phase is 0.06 µs against 2.14 µs on a
+> 7.21 µs statement. A `kInsert` record carries no image, so that is an
+> upper bound. `docs/workplan-wal-recovery.md` RC06 measures the real
+> figure in `build-release` before the change is kept.
+
 ### 3.7 Chain walks
 
 `UndoLog::Walk` follows `prior_undo_ptr` newest→oldest, bounded by

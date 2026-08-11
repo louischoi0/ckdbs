@@ -1,15 +1,18 @@
 # WAL recovery — workplan
 
 Status: **RC01-RC04 and RC04a written (unbuilt); RC05 onward not started.**
-§4's assertion-replay decision is **answered** (AS6a), so RC07 is unblocked;
-§4a records that `origin/main`'s `EXPLICIT` key mode **amended RV6**. Spec: `docs/wal.md` §12 (normative, and
+**Both of §4's blocking decisions are now answered** — the assertion replay
+range by AS6a (unblocking RC07) and the insert/enumeration question by RV10
+(unblocking RC06, and so RC05). **RV6 is superseded**: §4a records what
+`origin/main`'s `EXPLICIT` key mode did to it, §4b what the enumeration gap
+did. Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
 `docs/workplan-testing.md` (SIM04/SIM11 — the acceptance tests, already
 written and gated off), `docs/known-gaps.md` (this is its first item).
 
-Decisions are `RV1`-`RV9`, tasks `RC01`-`RC10`. A fresh prefix on purpose:
+Decisions are `RV1`-`RV10`, tasks `RC01`-`RC10` plus `RC04a`. A fresh prefix on purpose:
 `P`, `R`, `T`, `V`, `M`, `K-M` and a dozen others are taken and `CLAUDE.md`
 warns that a bare number is ambiguous — **cite the file, not the number.**
 
@@ -97,6 +100,12 @@ no document currently lists it as a recovery blocker.
    `bench/results-keystone-alloc.md`'s lesson applies — **measure before
    and after, in `build-release`.**
 
+   **This item was too narrow, and §4b says why.** Costing the three
+   mechanisms found that a loser's writes are not enumerable after a crash
+   *at all* — not only its inserts — because no chain in this engine is
+   per-transaction. RV10 answers the wider problem and the insert record is
+   one of its three parts.
+
 ## 3. Decision record — what this plan proposes
 
 | ID | Decision |
@@ -106,9 +115,10 @@ no document currently lists it as a recovery blocker.
 | RV3 | **v1 recovers data, not the catalog.** Catalog and DDL writes are unlogged (`txn.md` §7), so a crash still loses a `CREATE TABLE` and still leaves `sys.tables.next_id` behind the log (K1). Recovery must therefore state its promise as *"every acknowledged commit to a relation that survived is restored"* — and **RC09 must add the counter that says when it did not**, rather than letting the gap read as closed. Logged catalog writes are K-M2a's and stay there. |
 | RV4 | **A hazard RV3 creates, named so it is not discovered:** the superblock's high-water mark is unlogged too, so a crash can revert it while the log still names pages above it. A later allocation could then hand out a page redo has already written. Recovery **must raise the high-water mark to the maximum page id any replayed record names** before the store serves an allocation. Cheap, and it is the difference between a leak and corruption. |
 | RV5 | **Redo is idempotent through `page_lsn` only** (`wal.md` §9): replay iff `record.lsn > page_lsn`. No second mechanism, no per-record sequence numbers. A headerless page is never a replay target (`page.md` §1), which is what keeps Waystone out of recovery entirely. |
-| RV6 | **Undo reuses the abort path verbatim**, as `txn.md` §6 was written to allow: a loser's compensations are ordinary logged mutations, so undo is crash-restartable by RV5's gate alone and needs no undo-next pointer in v1. If a measurement or a proof says otherwise, a CLR is a format-version event and its own decision. **Amended 2026-08-11 — "verbatim" no longer holds; see §4a.** |
+| RV6 | ~~**Undo reuses the abort path verbatim**, needing no undo-next pointer in v1.~~ **Superseded 2026-08-11; both halves failed.** "Verbatim" fell to the `RowLocator` the abort path grew for `EXPLICIT` leaf division (§4a). "No undo-next pointer" fell to the enumeration gap (§4b) and is replaced by RV10. **What survives is the shape**: a loser's compensations are still ordinary logged mutations, so undo is still crash-restartable by RV5's gate alone and still needs no CLR — which is the part `txn.md` §6 was written to allow, and it holds. |
 | RV7 | **Advisory structures are rebuilt, never replayed.** Waystone pages are unlogged and correct when empty (invariant 8); Observational Cabins declare every value unobserved (`feat-cabin.md` §9); access statistics resume. Recovery touches none of them, and the contract suites are what prove that costs no result. |
 | RV8 | **Bound Cabins are replayed**, because an assertion is authoritative and `feat-assertion.md` §7 promises enforcement at restart *with no gap*. `exec::ReplayAssertionRecord` is the fold; what it needs and does not have is a **record range** — see §4. |
+| RV10 | **Decided 2026-08-11. A loser's writes are enumerated by its own undo chain, not by the scan range** — and the decision is wider than the INSERT question that surfaced it (§4b). `UndoRecordFields` gains `txn_prev_undo_ptr`, the writing transaction's previous record; `CHECKPOINT_BEGIN`'s active-transaction table becomes `[{txn_id, last_undo_ptr}]`, the durable head each chain is walked from; and `UndoRecordType::kInsert` is **written**, carrying the row's `pk`. Amends RV6 and reverses `txn.md` §3.6. Built by RC06, measured before it is kept. |
 | RV9 | **The gate flips once, in the harness.** SIM04/SIM11's `[GATED: recovery]` assertions are the acceptance criteria; RC10 enables them and the documented-gap counters' expected values become zero. A recovery whose own tests are written by this workplan rather than inherited from SIM is a recovery graded by its author. |
 
 ## 4a. RV6 amended: the abort path grew a parameter recovery cannot supply
@@ -154,6 +164,77 @@ format-version event and RC05's to argue if the refusal proves too broad.
 now has a parameter with no recovery-side implementation, and the identity
 check is the part that matters.
 
+## 4b. RV10: the enumeration gap, which is what §4's INSERT question really was
+
+**Found 2026-08-11, pricing §4's second open item.** That item asked how a
+loser's INSERT becomes undoable. Reading the code to cost the three
+mechanisms turned up a larger fact: **a loser's writes are not enumerable
+at all after a crash, inserts or otherwise.**
+
+`undo_log.hpp` states the topology in its own words — *"there are two chains
+here and they are still not the same chain"*: `prev_page_id` (page → page,
+creation order) and `prior_undo_ptr` (record → record, **one tuple's
+versions**). Neither is per-transaction. `UndoRecordFields` carries no
+owning transaction id, and `CheckpointBeginPayload`'s active list is bare
+`uint64` ids. So recovery's only route to "what did this loser write" is the
+WAL records inside the replay range.
+
+**That range does not cover it, and the hole is reachable:**
+
+> Loser `T` inserts into page `P` at LSN 100. `P` is written back — WAL steal
+> permits it, and `FlushPages` and the eviction drain both do it — so
+> `recLSN(P)` is cleared and `P` is absent from the checkpoint's dirty table
+> at LSN 500. Other pages carry recLSN 600, so `redo_start` is 600. Analysis
+> knows `T` is a loser, because the checkpoint's active list names it, and
+> **never sees the record that says where it wrote.**
+
+The row survives undo, and `txn.md` §8's gap makes it read as *committed*.
+Silent wrong data — the failure recovery exists to prevent. RV6's "needs no
+undo-next pointer in v1" is the sentence that does not survive: an
+undo-next pointer is exactly what enumerates a loser's writes independently
+of the redo start.
+
+**The three parts of RV10, and why each is load-bearing:**
+
+1. `UndoRecordFields` gains **`txn_prev_undo_ptr`** — a third chain beside
+   the two the file already names, and the only one that answers "what did
+   *this transaction* do".
+2. `CHECKPOINT_BEGIN`'s active-transaction table becomes
+   **`[{txn_id, last_undo_ptr}]`** — the durable head. It is already the
+   record carrying the active set; this is 8 bytes per active transaction
+   more.
+3. **`kInsert` is written, with the row's `pk`.** It now has a reason beyond
+   "somewhere to put the fact": an insert that wrote no record would break
+   the chain and orphan everything the transaction did before it. The `pk`
+   is what lets §4a's identity check run on the one case with no
+   before-image to recover a pk from.
+
+**Why not the cheaper-looking options.** Deriving inserts from
+`HEAP_INSERT` records is free on the write path and has exactly the hole
+above — and fails *silently*, which is the worst of the three. Snapshotting
+the trail into the checkpoint closes the hole but makes `CHECKPOINT_BEGIN`
+proportional to uncommitted inserts: unbounded under a bulk load, and a
+record must fit a segment. Capping it needs a fallback, and the only
+available fallback is writing the record — so it is RV10 plus a second
+mechanism.
+
+**Cost, from `bench/results-txn-layers.md` rather than from argument.** At
+the shipped `group` default the WAL-append phase is 0.95 µs for INSERT
+against 5.38 µs for UPDATE, on a 951 µs statement whose fsync is 933.69 µs —
+**~0.5 %**. Unlogged the same phase is 0.06 µs against 2.14 µs on a 7.21 µs
+statement — **up to ~29 %**, in the regime that actually scales. A `kInsert`
+record carries no image, so that is an upper bound and not the number. RC06
+measures the real one.
+
+**Both format changes are free today** and are format-version events once
+recovery ships — nothing has ever read a stream back, the same argument
+that moved RC03's `UNDO_WRITE` correction and AS6a's entry field.
+
+**What stays open:** whether the measured `relaxed` cost justifies a
+narrower rule — writing the record only for transactions that survive a
+checkpoint, say. That is RC06's call *with a number in hand*, not this
+section's.
+
 ## 4. Open decisions — surface, do not decide
 
 Each blocks a specific task and none is this plan's to settle. The house
@@ -179,11 +260,14 @@ option viable.
   before a checkpoint and rolled back after it would fail the mount. The
   `group_id` field is what makes the linkage reconstructible and the
   snapshot O(groups).
-- **Writing `UndoRecordType::kInsert`** (§2.4): a correctness requirement
-  with a hot-path cost `txn.md` §3.6 declined to pay. The alternatives —
-  persisting the trail wholesale, or deriving inserts from `HEAP_INSERT`
-  records during analysis — are not obviously worse and are not costed.
-  RC06 builds the record; **which mechanism is the owner's call.**
+- ~~**Writing `UndoRecordType::kInsert`**~~ — **ANSWERED 2026-08-11, and
+  the question was too narrow.** Costing the three mechanisms turned up the
+  enumeration gap in §4b: a loser's writes are not reachable after a crash
+  at all, inserts or otherwise, because no chain is per-transaction. The
+  answer is **RV10** — `txn_prev_undo_ptr` on the undo record, each active
+  transaction's `last_undo_ptr` in `CHECKPOINT_BEGIN`, and `kInsert`
+  written with the row's `pk`. RC06 builds it and measures it; `txn.md`
+  §3.6 is corrected.
 - **Recovery under a changed core count** (`wal.md` §3, §15). `cores` is
   superblock-pinned and a mismatch already refuses the mount, so v1
   inherits a working refusal rather than a decision. Reassignment stays
@@ -480,27 +564,57 @@ treated as a loser; the phase is called exactly when it is owed; running
 the whole driver twice is a no-op. All nine are in
 `tests/wal_recovery_test.cpp` and **none has been executed.**
 
-**RC05 — Undo.** *(read §4a first — RV6's "verbatim" no longer holds)*
+**RC05 — Undo.** *(read §4a and §4b first — RV6 fails on both counts: not
+"verbatim", and not "no undo-next pointer". **Now depends on RC06 for the
+whole phase, not only for the insert case.**)*
 Implements RC04a's `UndoPhase`.
-Roll losers back through their `undo_ptr` chains, emitting compensations
-through the **same** code `TransactionManager::Abort` uses — with §4a's
-correction: the abort path now checks a row's identity before compensating
-and takes a `RowLocator` recovery cannot supply, so RC05 reproduces the
-*check* from the before-image's own Keystone id and takes the no-locator
-branch on a mismatch. Then `TXN_ABORT`. Depends on RC06 for the insert
-case.
+
+Roll each loser back by walking **its own chain** from the
+`last_undo_ptr` the checkpoint recorded (RV10), newest to oldest — not by
+enumerating its writes from the scan range, which §4b shows is silently
+incomplete. Emit compensations through the **same** code
+`TransactionManager::Abort` uses, with §4a's correction: the abort path
+checks a row's identity before compensating and takes a `RowLocator`
+recovery cannot supply, so RC05 reproduces the *check* — from the
+before-image's Keystone id for `kOverwrite`/`kDeleteMark`, and from the
+record's own `pk` for `kInsert` — and takes the no-locator branch on a
+mismatch. Then `TXN_ABORT`.
+
 *Done when:* a loser's UPDATE is restored byte for byte, its DELETE's mark
-cleared, its INSERT's slot retired; a crash *during* undo resumes and
+cleared, its INSERT's slot retired; **a loser whose write predates the redo
+start is rolled back too** (§4b); a crash *during* undo resumes and
 completes; the live-run and recovered-run page images are compared byte
 for byte, which is the shape `assertion_wal_test.cpp` already uses.
 
-**RC06 — A durable insert record.** *(gated on §4's decision)*
-Make a loser's INSERT undoable from the log alone. Measure the INSERT path
-before and after in `build-release`, interleaved A/B, and record it beside
-the existing numbers — `txn.md` §3.6 traded this cost away deliberately
-and the trade is being reversed with evidence.
+**RC06 — The per-transaction undo chain, and a durable insert record.**
+*(unblocked 2026-08-11 — build to RV10; read §4b for why the scope grew)*
+Three parts, and the third is the one the task was originally named for:
+
+1. **`UndoRecordFields` gains `txn_prev_undo_ptr`**, set on every undo
+   record to the writing transaction's previous one.
+2. **`CHECKPOINT_BEGIN`'s active-transaction table becomes
+   `[{txn_id, last_undo_ptr}]`** — `CheckpointBeginPayload`,
+   `EncodeCheckpointBegin`/`DecodeCheckpointBegin`, and analysis's seeding
+   of `TxnOutcome::kLoser` from it, which now carries a head per loser.
+3. **`kInsert` is written, carrying the row's `pk`** — the chain link an
+   insert would otherwise omit, and §4a's identity check for the one record
+   type with no before-image.
+
+Then RC05's undo walks each loser's chain from its head rather than
+enumerating from the scan range.
+
+Measure the INSERT path before and after in `build-release`, interleaved
+A/B, and record it beside the existing numbers — `txn.md` §3.6 traded this
+cost away deliberately and the trade is being reversed with evidence.
+§4b's read of `bench/results-txn-layers.md` predicts ~0.5 % at `group` and
+an upper bound of ~29 % unlogged; **a prediction is not the measurement**,
+and `bench/results-keystone-alloc.md`'s lesson is that this engine has had
+the sign of such a number wrong before.
+
 *Done when:* a crash mid-transaction leaves no trace of the loser's
-inserted rows after recovery; the measured cost is in `bench/`.
+inserted rows after recovery; **a loser whose write predates the redo start
+is still rolled back** — the §4b case, and the one a scan-range enumeration
+would miss silently; the measured cost is in `bench/`.
 
 **RC07 — Bound Cabin replay.** *(unblocked 2026-08-11 — §4's first item is
 answered; build to `feat-assertion.md` AS6a)*
