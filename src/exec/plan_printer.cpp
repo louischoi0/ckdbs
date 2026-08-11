@@ -268,6 +268,23 @@ std::string FormatPlan(const StepChain& chain) {
         }
     }
 
+    // ---- The sort (OB6) --------------------------------------------------
+    //
+    // Between the projection and the quota, which is where it sits in
+    // execution order, and absent from an unsorted plan for the reason the
+    // quota line is absent from an unlimited one. A plan that prints no
+    // `sort` for a statement that wrote `ORDER BY` is not a printer bug: it
+    // is the compiler having elided a clause the chain already satisfies
+    // (OB3), and seeing that is most of why this line is worth printing.
+    if (chain.sorted()) {
+        os << "\nsort ";
+        for (std::size_t i = 0; i < chain.sort_keys.size(); ++i) {
+            if (i > 0) os << ", ";
+            os << FormatColumnRef(chain.sort_keys[i].ref)
+               << (chain.sort_keys[i].descending ? " desc" : " asc");
+        }
+    }
+
     // ---- The quota (V09) ------------------------------------------------
     //
     // After the projection, which is where it sits in execution order: the

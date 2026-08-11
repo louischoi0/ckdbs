@@ -157,6 +157,20 @@ struct ColumnName {
     bool qualified() const noexcept { return !qualifier.empty(); }
 };
 
+// One `ORDER BY` key: a column and the direction written beside it
+// (docs/workplan-order-by.md OB1). `ASC` and a bare column are the same
+// key - the standard's default - so only descending needs a bit.
+struct SortKey {
+    ColumnName column;
+    bool descending = false;
+};
+
+// How many keys one `ORDER BY` may name (`[PROPOSED]`). A cap at all is
+// the same argument the index column cap makes: the list is unbounded
+// client input, every key costs a comparison on every row pair, and a cap
+// refuses rather than sorting by a prefix and calling it the answer.
+inline constexpr std::size_t kMaxSortKeys = 8;
+
 enum class CompareOp { kEq, kNeq, kLt, kLte, kGt, kGte };
 
 struct SelectStmt;  // a predicate may carry one - see Condition below
@@ -475,13 +489,15 @@ struct SelectStmt {
     // written order across steps, pk order within one), so the clause
     // takes a prefix of an order the statement has, not one it hopes for.
     //
-    // `order_by` carries the written column for the *compiler* to judge:
-    // pk-ness is catalog knowledge, so accepting `ORDER BY <pk> [ASC]` as
-    // the validated no-op it is - and refusing every other column with the
-    // stored byte - happens at compile, not here. `DESC` never reaches the
-    // AST: every chain links forward only, and the parser refuses what no
-    // walk can produce.
-    std::optional<ColumnName> order_by;
+    // `order_by` carries the written sort keys in written order, empty when
+    // no `ORDER BY` was written. The parser judges *shape* only - a column
+    // reference, not an ordinal and not an expression - because which
+    // relation a name belongs to and whether it is the pk are catalog
+    // knowledge, and the compiler is where catalog knowledge lives.
+    //
+    // `DESC` reaches the AST: an output sort does not walk, so descending
+    // costs a comparator's sign (docs/workplan-order-by.md OB1).
+    std::vector<SortKey> order_by;
 
     // `LIMIT n`: how many rows the statement emits, nullopt when no LIMIT
     // was written. 0 is a real value - a legal statement that emits

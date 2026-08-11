@@ -210,6 +210,15 @@ InvalidArgument	4338879b6a60f25b	78f79099c419719c	SELECT * FROM t WHERE id = 1 O
 # stream - the verdicts flipped with their task, the V08 precedent. The
 # counts are slots (I11): LIMIT 10 and LIMIT 20 share a pattern_id below.
 # DESC, an aggregated statement's tail and a subquery's stay refused.
+#
+# [OB1] the general ORDER BY. DESC and a multi-key list flipped to `ok` -
+# their two hashes below did not move either, for exactly the reason the
+# V09 flips did not: `desc` was always an ordinary identifier and a comma
+# was always a comma, so what changed is the verdict and not the shape.
+# An ordinal stays refused, and for a reason DESC never had: it names a
+# select-list position, which is a second spelling of a thing that already
+# has one. An aggregated statement's tail also stays refused, which is what
+# keeps feat-aggregate.md section 10's decision open.
 ok	2014153a5d44a3d2	cbf29ce484222325	SELECT * FROM t ORDER BY id
 ok	cfd92d5cf2657bf9	183c9abf547928f7	SELECT * FROM t LIMIT 10
 ok	cfd92d5cf2657bf9	183288bf5470b5dc	SELECT * FROM t LIMIT 20
@@ -217,9 +226,9 @@ ok	a2ab37bd0b9912d1	6a2936eff68a8d8a	SELECT * FROM t LIMIT 10 OFFSET 5
 ok	d1d97970aff68c0c	b5d410774c7ffc00	SELECT * FROM t OFFSET 5
 ok	9e51e28ff0f77902	90e9577200715765	SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 2 OFFSET 1
 ok	7f56cd80953c49c8	cbf29ce484222325	SELECT limit, offset FROM t
-Unsupported	44d61d637a45b7d0	cbf29ce484222325	SELECT * FROM t ORDER BY id DESC
+ok	44d61d637a45b7d0	cbf29ce484222325	SELECT * FROM t ORDER BY id DESC
 Unsupported	e967d58b511229ec	b5d414774c8002cc	SELECT * FROM t ORDER BY 1
-Unsupported	f54a1f175f7d80c0	cbf29ce484222325	SELECT * FROM t ORDER BY id, name
+ok	f54a1f175f7d80c0	cbf29ce484222325	SELECT * FROM t ORDER BY id, name
 Unsupported	53268d89f9272838	b5d410774c7ffc00	SELECT b, COUNT(*) FROM t GROUP BY b LIMIT 5
 Unsupported	da3c546ef95221a8	b5d416774c800632	SELECT * FROM t WHERE id IN (SELECT id FROM u LIMIT 3)
 InvalidArgument	cfd92d5cf2657bf9	184a11bf54847d88	SELECT * FROM t LIMIT -1

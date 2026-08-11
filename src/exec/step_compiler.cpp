@@ -823,6 +823,12 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
         }
         for (const ColumnRef& key : chain.aggregate->group_keys) note(key);
     }
+    // A sort key has to be decoded to be compared, and it need not be
+    // projected: `SELECT a FROM t ORDER BY b` orders by a column the client
+    // never sees. `note` files each key against its own step, so a join
+    // ordered by the inner relation's column decodes it there and not on
+    // the driving one.
+    for (const SortKey& key : chain.sort_keys) note(key.ref);
 
     // The trail records the Keystone pk of every row a replayable step
     // accepts, and reads it from the frame rather than looking it up. The
@@ -1385,27 +1391,51 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         }
     }
 
-    // ---- 5a. The pagination tail (spec I11, workplan V09) ----------------
+    // ---- 5a. The pagination tail (spec I11, V09; sort per OB3) -----------
     //
-    // `ORDER BY` is validated and discarded. The one accepted form - the
-    // driving relation's pk, ascending - names the order the chain already
-    // emits (I12: written order across steps, pk order within one), so
-    // accepting it changes nothing and refusing everything else is the
-    // whole job. The parser already refused `DESC`, an aggregated
-    // statement's tail and a subquery's, so what arrives here is a
-    // non-aggregated depth-0 statement's clause; `up != 0` is likewise
-    // unreachable today and checked so the predicate stays total rather
-    // than resting on a parser guarantee two files away.
-    if (stmt.order_by.has_value()) {
-        auto ref = ResolveColumn(scope, *stmt.order_by);
+    // Every written key is resolved. Any relation in the top-level scope
+    // may be named: by the time the sink sees a row the frame holds every
+    // step's values, so a joined relation's column costs a sort exactly
+    // what the driving relation's does. `up != 0` is unreachable - the
+    // parser refuses the clause at depth > 0 - and is refused here anyway
+    // so the rule is a property of this function rather than of a
+    // guarantee two files away.
+    for (const parser::SortKey& written : stmt.order_by) {
+        auto ref = ResolveColumn(scope, written.column);
         if (!ref.ok()) return ref.status();
-        if (ref.value().up != 0 || ref.value().rel_slot != 0 || !IsPrimaryKey(ref.value())) {
-            return Status::Unsupported(
-                "ORDER BY is supported only on the driving relation's primary key" +
-                Position(stmt.order_by->byte_offset) +
-                "; pk order is the order the chain already emits, and any other "
-                "order needs an output sort this engine does not have");
+        if (ref.value().up != 0) {
+            return Status::Unsupported("ORDER BY cannot name an outer query's column" +
+                                       Position(written.column.byte_offset));
         }
+        chain.sort_keys.push_back(SortKey{ref.value(), ColumnAt(scope, ref.value()).type_val,
+                                          written.descending});
+    }
+
+    // ---- The elision: an order the chain already emits needs no sort -----
+    //
+    // One key, ascending, on the driving relation's pk is exactly V09's
+    // accepted form, and V09's argument for it still holds: it names the
+    // order the chain already emits (I12 - written order across steps, pk
+    // order within one), so there is nothing to do. Dropping the keys here
+    // rather than sorting-and-noticing-it-was-sorted is what keeps that
+    // path at literally zero cost instead of merely at low cost.
+    //
+    // The premise is that step 0 emits in pk order. A walk or range does
+    // (page-wise `min_key`, which a division preserves); an index step does
+    // because IX8a sorts its pks back into that order deliberately; a
+    // lookup or probe emits one row. A Cabin probe does **not** - its
+    // entry set is insertion-ordered, not key-ordered - so it is excluded
+    // by name. That exclusion is a fix, not a precaution: the discarding
+    // version of this clause answered `ORDER BY <pk>` over a Cabin-probed
+    // relation with whatever order the entry set happened to hold.
+    const bool one_ascending_pk =
+        chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
+        chain.sort_keys[0].ref.rel_slot == 0 && IsPrimaryKey(chain.sort_keys[0].ref);
+    const bool driving_emits_pk_order =
+        !chain.steps.empty() && chain.steps[0].kind != AccessKind::kCabinProbe;
+    if (one_ascending_pk && driving_emits_pk_order) {
+        chain.sort_keys.clear();
+
         // ...and on a kExplicit relation "the order the chain already emits"
         // is not quite true (docs/heap-and-tuple.md §4.1): a page's slots are
         // in insertion order, which equals key order only because an
@@ -1417,8 +1447,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // per-page emission order, not an output sort. Asked for here rather
         // than always, because reading every live slot's Keystone word up
         // front is a real cost on a walk that otherwise reads one per row.
-        if (!chain.steps.empty() && !scope.relations.empty() &&
-            scope.relations[0].access != nullptr &&
+        if (!scope.relations.empty() && scope.relations[0].access != nullptr &&
             scope.relations[0].access->key_mode == catalog::KeyMode::kExplicit) {
             chain.steps[0].emit_in_key_order = true;
         }
@@ -1445,8 +1474,9 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
 
     // ---- 7. What each step must decode *after* it has filtered (AP01) ---
     //
-    // Last of all, because it reads the projection and the fold, which
-    // section 5 only just resolved. Everything above this line is unchanged
+    // Last of all, because it reads the projection, the fold and the sort
+    // keys, which sections 5 and 5a only just resolved. Everything above
+    // this line is unchanged
     // by it - the steps, kinds, residuals and class an aggregated statement
     // compiles to are still its unaggregated twin's, which is AG1 and which
     // the contract suite pins.

@@ -74,7 +74,7 @@ TEST(ParserPaginationTest, LimitAlone) {
     ASSERT_TRUE(sel.limit.has_value());
     EXPECT_EQ(sel.limit.value(), 10u);
     EXPECT_EQ(sel.offset, 0u);
-    EXPECT_FALSE(sel.order_by.has_value());
+    EXPECT_TRUE(sel.order_by.empty());
 }
 
 TEST(ParserPaginationTest, OffsetAlone) {
@@ -100,24 +100,69 @@ TEST(ParserPaginationTest, LimitZeroIsAValueNotAnAbsence) {
 
 TEST(ParserPaginationTest, OrderByBareColumn) {
     const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY id"));
-    ASSERT_TRUE(sel.order_by.has_value());
-    EXPECT_EQ(sel.order_by->name, "id");
-    EXPECT_FALSE(sel.order_by->qualified());
+    ASSERT_EQ(sel.order_by.size(), 1u);
+    EXPECT_EQ(sel.order_by[0].column.name, "id");
+    EXPECT_FALSE(sel.order_by[0].column.qualified());
+    EXPECT_FALSE(sel.order_by[0].descending);
 }
 
 TEST(ParserPaginationTest, OrderByQualifiedWithAsc) {
     const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY t.id ASC"));
-    ASSERT_TRUE(sel.order_by.has_value());
-    EXPECT_EQ(sel.order_by->qualifier, "t");
-    EXPECT_EQ(sel.order_by->name, "id");
+    ASSERT_EQ(sel.order_by.size(), 1u);
+    EXPECT_EQ(sel.order_by[0].column.qualifier, "t");
+    EXPECT_EQ(sel.order_by[0].column.name, "id");
+    EXPECT_FALSE(sel.order_by[0].descending);
+}
+
+// ---- OB1: what the clause accepts now -------------------------------------
+
+// `DESC` used to be refused because "every chain links forward only". An
+// output sort does not walk - it orders what the walk emitted - so the
+// reason is gone rather than outvoted.
+TEST(ParserPaginationTest, DescReachesTheAst) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY id DESC"));
+    ASSERT_EQ(sel.order_by.size(), 1u);
+    EXPECT_EQ(sel.order_by[0].column.name, "id");
+    EXPECT_TRUE(sel.order_by[0].descending);
+}
+
+// Written order is significant and each key carries its own direction:
+// `ORDER BY x DESC, y` is descending on x and *ascending* on y, which is
+// the standard's reading and the one a client writing it expects.
+TEST(ParserPaginationTest, MultipleKeysKeepWrittenOrderAndPerKeyDirection) {
+    const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY x DESC, t.y, z ASC"));
+    ASSERT_EQ(sel.order_by.size(), 3u);
+    EXPECT_EQ(sel.order_by[0].column.name, "x");
+    EXPECT_TRUE(sel.order_by[0].descending);
+    EXPECT_EQ(sel.order_by[1].column.qualifier, "t");
+    EXPECT_EQ(sel.order_by[1].column.name, "y");
+    EXPECT_FALSE(sel.order_by[1].descending);
+    EXPECT_EQ(sel.order_by[2].column.name, "z");
+    EXPECT_FALSE(sel.order_by[2].descending);
+}
+
+TEST(ParserPaginationTest, EightKeysAreAccepted) {
+    const SelectStmt sel =
+        MustSelect(Parse("SELECT a FROM t ORDER BY c1, c2, c3, c4, c5, c6, c7, c8"));
+    EXPECT_EQ(sel.order_by.size(), 8u);
+}
+
+// The cap refuses at the byte of the key that crossed it - the ninth - and
+// not at the clause, which would leave the client counting commas.
+TEST(ParserPaginationTest, TheKeyCountCapRefusesAtTheOffendingKey) {
+    const std::string_view sql = "SELECT a FROM t ORDER BY c1, c2, c3, c4, c5, c6, c7, c8, c9";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "c9")));
 }
 
 TEST(ParserPaginationTest, TheFullTail) {
     const std::string_view sql =
         "SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 10 OFFSET 5";
     const SelectStmt sel = MustSelect(Parse(sql));
-    ASSERT_TRUE(sel.order_by.has_value());
-    EXPECT_EQ(sel.order_by->name, "id");
+    ASSERT_EQ(sel.order_by.size(), 1u);
+    EXPECT_EQ(sel.order_by[0].column.name, "id");
     ASSERT_TRUE(sel.limit.has_value());
     EXPECT_EQ(sel.limit.value(), 10u);
     EXPECT_EQ(sel.offset, 5u);
@@ -161,15 +206,7 @@ TEST(ParserPaginationTest, AWhereColumnMayBeNamedLimit) {
     EXPECT_EQ(sel.where[0].col.name, "limit");
 }
 
-// ---- Refusals: DESC and expressions ---------------------------------------
-
-TEST(ParserPaginationTest, DescIsUnsupportedWithItsPosition) {
-    const std::string_view sql = "SELECT a FROM t ORDER BY id DESC";
-    const auto parsed = Parse(sql);
-    ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
-    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "DESC")));
-}
+// ---- Refusals: expressions and ordinals -----------------------------------
 
 TEST(ParserPaginationTest, OrderByAnExpressionIsUnsupported) {
     const std::string_view sql = "SELECT a FROM t ORDER BY count(x)";
@@ -179,23 +216,16 @@ TEST(ParserPaginationTest, OrderByAnExpressionIsUnsupported) {
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "count")));
 }
 
-// `ORDER BY 1` and `ORDER BY a, b` are standard SQL a client will write -
-// forms this engine understands and declines, so each gets a positioned
-// Unsupported rather than the syntax error a bare grammar would give.
+// `ORDER BY 1` stays refused after OB1 lifted the DESC and multi-key
+// refusals beside it, and for a reason neither of those had: the ordinal
+// names a select-list position, which is a second spelling of something
+// that already has one. An output sort existing changes nothing about it.
 TEST(ParserPaginationTest, AnOrdinalOrderByIsUnsupported) {
     const std::string_view sql = "SELECT a FROM t ORDER BY 1";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
     EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
     EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "1")));
-}
-
-TEST(ParserPaginationTest, AMultiColumnOrderByIsUnsupported) {
-    const std::string_view sql = "SELECT a FROM t ORDER BY id, x";
-    const auto parsed = Parse(sql);
-    ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
-    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, ",")));
 }
 
 // ---- Refusals: aggregated output ------------------------------------------

@@ -93,6 +93,7 @@ out-of-range values, each naming the file and line.
 | `indexes` | `on` | Whether a secondary index may be **read**. Off takes the walk instead; replies are byte-identical. There is deliberately no maintenance switch — that is `DROP INDEX`. |
 | `cabin_max_values` / `cabin_max_entries_per_value` | `4096` / `4096` | Cabin caps. A cap refuses to observe, never truncates. |
 | `aggregate_max_groups` / `aggregate_max_distinct` | `65536` / `1048576` | Aggregation caps. A cap fails the statement, never truncates. |
+| `sort_max_rows` | `1048576` | How many rows one `ORDER BY` may hold. Fails the statement naming the key; never truncates, never spills. A `LIMIT` caps what is held at `offset + limit`, so this binds only an unlimited sort — and `ORDER BY <pk>` ascending is elided rather than sorted, so it is never bound at all. |
 | `log_dir` / `log_file` / `log_level` | — / `kdb.log` / `info` | Log destination and level (`trace`..`off`). Empty `log_file` disables file logging. |
 
 The two superblock-pinned keys (`cores`, `inline_cell_width`) are the ones

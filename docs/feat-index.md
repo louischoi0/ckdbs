@@ -565,9 +565,21 @@ Also refused, each naming the reason:
   complete is a wrong answer with a right answer's shape. Same rule
   `aggregate_max_groups` follows, and the opposite of a Cabin cap, which may
   fall back because a Cabin is only ever a shortcut.
-- **`ORDER BY` served from an index.** There is no output sort at all yet
-  (`feat-aggregate.md` §10); an index that could feed one is not the missing
-  half.
+- **`ORDER BY` served from an index. `[AMENDED 2026-08-11]`** The first
+  half of this entry is now false and the second is truer than when it was
+  written: an output sort exists (`docs/workplan-order-by.md`), and an
+  index still is not the missing half. Four reasons, each independent.
+  **IX8a** has `RunIndexStep` sort its matched pks *back* into pk order on
+  purpose, because creating an index must not reorder a reply. **IX2's
+  append-only maintenance** leaves an updated row with entries at two keys,
+  and the dedup keeps the lowest rather than the visible version's — which
+  today only picks an entry and would then pick a row's *position*.
+  **§5's 32-byte truncation** makes index order a prefix order, not a total
+  order on values, and IX6's "truncation cannot cost correctness" is an
+  argument about superset-plus-recheck that does not carry here.
+  **IX9's crossover** would be walked into deliberately by an index chosen
+  for its order rather than its selectivity, with no cardinality estimate
+  to see it coming.
 - **Expression, partial and descending indexes.** Out of v1; the key
   encoding of §5 is ascending by construction and reversing a column is a
   format-visible change, so it is a decision and not an omission.

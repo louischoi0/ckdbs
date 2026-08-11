@@ -499,11 +499,12 @@ SELECT AVG(balance) FROM accounts;
 - Caps fail the statement rather than truncate (`aggregate_max_groups`,
   ratified at 65,536).
 
-### Pagination (built 2026-08-10, V09)
+### Ordering and pagination (V09 2026-08-10; general `ORDER BY` 2026-08-11)
 
 ```sql
 SELECT <list> FROM ... [WHERE ...]
-    [ORDER BY <col> [ASC]] [LIMIT <n>] [OFFSET <m>]
+    [ORDER BY <col> [ASC|DESC] [, <col> [ASC|DESC]]...]
+    [LIMIT <n>] [OFFSET <m>]
 ```
 
 Each clause is independently optional, in that order (`OFFSET 5 LIMIT 10`
@@ -517,16 +518,37 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   refuses rather than wraps; `LIMIT 0` is legal and answers no rows.
 - The counts are **slots**: `LIMIT 10` and `LIMIT 20` are one pattern,
   two instances, so a limited statement fingerprints like any other.
-- `ORDER BY` may name only the driving relation's pk (checked at
-  compile — pk order is the free order and the only one). `ASC` is the
-  accepted no-op spelling; **`DESC` answers `Unsupported`** — every chain
-  links forward only, and a reverse walk does not exist.
-- `ORDER BY <pk>` means the same thing on an `EXPLICIT` relation as
-  anywhere else. It costs slightly more there: a caller-named key lands in
-  the slot it was inserted into rather than the one it sorts to, so the
-  engine emits each page's rows in key order instead of slot order. The
-  ordering is exact, not approximate, and `LIMIT`/`OFFSET` page through it
-  normally. The extra work is done only when the clause is present.
+- `ORDER BY` takes **any column or columns**, of any relation the
+  statement names, each `ASC` (the default) or `DESC`, up to eight keys.
+  Earlier keys decide; later keys break their ties. A key need not be
+  projected: `SELECT a FROM t ORDER BY b` is legal.
+- **Rows the clause does not distinguish keep the order they would have
+  had without it** — ordering refines the emission contract rather than
+  replacing it, so a tie is never resolved arbitrarily and never varies
+  between runs.
+- **Ordering by the primary key ascending is free**, and only that form:
+  it names the order the engine already emits, so the compiler drops the
+  clause and the statement pays nothing. `ANALYZE` shows this as the
+  absence of a `sort` line. Every other order — including `ORDER BY <pk>
+  DESC` — is an output sort, which is not free; see the two notes below.
+- **`ORDER BY <pk>` on an `EXPLICIT` relation** costs slightly more than
+  on an `ASSIGNED` one: a caller-named key lands in the slot it was
+  inserted into rather than the one it sorts to, so the engine emits each
+  page's rows in key order instead of slot order. Exact, not approximate,
+  and still not an output sort — the disorder is bounded by one page.
+- **A sorted statement's `LIMIT` bounds what you receive, not what the
+  engine reads.** The sort must see every qualifying row before it knows
+  which comes first, so unlike an unsorted or pk-ordered `LIMIT`, it
+  cannot stop the scan early; `ANALYZE`'s `examined=` shows the full
+  count. What the `LIMIT` does bound is memory — only `offset + limit`
+  rows are held. For deep pagination over an ordered column, prefer keyset
+  form.
+- A sort holding more than `sort_max_rows` rows **fails the statement**
+  naming the key. It never returns a partial ordering, and it never
+  spills to disk. Adding a `LIMIT` is usually the answer: it caps what is
+  held at `offset + limit` regardless of the relation's size.
+- Ordering over aggregated output (`GROUP BY`) is still refused with a
+  byte position.
 - The tail is refused over an aggregated statement (groups emit in fold
   order, which is not a contract) and inside a subquery, each with a
   byte position.
@@ -654,11 +676,13 @@ waits on"; `InvalidArgument` means "simply wrong".
   between algorithms — the query is the plan.** Written order is a client
   contract; decorrelation rewrites are forbidden, not merely unimplemented.
   A stable plan is what lets `pattern_id` name a plan and Waystone trust it.
-- **No `HAVING`, no `ORDER BY` over aggregated output, no `DESC`.** No
-  output sort exists; `HAVING` answers with "filter before the fold with
-  WHERE, or filter the result client-side". (`ORDER BY <pk>` / `LIMIT` /
-  `OFFSET` parse since V09 — see Pagination — because pk order is the
-  order the engine already emits; nothing here gained a sort.)
+- **No `HAVING`, and no `ORDER BY` over aggregated output.** `HAVING`
+  answers with "filter before the fold with WHERE, or filter the result
+  client-side". Ordering *aggregated* output stays refused deliberately:
+  it is one half of a decision to be made with `HAVING`, and answering
+  half of it would settle the rest by accident. Ordinary statements do
+  have a full `ORDER BY` — any columns, `ASC`/`DESC` — since 2026-08-11;
+  see Ordering and pagination.
 - **No cross-dialect shims.** No `SERIAL`, no `AUTO_INCREMENT` (an
   `ASSIGNED` relation's pk is already both, and an `EXPLICIT` one's is
   deliberately neither), no `IF NOT EXISTS`, no `public.` schema

@@ -596,13 +596,14 @@ TEST_F(StepCompileTest, ADefaultConstructedStepDecodesEverything) {
     EXPECT_EQ(fresh.filter_columns, Step::kAllColumns);
 }
 
-// ---- The pagination tail (spec I11, workplan V09) -------------------------
+// ---- The pagination tail (spec I11, V09; the sort is OB3) -----------------
 //
-// The compile half of V09: `limit`/`offset` ride the chain for the
-// dispatcher's emission quota, and `ORDER BY` is validated against the
-// driving relation's pk and *discarded* - the accepted form names the
-// order the chain already emits, so no field carries it and nothing
-// downstream can come to depend on one.
+// `limit`/`offset` ride the chain for the dispatcher's emission quota, and
+// since OB3 the resolved `ORDER BY` keys ride it too, for the dispatcher's
+// sort. The one form that still does not is the one V09 was written for:
+// a single ascending key on the driving relation's pk names the order the
+// chain already emits, so the compiler *elides* it and the statement pays
+// nothing.
 
 TEST_F(StepCompileTest, LimitAndOffsetSurviveCompilation) {
     const StepChain chain = MustCompile("SELECT name FROM acct LIMIT 3 OFFSET 1");
@@ -633,40 +634,70 @@ TEST_F(StepCompileTest, TheTailChangesNoStep) {
     EXPECT_EQ(limited.klass, plain.klass);
 }
 
-TEST_F(StepCompileTest, OrderByThePkIsAValidatedNoOp) {
+// The elision, and the whole reason it is worth having: the statement that
+// V09 accepted compiles to no sort at all, so its cost is unchanged rather
+// than merely small.
+TEST_F(StepCompileTest, OrderByThePkIsElidedNotSorted) {
     const StepChain chain = MustCompile("SELECT name FROM acct ORDER BY id");
     ASSERT_EQ(chain.steps.size(), 1u);
     EXPECT_EQ(chain.steps[0].kind, AccessKind::kScan);
+    EXPECT_FALSE(chain.sorted());
 }
 
-TEST_F(StepCompileTest, OrderByTheQualifiedPkOfTheDrivingRelationCompiles) {
+TEST_F(StepCompileTest, OrderByTheQualifiedPkOfTheDrivingRelationIsElided) {
     const StepChain chain = MustCompile(
         "SELECT a.name, t.sym FROM acct AS a JOIN trade AS t ON t.acct_id = a.id "
         "ORDER BY a.id LIMIT 5");
     ASSERT_EQ(chain.steps.size(), 2u);
     ASSERT_TRUE(chain.limit.has_value());
     EXPECT_EQ(chain.limit.value(), 5u);
+    EXPECT_FALSE(chain.sorted());
 }
 
-TEST_F(StepCompileTest, OrderByANonPkColumnIsUnsupported) {
-    const std::string sql = "SELECT name FROM acct ORDER BY name";
-    const auto chain = CompileSql(sql);
-    ASSERT_FALSE(chain.ok());
-    EXPECT_EQ(chain.status().code(), StatusCode::kUnsupported);
-    const std::string want = "byte " + std::to_string(sql.find("name", sql.find("ORDER")));
-    EXPECT_NE(chain.status().message().find(want), std::string::npos)
-        << chain.status().message();
+// ...and the elision is exactly that narrow. Descending on the same pk is
+// not an order any chain emits, because every chain links forward only.
+TEST_F(StepCompileTest, OrderByThePkDescendingIsSorted) {
+    const StepChain chain = MustCompile("SELECT name FROM acct ORDER BY id DESC");
+    ASSERT_EQ(chain.sort_keys.size(), 1u);
+    EXPECT_TRUE(chain.sort_keys[0].descending);
+    EXPECT_EQ(chain.sort_keys[0].ref.col_pos, 0u);
 }
 
-// The joined relation's pk is a real pk and still refused: emission order
-// is the *driving* relation's pk major (I12), and no other order exists
-// without a sort.
-TEST_F(StepCompileTest, OrderByAJoinedRelationsPkIsUnsupported) {
-    const auto chain = CompileSql(
+TEST_F(StepCompileTest, OrderByANonPkColumnCompilesToASortKey) {
+    const StepChain chain = MustCompile("SELECT name FROM acct ORDER BY name");
+    ASSERT_EQ(chain.sort_keys.size(), 1u);
+    EXPECT_EQ(chain.sort_keys[0].ref.rel_slot, 0u);
+    EXPECT_NE(chain.sort_keys[0].ref.col_pos, 0u);
+    EXPECT_FALSE(chain.sort_keys[0].descending);
+}
+
+// A joined relation's column is orderable: by the time the sink sees a row
+// the frame holds every step's values, so which step a key came from costs
+// the sort nothing.
+TEST_F(StepCompileTest, OrderByAJoinedRelationsColumnResolvesToItsSlot) {
+    const StepChain chain = MustCompile(
         "SELECT a.name, t.sym FROM acct AS a JOIN trade AS t ON t.acct_id = a.id "
-        "ORDER BY t.id");
-    ASSERT_FALSE(chain.ok());
-    EXPECT_EQ(chain.status().code(), StatusCode::kUnsupported);
+        "ORDER BY t.sym DESC, a.name");
+    ASSERT_EQ(chain.sort_keys.size(), 2u);
+    EXPECT_EQ(chain.sort_keys[0].ref.rel_slot, 1u);
+    EXPECT_TRUE(chain.sort_keys[0].descending);
+    EXPECT_EQ(chain.sort_keys[1].ref.rel_slot, 0u);
+    EXPECT_FALSE(chain.sort_keys[1].descending);
+}
+
+// A key must be decoded to be compared, and it is decoded by the step that
+// owns it - the one respect in which a sorted chain differs from its
+// unsorted twin (OB3).
+TEST_F(StepCompileTest, ASortKeyIsAddedToItsOwnStepsReadColumns) {
+    const StepChain plain = MustCompile("SELECT name FROM acct");
+    const StepChain sorted = MustCompile("SELECT name FROM acct ORDER BY tier");
+    ASSERT_EQ(sorted.steps.size(), plain.steps.size());
+    EXPECT_EQ(sorted.steps[0].kind, plain.steps[0].kind);
+    EXPECT_EQ(sorted.steps[0].residual.size(), plain.steps[0].residual.size());
+    EXPECT_EQ(sorted.klass, plain.klass);
+    // The ordered-by column is not projected, so it is read only because
+    // the sort named it.
+    EXPECT_NE(sorted.steps[0].read_columns, plain.steps[0].read_columns);
 }
 
 TEST_F(StepCompileTest, OrderByAnUnknownColumnIsAResolutionError) {

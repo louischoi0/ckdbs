@@ -101,6 +101,7 @@ add_library(kds
     src/exec/plan_printer.cpp
     src/exec/step_compiler.cpp
     src/exec/aggregate.cpp
+    src/exec/sort.cpp
     src/exec/type_literals.cpp
     src/exec/chain_frame.cpp
     src/exec/step_vm.cpp

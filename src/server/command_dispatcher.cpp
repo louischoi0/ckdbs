@@ -3400,10 +3400,33 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     // beside it is what an OFFSET's skipped rows still cost. A chain never
     // carries both a fold and a quota - the parser refuses the tail over
     // aggregated output - so the two wrappers cannot compose.
+    // **The sort runs under ANALYZE too**, for the same contract's sake and
+    // with a consequence the fold does not have: a sorted statement cannot
+    // stop early, so its `pages=` and `examined=` are the *unlimited*
+    // statement's however small its `LIMIT`. Skipping the sort here would
+    // report the stopping run that a sorted statement never performs.
+    //
+    // The rows are not rendered - the reply is the plan - so the sort holds
+    // keys and empty text. That is the one respect in which ANALYZE's run
+    // is cheaper than the real one, and it is the same respect in which it
+    // was already cheaper before a sort existed.
     exec::EmissionQuota quota(chain);
+    sorter_.Reset(chain, sort_max_rows_);
+    std::string analyze_scratch;
     Status ran = exec::Execute(
         catalog_, page_store_, chain,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            if (sorter_.active()) {
+                auto admitted = sorter_.Admit(frame);
+                if (!admitted.ok()) return admitted.status();
+                // Admitted rows are taken with empty text, which is the one
+                // respect in which this run is cheaper than the real one -
+                // and the same respect in which it already was. What matters
+                // is that the same rows are *admitted*, so `sorted=` and
+                // `rows=` describe the run that would have happened.
+                if (admitted.value()) sorter_.Take(analyze_scratch);
+                return storage::VisitControl::kContinue;
+            }
             const exec::QuotaVerdict verdict = quota.Note();
             if (verdict == exec::QuotaVerdict::kStop) return storage::VisitControl::kStop;
             if (verdict == exec::QuotaVerdict::kSkip) return storage::VisitControl::kContinue;
@@ -3419,6 +3442,13 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     if (!ran.ok()) {
         return {"ERR " + ran.message(), false};
     }
+    // `rows=` counts what the client would have been sent, so on the sorted
+    // path the quota runs where the real path runs it: after the order
+    // exists.
+    if (sorter_.active()) {
+        sorter_.Finish();
+        exec::DrainSorted(quota, sorter_.rows(), [&](const exec::OutputSort::Row&) { ++rows; });
+    }
     RecordExecution(instance, trail, chain, stats);
 
     const exec::StepStats total = stats.Total();
@@ -3433,6 +3463,14 @@ DispatchOutcome CommandDispatcher::RunAnalyze(const exec::StepChain& chain,
     // number could not.
     if (folding) {
         os << " groups=" << aggregator_.group_count();
+    }
+
+    // What the sort held, which under a `LIMIT` is what it retained rather
+    // than what arrived (OB5) - the number that says what the sort cost in
+    // memory. `examined=` beside it says what the walk cost, and the two
+    // differing by orders of magnitude is the top-N heap doing its job.
+    if (sorter_.active()) {
+        os << " sorted=" << sorter_.rows().size();
     }
 
     // The statement's own pattern_id, in the same hex CREATE PATTERN
@@ -3560,18 +3598,31 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // The eligible class is deliberately narrow and each exclusion is a
     // correctness statement, not a shortcut: an aggregate would fold on
     // the wrong core's sink; a quota (LIMIT/OFFSET) applies at emission
-    // and the remote side emits everything; ANALYZE describes a local run
-    // it did not perform; a projection list needs the projection types the
-    // remote whole-row batch does not carry yet. Every excluded shape is
-    // refused exactly as before, never mis-run.
+    // and the remote side emits everything; **a sort applies at emission
+    // too** (OB4) - the remote reply is the owning core's emission order,
+    // and the local sink the sorter decorates is never reached, so shipping
+    // a sorted statement would answer it unordered; ANALYZE describes a
+    // local run it did not perform; a projection list needs the projection
+    // types the remote whole-row batch does not carry yet. Every excluded
+    // shape is refused exactly as before, never mis-run.
+    //
+    // `sorted()` and not `stmt.order_by.empty()`: an `ORDER BY <pk> ASC`
+    // the compiler elided asks for the order this path already returns, so
+    // it stays eligible - **except** when the elision leaned on
+    // `emit_in_key_order`. That flag is how a `kExplicit` relation's walk
+    // is made to emit in key order (heap-and-tuple.md §4.1), and
+    // `EncodeStepDescriptor` does not carry it, so a shipped step would
+    // walk in slot order and answer the clause wrongly. Refused here rather
+    // than encoded: the wire format is versioned, and an honest affinity
+    // refusal beats a reordered reply.
     if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 1 &&
         chain.value().hoisted.empty() && chain.value().star() &&
-        !chain.value().aggregated() && !chain.value().limit.has_value() &&
-        chain.value().offset == 0) {
+        !chain.value().aggregated() && !chain.value().sorted() &&
+        !chain.value().limit.has_value() && chain.value().offset == 0) {
         const exec::Step& step = chain.value().steps[0];
         auto owner_access = catalog_.InitTableAccess(step.rel_oid);
         if (owner_access.ok() && owner_access.value()->owner_core != core_id_ &&
-            step.sub_chains.empty()) {
+            step.sub_chains.empty() && !step.emit_in_key_order) {
             auto tag = remote_reads_->Open(step, owner_access.value()->owner_core,
                                            next_remote_request_++);
             if (tag.ok()) {
@@ -3697,36 +3748,76 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // them. `kEmitThenStop` rides `RowSink`'s kStop (V03), so the walk
     // stops on the very tuple that filled the quota and fetches no further
     // page - early termination is the existing stop propagation.
+    // ---- OB4: the sort wraps the sink above the quota -------------------
+    //
+    // The same seam again, with one difference the fold and the quota did
+    // not have: **the quota runs downstream of the sort**, after the walk,
+    // because rows [m, m+n) of the sorted reply are not rows [m, m+n) of
+    // the emitted one. A chain never carries both a fold and a sort - the
+    // parser refuses the tail over aggregated output.
     exec::EmissionQuota quota(compiled);
+    sorter_.Reset(compiled, sort_max_rows_);
     exec_stats_.steps.clear();
+
+    // `SELECT *` renders from the relation's schema, which the chain
+    // deliberately does not carry types for. Resolved **once**, not per row:
+    // this is the commonest statement shape in the engine, and a catalog
+    // lookup per row was 50-63 ns of it (`bench/results-order-by.md`).
+    const catalog::TableAccess* star_access = nullptr;
+    if (compiled.star()) {
+        auto access = catalog_.InitTableAccess(compiled.steps[0].rel_oid);
+        if (!access.ok()) return {"ERR " + access.status().message(), false};
+        star_access = access.value();
+    }
+
+    // Rendering one row of the reply. Shared by the two paths below so the
+    // sorted and unsorted replies are formatted by one routine - the bug
+    // this shape avoids is a sorted statement rendering a DATE as an epoch
+    // day because a second formatter forgot `projection_types`.
+    std::string row_scratch;
+    auto render = [&](const exec::ChainFrame& frame, std::string& out) {
+        out.clear();
+        bool first_val = true;
+        if (star_access != nullptr) {
+            for (std::size_t i = 0; i < star_access->schema.columns.size(); ++i) {
+                if (!first_val) out += ',';
+                out += exec::FormatValue(
+                    star_access->schema.columns[i].type_val,
+                    frame.Get(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)}));
+                first_val = false;
+            }
+        } else {
+            for (std::size_t i = 0; i < compiled.projection.size(); ++i) {
+                if (!first_val) out += ',';
+                out += exec::FormatValue(compiled.projection_types[i],
+                                         frame.Get(compiled.projection[i]));
+                first_val = false;
+            }
+        }
+    };
+
     Status ran = exec::Execute(
         catalog_, page_store_, compiled,
         [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            if (sorter_.active()) {
+                // **Ask before rendering.** The sort cannot skip or stop -
+                // the quota runs after the order exists - but under a
+                // `LIMIT` most rows are beaten by the heap's worst retained
+                // row and will never be seen, and rendering them is what
+                // made top-N bound memory without bounding work.
+                auto admitted = sorter_.Admit(frame);
+                if (!admitted.ok()) return admitted.status();
+                if (admitted.value()) {
+                    render(frame, row_scratch);
+                    sorter_.Take(row_scratch);
+                }
+                return storage::VisitControl::kContinue;
+            }
             const exec::QuotaVerdict verdict = quota.Note();
             if (verdict == exec::QuotaVerdict::kStop) return storage::VisitControl::kStop;
             if (verdict == exec::QuotaVerdict::kSkip) return storage::VisitControl::kContinue;
-            os << "\\n";
-            bool first_val = true;
-            if (compiled.star()) {
-                auto access = catalog_.InitTableAccess(compiled.steps[0].rel_oid);
-                if (!access.ok()) return access.status();
-                for (std::size_t i = 0; i < access.value()->schema.columns.size(); ++i) {
-                    if (!first_val) os << ',';
-                    // `SELECT *` renders from the schema it already holds,
-                    // which is why the chain carries no types for it.
-                    os << exec::FormatValue(
-                        access.value()->schema.columns[i].type_val,
-                        frame.Get(exec::ColumnRef{0, 0, static_cast<std::uint16_t>(i)}));
-                    first_val = false;
-                }
-            } else {
-                for (std::size_t i = 0; i < compiled.projection.size(); ++i) {
-                    if (!first_val) os << ',';
-                    os << exec::FormatValue(compiled.projection_types[i],
-                                            frame.Get(compiled.projection[i]));
-                    first_val = false;
-                }
-            }
+            render(frame, row_scratch);
+            os << "\\n" << row_scratch;
             return verdict == exec::QuotaVerdict::kEmitThenStop
                        ? storage::VisitControl::kStop
                        : storage::VisitControl::kContinue;
@@ -3738,6 +3829,16 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // describing that is a trail describing a state no reader should
         // ever be pointed at (workplan P10).
         return {"ERR " + ran.message(), false};
+    }
+
+    // The order exists only now, so the quota is applied here rather than
+    // in the sink - and it is the same quota object, so `LIMIT n OFFSET m`
+    // still means rows [m, m+n) of the reply the unlimited statement gives.
+    // What changed is which reply that is: the sorted one.
+    if (sorter_.active()) {
+        sorter_.Finish();
+        exec::DrainSorted(quota, sorter_.rows(),
+                          [&](const exec::OutputSort::Row& row) { os << "\\n" << row.text; });
     }
 
     RecordExecution(instance, trail, compiled, exec_stats_);

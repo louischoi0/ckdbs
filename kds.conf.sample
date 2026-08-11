@@ -402,6 +402,31 @@ cabin_max_entries_per_value = 4096
 aggregate_max_groups = 65536
 aggregate_max_distinct = 1048576
 
+# How many rows one `ORDER BY` may hold. `[PROPOSED]` -
+# docs/workplan-order-by.md leaves the number open, so it is configurable
+# rather than compiled in.
+#
+# A sort is on the aggregate side of the line drawn above, for the same
+# reason: it has no shortcut to fall back to. A sort that stopped holding
+# rows has silently dropped exactly the ones the client asked to see last,
+# which is a wrong answer with a right answer's shape. So this **fails the
+# statement**, naming the key, with no spill, no truncation and no partial
+# ordering.
+#
+# Counted in rows rather than bytes, following aggregate_max_groups: an
+# entry count is the number an operator can reason about against a row
+# width they already know.
+#
+# **A LIMIT is usually the answer to hitting this.** With one, a sort holds
+# `offset + limit` rows however large the relation is, so this cap binds
+# only an unlimited ORDER BY. A limit larger than the cap is not itself an
+# error - the cap fires only if that many rows actually arrive.
+#
+# `sort_max_rows = 0` holds no row, which refuses every statement needing a
+# sort while leaving the grammar in place. Statements ordered by the primary
+# key ascending are unaffected either way: they are elided, not sorted.
+sort_max_rows = 1048576
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

@@ -1121,4 +1121,54 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     return false;  // incompatible value kinds
 }
 
+int OrderKey::Compare(const OrderKey& rhs) const noexcept {
+    // A string key and a numeric one never meet: both come from one column,
+    // whose type decided which arm `OrderKeyOf` took. The check is here
+    // because the alternative is comparing a string's `num` (always 0)
+    // against a real one and calling the result an order.
+    if (is_str != rhs.is_str) return is_str ? 1 : -1;
+    if (is_str) {
+        const int cmp = str.compare(rhs.str);
+        return cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
+    }
+    if (num < rhs.num) return -1;
+    return rhs.num < num ? 1 : 0;
+}
+
+StatusOr<OrderKey> OrderKeyOf(std::uint32_t type_val, const parser::AstValue& value) {
+    if (value.type == parser::ValueType::kNull) {
+        return Status::Corruption(
+            "cannot order a NULL: none is storable, and where one would sort is undecided");
+    }
+    OrderKey key;
+    if (type_val == kTypeValUint64) {
+        // Through ValueAsUint64 and not through int_val, for the reason
+        // CompareValues spells out above: int_val cannot hold the upper half
+        // of the range, and ordering it directly puts large ids below small
+        // ones. Int128 then holds the unsigned value exactly.
+        auto u = ValueAsUint64(value);
+        if (!u.ok()) return u.status();
+        key.num = static_cast<Int128>(u.value());
+        return key;
+    }
+    switch (value.type) {
+        case parser::ValueType::kInt:
+        case parser::ValueType::kDecimal:
+            // A decimal's unscaled integer orders the value directly because
+            // every value of one column shares that column's scale - (p, s)
+            // is a schema constant, so no rescale can be needed here.
+            key.num = static_cast<Int128>(value.int_val);
+            return key;
+        case parser::ValueType::kDecimalWide:
+            key.num = Int128FromHalves(value.dec_hi, value.int_val);
+            return key;
+        case parser::ValueType::kStr:
+            key.is_str = true;
+            key.str = value.str_val;
+            return key;
+        default:
+            return Status::Corruption("cannot order a value of this kind");
+    }
+}
+
 }  // namespace kds::exec
