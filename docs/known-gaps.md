@@ -68,16 +68,28 @@ There is no purge pass, and readers are deliberately unregistered
 
 ## Concurrency and multicore
 
-- `cores > 1` buys parallel WAL streams only: **core 0 serves every
-  statement**, peers come up alive and idle (`docs/crosscore.md`). The
-  P6 ownership question is decided **and built** (CC7 + P6b handoff + P6c
+- **Cross-core execution has started, and is exactly one shape wide.**
+  P4a-P4c are built (2026-08-10, `docs/workplan-crosscore.md`): a
+  single-relation remote read — a star `SELECT` against an `owner_core=1`
+  relation — is opened as a step on its owning core, streamed back under
+  credit, and framed by the session core, with the reply byte-identical to
+  the local path. **Every other statement is still served by core 0**:
+  `CheckReadAffinity` now refuses the shapes the pipeline cannot yet run,
+  retryably, rather than all of them. What remains is **P4d** — multi-step
+  wiring, join-key forwarding, and the viral `ChainRunner` coroutine
+  conversion, the workplan's largest single change — and **P4e**, the
+  equivalence pass plus the benchmark re-run. Until P4e runs,
+  `bench/results-multicore.md`'s 1.05× is a *parity baseline*, not a
+  measurement of the pipeline.
+- Relation ownership is decided **and built** (CC7 + P6b handoff + P6c
   `placement` key, 2026-08-10): a rotated relation's pages are grantable
-  and readable by its owner — but `placement = rotate` stays non-default,
-  because a rotated relation's *statements* are still refused retryably
-  until dispatch lands. Row-id leasing for peer INSERT is also built
-  (P5-shape, 2026-08-10). **The one remaining piece is the step pipeline
-  itself** — statement dispatch plus the executor's coroutine conversion,
-  the workplan's largest single change left.
+  and readable by its owner. `placement` still defaults to `creating` —
+  `rotate` places relations on cores that can serve one statement shape and
+  must refuse the rest, so it stays an exercise mode until P4d lands. The
+  header comment on `PlacementPolicy` (`include/kds/catalog/core_placement.hpp`)
+  still says a rotated relation *cannot serve statements yet*; that is the
+  pre-P4c wording, and the sentence above is the current one. Row-id
+  leasing for peer INSERT is also built (P5-shape, 2026-08-10).
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
 - Cross-core writes are refused retryably (CC3): a transaction's writes
