@@ -125,6 +125,7 @@ add_executable(kds_tests
     wal_log_scanner_test.cpp
     wal_analysis_test.cpp
     wal_redo_test.cpp
+    wal_high_water_test.cpp
     wal_manager_test.cpp
     page_mgr_wal_gate_test.cpp
     wal_checkpointer_test.cpp

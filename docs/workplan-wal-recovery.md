@@ -1,6 +1,6 @@
 # WAL recovery — workplan
 
-Status: **RC01-RC03 written (unbuilt); RC04 onward not started.** Spec: `docs/wal.md` §12 (normative, and
+Status: **RC01-RC04 written (unbuilt); RC05 onward not started.** Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
@@ -115,14 +115,25 @@ Each blocks a specific task and none is this plan's to settle. The house
 rule applies: stop and ask, or build behind an interface that keeps every
 option viable.
 
-- **The assertion replay range** (`feat-assertion.md` §7's
-  checkpoint-genesis gap). A group directory folded from records needs the
-  records from the Bound Cabin's *birth*, not from the last checkpoint,
-  because nothing durable holds the headers a checkpoint-bounded replay
-  would start from. Either the checkpoint persists the directory, or
-  assertion replay starts at each cabin's `ASSERT_BUILD`. **RC07 cannot be
-  written until this is answered**, and it is the one open item on the
-  critical path.
+- ~~**The assertion replay range**~~ — **ANSWERED 2026-08-11, and no longer
+  open.** The operator took the first option, amended: the checkpoint
+  persists the directory as **headers only**
+  (`{group_id, key, count, sum}`, O(groups)), replay folds `ASSERT_*` from
+  the last checkpoint forward, and the **entry gains a `group_id`** so the
+  header→entry linkage is rebuilt from the cabin's own pages instead of
+  persisted. Ratified as `feat-assertion.md` **AS6a** (§2, §5.1, §7), which
+  carries the full statement. RC07 is unblocked and owns it.
+
+  Two things the decision turned on that neither option had costed, recorded
+  here because they are what made the plain first option unbuildable:
+  **a group header's entry-list is O(all writes, forever)**, appended by
+  `BoundCabin::Apply`/`ApplyDeparture` per checked write and removed only on
+  abort — so persisting the directory whole means writing O(all entries) at
+  every checkpoint; and it **cannot simply be omitted**, because
+  `Unapply` answers `NotFound` on a missing pair, so a reservation made
+  before a checkpoint and rolled back after it would fail the mount. The
+  `group_id` field is what makes the linkage reconstructible and the
+  snapshot O(groups).
 - **Writing `UndoRecordType::kInsert`** (§2.4): a correctness requirement
   with a hot-path cost `txn.md` §3.6 declined to pay. The alternatives —
   persisting the trail wholesale, or deriving inserts from `HEAP_INSERT`
@@ -299,12 +310,85 @@ the record. The first two are in `tests/wal_redo_test.cpp` with the
 primitives' own tests beside them; the third is complete for all
 eight. **Nothing has been executed.**
 
-**RC04 — RV4's high-water repair.**
-Raise the superblock's page high-water mark past every page id any
-replayed record named, before any allocation can run.
+**RC04 — RV4's high-water repair. WRITTEN 2026-08-10, NOT BUILT OR RUN**,
+on RC01's terms — still no toolchain here. `wal/high_water.hpp` +
+`src/wal/high_water.cpp`: `RaiseHighWater(store, analysis)` moves the
+store's allocation floor past `analysis.max_page_id` and reports the
+transaction-id ceiling `analysis.max_txn_id` implies. Plus one new seam,
+`storage::PageStore::RaiseAllocationFloor`, overridden by
+`DevicePageStore`, `InMemoryPageStore` and `BufferPool` (which delegates,
+because its allocator is delegated).
+
+**RV4 is wrong about where the mark lives, and the correction changes what
+this task had left to do.** RV4 says "the superblock's high-water mark".
+The superblock holds no such thing — `server/superblock.hpp` states in as
+many words that it "deliberately does not hold allocation state — no
+page-id counter, no total/free page counts", and that which ids exist is
+answered by `DevicePageStore`'s free-map page. The hazard survives the
+correction intact, because the free map is unlogged too and a crash
+between a data write-back and the map write-back reverts it (the ordering
+note in `device_page_store.cpp`'s `FlushMaps` calls the result an orphan;
+the log is what makes it more than one). What changes is the *scope*:
+
+- **Redo already closes the common case.** Its `CreateAt()` re-establishes
+  the free-map bit for every page it writes through a `PAGE_INIT` or an
+  FPI, so a page whose records are in the replay range is protected by the
+  phase before this one.
+- **What it does not close, and what makes RC04 a fix rather than a
+  formality, is a page the log names that redo never visits.** A
+  `CHECKPOINT_BEGIN` dirty-page entry with a recLSN of 0 is
+  dirty-but-described-by-no-record (§11-3): no applier ever runs for it,
+  no bit is ever set, and `analysis.max_page_id` counts it correctly
+  because the log named it. That is the case the headline test is built
+  on, and the one the repair exists for.
+- **The floor is a constant today.** `DevicePageStore::Open` starts every
+  mount at the same `first_new_page_id`, which is a property of the build
+  and not of the database in front of it. The repair makes allocation
+  safety rest on the log rather than on the free map being complete.
+
+Three decisions the task's own text did not make:
+
+- **The floor is raised; no free-map bit is set.** Marking an id allocated
+  that no page was ever written at would turn `Get()`'s honest `NotFound`
+  into a read of whatever bytes the device holds there. "This id exists"
+  and "do not hand this id out" are two facts, and recovery may only
+  assert the second.
+- **A store that cannot raise its floor refuses the mount.** The base
+  `PageStore` default is `Unsupported`, not a silent no-op — a store that
+  ignored the raise would let recovery report a repair that did not
+  happen, which is worse than a refusal that names the store (RV1).
+  `DevicePageStore` refuses the same way when a **lease** is installed,
+  because a leased core takes its ids from its extent and never consults
+  the floor.
+- **The transaction-id half is computed here and applied by the caller.**
+  `analysis.max_txn_id` is the other face of the same unlogged-page
+  hazard (`txn/trx_id.hpp` records the exposure), but the superblock is
+  `server/`'s and `wal/` sits below it — the boundary `analysis.hpp`
+  already drew. `HighWaterRepair::next_trx_id` is the number; the caller
+  owes `SuperBlock::SetNextTrxId`, which already refuses to lower.
+
+**Two obligations this leaves named rather than hidden**, both for the
+mount driver RC05-RC08 build:
+
+1. `storage::ExtentAllocator` — core 0's carver of per-core page extents —
+   is constructed in `expeditor.cpp` with `kFirstUserPageId` as its search
+   hint. It must start above `HighWaterRepair::page_floor` instead, or a
+   granted extent can cover pages the log names: the same hazard in the
+   multicore shape, which is why the repair returns the floor rather than
+   only applying it.
+2. Recovery must run before any lease is installed — which RV1 already
+   requires, and which the leased-store refusal now enforces mechanically.
+
 *Done when:* a scripted crash that reverts the mark cannot hand out a page
 redo wrote; the test fails without the repair (a fix whose test passes
-either way is not a fix).
+either way is not a fix). `tests/wal_high_water_test.cpp`'s first test is
+that, end to end — allocate four pages and sync, revert the free map to
+its pre-allocation image, reopen, analyse, redo, repair, then allocate
+four more and assert the pre-crash page's **bytes** are still there.
+Without the raise the third allocation is that page and the sync writes
+zeroes over it. The refusals, the monotonicity of the floor and the
+transaction ceiling have their own tests beside it, and **none has been
+executed.**
 
 **RC05 — Undo.**
 Roll losers back through their `undo_ptr` chains, emitting compensations
@@ -323,14 +407,33 @@ and the trade is being reversed with evidence.
 *Done when:* a crash mid-transaction leaves no trace of the loser's
 inserted rows after recovery; the measured cost is in `bench/`.
 
-**RC07 — Bound Cabin replay.** *(blocked on §4's first item)*
-Feed `exec::ReplayAssertionRecord` the decided record range and rebuild
-every group directory, then verify `header == Σ(entries)` through
-`VerifyAgainstEntries`.
+**RC07 — Bound Cabin replay.** *(unblocked 2026-08-11 — §4's first item is
+answered; build to `feat-assertion.md` AS6a)*
+Four parts, in dependency order:
+
+1. **`BoundCabinEntry` gains `group_id` (uint32)**, in the 4 bytes
+   `EncodeEntry` writes as a literal zero. Width stays 32 B.
+2. **`AssertEntryPayload` gains `group_id`**, so replay reads the id rather
+   than re-deriving it and never has to reproduce the live run's allocation
+   order. The payload already carries the group key, so nothing else moves.
+3. **The checkpoint snapshots each cabin's group headers** —
+   `{group_id, key, count, sum}` — and recovery loads it, rebuilds the
+   linkage by scanning the cabin's pages and bucketing by `group_id`, then
+   feeds `exec::ReplayAssertionRecord` the range **from that checkpoint
+   forward**.
+4. **Verify** `header == Σ(entries)` through `VerifyAgainstEntries`, which
+   is now a check of a rebuilt structure against durable bytes rather than
+   of a structure against itself.
+
+Both format touches are free while nothing has read a stream back and cost
+a format-version event afterwards, which is why AS6a was ratified before
+this task rather than during it.
+
 *Done when:* `SHOW ASSERTIONS` reports `enforcing=1` immediately after a
 restart — the claim `feat-assertion.md` §7 makes and the engine currently
 contradicts — and the admission boundary answers identically either side
-of a crash.
+of a crash. Add one test that a group whose entries span a checkpoint
+re-sums correctly, since that is the boundary the snapshot introduces.
 
 **RC08 — Completion checkpoint and the anchor.**
 Recovery ends by writing a checkpoint and publishing the anchor, bounding

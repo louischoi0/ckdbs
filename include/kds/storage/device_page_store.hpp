@@ -130,6 +130,29 @@ public:
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
     StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
 
+    // ---- Recovery's high-water repair (RV4, workplan RC04) --------------
+    //
+    // Raises where CreateNew() starts its search (page_store.hpp).
+    //
+    // **Note what this does not do: it does not set a free-map bit.** The
+    // map is the durable record of which ids *exist*, and marking an id
+    // allocated that no page was ever written at would turn Get()'s honest
+    // NotFound into a read of whatever bytes the device happens to hold
+    // there. The floor is a separate fact - "do not hand this out" - and
+    // keeping the two apart is what lets recovery close the hazard without
+    // inventing pages.
+    //
+    // Refuses with Unsupported on a **leased** store. A leased core takes
+    // its ids from the extent core 0 reserved for it and never consults
+    // this floor (SetCoreOwnership), so raising it here would be a silent
+    // no-op - the shape of repair that reports success and changes nothing.
+    // The leased core's equivalent is that core 0's ExtentAllocator must
+    // start above the recovered high-water, which is the grant path's and
+    // not this store's. Recovery runs at mount, before any lease is
+    // installed (RV1), so the refusal is a guard against this being called
+    // somewhere it does not belong rather than a restriction on recovery.
+    Status RaiseAllocationFloor(PageId first_allocatable_page_id) override;
+
     // Get() that leaves the frame clean (page_store.hpp). Without it a
     // read-only statement dirties every page it touches and the next
     // checkpoint writes the whole working set back with nothing changed.

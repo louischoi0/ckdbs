@@ -261,6 +261,12 @@ public:
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
     StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
 
+    // Delegated, because the allocator is delegated: CreateNew() takes its
+    // id from `backing_`, so the floor that constrains it is backing_'s.
+    Status RaiseAllocationFloor(PageId first_allocatable_page_id) override {
+        return backing_.RaiseAllocationFloor(first_allocatable_page_id);
+    }
+
 private:
     StatusOr<std::uint32_t> TakeFreeFrameSlot() noexcept;
     Frame& RegisterFrame(std::uint32_t slot, PageId page_id,

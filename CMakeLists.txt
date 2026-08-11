@@ -84,6 +84,7 @@ add_library(kds
     src/wal/log_scanner.cpp
     src/wal/analysis.cpp
     src/wal/redo.cpp
+    src/wal/high_water.cpp
     src/wal/manager.cpp
     src/wal/checkpointer.cpp
     src/wal/log_device.cpp

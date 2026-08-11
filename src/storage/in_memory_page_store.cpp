@@ -29,6 +29,13 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> InMemoryPageStore::
     return std::make_pair(id, created.value());
 }
 
+Status InMemoryPageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
+    if (first_allocatable_page_id > next_new_page_id_) {
+        next_new_page_id_ = first_allocatable_page_id;
+    }
+    return Status::OK();
+}
+
 StatusOr<std::span<std::byte, kPageSize>> InMemoryPageStore::Get(PageId page_id) {
     auto it = pages_.find(page_id);
     if (it == pages_.end()) {

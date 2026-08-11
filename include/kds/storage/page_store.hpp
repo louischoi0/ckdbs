@@ -81,6 +81,38 @@ public:
     // hand out.
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() = 0;
 
+    // Raises the floor CreateNew() allocates from: after an OK return, no
+    // CreateNew() may hand out an id below `first_allocatable_page_id`.
+    //
+    // **Monotonic.** A floor at or below the current one is an accepted
+    // no-op, never a lowering - a floor that could fall would re-open the
+    // hazard it exists to close, and every caller so far only ever raises.
+    //
+    // Its one production caller is recovery (docs/wal.md §12,
+    // docs/workplan-wal-recovery.md RV4/RC04): the durable record of which
+    // ids exist is unlogged, so a crash can revert it while the log still
+    // names pages above it, and an allocation afterwards would hand out a
+    // page redo has already written. Raising the floor past every id the
+    // log names is what makes that impossible.
+    //
+    // The cost is ids: every free id below the floor is skipped for the
+    // life of the instance. That is what a high-water mark means, and it is
+    // cheap here because nothing frees a page (page.md §5) and CreateNew()
+    // hands out the lowest free id, so there are almost no gaps below the
+    // mark to skip.
+    //
+    // **The default refuses**, and does not quietly succeed. A store that
+    // ignored the raise would let recovery report a repair that did not
+    // happen, which is worse than a mount that fails naming the store -
+    // RV1's rule that a failed recovery refuses the mount rather than
+    // serving a partial database.
+    virtual Status RaiseAllocationFloor(PageId first_allocatable_page_id) {
+        (void)first_allocatable_page_id;
+        return Status::Unsupported(
+            "PageStore: this store cannot raise its allocation floor, so recovery cannot "
+            "guarantee it will not re-issue a page id the log names");
+    }
+
     // Fetches an already-created page's bytes for reading or in-place
     // mutation. Fails with NotFound if page_id was never created.
     virtual StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) = 0;

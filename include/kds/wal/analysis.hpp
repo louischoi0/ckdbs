@@ -101,11 +101,17 @@ struct AnalysisResult {
     // recLSN of 0, take the minimum - which is the part that drifts.
     Lsn redo_start_lsn = 0;
 
-    // The largest page id any replayed record names. RV4's input: the
-    // superblock's high-water mark is unlogged and a crash can revert it
-    // below this, after which an allocation would hand out a page redo has
-    // already written. Recovery raises the mark past this before the store
-    // serves an allocation.
+    // The largest page id any replayed record names, or kInvalidPageId
+    // when the range named none. RV4's input, and the repair reads it
+    // through `wal/high_water.hpp`.
+    //
+    // The hazard: the durable record of which page ids exist is unlogged -
+    // the free-map page, **not** the superblock, which holds no allocation
+    // state at all (server/superblock.hpp; RV4 misnames it and
+    // high_water.hpp corrects it). A crash can revert that map while the
+    // log still names pages above it, after which an allocation would hand
+    // out a page redo has already written. Recovery raises the store's
+    // allocation floor past this before it can serve one.
     PageId max_page_id = kInvalidPageId;
 
     // Largest transaction id seen, so the id sequence can be advanced past

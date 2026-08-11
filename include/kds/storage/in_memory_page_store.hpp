@@ -27,6 +27,16 @@ public:
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
     StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
 
+    // The whole of the allocator here is `next_new_page_id_`, so raising
+    // the floor is raising it - and this store needs the call more than a
+    // durable one does, because CreateNew() does not skip over ids that
+    // already exist (see the constructor's note). It does not even walk
+    // past them: a failed CreateAt() returns before the increment, so a
+    // replay that created the page at `next_new_page_id_` wedges every
+    // later allocation at AlreadyExists permanently. Only a raise unwedges
+    // it.
+    Status RaiseAllocationFloor(PageId first_allocatable_page_id) override;
+
     // Pages created so far. Nothing evicts, so this is both the resident
     // count and the allocated one. Exposed because "how many pages did
     // that touch" is the assertion sparse-allocation tests are made of,

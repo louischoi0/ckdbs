@@ -399,6 +399,33 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     return std::make_pair(page_id, created.value());
 }
 
+Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
+    if (lease_ != nullptr) {
+        return Status::Unsupported(
+            "DevicePageStore: core " + std::to_string(core_id_) +
+            " allocates from an extent lease, whose floor this store does not own; raising it "
+            "here would change nothing");
+    }
+    // Equal is the legal terminal case - "no id left" - and CreateNew()
+    // already reports that as OutOfSpace. Above it there is no bit to find
+    // and no page to address, so the log named an id this build cannot have
+    // written.
+    if (first_allocatable_page_id > kFreeMapBitsPerPage) {
+        return Status::OutOfRange("DevicePageStore: allocation floor " +
+                                  std::to_string(first_allocatable_page_id) +
+                                  " is beyond the single free-map page's coverage (" +
+                                  std::to_string(kFreeMapBitsPerPage) + " ids)");
+    }
+    if (first_allocatable_page_id > next_new_page_id_) {
+        next_new_page_id_ = first_allocatable_page_id;
+        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+            log_->Debug("pagestore", "allocation floor raised to " +
+                                         std::to_string(next_new_page_id_));
+        }
+    }
+    return Status::OK();
+}
+
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Get(PageId page_id) {
     if (!IsAllocated(page_id)) {
         return Status::NotFound("page id not found");
