@@ -27,6 +27,9 @@ UndoRecordFields ReadRecordHeader(std::span<const std::byte, kPageSize> page,
     std::memcpy(&r.type, p + kUndoRecTypeOffset, sizeof(r.type));
     std::memcpy(&r.flags, p + kUndoRecFlagsOffset, sizeof(r.flags));
     std::memcpy(&r.reserved, p + kUndoRecReservedOffset, sizeof(r.reserved));
+    std::memcpy(&r.txn_prev_undo_ptr, p + kUndoRecTxnPrevUndoPtrOffset,
+                sizeof(r.txn_prev_undo_ptr));
+    std::memcpy(&r.pk, p + kUndoRecPkOffset, sizeof(r.pk));
     return r;
 }
 
@@ -41,6 +44,9 @@ void WriteRecordHeader(std::span<std::byte, kPageSize> page, std::uint16_t offse
     std::memcpy(p + kUndoRecTypeOffset, &r.type, sizeof(r.type));
     std::memcpy(p + kUndoRecFlagsOffset, &r.flags, sizeof(r.flags));
     std::memcpy(p + kUndoRecReservedOffset, &r.reserved, sizeof(r.reserved));
+    std::memcpy(p + kUndoRecTxnPrevUndoPtrOffset, &r.txn_prev_undo_ptr,
+                sizeof(r.txn_prev_undo_ptr));
+    std::memcpy(p + kUndoRecPkOffset, &r.pk, sizeof(r.pk));
 }
 
 // Shared by UndoPageAppend and UndoPageWriteAt: what both refuse before
@@ -216,6 +222,14 @@ Status EncodeUndoRecordTail(std::span<std::byte> out, const UndoRecordFields& fi
                 sizeof(fields.flags));
     std::memcpy(p + (kUndoRecReservedOffset - kUndoRecordTailOffset), &fields.reserved,
                 sizeof(fields.reserved));
+    // RV10's two. They are in the tail rather than in the WAL payload's
+    // fields because the tail is "the record's bytes from target_page_id
+    // onward" and these are part of the record - keeping the payload's
+    // field list unchanged, which is what stops UndoWritePayload from
+    // becoming a second, drifting copy of the record header.
+    std::memcpy(p + (kUndoRecTxnPrevUndoPtrOffset - kUndoRecordTailOffset),
+                &fields.txn_prev_undo_ptr, sizeof(fields.txn_prev_undo_ptr));
+    std::memcpy(p + (kUndoRecPkOffset - kUndoRecordTailOffset), &fields.pk, sizeof(fields.pk));
     if (!image.empty()) {
         std::memcpy(p + kUndoRecordTailHeaderSize, image.data(), image.size());
     }
@@ -246,6 +260,11 @@ StatusOr<DecodedUndoRecord> DecodeUndoRecordTail(std::span<const std::byte> tail
                 sizeof(out.fields.flags));
     std::memcpy(&out.fields.reserved, p + (kUndoRecReservedOffset - kUndoRecordTailOffset),
                 sizeof(out.fields.reserved));
+    std::memcpy(&out.fields.txn_prev_undo_ptr,
+                p + (kUndoRecTxnPrevUndoPtrOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.txn_prev_undo_ptr));
+    std::memcpy(&out.fields.pk, p + (kUndoRecPkOffset - kUndoRecordTailOffset),
+                sizeof(out.fields.pk));
 
     if (UndoRecordTailSize(out.fields.image_len) != tail.size()) {
         return Status::Corruption("undo record tail says its image is " +

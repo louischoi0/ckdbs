@@ -331,16 +331,38 @@ struct CheckpointDirtyPage {
     Lsn rec_lsn;  // oldest LSN that must be replayed to make the page whole
 };
 
+// One live transaction, as a checkpoint records it.
+//
+// **`last_undo_ptr` was added at RV10** (docs/workplan-wal-recovery.md §4b)
+// and it is the reason this is a struct rather than the bare `uint64_t` id
+// it used to be: it is the **head of the transaction's undo chain**, and
+// walking that chain is how recovery's undo phase learns what a loser
+// wrote. Without it the only source is the WAL inside the replay range, and
+// a page written back before this checkpoint puts a still-uncommitted write
+// outside that range - so the write survives undo and `txn.md` §8's gap
+// then reads it as committed.
+//
+// `kNoUndoPtr` (0) is legal and means the transaction had written nothing
+// when the checkpoint ran. Undo owes such a transaction no compensation.
+struct CheckpointActiveTxn {
+    std::uint64_t txn_id;
+    std::uint64_t last_undo_ptr;
+};
+
 inline constexpr std::size_t kCheckpointTxnCountOffset = 0;
 inline constexpr std::size_t kCheckpointDirtyCountOffset = 4;
 inline constexpr std::size_t kCheckpointBeginFixedSize = 8;
-// Then `txn_count` 8-byte ids, then `dirty_count` entries of:
+// Then `txn_count` entries of:
+inline constexpr std::size_t kActiveTxnIdOffset = 0;
+inline constexpr std::size_t kActiveTxnLastUndoPtrOffset = 8;
+inline constexpr std::size_t kActiveTxnEntrySize = 16;  // was 8, an id alone
+// then `dirty_count` entries of:
 inline constexpr std::size_t kDirtyPageIdOffset = 0;
 inline constexpr std::size_t kDirtyRecLsnOffset = 4;
 inline constexpr std::size_t kDirtyEntrySize = 12;
 
 struct DecodedCheckpointBegin {
-    std::vector<std::uint64_t> active_txns;
+    std::vector<CheckpointActiveTxn> active_txns;
     std::vector<CheckpointDirtyPage> dirty_pages;
 };
 
@@ -349,7 +371,7 @@ struct DecodedCheckpointBegin {
 std::size_t CheckpointBeginSize(std::size_t txn_count, std::size_t dirty_count) noexcept;
 
 StatusOr<std::size_t> EncodeCheckpointBegin(std::span<std::byte> out,
-                                            std::span<const std::uint64_t> active_txns,
+                                            std::span<const CheckpointActiveTxn> active_txns,
                                             std::span<const CheckpointDirtyPage> dirty_pages);
 StatusOr<DecodedCheckpointBegin> DecodeCheckpointBegin(std::span<const std::byte> in);
 

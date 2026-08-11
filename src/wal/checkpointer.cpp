@@ -12,7 +12,7 @@ Checkpointer::Checkpointer(WalManager& wal, CheckpointTarget& target, ActiveTran
                            CheckpointAnchor& anchor, CheckpointerConfig config)
     : wal_(wal), target_(target), txns_(txns), anchor_(anchor), config_(config) {}
 
-Status Checkpointer::LogBegin(std::span<const std::uint64_t> active_txns,
+Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
                               std::span<const CheckpointDirtyPage> dirty_pages) {
     payload_scratch_.assign(CheckpointBeginSize(active_txns.size(), dirty_pages.size()),
                             std::byte{0});
@@ -37,7 +37,7 @@ Status Checkpointer::Start() {
 
     // Both tables are snapshotted before the record is written, so what
     // BEGIN carries is exactly what recovery's analysis phase will see.
-    const std::vector<std::uint64_t> active_txns = txns_.Snapshot();
+    const std::vector<CheckpointActiveTxn> active_txns = txns_.Snapshot();
     const std::vector<CheckpointDirtyPage> dirty = target_.DirtyTable();
 
     if (Status s = LogBegin(active_txns, dirty); !s.ok()) {

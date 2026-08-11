@@ -354,16 +354,38 @@ Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row)
     return first_failure;
 }
 
-std::vector<std::uint64_t> TransactionManager::Snapshot() const {
+std::vector<wal::CheckpointActiveTxn> TransactionManager::Snapshot() const {
     // Active only: a transaction that has ended but whose handle the caller
     // has not dropped yet is not in flight, and listing it would make
     // recovery roll back writes that were committed.
-    std::vector<std::uint64_t> ids;
-    ids.reserve(live_.size());
+    //
+    // Each carries the head of its undo chain (RV10). That pointer is the
+    // whole reason a checkpoint is sufficient for undo: it lets recovery
+    // walk a loser's records backwards from here, however far below the
+    // redo start they were written.
+    std::vector<wal::CheckpointActiveTxn> out;
+    out.reserve(live_.size());
     for (const std::unique_ptr<Transaction>& t : live_) {
-        if (t->active_) ids.push_back(t->id_);
+        if (t->active_) out.push_back({t->id_, t->last_undo_ptr_});
     }
-    return ids;
+    return out;
+}
+
+StatusOr<std::uint64_t> TransactionManager::AppendUndo(Transaction& txn,
+                                                       UndoRecordFields fields, std::uint64_t pk,
+                                                       std::span<const std::byte> image) {
+    // Both set here and nowhere else - manager.hpp says why.
+    fields.txn_prev_undo_ptr = txn.last_undo_ptr_;
+    fields.pk = pk;
+
+    auto ptr = undo_.Append(txn.id_, fields, image);
+    if (!ptr.ok()) return ptr.status();
+
+    // Advanced only on success. A failed append wrote no record, so leaving
+    // the head where it was keeps the chain a chain - the next record links
+    // past the gap rather than to a pointer nothing backs.
+    txn.last_undo_ptr_ = ptr.value();
+    return ptr.value();
 }
 
 void TransactionManager::Release(Transaction& txn) {

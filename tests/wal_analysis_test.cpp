@@ -6,7 +6,9 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/txn/undo_page.hpp"
 #include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/payload.hpp"
 #include "kds/wal/stream.hpp"
 
 // RC02 - recovery's analysis phase (docs/workplan-wal-recovery.md).
@@ -31,7 +33,7 @@ constexpr std::uint64_t kSegmentSize = 16 * 1024;
 
 // Appends a CHECKPOINT_BEGIN carrying the two tables, as the checkpointer
 // does, and returns its LSN.
-Lsn AppendCheckpointBegin(WalStream& stream, std::span<const std::uint64_t> active_txns,
+Lsn AppendCheckpointBegin(WalStream& stream, std::span<const CheckpointActiveTxn> active_txns,
                           std::span<const CheckpointDirtyPage> dirty_pages) {
     std::vector<std::byte> payload(
         CheckpointBeginSize(active_txns.size(), dirty_pages.size()), std::byte{0});
@@ -81,9 +83,9 @@ TEST_F(AnalysisTest, WinnersLosersAndAbortedAreSplitExactly) {
     ASSERT_TRUE(r.ok()) << r.status().message();
 
     ASSERT_EQ(r.value().transactions.size(), 3u);
-    EXPECT_EQ(r.value().transactions.at(10), TxnOutcome::kWinner);
-    EXPECT_EQ(r.value().transactions.at(20), TxnOutcome::kAborted);
-    EXPECT_EQ(r.value().transactions.at(30), TxnOutcome::kLoser);
+    EXPECT_EQ(r.value().transactions.at(10).outcome, TxnOutcome::kWinner);
+    EXPECT_EQ(r.value().transactions.at(20).outcome, TxnOutcome::kAborted);
+    EXPECT_EQ(r.value().transactions.at(30).outcome, TxnOutcome::kLoser);
     EXPECT_EQ(r.value().winners, 1u);
     EXPECT_EQ(r.value().aborted, 1u);
     EXPECT_EQ(r.value().losers, 1u);
@@ -106,7 +108,7 @@ TEST_F(AnalysisTest, ACommitIsNotDowngradedByALaterRecordNamingIt) {
     }
     auto r = Run();
     ASSERT_TRUE(r.ok()) << r.status().message();
-    EXPECT_EQ(r.value().transactions.at(7), TxnOutcome::kWinner);
+    EXPECT_EQ(r.value().transactions.at(7).outcome, TxnOutcome::kWinner);
 }
 
 // ---- Seeding from the checkpoint ----------------------------------------
@@ -121,7 +123,7 @@ TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
         // Transaction 42 began before the checkpoint, so no TXN_BEGIN for
         // it appears in the scanned range - the checkpoint's active list
         // is the only thing that knows it exists.
-        const std::uint64_t active[] = {42};
+        const CheckpointActiveTxn active[] = {{42, /*last_undo_ptr=*/0}};
         const CheckpointDirtyPage dirty[] = {{700, 4096 + 64}};
         checkpoint_lsn = AppendCheckpointBegin(w, active, dirty);
         ASSERT_NE(checkpoint_lsn, 0u);
@@ -132,7 +134,7 @@ TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
     ASSERT_TRUE(r.ok()) << r.status().message();
 
     ASSERT_TRUE(r.value().transactions.count(42) == 1);
-    EXPECT_EQ(r.value().transactions.at(42), TxnOutcome::kLoser)
+    EXPECT_EQ(r.value().transactions.at(42).outcome, TxnOutcome::kLoser)
         << "a transaction live at the checkpoint and never terminated is a loser";
     ASSERT_TRUE(r.value().dirty_pages.count(700) == 1);
     EXPECT_EQ(r.value().dirty_pages.at(700), 4096u + 64u)
@@ -172,7 +174,7 @@ TEST_F(AnalysisTest, TheRedoStartIsTheOldestRecLsn) {
             ASSERT_TRUE(lsn.ok());
             lsns.push_back(lsn.value());
         }
-        const std::uint64_t active[] = {1};
+        const CheckpointActiveTxn active[] = {{1, /*last_undo_ptr=*/0}};
         // Pages 20-22 appear *only* in the checkpoint's table, so this
         // exercises the seeding path rather than re-stating what the scan
         // already saw. Not in recLSN order, so a min() that happened to
@@ -203,7 +205,7 @@ TEST_F(AnalysisTest, ARecLsnOfZeroIsSkippedAndDoesNotDragTheRedoStartToZero) {
         auto lsn = s.value()->Append({RecordType::kHeapInsert, 1, 11});
         ASSERT_TRUE(lsn.ok());
         second = lsn.value();
-        const std::uint64_t active[] = {1};
+        const CheckpointActiveTxn active[] = {{1, /*last_undo_ptr=*/0}};
         const CheckpointDirtyPage dirty[] = {{10, 0}, {11, second}};
         AppendCheckpointBegin(*s.value(), active, dirty);
         ASSERT_TRUE(s.value()->Sync().ok());
@@ -248,7 +250,7 @@ TEST_F(AnalysisTest, ALogWithNoCheckpointIsAnalyzedFromTheStart) {
     auto r = Run(/*redo_start=*/0, /*anchor_durable=*/0);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().records, 3u);
-    EXPECT_EQ(r.value().transactions.at(1), TxnOutcome::kWinner);
+    EXPECT_EQ(r.value().transactions.at(1).outcome, TxnOutcome::kWinner);
     EXPECT_EQ(r.value().dirty_pages.size(), 1u);
 }
 
@@ -350,9 +352,86 @@ TEST_F(AnalysisTest, ATornTailIsMeteredAndTheRecordsBeforeItStand) {
 
     auto r = Analyze(torn, 0, AnalysisStart{});
     ASSERT_TRUE(r.ok()) << r.status().message();
-    EXPECT_EQ(r.value().transactions.at(1), TxnOutcome::kLoser)
+    EXPECT_EQ(r.value().transactions.at(1).outcome, TxnOutcome::kLoser)
         << "a commit that did not survive is not a commit";
     EXPECT_EQ(r.value().end_lsn, last_lsn);
+}
+
+// ---- RV10: the undo-chain head each loser is walked from ----------------
+
+TEST_F(AnalysisTest, ACheckpointSeedsALosersUndoChainHead) {
+    // The case the scan alone cannot answer: the transaction's write is
+    // below the redo start, so no record in range names it, and the head
+    // the checkpoint recorded is the only route to it.
+    const std::uint64_t kHead = 0x00020038ull;
+    {
+        auto s = WalStream::Open(&device_, 0);
+        ASSERT_TRUE(s.ok());
+        const CheckpointActiveTxn active[] = {{77, kHead}};
+        const CheckpointDirtyPage dirty[] = {{500, 0}};
+        AppendCheckpointBegin(*s.value(), active, dirty);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto r = Run();
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().transactions.at(77).outcome, TxnOutcome::kLoser);
+    EXPECT_EQ(r.value().transactions.at(77).last_undo_ptr, kHead)
+        << "the head a checkpoint recorded is what undo starts from";
+}
+
+TEST_F(AnalysisTest, AnUndoWriteInRangeAdvancesTheHeadPastTheCheckpoints) {
+    // The scan is forward, so the newest record wins: a checkpoint's head
+    // describes what the transaction wrote *before* the scan, and anything
+    // it wrote inside the scan is newer.
+    const std::uint64_t kStale = 0x00020038ull;
+    constexpr PageId kUndoPage = 9;
+    constexpr std::uint16_t kOffset = 56;
+    {
+        auto s = WalStream::Open(&device_, 0);
+        ASSERT_TRUE(s.ok());
+        const CheckpointActiveTxn active[] = {{77, kStale}};
+        AppendCheckpointBegin(*s.value(), active, {});
+
+        std::vector<std::byte> tail(txn::UndoRecordTailSize(0), std::byte{0});
+        txn::UndoRecordFields rec{};
+        rec.target_page_id = 300;
+        rec.target_slot = 1;
+        rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
+        rec.pk = 4242;
+        ASSERT_TRUE(txn::EncodeUndoRecordTail(tail, rec, {}).ok());
+
+        std::vector<std::byte> buf(kUndoWriteFixedSize + tail.size(), std::byte{0});
+        const UndoWritePayload p{0, 0, kOffset, static_cast<std::uint16_t>(tail.size())};
+        auto n = EncodeUndoWrite(buf, p, tail);
+        ASSERT_TRUE(n.ok()) << n.status().message();
+        ASSERT_TRUE(s.value()
+                        ->Append({RecordType::kUndoWrite, 77, kUndoPage},
+                                 std::span(buf).first(n.value()))
+                        .ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto r = Run();
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().transactions.at(77).last_undo_ptr,
+              txn::EncodeUndoPtr(kUndoPage, kOffset))
+        << "the newest record this transaction wrote is the head";
+    EXPECT_NE(r.value().transactions.at(77).last_undo_ptr, kStale);
+}
+
+TEST(AnalysisUndoPtrTest, TheDuplicatedShiftMatchesTheRealOne) {
+    // analysis.hpp repeats txn::kUndoPtrPageIdShift because wal/ sits below
+    // txn/ and cannot include it. This is the pin that catches a change to
+    // either - the one thing standing between the duplication and a silent
+    // divergence that would make every recovered chain head name the wrong
+    // page.
+    constexpr PageId kPage = 1234;
+    constexpr std::uint16_t kOffset = 4321;
+    const std::uint64_t theirs = txn::EncodeUndoPtr(kPage, kOffset);
+    const std::uint64_t ours =
+        (static_cast<std::uint64_t>(kPage) << kAnalysisUndoPtrPageIdShift) | kOffset;
+    EXPECT_EQ(ours, theirs);
 }
 
 }  // namespace

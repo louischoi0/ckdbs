@@ -343,7 +343,10 @@ TEST(WalPayloadTest, FullPageImageRejectsAShortPayload) {
 // ---- CHECKPOINT ----------------------------------------------------------
 
 TEST(WalPayloadTest, CheckpointBeginRoundTripsBothTables) {
-    const std::vector<std::uint64_t> txns = {7, 9, 0x0000FFFFFFFFFFFFull};
+    // Each carries its undo-chain head (RV10). The third is kNoUndoPtr,
+    // which is legal and means the transaction had written nothing yet.
+    const std::vector<CheckpointActiveTxn> txns = {
+        {7, 0x00010020ull}, {9, 0x00020038ull}, {0x0000FFFFFFFFFFFFull, 0}};
     const std::vector<CheckpointDirtyPage> dirty = {
         {1, 4096}, {2, 8192}, {kInvalidPageId - 1, 0x1234567890ull}};
 
@@ -353,7 +356,12 @@ TEST(WalPayloadTest, CheckpointBeginRoundTripsBothTables) {
         });
     auto decoded = DecodeCheckpointBegin(PayloadOf(record));
     ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_EQ(decoded.value().active_txns, txns);
+    ASSERT_EQ(decoded.value().active_txns.size(), txns.size());
+    for (std::size_t i = 0; i < txns.size(); ++i) {
+        EXPECT_EQ(decoded.value().active_txns[i].txn_id, txns[i].txn_id) << "txn " << i;
+        EXPECT_EQ(decoded.value().active_txns[i].last_undo_ptr, txns[i].last_undo_ptr)
+            << "txn " << i;
+    }
     ASSERT_EQ(decoded.value().dirty_pages.size(), dirty.size());
     for (std::size_t i = 0; i < dirty.size(); ++i) {
         EXPECT_EQ(decoded.value().dirty_pages[i].page_id, dirty[i].page_id) << "entry " << i;
@@ -374,7 +382,7 @@ TEST(WalPayloadTest, CheckpointBeginRoundTripsEmptyTables) {
 }
 
 TEST(WalPayloadTest, CheckpointBeginRejectsCountsTheRecordDoesNotBack) {
-    const std::vector<std::uint64_t> txns = {1};
+    const std::vector<CheckpointActiveTxn> txns = {{1, 0}};
     const std::vector<CheckpointDirtyPage> dirty = {{5, 64}};
     std::vector<std::byte> out(CheckpointBeginSize(txns.size(), dirty.size()));
     auto size = EncodeCheckpointBegin(out, txns, dirty);
@@ -400,7 +408,7 @@ TEST(WalPayloadTest, CheckpointBeginRejectsAnInvalidPageIdInTheDirtyTable) {
 TEST(WalPayloadTest, CheckpointBeginRejectsAZeroTxnIdInTheActiveTable) {
     // 0 means "non-transactional" in the envelope, so it can never name a
     // live transaction.
-    const std::vector<std::uint64_t> txns = {0};
+    const std::vector<CheckpointActiveTxn> txns = {{0, 0}};
     std::vector<std::byte> out(CheckpointBeginSize(txns.size(), 0));
     EXPECT_EQ(EncodeCheckpointBegin(out, txns, {}).status().code(), StatusCode::kInvalidArgument);
 }

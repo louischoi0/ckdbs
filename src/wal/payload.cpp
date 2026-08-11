@@ -385,12 +385,12 @@ StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::by
 // ---- CHECKPOINT_BEGIN ----------------------------------------------------
 
 std::size_t CheckpointBeginSize(std::size_t txn_count, std::size_t dirty_count) noexcept {
-    return kCheckpointBeginFixedSize + txn_count * sizeof(std::uint64_t) +
+    return kCheckpointBeginFixedSize + txn_count * kActiveTxnEntrySize +
            dirty_count * kDirtyEntrySize;
 }
 
 StatusOr<std::size_t> EncodeCheckpointBegin(std::span<std::byte> out,
-                                            std::span<const std::uint64_t> active_txns,
+                                            std::span<const CheckpointActiveTxn> active_txns,
                                             std::span<const CheckpointDirtyPage> dirty_pages) {
     if (active_txns.size() > 0xFFFFFFFFull || dirty_pages.size() > 0xFFFFFFFFull) {
         return Status::InvalidArgument("wal payload: CHECKPOINT_BEGIN table longer than a uint32");
@@ -399,11 +399,11 @@ StatusOr<std::size_t> EncodeCheckpointBegin(std::span<std::byte> out,
     if (Status s = CheckOutputSize(out, total, "CHECKPOINT_BEGIN"); !s.ok()) {
         return s;
     }
-    for (const std::uint64_t txn_id : active_txns) {
-        if (txn_id > kMaxTxnId) {
+    for (const CheckpointActiveTxn& entry : active_txns) {
+        if (entry.txn_id > kMaxTxnId) {
             return Status::InvalidArgument("wal payload: CHECKPOINT_BEGIN txn_id exceeds 48 bits");
         }
-        if (txn_id == kNoTxnId) {
+        if (entry.txn_id == kNoTxnId) {
             return Status::InvalidArgument("wal payload: CHECKPOINT_BEGIN lists txn_id 0");
         }
     }
@@ -414,9 +414,14 @@ StatusOr<std::size_t> EncodeCheckpointBegin(std::span<std::byte> out,
                          static_cast<std::uint32_t>(dirty_pages.size()));
 
     std::size_t at = kCheckpointBeginFixedSize;
-    for (const std::uint64_t txn_id : active_txns) {
-        Store<std::uint64_t>(out, at, txn_id);
-        at += sizeof(std::uint64_t);
+    for (const CheckpointActiveTxn& entry : active_txns) {
+        Store<std::uint64_t>(out, at + kActiveTxnIdOffset, entry.txn_id);
+        // No validation of last_undo_ptr here. `UndoPtrIsPlausible` lives in
+        // txn/ and this layer must not reach up for it; the value is checked
+        // where it is *followed*, which is recovery's undo phase (RC05), and
+        // kNoUndoPtr is legal and means "wrote nothing yet".
+        Store<std::uint64_t>(out, at + kActiveTxnLastUndoPtrOffset, entry.last_undo_ptr);
+        at += kActiveTxnEntrySize;
     }
     for (const CheckpointDirtyPage& entry : dirty_pages) {
         Store<PageId>(out, at + kDirtyPageIdOffset, entry.page_id);
@@ -446,12 +451,14 @@ StatusOr<DecodedCheckpointBegin> DecodeCheckpointBegin(std::span<const std::byte
 
     std::size_t at = kCheckpointBeginFixedSize;
     for (std::uint32_t i = 0; i < txn_count; ++i) {
-        const auto txn_id = Load<std::uint64_t>(in, at);
-        if (Status s = CheckTxnId(txn_id, "CHECKPOINT_BEGIN txn_id"); !s.ok()) {
+        CheckpointActiveTxn entry{};
+        entry.txn_id = Load<std::uint64_t>(in, at + kActiveTxnIdOffset);
+        entry.last_undo_ptr = Load<std::uint64_t>(in, at + kActiveTxnLastUndoPtrOffset);
+        if (Status s = CheckTxnId(entry.txn_id, "CHECKPOINT_BEGIN txn_id"); !s.ok()) {
             return s;
         }
-        decoded.active_txns.push_back(txn_id);
-        at += sizeof(std::uint64_t);
+        decoded.active_txns.push_back(entry);
+        at += kActiveTxnEntrySize;
     }
     for (std::uint32_t i = 0; i < dirty_count; ++i) {
         CheckpointDirtyPage entry{};

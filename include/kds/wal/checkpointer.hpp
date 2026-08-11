@@ -68,7 +68,12 @@ namespace kds::wal {
 class ActiveTransactions {
 public:
     virtual ~ActiveTransactions() = default;
-    virtual std::vector<std::uint64_t> Snapshot() const = 0;
+    // Each live transaction and the head of its undo chain (RV10,
+    // `payload.hpp`'s CheckpointActiveTxn). The head is what makes a
+    // checkpoint enough for recovery's undo phase: without it, a loser's
+    // writes are only findable in the WAL inside the replay range, which
+    // does not always contain them.
+    virtual std::vector<CheckpointActiveTxn> Snapshot() const = 0;
 };
 
 // No transactions, for a core that is only replaying or only doing
@@ -76,7 +81,7 @@ public:
 // set is a correct answer, and recovery handles it.
 class NoActiveTransactions final : public ActiveTransactions {
 public:
-    std::vector<std::uint64_t> Snapshot() const override { return {}; }
+    std::vector<CheckpointActiveTxn> Snapshot() const override { return {}; }
 };
 
 // The pages a checkpoint has to get on disk, and the way to do it. The
@@ -201,7 +206,7 @@ public:
     Status RunToCompletion();
 
 private:
-    Status LogBegin(std::span<const std::uint64_t> active_txns,
+    Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
                     std::span<const CheckpointDirtyPage> dirty_pages);
 
     WalManager& wal_;

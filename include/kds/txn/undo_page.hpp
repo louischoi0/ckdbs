@@ -120,12 +120,17 @@ enum class UndoRecordType : std::uint8_t {
     // Image empty: a delete-mark changes no tuple bytes, so there are none
     // to restore.
     kDeleteMark = 2,
-    // Image empty. **Defined and never written** (txn.md section 3.6): a
-    // tuple with undo_ptr == kNoUndoPtr whose writer is invisible already
-    // means "no visible version", so an insert needs no undo record and
-    // rollback of one reads the transaction's in-memory trail instead. It
-    // is defined now so that persisting that trail - which recovery-driven
-    // rollback will need - is a code change and not a format-version event.
+    // Image empty. **Written since 2026-08-11** (RV10,
+    // docs/workplan-wal-recovery.md §4b), reversing txn.md section 3.6.
+    //
+    // Nothing about *visibility* changed and section 3.6 was right about
+    // it: a tuple with undo_ptr == kNoUndoPtr whose writer is invisible
+    // already means "no visible version", so reading an insert needs no
+    // record. What needs one is **recovery**, and for a reason wider than
+    // the insert - an undo record is now a link in the writing
+    // transaction's chain (`txn_prev_undo_ptr` below), and an insert that
+    // wrote none would break that chain and orphan everything the
+    // transaction did before it.
     kInsert = 3,
 };
 
@@ -138,6 +143,36 @@ struct UndoRecordFields {
     std::uint8_t type;      // UndoRecordType
     std::uint8_t flags;     // 0
     std::uint16_t reserved; // 0
+
+    // ---- RV10's two additions -------------------------------------------
+
+    // **The third chain.** The writing transaction's previous undo record,
+    // kNoUndoPtr for its first. `undo_log.hpp` names the other two and says
+    // they are not the same chain: `prev_page_id` is page->page in creation
+    // order and `prior_undo_ptr` is record->record over *one tuple's
+    // versions*. Neither answers "what did this transaction do", which is
+    // the question recovery's undo phase asks and could not previously ask
+    // of anything durable - its only other source is the WAL inside the
+    // replay range, and a page written back before a checkpoint puts a
+    // still-uncommitted write outside it (workplan-wal-recovery.md §4b).
+    //
+    // Walked from the head `CHECKPOINT_BEGIN` records per active
+    // transaction, so its reach does not depend on the redo start.
+    std::uint64_t txn_prev_undo_ptr;
+
+    // The Keystone id of the row this record is about, zero-extended
+    // (invariant 7 - the upper 24 bits are always 0).
+    //
+    // Here because compensation must prove it is writing the row it means
+    // to before it writes: a btree leaf division moves tuples and renumbers
+    // slots, so `(target_page_id, target_slot)` is where the row *was*
+    // (`TransactionManager::Compensate`, and workplan-wal-recovery.md §4a).
+    // The live path reads the pk from its in-memory trail; recovery has
+    // only this record, and **two of the three types carry no image to
+    // recover a pk from** - kDeleteMark's is empty by design and kInsert's
+    // is empty too. Storing it once, for every type, is what makes the
+    // check uniform rather than available for kOverwrite alone.
+    std::uint64_t pk;
 };
 
 inline constexpr std::size_t kUndoRecPriorTrxIdOffset = 0;
@@ -148,13 +183,26 @@ inline constexpr std::size_t kUndoRecImageLenOffset = 22;
 inline constexpr std::size_t kUndoRecTypeOffset = 24;
 inline constexpr std::size_t kUndoRecFlagsOffset = 25;
 inline constexpr std::size_t kUndoRecReservedOffset = 26;
-// 8+8+4+2+2+1+1+2 = 28; image bytes begin here.
+inline constexpr std::size_t kUndoRecTxnPrevUndoPtrOffset = 28;
+inline constexpr std::size_t kUndoRecPkOffset = 36;
+// 8+8+4+2+2+1+1+2+8+8 = 44; image bytes begin here.
+//
+// **Grew 28 -> 44 at RV10**, and the cost is stated rather than absorbed:
+// 16 bytes per undo record, so a kOverwrite carrying a 64-byte image goes
+// from 92 to 108 bytes and a page holds ~17 % fewer of them. That is the
+// price of a chain that can be walked without the log, and it is paid on
+// undo pages, which nothing purges - so it compounds with the reclamation
+// gap rather than standing apart from it (docs/known-gaps.md).
+//
+// The two new fields are appended rather than fitted into `reserved`, which
+// is 2 bytes and holds neither. Appending also keeps every existing offset
+// where it was, so the *tail* mapping below extends rather than moves.
 //
 // Records are **unpadded**. Every access is a field-wise memcpy (rules.md
 // section 2), so alignment buys nothing, and 8-byte padding would waste up
 // to 7 bytes on a page holding ~290 records. `lower` advances by exactly
 // kUndoRecordHeaderSize + image_len.
-inline constexpr std::size_t kUndoRecordHeaderSize = 28;
+inline constexpr std::size_t kUndoRecordHeaderSize = 44;
 
 static_assert(offsetof(UndoRecordFields, prior_trx_id) == kUndoRecPriorTrxIdOffset);
 static_assert(offsetof(UndoRecordFields, prior_undo_ptr) == kUndoRecPriorUndoPtrOffset);
@@ -164,7 +212,9 @@ static_assert(offsetof(UndoRecordFields, image_len) == kUndoRecImageLenOffset);
 static_assert(offsetof(UndoRecordFields, type) == kUndoRecTypeOffset);
 static_assert(offsetof(UndoRecordFields, flags) == kUndoRecFlagsOffset);
 static_assert(offsetof(UndoRecordFields, reserved) == kUndoRecReservedOffset);
-// sizeof(UndoRecordFields) is 32, not 28: the u64 members give the struct
+static_assert(offsetof(UndoRecordFields, txn_prev_undo_ptr) == kUndoRecTxnPrevUndoPtrOffset);
+static_assert(offsetof(UndoRecordFields, pk) == kUndoRecPkOffset);
+// sizeof(UndoRecordFields) is 48, not 44: the u64 members give the struct
 // 8-byte alignment, so its size rounds up. Deliberately not asserted
 // against - those four tail bytes are never touched, because fields are
 // memcpy'd one at a time through the offsets above and never as a struct.
@@ -249,8 +299,10 @@ Status UndoPtrIsPlausible(std::uint64_t ptr);
 
 inline constexpr std::size_t kUndoRecordTailOffset = kUndoRecTargetPageIdOffset;  // 16
 inline constexpr std::size_t kUndoRecordTailHeaderSize =
-    kUndoRecordHeaderSize - kUndoRecordTailOffset;  // 12
-static_assert(kUndoRecordTailHeaderSize == 12);
+    kUndoRecordHeaderSize - kUndoRecordTailOffset;  // 28 since RV10, was 12
+// Derived, then asserted against the literal, so the two new fields cannot
+// be added to the record and forgotten in the tail redo reads back.
+static_assert(kUndoRecordTailHeaderSize == 28);
 
 // Bytes a tail occupies for an image of `image_len`.
 std::size_t UndoRecordTailSize(std::size_t image_len) noexcept;

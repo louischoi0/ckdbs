@@ -70,6 +70,34 @@ enum class TxnOutcome : std::uint8_t {
 
 const char* TxnOutcomeName(TxnOutcome outcome) noexcept;
 
+// What analysis knows about one transaction: its verdict, and - for a loser
+// - where its undo chain starts.
+//
+// The head is RV10's whole point (`docs/workplan-wal-recovery.md` §4b).
+// Enumerating a loser's writes from the records in the replay range is
+// **incomplete**: a page written back before a checkpoint has its recLSN
+// cleared, so the redo start can advance past a still-uncommitted write and
+// the record naming it is never scanned. Walking `txn_prev_undo_ptr`
+// backwards from this pointer reaches every record the transaction wrote,
+// however far below the scan it lies.
+//
+// Two sources, and the later always wins because the scan is forward:
+// `CHECKPOINT_BEGIN`'s active table seeds it for a transaction that was
+// already running, and each `UNDO_WRITE` this transaction appends replaces
+// it. `kNoUndoPtr` means the transaction wrote nothing, and undo owes it
+// no compensation.
+// `txn::kUndoPtrPageIdShift`, duplicated deliberately. `wal/` sits below
+// `txn/` and `txn/undo_log.hpp` already includes `wal/manager.hpp`, so
+// reaching back for the real constant would be a cycle. This is the one
+// place the layering costs a repeated literal; `wal_analysis_test.cpp`
+// builds a pointer both ways and compares, so a change to either is caught.
+inline constexpr int kAnalysisUndoPtrPageIdShift = 16;
+
+struct TxnState {
+    TxnOutcome outcome = TxnOutcome::kLoser;
+    std::uint64_t last_undo_ptr = 0;  // txn::kNoUndoPtr, not named here: wal/ sits below txn/
+};
+
 struct AnalysisResult {
     // Where the scan began and where the stream actually ended.
     Lsn scan_start_lsn = 0;
@@ -86,7 +114,7 @@ struct AnalysisResult {
     // varies between runs cannot be replayed from a seed.
     std::map<PageId, Lsn> dirty_pages;
 
-    std::map<std::uint64_t, TxnOutcome> transactions;
+    std::map<std::uint64_t, TxnState> transactions;
 
     // The oldest recLSN in `dirty_pages`, or `end_lsn` when nothing was
     // dirtied - "the earliest point redo must actually touch", which is at

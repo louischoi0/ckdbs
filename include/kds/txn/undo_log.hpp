@@ -38,12 +38,19 @@
 // reader registration (§9), and would in any case need a per-page horizon
 // rather than an owner, because a page's records outlive their writer.
 //
-// So there are two chains here and they are still not the same chain:
+// So there are **three** chains here and no two of them are the same chain:
 //
-//   prev_page_id     page -> page, the log's pages in creation order
-//   prior_undo_ptr   record -> record, one tuple's versions, for reading
+//   prev_page_id       page -> page, the log's pages in creation order
+//   prior_undo_ptr     record -> record, one tuple's versions, for reading
+//   txn_prev_undo_ptr  record -> record, one *transaction's* records, for
+//                      recovery's undo phase (RV10, added 2026-08-11)
 //
-// A version chain crosses transactions freely, and now so does a page.
+// A version chain crosses transactions freely, and so does a page. The
+// third exists because neither of the first two answers "what did this
+// transaction write", and after a crash that is the only question undo
+// asks. Its head per active transaction is durable in `CHECKPOINT_BEGIN`,
+// so walking it does not depend on the redo start - which is what the WAL
+// alone could not give (docs/workplan-wal-recovery.md §4b).
 //
 // ---- Allocation ----------------------------------------------------------
 //

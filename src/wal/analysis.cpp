@@ -52,10 +52,22 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
             return;
         }
         out.max_txn_id = std::max(out.max_txn_id, txn_id);
-        auto [it, inserted] = out.transactions.emplace(txn_id, outcome);
+        auto [it, inserted] = out.transactions.emplace(txn_id, TxnState{outcome, 0});
         if (!inserted && outcome != TxnOutcome::kLoser) {
-            it->second = outcome;
+            it->second.outcome = outcome;
         }
+    };
+
+    // RV10's chain head. Always overwritten rather than kept, because the
+    // scan is forward and the newest record this transaction wrote is the
+    // one undo must start from - the checkpoint's value is a seed for
+    // whatever it wrote *before* the scan, not a better answer than a
+    // record inside it.
+    const auto note_undo_head = [&out](std::uint64_t txn_id, std::uint64_t ptr) {
+        if (txn_id == kNoTxnId || ptr == 0) {
+            return;
+        }
+        out.transactions[txn_id].last_undo_ptr = ptr;
     };
 
     const auto visit = [&](const DecodedRecord& record) -> Status {
@@ -72,6 +84,23 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
             out.max_page_id = (out.max_page_id == kInvalidPageId)
                                   ? record.header.page_id
                                   : std::max(out.max_page_id, record.header.page_id);
+        }
+
+        // An undo record this transaction just wrote becomes the head of
+        // its chain. The pointer is (page_id, offset) packed the way
+        // `txn::EncodeUndoPtr` packs it - reproduced here rather than
+        // called, because `wal/` sits below `txn/` and this is the one
+        // place the layering costs a duplicated shift. The shape is pinned
+        // by a static_assert-style test in wal_analysis_test.cpp.
+        if (record.type() == RecordType::kUndoWrite) {
+            auto decoded = DecodeUndoWrite(record.payload);
+            if (!decoded.ok()) {
+                return decoded.status();
+            }
+            note_undo_head(record.header.txn_id,
+                           (static_cast<std::uint64_t>(record.header.page_id)
+                            << kAnalysisUndoPtrPageIdShift) |
+                               decoded.value().fields.offset);
         }
 
         switch (record.type()) {
@@ -92,8 +121,9 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
                 if (!decoded.ok()) {
                     return decoded.status();
                 }
-                for (std::uint64_t txn_id : decoded.value().active_txns) {
-                    note_txn(txn_id, TxnOutcome::kLoser);
+                for (const CheckpointActiveTxn& t : decoded.value().active_txns) {
+                    note_txn(t.txn_id, TxnOutcome::kLoser);
+                    note_undo_head(t.txn_id, t.last_undo_ptr);
                 }
                 for (const CheckpointDirtyPage& page : decoded.value().dirty_pages) {
                     out.dirty_pages.emplace(page.page_id, page.rec_lsn);
@@ -147,9 +177,9 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
     // recLSN of 0; different bound, which is what the parameter is for.
     out.redo_start_lsn = RedoStartFrom(out.end_lsn, out.dirty_pages);
 
-    for (const auto& [txn_id, outcome] : out.transactions) {
+    for (const auto& [txn_id, state] : out.transactions) {
         (void)txn_id;
-        switch (outcome) {
+        switch (state.outcome) {
             case TxnOutcome::kWinner: ++out.winners; break;
             case TxnOutcome::kAborted: ++out.aborted; break;
             case TxnOutcome::kLoser: ++out.losers; break;

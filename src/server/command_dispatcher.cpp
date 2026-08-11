@@ -2640,6 +2640,19 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // which the bulk guard above this path already required.
     if (scope.txn != nullptr) {
         for (std::size_t k = 0; k < filled.value().rows.size(); ++k) {
+            // One undo record per row, same as the per-row path: the chain
+            // is per *write*, not per statement, so a bulk insert that
+            // wrote one record for the batch would leave the rest of the
+            // rows unreachable from it (RV10).
+            txn::UndoRecordFields rec{};
+            rec.prior_trx_id = kNoTrxId;
+            rec.prior_undo_ptr = txn::kNoUndoPtr;
+            rec.target_page_id = filled.value().rows[k].page_id;
+            rec.target_slot = filled.value().rows[k].slot;
+            rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
+            auto ptr = txn_->AppendUndo(*scope.txn, rec, first.value() + k, {});
+            if (!ptr.ok()) return {"ERR " + ptr.status().message(), false};
+
             txn_->NoteInsert(*scope.txn, oid, filled.value().rows[k].page_id,
                              filled.value().rows[k].slot, first.value() + k);
         }
@@ -2871,13 +2884,29 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         return ErrorReply(s);
     }
 
-    // ---- The rollback trail (docs/txn.md section 3.6) -------------------
+    // ---- The rollback trail, and the durable record beside it -----------
     //
-    // An insert writes **no undo record**: a tuple with undo_ptr == 0 whose
-    // writer is invisible already means "no visible version", so the record
-    // would carry nothing. Rollback of an insert retires the slot, and this
-    // in-memory entry is what tells it which one.
+    // The trail entry is what a *live* rollback reads; the undo record is
+    // what survives a crash. Section 3.6 said an insert writes no record,
+    // and RV10 reversed that - not for visibility, which is unchanged, but
+    // because each record links to the transaction's previous one and an
+    // insert that wrote none would break the chain recovery walks
+    // (`docs/workplan-wal-recovery.md` §4b).
+    //
+    // **The tuple is not stamped with this pointer.** `undo_ptr == 0` still
+    // means "inserted" to every reader; the record is reachable only
+    // through the transaction chain, which is what keeps §3.6's visibility
+    // rule intact.
     if (scope.txn != nullptr) {
+        txn::UndoRecordFields rec{};
+        rec.prior_trx_id = kNoTrxId;
+        rec.prior_undo_ptr = txn::kNoUndoPtr;
+        rec.target_page_id = placed.value().page_id;
+        rec.target_slot = placed.value().slot;
+        rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
+        auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
+        if (!ptr.ok()) return {"ERR " + ptr.status().message(), false};
+
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
     }
@@ -4146,7 +4175,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             rec.target_slot = slot;
             rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kOverwrite);
 
-            auto ptr = txn_->undo().Append(scope.txn->id(), rec, image);
+            auto ptr = txn_->AppendUndo(*scope.txn, rec, id.value(), image);
             if (!ptr.ok()) return ptr.status();
             new_trx_id = scope.txn->id();
             new_undo_ptr = ptr.value();
@@ -4653,7 +4682,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             rec.target_slot = slot;
             rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kDeleteMark);
 
-            auto ptr = txn_->undo().Append(scope.txn->id(), rec, {});
+            auto ptr = txn_->AppendUndo(*scope.txn, rec, id.value(), {});
             if (!ptr.ok()) return ptr.status();
             new_trx_id = scope.txn->id();
             new_undo_ptr = ptr.value();

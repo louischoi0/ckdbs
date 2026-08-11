@@ -26,11 +26,18 @@ constexpr std::uint64_t kSegmentSize = 1024 * 1024;
 
 class ScriptedTxns final : public ActiveTransactions {
 public:
-    std::vector<std::uint64_t> Snapshot() const override { return live_; }
-    void SetLive(std::vector<std::uint64_t> live) { live_ = std::move(live); }
+    std::vector<CheckpointActiveTxn> Snapshot() const override { return live_; }
+    // Ids alone, with a kNoUndoPtr head each - these tests are about the
+    // checkpoint's ordering and its tables' shape, not about undo chains.
+    void SetLive(const std::vector<std::uint64_t>& ids) {
+        live_.clear();
+        live_.reserve(ids.size());
+        for (std::uint64_t id : ids) live_.push_back({id, 0});
+    }
+    void SetLive(std::vector<CheckpointActiveTxn> live) { live_ = std::move(live); }
 
 private:
-    std::vector<std::uint64_t> live_;
+    std::vector<CheckpointActiveTxn> live_;
 };
 
 // A checkpoint target that records what it was asked to flush and can
@@ -119,7 +126,10 @@ TEST_F(CheckpointerTest, BeginCarriesTheTablesAnalysisStartsFrom) {
     EXPECT_EQ(records.front().type(), RecordType::kCheckpointBegin);
     auto begin = DecodeCheckpointBegin(records.front().payload);
     ASSERT_TRUE(begin.ok()) << begin.status().message();
-    EXPECT_EQ(begin.value().active_txns, (std::vector<std::uint64_t>{11, 22, 33}));
+    ASSERT_EQ(begin.value().active_txns.size(), 3u);
+    EXPECT_EQ(begin.value().active_txns[0].txn_id, 11u);
+    EXPECT_EQ(begin.value().active_txns[1].txn_id, 22u);
+    EXPECT_EQ(begin.value().active_txns[2].txn_id, 33u);
     ASSERT_EQ(begin.value().dirty_pages.size(), 2u);
     EXPECT_EQ(begin.value().dirty_pages[0].page_id, 7u);
     EXPECT_EQ(begin.value().dirty_pages[0].rec_lsn, 400u);

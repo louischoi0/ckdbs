@@ -32,7 +32,7 @@ constexpr std::uint64_t kSegmentSize = 1024 * 1024;
 
 class NoTxns final : public wal::ActiveTransactions {
 public:
-    std::vector<std::uint64_t> Snapshot() const override { return {}; }
+    std::vector<wal::CheckpointActiveTxn> Snapshot() const override { return {}; }
 };
 
 // Fails Sync() on demand, so the "the anchor did not land" path is a real

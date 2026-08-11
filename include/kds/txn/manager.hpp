@@ -34,17 +34,26 @@
 // transaction spanning cores is not representable and `wal.md` section 3
 // says not to design it yet.
 //
-// ---- The trail, and why an insert writes nothing to undo -------------------
+// ---- The trail, and the undo chain beside it -------------------------------
 //
 // Every write appends to an in-memory trail, and Abort walks it in reverse
-// emitting compensations. An **insert writes no undo record** (section
-// 3.6): a tuple with `undo_ptr == kNoUndoPtr` whose writer is invisible
-// already means "no visible version", so the record would carry no
-// information and the insert path's cost is unchanged. Rollback of an
-// insert therefore reads the trail, and `UndoRecordType::kInsert` stays
-// defined and never written so that persisting the trail later - which
-// recovery-driven rollback needs - is a code change and not a
-// format-version event.
+// emitting compensations. **The trail is the live path's and does not
+// survive a crash** - which is why there is a second, durable record of the
+// same writes.
+//
+// Every write also appends an undo record, and since RV10
+// (`docs/workplan-wal-recovery.md` §4b) that includes an **insert**.
+// Section 3.6's reasoning was about *visibility* and remains true there: a
+// tuple with `undo_ptr == kNoUndoPtr` whose writer is invisible already
+// means "no visible version", so reading an insert needs no record, and
+// `AppendUndo` deliberately does not stamp the tuple. What needs the record
+// is recovery: each one links to the transaction's previous through
+// `txn_prev_undo_ptr`, and an insert that wrote none would break that chain
+// and orphan everything the transaction did before it.
+//
+// So the two structures are kept in step by one function - `AppendUndo`
+// advances the chain, the `Note*` calls extend the trail, and both are
+// called from the same three write paths.
 //
 // ---- Concurrency -----------------------------------------------------------
 //
@@ -114,6 +123,17 @@ public:
 
     const std::vector<TrailEntry>& trail() const noexcept { return trail_; }
 
+    // The newest undo record this transaction wrote - the head of its
+    // `txn_prev_undo_ptr` chain (RV10, `undo_page.hpp`). `kNoUndoPtr` until
+    // it writes one.
+    //
+    // **This is what a checkpoint persists** so recovery can walk the chain
+    // after a crash. The trail above is the live rollback path's and does
+    // not survive one; this pointer is the durable equivalent, and the two
+    // are kept in step by `TransactionManager::AppendUndo` being the only
+    // thing that advances either.
+    std::uint64_t last_undo_ptr() const noexcept { return last_undo_ptr_; }
+
 private:
     friend class TransactionManager;
 
@@ -121,6 +141,7 @@ private:
     IsolationLevel isolation_ = IsolationLevel::kReadCommitted;
     ReadView view_;
     std::vector<TrailEntry> trail_;
+    std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     bool active_ = false;
 };
 
@@ -220,6 +241,31 @@ public:
     Status CheckWriteConflict(const Transaction& txn, std::uint64_t cur,
                               std::uint64_t pk) const;
 
+    // ---- The one place an undo record is appended (RV10) ----------------
+    //
+    // Sets `fields.txn_prev_undo_ptr` from `txn`, sets `fields.pk`, appends
+    // through the log, and on success advances the transaction's head.
+    //
+    // It exists so no call site can forget the chain link. There are three
+    // of them - overwrite, delete-mark and, since RV10, insert - and a
+    // record written with a zero `txn_prev_undo_ptr` would silently
+    // terminate the chain early, orphaning every record the transaction
+    // wrote before it. That failure is invisible until a crash, which is
+    // exactly the kind this engine centralizes rather than documents.
+    //
+    // `pk` is passed separately rather than pre-set on `fields` for the
+    // same reason: it is required for every type (`undo_page.hpp` - two of
+    // the three carry no image to recover it from) and a parameter cannot
+    // be left at its default by accident.
+    //
+    // **Does not stamp the tuple.** Whether the new record joins the
+    // *version* chain is the caller's, and for `kInsert` it must not:
+    // `txn.md` §3.6's visibility rule is that `undo_ptr == kNoUndoPtr`
+    // means "inserted", so an insert's record is reachable through the
+    // transaction chain alone.
+    StatusOr<std::uint64_t> AppendUndo(Transaction& txn, UndoRecordFields fields,
+                                       std::uint64_t pk, std::span<const std::byte> image);
+
     // Records one write for rollback. Never fails: a trail entry is memory,
     // and a write that could not be recorded is a write that cannot be
     // undone - which is why the caller records *before* it mutates.
@@ -260,7 +306,7 @@ public:
 
     // wal::ActiveTransactions. The ids in flight *right now*, for a
     // checkpoint's CHECKPOINT_BEGIN table (wal.md sections 11, 12).
-    std::vector<std::uint64_t> Snapshot() const override;
+    std::vector<wal::CheckpointActiveTxn> Snapshot() const override;
 
     UndoLog& undo() noexcept { return undo_; }
 
