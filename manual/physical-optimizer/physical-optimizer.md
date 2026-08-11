@@ -62,6 +62,16 @@ the nightly rebuild loop returns. A 24/7 workload with no quiet period
 is the case that can safely lower it — and, since the decoupling, the
 case that finally can.
 
+**When a Cabin leaves ACTIVE is proportional to what it proved** — since
+2026-08-10, at any window. The heat score is read in two ways: linearly
+for live ranking, and logarithmically wherever two *idle* things must be
+ordered. The linear read bottoms out after about 16 half-lives of
+silence, which used to cap the DECAYING onset at the score's own bit
+width and made the eviction of cold statistics entries arbitrary; the
+log read has no floor. What it does not change is the DROP at the end of
+the cooldown, which is a timeout by necessity — silence is silence, and
+no precision distinguishes a dead Cabin from a sleeping one.
+
 ## 2. `SHOW RELAYOUT` — the shadow report
 
 ```

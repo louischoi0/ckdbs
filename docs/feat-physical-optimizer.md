@@ -78,7 +78,7 @@ mover code ships in v1 (R11).
 
 | ID | Decision |
 |----|----------|
-| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: hot/cold classification here, trail-retention ordering (`spec-pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. |
+| R1 | **The lazy-decay score.** Exponential half-life decay computed lazily from a stored `{score, last_bump}` pair: a touch decays-then-increments, a read decays only, and there is no background decay pass — idle data costs nothing and is never visited. One implementation (`include/kds/stats/decay.hpp`), `sched::Clock`-injected; with no clock the score degrades to a raw count, the same best-effort stance `sys.access_stats.last_seen` already takes. Half-life is the `decay_half_life` config key, per instance, default 600 s `[PROPOSED]`. Declared consumers: hot/cold classification here, trail-retention ordering (`spec-pattern-tracking-levels.md`), and EV1's experimental temperature hook. Scores are memory-resident and never persisted `[PROPOSED]`. **Two reads (2026-08-10):** the Q24.8 `ValueAt` — which underflows to zero after ~16 half-lives, so it ranks live data only — and `Log2ValueAt`, the same state read in the log domain, where decay is a subtraction and ordering survives indefinitely. The state did not change: the underflow was always in the read. Any consumer that must order *idle* things (an eviction victim, a retirement) uses the log read; see §II.4's note for what that fixed and what it structurally cannot. |
 | R2 | **Inputs are the existing collectors only**: `sys.access_stats` (the shape axis), Waystone sightings (the value axis), and what a page itself says when walked. The optimizer adds no third collector; an input it lacks becomes a collection change in the layer that owns collection, spec'd there first. |
 | R3 | **Two halves with a hard seam.** The **planner** is pure — it reads statistics and the catalog and produces `RelayoutPlan`s with predicted benefit — and the **mover** enacts plans. Shadow mode is the planner without the mover. The `physical_optimizer` config key takes `off | shadow` (default `shadow`); `on` is **refused at startup naming the open gates**, so a config written for the future fails loudly today instead of silently under-delivering. |
 | R4 | **The page epoch** settles `heap-and-tuple.md` §3.1a's `[OPEN]`: `PageHeaderFields::reserved0` (offset 16, u64) becomes `relayout_epoch` — the field the header comment already nominated. Every existing page carries 0 there, so **no format bump**: a zero reads as epoch 0. Durable by construction (it is header bytes), which trails need because trail pages are durable. Bumped **only by the mover** when tuples move; INSERT/UPDATE/DELETE never bump, because the fixed-length rule makes them address-stable — that stability is the whole reason replay is safe today. Wraparound is unreachable at u64 width rather than handled. **Pairing rule: no consumer may accept a location on epoch equality alone** — the epoch is a fast whole-page invalidation layered over the Keystone-id check (K1), never a substitute for it. |
@@ -484,16 +484,53 @@ property of the workload, so it is documented rather than enforced — a
 24/7 workload with no quiet period is exactly the case that may lower
 it, and now can.
 
-The second finding is the one with a real remedy, and it belongs to R1
-rather than here: the Q24.8 score **underflows to zero after ~16
-half-lives**, so across most of a 128-half-life cooldown the DROP is a
-*timeout, not a judgement* — below the underflow no threshold comparison
-can tell a cold Cabin from a colder one. Closing that means giving the
-score dynamic range to cover the phenomenon (a wider fixed-point type,
-or a `decay_half_life` long enough that a night is a handful of
-half-lives rather than a hundred), which is an R1 decision with
-consumers beyond this controller. `[OPEN]`, recorded here because this
-is where it was measured.
+The second finding — Q24.8 **underflowing to zero after ~16 half-lives**
+— is **addressed (2026-08-10)**, and what it turned out to be is worth
+recording, because the first reading of it was wrong in a way that would
+have produced the wrong fix.
+
+R1 gained a range-preserving read rather than a new representation:
+`stats::decay.hpp`'s `Log2ValueAt`. **The information was never lost in
+the state** — `{scaled, last_bump}` holds the whole history — only in
+the read, where `>> halvings` flushes it. In the log domain decay is a
+subtraction, so scores stay ordered for thousands of half-lives; the
+linear `ValueAt` is untouched, so every consumer that only ranks live
+data is unaffected, and the decision core consults the log **only where
+the linear form has run out of resolution**. That is why no measured
+threshold decision and no PHY07 golden trace moved.
+
+What it fixes, exactly:
+- **The eviction victim among cold entries** (`OptimizerSignals`), which
+  is a live defect at every configuration: a full table is mostly idle
+  entries, all reading 0, so the "coldest" scan found a tie and kept
+  whichever the hash map yielded first. A fingerprint idle an hour could
+  outlive one idle a week.
+- **The DECAYING onset's cap** at `log2(frequency × 256)` half-lives,
+  independent of the saved-pages factor and T_amort. At the shipped
+  T_amort = 64 the honest onset lands ~1.3 half-lives *before* the cap,
+  so this is a cliff one doubling away rather than a live defect. **The
+  crossover is measured at T_amort = 130** (`bench/results-cabin-optimizer-days.md`
+  Part III, a controlled A/B against a pre-fix binary), which is nearer
+  the shipped window than the 256 first estimated here — the cliff is
+  one doubling away, not two. Post-fix the onset tracks `log2(T_amort)`
+  as the model says (+6.5 and +11.5 half-lives at windows of 4,096 and
+  100,000, against +6.0 and +10.6 predicted); pre-fix it saturated flat
+  (+1.0 and +1.5). Removing the cap is what lets the window be widened
+  at all.
+- **Budget-swap victim ordering** among incumbents whose scores have
+  both underflowed.
+
+What it does **not** fix, and cannot: the DROP at the end of the
+cooldown is still fired by the clock. A dead Cabin and an
+overnight-quiet one emit identical silence at every instant, so no
+amount of score precision distinguishes them — the earlier paragraph's
+floor is structural, not a resolution problem. "Judgement" here means
+the *timing* is proportional to demonstrated value again, not that the
+final step consults evidence it does not have.
+
+Precision: the log read is exact in its integer part and LUT-bucketed in
+its fraction, worst case 0.78% in the ratio — under a tenth of the
+narrowest threshold margin any rule applies.
 
 **Rules** (asymmetric margins = hysteresis; all thresholds PROPOSED,
 configuration-surfaced):

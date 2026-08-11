@@ -153,6 +153,19 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // when a reply is produced has moved yet.
     *out = DispatchAndStage(line, session);
 
+    if (out->pending_remote.has_value() && remote_reads_ != nullptr) {
+        // The remote read (workplan P4c). The predicate re-finds the state
+        // each poll, so a torn-down read wakes the waiter instead of
+        // dangling a flag address (the reads vector may reallocate).
+        const PipelineTag tag = *out->pending_remote;
+        const std::function<bool()> finished = [this, tag] {
+            SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
+            return read == nullptr || read->done;
+        };
+        co_await sched::WaitUntil{&finished};
+        *out = FinishRemoteRead(tag);
+    }
+
     if (out->pending_lsn != wal::kNoLsn) {
         // **The group commit.** Parking here rather than syncing inside the
         // statement is the whole change: every other runnable connection
@@ -225,6 +238,24 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
 
 DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* session) {
     DispatchOutcome outcome = DispatchAndStage(line, session);
+    if (outcome.pending_remote.has_value()) {
+        // With no reactor there is nothing to pump the reply through, so
+        // the synchronous path can only finish a read that is already
+        // complete - the in-process loopback arrangement tests use. An
+        // incomplete one is closed and refused retryably rather than
+        // spun on: a wait with nothing to run the other side is a hang.
+        const PipelineTag tag = *outcome.pending_remote;
+        SessionStepClient::RemoteRead* read =
+            remote_reads_ != nullptr ? remote_reads_->Find(tag) : nullptr;
+        if (read != nullptr && read->done) {
+            outcome = FinishRemoteRead(tag);
+        } else {
+            if (remote_reads_ != nullptr) remote_reads_->Close(tag);
+            return {ErrorReply(Status::TxnConflict(
+                        "remote read needs the reactor path; retry on a served connection")),
+                    false};
+        }
+    }
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
 
     // Inline, on this thread: the batch is whatever happened to be staged
@@ -2202,6 +2233,134 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
     return Status::OK();
 }
 
+namespace {
+
+// A KWP-decoded field back into the value FormatValue renders (workplan
+// P4c): the inverse of RowBatchWriter's per-type encoding, by the schema
+// column's type. Little-endian, widths fixed by the type - the same facts
+// the encoder used, read back through the same constants.
+parser::AstValue FieldToValue(const catalog::SysColumnRow& col,
+                              const wire::DecodedField& field) {
+    parser::AstValue v;
+    if (field.is_null) return v;  // kNull default
+    auto le = [&](std::size_t n) {
+        std::uint64_t out = 0;
+        for (std::size_t i = 0; i < n && i < field.bytes.size(); ++i) {
+            out |= static_cast<std::uint64_t>(field.bytes[i]) << (8 * i);
+        }
+        return out;
+    };
+    switch (col.type_val) {
+        case catalog::kTypeValInt8:
+            v.type = parser::ValueType::kInt;
+            v.int_val = static_cast<std::int8_t>(le(1));
+            break;
+        case catalog::kTypeValInt16:
+            v.type = parser::ValueType::kInt;
+            v.int_val = static_cast<std::int16_t>(le(2));
+            break;
+        case catalog::kTypeValInt32:
+        case catalog::kTypeValDate:
+            v.type = parser::ValueType::kInt;
+            v.int_val = static_cast<std::int32_t>(le(4));
+            break;
+        case catalog::kTypeValInt64:
+        case catalog::kTypeValTimestamp:
+            v.type = parser::ValueType::kInt;
+            v.int_val = static_cast<std::int64_t>(le(8));
+            break;
+        case catalog::kTypeValUint64:
+            v.type = parser::ValueType::kInt;
+            v.int_val = static_cast<std::int64_t>(le(8));
+            v.raw_int_text = std::to_string(le(8));
+            break;
+        case catalog::kTypeValBool:
+            v.type = parser::ValueType::kInt;
+            v.int_val = le(1) != 0 ? 1 : 0;
+            break;
+        case catalog::kTypeValDecimal:
+            v.type = parser::ValueType::kDecimal;
+            v.int_val = static_cast<std::int64_t>(le(8));
+            v.scale = static_cast<std::uint8_t>(catalog::DecimalScaleOf(col.len));
+            break;
+        case catalog::kTypeValDecimalWide: {
+            v.type = parser::ValueType::kDecimalWide;
+            v.int_val = static_cast<std::int64_t>(le(8));
+            std::uint64_t hi = 0;
+            for (std::size_t i = 8; i < 16 && i < field.bytes.size(); ++i) {
+                hi |= static_cast<std::uint64_t>(field.bytes[i]) << (8 * (i - 8));
+            }
+            v.dec_hi = static_cast<std::int64_t>(hi);
+            v.scale = static_cast<std::uint8_t>(catalog::DecimalScaleOf(col.len));
+            break;
+        }
+        default:  // varchar, char: the bytes are the text
+            v.type = parser::ValueType::kStr;
+            v.str_val.assign(reinterpret_cast<const char*>(field.bytes.data()),
+                             field.bytes.size());
+            break;
+    }
+    return v;
+}
+
+}  // namespace
+
+DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
+    SessionStepClient::RemoteRead* read = remote_reads_->Find(tag);
+    if (read == nullptr) {
+        return {ErrorReply(Status::IoError("remote read state vanished before completion")),
+                false};
+    }
+    if (!read->error.ok()) {
+        const Status error = read->error;
+        remote_reads_->Close(tag);
+        return {ErrorReply(error), false};
+    }
+
+    auto access = catalog_.InitTableAccess(read->rel_oid);
+    if (!access.ok()) {
+        remote_reads_->Close(tag);
+        return {ErrorReply(access.status()), false};
+    }
+    const catalog::Schema& schema = access.value()->schema;
+
+    // Byte-identical to the local star reply: the header of column names,
+    // then one "\n"-escaped comma row per match, FormatValue's rendering.
+    std::ostringstream os;
+    bool first_col = true;
+    for (const auto& col : schema.columns) {
+        if (!first_col) os << ',';
+        os << catalog::NameView(col.name);
+        first_col = false;
+    }
+
+    for (const auto& batch : read->batches) {
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(batch, rows);
+        if (!header.ok()) {
+            remote_reads_->Close(tag);
+            return {ErrorReply(header.status()), false};
+        }
+        auto decoded = wire::DecodeRowBatch(rows, schema.columns.size());
+        if (!decoded.ok()) {
+            remote_reads_->Close(tag);
+            return {ErrorReply(decoded.status()), false};
+        }
+        for (const auto& row : decoded.value()) {
+            os << "\\n";
+            bool first_val = true;
+            for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+                if (!first_val) os << ',';
+                os << exec::FormatValue(schema.columns[i].type_val,
+                                        FieldToValue(schema.columns[i], row[i]));
+                first_val = false;
+            }
+        }
+    }
+    remote_reads_->Close(tag);
+    return {os.str(), false};
+}
+
 Status CommandDispatcher::CheckReadAffinity(const exec::StepChain& chain) {
     // Every step, hoisted sub-chains included: a sub-chain reads a real
     // relation and is exactly as unable to reach another core's pages.
@@ -3211,10 +3370,36 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
 
     // The plan is resolved; now ask whether this core may run it
     // (crosscore.md §2's fast-path-versus-pipeline decision). Every
-    // relation local is the fast path and the only path built - a chain
-    // spanning cores is refused with its reason rather than mis-executed,
-    // because the pipeline that would run it needs a suspendable statement
-    // path and task representation is an open decision (core_affinity.hpp).
+    // relation local is the fast path; a single-step star read of a
+    // relation another core owns ships to that core (workplan P4c) - and
+    // everything else that spans cores keeps the affinity refusal below.
+    //
+    // The eligible class is deliberately narrow and each exclusion is a
+    // correctness statement, not a shortcut: an aggregate would fold on
+    // the wrong core's sink; a quota (LIMIT/OFFSET) applies at emission
+    // and the remote side emits everything; ANALYZE describes a local run
+    // it did not perform; a projection list needs the projection types the
+    // remote whole-row batch does not carry yet. Every excluded shape is
+    // refused exactly as before, never mis-run.
+    if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 1 &&
+        chain.value().hoisted.empty() && chain.value().star() &&
+        !chain.value().aggregated() && !chain.value().limit.has_value() &&
+        chain.value().offset == 0) {
+        const exec::Step& step = chain.value().steps[0];
+        auto owner_access = catalog_.InitTableAccess(step.rel_oid);
+        if (owner_access.ok() && owner_access.value()->owner_core != core_id_ &&
+            step.sub_chains.empty()) {
+            auto tag = remote_reads_->Open(step, owner_access.value()->owner_core,
+                                           next_remote_request_++);
+            if (tag.ok()) {
+                DispatchOutcome pending;
+                pending.pending_remote = tag.value();
+                return pending;
+            }
+            // A step the descriptor refuses (an index probe, say) falls
+            // through to the honest refusal rather than a worse error.
+        }
+    }
     if (Status affinity = CheckReadAffinity(chain.value()); !affinity.ok()) {
         return {"ERR " + affinity.message(), false};
     }

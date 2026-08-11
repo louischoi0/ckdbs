@@ -100,6 +100,18 @@ struct SnapshotFingerprint {
     std::uint64_t pattern_id = 0;
     std::uint32_t frequency_q8 = 0;  // decayed executions, Q24.8
     std::uint32_t pages_q8 = 0;      // decayed page sum, Q24.8
+
+    // The same two values in the log domain (decay.hpp's `Log2Q16`),
+    // carried beside the linear pair rather than replacing it. The linear
+    // fields keep every existing consumer and every measured threshold
+    // decision exactly as they were; these two exist because the linear
+    // ones **underflow to zero after ~16 half-lives** of silence, and a
+    // controller deciding retirement needs to tell one cold shape from
+    // another long after both read 0. Decay is a subtraction here, so
+    // they stay ordered for as long as anyone will ever wait.
+    Log2Q16 frequency_log2 = kLog2NegInf;
+    Log2Q16 pages_log2 = kLog2NegInf;
+
     CandidateRef candidate;          // zero rel_oid = no cabin candidacy
 };
 

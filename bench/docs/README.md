@@ -300,24 +300,43 @@ the board, tape and zero-row probes is captured as evidence of the plan.
 The **amortization window is a server key, not a driver flag** — this
 scenario measures whatever `cabin_optimizer_amort_windows` the config sets,
 and `bench/results-cabin-optimizer-days.md` reports the same run at both 1
-and the shipped 64. Note that at a compressed half-life the DROP cooldown
-(`2 × T_amort` half-lives) can exceed the whole run: at `decay_half_life =
-5` and `T_amort = 64` it is 640 s against a 283 s three-day matrix, so no
-DROP is reachable and the retirement evidence has to come from
-`cabinopt_cooldown_check.py` below. Work that arithmetic out before
-choosing the pacing, not after reading an empty drops counter.
+and the shipped 64 (and, in its Part III, at 64 again on a later commit).
+Note that at a compressed half-life the DROP cooldown can exceed the whole
+run: it is `cabin_optimizer_cooldown_half_lives` (its own key since
+2026-08-10, default 128 — previously fused as `2 × T_amort`, which is the
+same number at the shipped window), so at `decay_half_life = 5` it is 640 s
+against a 283 s three-day matrix, no DROP is reachable, and the retirement
+evidence has to come from `cabinopt_cooldown_check.py` below. Work that
+arithmetic out before choosing the pacing, not after reading an empty drops
+counter.
 
-### `cabinopt_cooldown_check.py` — is `amort_windows` live, and is the cooldown the specified multiple?
+### `cabinopt_cooldown_check.py` — the DROP cooldown and the DECAYING onset, per configuration and per binary
 
-A two-arm behavioural check for one question the business-days matrix
-cannot answer: whether `cabin_optimizer_amort_windows` reaches the live
-controller's DROP cooldown or only its struct. Two servers identical except
-that key, warmed on the same hot probe over the same relation until each
-controller holds an ACTIVE Cabin of its own, then left in silence and
-polled. The control arm must go DECAYING and DROP within a couple of
-half-lives; the test arm must not drop for `2 × T_amort` half-lives after
-its own DECAYING onset. One run yields both facts — the key is live, and
-the cooldown is the specified multiple rather than some other number.
+A multi-arm behavioural check for the two lifecycle instants the
+business-days matrix cannot reach, because at any honest time compression
+they sit outside a 283 s run. N servers identical except for their
+`cabin_optimizer_*` keys, warmed on the same hot probe over the same
+relation until every controller holds an ACTIVE Cabin of its own, then left
+in silence and polled. It measures:
+
+- **the DROP cooldown** — how long a DECAYING entry is given to rebound.
+  The control arm must go DECAYING and DROP within a couple of half-lives;
+  a test arm with a longer cooldown must outlive it. One run yields both
+  facts: the key is live, and the cooldown is the number configured rather
+  than some other number.
+- **the DECAYING onset** — how long silence takes to push an ACTIVE Cabin
+  out of ACTIVE, reported against a prediction that needs no calibration.
+  `B` decays on the R1 clock and `C = P_rel / T_amort` does not, so
+  widening the amortization window by a factor k moves the onset by exactly
+  `log2(k)` half-lives; every workload-dependent term cancels in that
+  difference. The driver takes the narrowest-window arm as the reference and
+  prints observed-versus-predicted deltas for the rest.
+
+Running the **same** config against two ports served by two *different
+binaries* turns either measurement into an A/B — which is what
+`bench/results-cabin-optimizer-days.md` Part III does to show that the
+onset saturates at the Q24.8 underflow floor before the log-domain decay
+read and tracks `log2(T_amort)` after it.
 
 Nothing here is timed: every output is a wall-clock instant of a state
 transition or a counter, so there are no latencies and no percentiles. The
@@ -325,31 +344,44 @@ relation shape and row generator are **imported from
 `scenario4_cabinopt_days.py`** so the two cannot drift.
 
 The half-life is the affordability knob and is deliberately not what is
-under test — at `decay_half_life = 1` the ratified cooldown is 128 s
-instead of 21 h 20 m, and the ratio between the arms is unchanged. **Both
-arms must run the same half-life** or the comparison means nothing.
+under test — at `decay_half_life = 1` the shipped cooldown is 128 s
+instead of 21 h 20 m, and the ratio between the arms is unchanged. **Every
+arm must run the same half-life** or the comparison means nothing.
 
 ```bash
-# two configs differing in exactly one key, both decay_half_life = 1
+# cooldown: two configs differing in exactly one key, both decay_half_life = 1
 ./build-release/kds_server ~/bench-cabinopt-cool/a1.db  --port 15661 --config amort1.conf  &
 ./build-release/kds_server ~/bench-cabinopt-cool/a64.db --port 15662 --config amort64.conf &
 ./tools/cabinopt_cooldown_check.py \
-    --arm amort1:15661:1 --arm amort64:15662:64 \
+    --arm amort1:15661:1:2 --arm amort64:15662:64:128 \
     --half-life 1 --rows 10000 --warm-seconds 25 \
     --silence-seconds 200 --poll-seconds 1 --json cool.json
+
+# onset A/B: three windows x two binaries, same three config files on both
+./tools/cabinopt_cooldown_check.py \
+    --arm post-w64:15671:64:128     --arm post-w4096:15672:4096:128 \
+    --arm post-w100000:15673:100000:128 \
+    --arm pre-w64:15681:64:128      --arm pre-w4096:15682:4096:128 \
+    --arm pre-w100000:15683:100000:128 \
+    --half-life 1 --rows 10000 --warm-seconds 25 \
+    --silence-seconds 40 --poll-seconds 0.5 --json wide.json
 ```
 
 | flag | default | what it does |
 |---|---|---|
-| `--arm NAME:PORT:AMORT` | — | repeatable, two minimum (the control *is* the measurement). `AMORT` is only what the arm's config sets, used to print the predicted cooldown |
-| `--half-life S` | required | the servers' `decay_half_life`; the driver cannot read it back, so it is stated rather than inferred |
+| `--arm NAME:PORT:AMORT[:COOLDOWN]` | — | repeatable, two minimum (the control *is* the measurement). `AMORT` is the arm's `cabin_optimizer_amort_windows` — the onset prediction reads it — and the optional `COOLDOWN` is its `cabin_optimizer_cooldown_half_lives`. The driver cannot read a key back, so both are stated; omitting `COOLDOWN` falls back to the pre-decoupling `2 × AMORT`, which is what a pre-2026-08-10 build fuses |
+| `--half-life S` | required | the servers' `decay_half_life`; stated, not inferred |
 | `--rows N` | 10000 | rows in the probed relation; sets `P_rel` and so the cost floor `P_rel / T_amort` printed as `cost_q16` |
 | `--warm-seconds` / `--warm-block` | 20 / 60 | upper bound on the warm phase and probes per arm per interleave block; the phase ends early once every arm is ACTIVE |
-| `--silence-seconds` / `--poll-seconds` | 200 / 1 | the silence window and the `SHOW CABIN_OPTIMIZER` poll cadence. The poll bounds the resolution: an observed cooldown is accurate to ±1 poll |
-| `--rows`, `--suffix`, `--seed`, `--timeout`, `--json` | | as the other drivers |
+| `--silence-seconds` / `--poll-seconds` | 200 / 1 | the silence window and the `SHOW CABIN_OPTIMIZER` poll cadence. The poll bounds the resolution: an observed instant is accurate to ±1 poll, and is biased late by up to one poll plus one snapshot interval |
+| `--suffix`, `--seed`, `--timeout`, `--json` | | as the other drivers |
 
-Exit status is 0 only if the control dropped and the test arm outlived it,
-so the check is usable as a gate. The JSON carries every poll's full
+The cooldown verdict is **only asked when it is reachable**: if the
+shortest predicted cooldown exceeds `--silence-seconds`, the driver says so
+and reports the onset alone, rather than printing a failure that is really
+its own pacing. Exit status is 0 when the cooldown verdict passes, or —
+in an onset-only run — when every arm reached DECAYING, so the check is
+usable as a gate either way. The JSON carries every poll's full
 `SHOW CABIN_OPTIMIZER` capture, which is where the per-entry B/C decay
 curve and the score's Q24.8 underflow floor are readable.
 
@@ -435,6 +467,7 @@ prices the missing visibility witness.
 | `latency_matrix.py` | per-statement latency across storage forms and access kinds |
 | `bulk_insert_benchmark.py` | the T1 multi-row `VALUES` statement (`docs/spec-bulkinsert.md`, BLK08): rows-per-statement 1/10/100/1000 at a fixed total row count, into scenario1's `write_probe` shape (`id` + 4 × int64, heap). Phases: `ping` (client+socket floor), `bulk-<B>` (B rows/statement, autocommitted, per-statement latencies — divide by B for per-row), `txn-1000` (`--txn-control`: the pre-T1 batching — single-row INSERTs in 1000-row transactions), and `parse-<B>` (`--parse-probe`: the B-row statement against a nonexistent table, which parses fully and dies at catalog resolution — round trip + parse, no pipeline; its ERR replies are expected). Durability is the **server's** config key, one class per run — pass `--durability` so the JSON is labeled. `--cabin` issues `CREATE CABIN ON <t>(a)` after each CREATE TABLE, which closes the T3 sorted-fill gate (`cabin_mask`) and forces the row loop — the gate-closed twin for pricing T3 (`docs/workplan-t3.md`); `--trace` keeps each bulk phase's per-statement series in `<json>.trace.json`. Verifies every reply's `rows=`, the id span, and `SELECT COUNT(*)` per phase; a mismatch aborts. Keep one server's total WAL under one 64 MiB segment (~250K rows): the stream wedges permanently when an append exactly fills a segment (found by this driver's first run). `--rows N --batches 1,10,100,1000 --suffix tag --json out.json` |
 | `pg_bulk_insert_benchmark.py` | the same matrix on PostgreSQL (identity pk, explicit column list). `--synchronous-commit off` is the session-GUC twin of ckdbs `relaxed`; cluster tuning stays at defaults |
+| `kwp_load_benchmark.py` | the T2 KWP binary load stream (`docs/spec-bulkinsert.md` §3, KL02–KL06): a dependency-free KWP v0 client — HELLO with the `BULK_LOAD` capability, `LOAD_BEGIN` → pre-encoded D5 chunks → windowed ACKs → `LOAD_END` — against the same int-only `write_probe` schema as `bulk_insert_benchmark.py`, so the T2-vs-T1 delta is parse+round-trip removal. Needs the server started with `kwp_port`; a text-port connection does DDL and `COUNT(*)` verification. `--chunk-rows 100,1000`, `--mode pipelined\|serial` (window 4 vs stop-and-wait — the delta prices the window), `--no-quickack` exhibits the ~40 ms Nagle stalls of the endpoint's missing `TCP_NODELAY` instead of defeating them client-side (found by this driver; see `bench/results-bulk-insert.md` Part IV). Latencies are per chunk; pipelined ones include deliberate window queueing — read the throughput. Wire layouts implemented from `include/kds/wire/kwp.hpp`, `kwp_types.hpp`, `wire/row_codec` |
 | `cabin_optimizer_benchmark.py` | the cabin optimizer (`docs/feat-physical-optimizer.md` Part II, workplan PHY08), two cases on two servers. `--case null`: what `cabin_optimizer = on` costs a workload with zero eligible candidates — pk lookups + INSERTs over BTREE relations of 200/1K/10K rows, three arms (`off1`/`on`/`off2`) interleaved per round through `SET CABIN_OPTIMIZER` on one server and one data file, so the off1/off2 gap is the in-run noise floor; then the tick itself priced from `/proc/<pid>/stat` over two idle windows (`--idle-seconds` each, on then off) divided by the tick delta `SHOW CABIN_OPTIMIZER` reports. Wants a server booted with `cabin_optimizer = off` and `cabin_optimizer_snapshot_interval_ms` lowered (the results file states the value used). `--case improve`: a hot non-pk equality (`WHERE val = 7`, exactly 10 matching rows at every size — the value domain is `rows/10`) probed in three phases per size: `walk` (fixed `--probe-ops`, switch off), `transition` (SET ON; probes continue while the controller CREATEs, time-to-create and time-to-serve recorded from `SHOW CABIN_OPTIMIZER`/`SHOW CABINS` polls between blocks), `served` (same fixed ops). Captures the managed entry line, `ANALYZE` before/after (`pages=`, `cabin_hits=1 cabin_optimizer=true`), the Cabin's hits/misses, a pk-lookup control that must not move, and `--verify` compares one walked reply against one served reply row-for-row. `--server-pid` adds server-CPU-per-op to both probe phases. `--case null --rounds 60 --lookups 60 --inserts 10 --idle-seconds 60 --server-pid <pid>` / `--case improve --probe-ops 1200 --server-pid <pid>`, each against a fresh data file |
 | `pg_cabin_optimizer_benchmark.py` | the improve case's twin: same relations, rows and probes (imported from the ckdbs driver), against the port-15433 cluster at defaults. Deliberately has nothing to switch on — at defaults PostgreSQL seq-scans the hot shape forever, which is the honest baseline for a structure the engine declares for itself; `EXPLAIN (ANALYZE, BUFFERS)` per size is captured as evidence of the plan |
 | `bench/keystone_alloc_bench.cpp` | the id allocator, in-process — no client, no socket |

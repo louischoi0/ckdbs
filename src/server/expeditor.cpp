@@ -851,6 +851,51 @@ Status Expeditor::Serve() {
             return s;
         }
 
+        // The session side of remote reads (workplan P4c): core 0 ships an
+        // eligible single-step read to the owning core and awaits its
+        // batches. Registered before the dispatcher learns about it so a
+        // reply can never beat its handlers.
+        remote_reads_.emplace(
+            /*core_id=*/0,
+            [this, &scheduler](std::uint32_t dst, sched::RingMessageKind kind,
+                               std::vector<std::byte> payload) {
+                sched::MessageHeader out{};
+                out.src_core = 0;
+                out.dst_core = dst;
+                out.session_core = 0;
+                out.kind = static_cast<std::uint16_t>(kind);
+                out.sched_group =
+                    static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+                scheduler.Submit(sched::MakeSendRetryTask(*transport_, out, payload));
+                return Status::OK();
+            },
+            &*logger_);
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kStepBatch,
+                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                    remote_reads_->OnStepBatch(payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kStepEof,
+                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                    remote_reads_->OnStepEof(payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kStepError,
+                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                    remote_reads_->OnStepError(payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        dispatcher_->SetRemoteReads(&*remote_reads_);
+
         // The row-id lease's grant side (P5's shape): a peer's kRowIdLease
         // request is answered with a block carved by AllocateRowIdRange -
         // the bulk-INSERT primitive, already ceiling-checked. Core 0 is the

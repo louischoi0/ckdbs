@@ -12,6 +12,10 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/row_codec.hpp"
+#include "kds/server/remote_step_service.hpp"
+#include "kds/server/session_step_client.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/ring_transport.hpp"
@@ -521,6 +525,91 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
     auto next_on_core0 = core0_->catalog.AllocateRowId(oid.value());
     ASSERT_TRUE(next_on_core0.ok());
     EXPECT_GE(next_on_core0.value(), first.value() + 16);
+}
+
+// ---- P4c: a SELECT against a rotated relation executes remotely ---------
+
+TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
+    // The whole cross-core read path end to end, loopback transport: the
+    // dispatcher compiles, sees owner_core=1, ships the step; the "remote"
+    // server executes it and streams batches; the session finishes the
+    // reply. Everything but the rings.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto access = catalog2.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    for (int i = 0; i < 4; ++i) {
+        auto id = catalog2.AllocateRowId(oid.value());
+        ASSERT_TRUE(id.ok());
+        parser::AstValue v;
+        v.type = parser::ValueType::kInt;
+        v.int_val = i * 10;
+        v.raw_int_text = std::to_string(i * 10);
+        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
+                                       id.value(), {v});
+        ASSERT_TRUE(payload.ok());
+        auto placed = heap::ChainInsert(*core0_store_, access.value()->desc_page_id,
+                                        id.value(), payload.value(), 1);
+        ASSERT_TRUE(placed.ok());
+    }
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 1u);
+
+    // The session core's runtime. Its store is lease-bound, so schema
+    // resolution needs CC7's grant exactly as a real session core would
+    // have received at the relation's publish.
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    runtime.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+
+    // The loopback pair: the "owner" executes over the fixture's
+    // unrestricted store; sends cross-deliver in process.
+    std::optional<RemoteStepServer> server;
+    std::optional<SessionStepClient> client;
+    server.emplace(
+        catalog2, *core0_store_, /*core_id=*/1,
+        [&](std::uint32_t, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            switch (kind) {
+                case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+                default: ADD_FAILURE() << "unexpected server send";
+            }
+            return Status::OK();
+        });
+    client.emplace(
+        /*core_id=*/0,
+        [&](std::uint32_t, sched::RingMessageKind kind, std::vector<std::byte> payload) {
+            sched::MessageHeader h{};
+            h.src_core = 0;
+            h.dst_core = 1;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen: server->OnStepOpen(h, payload); break;
+                case sched::RingMessageKind::kStepCredit: server->OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepCancel: server->OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected client send";
+            }
+            return Status::OK();
+        });
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    auto out = runtime.value()->dispatcher().Dispatch("SELECT * FROM rotated");
+    EXPECT_EQ(out.response,
+              "id,v\\n1,0\\n2,10\\n3,20\\n4,30");
+    EXPECT_EQ(client->open_reads(), 0u);
+
+    // The ineligible shapes keep the refusal: a projection list is not
+    // shipped in P4c and answers the affinity refusal, never wrong rows.
+    auto refused = runtime.value()->dispatcher().Dispatch("SELECT v FROM rotated");
+    EXPECT_EQ(refused.response.rfind("ERR ", 0), 0u);
 }
 
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
