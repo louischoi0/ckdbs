@@ -1,6 +1,7 @@
 #include "kds/wal/analysis.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -47,7 +48,11 @@ Lsn AppendCheckpointBegin(WalStream& stream, std::span<const CheckpointActiveTxn
 
 class AnalysisTest : public ::testing::Test {
 protected:
-    MemoryLogDevice device_{kSegmentSize};
+    // Construction is fallible and behind a factory, so the fixture holds
+    // the owner and hands the tests the reference they already used.
+    StatusOr<std::unique_ptr<MemoryLogDevice>> owned_device_ =
+        MemoryLogDevice::Create(kSegmentSize);
+    MemoryLogDevice& device_ = *owned_device_.value();
 
     StatusOr<AnalysisResult> Run(Lsn redo_start = 0, Lsn anchor_durable = 0) {
         return Analyze(device_, /*core_id=*/0, AnalysisStart{redo_start, anchor_durable});
@@ -343,7 +348,9 @@ TEST_F(AnalysisTest, ATornTailIsMeteredAndTheRecordsBeforeItStand) {
 
     // Wipe the commit record: the transaction becomes a loser, which is
     // the whole point of a durable commit being the thing that decides.
-    MemoryLogDevice torn(kSegmentSize);
+    auto owned_torn = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(owned_torn.ok());
+    MemoryLogDevice& torn = *owned_torn.value();
     ASSERT_TRUE(torn.CreateSegment(0).ok());
     for (std::size_t i = static_cast<std::size_t>(last_lsn); i < segment.size(); ++i) {
         segment[i] = std::byte{0};

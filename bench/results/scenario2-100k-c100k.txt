@@ -1,0 +1,71 @@
+created 8 relations with suffix _083817:
+  organizations_083817
+  ships_083817
+  operations_083817
+  cargos_083817
+  fees_083817
+  recipes_083817
+  freights_083817
+  charges_083817
+
+read probe - which of the reads S2-02..S2-04 need does this server take?
+
+  pk lookup           ok
+  capacity aggregate  ok
+  recipe filterscan   ok
+  voyage manifest     ok
+  voyage rollup       ok
+  customer statement  ok
+
+
+ckdbs benchmark - 68 columns, 114235 rows resident, 1 connection
+server 127.0.0.1:15487  table scenario2_083817
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0      62.6     43.1     43.9     46.0    149.6    149.6     149.6     0
+load-organizations        2000         0    1201.9    972.9   1090.4   1130.8   1506.4   2634.1    7785.1     0
+load-ships                 200         0    1126.0    984.8   1063.6   1113.3   1289.5   1510.9    1900.0     0
+load-operations           2000         0    1184.8    967.6   1070.6   1110.8   1376.5   2758.8   11029.8     0
+load-fees                   12         0    1199.4   1107.9   1124.1   1168.1   1386.3   1386.3    1386.3     0
+load-recipes                93         0    1190.0   1006.0   1086.8   1131.5   1717.5   3144.7    3144.7     0
+load-cargos             100000         0    1082.7    833.9    970.9   1011.9   1317.3   2472.6  133910.6     0
+booking                   1500       555    1771.8   1446.0   1587.8   1637.0   2246.9   3523.4   32716.6     0
+cargo-lookup              1500       555      50.8     37.7     47.2     47.9     57.7     75.7    1227.5     0
+credit-lookup             1500       555      44.8     30.3     39.6     40.4     50.9     81.8    1333.0     0
+capacity-read             1500       555      41.9     28.5     38.3     39.2     49.1     71.9     956.8     0
+recipe-read               1500       555      50.4     37.9     47.5     48.2     55.9     68.1    1325.0     0
+freight-insert            1500       555      45.7     30.1     39.0     39.6     47.9     74.6    2331.9     0
+charge-insert             8430     3,120      36.0     23.3     33.4     33.9     38.7     60.8    2047.1     0
+operation-update          1500       555      39.8     29.1     37.9     38.3     43.3     53.5     775.4     0
+org-update                1500       555      39.3     26.5     36.2     36.7     45.4     60.0    1369.7     0
+commit                    1500       555    1169.5    939.7   1028.1   1062.6   1412.9   2452.6   32070.0     0
+manifest-scan               60        22     152.9     26.6     27.7     72.8    804.3   1986.7    1986.7     0
+voyage-rollup               60        22     115.9     28.0     29.5     75.3    114.2   1193.4    1193.4     0
+customer-statement          30        11     364.2     28.6     31.6    294.9   1227.8   1338.1    1338.1     0
+
+  ddl: 8 relations
+  booking: BEGIN/COMMIT, capacity=cached, 1 booker, contended
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+bookings
+  committed                 1500       555.2 TPS
+  rejected-capacity            0        0.0% of attempts
+  rejected-credit              0        0.0% of attempts
+  conflicted                   0          0 retries
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              1, contended (shared voyages and customers)
+  cargo pool left      98500
+
+  manifest reporter    3 passes, 150 reads, 16 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+verify (§4)          100 checks, 0 failure(s)
+  I1 booked_cbm == SUM(freights.cbm), I2 within ship capacity,
+  I3 outstanding == recomputed charges, I4 charge rows == rules
+
+  wrote /home/cdkbs/ckdbs/.claude/worktrees/fix-undo-record-asserts/bench/results/scenario2-100k-c100k.json

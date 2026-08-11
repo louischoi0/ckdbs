@@ -1,6 +1,7 @@
 #include "kds/wal/log_scanner.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -61,7 +62,11 @@ struct Collected {
 
 class LogScannerTest : public ::testing::Test {
 protected:
-    MemoryLogDevice device_{kSegmentSize};
+    // Construction is fallible and behind a factory, so the fixture holds
+    // the owner and hands the tests the reference they already used.
+    StatusOr<std::unique_ptr<MemoryLogDevice>> owned_device_ =
+        MemoryLogDevice::Create(kSegmentSize);
+    MemoryLogDevice& device_ = *owned_device_.value();
 };
 
 // ---- 1. Round trip, including across a roll ------------------------------
@@ -156,7 +161,9 @@ TEST_F(LogScannerTest, ATornTailStopsCleanlyAtEveryByteOffsetOfTheLastRecord) {
     Lsn last_lsn = 0;
     std::uint64_t last_len = 0;
     {
-        MemoryLogDevice device(kSegmentSize);
+        auto owned = MemoryLogDevice::Create(kSegmentSize);
+        ASSERT_TRUE(owned.ok());
+        MemoryLogDevice& device = *owned.value();
         auto stream = WalStream::Open(&device, 0);
         ASSERT_TRUE(stream.ok());
         for (int i = 0; i < 4; ++i) {
@@ -173,7 +180,9 @@ TEST_F(LogScannerTest, ATornTailStopsCleanlyAtEveryByteOffsetOfTheLastRecord) {
     ASSERT_GT(last_len, 0u);
 
     for (std::uint64_t cut = 1; cut <= last_len; ++cut) {
-        MemoryLogDevice device(kSegmentSize);
+        auto owned = MemoryLogDevice::Create(kSegmentSize);
+        ASSERT_TRUE(owned.ok());
+        MemoryLogDevice& device = *owned.value();
         ASSERT_TRUE(device.CreateSegment(0).ok());
         // Everything up to the last record, plus `last_len - cut` of it.
         std::vector<std::byte> truncated = good_segment;

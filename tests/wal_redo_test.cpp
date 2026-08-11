@@ -1,6 +1,7 @@
 #include "kds/wal/redo.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,7 +43,11 @@ std::vector<std::byte> Bytes(std::size_t n, unsigned char fill) {
 
 class RedoTest : public ::testing::Test {
 protected:
-    MemoryLogDevice device_{kSegmentSize};
+    // Construction is fallible and behind a factory, so the fixture holds
+    // the owner and hands the tests the reference they already used.
+    StatusOr<std::unique_ptr<MemoryLogDevice>> owned_device_ =
+        MemoryLogDevice::Create(kSegmentSize);
+    MemoryLogDevice& device_ = *owned_device_.value();
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
 
     // Appends PAGE_INIT for a heap page plus `n` tuple inserts, and returns

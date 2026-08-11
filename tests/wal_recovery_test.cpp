@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -58,7 +59,11 @@ public:
 
 class RecoveryTest : public ::testing::Test {
 protected:
-    MemoryLogDevice device_{kSegmentSize};
+    // Construction is fallible and behind a factory, so the fixture holds
+    // the owner and hands the tests the reference they already used.
+    StatusOr<std::unique_ptr<MemoryLogDevice>> owned_device_ =
+        MemoryLogDevice::Create(kSegmentSize);
+    MemoryLogDevice& device_ = *owned_device_.value();
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
 
     // PAGE_INIT + one insert under `txn_id`, then `terminal` if it is not

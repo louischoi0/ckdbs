@@ -709,3 +709,180 @@ allocates for real even where `posix_fallocate` is unsupported).
   unwritten-extent conversion plus timestamp metadata inside the commit-path
   fsync, and it did not need `docs/observability.md`'s instrumentation to
   find, only `strace -T` on the live server.
+
+---
+
+# 2026-08-11: a 20× cargo book, on a machine that was not quiet
+
+A second run of the same freight workload with the cargo relation grown from
+5,000 rows to **100,000**, asking one question the 2026-08-07 run above could
+not: does a booking get slower when the book it searches gets bigger?
+
+**The answer is no, and that is the only strong finding here.** Everything
+else in this section is weaker than the section above it, for two reasons
+stated before any number is quoted, because both decide how the numbers may
+be read.
+
+## Two limits on everything below
+
+**1. Another benchmark shared the machine.** A second worktree
+(`feat-order-by`) compiled and ran its own driver on this 2-core box during
+the matrix. Its windows, from its artefacts' mtimes: compiles at 07:14-07:22,
+08:00-08:03 and 08:09-08:10, and driver runs at 07:32:29-07:41:28 and
+08:31:31-08:35:16. Four of the twelve cells overlap one of those windows and
+are marked `*` throughout this section. This is the same interference the
+2026-08-07 run documents as producing a 34% spread, and it is why no row here
+is called a regression.
+
+**2. There is no PostgreSQL comparison, and none can be taken on this host.**
+PostgreSQL is not installed, there is no container runtime, and `sudo`
+requires a password that is not available — so `tools/pg_setup.sh` cannot run.
+Every twin cell is **not executed**. The 2026-08-07 PG numbers are *not*
+carried down into this section: they were measured on different hardware and
+would not be a comparison for this run.
+
+For the same reason, **no delta against the 5,000-cargo run above is a clean
+engine delta**. That run was Amazon EBS gp3 / amzn2023 / gcc 11.5.0; this one
+is Azure / Ubuntu 24.04 / gcc 13.3.0 on 2 cores. Different device, different
+compiler. Only within-section comparisons mean anything.
+
+## The run
+
+| | |
+|---|---|
+| executed | **2026-08-11 07:36:08 → 08:42:49 UTC** |
+| worktree / branch | `fix-undo-record-asserts` / `worktree-fix-undo-record-asserts` |
+| **commit measured** | **`c500d4a`** |
+| **why not `main`** | `main` at `393b5a4` **does not compile.** `c09353e` (RC06/RV10) was committed unbuilt and left five compile errors; `a00c727`, `ee2250a` and `393b5a4` all inherited that tree. `c500d4a` repairs exactly those five, none behaviour-changing. There is no way to measure `main` itself |
+| device | `/dev/root`, 243G free — a real block device, not tmpfs |
+| build | `-DCMAKE_BUILD_TYPE=Release` (`-O3 -DNDEBUG`), gcc 13.3.0 |
+| host | Azure, **2 cores**, Ubuntu 24.04 |
+| KDS server | `cores = 1`, durability `group`, all other keys default |
+| PostgreSQL | **not installed — every twin cell not executed** |
+| client | one connection, one booker, Python driver |
+| scale | 2,000 organizations, 200 ships, 2,000 voyages, **100,000 cargos** |
+| work | `--bookings 1500 --seed 1 --verify 25`, identical in every cell |
+| isolation | fresh server **and** fresh data file per configuration |
+
+Every cell committed exactly 1,500 bookings and 8,430 charge rows — 5.620
+fees per booking — with **0 failed, 0 conflicted and 0 retries** in all
+twelve. The workload itself is not in question; only the timings are.
+
+## The options matrix
+
+`*` marks a cell that overlapped the other benchmark. "vs base" is against
+the mean of the two **uncontaminated** baseline replicates, 568.8 TPS.
+
+| # | configuration | KDS TPS | vs base | reading |
+|---|---|---:|---:|---|
+| 1a | **baseline** (`c100k`) | 555.2 | −2.4% | clean |
+| 1b | **baseline**, repeated (`base3`) | **582.4** | +2.4% | clean |
+| 1c | baseline, repeated `*` | 547.1 | −3.8% | contended |
+| 1d | baseline, repeated `*` | 536.3 | −5.7% | contended |
+| 2 | `waystone_recording = off` `*` | 550.6 | −3.2% | contended — unreadable |
+| 3 | `--cabin` | 526.5 | −7.4% | clean, but see below |
+| 4 | `--fk` | 518.7 | −8.8% | clean, but see below |
+| 5 | `--capacity-mode scan` | 513.8 | −9.7% | clean, but see below |
+| 6 | `--isolation repeatable-read` | 492.7 | −13.4% | clean, but see below |
+| 7 | **`--no-txn`** | **95.7** | **−83.2%** | **real: 5.9×** |
+| — | `--isolation repeatable-read`, 2nd run | — | — | **not executed** (aborted, 0-byte file) |
+
+**Only row 7 can be called.** The two clean baseline replicates are 555.2 and
+582.4 — themselves **4.8% apart** — so with n=2 there is no usable noise
+floor, and rows 3 through 6 sit between 7% and 13% below base against a floor
+that could plausibly be 5% or more. They are all *below* base and in a
+suggestive order, but this run cannot separate them from the machine. Calling
+`repeatable-read` a 13% regression on this evidence would be reporting the
+box, not the engine.
+
+Row 7 is 5.9× and needs no floor to be believed: under `--no-txn` each of the
+nine statements becomes its own transaction and therefore its own fsync,
+exactly as the 2026-08-07 run found (there, 3.3×). Booking mean goes 1,799 µs
+→ 10,419 µs.
+
+## The baseline distribution
+
+Cell 1a, the clean 100K baseline. Microseconds.
+
+| statement | ops | mean | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| cargo-lookup | 1,500 | 55.3 | 41.8 | 47.9 | 49.0 | 60.6 | 115.5 |
+| credit-lookup | 1,500 | 49.1 | 30.8 | 39.9 | 41.2 | 52.6 | 103.0 |
+| capacity-read | 1,500 | 42.9 | 28.4 | 38.4 | 39.6 | 52.9 | 87.1 |
+| recipe-read | 1,500 | 50.1 | 38.2 | 47.4 | 48.4 | 59.1 | 77.1 |
+| freight-insert | 1,500 | 46.8 | 30.5 | 38.9 | 39.7 | 49.4 | 129.4 |
+| charge-insert | 8,430 | 37.2 | 23.2 | 32.8 | 33.6 | 42.2 | 78.1 |
+| operation-update | 1,500 | 41.8 | 29.1 | 37.5 | 38.3 | 46.6 | 69.4 |
+| org-update | 1,500 | 41.4 | 26.5 | 36.0 | 36.8 | 47.5 | 75.4 |
+| **commit** | 1,500 | **1,167.5** | **945.6** | **1,045.4** | **1,089.1** | 1,332.7 | **2,282.1** |
+| whole booking | 1,500 | 1,799.0 | 1,419.0 | 1,609.4 | 1,671.2 | 2,462.7 | 3,875.5 |
+
+## Where a booking spends its time
+
+| wait type | KDS µs | share |
+|---|---:|---:|
+| **durability wait** (`COMMIT`, one fsync) | **1,167.5** | **64.9%** |
+| write-statement wait (1 + 5.620 inserts, 2 updates) | 339.1 | 18.8% |
+| read wait (4 statements) | 197.4 | 11.0% |
+| client, framing and `BEGIN` (residual) | 95.0 | 5.3% |
+| **whole booking** | **1,799.0** | 100% |
+
+The commit's share is **64.9%** here against 50.1% in the 5,000-cargo run —
+but that is a different device, and the honest reading is not "the commit got
+worse". It is that every *other* part got cheaper (eight statements totalling
+536 µs against 1,565 µs) while the fsync did not, so the same fixed cost
+occupies more of a smaller booking. The finding the 2026-08-07 section
+states — half a booking waits for one fsync — is *more* true here, not less.
+
+## What a 50× larger cargo book changes: nothing a statement can see
+
+The ladder, all at `--bookings 1500`, everything but `--cargos` held equal.
+p50 microseconds.
+
+| statement | 2,000 cargos `*` | 10,000 | 100,000 |
+|---|---:|---:|---:|
+| cargo-lookup | 47.0 | 47.5 | **47.9** |
+| credit-lookup | 40.5 | 40.3 | 40.4 |
+| capacity-read | 39.4 | 39.0 | 39.2 |
+| recipe-read | 48.0 | 48.0 | 48.2 |
+| freight-insert | 39.8 | 39.5 | 39.6 |
+| charge-insert | 33.7 | 33.6 | 33.9 |
+| operation-update | 38.3 | 38.2 | 38.3 |
+| org-update | 36.7 | 36.8 | 36.7 |
+| commit | 1,174.6 | 1,212.9 | 1,062.6 |
+
+**`cargo-lookup` moves 47.0 → 47.9 µs while the relation it descends grows
+50×.** That is 1.9% for a 50-fold size increase, and every other statement is
+flat to within its own noise. This is the clustered btree doing exactly what
+it exists for: the descent is O(log n) over a tree whose fanout is large
+enough that 2,000 and 100,000 rows differ by a fraction of a level, and the
+0.9 µs is consistent with that fraction.
+
+**The contamination does not threaten this conclusion, and the direction of
+the error is why.** The `2,000` column is the contended one, so contention
+can only have made it *slower*; it is nonetheless the **fastest** column. A
+clean 2,000-cargo run would be at or below 47.0, which widens the already
+tiny gap in the same direction rather than reversing it. Interference adds
+noise — it does not manufacture a flat line across nine statements and three
+sizes.
+
+The consequence for this workload is that **size is not where its time goes,
+and growing the book will not change that**. A booking at 100,000 cargos
+spends 64.9% of itself waiting for one fsync and 1.9% more than a 2,000-cargo
+booking on the lookup that got 50× more data to search. Anything that wants
+this workload faster has to attack the durability point; nothing about the
+relation sizes is on the table.
+
+## What this section does not answer
+
+- **Whether the Cabin, the foreign keys, `scan` mode or `repeatable-read`
+  cost anything.** Rows 3-6 are all clean cells and all below base, but the
+  two clean baseline replicates disagree by 4.8% and n=2 supports no floor.
+  This needs a re-run with three or more baseline replicates **on an idle
+  machine** before any of the four can be quoted.
+- **What `waystone_recording = off` costs.** Its cell was contended; it is
+  not reported as a number at all.
+- **Anything about PostgreSQL.** Not installed, not installable here.
+- **Whether the commit's 1,167 µs has the same composition** as the second
+  millisecond the 2026-08-07 section found and removed. Not investigated;
+  `strace -T` on the live server is the tool that answered it before.
