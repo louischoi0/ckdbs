@@ -370,6 +370,22 @@ struct Step {
     // every other kind.
     std::optional<IndexProbe> index;
 
+    // Emit each page's rows in pk order rather than in slot order.
+    //
+    // A walk hands the executor a page's slots in slot order, which *is* pk
+    // order whenever ids were issued monotonically: each new id is appended
+    // above every id already on the page. A caller-supplied id
+    // (docs/heap-and-tuple.md §4.1) can be appended below them, so on a
+    // kExplicit relation the two orders diverge - within one page only, since
+    // pages stay key-ordered by `min_key` either way.
+    //
+    // Set only where both halves are true: the statement asked for pk order,
+    // and the relation is one whose slots can be out of it. Everything else
+    // keeps the walk untouched, because the sort is not free - it reads every
+    // live slot's Keystone word up front, where the natural walk reads one
+    // per emitted row.
+    bool emit_in_key_order = false;
+
     // The columns this step's kind was assigned for, in schema order:
     // the filtered columns for kFilterScan, the pk for kLookup/kProbe/
     // kRange, empty for a bare kScan.

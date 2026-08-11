@@ -1,6 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <optional>
 #include <string>
 #include <vector>
@@ -151,29 +152,99 @@ TEST_F(KeyModeSqlTest, ARangeScanIsCorrectAfterDescendingInserts) {
     EXPECT_EQ(ranged.response.find("60,60"), std::string::npos) << ranged.response;
 }
 
-TEST_F(KeyModeSqlTest, OrderByIsRefusedOnAnExplicitRelation) {
+// The ids a reply's rows carry, in the order they were emitted. Rows are
+// "id,qty" lines separated by the dispatcher's escaped newline.
+std::vector<std::uint64_t> EmittedIds(const std::string& response) {
+    std::vector<std::uint64_t> ids;
+    for (std::size_t i = 0; i < response.size();) {
+        const std::size_t line_end = std::min(response.find("\\n", i), response.size());
+        const std::size_t comma = response.find(',', i);
+        if (comma != std::string::npos && comma < line_end) {
+            const std::string digits = response.substr(i, comma - i);
+            if (!digits.empty() &&
+                std::all_of(digits.begin(), digits.end(),
+                            [](unsigned char c) { return std::isdigit(c) != 0; })) {
+                ids.push_back(std::stoull(digits));
+            }
+        }
+        i = line_end + 2;
+    }
+    return ids;
+}
+
+TEST_F(KeyModeSqlTest, OrderByEmitsKeyOrderOnAnExplicitRelation) {
     auto d = Dispatcher();
     CreateExplicit(d);
+
+    // Descending inserts put a page's slots deliberately out of key order:
+    // each id is appended *below* everything already on the page, which is
+    // the case an engine-issued sequence can never produce.
+    const int kRows = 250;
+    for (int id = kRows; id >= 1; --id) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
+                             std::to_string(id) + ")")
+                      .response.substr(0, 8),
+                  "INSERTED");
+    }
+
+    auto ordered = d.Dispatch("SELECT * FROM t ORDER BY id");
+    ASSERT_NE(ordered.response.substr(0, 3), "ERR") << ordered.response;
+
+    std::vector<std::uint64_t> ids = EmittedIds(ordered.response);
+    ASSERT_EQ(ids.size(), static_cast<std::size_t>(kRows)) << ordered.response;
+    EXPECT_TRUE(std::is_sorted(ids.begin(), ids.end()))
+        << "ORDER BY returned the right rows in the wrong order";
+    EXPECT_EQ(ids.front(), 1u);
+    EXPECT_EQ(ids.back(), static_cast<std::uint64_t>(kRows));
+}
+
+TEST_F(KeyModeSqlTest, OrderByWithLimitTakesTheLowestKeysNotTheFirstSlots) {
+    auto d = Dispatcher();
+    CreateExplicit(d);
+
+    // The case a per-page sort has to get right and a naive one would not:
+    // LIMIT stops the walk part-way through a page, so the page's rows must
+    // already be in key order when the quota fills - not merely sorted after
+    // the fact.
+    const int kRows = 250;
+    for (int id = kRows; id >= 1; --id) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES (" + std::to_string(id) + ", " +
+                             std::to_string(id) + ")")
+                      .response.substr(0, 8),
+                  "INSERTED");
+    }
+
+    auto page1 = d.Dispatch("SELECT * FROM t ORDER BY id LIMIT 5");
+    ASSERT_NE(page1.response.substr(0, 3), "ERR") << page1.response;
+    EXPECT_EQ(EmittedIds(page1.response), (std::vector<std::uint64_t>{1, 2, 3, 4, 5}))
+        << page1.response;
+
+    // And OFFSET walks that same order rather than a slot order.
+    auto page2 = d.Dispatch("SELECT * FROM t ORDER BY id LIMIT 5 OFFSET 5");
+    ASSERT_NE(page2.response.substr(0, 3), "ERR") << page2.response;
+    EXPECT_EQ(EmittedIds(page2.response), (std::vector<std::uint64_t>{6, 7, 8, 9, 10}))
+        << page2.response;
+}
+
+TEST_F(KeyModeSqlTest, OrderByStillWorksOnAnAssignedRelation) {
+    auto d = Dispatcher();
     CreateAssigned(d);
 
-    // `ORDER BY <pk>` is compiled away on the standing claim that the walk
-    // already emits in pk order (exec/step_compiler.cpp §5a). That claim
-    // rests on ids being appended *above* every id already on the page,
-    // which is exactly what a caller-supplied id need not do - so on an
-    // EXPLICIT relation a page's rows can come out unsorted, and a clause
-    // that was discarded as a no-op would silently become a wrong answer.
-    //
-    // Refused instead. The alternative - sorting each page's rows at
-    // emission - changes the walk's streaming shape and is deliberately not
-    // part of this amendment.
-    auto refused = d.Dispatch("SELECT * FROM t ORDER BY id");
-    EXPECT_EQ(refused.response.substr(0, 3), "ERR") << refused.response;
-    EXPECT_NE(refused.response.find("byte "), std::string::npos) << refused.response;
+    // The path that was always sound: an engine-issued id is appended above
+    // every id on the page, so slot order *is* key order and the walk is
+    // left untouched. This is the regression guard for that - the per-page
+    // sort must not have become the only correct path.
+    for (int k = 1; k <= 50; ++k) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO a VALUES (" + std::to_string(k) + ")")
+                      .response.substr(0, 8),
+                  "INSERTED");
+    }
 
-    // Unchanged where the premise still holds: an engine-issued sequence is
-    // appended in order, so the walk really does emit in pk order.
-    auto allowed = d.Dispatch("SELECT * FROM a ORDER BY id");
-    EXPECT_NE(allowed.response.substr(0, 3), "ERR") << allowed.response;
+    auto ordered = d.Dispatch("SELECT * FROM a ORDER BY id");
+    ASSERT_NE(ordered.response.substr(0, 3), "ERR") << ordered.response;
+    std::vector<std::uint64_t> ids = EmittedIds(ordered.response);
+    ASSERT_EQ(ids.size(), 50u);
+    EXPECT_TRUE(std::is_sorted(ids.begin(), ids.end()));
 }
 
 TEST_F(KeyModeSqlTest, InterleavedAscendingAndDescendingKeysAllLand) {

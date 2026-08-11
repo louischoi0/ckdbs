@@ -3,7 +3,8 @@
 The engine-wide list of what is missing, what does not survive a restart,
 and what the code does differently from what a spec or older doc claims.
 Verified against code 2026-08-10; the "Storage and key modes" section and
-the `ORDER BY` entry added 2026-08-11 with the `EXPLICIT` key mode. Each
+the `ORDER BY` entry added and then closed on 2026-08-11 with the
+`EXPLICIT` key mode. Each
 entry names the owning doc — the full argument and any workplan live
 there, not here. Manuals link here instead of carrying their own copies.
 
@@ -127,19 +128,17 @@ There is no purge pass, and readers are deliberately unregistered
   `ORDER BY` accepts the primary key alone (a validated no-op) and no
   `DESC`; there are no cursors, and KWP/1 portal suspension is still
   unbuilt — only the frame codec exists (`docs/protocol.md`).
-- **`ORDER BY <pk>` no longer means key order on an `EXPLICIT` relation**
-  (found 2026-08-11, `docs/heap-and-tuple.md` §4.1). The clause is
-  validated and discarded because "pk order is the order the chain
-  already emits" — true while every id was appended in ascending order,
-  and false once a caller names them: a walk emits a page's slots in slot
-  order (`RunWalkStep`, `src/exec/step_vm.cpp`), and an explicit
-  relation's slots need not be in key order. Ordering **across** pages
-  survives, since page-wise `min_key` ordering is preserved by a leaf
-  division, so the disorder is bounded by one page. Nothing tests
-  emission order on such a relation. `LIMIT`/`OFFSET` is unaffected — it
-  is a prefix of the emitted order, whatever that order is. Closing it
-  means either sorting a page at emission or refusing `ORDER BY` on
-  `EXPLICIT` relations; neither is decided.
+- ~~**`ORDER BY <pk>` no longer means key order on an `EXPLICIT`
+  relation**~~ — **closed 2026-08-11.** The clause used to be validated and
+  discarded, on the claim that "pk order is the order the chain already
+  emits": true while every id was appended in ascending order, and false
+  once a caller names them. The fix is a **per-page emission order**, not an
+  output sort, because the disorder was bounded by one page — ordering
+  *across* pages was never at risk, since a leaf division preserves
+  page-wise `min_key` ordering. `Step::emit_in_key_order` is set only when
+  the statement asked for pk order *and* the relation is `EXPLICIT`; the
+  walk is untouched everywhere else. Covered by emission-order tests,
+  including under `LIMIT`/`OFFSET`.
 - **`IN (value list)`** is unbuilt — the open half of parser workplan V08;
   it currently reports "expected a subquery".
 - **Per-transaction durability class** is a KWP/1 protocol field; the text

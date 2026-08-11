@@ -515,15 +515,12 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   compile — pk order is the free order and the only one). `ASC` is the
   accepted no-op spelling; **`DESC` answers `Unsupported`** — every chain
   links forward only, and a reverse walk does not exist.
-- **On an `EXPLICIT` relation, `ORDER BY <pk>` is weaker than it reads.**
-  It is accepted and discarded, on the standing claim that emission is
-  already pk order — which holds *across* pages but not *within* one:
-  rows are emitted in slot order, and a caller-named key lands wherever
-  it was inserted rather than where it sorts. So a result may be out of
-  key order by up to one page's worth of rows. This is a recorded gap
-  (`docs/known-gaps.md`), not a decided behaviour; sort client-side if
-  you need the order. `LIMIT`/`OFFSET` is unaffected — it is a prefix of
-  whatever order the statement emits.
+- `ORDER BY <pk>` means the same thing on an `EXPLICIT` relation as
+  anywhere else. It costs slightly more there: a caller-named key lands in
+  the slot it was inserted into rather than the one it sorts to, so the
+  engine emits each page's rows in key order instead of slot order. The
+  ordering is exact, not approximate, and `LIMIT`/`OFFSET` page through it
+  normally. The extra work is done only when the clause is present.
 - The tail is refused over an aggregated statement (groups emit in fold
   order, which is not a contract) and inside a subquery, each with a
   byte position.
