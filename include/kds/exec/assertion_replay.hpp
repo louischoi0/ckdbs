@@ -29,15 +29,18 @@
 // the type byte), which is general recovery's record, not an assertion one.
 // This fold assumes the envelope's page exists and is formatted.
 //
-// **Where replay starts.** A directory folded from records needs the records
-// from the cabin's birth - the ASSERT_BUILD run - not merely from the last
-// checkpoint, because nothing durable holds the group headers a
-// checkpoint-bounded replay would have to start from. Closing that needs the
-// checkpoint to persist the directory (or recovery to start assertion replay
-// at each cabin's build), and **no milestone owns it**, the same way nothing
-// owns single-core recovery itself (docs/workplan-crosscore.md P2's fourth
-// bullet). This fold is correct for whatever record range the caller feeds
-// it; the range question is recovery's, recorded rather than solved here.
+// **Where replay starts** - decided, and still not this file's business.
+// A directory folded from records needs a durable base to fold onto, and
+// until 2026-08-11 nothing held one, so the fold would have had to start at
+// the cabin's birth. `feat-assertion.md` **AS6a** settles it: the checkpoint
+// snapshots each cabin's group headers, every entry carries a `group_id` so
+// the header->entry linkage is rebuilt from the cabin's own pages, and replay
+// folds from the last checkpoint forward. `docs/workplan-wal-recovery.md`
+// RC07 builds that.
+//
+// **None of it changes this fold.** It was written correct for whatever
+// record range the caller feeds it, and AS6a decides the range - so RC07
+// supplies a base and a narrower range, and calls exactly what is here.
 //
 // ---- The skip rule --------------------------------------------------------
 //

@@ -180,15 +180,21 @@ are append-only additions the day a measurement asks.
 whole, page half included* — after ASSERT_DROP the cabin's pages are freed
 and may be reused, so touching one would corrupt an unrelated page.
 
-**One finding, recorded rather than solved: the checkpoint-genesis gap.**
+**One finding, recorded rather than solved at AST05: the checkpoint-genesis
+gap. Answered 2026-08-11 — see `feat-assertion.md` AS6a.**
 A directory folded from records needs the records from the cabin's birth
 (the ASSERT_BUILD run), not merely from the last checkpoint, because
 nothing durable holds the group headers a checkpoint-bounded replay would
-start from — AS5's "not a separate store" has this as its price. Closing it
-means the checkpoint persists the directory, or assertion replay starts at
-each cabin's build; **no milestone owns that**, the same way nothing owns
-single-core recovery itself, and the fold is correct for whatever record
-range recovery eventually feeds it.
+start from — AS5's "not a separate store" has this as its price. The
+resolution is the first of the two options, amended: the checkpoint
+persists the directory as **headers only**, and the **entry gains a
+`group_id`** so the header→entry linkage is rebuilt from the cabin's pages
+rather than persisted — without which the snapshot would be O(all entries)
+per checkpoint, because a header's entry-list grows once per checked write
+and `Unapply` refuses a pair it cannot find. `docs/workplan-wal-recovery.md`
+RC07 owns the build. **The fold in `exec/assertion_replay.hpp` is
+unchanged** and remains correct for the record range recovery feeds it;
+what AS6a settles is the range, not the fold.
 
 **The gated half, registered as follow-ups.** The S-2 crash matrix
 (crash before/after each record type at every boundary) — the harness does

@@ -51,6 +51,7 @@ and correct.
 | AS4 | Reservation protocol combined with home-core group-key serialization. No latches, no waiting, no deadlock. |
 | AS5 | No separate counter store. The Bound Cabin is the single structure: entries plus a per-group running aggregate maintained in the group directory header. Checks are computed against the Cabin in real time on the write path. |
 | AS6 | Bound Cabin is a **logged, headered authority class** (same durability tier as the var-heap (V3) and unique indexes (U5)). Prerequisite: the Cabin class split defined in §5. |
+| AS6a | **Decided 2026-08-11.** Where assertion replay starts: a **per-checkpoint snapshot of the group headers** (`{group_id, key, count, sum}`), folded forward with `ASSERT_*` records **from the last checkpoint** — never from the cabin's birth, which would make RTO a function of the assertion's lifetime and make WAL retention a correctness setting. Every entry carries its `group_id` (§5.1) so the header→entry linkage is rebuilt from the cabin's own pages instead of persisted. Narrows AS5's "not a separate store" to "not a separate authority". Full statement and costs: §7. Owned by `docs/workplan-wal-recovery.md` RC07. |
 | AS7 | `CREATE ASSERTION` performs a full scan of the target relation to build the Bound Cabin and initial aggregates. Any existing violation fails the CREATE and discards the build. `NOT VALID` is reserved grammar, `Unsupported` in v1. |
 | AS8 | v1 assertions target exactly one relation. Multi-relation assertions: `Unsupported` (blocked on cross-core write / 2PC, which is itself reserved). |
 | AS9 | A violation is a **statement error** (transaction survives), consistent with AG3 overflow semantics. New Status code `AssertionViolation`; the error carries the assertion name and the violating group key. |
@@ -217,10 +218,25 @@ shared lookup machinery but different lifecycle contracts:
 | reserved | 16 bit | alignment / future |
 | location hint: page id / epoch / slot | 64 bit | advisory; shares Waystone validation rules; on hint failure fall back to pk descent and heal in place |
 | aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For COUNT-only assertions this field is written as 1. |
+| `group_id` | 32 bit | **AS6a.** Which group of this cabin the entry belongs to. Authoritative, not advisory: it is what lets recovery rebuild the header→entry linkage by scanning the cabin's own pages. |
 | padding | — | to 32 B |
 
 Exact bit packing is an implementation detail of AST04; the normative facts
-are: fixed 32 B, pk authoritative, hint advisory, value inline.
+are: fixed 32 B, pk authoritative, hint advisory, value inline, `group_id`
+authoritative.
+
+`group_id` occupies the first 4 bytes of what AST04 shipped as padding and
+wrote as a literal zero, so the 32 B width is unchanged. **An id and not a
+group-key hash**, and the difference is correctness rather than taste:
+`HashGroupKey` is a mixing function whose collisions are expected and are
+resolved by confirming the stored key (§5.2), and an entry carries no key —
+so an entry holding only a hash could not be attributed between two colliding
+groups. An id makes attribution exact and removes the collision question from
+the recovery path.
+
+Ids are **dense per cabin**, assigned at group creation, never reused while
+the cabin lives; `DROP ASSERTION` releases the whole space with the cabin
+(§8.3).
 
 ### 5.2 Group directory and running aggregate
 
@@ -235,9 +251,12 @@ Admission checks read only the group header: **O(1)**, no entry iteration.
 Entries exist for violation diagnostics, repair/verification (re-summation),
 and future extension; they are not on the check hot path.
 
-The running aggregate is not a separate store (AS5): it is a field of the
-Cabin group header, recovered by WAL replay and verifiable against the entry
-list.
+The running aggregate is not a separate **authority** (AS5): it is a field of
+the Cabin group header, recovered by WAL replay and verifiable against the
+entry list. AS6a narrows AS5's original wording — the directory does acquire a
+durable form, a per-checkpoint snapshot — but the narrowing is only of the
+word "store": the entries remain the authority, the snapshot is a derived
+cache, and `VerifyAgainstEntries` is what proves one against the other.
 
 ### 5.3 One Bound Cabin per assertion
 
@@ -309,16 +328,57 @@ by this protocol.
 - Recovery: replay restores group headers and entries exactly; in-flight
   (uncommitted) reservations at crash are rolled back by normal transaction
   recovery via `ASSERT_ROLLBACK` compensation. The constraint is enforceable
-  immediately at restart — **no rebuild scan, no enforcement gap**.
+  immediately at restart — **no rebuild scan, no enforcement gap**. "No
+  rebuild scan" means no re-scan of the *relation*, which is what AS7's
+  CREATE-time build costs; AS6a's linkage rebuild reads the cabin's own
+  pages, whose size is the assertion's entry count and not the table's.
 
-  > **[GAP, found at AST05 (2026-08-09).]** The directory fold needs the
-  > records from the cabin's birth, not merely from the last checkpoint:
-  > nothing durable holds the group headers a checkpoint-bounded replay
-  > would start from, which is AS5's "not a separate store" carrying a
-  > price. Either the checkpoint persists the directory or assertion replay
-  > starts at each cabin's `ASSERT_BUILD`; no milestone owns the choice —
-  > recovery itself is unowned — and `exec/assertion_replay.hpp` is correct
-  > for whatever record range recovery eventually feeds it.
+  > **AS6a — where assertion replay starts. Decided 2026-08-11; closes the
+  > gap found at AST05 (2026-08-09).** Owned by
+  > `docs/workplan-wal-recovery.md` RC07.
+  >
+  > **The rule.** A Bound Cabin's group directory is made durable by a
+  > **per-checkpoint snapshot of its group headers** —
+  > `{group_id, key, count, sum}`, O(groups) — and assertion replay folds
+  > `ASSERT_*` records **from the last checkpoint forward**, never from the
+  > cabin's birth. Every entry carries the `group_id` of its group (§5.1),
+  > so the header→entry linkage is rebuilt by scanning the cabin's own
+  > pages rather than persisted.
+  >
+  > **Recovery order.** Ordinary redo restores the entry pages → the
+  > snapshot is loaded → the cabin's pages are scanned and bucketed by
+  > `group_id`, rebuilding the linkage → `ASSERT_*` records are folded from
+  > the checkpoint forward. Bounded by the cabin's own pages: not by the
+  > relation, and not by the log.
+  >
+  > **Why not the other option.** Starting replay at each cabin's
+  > `ASSERT_BUILD` makes RTO a function of the assertion's lifetime, but the
+  > disqualifier is not speed — it makes correctness depend on the WAL never
+  > recycling the segment holding that record. `wal.md` §13 lists retention
+  > as ordinary operational configuration, and a retention setting that
+  > silently becomes a correctness setting is the wrong coupling to ship.
+  >
+  > **Why the snapshot is headers-only, and why the entry had to change.**
+  > A header's entry-list is not O(groups): `BoundCabin::Apply` and
+  > `ApplyDeparture` append one `(page_id, index)` pair per checked write
+  > and only ever remove one on abort, so the linkage is O(all writes,
+  > forever). It cannot simply be dropped from the snapshot either —
+  > `Unapply` answers `NotFound` when the pair is absent, so a reservation
+  > made before a checkpoint and rolled back after it would fail the mount.
+  > Persisting the linkage would mean writing O(all entries) at every
+  > checkpoint; carrying `group_id` on the entry is what makes it
+  > reconstructible instead, and reduces the snapshot to the group count.
+  >
+  > **What this costs, and why now.** Two persisted formats move: the entry
+  > gains `group_id` in bytes AST04 already writes as zero, and
+  > `AssertEntryPayload` gains the same field so replay never re-derives an
+  > id. Both are free **today** — every entry's padding is zero on every
+  > page in existence, and no WAL stream has ever been read back, which is
+  > the same argument that let RC03's `UNDO_WRITE` correction move without a
+  > format-version event. Once assertions ship, each becomes one.
+  >
+  > **Unchanged:** the write amplification budgeted below, the admission
+  > check, and its O(1) read.
 - Verification: an offline/maintenance check may re-sum entries against group
   headers (hooks into the integrity sweep of the testing harness, S-1).
 

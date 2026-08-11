@@ -37,7 +37,11 @@ the owner's workplan.
 - **The assertion checkpoint-genesis gap** (`docs/feat-assertion.md` §7):
   the group-directory fold needs records from the Bound Cabin's birth, and
   nothing durable holds headers for a checkpoint-bounded replay to start
-  from. Unowned, like recovery itself.
+  from. **Decided 2026-08-11 and now owned** — AS6a gives the checkpoint a
+  headers-only directory snapshot and the entry a `group_id`, so replay
+  folds from the last checkpoint; `docs/workplan-wal-recovery.md` RC07
+  builds it. The gap stays listed until RC07 ships: today a restart still
+  loses every group directory and enforcement does not resume.
 
 ## What a restart loses (without a crash)
 
