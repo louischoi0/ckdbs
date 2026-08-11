@@ -87,6 +87,7 @@ add_library(kds
     src/wal/analysis.cpp
     src/wal/redo.cpp
     src/wal/high_water.cpp
+    src/wal/recovery.cpp
     src/wal/manager.cpp
     src/wal/checkpointer.cpp
     src/wal/log_device.cpp

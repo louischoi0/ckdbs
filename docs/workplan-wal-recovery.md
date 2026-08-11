@@ -1,6 +1,8 @@
 # WAL recovery — workplan
 
-Status: **RC01-RC04 written (unbuilt); RC05 onward not started.** Spec: `docs/wal.md` §12 (normative, and
+Status: **RC01-RC04 and RC04a written (unbuilt); RC05 onward not started.**
+§4's assertion-replay decision is **answered** (AS6a), so RC07 is unblocked;
+§4a records that `origin/main`'s `EXPLICIT` key mode **amended RV6**. Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
@@ -104,10 +106,53 @@ no document currently lists it as a recovery blocker.
 | RV3 | **v1 recovers data, not the catalog.** Catalog and DDL writes are unlogged (`txn.md` §7), so a crash still loses a `CREATE TABLE` and still leaves `sys.tables.next_id` behind the log (K1). Recovery must therefore state its promise as *"every acknowledged commit to a relation that survived is restored"* — and **RC09 must add the counter that says when it did not**, rather than letting the gap read as closed. Logged catalog writes are K-M2a's and stay there. |
 | RV4 | **A hazard RV3 creates, named so it is not discovered:** the superblock's high-water mark is unlogged too, so a crash can revert it while the log still names pages above it. A later allocation could then hand out a page redo has already written. Recovery **must raise the high-water mark to the maximum page id any replayed record names** before the store serves an allocation. Cheap, and it is the difference between a leak and corruption. |
 | RV5 | **Redo is idempotent through `page_lsn` only** (`wal.md` §9): replay iff `record.lsn > page_lsn`. No second mechanism, no per-record sequence numbers. A headerless page is never a replay target (`page.md` §1), which is what keeps Waystone out of recovery entirely. |
-| RV6 | **Undo reuses the abort path verbatim**, as `txn.md` §6 was written to allow: a loser's compensations are ordinary logged mutations, so undo is crash-restartable by RV5's gate alone and needs no undo-next pointer in v1. If a measurement or a proof says otherwise, a CLR is a format-version event and its own decision. |
+| RV6 | **Undo reuses the abort path verbatim**, as `txn.md` §6 was written to allow: a loser's compensations are ordinary logged mutations, so undo is crash-restartable by RV5's gate alone and needs no undo-next pointer in v1. If a measurement or a proof says otherwise, a CLR is a format-version event and its own decision. **Amended 2026-08-11 — "verbatim" no longer holds; see §4a.** |
 | RV7 | **Advisory structures are rebuilt, never replayed.** Waystone pages are unlogged and correct when empty (invariant 8); Observational Cabins declare every value unobserved (`feat-cabin.md` §9); access statistics resume. Recovery touches none of them, and the contract suites are what prove that costs no result. |
 | RV8 | **Bound Cabins are replayed**, because an assertion is authoritative and `feat-assertion.md` §7 promises enforcement at restart *with no gap*. `exec::ReplayAssertionRecord` is the fold; what it needs and does not have is a **record range** — see §4. |
 | RV9 | **The gate flips once, in the harness.** SIM04/SIM11's `[GATED: recovery]` assertions are the acceptance criteria; RC10 enables them and the documented-gap counters' expected values become zero. A recovery whose own tests are written by this workplan rather than inherited from SIM is a recovery graded by its author. |
+
+## 4a. RV6 amended: the abort path grew a parameter recovery cannot supply
+
+**Found 2026-08-11, merging `origin/main` into the recovery line.** The
+`EXPLICIT` key mode landed on main, and with it btree **leaf division** —
+which moves half a leaf's tuples to another page and renumbers the slots of
+the ones that stay. A recorded `(page_id, slot)` is therefore no longer a
+stable address for the life of a row.
+
+`TransactionManager::Abort` was changed for it, and correctly:
+`Compensate` now reads the pk at `(page_id, slot)` and compares it against
+`TrailEntry::pk` before writing a byte, and on a mismatch either asks an
+installed `RowLocator(rel_oid, pk)` for the row's current address or fails
+`Corruption`. Main's own words for why: compensating blindly "is not a
+failed rollback, it is a rollback that corrupts a row it never wrote."
+
+**Recovery cannot make that check as the format stands.** It walks the
+*durable* chain, not the in-memory trail, and `txn::UndoRecordFields`
+carries `target_page_id`, `target_slot`, `type` and the two chain links —
+**no `pk` and no `rel_oid`.** So RC05 can supply neither half: not the
+identity to check, and not the `(rel_oid, pk)` a locator needs. This is the
+same shape as RC03's `UNDO_WRITE` blocker — a fact that lives on the page
+and nowhere in the log — arriving from a different direction.
+
+**Proposed resolution, and it needs no format change.** The pk is already
+in the record: for `kOverwrite` and `kDelete` the before-image *is* the
+prior tuple payload, and `KeystoneIdOfPayload` is what reads an id out of
+one — the same call `Compensate` makes. So recovery's undo can check
+identity from the image itself and, on a mismatch, take the **no-locator
+branch** — refuse the mount rather than guess. That is not a degraded mode;
+it is the branch main already ships as "the safe half of the same rule",
+and it keeps `rel_oid` out of a format that has no room for it.
+
+What it costs: a crash on an `EXPLICIT` relation whose leaf divided
+mid-transaction refuses the mount instead of recovering. Narrow today —
+`EXPLICIT` is refused on heap relations, and only `EXPLICIT` can trigger a
+division mid-statement — and it fails loudly rather than corrupting.
+Lifting it means putting `rel_oid` in the undo record, which is a
+format-version event and RC05's to argue if the refusal proves too broad.
+
+**RC05 must not be written as "call `Abort`".** The abort path's signature
+now has a parameter with no recovery-side implementation, and the identity
+check is the part that matters.
 
 ## 4. Open decisions — surface, do not decide
 
@@ -390,10 +435,60 @@ zeroes over it. The refusals, the monotonicity of the floor and the
 transaction ceiling have their own tests beside it, and **none has been
 executed.**
 
-**RC05 — Undo.**
+**RC04a — The driver, which no task owned. WRITTEN 2026-08-11, NOT BUILT
+OR RUN.** `wal/recovery.hpp` + `src/wal/recovery.cpp`:
+`RecoverCore(device, core_id, store, start, undo)` runs analysis → redo →
+the high-water repair → undo, and returns a `RecoveryReport`.
+
+§2's second item named "an entry point that runs them before the server
+accepts a connection" and attributed it to "RC02-RC05", but no task's
+*Done when* mentioned it, so it was written by nobody and the three phases
+sat as three unconnected functions. This is that entry point. It is
+numbered `04a` rather than given a slot in the series because the series
+is cited elsewhere and renumbering it would break those citations.
+
+Two decisions it had to make:
+
+- **Undo is injected, and its absence refuses the mount.** RC05 is
+  unbuilt, and the tempting shape — run the phases that exist and return
+  success — is not merely incomplete, it is **worse than not recovering**.
+  Redo restores uncommitted writes deliberately, and `txn.md` §8's
+  accepted gap is that a surviving uncommitted row reads as *committed* on
+  the next boot. A driver that replayed and stopped would publish every
+  loser's writes. So `UndoPhase` is an interface, RC05 implements it, and
+  a stream with losers and no phase installed fails `Unsupported` naming
+  RC05. A stream with no losers recovers completely today.
+- **The refusal is taken before redo, not after.** Once redo has run, a
+  mount that then discovers it cannot undo has already put the rows on the
+  pages; the only version of the check that leaves the database as it was
+  found is the one before the first write. The test asserts exactly that —
+  `store.page_count() == 0` after the refusal.
+
+The high-water repair goes **before** undo, because undo writes and RV4's
+rule is "before the store serves an allocation"; a test installs an undo
+phase that allocates and asserts it cannot be handed a page the log names.
+
+Left to the caller, per the layering `analysis.hpp` drew: reading the
+anchor, applying `HighWaterRepair::next_trx_id` to the superblock, looping
+over cores (RV2 — and introducing an order between streams is what
+`workplan-crosscore.md` guideline 3 forbids), RC08's completion checkpoint
+and RC09's report.
+
+*Done when:* a loser with no undo phase refuses and writes nothing; a
+winner recovers with no phase installed; a durable `TXN_ABORT` is not
+treated as a loser; the phase is called exactly when it is owed; running
+the whole driver twice is a no-op. All nine are in
+`tests/wal_recovery_test.cpp` and **none has been executed.**
+
+**RC05 — Undo.** *(read §4a first — RV6's "verbatim" no longer holds)*
+Implements RC04a's `UndoPhase`.
 Roll losers back through their `undo_ptr` chains, emitting compensations
-through the **same** code `TransactionManager::Abort` uses. Then
-`TXN_ABORT`. Depends on RC06 for the insert case.
+through the **same** code `TransactionManager::Abort` uses — with §4a's
+correction: the abort path now checks a row's identity before compensating
+and takes a `RowLocator` recovery cannot supply, so RC05 reproduces the
+*check* from the before-image's own Keystone id and takes the no-locator
+branch on a mismatch. Then `TXN_ABORT`. Depends on RC06 for the insert
+case.
 *Done when:* a loser's UPDATE is restored byte for byte, its DELETE's mark
 cleared, its INSERT's slot retired; a crash *during* undo resumes and
 completes; the live-run and recovered-run page images are compared byte
