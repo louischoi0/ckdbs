@@ -100,16 +100,14 @@ There is no purge pass, and readers are deliberately unregistered
 
 ## Storage and key modes
 
-- **Dividing a full btree *internal* node is not implemented**
-  (`docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` PK09). A
-  full leaf divides (built 2026-08-11 with the `EXPLICIT` key mode), but
-  when the division's separator must be promoted into a parent that is
-  already full, the parent right-splits with no movement — which is sound
-  only when the separator sorts above every separator that node holds.
-  Below it, the insert is refused with `OutOfSpace` naming the gap rather
-  than stranding the subtrees above it. Reaching it needs ~678 leaf
-  divisions under one parent (`kInternalMaxEntries` is 678), i.e. a large
-  out-of-order load into one key region. Guarded, not silent.
+- ~~**Dividing a full btree *internal* node is not implemented**~~ —
+  **built 2026-08-11** (`docs/workplan-key-mode.md` PK09). A separator
+  promoted into a full parent now divides that node's entries when it sorts
+  inside them: the median moves up, its child becomes the new node's
+  leftmost, and the lower half is written back. The cheap
+  right-split-with-no-movement is kept for the append case it correctly
+  serves. Struck rather than deleted because the refusal it replaced was a
+  named `OutOfSpace` some reader may still be holding.
 - **A heap relation cannot be `EXPLICIT`**, refused at
   `Catalog::CreateTable` and at the statement layer. Not a defect: a heap
   chain grows only at its tail and has no descent to prove a supplied key

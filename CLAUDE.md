@@ -56,7 +56,7 @@ statements, not style.
 | Task representation | Decided and built: C++20 stackless coroutines | `docs/sched.md` §3 |
 | Wire protocol KWP/1 | Frame codec only; the server speaks the newline text protocol | `docs/protocol.md`, `docs/protocol-wp.md`, `docs/client-manual.md` |
 | Keystone id issue-once contract | K-M1, K-M3, K-M4 built (K-M3 2026-08-10: `exec::CompileAssignments` refuses a pk UPDATE at compile with `Unsupported` and a byte); K1 does not hold across a crash — read the findings before quoting the invariant | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
-| Key mode (`EXPLICIT` pk) | **Built 2026-08-11** (PK01-PK07): the caller may supply a pk and it need not ascend; uniqueness is proved by the btree descent, so the mode is `BTREE`-only and a full leaf now divides. The pk stays non-updatable. Remaining: PK09, dividing a full internal node (refused with `OutOfSpace`, ~678 leaf divisions under one parent to reach) | `docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` |
+| Key mode (`EXPLICIT` pk) | **Built 2026-08-11** (PK01-PK07): the caller may supply a pk and it need not ascend; uniqueness is proved by the btree descent, so the mode is `BTREE`-only and a full leaf now divides. The pk stays non-updatable. **Complete** — PK09 (dividing a full internal node) landed the same day, so no part of the feature is refused for being unbuilt | `docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` |
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
 | User manual | `manual/` — SQL surface written, verified against code | `manual/sql/sql.md` |
 
@@ -124,8 +124,7 @@ interface that keeps every listed option viable.
   `inline_cell_width` default; spilled-value size cap; prefix-inlining
   trigger; purge cadence; the 16 reserved Keystone bits; id reuse; I/O
   backend; whether invariant 3 is ever relaxed; whether a heap relation may
-  ever be `EXPLICIT` (that is the split policy, not a pk rule); dividing a
-  full btree internal node (`docs/workplan-key-mode.md` PK09).
+  ever be `EXPLICIT` (that is the split policy, not a pk rule).
 - **Waystone** (`docs/waystone-concpets.md` §9): per-pattern retention and
   eviction; persistence class of trail pages; `arg_hash` collisions; decay
   and sampling; whether invariant 9 is ever amended.

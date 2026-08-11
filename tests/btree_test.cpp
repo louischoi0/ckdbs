@@ -843,6 +843,88 @@ TEST(BtreeTest, ADividedLeafKeepsADeleteMarkOnTheVersionItMoved) {
     EXPECT_EQ(tuple.value().trx_id, 99u) << "the deleter's identity did not travel either";
 }
 
+// ---- Dividing a full internal node (workplan-key-mode.md PK09) -----------
+
+TEST(BtreeTest, AFullInternalNodeDividesWhenAnInteriorSeparatorArrives) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    // The shape that reaches it: one tuple per leaf, so every insert splits
+    // and every split promotes a separator. `kInternalMaxEntries` of those
+    // fill the root's internal node; the next interior key has to divide it.
+    //
+    // Ascending first, spaced so there is room to come back between the
+    // keys - this half only builds the full node.
+    const std::uint64_t kSpacing = 10;
+    for (std::uint64_t k = 1; k <= kInternalMaxEntries + 8; ++k) {
+        auto r = tree.Insert(k * kSpacing, kOnePerLeafFiller);
+        ASSERT_TRUE(r.ok()) << "id " << k * kSpacing << ": " << r.status().message();
+    }
+
+    // Every id must still be reachable before the interesting part, or a
+    // failure below is ambiguous.
+    for (std::uint64_t k = 1; k <= kInternalMaxEntries + 8; ++k) {
+        ASSERT_TRUE(BtreeLookup(store, tree.root, k * kSpacing).ok())
+            << "lost id " << k * kSpacing << " while building the full node";
+    }
+
+    // Now an interior key. It divides a leaf, and the separator that comes
+    // out sorts *inside* the full internal node - the case the cheap
+    // right-split cannot serve and which used to be refused outright.
+    auto interior = tree.Insert(kSpacing + kSpacing / 2, kOnePerLeafFiller);
+    ASSERT_TRUE(interior.ok()) << interior.status().message();
+
+    // Everything is still findable by descent, which is the property an
+    // internal division has to preserve: a separator promoted to the wrong
+    // side would strand a whole subtree, and only a descent notices.
+    for (std::uint64_t k = 1; k <= kInternalMaxEntries + 8; ++k) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, k * kSpacing).ok())
+            << "the internal division stranded id " << k * kSpacing;
+    }
+    EXPECT_TRUE(BtreeLookup(store, tree.root, kSpacing + kSpacing / 2).ok());
+
+    // And the leaf chain still holds them all, in page-wise key order.
+    auto rows = ScanAll(store, tree.root);
+    EXPECT_EQ(rows.size(), kInternalMaxEntries + 9);
+    ExpectPagesKeyOrdered(rows);
+}
+
+TEST(BtreeTest, RepeatedInteriorSeparatorsDivideInternalNodesOverAndOver) {
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+
+    // One division proves the mechanism; this proves it composes. After the
+    // root's internal node is full, *every* interior key promotes a
+    // separator that has to divide a node - and the nodes those divisions
+    // create fill and divide in turn, which is what grows the tree past two
+    // levels.
+    const std::uint64_t kSpacing = 10;
+    const std::uint64_t kBuilt = kInternalMaxEntries + 8;
+    for (std::uint64_t k = 1; k <= kBuilt; ++k) {
+        ASSERT_TRUE(tree.Insert(k * kSpacing, kOnePerLeafFiller).ok());
+    }
+
+    std::vector<std::uint64_t> interior;
+    for (std::uint64_t k = 1; k <= 200; ++k) {
+        const std::uint64_t id = k * kSpacing + kSpacing / 2;
+        auto r = tree.Insert(id, kOnePerLeafFiller);
+        ASSERT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
+        interior.push_back(id);
+    }
+
+    for (std::uint64_t k = 1; k <= kBuilt; ++k) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, k * kSpacing).ok())
+            << "an internal division stranded id " << k * kSpacing;
+    }
+    for (std::uint64_t id : interior) {
+        EXPECT_TRUE(BtreeLookup(store, tree.root, id).ok()) << "lost interior id " << id;
+    }
+
+    auto rows = ScanAll(store, tree.root);
+    EXPECT_EQ(rows.size(), kBuilt + interior.size());
+    ExpectPagesKeyOrdered(rows);
+}
+
 TEST(BtreeTest, ALeafHoldingOneOversizedTupleIsRefusedRatherThanDivided) {
     storage::InMemoryPageStore store(128);
     Tree tree(store);

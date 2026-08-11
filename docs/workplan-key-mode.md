@@ -1,12 +1,12 @@
 # Key mode (`EXPLICIT` pk) — workplan
 
-Tasks `PK01`-`PK08` for `docs/heap-and-tuple.md` §4.1 (the 2026-08-11
+Tasks `PK01`-`PK09` for `docs/heap-and-tuple.md` §4.1 (the 2026-08-11
 amendment to invariant 11). The spec owns the argument and the refusal
 codes; this file owns only the order and the acceptance.
 
-**PK01-PK07 are done, 2026-08-11, built and green.** PK08 (docs) is this
-file and the set it lists. One piece is deliberately unbuilt and carried
-below as remaining work: **dividing a full btree internal node.**
+**PK01-PK09 are done, 2026-08-11, built and green.** PK08 (docs) is this
+file and the set it lists. Nothing in the feature is refused for being
+unbuilt.
 
 **The shape of the work changed once, and the change is worth reading
 before touching any task below.** This workplan was drafted against a
@@ -285,33 +285,59 @@ bullet. `docs/known-gaps.md` — the internal-node division.
 
 ---
 
-## Remaining work
+## PK09 — dividing a full btree internal node  **[DONE 2026-08-11]**
 
-**PK09 — dividing a full btree internal node.** Not implemented, and the
-only piece of the feature that is not.
+The last piece, and the only one the first pass left unbuilt.
 
 When a leaf division promotes a separator into a parent that is already
-full, `PromoteSeparator` right-splits with no movement: a new internal node
-whose only child is the new subtree, with the separator promoted another
-level. **That is sound only when the separator sorts above every separator
-the node already holds.** Under monotonic ids the argument was free — a
-split always happened at the rightmost edge — and a caller-supplied id
-removes it. The trick is kept, because it is correct and cheap in the case
-it covers, and it is now **guarded by an explicit check**: a separator
-sorting below the node's highest is refused with `OutOfSpace` naming this
-task. Checked rather than assumed, because promoting an interior separator
-that way would strand every subtree above it — silent data loss, not a
-wrong answer anyone would notice.
+full, `PromoteSeparator` used to right-split with no movement: a new node
+whose only child is the new subtree, separator promoted another level.
+**That is sound only when the separator sorts above every separator the node
+already holds.** Under monotonic ids the argument was free — a split always
+happened at the rightmost edge — and a caller-supplied id removes it. That
+case was guarded and refused with `OutOfSpace`; it is now built.
 
-Reaching the refusal needs roughly **678 leaf divisions under one parent**
-(`kInternalMaxEntries` is 678, `btree_page.hpp`), i.e. a large descending or
-interleaved load into one key region. Remote, not impossible.
+`DivideInternalNode` reads the node's entries, places the incoming
+`(sep, child)` in sort order, and cuts at the median:
 
-Building it is an internal-node redistribution: cut the entry array at its
-median, move the upper half to a new node, and promote the median separator
-rather than the incoming one — the leaf division's shape, one level up, and
-without the payload copying that made the leaf case need a rebuild. It has
-no dependency on anything unbuilt.
+- the **median separator moves up**, it is not copied. This is the one place
+  an internal division differs from a leaf's. In a leaf both halves keep
+  their keys and the new page's low key is *duplicated* as the parent's
+  separator; here the median's **child becomes the new node's leftmost
+  child**, so the key has no remaining home at this level and belongs to the
+  parent. Copying it instead would route every key at exactly that value
+  into a subtree that no longer holds it.
+- the new node takes the entries above the median; the old node is rebuilt
+  with those below it and its original `leftmost_child`, so every key below
+  the median routes exactly where it did.
+
+Simpler than the leaf case despite being the same shape: an internal entry
+is a fixed `(sep_key, child)` pair, so there is no payload to copy, no MVCC
+state to preserve and no `relayout_epoch` to carry — nothing addresses an
+internal entry by position.
+
+Two things moved with it. `kMaxStructuralChanges` went from
+`2 + (depth-1) + 1` to `2 + 2*(depth-1) + 1`: a division writes **two**
+nodes per level where the right-split writes one, and a dropped structural
+change is a mutated page no record describes. And `CanPromoteSeparator` —
+the read-only pre-flight that hoisted the refusal above the first byte
+written — was **removed**, because there is no longer a refusal to hoist.
+
+Files: `src/storage/btree/btree.cpp`, `include/kds/storage/insert_placement.hpp`,
+`tests/btree_test.cpp`.
+
+Tests: a full internal node divided by an interior separator, with every id
+still reachable **by descent** afterwards — a separator promoted to the
+wrong side strands a whole subtree, and only a descent notices, which is why
+the assertion is a lookup per id rather than a scan. Plus 200 further
+interior keys, so the nodes those divisions create fill and divide in turn.
+Both verified failing with the division disabled.
+
+---
+
+## Remaining work
+
+**None.** Every task in this workplan is built and green.
 
 **Not planned, and not a gap:** relaxing `EXPLICIT` onto heap relations.
 That is the heap page split policy (`heap-and-tuple.md` §3.1b), and a heap

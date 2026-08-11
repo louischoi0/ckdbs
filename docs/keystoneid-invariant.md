@@ -46,9 +46,8 @@ Decisions fixed here:
   id and **it need not ascend**. So K3's subject widens twice over —
   ids may be sparse *and* out of order — and the blast radius was paid
   where it lands rather than avoided. It landed entirely inside the
-  clustered btree: a full leaf now divides, a full internal node's
-  promotion is guarded (and its division unbuilt), and the leaf slot
-  search no longer assumes key order. Nothing outside the btree
+  clustered btree: a full leaf now divides, a full internal node divides
+  too, and the leaf slot search no longer assumes key order. Nothing outside the btree
   changed, because nothing outside it depended on issuance order —
   see the corrected list in §1.
   **What did not move:** an `ASSIGNED` relation's cursor still never
@@ -131,9 +130,9 @@ btree-clustered relations and each of the four had to be settled:
   guessing — the strongest of the four. **Paid off**: `SplitLeafAndInsert`
   divides a full leaf instead (`src/storage/btree/btree.cpp`,
   `heap-and-tuple.md` §4.1). One refusal of this class survives, and it is
-  narrower: a separator promoted into a *full internal node* that sorts
-  below that node's highest is still `OutOfSpace`, because dividing an
-  internal node is unbuilt.
+  narrower still, and then closed: a separator promoted into a *full
+  internal node* below that node's highest divides its entries (PK09),
+  which leaves no refusal of this class at all.
 - `keystone.hpp` derives uniqueness *from* monotonicity ("unique and
   monotonic by construction rather than by a uniqueness check").
   **Replaced, per mode**: on `ASSIGNED` that derivation stands; on

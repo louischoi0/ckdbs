@@ -56,11 +56,16 @@ struct StructuralChange {
 inline constexpr std::uint16_t kMaxBtreeDepth = 16;
 
 // One insert records at most: the new page, the old page whose link moved,
-// one node per level it propagated a split back up (`depth <=
+// **two** nodes per level it propagated a split back up (`depth <=
 // kMaxBtreeDepth - 1`, since depth indexes a kMaxBtreeDepth-element path),
 // and one new root.
+//
+// Two per level, not one, since PK09: a full internal node is *divided* -
+// its upper half moved to a new node and the lower half written back - so
+// both pages change and both need an image. The right-split-with-no-movement
+// case still touches only one, and this bound covers the worse of the two.
 inline constexpr std::size_t kMaxStructuralChanges =
-    2 + (static_cast<std::size_t>(kMaxBtreeDepth) - 1) + 1;
+    2 + 2 * (static_cast<std::size_t>(kMaxBtreeDepth) - 1) + 1;
 
 struct InsertPlacement {
     PageId page_id = kInvalidPageId;  // the page the tuple landed in

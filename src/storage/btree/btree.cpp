@@ -198,58 +198,110 @@ StatusOr<std::uint16_t> FindSlotForId(heap::PageView& leaf, std::uint64_t id,
     return Status::NotFound("no such key in leaf");
 }
 
-// The one thing that can make PromoteSeparator below refuse: a **full**
-// internal node whose highest separator sorts above `sep`. Its right-split
-// moves no entries, which is only sound at the node's right edge; promoting
-// an interior separator that way would strand every subtree above it.
-//
-// Written once and asked twice - here by the promotion itself, and by
-// CanPromoteSeparator below *before* any page is touched. See there for why
-// the second call is not belt-and-braces.
-Status SeparatorAboveEveryEntry(const InternalView& parent, PageId parent_id,
-                                std::uint64_t sep) {
-    if (parent.entry_count() == 0) return Status::OK();
+// Which of the two ways a full internal node can grow applies: true when
+// `sep` sorts above every separator the node holds, so the cheap right-split
+// that moves no entries is sound. False means the entries have to be
+// divided, because promoting an interior separator by that path would strand
+// every subtree above it.
+StatusOr<bool> SeparatorAboveEveryEntry(const InternalView& parent, std::uint64_t sep) {
+    if (parent.entry_count() == 0) return true;
     auto highest = parent.Entry(static_cast<std::uint16_t>(parent.entry_count() - 1));
     if (!highest.ok()) return highest.status();
-    if (sep >= highest.value().sep_key) return Status::OK();
-    return Status::OutOfSpace(
-        "internal node " + std::to_string(parent_id) + " is full and separator " +
-        std::to_string(sep) + " sorts below its highest (" +
-        std::to_string(highest.value().sep_key) +
-        "); dividing a full internal node's entries is not implemented "
-        "(docs/workplan-key-mode.md PK04)");
+    return sep >= highest.value().sep_key;
 }
 
-// Whether promoting `sep` up this descent path can succeed, decided without
-// writing anything.
+// ---- Dividing a full internal node (workplan-key-mode.md PK09) -----------
 //
-// **Asked before a leaf is divided, and that ordering is the point.** A
-// division rewrites two leaves and splices a third page into the sibling
-// chain; if the promotion then refuses, the caller gets an error over a tree
-// whose new leaf no descent can reach - its rows answer a sequential scan
-// and not a lookup, and a later insert of a key that belongs to it would
-// land a duplicate in the old leaf. There is no unwind path for that: the
-// pages are already mutated and the WAL record set the caller emits
-// describes the *finished* division, not a half of one. So the refusal is
-// hoisted above the first byte written, which turns a torn structure into a
-// statement that failed and changed nothing.
+// The leaf division's shape, one level up, and simpler: an internal entry is
+// a fixed `(sep_key, child)` pair, so there is no payload to copy and no
+// MVCC state to preserve - only the entry array to cut.
 //
-// Read-only fetches, and only on a split - once per page of relation.
-Status CanPromoteSeparator(storage::PageStore& store, const Descent& descent,
-                           std::uint64_t sep) {
-    for (int d = static_cast<int>(descent.depth) - 1; d >= 0; --d) {
-        const PageId parent_id = descent.path[static_cast<std::uint16_t>(d)];
-        auto parent_bytes = store.GetForRead(parent_id);
-        if (!parent_bytes.ok()) return parent_bytes.status();
-        InternalView parent(parent_bytes.value());
+// **The median separator moves up rather than being copied**, which is the
+// one place this differs from a leaf. In a leaf both halves keep their keys
+// and the new page's low key is duplicated as the parent's separator; in an
+// internal node the median's *child* becomes the new node's leftmost child,
+// so the key itself has no remaining home here and belongs to the parent.
+// Copying it instead would route every key at exactly that value into a
+// subtree that no longer holds it.
+//
+// Returns what the caller must promote one level further.
+struct InternalDivision {
+    std::uint64_t sep = 0;             // the median, moved up
+    PageId child = kInvalidPageId;     // the node now holding everything above it
+};
 
-        // Absorbed here; nothing above this node is consulted, exactly as
-        // the promotion itself stops here.
-        if (!parent.IsFull()) return Status::OK();
-        if (Status s = SeparatorAboveEveryEntry(parent, parent_id, sep); !s.ok()) return s;
+StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId node_id,
+                                               std::uint64_t sep, PageId child,
+                                               storage::InsertPlacement& out) {
+    std::vector<BtreeInternalEntryFields> entries;
+    std::uint16_t level = 0;
+    PageId leftmost = kInvalidPageId;
+    {
+        auto bytes = store.Get(node_id);
+        if (!bytes.ok()) return bytes.status();
+        InternalView node(bytes.value());
+        level = node.level();
+        leftmost = node.leftmost_child();
+        const std::uint16_t n = node.entry_count();
+        entries.reserve(static_cast<std::size_t>(n) + 1);
+        for (std::uint16_t i = 0; i < n; ++i) {
+            auto e = node.Entry(i);
+            if (!e.ok()) return e.status();
+            entries.push_back(e.value());
+        }
     }
-    // Past the root: a fresh root always has room for one separator.
-    return Status::OK();
+
+    // The incoming entry, placed in sort order. Done here rather than through
+    // InsertEntry because the node is full - the array only exists in this
+    // vector until both halves are written back.
+    auto at = std::lower_bound(
+        entries.begin(), entries.end(), sep,
+        [](const BtreeInternalEntryFields& e, std::uint64_t key) { return e.sep_key < key; });
+    if (at != entries.end() && at->sep_key == sep) {
+        // InsertEntry's rule, and for its reason: two subtrees sharing a low
+        // key makes the descent's choice between them arbitrary and one of
+        // them permanently unreachable.
+        return Status::AlreadyExists("separator key " + std::to_string(sep) +
+                                      " is already present in internal node " +
+                                      std::to_string(node_id));
+    }
+    entries.insert(at, BtreeInternalEntryFields{sep, child});
+
+    const std::size_t m = entries.size() / 2;
+    const BtreeInternalEntryFields median = entries[m];
+
+    auto created = store.CreateNew();
+    if (!created.ok()) return created.status();
+    auto [right_id, right_bytes] = created.value();
+
+    auto right = InternalView::CreateEmpty(right_bytes, level, median.child);
+    if (!right.ok()) return right.status();
+    for (std::size_t k = m + 1; k < entries.size(); ++k) {
+        if (Status s = right.value().InsertEntry(entries[k].sep_key, entries[k].child); !s.ok()) {
+            return s;
+        }
+    }
+
+    // The old node is rebuilt, not edited: there is no API to drop the upper
+    // half in place, and reformatting is what the leaf division does for the
+    // same reason. `leftmost` goes back unchanged, so every key below the
+    // median still routes exactly where it did.
+    //
+    // Re-fetched because CreateNew() above may have handed out a new frame.
+    auto again = store.Get(node_id);
+    if (!again.ok()) return again.status();
+    auto rebuilt = InternalView::CreateEmpty(AsPage(again.value()), level, leftmost);
+    if (!rebuilt.ok()) return rebuilt.status();
+    for (std::size_t k = 0; k < m; ++k) {
+        if (Status s = rebuilt.value().InsertEntry(entries[k].sep_key, entries[k].child);
+            !s.ok()) {
+            return s;
+        }
+    }
+
+    out.Record(right_id, /*is_new_page=*/false, 0);
+    out.Record(node_id, /*is_new_page=*/false, 0);
+    return InternalDivision{median.sep_key, right_id};
 }
 
 // ---- Propagate a new subtree's separator up the descent path -------------
@@ -276,22 +328,33 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
             return out;  // absorbed; the tree did not grow
         }
 
-        // Full internal node, right-split with no movement: a new node whose
-        // only child is `child` needs no entries, and `sep` is what gets
-        // promoted another level.
-        //
-        // **That is only sound when `sep` sorts above every separator this
-        // node already holds.** The argument used to be free - ids were
-        // monotonic, so a split always happened at the rightmost edge - and
-        // a caller-supplied id (section 4.1) removes it. Checked rather than
-        // assumed: promoting an interior separator this way would strand
-        // every subtree that sorts above it, which is silent data loss, not
-        // a wrong answer someone would notice. The caller has already asked
-        // the same question through CanPromoteSeparator, before it wrote
-        // anything; this is where the answer is load-bearing.
-        if (Status s = SeparatorAboveEveryEntry(parent, parent_id, sep); !s.ok()) return s;
-
         const std::uint16_t level = parent.level();
+
+        // A full node, and two ways to grow it.
+        //
+        // When `sep` sorts above every separator here, a right-split with no
+        // movement is enough: a new node whose only child is `child` needs
+        // no entries at all, and `sep` is promoted another level. That is the
+        // append case a monotonic id sequence produces exclusively, and it
+        // stays because it is correct and costs nothing.
+        //
+        // Anything else has to divide the node's entries, which only a
+        // caller-supplied id can require (§4.1). Promoting an interior
+        // separator by the cheap path would strand every subtree above it -
+        // silent data loss, not a wrong answer someone would notice - so the
+        // two are told apart rather than assumed.
+        auto appends = SeparatorAboveEveryEntry(parent, sep);
+        if (!appends.ok()) return appends.status();
+
+        if (!appends.value()) {
+            auto divided = DivideInternalNode(store, parent_id, sep, child, out);
+            if (!divided.ok()) return divided.status();
+            sep = divided.value().sep;
+            child = divided.value().child;
+            old_root_level = level;
+            continue;
+        }
+
         auto created_node = store.CreateNew();
         if (!created_node.ok()) return created_node.status();
         auto [new_node_id, new_node_bytes] = created_node.value();
@@ -411,11 +474,6 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     // `live.size() >= 2`.
     const std::size_t split_at = live.size() / 2;
     const std::uint64_t split_key = live[split_at].key;
-
-    // **Before the first byte is written**: a promotion that would refuse
-    // has to refuse now, while the leaf is still whole. Afterwards there is
-    // nothing to unwind it with - see CanPromoteSeparator.
-    if (Status s = CanPromoteSeparator(store, descent, split_key); !s.ok()) return s;
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
@@ -612,13 +670,6 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // the chain: every leaf past the splice vanishes from every sequential
     // scan while still answering a descent.
     const PageId right_sibling = leaf.next_page_id();
-
-    // Same pre-flight the division makes, and for the same reason: this path
-    // splices a page into the sibling chain before it promotes, so a
-    // promotion that refuses afterwards leaves a leaf holding a row that
-    // only a scan can see. While ids were monotonic the refusal below could
-    // not fire here; a caller-supplied id makes it reachable.
-    if (Status s = CanPromoteSeparator(store, descent.value(), /*sep=*/id); !s.ok()) return s;
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
