@@ -31,6 +31,7 @@ add_library(kds
     src/storage/extent_lease.cpp
     src/txn/undo_page.cpp
     src/txn/undo_log.cpp
+    src/txn/recovery_undo.cpp
     src/txn/visibility.cpp
     src/txn/trx_id.cpp
     src/txn/manager.cpp

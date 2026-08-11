@@ -105,6 +105,18 @@ struct UndoVersion {
     std::uint64_t prior_trx_id = 0;
     std::uint64_t prior_undo_ptr = kNoUndoPtr;
     std::vector<std::byte> image;
+
+    // ---- What the *version* walk does not need, and undo does -----------
+    //
+    // A reader stepping back through versions has the tuple in hand, so it
+    // needs only "what did it look like before" - the three fields above.
+    // Recovery's undo phase arrives from the other end: it has a chain of
+    // records and no idea which tuple any of them is about, so it needs
+    // every one of these.
+    PageId target_page_id = kInvalidPageId;
+    std::uint16_t target_slot = 0;
+    std::uint64_t txn_prev_undo_ptr = kNoUndoPtr;  // the transaction chain (RV10)
+    std::uint64_t pk = 0;                          // the identity check (§4a)
 };
 
 class UndoLog {

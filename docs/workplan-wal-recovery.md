@@ -580,11 +580,39 @@ before-image's Keystone id for `kOverwrite`/`kDeleteMark`, and from the
 record's own `pk` for `kInsert` — and takes the no-locator branch on a
 mismatch. Then `TXN_ABORT`.
 
+**WRITTEN 2026-08-11, NOT BUILT OR RUN.** `txn/recovery_undo.hpp` +
+`src/txn/recovery_undo.cpp`: `txn::RecoveryUndo` implements
+`wal::UndoPhase`. It lives in `txn/` because it needs `UndoLog`,
+`heap::PageView` and the record format, and `wal/` sits below `txn/`.
+
+**A bug found before a line of it was written, and fixed first.**
+`TransactionManager::Compensate` logged `HEAP_DELETE_MARK` to *clear* a
+delete-mark, and redo replays that type by **setting** one — so a
+transaction that delete-marked a row and then aborted came back from
+recovery still deleted, the abort undone by its own compensation.
+`redo.cpp` asserted the opposite in a comment, which is why it survived
+RC03. `RecordType::kHeapDeleteUnmark` now exists, with a payload carrying
+`undo_ptr` as well as the writer — `ClearDeleteMark` restores both, and a
+record carrying only the writer would leave the version chain pointing at
+an undo record for a change that no longer happened.
+
+`UndoVersion` gained the four fields the *version* walk never needed and
+undo does: `target_page_id`, `target_slot`, `txn_prev_undo_ptr`, `pk`. A
+reader stepping back through versions has the tuple in hand; undo arrives
+with a chain of records and no idea which tuple any of them is about.
+
 *Done when:* a loser's UPDATE is restored byte for byte, its DELETE's mark
 cleared, its INSERT's slot retired; **a loser whose write predates the redo
 start is rolled back too** (§4b); a crash *during* undo resumes and
 completes; the live-run and recovered-run page images are compared byte
 for byte, which is the shape `assertion_wal_test.cpp` already uses.
+
+Ten tests in `tests/recovery_undo_test.cpp` cover the first three, the
+re-run no-op, the two classes undo owes nothing to, §4a's refusal when a
+row has moved, and a self-linked chain reported rather than hung on.
+**The byte-for-byte live-vs-recovered comparison is not among them** — it
+needs a driver that runs both, which is RC08/RC10's harness. **Nothing has
+been executed.**
 
 **RC06 — The per-transaction undo chain, and a durable insert record.**
 *(unblocked 2026-08-11 — build to RV10; read §4b for why the scope grew)*

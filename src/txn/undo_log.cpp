@@ -136,6 +136,10 @@ StatusOr<UndoVersion> UndoLog::Read(std::uint64_t ptr) {
     out.type = static_cast<UndoRecordType>(rec.value().fields.type);
     out.prior_trx_id = rec.value().fields.prior_trx_id;
     out.prior_undo_ptr = rec.value().fields.prior_undo_ptr;
+    out.target_page_id = rec.value().fields.target_page_id;
+    out.target_slot = rec.value().fields.target_slot;
+    out.txn_prev_undo_ptr = rec.value().fields.txn_prev_undo_ptr;
+    out.pk = rec.value().fields.pk;
     // Copied, not viewed: the next step of a walk fetches another page.
     out.image.assign(rec.value().image.begin(), rec.value().image.end());
     return out;
