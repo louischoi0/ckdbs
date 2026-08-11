@@ -143,8 +143,12 @@ TEST_F(UndoLogTest, UndoPagesAreHeaderedAndStamped) {
 }
 
 TEST_F(UndoLogTest, AppendsShareAPageUntilItFills) {
-    // 2000-byte images: 2028 bytes per record, four to a page.
-    const std::vector<std::byte> image(2000, std::byte{0x5A});
+    // Sized so exactly four records fill a page and the fifth must spill.
+    // Derived, because the answer moved when RV10 grew the record header
+    // from 28 to 44 bytes - a literal image size silently became "three to
+    // a page" and the test failed on the wrong thing.
+    const std::vector<std::byte> image(kUndoPageCapacity / 4 - kUndoRecordHeaderSize,
+                                       std::byte{0x5A});
     std::vector<PageId> pages;
     for (int i = 0; i < 5; ++i) {
         auto ptr = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), image);
@@ -190,15 +194,20 @@ TEST_F(UndoLogTest, TransactionsShareTheCurrentPage) {
 }
 
 // The saving, stated as the test that would have caught the old behaviour:
-// 200 autocommit-shaped transactions of one small record each must not cost
-// 200 pages.
+// autocommit-shaped transactions of one small record each must not cost a
+// page each.
 TEST_F(UndoLogTest, ManyShortTransactionsDoNotCostAPageEach) {
-    for (std::uint64_t trx_id = 100; trx_id < 300; ++trx_id) {
+    // As many as one page holds, derived rather than assumed: a
+    // "image"-sized record is kUndoRecordHeaderSize + 5 bytes, and that
+    // header grew at RV10, so the count that fits fell with it. The claim is
+    // "many transactions, one page", not any particular number of them.
+    const std::uint64_t kFits = kUndoPageCapacity / (kUndoRecordHeaderSize + 5);
+    for (std::uint64_t trx_id = 100; trx_id < 100 + kFits; ++trx_id) {
         ASSERT_TRUE(log_->Append(trx_id, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("image"))
                         .ok());
     }
     EXPECT_EQ(log_->PageCount().value(), 1u)
-        << "200 records of 33 bytes fit on one 8,136-byte page";
+        << kFits << " short records must share one " << kUndoPageCapacity << "-byte page";
 }
 
 // A version chain crosses transactions freely - which is the difference

@@ -1,12 +1,12 @@
 #include "kds/wal/analysis.hpp"
 
 #include <cstddef>
+#include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
-
-#include <memory>
 
 #include "kds/txn/undo_page.hpp"
 #include "kds/wal/memory_log_device.hpp"
@@ -49,16 +49,11 @@ Lsn AppendCheckpointBegin(WalStream& stream, std::span<const CheckpointActiveTxn
 
 class AnalysisTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        auto created = MemoryLogDevice::Create(kSegmentSize);
-        ASSERT_TRUE(created.ok()) << created.status().message();
-        device_ = std::move(created.value());
-    }
-
-    std::unique_ptr<MemoryLogDevice> device_;
+    std::unique_ptr<MemoryLogDevice> device_ =
+        std::move(MemoryLogDevice::Create(kSegmentSize).value());
 
     StatusOr<AnalysisResult> Run(Lsn redo_start = 0, Lsn anchor_durable = 0) {
-        return Analyze(*device_, /*core_id=*/0, AnalysisStart{redo_start, anchor_durable});
+        return Analyze((*device_), /*core_id=*/0, AnalysisStart{redo_start, anchor_durable});
     }
 };
 
@@ -351,9 +346,9 @@ TEST_F(AnalysisTest, ATornTailIsMeteredAndTheRecordsBeforeItStand) {
 
     // Wipe the commit record: the transaction becomes a loser, which is
     // the whole point of a durable commit being the thing that decides.
-    auto torn_created = MemoryLogDevice::Create(kSegmentSize);
-    ASSERT_TRUE(torn_created.ok()) << torn_created.status().message();
-    MemoryLogDevice& torn = *torn_created.value();
+    auto torn_owned = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(torn_owned.ok()) << torn_owned.status().message();
+    MemoryLogDevice& torn = *torn_owned.value();
     ASSERT_TRUE(torn.CreateSegment(0).ok());
     for (std::size_t i = static_cast<std::size_t>(last_lsn); i < segment.size(); ++i) {
         segment[i] = std::byte{0};

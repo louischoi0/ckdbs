@@ -3,11 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
-
-#include <memory>
 
 #include "kds/server/superblock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -60,13 +60,8 @@ public:
 
 class RecoveryTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        auto created = MemoryLogDevice::Create(kSegmentSize);
-        ASSERT_TRUE(created.ok()) << created.status().message();
-        device_ = std::move(created.value());
-    }
-
-    std::unique_ptr<MemoryLogDevice> device_;
+    std::unique_ptr<MemoryLogDevice> device_ =
+        std::move(MemoryLogDevice::Create(kSegmentSize).value());
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
 
     // PAGE_INIT + one insert under `txn_id`, then `terminal` if it is not
@@ -104,7 +99,7 @@ protected:
 TEST_F(RecoveryTest, ALoserWithNoUndoPhaseRefusesTheMountBeforeRedoWrites) {
     WriteStream(/*txn_id=*/7, RecordType::kPad);  // no terminal record
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, /*undo=*/nullptr);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(r.status().code(), StatusCode::kUnsupported) << r.status().message();
 
@@ -117,7 +112,7 @@ TEST_F(RecoveryTest, ALoserWithNoUndoPhaseRefusesTheMountBeforeRedoWrites) {
 TEST_F(RecoveryTest, AWinnerRecoversWithNoUndoPhaseAtAll) {
     WriteStream(/*txn_id=*/7, RecordType::kTxnCommit);
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, /*undo=*/nullptr);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().analysis.winners, 1u);
     EXPECT_EQ(r.value().analysis.losers, 0u);
@@ -136,7 +131,7 @@ TEST_F(RecoveryTest, ADurableAbortIsNotALoserAndNeedsNoUndoPhase) {
     // and the driver must not refuse for it.
     WriteStream(/*txn_id=*/7, RecordType::kTxnAbort);
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, /*undo=*/nullptr);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().analysis.aborted, 1u);
     EXPECT_EQ(r.value().analysis.losers, 0u);
@@ -149,7 +144,7 @@ TEST_F(RecoveryTest, AnInstalledUndoPhaseIsCalledForALoser) {
     WriteStream(/*txn_id=*/7, RecordType::kPad);
     RecordingUndo undo;
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, &undo);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, &undo);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(undo.calls, 1);
     EXPECT_EQ(undo.losers_seen, 1u);
@@ -162,7 +157,7 @@ TEST_F(RecoveryTest, AnInstalledUndoPhaseIsNotCalledWithoutLosers) {
     WriteStream(/*txn_id=*/7, RecordType::kTxnCommit);
     RecordingUndo undo;
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, &undo);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, &undo);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(undo.calls, 0) << "a winner-only stream owes undo nothing";
     EXPECT_FALSE(r.value().undo_ran);
@@ -172,7 +167,7 @@ TEST_F(RecoveryTest, AFailingUndoPhaseRefusesTheMount) {
     WriteStream(/*txn_id=*/7, RecordType::kPad);
     FailingUndo undo;
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, &undo);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, &undo);
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
@@ -197,7 +192,7 @@ TEST_F(RecoveryTest, TheHighWaterFloorIsRaisedBeforeUndoCouldWrite) {
     WriteStream(/*txn_id=*/7, RecordType::kPad);
     AllocatingUndo undo;
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, &undo);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, &undo);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_GT(undo.first_id, r.value().analysis.max_page_id)
         << "undo allocated a page the log names";
@@ -207,7 +202,7 @@ TEST_F(RecoveryTest, TheHighWaterFloorIsRaisedBeforeUndoCouldWrite) {
 TEST_F(RecoveryTest, TheReportCarriesTheTrxCeilingItsCallerOwes) {
     WriteStream(/*txn_id=*/9000, RecordType::kTxnCommit);
 
-    auto r = RecoverCore(*device_, 0, store_, AnalysisStart{}, /*undo=*/nullptr);
+    auto r = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().high_water.next_trx_id, 9001u);
 
@@ -222,13 +217,13 @@ TEST_F(RecoveryTest, RunningTwiceIsANoOp) {
     // idempotent as redo is.
     WriteStream(/*txn_id=*/7, RecordType::kTxnCommit);
 
-    auto first = RecoverCore(*device_, 0, store_, AnalysisStart{}, /*undo=*/nullptr);
+    auto first = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_TRUE(first.ok()) << first.status().message();
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
     const std::vector<std::byte> after_first(page.value().begin(), page.value().end());
 
-    auto second = RecoverCore(*device_, 0, store_, AnalysisStart{}, /*undo=*/nullptr);
+    auto second = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_TRUE(second.ok()) << second.status().message();
     EXPECT_EQ(second.value().redo.applied, 0u);
     EXPECT_EQ(second.value().redo.skipped_by_lsn, 2u);
@@ -243,7 +238,7 @@ TEST_F(RecoveryTest, RunningTwiceIsANoOp) {
 TEST_F(RecoveryTest, AnAnchorPastTheDurableEndRefusesTheMount) {
     WriteStream(/*txn_id=*/7, RecordType::kTxnCommit);
 
-    auto r = RecoverCore(*device_, 0, store_,
+    auto r = RecoverCore((*device_), 0, store_,
                          AnalysisStart{/*redo_start_lsn=*/0, /*anchor_durable_lsn=*/1u << 30},
                          /*undo=*/nullptr);
     ASSERT_FALSE(r.ok());

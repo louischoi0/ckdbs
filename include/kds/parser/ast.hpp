@@ -323,6 +323,19 @@ struct CreateTableStmt {
     // than a grammar one, so the dispatcher - not the parser - is what
     // needs this.
     std::uint32_t key_mode_byte_offset = 0;
+
+    // Whether the statement *said* either word, as opposed to landing on
+    // the field's default above.
+    //
+    // The two fields cannot answer this themselves: `HEAP` and `ASSIGNED`
+    // are also what an unqualified statement means, so "kHeap" is both "the
+    // writer asked for a heap" and "the writer said nothing". The
+    // dispatcher needs them apart, because an instance-wide default
+    // (`default_key_mode`) applies only to the second - a written word
+    // always wins over configuration, or the statement does not mean what
+    // it says.
+    bool clustered_given = false;
+    bool key_mode_given = false;
 };
 
 // The per-statement row cap for a multi-row INSERT (docs/spec-bulkinsert.md

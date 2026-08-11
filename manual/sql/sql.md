@@ -61,6 +61,12 @@ CREATE TABLE <name> ( <col> <type> [REFERENCES <parent>] [CABIN | CABIN AUTO | N
   and `ASSIGNED EXPLICIT` two different `INSERT` arities.
 - All four words are ordinary **identifiers**, not reserved (see the
   appendix) — a column may still be named `explicit` or `btree`.
+- **Omitting the key-mode word takes the server's `default_key_mode`**
+  (shipped `assigned`, `kds.conf.sample`). Writing one always wins over the
+  setting. On a server configured `explicit`, a statement naming neither
+  word is `BTREE EXPLICIT` — the storage default follows the mode there,
+  because an explicit relation must be btree-clustered. `DESCRIBE <table>`
+  reports which mode a relation actually got.
 - At least one column is required.
 - The optional per-column suffixes come in a **fixed order**: `REFERENCES`
   before the cabin policy. Two optional suffixes in either order would be a

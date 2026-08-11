@@ -102,6 +102,10 @@ Numbered to match `docs/heap-and-tuple.md` §8.
 - Tests accompany every subsystem; contract suites (waystone, index, cabin,
   types, assertion) compare configurations byte-for-byte — keep them green
   and extend them with the feature.
+- **Never push what you have not built.** `main` has twice received commits
+  that were never compiled. `scripts/githooks/pre-push` is the gate; enable
+  it once per clone with `git config core.hooksPath scripts/githooks`, and
+  bypass it with `git push --no-verify` only when you can say why.
 - **Measure in `build-release`, never `./build` (Debug)** — Debug has
   reported the wrong sign twice. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.** Details:

@@ -218,7 +218,9 @@ public:
                        txn::IsolationLevel isolation =
                            txn::IsolationLevel::kReadCommitted,
                        std::uint32_t core_id = 0, bool indexes = true,
-                       std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows) noexcept
+                       std::uint64_t max_insert_rows = parser::kDefaultMaxInsertRows,
+                       catalog::KeyMode default_key_mode =
+                           catalog::KeyMode::kAssigned) noexcept
         : superblock_(superblock),
           catalog_(catalog),
           page_store_(page_store),
@@ -236,7 +238,8 @@ public:
           autocommit_session_(isolation),
           core_id_(core_id),
           indexes_enabled_(indexes),
-          max_insert_rows_(max_insert_rows) {}
+          max_insert_rows_(max_insert_rows),
+          default_key_mode_(default_key_mode) {}
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -1136,6 +1139,11 @@ private:
     // BI3's per-statement row cap, from the `max_insert_rows` config key.
     // A refusal, never a truncation.
     std::uint64_t max_insert_rows_ = parser::kDefaultMaxInsertRows;
+
+    // What a CREATE TABLE naming no key-mode word means, from the
+    // `default_key_mode` config key (docs/heap-and-tuple.md section 4.1).
+    // A written word always wins over it.
+    catalog::KeyMode default_key_mode_ = catalog::KeyMode::kAssigned;
 
     // The physical optimizer's mode and R1 half-life (workplan PX06).
     // Shadow costs nothing at rest - the planner is pull-only, computed

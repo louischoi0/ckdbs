@@ -1,12 +1,12 @@
 #include "kds/wal/redo.hpp"
 
 #include <cstddef>
+#include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
-
-#include <memory>
 
 #include "kds/server/superblock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -44,13 +44,8 @@ std::vector<std::byte> Bytes(std::size_t n, unsigned char fill) {
 
 class RedoTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        auto created = MemoryLogDevice::Create(kSegmentSize);
-        ASSERT_TRUE(created.ok()) << created.status().message();
-        device_ = std::move(created.value());
-    }
-
-    std::unique_ptr<MemoryLogDevice> device_;
+    std::unique_ptr<MemoryLogDevice> device_ =
+        std::move(MemoryLogDevice::Create(kSegmentSize).value());
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
 
     // Appends PAGE_INIT for a heap page plus `n` tuple inserts, and returns
@@ -82,7 +77,7 @@ protected:
     }
 
     AnalysisResult Analyzed() {
-        auto a = Analyze(*device_, 0, AnalysisStart{});
+        auto a = Analyze((*device_), 0, AnalysisStart{});
         EXPECT_TRUE(a.ok()) << a.status().message();
         return a.ok() ? a.value() : AnalysisResult{};
     }
@@ -99,7 +94,7 @@ protected:
 
 TEST_F(RedoTest, ReplaysAHeapStreamOntoAStoreThatNeverSawIt) {
     WriteHeapStream(3);
-    auto r = Redo(*device_, 0, store_, Analyzed());
+    auto r = Redo((*device_), 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().applied, 4u);       // one PAGE_INIT + three inserts
     EXPECT_EQ(r.value().pages_created, 1u);
@@ -122,10 +117,10 @@ TEST_F(RedoTest, ReplayingTwiceIsAByteForByteNoOp) {
     WriteHeapStream(4);
     const AnalysisResult analysis = Analyzed();
 
-    ASSERT_TRUE(Redo(*device_, 0, store_, analysis).ok());
+    ASSERT_TRUE(Redo((*device_), 0, store_, analysis).ok());
     const std::vector<std::byte> after_first = PageBytes(kPage);
 
-    auto second = Redo(*device_, 0, store_, analysis);
+    auto second = Redo((*device_), 0, store_, analysis);
     ASSERT_TRUE(second.ok()) << second.status().message();
     EXPECT_EQ(PageBytes(kPage), after_first);
 
@@ -144,7 +139,7 @@ TEST_F(RedoTest, ARecordAtOrBelowThePagesLsnIsSkipped) {
     storage::FormatPage(created.value(), PageType::kHeap);
     storage::SetPageLsn(created.value(), analysis.end_lsn + 1);
 
-    auto r = Redo(*device_, 0, store_, analysis);
+    auto r = Redo((*device_), 0, store_, analysis);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().applied, 0u);
     EXPECT_EQ(r.value().skipped_by_lsn, 3u);
@@ -169,7 +164,7 @@ TEST_F(RedoTest, AFullPageImageRestoresTheWholePage) {
         ASSERT_TRUE(s.value()->Sync().ok());
     }
 
-    auto r = Redo(*device_, 0, store_, Analyzed());
+    auto r = Redo((*device_), 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().page_images, 1u);
 
@@ -188,7 +183,18 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnCommit, 1, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Sync().ok());
     }
-    auto r = Redo(*device_, 0, store_, Analyzed());
+    // Redone from the head of the log, deliberately. What is under test is
+    // the *classification* - that a transaction boundary reaches redo and is
+    // counted as touching no page - and an honest analysis of this stream
+    // makes redo skip it entirely: no record here dirties a page, so
+    // `RedoStartFrom` returns end_lsn and there is correctly nothing to
+    // replay (wal.md §11-3). Asking for the classification means arranging
+    // for the records to be visited; the redo-start optimization is a
+    // separate claim with its own tests.
+    AnalysisResult from_head = Analyzed();
+    from_head.redo_start_lsn = 0;
+
+    auto r = Redo((*device_), 0, store_, from_head);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().applied, 0u);
     EXPECT_EQ(r.value().no_page, 2u);
@@ -230,7 +236,7 @@ TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {
         ASSERT_TRUE(s.value()->Sync().ok());
     }
 
-    auto r = Redo(*device_, 0, store_, Analyzed());
+    auto r = Redo((*device_), 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
 
     auto page = store_.Get(kPage);

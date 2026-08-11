@@ -549,6 +549,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
                     std::to_string(word.byte_offset) + ")");
             }
             storage_given = true;
+            stmt.clustered_given = true;
             stmt.clustered = is_heap ? catalog::ClusteredType::kHeap
                                      : catalog::ClusteredType::kBtree;
         } else {
@@ -559,6 +560,7 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
                     std::to_string(word.byte_offset) + ")");
             }
             key_mode_given = true;
+            stmt.key_mode_given = true;
             stmt.key_mode_byte_offset = word.byte_offset;
             stmt.key_mode = is_assigned ? catalog::KeyMode::kAssigned
                                         : catalog::KeyMode::kExplicit;

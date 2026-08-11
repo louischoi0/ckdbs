@@ -26,7 +26,7 @@ std::string Expeditor::Config::LogPath() const {
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
-            "isolation",
+            "isolation",             "default_key_mode",
             "wal_drain_interval_us", "relaxed_flush_interval_us",
             "log_dir",  "log_file",               "log_level",
             "max_rows_touched",      "max_insert_rows",        "kwp_port",
@@ -119,6 +119,13 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto parsed = txn::ParseIsolationLevel(v.value());
         if (!parsed.ok()) return parsed.status();
         isolation = parsed.value();
+    }
+    if (file.Has("default_key_mode")) {
+        auto v = file.GetString("default_key_mode");
+        if (!v.ok()) return v.status();
+        auto parsed = catalog::ParseKeyMode(v.value());
+        if (!parsed.ok()) return parsed.status();
+        default_key_mode = parsed.value();
     }
     if (file.Has("waystone_replay")) {
         auto v = file.GetBool("waystone_replay");
@@ -565,7 +572,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->config_.waystone_replay, expeditor->config_.access_statistics,
         expeditor->cabin_store_ ? &*expeditor->cabin_store_ : nullptr,
         &*expeditor->txn_manager_, expeditor->config_.isolation, /*core_id=*/0,
-        expeditor->config_.indexes, expeditor->config_.max_insert_rows);
+        expeditor->config_.indexes, expeditor->config_.max_insert_rows,
+        expeditor->config_.default_key_mode);
     expeditor->dispatcher_->set_aggregate_limits(
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});
