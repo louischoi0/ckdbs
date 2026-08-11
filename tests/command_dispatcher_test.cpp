@@ -407,22 +407,25 @@ TEST_F(CommandDispatcherTest, CreateTableAcceptsAnExplicitBtreeRelation) {
 TEST_F(CommandDispatcherTest, CreateTableRefusesAnExplicitHeapRelation) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
 
-    // Written out, and written by omission - HEAP is the default, so a bare
-    // EXPLICIT asks for the same relation and gets the same refusal at the
-    // same byte.
+    // The contradiction the *writer* stated: a heap was asked for by name
+    // and an explicit relation cannot live on one.
     auto spelled = d.Dispatch("CREATE TABLE t (id int64) HEAP EXPLICIT");
     EXPECT_EQ(spelled.response.substr(0, 4), "ERR ") << spelled.response;
     EXPECT_NE(spelled.response.find("must be BTREE"), std::string::npos) << spelled.response;
     EXPECT_NE(spelled.response.find("byte 31"), std::string::npos) << spelled.response;
 
-    auto implied = d.Dispatch("CREATE TABLE t (id int64) EXPLICIT");
-    EXPECT_EQ(implied.response.substr(0, 4), "ERR ") << implied.response;
-    EXPECT_NE(implied.response.find("must be BTREE"), std::string::npos) << implied.response;
-    EXPECT_NE(implied.response.find("byte 26"), std::string::npos) << implied.response;
-
-    // Refused before anything is written: no relation is left behind under
-    // either spelling.
+    // Refused before anything is written: the refusal leaves no relation.
     EXPECT_EQ(d.Dispatch("DESCRIBE t").response.substr(0, 4), "ERR ");
+
+    // A bare EXPLICIT is **not** the same statement, and is no longer
+    // refused. The writer named a mode and said nothing about storage, and
+    // there is exactly one storage an explicit relation can use - so
+    // resolving to it is deduction, not a guess. Refusing this used to
+    // punish a statement for an unstated default it never mentioned.
+    auto implied = d.Dispatch("CREATE TABLE t (id int64) EXPLICIT");
+    EXPECT_EQ(implied.response.substr(0, 7), "CREATED") << implied.response;
+    EXPECT_NE(d.Dispatch("DESCRIBE t").response.find("clustered_type=BTREE key_mode=EXPLICIT"),
+              std::string::npos);
 }
 
 TEST_F(CommandDispatcherTest, CreateTableIsIdempotentWhenAlreadyExists) {

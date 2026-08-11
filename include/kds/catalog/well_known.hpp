@@ -1,10 +1,14 @@
 #pragma once
 
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <iterator>
+#include <string>
+#include <string_view>
 
 #include "kds/base/common.hpp"
+#include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
 
 // Well-known oids and fixed page ids. These values are persisted, so they
@@ -388,5 +392,30 @@ enum class KeyMode : std::uint8_t {
     // 0..n-1, the first being the pk, and omitting it is refused.
     kExplicit = 1,
 };
+
+// The one spelling of each mode, so the word a config file accepts, the word
+// a refusal names and the word `DESCRIBE` prints cannot drift apart.
+constexpr const char* KeyModeName(KeyMode mode) noexcept {
+    return mode == KeyMode::kExplicit ? "EXPLICIT" : "ASSIGNED";
+}
+
+// Parses the `default_key_mode` config value, case-insensitively - the same
+// two words the trailing `CREATE TABLE` clause accepts, so an operator never
+// has to learn a second spelling for the same idea.
+//
+// Anything else is InvalidArgument naming what was given, rather than a
+// silent fall back to the default: a misspelled key mode would otherwise
+// leave an instance quietly creating the wrong kind of relation, and the
+// first sign of it would be an INSERT arity refusal nobody can explain.
+inline StatusOr<KeyMode> ParseKeyMode(std::string_view text) {
+    std::string folded(text);
+    for (char& c : folded) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (folded == "assigned") return KeyMode::kAssigned;
+    if (folded == "explicit") return KeyMode::kExplicit;
+    return Status::InvalidArgument("unknown key mode '" + std::string(text) +
+                                   "'; expected 'assigned' or 'explicit'");
+}
 
 }  // namespace kds::catalog
