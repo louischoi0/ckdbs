@@ -333,16 +333,20 @@ public:
     //                            zero-column relation cannot have one.
     //                            Kept only so the failure names the
     //                            reason; use the column-list form.
-    //   CREATE TABLE <name> (<col> <type> [, ...]) [HEAP | BTREE]
+    //   CREATE TABLE <name> (<col> <type> [, ...])
+    //       [HEAP | BTREE] [ASSIGNED | EXPLICIT]
     //                         -> same CREATED/EXISTS response as above,
     //                            but with real columns: parsed via
     //                            src/parser, types resolved through
-    //                            Catalog::ResolveTypeByName(). The trailing
-    //                            keyword picks the storage: HEAP (default)
-    //                            is a chain of heap pages, BTREE is a
-    //                            clustered B+ tree on the Keystone pk. See
-    //                            src/exec/row_codec.hpp for the supported
-    //                            column type set.
+    //                            Catalog::ResolveTypeByName(). The storage
+    //                            word: HEAP (default) is a chain of heap
+    //                            pages, BTREE is a clustered B+ tree on the
+    //                            Keystone pk. The key-mode word (§4.1):
+    //                            ASSIGNED (default) has the engine issue the
+    //                            pk, EXPLICIT has the caller supply it and
+    //                            requires BTREE. Either order, each at most
+    //                            once. See src/exec/row_codec.hpp for the
+    //                            supported column type set.
     //   INSERT INTO <name> VALUES (<val> [, ...])
     //                         -> "INSERTED oid=<table_oid> id=<n> slot=<n>"
     //                            or "ERR ...". Values are positional, one
@@ -940,6 +944,11 @@ private:
         TupleLocation at;
     };
     PkLookup LocateByPk(const catalog::TableAccess& access, std::uint64_t pk);
+
+    // The row-relocation callback a rollback needs when a leaf division has
+    // moved rows this transaction wrote (txn/manager.hpp's RowLocator).
+    // Built per abort, never stored on the manager - see the definition.
+    txn::TransactionManager::RowLocator RowLocatorForRollback();
 
     // The bytes of the page a located tuple sits on, for a reader. Reuses
     // the span the locator carried out when it has one, and fetches

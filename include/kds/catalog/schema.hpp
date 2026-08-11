@@ -165,6 +165,18 @@ struct TableAccess {
     // core's id everywhere else.
     std::uint32_t owner_core = 0;
 
+    // Who names this relation's ids (well_known.hpp's KeyMode,
+    // docs/heap-and-tuple.md section 4.1), from sys.tables. Cacheable by
+    // this struct's admission test for the same reason `clustered_type` is:
+    // it is chosen at CREATE TABLE and there is no statement that changes
+    // it, so it cannot move without DDL.
+    //
+    // Read by the INSERT path to pick the arity and the id source. Nothing
+    // below the dispatcher reads it - the storage layer takes an id and
+    // never asks who named it, which is the property that keeps this a
+    // catalog fact rather than a storage mode.
+    KeyMode key_mode = KeyMode::kAssigned;
+
     // The relation's fixed row size and column offsets (row_layout.hpp),
     // computed once when the entry is filled. It belongs here for the same
     // reason the schema does and by the same test the rest of this struct

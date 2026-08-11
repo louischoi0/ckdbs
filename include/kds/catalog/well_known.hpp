@@ -349,4 +349,44 @@ enum class ClusteredType : std::uint8_t {
     kBtree = 1,
 };
 
+// Who names a relation's Keystone id (docs/heap-and-tuple.md section 4.1,
+// the 2026-08-11 amendment to invariant 11). Fixed at CREATE TABLE, a
+// property of the relation rather than of a statement, and never altered
+// afterwards.
+//
+// **This chooses the issuer *and*, with it, the ordering.** On a kExplicit
+// relation an id may sort anywhere - below every id already placed - which
+// is the half of the amendment that has consequences. Three of them, and
+// code that reads this enum is usually reading it for one of the three:
+//
+//   - **A kExplicit relation must be btree-clustered**, refused otherwise at
+//     `Catalog::CreateTable`. A heap chain grows only at its tail, so an id
+//     below the tail's `min_key` has no legal page (invariant 3), and
+//     proving such an id unused would mean scanning the whole chain.
+//   - **Uniqueness is proved by the descent**, not by the cursor.
+//     `sys.tables.next_id` is a high-water mark for K4's budget and nothing
+//     else here: a relation whose mark is 1000 may have had 500 since its
+//     first insert, so the mark answers no question about what is in use.
+//   - **A full leaf divides** rather than refusing (btree.cpp's
+//     `SplitLeafAndInsert`). Invariants 2 and 3 both survive it - the old
+//     leaf keeps its `min_key` and each half stays at or above its own low
+//     bound - but tuples move, so the page's `relayout_epoch` moves with
+//     them.
+//
+// What is *not* affected: every heap-clustered relation is kAssigned by the
+// rule above, so the semi-sorted chain still sees a monotonic sequence, and
+// page-wise `min_key` ordering holds in the btree because a division's new
+// leaf opens at a key that was already inside the old one.
+//
+// kAssigned is 0 so a zeroed or default-constructed row reads as the
+// behavior every relation had before the amendment.
+enum class KeyMode : std::uint8_t {
+    // The engine issues the id from the cursor. INSERT supplies values for
+    // columns 1..n-1 and supplying the pk is refused.
+    kAssigned = 0,
+    // The caller supplies the id. INSERT supplies values for columns
+    // 0..n-1, the first being the pk, and omitting it is refused.
+    kExplicit = 1,
+};
+
 }  // namespace kds::catalog

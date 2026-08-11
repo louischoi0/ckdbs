@@ -802,13 +802,29 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args) {
     }
 
     catalog::Schema schema;
+    // kAssigned by name: this legacy command has no syntax for a key mode
+    // and is not gaining one (the SQL path owns DDL surface), so the
+    // relation it makes is engine-keyed and says so.
     auto oid = catalog_.CreateTable(catalog::kNamespacePublic, args, schema,
-                                     catalog::ClusteredType::kHeap);
+                                     catalog::ClusteredType::kHeap,
+                                     catalog::KeyMode::kAssigned);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
     return {"CREATED oid=" + std::to_string(oid.value()), false};
 }
+
+namespace {
+
+// The word a CREATE TABLE clause spells, for the same reason
+// `clustered_type` is rendered rather than numbered: DESCRIBE is read by a
+// person, and mapping 0 and 1 back onto heap-and-tuple.md section 4.1's two
+// modes is work the engine can do once here.
+const char* KeyModeName(catalog::KeyMode mode) {
+    return mode == catalog::KeyMode::kExplicit ? "EXPLICIT" : "ASSIGNED";
+}
+
+}  // namespace
 
 DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
     if (args.empty()) {
@@ -846,7 +862,9 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
     // newline byte.
     std::ostringstream os;
     os << "oid=" << oid.value() << " root_page_id=" << table_row.value().desc_page_id
-       << " clustered_type=" << clustered << " next_id=" << table_row.value().next_id
+       << " clustered_type=" << clustered
+       << " key_mode=" << KeyModeName(table_row.value().key_mode)
+       << " next_id=" << table_row.value().next_id
        << " owner_core=" << table_row.value().owner_core
        << " columns=" << schema.columns.size();
 
@@ -906,11 +924,20 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
         // Column 0 is the Keystone primary key by construction, not by a
         // stored flag - heap-and-tuple.md section 4 makes it positional.
         const bool is_pk = i == 0;
+
+        // The pk is autoincrement only where the engine is the one issuing
+        // it. On an EXPLICIT relation the caller names the id and the
+        // cursor is merely admitted past it (heap-and-tuple.md section 4.1),
+        // so `yes` here would describe a sequence that never runs - and a
+        // field that is convenient to print is not a reason to print
+        // something untrue.
+        const bool autoincrement =
+            is_pk && table_row.value().key_mode == catalog::KeyMode::kAssigned;
         os << "\\n"
            << "pos=" << col.pos << " name=" << catalog::NameView(col.name) << " type=" << type_name
            << " notnull=" << (col.notnull ? "yes" : "no")
            << " pk=" << (is_pk ? "yes" : "no")
-           << " autoincrement=" << (is_pk ? "yes" : "no");
+           << " autoincrement=" << (autoincrement ? "yes" : "no");
 
         // The declared cabin policy (docs/feat-cabin.md), printed for every
         // non-pk column. The *effective* value, so `auto` covers both "the
@@ -1965,8 +1992,30 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
                                                   parent_oid.value(), col.references_table});
     }
 
-    auto oid =
-        catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema, stmt.clustered);
+    // ---- The key mode against the storage (docs/heap-and-tuple.md §4.1) --
+    //
+    // **An EXPLICIT relation must be BTREE-clustered**, and the refusal is
+    // here rather than in the parser because it is a statement about where
+    // rows can be put, not about how the words go together: the grammar
+    // takes the two trailing words in either order and neither one's
+    // meaning depends on the other. Unsupported, not InvalidArgument - the
+    // combination is understood and declined, and HEAP being the default is
+    // why a bare `EXPLICIT` lands here too.
+    if (stmt.key_mode == catalog::KeyMode::kExplicit &&
+        stmt.clustered != catalog::ClusteredType::kBtree) {
+        return {ErrorReply(Status::Unsupported(
+                    "an EXPLICIT relation must be BTREE (byte " +
+                    std::to_string(stmt.key_mode_byte_offset) +
+                    ") - a supplied id is not drawn from the cursor, so placing it and proving "
+                    "it unique both need a descent, and a heap chain grows only at its tail")),
+                false};
+    }
+
+    // The mode the statement asked for (PK03). Passed by name rather than
+    // defaulted, per PK01's rule: a defaulted mode is how the wrong one
+    // reaches a relation without anyone reading the line.
+    auto oid = catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema,
+                                     stmt.clustered, stmt.key_mode);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -2509,9 +2558,15 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
 
 bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
                                            catalog::Oid oid) const {
+    // kAssigned is not implied by kHeap, even though an EXPLICIT relation
+    // must be btree-clustered and so cannot reach here through DDL: the
+    // catalog can be driven directly, and this path's whole shape - one
+    // contiguous id range carved up front, appended in order - is wrong for
+    // ids the caller names. Stated rather than inherited, so the coupling
+    // cannot be broken silently from the other end.
     return ta.clustered_type == catalog::ClusteredType::kHeap &&
-           ta.varheap_page_id == kInvalidPageId && ta.indexes.empty() && ta.cabin_mask == 0 &&
-           !enforcer_.AnyOn(oid);
+           ta.key_mode == catalog::KeyMode::kAssigned && ta.varheap_page_id == kInvalidPageId &&
+           ta.indexes.empty() && ta.cabin_mask == 0 && !enforcer_.AnyOn(oid);
 }
 
 DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stmt,
@@ -2625,25 +2680,68 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     const std::vector<parser::AstValue>& values, WriteScope& scope, InsertRowResult& out) {
     const catalog::TableAccess& ta = *ta_ptr;
 
-    // The primary key is the engine's to issue, never the caller's
-    // (CLAUDE.md invariant 11), so VALUES supplies the columns *after* it.
-    // Catching the old arity here gives a usable message instead of the
-    // codec's "expected N value(s)".
+    // ---- Arity, and where the pk comes from -----------------------------
+    //
+    // Which one of these is right is the relation's key mode
+    // (docs/heap-and-tuple.md section 4.1), fixed at CREATE TABLE:
+    //
+    //   kAssigned - the engine issues the id, so VALUES supplies the columns
+    //               *after* it and naming the pk is refused.
+    //   kExplicit - the caller names the id, so VALUES supplies every column
+    //               starting with it and omitting the pk is refused.
+    //
+    // One arity per relation, never two: INSERT is positional with no column
+    // list, so a relation that accepted both counts could not say which of
+    // them a wrong-length row meant.
     const std::size_t ncols = ta.schema.columns.size();
-    if (ncols > 0 && values.size() == ncols) {
-        return "ERR do not supply a value for primary-key column '" +
-               std::string(catalog::NameView(ta.schema.columns.front().name)) +
-               "' - it is autoincrement and engine-assigned";
+    const bool explicit_key = ta.key_mode == catalog::KeyMode::kExplicit;
+    const std::size_t want = explicit_key ? ncols : ncols - 1;
+
+    if (ncols > 0 && values.size() != want) {
+        // The two common mistakes get the message that names the rule rather
+        // than the count, because the count alone reads as an off-by-one.
+        if (!explicit_key && values.size() == ncols) {
+            return "ERR do not supply a value for primary-key column '" +
+                   std::string(catalog::NameView(ta.schema.columns.front().name)) +
+                   "' - it is autoincrement and engine-assigned";
+        }
+        if (explicit_key && values.size() == ncols - 1) {
+            return "ERR supply a value for primary-key column '" +
+                   std::string(catalog::NameView(ta.schema.columns.front().name)) +
+                   "' - this relation is EXPLICIT, so the caller names its keys";
+        }
+        // Any other arity error, *before* the id: the codec would refuse
+        // this row at encode, which sits after the id is settled - and BI9's
+        // rule is that a refused row burns nothing. Same spelling as the
+        // codec's own check (row_codec.cpp), which stays the authority on
+        // everything deeper; this is only the count, hoisted above the burn.
+        return "ERR expected " + std::to_string(want) + " value(s)" +
+               (explicit_key ? " including the primary key" : " after the primary key") +
+               ", got " + std::to_string(values.size());
     }
-    // Any other arity error, *before* the id: the codec would refuse this
-    // row at encode, which sits after AllocateRowId - and BI9's rule is
-    // that a refused row burns nothing. Same spelling as the codec's own
-    // check (row_codec.cpp), which stays the authority on everything
-    // deeper; this is only the count, hoisted above the burn.
-    if (ncols > 0 && values.size() != ncols - 1) {
-        return "ERR expected " + std::to_string(ncols - 1) +
-               " value(s) after the primary key, got " + std::to_string(values.size());
+
+    // On an explicit relation the pk is values[0] and the body is the rest.
+    // Split here, once, so everything downstream - the FK check, assertion
+    // admission, EncodeRow, the Cabin witness, index maintenance - keeps
+    // receiving exactly the shape it already expects: the columns after the
+    // key. The copy is paid only by explicit relations, and only per row.
+    std::vector<parser::AstValue> body_storage;
+    std::uint64_t supplied_id = 0;
+    if (explicit_key && ncols > 0) {
+        const parser::AstValue& key = values.front();
+        if (key.type != parser::ValueType::kInt) {
+            return "ERR primary-key column '" +
+                   std::string(catalog::NameView(ta.schema.columns.front().name)) +
+                   "' needs an integer literal (byte " + std::to_string(key.byte_offset) + ")";
+        }
+        if (key.int_val < 0) {
+            return "ERR primary key " + std::to_string(key.int_val) +
+                   " is negative (byte " + std::to_string(key.byte_offset) + ")";
+        }
+        supplied_id = static_cast<std::uint64_t>(key.int_val);
+        body_storage.assign(values.begin() + 1, values.end());
     }
+    const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;
 
     // ---- The forward check (docs/impl-foreign-keys.md §2) ---------------
     //
@@ -2655,8 +2753,8 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         auto view = CheckView(scope);
         if (!view.ok()) return ErrorReply(view.status());
         for (const catalog::ForeignKeyRef& fk : ta.fkeys_out) {
-            if (fk.column_no == 0 || fk.column_no > values.size()) continue;
-            if (Status s = CheckForeignKeyOnWrite(ta, fk, values[fk.column_no - 1],
+            if (fk.column_no == 0 || fk.column_no > body.size()) continue;
+            if (Status s = CheckForeignKeyOnWrite(ta, fk, body[fk.column_no - 1],
                                                   view.value());
                 !s.ok()) {
                 return ErrorReply(s);
@@ -2672,18 +2770,31 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // cooperative core, so the answer holds - and in a bulk statement this
     // row's admission sees every earlier row's reservation, which is the
     // intra-statement accumulation BI2 exists to keep.
-    if (Status s = enforcer_.AdmitInsert(oid, values); !s.ok()) {
+    if (Status s = enforcer_.AdmitInsert(oid, body); !s.ok()) {
         return ErrorReply(s);
     }
 
-    auto id = catalog_.AllocateRowId(oid);
-    if (!id.ok()) {
-        return "ERR " + id.status().message();
+    // The id, from whichever source the mode names. Both sit at exactly this
+    // point in the statement - after admission, before the encode - so a
+    // refused row still burns nothing either way, and the explicit path
+    // advances the relation's high-water mark rather than drawing from it.
+    std::uint64_t row_id = 0;
+    if (explicit_key) {
+        if (Status s = catalog_.AdmitExplicitRowId(oid, supplied_id); !s.ok()) {
+            return ErrorReply(s);
+        }
+        row_id = supplied_id;
+    } else {
+        auto issued = catalog_.AllocateRowId(oid);
+        if (!issued.ok()) {
+            return "ERR " + issued.status().message();
+        }
+        row_id = issued.value();
     }
 
     std::vector<exec::AppendedSpill> spills;
     auto encoded = exec::EncodeRow(
-        ta.schema, ta.layout, id.value(), values,
+        ta.schema, ta.layout, row_id, body,
         exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills});
     if (!encoded.ok()) {
         return "ERR " + encoded.status().message();
@@ -2693,7 +2804,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // a clustered B+ tree. Duplicate-key and min_key enforcement live in
     // there, not here: they are storage invariants, not dispatcher policy.
     const bool is_btree = ta.clustered_type == catalog::ClusteredType::kBtree;
-    auto placed = InsertIntoRelation(ta, id.value(), encoded.value(),
+    auto placed = InsertIntoRelation(ta, row_id, encoded.value(),
                                      /*trx_id=*/WriterId(scope));
     if (!placed.ok()) {
         if (logging(LogLevel::kWarn)) {
@@ -2715,7 +2826,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     //
     // `ta` is still valid here: the only thing that invalidates it is the
     // desc-page relink below, which happens after.
-    NoteCabinWrite(ta, values, /*first_col_pos=*/1, id.value(), placed.value().page_id,
+    NoteCabinWrite(ta, body, /*first_col_pos=*/1, row_id, placed.value().page_id,
                    placed.value().slot);
 
     // ---- Index maintenance (docs/feat-index.md §2) ----------------------
@@ -2732,15 +2843,15 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // Collected only when there is a log to write to, so the unlogged path
     // stays the code it always was.
     std::vector<exec::IndexWrite> index_writes;
-    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, values,
-                                          /*first_col_pos=*/1, encoded.value(), id.value(),
+    if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, body,
+                                          /*first_col_pos=*/1, encoded.value(), row_id,
                                           /*previous=*/{},
                                           wal_ != nullptr ? &index_writes : nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("index", "maintaining the indexes of table oid " +
                                      std::to_string(oid) + " for id " +
-                                     std::to_string(id.value()) + " failed: " + s.message());
+                                     std::to_string(row_id) + " failed: " + s.message());
         }
         return "ERR " + s.message();
     }
@@ -2754,7 +2865,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // than under-reserving, which no compensation could see. A failure here
     // fails the statement; the abort path unwinds whatever was applied.
     if (Status s = enforcer_.ReserveInsert(page_store_, wal_, WriterId(scope), oid,
-                                           values, id.value(), placed.value().page_id,
+                                           body, row_id, placed.value().page_id,
                                            placed.value().slot);
         !s.ok()) {
         return ErrorReply(s);
@@ -2768,7 +2879,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // in-memory entry is what tells it which one.
     if (scope.txn != nullptr) {
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
-                         id.value());
+                         row_id);
     }
 
     // Logged after the page is mutated and before the client is answered -
@@ -2780,7 +2891,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
-            log_->Error("wal", "logging the insert of id " + std::to_string(id.value()) +
+            log_->Error("wal", "logging the insert of id " + std::to_string(row_id) +
                                    " failed: " + s.message());
         }
         return "ERR " + s.message();
@@ -2826,7 +2937,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         log_->Debug(is_btree ? "btree" : "heap",
                     "relation of table oid " + std::to_string(oid) +
                         " grew: new tuple page " + std::to_string(placed.value().page_id) +
-                        " min_key=" + std::to_string(id.value()) + " pages_logged=" +
+                        " min_key=" + std::to_string(row_id) + " pages_logged=" +
                         std::to_string(placed.value().changes().size()));
     }
 
@@ -2837,14 +2948,14 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     if (logging(LogLevel::kTrace)) {
         log_->Trace(is_btree ? "btree" : "heap", "insert page=" + std::to_string(placed.value().page_id) +
                                 " slot=" + std::to_string(placed.value().slot) +
-                                " id=" + std::to_string(id.value()) +
+                                " id=" + std::to_string(row_id) +
                                 " bytes=" + std::to_string(encoded.value().size()));
     }
 
     // The page id rides the (single-row) reply because it is no longer
     // implied by the table: a client that wants to `SHOW PAGE` the row it
     // just wrote would otherwise have to walk the chain to guess.
-    out.id = id.value();
+    out.id = row_id;
     out.page_id = placed.value().page_id;
     out.slot = placed.value().slot;
     return std::nullopt;
@@ -2932,6 +3043,36 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
         return std::nullopt;
     }
     return static_cast<std::uint64_t>(cond.val.int_val);
+}
+
+txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
+    // How a rollback finds a row whose address moved under it
+    // (txn/manager.hpp's RowLocator). A btree leaf division relocates half a
+    // leaf and renumbers the rest, so an entry recorded earlier in the same
+    // transaction can name a slot that now holds a different row - and
+    // compensating that blindly writes over a row this transaction never
+    // touched.
+    //
+    // Built per abort rather than installed on the manager: the manager
+    // outlives a dispatcher, and a stored callback capturing `this` would
+    // outlive its captures. An abort runs entirely inside one dispatch, so a
+    // borrowed one cannot dangle.
+    return [this](std::uint32_t rel_oid,
+                  std::uint64_t pk) -> StatusOr<txn::TransactionManager::RowLocation> {
+        auto access = catalog_.InitTableAccess(static_cast<catalog::Oid>(rel_oid));
+        if (!access.ok()) return access.status();
+        const PkLookup found = LocateByPk(*access.value(), pk);
+        if (found.kind != PkLookup::Kind::kAt) {
+            // kAbsent means the row is gone, kScan means the relation has no
+            // descent to ask. Neither is a location, and rollback may not
+            // guess one - the caller reports rather than compensating a slot
+            // it cannot vouch for.
+            return Status::NotFound("row id " + std::to_string(pk) + " of relation oid " +
+                                    std::to_string(rel_oid) +
+                                    " could not be relocated for rollback");
+        }
+        return txn::TransactionManager::RowLocation{found.at.page_id, found.at.slot};
+    };
 }
 
 CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAccess& access,
@@ -4242,7 +4383,7 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     if (Status s = enforcer_.AbortTxn(page_store_, wal_, id); !s.ok()) {
         return {ErrorReply(s), false};
     }
-    Status aborted = txn_->Abort(*txn);
+    Status aborted = txn_->Abort(*txn, RowLocatorForRollback());
     session.Finish();
     txn_->Release(*txn);
     if (!aborted.ok()) return {"ERR " + aborted.message(), false};
@@ -4340,7 +4481,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         if (Status s = enforcer_.AbortTxn(page_store_, wal_, scope.txn->id()); !s.ok()) {
             return s;
         }
-        Status aborted = txn_->Abort(*scope.txn);
+        Status aborted = txn_->Abort(*scope.txn, RowLocatorForRollback());
         txn_->Release(*scope.txn);
         scope.txn = nullptr;
         return aborted;

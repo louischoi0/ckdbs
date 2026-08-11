@@ -11,10 +11,19 @@ relation state either way — the equivalence test is the feature's spine.
   btree insert is already a descent, not a walk.
 - **T3-2, the gate (prerequisites 4 and 5, resolved conservatively)**:
   engages iff the statement is multi-row AND the relation is heap AND
-  carries no index, no Cabin, no assertion, AND its schema cannot spill.
-  FK stays allowed: forward checks run per row *before* any placement,
-  so order is preserved and a refusal burns nothing — not even the range.
-  Anything outside the gate takes the row loop; the gate can only widen.
+  **its key mode is `ASSIGNED`** AND it carries no index, no Cabin, no
+  assertion, AND its schema cannot spill (`SortedFillEligible`,
+  `src/server/command_dispatcher.cpp`). FK stays allowed: forward checks
+  run per row *before* any placement, so order is preserved and a refusal
+  burns nothing — not even the range. Anything outside the gate takes the
+  row loop; the gate can only widen.
+  The key-mode conjunct was added 2026-08-11 with the `EXPLICIT` mode
+  (`docs/heap-and-tuple.md` §4.1) and is stated rather than inherited from
+  "heap": an explicit relation must be btree-clustered and so cannot reach
+  this path through DDL, but the catalog can be driven directly, and this
+  path's whole shape — one contiguous id range carved up front, appended
+  in order — is wrong for ids the caller names. Stated at this end so the
+  coupling cannot be broken silently from the other.
 - **T3-3, the id range (prerequisite 1)**: `AllocateRowIdRange(oid, n)` —
   one catalog write bumps `next_id` by n; issuance inside the range is
   monotone by construction. An aborted statement burns the whole range:

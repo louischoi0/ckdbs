@@ -43,6 +43,15 @@ ok	-	-	CREATE TABLE t (id int) BTREE
 ok	-	-	CREATE TABLE t (id int) heap
 ok	-	-	CREATE TABLE t (id int);
 ok	-	-	create table t (id int)
+# [PK03] the key-mode word (heap-and-tuple.md §4.1), order-free with the
+# storage word. `EXPLICIT` alone parses: HEAP EXPLICIT is refused by the
+# dispatcher, which is a storage rule and not something this file sees.
+ok	-	-	CREATE TABLE t (id int) ASSIGNED
+ok	-	-	CREATE TABLE t (id int) EXPLICIT
+ok	-	-	CREATE TABLE t (id int) HEAP ASSIGNED
+ok	-	-	CREATE TABLE t (id int) BTREE EXPLICIT
+ok	-	-	CREATE TABLE t (id int) EXPLICIT BTREE
+ok	-	-	CREATE TABLE t (id int) explicit btree
 
 # ---- CREATE TABLE — rejected -----------------------------------------------
 InvalidArgument	-	-	CREATE t (id int)
@@ -56,6 +65,13 @@ InvalidArgument	-	-	CREATE TABLE t (id int
 InvalidArgument	-	-	CREATE TABLE t (id int,)
 InvalidArgument	-	-	CREATE TABLE t (id int) FOO
 InvalidArgument	-	-	CREATE TABLE
+# [PK03] one word per category, and an unknown word after both still
+# reaches the trailing-garbage check.
+InvalidArgument	-	-	CREATE TABLE t (id int) HEAP BTREE
+InvalidArgument	-	-	CREATE TABLE t (id int) BTREE BTREE
+InvalidArgument	-	-	CREATE TABLE t (id int) ASSIGNED EXPLICIT
+InvalidArgument	-	-	CREATE TABLE t (id int) EXPLICIT EXPLICIT
+InvalidArgument	-	-	CREATE TABLE t (id int) BTREE EXPLICIT FOO
 # [V11] gains WITH (k = v); today the option list is trailing garbage.
 InvalidArgument	-	-	CREATE TABLE t (id int) WITH (PHYSICAL_OPTIMIZER = ON)
 

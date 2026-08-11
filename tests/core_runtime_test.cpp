@@ -267,7 +267,8 @@ TEST_F(CoreRuntimeTest, APeerResolvesARelationCoreZeroCreated) {
     // The point of the whole phase: a non-zero core can read the catalog,
     // so it can resolve a relation, so it can serve a statement.
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     FlushCatalog();
 
@@ -299,7 +300,7 @@ TEST_F(CoreRuntimeTest, APeerDoesNotSeeADdlThatWasNotFlushed) {
 
     ASSERT_TRUE(core0_->catalog
                     .CreateTable(catalog::kNamespacePublic, "late", TwoColumnSchema(),
-                                 catalog::ClusteredType::kHeap)
+                                 catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned)
                     .ok());
 
     // Not flushed yet: invisible, and a NotFound rather than an error.
@@ -355,7 +356,8 @@ TEST_F(CoreRuntimeTest, APeerReadsTheCatalogAndCannotWriteIt) {
 
 TEST_F(CoreRuntimeTest, AGrantedPeerFaultsARelationsDataPagesReadOnly) {
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok());
     // The flush half of flush-then-grant: the relation's pages must be on
     // the device before the grant makes them reachable, or the peer faults
@@ -436,7 +438,8 @@ TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
         });
 
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
-                                    TwoColumnSchema(), catalog::ClusteredType::kHeap);
+                                    TwoColumnSchema(), catalog::ClusteredType::kHeap,
+                                    catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
 
     // The catalog recorded the rotated owner, and the hook saw the same
@@ -491,7 +494,8 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
     // own store would refuse to write anyway (MayWrite is the guard this
     // path exists to satisfy, not to bypass).
     auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
-                                           catalog::ClusteredType::kHeap);
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok());
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -538,7 +542,7 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated", TwoColumnSchema(),
-                                    catalog::ClusteredType::kHeap);
+                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     auto access = catalog2.InitTableAccess(oid.value());
     ASSERT_TRUE(access.ok());

@@ -371,6 +371,26 @@ TEST(FingerprintTest, ABareNumericIsTheQuotedStringOfItsSpelling) {
     EXPECT_NE(bare.arg_hash, padded.arg_hash);
 }
 
+TEST(FingerprintTest, TheKeyModeWordNeededNoFingerprintVersionBump) {
+    // PK03 (docs/heap-and-tuple.md §4.1). The easy half of the bump rule:
+    // `ASSIGNED` and `EXPLICIT` are new *syntax* - they lexed as ordinary
+    // identifiers before and they hash as ordinary identifiers now, and no
+    // statement that parses today contains one, so no hash moves. The
+    // version therefore does not move either.
+    //
+    // This is here so that a later change which *does* move a hash cannot
+    // pass by leaving the version alone quietly: the golden corpus pins the
+    // hashes, and this pins the version they are relative to.
+    EXPECT_EQ(kFingerprintVersion, 1u);
+    EXPECT_EQ(Must("SELECT * FROM accounts WHERE id = 42").pattern_id, 0xe0fa0b4bc8f0ebe2ull);
+
+    // And neither word is reserved, so one used as a column name is still
+    // an identifier with a shape - which is the property that keeps the
+    // hashes above from having moved in the first place.
+    EXPECT_TRUE(FingerprintOf("SELECT * FROM t WHERE explicit = 1").has_value());
+    EXPECT_TRUE(FingerprintOf("SELECT * FROM t WHERE assigned = 1").has_value());
+}
+
 TEST(FingerprintTest, TheNumericTokenNeededNoFingerprintVersionBump) {
     // The subtler case of the bump rule, argued in fingerprint.cpp:
     // `12.34` *did* lex before this token (int, dot, int), so its

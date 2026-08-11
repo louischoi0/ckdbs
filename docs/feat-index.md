@@ -141,16 +141,28 @@ exists precisely because a heap has no pk descent to heal with.
 > contents.**
 
 `storage/btree/btree.hpp` cannot host this, and not by accident. Its split
-is: *new leaf, low key = the id that caused the split, tuple goes there,
-nothing moved.* It refuses `OutOfSpace` for any key below the target leaf's
-contents, and its own header says why — dividing a page's contents would
-decide **the heap page split policy**, which is an open decision in
-`CLAUDE.md`. That bargain holds because invariant 11 makes every pk
-monotonic.
+was: *new leaf, low key = the id that caused the split, tuple goes there,
+nothing moved* — refusing `OutOfSpace` for any key below the target leaf's
+contents, on the grounds that dividing a page's contents would decide the
+open **heap page split policy**. That bargain held because invariant 11 made
+every pk monotonic.
 
-**A secondary key is not monotonic.** Arbitrary-order arrival is the defining
-property of the thing, so real splits are mandatory and the existing module
-cannot be taught them without settling the decision it exists to avoid.
+**Corrected 2026-08-11** (`docs/heap-and-tuple.md` §4.1): the premise is
+gone. An `EXPLICIT` relation's caller names its keys and they need not
+ascend, so the clustered btree now **does** divide a full leaf —
+`SplitLeafAndInsert` cuts the live versions at their median key, the old
+leaf keeping its `min_key` and the new one taking the split key. The
+refusal that remains is narrower and is about internal nodes, not leaves.
+
+**The conclusion below is unchanged, and now rests on the right reason.** It
+was never really the split: it is that an index page is a different *kind*
+of page. The clustered tree's leaf is a heap page holding tuples addressed
+by one Keystone id; an index page holds entries keyed by `key || pk`, with
+no Keystone word, no MVCC header and no `PageView`. Teaching the clustered
+module to also store entries would be the merge that costs both, and
+**a secondary key is not monotonic** — arbitrary-order arrival is the
+defining property of the thing, so its splits were mandatory from the first
+line rather than inherited from a decision that has since moved.
 
 The escape is that an index page is **not a heap page**:
 

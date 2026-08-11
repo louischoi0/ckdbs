@@ -214,6 +214,60 @@ std::string WideInsert() {
     return sql + ")";
 }
 
+TEST_F(InsertWalTest, ALeafDivisionLogsBothPagesAsImagesAndNoPageInit) {
+    // A caller-supplied key that sorts inside a full leaf divides it
+    // (docs/heap-and-tuple.md §4.1), which moves versions onto a page no
+    // other record describes.
+    //
+    // `is_new_page` means "a PAGE_INIT is enough, because the HEAP_INSERT
+    // after it describes the only tuple on this page" - not "this page is
+    // new". A division satisfies neither half: the new leaf receives the
+    // moved upper half, and the incoming tuple may land in the *rebuilt old*
+    // leaf instead. Logging the new leaf as an init would replay it empty
+    // and lose every version the division moved.
+    //
+    // This test exists because nothing reads the log back yet
+    // (docs/known-gaps.md), so a wrong record set is otherwise invisible
+    // until recovery is built and the data is already gone.
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    std::string sql = "CREATE TABLE t (id int64";
+    for (int i = 0; i < kWideColumns; ++i) sql += ", v" + std::to_string(i) + " varchar";
+    ASSERT_EQ(d.Dispatch(sql + ") BTREE EXPLICIT").response.substr(0, 7), "CREATED");
+
+    auto insert = [&](int id) {
+        std::string s = "INSERT INTO t VALUES (" + std::to_string(id);
+        for (int i = 0; i < kWideColumns; ++i) s += ", 'x'";
+        return d.Dispatch(s + ")").response;
+    };
+
+    // Ascending with gaps until the tree grows, so a leaf is known full.
+    int last = 0;
+    for (int k = 1; k <= 60; ++k) {
+        const std::string reply = insert(k * 10);
+        ASSERT_EQ(reply.substr(0, 8), "INSERTED") << reply;
+        last = k * 10;
+        if (CountOf(RecordTypes(), wal::RecordType::kFullPageImage) > 0) break;
+    }
+    ASSERT_GT(last, 0);
+
+    // Deltas, not totals: the stream already holds the inits and images of
+    // every append-split above, and only this statement's records are the
+    // subject.
+    std::vector<wal::RecordType> before = RecordTypes();
+    const std::size_t inits_before = CountOf(before, wal::RecordType::kPageInit);
+    const std::size_t images_before = CountOf(before, wal::RecordType::kFullPageImage);
+
+    // Now land in the first gap, which routes back into a full leaf.
+    const std::string divided = insert(15);
+    ASSERT_EQ(divided.substr(0, 8), "INSERTED") << divided;
+
+    std::vector<wal::RecordType> after = RecordTypes();
+    EXPECT_EQ(CountOf(after, wal::RecordType::kPageInit) - inits_before, 0u)
+        << "a divided leaf's contents are not describable by a PAGE_INIT plus one insert";
+    EXPECT_GE(CountOf(after, wal::RecordType::kFullPageImage) - images_before, 2u)
+        << "both halves of a division have to be logged whole";
+}
+
 TEST_F(InsertWalTest, ChainGrowthLogsTheNewPageAndTheLinkThatReachesIt) {
     CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
     // A wide row so the page fills in a countable number of inserts rather

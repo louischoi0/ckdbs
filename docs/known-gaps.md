@@ -2,9 +2,10 @@
 
 The engine-wide list of what is missing, what does not survive a restart,
 and what the code does differently from what a spec or older doc claims.
-Verified against code 2026-08-10. Each entry names the owning doc — the
-full argument and any workplan live there, not here. Manuals link here
-instead of carrying their own copies.
+Verified against code 2026-08-10; the "Storage and key modes" section and
+the `ORDER BY` entry added 2026-08-11 with the `EXPLICIT` key mode. Each
+entry names the owning doc — the full argument and any workplan live
+there, not here. Manuals link here instead of carrying their own copies.
 
 Scope note: an entry here is a *known, accepted* state, usually with a
 named owner. It is not a bug list; a gap whose fix is decided belongs in
@@ -97,6 +98,29 @@ There is no purge pass, and readers are deliberately unregistered
   `PageRef` migration (~257 call sites) is a hard prerequisite
   (`docs/spec-eviction.md`, `docs/page.md` §3).
 
+## Storage and key modes
+
+- **Dividing a full btree *internal* node is not implemented**
+  (`docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` PK09). A
+  full leaf divides (built 2026-08-11 with the `EXPLICIT` key mode), but
+  when the division's separator must be promoted into a parent that is
+  already full, the parent right-splits with no movement — which is sound
+  only when the separator sorts above every separator that node holds.
+  Below it, the insert is refused with `OutOfSpace` naming the gap rather
+  than stranding the subtrees above it. Reaching it needs ~678 leaf
+  divisions under one parent (`kInternalMaxEntries` is 678), i.e. a large
+  out-of-order load into one key region. Guarded, not silent.
+- **A heap relation cannot be `EXPLICIT`**, refused at
+  `Catalog::CreateTable` and at the statement layer. Not a defect: a heap
+  chain grows only at its tail and has no descent to prove a supplied key
+  unused. Lifting it is the heap page split policy
+  (`docs/heap-and-tuple.md` §3.1b), which stays open.
+- **A `DELETE`d row's primary key cannot be re-supplied** on an
+  `EXPLICIT` relation. The uniqueness check scans the landing leaf's live
+  slots, and a delete-marked slot is live until retirement — and nothing
+  retires (see reclamation above). Consistent with K1 issue-once, and a
+  restriction a caller doing delete-then-reinsert will meet.
+
 ## SQL surface and protocol
 
 - **No NULL storage**: `NULL` parses as a literal; rows holding one are
@@ -105,6 +129,19 @@ There is no purge pass, and readers are deliberately unregistered
   `ORDER BY` accepts the primary key alone (a validated no-op) and no
   `DESC`; there are no cursors, and KWP/1 portal suspension is still
   unbuilt — only the frame codec exists (`docs/protocol.md`).
+- **`ORDER BY <pk>` no longer means key order on an `EXPLICIT` relation**
+  (found 2026-08-11, `docs/heap-and-tuple.md` §4.1). The clause is
+  validated and discarded because "pk order is the order the chain
+  already emits" — true while every id was appended in ascending order,
+  and false once a caller names them: a walk emits a page's slots in slot
+  order (`RunWalkStep`, `src/exec/step_vm.cpp`), and an explicit
+  relation's slots need not be in key order. Ordering **across** pages
+  survives, since page-wise `min_key` ordering is preserved by a leaf
+  division, so the disorder is bounded by one page. Nothing tests
+  emission order on such a relation. `LIMIT`/`OFFSET` is unaffected — it
+  is a prefix of the emitted order, whatever that order is. Closing it
+  means either sorting a page at emission or refusing `ORDER BY` on
+  `EXPLICIT` relations; neither is decided.
 - **`IN (value list)`** is unbuilt — the open half of parser workplan V08;
   it currently reports "expected a subquery".
 - **Per-transaction durability class** is a KWP/1 protocol field; the text

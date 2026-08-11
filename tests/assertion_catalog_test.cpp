@@ -98,7 +98,13 @@ TEST_F(AssertionCatalogTest, TheFormatVersionMovedAndTheOverflowRangeMovedWithIt
     // undone. Page 14 is sys.assertions' root; it was the first id a catalog
     // chain grew into, so a version-12 file that outgrew any catalog root has
     // a page there that this build would overwrite.
-    EXPECT_EQ(server::kSuperBlockVersion, 13u);
+    //
+    // `>=` rather than `== 13`: this test pins that the bump *happened*, and
+    // an exact pin makes every later bump fail here for no reason - which is
+    // exactly what it did at 13 -> 14 (sys.tables' key_mode,
+    // docs/workplan-key-mode.md PK01). A version below 13 is the real
+    // regression, and that is what this now says.
+    EXPECT_GE(server::kSuperBlockVersion, 13u);
     EXPECT_EQ(catalog::kCatalogPageAssertions, 14u);
     EXPECT_EQ(catalog::kCatalogOverflowFirst, 15u);
     EXPECT_GT(catalog::kCatalogOverflowFirst, catalog::kCatalogPageAssertions);

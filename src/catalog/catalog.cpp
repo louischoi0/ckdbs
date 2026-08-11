@@ -684,7 +684,8 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
 
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                                    PageId desc_page_id, ClusteredType clustered_type,
-                                   PageId varheap_page_id, std::uint32_t owner_core) {
+                                   PageId varheap_page_id, std::uint32_t owner_core,
+                                   KeyMode key_mode) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -694,6 +695,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.next_id = kFirstRowId;
     row.varheap_page_id = varheap_page_id;
     row.owner_core = owner_core;
+    row.key_mode = key_mode;
     Status s = InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
@@ -734,11 +736,28 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 }
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                                    ClusteredType clustered_type) {
+                                    ClusteredType clustered_type, KeyMode key_mode) {
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
     if (Status s = CheckKeystoneColumn(schema); !s.ok()) return s;
+
+    // An EXPLICIT relation must be btree-clustered (heap-and-tuple.md
+    // section 4.1). A caller-supplied id may sort anywhere, and a heap chain
+    // has no answer for one: it grows only at its tail, so an id below the
+    // tail's min_key has no legal page, and proving the id unused would mean
+    // scanning every page in the chain. The btree's descent answers both in
+    // one walk.
+    //
+    // Enforced here as well as at the statement layer - which refuses with
+    // the offending token's byte - because this is where a relation actually
+    // comes into being, and a relation that cannot accept a single INSERT
+    // should not be creatable through any path.
+    if (key_mode == KeyMode::kExplicit && clustered_type != ClusteredType::kBtree) {
+        return Status::Unsupported(
+            "an EXPLICIT relation must be BTREE-clustered: a supplied id is not drawn from the "
+            "cursor, so placing it and proving it unique both need a descent");
+    }
     if (Status s = CheckDeclarableColumnTypes(schema); !s.ok()) return s;
 
     // Same argument, extended by the fixed-length rule: the relation's row
@@ -812,7 +831,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         return s;
     }
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
-                                      varheap_root, owner_core);
+                                      varheap_root, owner_core, key_mode);
         !s.ok()) {
         return s;
     }
@@ -1180,6 +1199,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;
     access.owner_core = table_row.value().owner_core;
+    access.key_mode = table_row.value().key_mode;
 
     // The row-size constant, computed once here and carried for the life of
     // the entry (invariant 13). This is the only place it is derived: a
@@ -1291,6 +1311,15 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
         [&](SysTableRow& row, heap::PageView& page, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
+            if (row.key_mode == KeyMode::kExplicit) {
+                // A carve issues a contiguous block of ids, which is exactly
+                // what this relation's caller is doing by hand. Refused for
+                // AllocateRowId's reason, and it also takes row-id leasing
+                // off the table for these relations - a lease is a carve.
+                return Status::Unsupported(
+                    "relation names its own primary keys (EXPLICIT); the engine does not carve "
+                    "id ranges for it");
+            }
             // Exhaustion checked against the range's *last* id: a range
             // that would cross the ceiling is refused whole, never split.
             if (row.next_id > kMaxKeystoneId - (count - 1)) {
@@ -1334,6 +1363,15 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
         if (row.oid != table_oid) return false;
 
+        if (row.key_mode == KeyMode::kExplicit) {
+            // The caller names ids on this relation, so issuing one here
+            // would hand out a value the caller may spell later - and
+            // nothing downstream could tell the two apart.
+            return Status::Unsupported(
+                "relation names its own primary keys (EXPLICIT); the engine does not issue "
+                "ids for it");
+        }
+
         const std::uint64_t id = row.next_id;
         if (id > kMaxKeystoneId) {
             // The sequence is exhausted, not wrapped: reissuing from the
@@ -1365,6 +1403,69 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
     if (!acted.ok()) return acted.status();
     if (!acted.value()) return Status::NotFound("no sys.tables row for this oid");
     return issued;
+}
+
+Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
+    // Spellability first, before the catalog page is touched at all: an id
+    // outside the Keystone field cannot be stored by any path, so there is
+    // nothing to check a relation for.
+    if (id < kFirstRowId) {
+        return Status::InvalidArgument("primary key " + std::to_string(id) +
+                                       " is below the first issuable id (" +
+                                       std::to_string(kFirstRowId) +
+                                       "); 0 is reserved for \"unset\"");
+    }
+    if (id > kMaxKeystoneId) {
+        return Status::InvalidArgument("primary key " + std::to_string(id) +
+                                       " does not fit the 40-bit Keystone id space (max " +
+                                       std::to_string(kMaxKeystoneId) + ")");
+    }
+
+    auto acted = ForFirstRow<SysTableRow>(
+        store_, kCatalogPageTables,
+        [&](SysTableRow& row, heap::PageView& page, std::uint16_t i,
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+            if (row.oid != table_oid) return false;
+
+            if (row.key_mode != KeyMode::kExplicit) {
+                // The mirror of AllocateRowId's refusal. Both are checked at
+                // the callee because the mode is a per-relation fact and the
+                // call sites are several.
+                return Status::Unsupported(
+                    "the engine issues primary keys for this relation (ASSIGNED); it does not "
+                    "accept a caller-supplied id");
+            }
+
+            // Below the mark: nothing to record. The mark is a ceiling on
+            // what has been *issued*, and a descending id issues nothing -
+            // it is admitted on the strength of the btree descent that
+            // follows, not on this number. Returning without a write is what
+            // keeps a backfill of old ids from touching the catalog page
+            // once per row.
+            if (id < row.next_id) return true;
+
+            // At or above: the mark moves past it, persisted before the
+            // caller places anything. Same ordering as AllocateRowId and the
+            // same reason - a crash between here and the insert leaves a
+            // ceiling that is too high, which burns ids (K3 calls that free)
+            // where the reverse would leave one too low, and a too-low mark
+            // is how the engine later issues an id that is already a tuple's
+            // identity.
+            row.next_id = id + 1;
+            auto encoded = row.Encode();
+            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+                return s;
+            }
+            if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+                log_->Trace("catalog", "admitted explicit row id " + std::to_string(id) +
+                                           " for table oid " + std::to_string(table_oid) +
+                                           ", high-water now " + std::to_string(row.next_id));
+            }
+            return true;
+        });
+    if (!acted.ok()) return acted.status();
+    if (!acted.value()) return Status::NotFound("no sys.tables row for this oid");
+    return Status::OK();
 }
 
 Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {

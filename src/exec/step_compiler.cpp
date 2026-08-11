@@ -1406,6 +1406,31 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 "; pk order is the order the chain already emits, and any other "
                 "order needs an output sort this engine does not have");
         }
+        // ...and "the order the chain already emits" is exactly what a
+        // kExplicit relation does not give (docs/heap-and-tuple.md §4.1).
+        // The walk emits a page's slots in **slot** order, which equals key
+        // order only because an engine-issued id is appended above every id
+        // already on the page. A caller-supplied id may be appended below
+        // them, so the rows of one page can come out unsorted - ordering
+        // *across* pages survives, since a division opens the new leaf at a
+        // key that was already inside the old one, but within a page it does
+        // not.
+        //
+        // Refused rather than silently misordered: discarding the clause
+        // here is only sound while the premise holds, and a paginated read
+        // that returns the right rows in the wrong order is the kind of
+        // wrong answer nothing downstream can detect. Closing this properly
+        // means sorting each page's accepted rows at emission, which is a
+        // change to the walk's streaming shape and is not in this amendment.
+        if (!scope.relations.empty() && scope.relations[0].access != nullptr &&
+            scope.relations[0].access->key_mode == catalog::KeyMode::kExplicit) {
+            return Status::Unsupported(
+                "ORDER BY is not supported on an EXPLICIT relation" +
+                Position(stmt.order_by->byte_offset) +
+                "; its keys are caller-supplied and need not ascend, so the walk's "
+                "emission order is not key order within a page, and this engine has "
+                "no output sort to impose one");
+        }
     }
     chain.limit = stmt.limit;
     chain.offset = stmt.offset;

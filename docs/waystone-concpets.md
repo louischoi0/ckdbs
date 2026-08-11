@@ -22,7 +22,7 @@ Three properties follow, and they define the structure:
 
 - **A relation holds no Keystone map.** Nothing addresses a tuple by arithmetic on its pk, so there is no per-relation directory, no coverage guarantee, and no per-relation enable flag. A relation stores tuples; that is all it does.
 - **A waystone spans relations.** One page holds the Keystones of a customer row, the account rows under it, and the instrument rows those reference — because that is what one execution of `patternX(a, b)` touched. Every entry therefore carries its own `rel_oid` (§6).
-- **Pk values may be arbitrary.** Nothing here requires a dense, monotonically issued id sequence, so a heap page or a btree leaf may hold any pk the rest of the engine permits. See §8: this *permits* a relaxation, it does not perform one.
+- **Pk values may be arbitrary.** Nothing here requires a dense, monotonically issued id sequence, so a heap page or a btree leaf may hold any pk the rest of the engine permits. See §8: this *permits* a relaxation, it does not perform one — and as of 2026-08-11 the engine performs part of it for its own reasons, which cost this document nothing.
 
 Waystone lives outside the executor. The executor emits a trail through a one-method seam and asks for one through another; all storage and policy belong to Waystone, which is what keeps the advisory contract structurally enforceable.
 
@@ -147,7 +147,13 @@ The bar to clear, measured on this engine: a validated point lookup ran 8,417 qp
 - **Invariant 7** (advisory; deleting it never changes results) — unchanged, and still the one that matters.
 - **Invariant 8** (never authoritative) — unchanged, and now load-bearing in a new way: it is what forces §2's trail model.
 - **Invariant 6** (ids outside the tuple header are zero-extended `uint64`) — unchanged; entry `pk` obeys it.
-- **Invariant 3** (`min_key`) and **invariant 10** (system-generated autoincrement ids) — **not changed by this document.** §1 notes that pattern-keying removes the *only* structural reason the engine needed dense monotonic pks, so arbitrary pk values become possible. Whether to actually permit a caller-supplied pk (invariant 10) or to retire `min_key` pruning (invariant 3) are separate decisions with their own blast radius — `min_key` exists for lock-free range pruning and `next_id` for tuple identity, neither of which was ever about Waystone. Listed `[OPEN]` in §9; do not assume either.
+- **Invariant 3** (`min_key`) and **invariant 11** (pk provenance and ordering) — **not changed by this document.** §1 notes that pattern-keying removes the *only* structural reason the engine needed dense monotonic pks, so arbitrary pk values become possible. Whether to actually permit a caller-supplied pk or to retire `min_key` pruning are separate decisions with their own blast radius — `min_key` exists for lock-free range pruning and `next_id` for tuple identity, neither of which was ever about Waystone.
+
+  **Settled 2026-08-11, and settled by something else** (`docs/heap-and-tuple.md` §4.1): a relation may now be declared `EXPLICIT`, and its caller-supplied ids **need not ascend**. Both halves of this bullet's "arbitrary pk values" are therefore permitted — on btree-clustered relations, which is where the descent can prove a named key unique. Two things worth stating plainly, because the earlier note here half-claimed the decision:
+
+  - **This document did not win the argument, and did not need to.** The relaxation was granted on the storage layer's terms — uniqueness moved from the cursor to the btree descent — not on pattern-keying's. Waystone's claim that it removes the *need* for dense monotonic pks stands unused: nothing in §4.1's argument cites it.
+  - **The engine's answer for a heap relation is unchanged.** Every heap chain is still `ASSIGNED` and still fed a monotonic sequence, because a chain has no descent. So the "retire `min_key` pruning" half of this bullet is fully open, and `min_key` remains immutable in both storage forms — a btree leaf division keeps the old page's bound and gives the new page the split key, precisely so invariants 2 and 3 survive the one operation that moves tuples.
+  - **What it cost Waystone: one epoch bump.** A leaf division moves tuples, so the old page's `relayout_epoch` advances and every trail entry into it becomes untrusted at once. That is §3.1a's pairing rule working exactly as designed — invariant 8's advisory contract absorbs it as a performance event, never a correctness one.
 
 ## 9. Open decisions — do not assume
 
@@ -160,7 +166,7 @@ The bar to clear, measured on this engine: a validated point lookup ran 8,417 qp
 - **Completeness / set caching**, and with it whether invariant 8 is ever amended. Needs a per-relation change stamp bumped at *commit*, not at write — a row inserted-then-committed by another transaction would otherwise slip past a stamp taken between the two.
 - **`arg_hash` collision handling** beyond the header check (§5): chain, displace, or drop.
 - **Pattern registration on the statement path** vs. lazily off it (§4 hazard).
-- **Invariant 3 / invariant 10 relaxation** (§8).
+- **Invariant 3 relaxation** (§8) — still fully open. ~~Invariant 11's~~ pk half is **settled 2026-08-11**: caller-supplied ids yes, and descending ids yes, on btree-clustered relations (`docs/heap-and-tuple.md` §4.1). It was settled on the storage layer's argument rather than this document's, and it changed nothing here — trail entries key on a pk's *value*, never on its order or its provenance, and the leaf division it introduced invalidates trails through the epoch counter that already existed for relayout.
 - Inherited and still open: heap-page epoch storage and width; decay function and cadence; ring sampling policy under pressure; hint-index per-template trust classification.
 
 ## 10. Why not a pk-direct index

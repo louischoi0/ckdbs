@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -160,12 +161,44 @@ public:
     // dispatcher's INSERT path already does.
     StatusOr<wal::Lsn> Commit(Transaction& txn, wal::DurabilityClass durability);
 
+    // ---- Re-locating a row whose address moved --------------------------
+    //
+    // A trail entry records where a row *was* - `(page_id, slot)` - because
+    // that is what rollback needs to reach it, and for most of this engine's
+    // life a row's address was stable for life (row_codec.hpp). A btree leaf
+    // division breaks that: it moves half a leaf's tuples to another page and
+    // renumbers the slots of the ones that stay
+    // (`docs/heap-and-tuple.md` §4.1). Only a kExplicit relation can trigger
+    // one mid-statement, but when it does, every entry this transaction
+    // recorded earlier names a slot that is out of range or holds a
+    // different row - and compensating that blindly is not a failed
+    // rollback, it is a rollback that corrupts a row it never wrote.
+    //
+    // So compensation checks identity before it acts, and asks for the row's
+    // current address when the check fails. The lookup lives outside this
+    // class because finding a row by `(rel_oid, pk)` needs the catalog and
+    // the relation's storage form, and `txn` deliberately knows neither -
+    // `CommandDispatcher::LocateByPk` is the implementation, installed here.
+    //
+    // Unset is a valid configuration: without it a moved row is reported
+    // rather than compensated wrongly, which is the safe half of the same
+    // rule.
+    struct RowLocation {
+        PageId page_id = kInvalidPageId;
+        std::uint16_t slot = 0;
+    };
+    // Passed to Abort rather than stored on the manager: the implementation
+    // belongs to the dispatcher, which is shorter-lived than the manager it
+    // borrows, so a stored callback capturing it would outlive its captures.
+    using RowLocator = std::function<StatusOr<RowLocation>(std::uint32_t rel_oid,
+                                                            std::uint64_t pk)>;
+
     // Walks the trail **in reverse** emitting each compensation as an
     // ordinary logged page mutation (section 6), then TXN_ABORT with no
     // durability wait - a transaction whose abort record did not survive is
     // a transaction with no commit record, which recovery rolls back
     // anyway. Undo pages are not freed.
-    Status Abort(Transaction& txn);
+    Status Abort(Transaction& txn, const RowLocator& locate_row = {});
 
     // ---- First-updater-wins (section 5) --------------------------------
     //
@@ -236,7 +269,8 @@ public:
     std::size_t ActiveCount() const noexcept;
 
 private:
-    Status Compensate(const TrailEntry& entry, std::uint64_t trx_id);
+    Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
+                      const RowLocator& locate_row);
 
     TrxIdSequence& ids_;
     UndoLog& undo_;

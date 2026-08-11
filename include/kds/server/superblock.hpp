@@ -139,7 +139,25 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 //
 // The price is the usual one and, here, exactly what is wanted: every
 // pre-existing data file stops mounting.
-inline constexpr std::uint32_t kSuperBlockVersion = 13;
+// 13 -> 14: `sys.tables` grew `key_mode` (docs/heap-and-tuple.md section
+// 4.1, workplan-key-mode.md PK01) - the **sixth repeat of the catalog-row-
+// layout break** 4 -> 5 first recorded, and the second time SysTableRow
+// specifically has been the row that grew (9 -> 10 was `owner_core`).
+//
+// One byte, and the bump is not negotiable for it. A version-13 file has
+// SysTableRow rows one byte short, and `Decode` refuses anything but the
+// exact size (rows.hpp's stated reason: a heap tuple's data_len is
+// caller-supplied at read time, so a length mismatch is a real corruption
+// signal). Without the bump the file mounts cleanly and then fails on the
+// first catalog read, naming a size rather than a version - precisely the
+// opaque failure 4 -> 5 exists to convert into a refusal at the door.
+//
+// Worth recording because it was nearly missed: `docs/page.md` section 16
+// says no shipped format exists, which is true of the *page* layout and not
+// of the catalog rows, and the spec amendment quoted it at the wrong
+// subject before this list was read. The authority on whether a catalog row
+// may grow quietly is this comment block, and it has said no six times.
+inline constexpr std::uint32_t kSuperBlockVersion = 14;
 
 // ---- On-disk field layout ----------------------------------------------
 
