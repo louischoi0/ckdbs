@@ -1,11 +1,33 @@
 # WAL recovery — workplan
 
-Status: **RC01-RC04 and RC04a written (unbuilt); RC05 onward not started.**
-**Both of §4's blocking decisions are now answered** — the assertion replay
-range by AS6a (unblocking RC07) and the insert/enumeration question by RV10
-(unblocking RC06, and so RC05). **RV6 is superseded**: §4a records what
-`origin/main`'s `EXPLICIT` key mode did to it, §4b what the enumeration gap
-did. Spec: `docs/wal.md` §12 (normative, and
+Status as of 2026-08-11, on `main` at `ee2250a`:
+
+| | |
+|---|---|
+| RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **written, never compiled** |
+| RC07 | unblocked by AS6a, not started |
+| RC08, RC09 | unblocked, not started |
+| RC10 | not started, and **not completable without a toolchain** — its done-when is that the harness *runs* |
+
+**Nothing in this series has ever been built or executed.** The environment
+it was written in has no C++ toolchain, and that is a property of every
+task below, not a note on one of them. Two done-when clauses are already
+unmet by their own text and say so: RC06's measured INSERT cost, and RC05's
+byte-for-byte live-vs-recovered comparison. **The next action on this plan
+is `scripts/test.sh` on a machine with a compiler, not RC07.**
+
+Both of §4's blocking decisions are answered — the assertion replay range
+by AS6a (RC07), the insert/enumeration question by RV10 (RC06, and so
+RC05). **RV6 is superseded**: §4a records what `origin/main`'s `EXPLICIT`
+key mode did to it, §4b what the enumeration gap did.
+
+**Two defects were found by writing this plan, both in code that predates
+it, and both had the same signature — a comment asserting a property the
+adjacent code did not have.** `redo.cpp` said rollback's delete-mark clear
+was a distinct record type; it was not, so a crash after an aborted DELETE
+came back with the row still deleted (fixed at `a00c727`). §4a said a
+delete-mark's before-image would yield a pk; its image is empty. Treat the
+unexecuted parts of this series with that in mind. Spec: `docs/wal.md` §12 (normative, and
 still `[PROPOSED]` — this plan proposes the amendments §12 needs and does
 not make them). Related: `docs/txn.md` §§3, 6, 8, `docs/page.md` §§2, 8,
 10, `docs/keystoneid-invariant.md` K-M2a, `docs/feat-assertion.md` §7,
@@ -144,14 +166,27 @@ identity to check, and not the `(rel_oid, pk)` a locator needs. This is the
 same shape as RC03's `UNDO_WRITE` blocker — a fact that lives on the page
 and nowhere in the log — arriving from a different direction.
 
-**Proposed resolution, and it needs no format change.** The pk is already
-in the record: for `kOverwrite` and `kDelete` the before-image *is* the
-prior tuple payload, and `KeystoneIdOfPayload` is what reads an id out of
-one — the same call `Compensate` makes. So recovery's undo can check
-identity from the image itself and, on a mismatch, take the **no-locator
-branch** — refuse the mount rather than guess. That is not a degraded mode;
-it is the branch main already ships as "the safe half of the same rule",
-and it keeps `rel_oid` out of a format that has no room for it.
+**Proposed resolution.** Recovery's undo checks identity from the record
+itself and, on a mismatch, takes the **no-locator branch** — refuse the
+mount rather than guess. That is not a degraded mode; it is the branch main
+already ships as "the safe half of the same rule", and it keeps `rel_oid`
+out of a format that has no room for it.
+
+> **Corrected 2026-08-11, at RC06.** This paragraph first claimed the
+> resolution "needs no format change", because "for `kOverwrite` and
+> `kDelete` the before-image *is* the prior tuple payload" and
+> `KeystoneIdOfPayload` could read the pk out of it. **That is false for two
+> of the three types.** `kDeleteMark`'s image is empty by design — the enum
+> says so: *"a delete-mark changes no tuple bytes, so there are none to
+> restore"* — and `kInsert`'s is empty too. Only `kOverwrite` carries a
+> payload to recover a pk from.
+>
+> So `pk` is stored on **every** undo record, as one of RV10's two added
+> fields (§4b), and the identity check is uniform across the three types
+> rather than available for one. The correction cost nothing, because RV10
+> was moving the format anyway — but the claim was wrong when written, and
+> it was wrong in the same way `redo.cpp`'s delete-unmark comment was:
+> reasoning about the design instead of reading the adjacent enum.
 
 What it costs: a crash on an `EXPLICIT` relation whose leaf divided
 mid-transaction refuses the mount instead of recovering. Narrow today —
