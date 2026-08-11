@@ -91,10 +91,30 @@ Status ApplyDeleteMark(std::span<std::byte, kPageSize> page, const DecodedRecord
     }
     heap::PageView view(page);
     // DeleteMark re-stamps rather than failing on an already-marked slot,
-    // so this is idempotent without a special case - and rollback's
-    // ClearDeleteMark is a *different* record, so redo never has to guess
-    // which direction a mark record meant.
+    // so this is idempotent without a special case - and rollback's clear
+    // is HEAP_DELETE_UNMARK, a *different* record, so redo never has to
+    // guess which direction a mark record meant.
+    //
+    // **That was not true until 2026-08-11 and this comment asserted it
+    // anyway.** `TransactionManager::Compensate` logged kHeapDeleteMark to
+    // clear a mark, so redo replayed a rollback's compensation as a second
+    // delete - and a transaction that delete-marked a row and then aborted
+    // came back from recovery with the row still deleted. RC05 added the
+    // record type the comment had already assumed.
     return view.DeleteMark(fields.value().slot, fields.value().trx_id);
+}
+
+Status ApplyDeleteUnmark(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    auto fields = DecodeHeapDeleteUnmark(record.payload);
+    if (!fields.ok()) {
+        return fields.status();
+    }
+    heap::PageView view(page);
+    // Idempotent for the same reason its counterpart is: clearing a mark
+    // that is already clear re-stamps the same header and moves no other
+    // byte.
+    return view.ClearDeleteMark(fields.value().slot, fields.value().trx_id,
+                                fields.value().undo_ptr);
 }
 
 Status ApplySlotRetire(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
@@ -285,6 +305,9 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                 break;
             case RecordType::kHeapDeleteMark:
                 applied = ApplyDeleteMark(page, record);
+                break;
+            case RecordType::kHeapDeleteUnmark:
+                applied = ApplyDeleteUnmark(page, record);
                 break;
             case RecordType::kSlotRetire:
                 applied = ApplySlotRetire(page, record);

@@ -308,11 +308,17 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
                 return s;
             }
             if (wal_ == nullptr) return Status::OK();
-            std::array<std::byte, wal::kDeleteMarkPayloadSize> buf{};
-            const wal::HeapDeleteMarkPayload fields{entry.prior_trx_id, slot};
-            if (auto n = wal::EncodeHeapDeleteMark(buf, fields); !n.ok()) return n.status();
+            // **HEAP_DELETE_UNMARK, not HEAP_DELETE_MARK.** This logged the
+            // mark record until 2026-08-11, which redo replays by *setting*
+            // a mark - so a crash after this rollback brought the row back
+            // deleted, the abort undone by its own compensation. The two
+            // directions are two record types (`record.hpp`).
+            std::array<std::byte, wal::kDeleteUnmarkPayloadSize> buf{};
+            const wal::HeapDeleteUnmarkPayload fields{entry.prior_trx_id, entry.prior_undo_ptr,
+                                                      slot};
+            if (auto n = wal::EncodeHeapDeleteUnmark(buf, fields); !n.ok()) return n.status();
             auto rec = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kHeapDeleteMark, trx_id, page_id}, buf);
+                wal::RecordSpec{wal::RecordType::kHeapDeleteUnmark, trx_id, page_id}, buf);
             if (!rec.ok()) return rec.status();
             return store_.StampPageLsn(page_id, rec.value());
         }

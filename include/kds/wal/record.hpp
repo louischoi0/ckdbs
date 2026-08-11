@@ -125,6 +125,27 @@ enum class RecordType : std::uint8_t {
     // Teardown (DROP ASSERTION): the directory forgets the assertion. The
     // pages return through ordinary FREE records, not through this one.
     kAssertDrop = 22,
+    // ---- Clearing a delete-mark (RC05, 2026-08-11) ----------------------
+    //
+    // Rollback's compensation for a DELETE, and it needs a type of its own
+    // because **HEAP_DELETE_MARK cannot say which direction it meant**.
+    //
+    // This is a bug that shipped, found writing RC05. `redo.cpp`'s applier
+    // asserted the opposite in a comment - "rollback's ClearDeleteMark is a
+    // *different* record, so redo never has to guess which direction a mark
+    // record meant" - and it was not: `TransactionManager::Compensate`
+    // logged `kHeapDeleteMark` to *clear* a mark, with a payload
+    // `{trx_id, slot}` identical in shape to the one that *sets* it. Redo
+    // replays both by calling `DeleteMark`, so a transaction that
+    // delete-marked a row and then aborted came back from recovery with the
+    // row still deleted - the abort silently undone by its own
+    // compensation.
+    //
+    // A distinct type rather than a flag in the payload: the two operations
+    // are different operations, and a reader that has to consult a bit to
+    // know whether a record adds or removes state is one substitution away
+    // from the same defect.
+    kHeapDeleteUnmark = 23,
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
     // there is no B+ tree page format to describe, and a number reserved
     // for a payload nobody can encode is a number that gets used wrong.

@@ -211,6 +211,36 @@ StatusOr<std::size_t> EncodeHeapDeleteMark(std::span<std::byte> out,
                                            const HeapDeleteMarkPayload& fields);
 StatusOr<HeapDeleteMarkPayload> DecodeHeapDeleteMark(std::span<const std::byte> in);
 
+// ---- HEAP_DELETE_UNMARK --------------------------------------------------
+//
+// Rollback's compensation for a DELETE (record.hpp says why it is a type of
+// its own and not a flag).
+//
+// It carries `undo_ptr` where HEAP_DELETE_MARK does not, and that is not
+// symmetry for its own sake: `PageView::ClearDeleteMark` restores the
+// tuple's writer *and* its version-chain link, because clearing the mark
+// puts the row back under the version that preceded the delete. A record
+// carrying only the writer would restore half the header and leave the
+// chain pointing at the undo record of a change that no longer happened.
+struct HeapDeleteUnmarkPayload {
+    std::uint64_t trx_id;     // the writer to restore - the pre-delete one
+    std::uint64_t undo_ptr;   // and its version-chain link
+    std::uint16_t slot;
+};
+
+inline constexpr std::size_t kDeleteUnmarkTrxIdOffset = 0;
+inline constexpr std::size_t kDeleteUnmarkUndoPtrOffset = 8;
+inline constexpr std::size_t kDeleteUnmarkSlotOffset = 16;
+inline constexpr std::size_t kDeleteUnmarkPayloadSize = 18;
+
+static_assert(offsetof(HeapDeleteUnmarkPayload, trx_id) == kDeleteUnmarkTrxIdOffset);
+static_assert(offsetof(HeapDeleteUnmarkPayload, undo_ptr) == kDeleteUnmarkUndoPtrOffset);
+static_assert(offsetof(HeapDeleteUnmarkPayload, slot) == kDeleteUnmarkSlotOffset);
+
+StatusOr<std::size_t> EncodeHeapDeleteUnmark(std::span<std::byte> out,
+                                             const HeapDeleteUnmarkPayload& fields);
+StatusOr<HeapDeleteUnmarkPayload> DecodeHeapDeleteUnmark(std::span<const std::byte> in);
+
 // ---- SLOT_RETIRE ---------------------------------------------------------
 //
 // Physical retirement, deliberately a different record from the delete-mark

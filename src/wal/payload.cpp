@@ -260,6 +260,40 @@ StatusOr<HeapDeleteMarkPayload> DecodeHeapDeleteMark(std::span<const std::byte> 
     return fields;
 }
 
+StatusOr<std::size_t> EncodeHeapDeleteUnmark(std::span<std::byte> out,
+                                             const HeapDeleteUnmarkPayload& fields) {
+    if (Status s = CheckOutputSize(out, kDeleteUnmarkPayloadSize, "HEAP_DELETE_UNMARK"); !s.ok()) {
+        return s;
+    }
+    if (fields.trx_id > kMaxTxnId) {
+        return Status::InvalidArgument("wal payload: delete-unmark trx_id exceeds 48 bits");
+    }
+
+    Store<std::uint64_t>(out, kDeleteUnmarkTrxIdOffset, fields.trx_id);
+    Store<std::uint64_t>(out, kDeleteUnmarkUndoPtrOffset, fields.undo_ptr);
+    Store<std::uint16_t>(out, kDeleteUnmarkSlotOffset, fields.slot);
+    return kDeleteUnmarkPayloadSize;
+}
+
+StatusOr<HeapDeleteUnmarkPayload> DecodeHeapDeleteUnmark(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kDeleteUnmarkPayloadSize, "HEAP_DELETE_UNMARK"); !s.ok()) {
+        return s;
+    }
+
+    HeapDeleteUnmarkPayload fields{};
+    fields.trx_id = Load<std::uint64_t>(in, kDeleteUnmarkTrxIdOffset);
+    fields.undo_ptr = Load<std::uint64_t>(in, kDeleteUnmarkUndoPtrOffset);
+    fields.slot = Load<std::uint16_t>(in, kDeleteUnmarkSlotOffset);
+    // **kNoTxnId is legal here and is not in the mark's payload.** Clearing
+    // a delete restores whatever writer preceded it, and for a row that no
+    // transaction had written since bootstrap that is the pre-existing
+    // writer, not a live id. CheckTxnId would refuse it.
+    if (fields.trx_id > kMaxTxnId) {
+        return Status::Corruption("wal payload: delete-unmark trx_id exceeds 48 bits");
+    }
+    return fields;
+}
+
 // ---- SLOT_RETIRE ---------------------------------------------------------
 
 StatusOr<std::size_t> EncodeSlotRetire(std::span<std::byte> out, const SlotRetirePayload& fields) {

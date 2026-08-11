@@ -43,6 +43,7 @@ const char* RecordTypeName(RecordType type) noexcept {
         case RecordType::kHeapInsert: return "HEAP_INSERT";
         case RecordType::kHeapOverwrite: return "HEAP_OVERWRITE";
         case RecordType::kHeapDeleteMark: return "HEAP_DELETE_MARK";
+        case RecordType::kHeapDeleteUnmark: return "HEAP_DELETE_UNMARK";
         case RecordType::kSlotRetire: return "SLOT_RETIRE";
         case RecordType::kAlloc: return "ALLOC";
         case RecordType::kFullPageImage: return "FULL_PAGE_IMAGE";
