@@ -239,10 +239,15 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // crash can have lost the allocation that created it. PAGE_INIT and
         // an FPI both describe a whole page, so either can create one;
         // anything else needs the page to be there already.
-        std::span<std::byte, kPageSize> page;
+        // Dynamic extent while the branches below decide *which* page this
+        // is, narrowed to the fixed extent once past them. A
+        // `span<byte, kPageSize>` cannot be declared here and assigned
+        // there: a fixed-extent span has no default constructor, and the
+        // store hands back dynamic spans besides.
+        std::span<std::byte> page_bytes;
         auto got = store.Get(page_id);
         if (got.ok()) {
-            page = got.value();
+            page_bytes = got.value();
         } else if (got.status().code() == StatusCode::kCorruption) {
             // Checksum failure. Held, not failed: an FPI later in the
             // stream is exactly what heals this (page.md §10).
@@ -254,7 +259,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page = created.value();
+            page_bytes = created.value();
             if (poisoned.erase(page_id) != 0) {
                 ++stats.pages_healed;
             }
@@ -263,11 +268,14 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page = created.value();
+            page_bytes = created.value();
             ++stats.pages_created;
         } else {
             return got.status();
         }
+
+        // Every path that reaches here assigned a whole page.
+        const std::span<std::byte, kPageSize> page(page_bytes.data(), kPageSize);
 
         // A page still poisoned is one no image has healed yet; its
         // ordinary records cannot be applied to bytes nobody trusts.

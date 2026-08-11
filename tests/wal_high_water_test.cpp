@@ -96,7 +96,9 @@ AnalysisResult Named(PageId max_page_id, std::uint64_t max_txn_id = 0) {
 TEST(HighWaterTest, ARecoveredStoreDoesNotHandOutAPageTheLogNamed) {
     auto device = MakeDevice();
     ASSERT_NE(device, nullptr);
-    MemoryLogDevice log(kSegmentSize);
+    auto log_owned = MemoryLogDevice::Create(kSegmentSize);
+    ASSERT_TRUE(log_owned.ok()) << log_owned.status().message();
+    MemoryLogDevice& log = *log_owned.value();
 
     // ---- The run before the crash ----------------------------------------
     //
