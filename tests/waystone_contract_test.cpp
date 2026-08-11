@@ -169,6 +169,16 @@ const std::vector<std::string>& Queries() {
         "SELECT * FROM b LIMIT 3 OFFSET 2",
         "SELECT * FROM h OFFSET 5",
         "SELECT * FROM b ORDER BY id ASC LIMIT 2",
+        // OB4's half of the same question, and a sharper one. The sort is
+        // a sink decorator downstream of trail recording, so a trail can
+        // reorder *execution* freely while the reply stays fixed - these
+        // cases are the ones that would catch a sort that had leaked into
+        // the VM, and the DESC and multi-key forms are the ones with no
+        // walk order to fall back on if it had.
+        "SELECT * FROM b ORDER BY v DESC",
+        "SELECT * FROM b ORDER BY v DESC LIMIT 3 OFFSET 1",
+        "SELECT * FROM b ORDER BY label, id DESC",
+        "SELECT * FROM h ORDER BY v",
         "SELECT * FROM b WHERE v = 50 LIMIT 1",
         "SELECT * FROM b WHERE id = 99 LIMIT 1",
         "SELECT label FROM b LIMIT 0",

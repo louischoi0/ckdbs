@@ -35,7 +35,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "access_statistics",       "cabins",   "cabin_max_values",
             "indexes",
             "cabin_max_entries_per_value", "cores", "placement",
-            "aggregate_max_groups",  "aggregate_max_distinct",
+            "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -166,6 +166,14 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetUint("aggregate_max_distinct");
         if (!v.ok()) return v.status();
         aggregate_max_distinct = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("sort_max_rows")) {
+        auto v = file.GetUint("sort_max_rows");
+        if (!v.ok()) return v.status();
+        // No zero check, for `aggregate_max_groups`'s reason: 0 means no
+        // row may be held, which refuses every statement that needs a sort
+        // while leaving the grammar in place.
+        sort_max_rows = static_cast<std::size_t>(v.value());
     }
     if (file.Has("physical_optimizer")) {
         auto v = file.GetString("physical_optimizer");
@@ -561,6 +569,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->dispatcher_->set_aggregate_limits(
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});
+    expeditor->dispatcher_->set_sort_max_rows(expeditor->config_.sort_max_rows);
     expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
                                          expeditor->config_.decay_half_life_ns);
     // PHY01's collector, wired to both feeders: the dispatcher touches

@@ -13,6 +13,7 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
+#include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/budget.hpp"
 #include "kds/exec/plan_printer.hpp"
@@ -718,6 +719,9 @@ public:
         aggregate_limits_ = limits;
     }
 
+    // `sort_max_rows`, from the config. A setter for the same reason.
+    void set_sort_max_rows(std::size_t rows) noexcept { sort_max_rows_ = rows; }
+
     // Arms the remote-read path (workplan P4c): a single-step star SELECT
     // of a relation another core owns ships to that core instead of taking
     // the affinity refusal. `client` must outlive the dispatcher. With
@@ -1025,6 +1029,17 @@ private:
     // are not valid, and nothing may read it there. That is the same
     // contract `trail_scratch_` has with `Clear()`.
     exec::Aggregator aggregator_;
+
+    // The output sort (OB4), hoisted for `aggregator_`'s reason and holding
+    // the same contract: `Reset` points it at one statement's keys, and
+    // between statements it holds a buffer nothing may read. Statements
+    // that wrote no `ORDER BY`, and those whose order the compiler elided,
+    // leave it inactive and untouched.
+    exec::OutputSort sorter_;
+
+    // `sort_max_rows` - how many rows one sort may hold before the
+    // statement is refused. A cap, not a budget: it never truncates.
+    std::size_t sort_max_rows_ = exec::kDefaultSortMaxRows;
 
     // Where a successful SELECT reports the tuples it found, or null when
     // nothing is recording - which is a valid production configuration

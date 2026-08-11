@@ -561,6 +561,27 @@ struct AggregateSpec {
     std::vector<ColumnRef> group_keys;
 };
 
+// ---- Sorting (docs/workplan-order-by.md OB3) -----------------------------
+
+// One resolved `ORDER BY` key. Written order is significant: the first key
+// decides and later keys break its ties.
+struct SortKey {
+    // Which column, structurally. Any relation in the top-level scope may
+    // be named - the frame holds every step's values by the time the sink
+    // sees a row, so ordering by a joined relation's column costs the same
+    // as ordering by the driving one's.
+    ColumnRef ref;
+
+    // The catalog `type_val`, resolved here for the reason
+    // `projection_types` is: the comparator has to know a uint64 from an
+    // int64 to order the upper half of the range correctly, and asking the
+    // catalog once per key per *comparison* is the per-row cost the frame
+    // design exists to avoid.
+    std::uint32_t type_val = 0;
+
+    bool descending = false;
+};
+
 struct StepChain {
     StatementClass klass = StatementClass::kUnclassified;
 
@@ -618,15 +639,25 @@ struct StepChain {
     // exactly as `aggregate` above, and for AG1's reason: the quota is a
     // sink decorator, so the steps, kinds and residuals of a limited
     // statement are its unlimited twin's, bit for bit.
-    //
-    // `ORDER BY` deliberately does not survive compilation. The one
-    // accepted form - the driving relation's pk, ascending - names the
-    // order the chain already emits (I12: written order across steps, pk
-    // order within one), so there is nothing for an executor to do with
-    // it: the compiler validates and discards, and a field here would be
-    // a fact nothing may read.
     std::optional<std::uint64_t> limit;
     std::uint64_t offset = 0;
+
+    // The `ORDER BY` keys, in written order (docs/workplan-order-by.md OB3).
+    //
+    // **Empty means "emit in chain order"**, which covers two different
+    // statements: one that wrote no `ORDER BY`, and one whose `ORDER BY` the
+    // compiler *elided* because the chain already emits that order. The
+    // elision is why `ORDER BY <pk> ASC` still costs nothing - it compiles
+    // to no sort, not to a sort that happens to find its input ordered.
+    //
+    // Read by the dispatcher only, like `limit`, `offset` and `aggregate`;
+    // no execute path looks at it. A sort does reach into the chain for one
+    // thing, `Step::read_columns` - a key must be decoded to be compared -
+    // and that is the single respect in which a sorted chain differs from
+    // its unsorted twin.
+    std::vector<SortKey> sort_keys;
+
+    bool sorted() const noexcept { return !sort_keys.empty(); }
 };
 // Whether any step anywhere in `chain` - sub-chains included - is one a
 // Waystone trail may replace.

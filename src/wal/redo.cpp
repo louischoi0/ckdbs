@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -239,10 +240,13 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // crash can have lost the allocation that created it. PAGE_INIT and
         // an FPI both describe a whole page, so either can create one;
         // anything else needs the page to be there already.
-        std::span<std::byte, kPageSize> page;
+        // A fixed-extent span has no default constructor - it must always
+        // name a page - so the three arms below fill an optional and the
+        // code past them unwraps it once.
+        std::optional<std::span<std::byte, kPageSize>> found;
         auto got = store.Get(page_id);
         if (got.ok()) {
-            page = got.value();
+            found = got.value();
         } else if (got.status().code() == StatusCode::kCorruption) {
             // Checksum failure. Held, not failed: an FPI later in the
             // stream is exactly what heals this (page.md §10).
@@ -254,7 +258,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page = created.value();
+            found = created.value();
             if (poisoned.erase(page_id) != 0) {
                 ++stats.pages_healed;
             }
@@ -263,11 +267,12 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page = created.value();
+            found = created.value();
             ++stats.pages_created;
         } else {
             return got.status();
         }
+        std::span<std::byte, kPageSize> page = found.value();
 
         // A page still poisoned is one no image has healed yet; its
         // ordinary records cannot be applied to bytes nobody trusts.

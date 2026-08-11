@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "kds/base/int128.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/parser/ast.hpp"
@@ -297,5 +298,58 @@ StatusOr<std::uint64_t> ValueAsUint64(const parser::AstValue& value);
 // kept the comparison, which was never the problem.
 bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
                    const parser::AstValue& rhs, parser::CompareOp op);
+
+// ---- Ordering (docs/workplan-order-by.md OB2) ----------------------------
+//
+// One decoded value, normalized to the form the engine orders it in. This
+// is where "which value sorts first" is decided, once.
+//
+// **Why a normalized key and not a three-way `CompareValues`.** A sort
+// compares each row O(log n) times and decodes it once, so the type
+// dispatch belongs on the once side. Normalizing also removes the trap that
+// makes `CompareValues` unusable as a sort predicate: it answers "no match"
+// to anything it cannot compare, so `<` and `>` can both be false, which is
+// not a strict weak ordering and which `std::sort` may read off the end of
+// its range for. An `OrderKey` either exists and orders totally, or was
+// refused at the boundary where a `Status` still has somewhere to go.
+//
+// Every numeric type lands in `num`: `Int128` holds an int64, a uint64 and
+// a wide decimal's unscaled value exactly, so ordering is one comparison
+// with no per-type branch. DATE and TIMESTAMP need no case of their own -
+// an ordering on the encoded integer *is* the ordering on the value (TY5).
+//
+// **Keys are comparable only within one column.** `scale` is dropped, so
+// two decimals of different scale would compare as their unscaled
+// integers - safe because every value of a column shares that column's
+// (p, s), and the reason `CompareValues` beside this asserts the scales
+// agree rather than rescaling.
+struct OrderKey {
+    Int128 num = 0;
+    std::string str;
+    bool is_str = false;
+
+    // Negative, zero, positive - the `strcmp` convention. Total and
+    // infallible: everything that could fail was refused by `OrderKeyOf`.
+    int Compare(const OrderKey& rhs) const noexcept;
+};
+
+// Normalizes one decoded value of a column of type `type_val`, or refuses.
+//
+// Refuses rather than defaults in three cases, each of which is a decode or
+// compile bug reaching a comparator - and a comparator that answers "equal"
+// to a value it could not read produces a plausible order out of a bug:
+//
+//   - a NULL. None is storable today, and *where* a NULL sorts - first or
+//     last - is an open decision, the same one `EncodeIndexKeyColumn`
+//     declines to prejudge. Defaulting here would settle it by accident.
+//   - a uint64 whose digits do not read (the `raw_int_text` rule, which
+//     `ValueAsUint64` is the single owner of).
+//   - a value kind that has no order.
+//
+// Note what this is *not*: the index key's order, which compares a 32-byte
+// truncation of a string and so is a prefix order rather than a total one
+// (one of four reasons an index cannot serve an `ORDER BY` -
+// `docs/workplan-order-by.md`).
+StatusOr<OrderKey> OrderKeyOf(std::uint32_t type_val, const parser::AstValue& value);
 
 }  // namespace kds::exec

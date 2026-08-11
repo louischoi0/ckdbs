@@ -3,8 +3,9 @@
 The engine-wide list of what is missing, what does not survive a restart,
 and what the code does differently from what a spec or older doc claims.
 Verified against code 2026-08-10; the "Storage and key modes" section and
-the `ORDER BY` entry added and then closed on 2026-08-11 with the
-`EXPLICIT` key mode. Each
+the `ORDER BY <pk>` entry added and then closed on 2026-08-11 with the
+`EXPLICIT` key mode, and the pagination entry closed the same day by the
+output sort. Each
 entry names the owning doc — the full argument and any workplan live
 there, not here. Manuals link here instead of carrying their own copies.
 
@@ -136,10 +137,28 @@ There is no purge pass, and readers are deliberately unregistered
 
 - **No NULL storage**: `NULL` parses as a literal; rows holding one are
   not storable today (`docs/client-manual.md`).
-- **Pagination is LIMIT/OFFSET only** (V09, built 2026-08-10):
-  `ORDER BY` accepts the primary key alone (a validated no-op) and no
-  `DESC`; there are no cursors, and KWP/1 portal suspension is still
+- ~~**Pagination is LIMIT/OFFSET only**~~ — **closed 2026-08-11** by the
+  output sort (`docs/workplan-order-by.md`). `ORDER BY` now takes any
+  column or columns, pk or not, of any relation in a non-aggregated
+  top-level statement, each `ASC` or `DESC`. What remains true of that
+  entry: **there are no cursors**, and KWP/1 portal suspension is still
   unbuilt — only the frame codec exists (`docs/protocol.md`).
+- **A sorted statement's `LIMIT` bounds output and memory, not work.** The
+  sort is blocking, so the walk cannot stop when the quota fills the way it
+  does on an unsorted or pk-elided statement; the row-touch budget is what
+  bounds work. Visible as ANALYZE's `examined=` being the unlimited
+  statement's. Not a defect — the alternative is a wrong answer — but it is
+  the one performance property a client migrating from `LIMIT` alone will
+  notice.
+- **A sort refuses past `sort_max_rows`; it does not spill.** No temp-file
+  story exists, so an unlimited `ORDER BY` over a relation larger than the
+  cap fails the statement naming the key. Under a `LIMIT` the top-N heap
+  holds `offset + limit` rows, so the cap binds only the unlimited case.
+- **An index still does not serve an `ORDER BY`**, and this is a finding
+  rather than a gap: `docs/workplan-order-by.md` records the four reasons
+  (IX8a's deliberate re-sort to pk order, append-only maintenance picking a
+  stale key at dedup, 32-byte string truncation making index order a prefix
+  order, and no cardinality estimate to avoid IX9's crossover).
 - ~~**`ORDER BY <pk>` no longer means key order on an `EXPLICIT`
   relation**~~ — **closed 2026-08-11.** The clause used to be validated and
   discarded, on the claim that "pk order is the order the chain already
@@ -179,6 +198,42 @@ There is no purge pass, and readers are deliberately unregistered
   (`docs/feat-physical-optimizer.md` §6): every candidate move is blocked
   by a named gate; `physical_optimizer = on` is refused at startup naming
   all three.
+
+## Recovery work landed uncompiled at RC06 — repaired 2026-08-11
+
+**`main` did not build at `393b5a4`**, and had not since RC06 (`c09353e`,
+"the per-transaction undo chain, and a durable insert record (RV10)"). Found
+while building the output sort, which could not be verified until the tree
+compiled; repaired there, and recorded here because the *cause* is a process
+gap, not a code one — a commit that was never compiled cannot have been
+tested either, and 15 WAL/undo tests fail for reasons that predate any of
+this (see below).
+
+What was broken, all of it stale-by-one-commit rather than wrong by design:
+
+- `include/kds/txn/undo_page.hpp`: two `static_assert`s compared `offsetof`
+  on RV10's appended `txn_prev_undo_ptr` / `pk` against the **serialized**
+  offsets 28 and 36. The record is unpadded by design and the encoder
+  memcpy's through those constants correctly, but the C++ struct aligns its
+  u64 tail to 32 and 40 — so the asserts compared a wire offset with a
+  layout and could never hold. Dropped, with the reason written in place;
+  the format is unchanged and the offsets below the first aligned u64 are
+  still asserted. `kMaxUndoImageLen == 8108` was RV10-stale too (the header
+  grew 28 → 44), now 8092, and the "~7 bytes" margin it documents is ~23.
+- `src/wal/redo.cpp`: a default-constructed `std::span<std::byte,
+  kPageSize>`, which a fixed-extent span has no constructor for.
+- `src/server/command_dispatcher.cpp`: two unqualified `kNoTrxId`, and one
+  `return {msg, false}` in a function returning `std::optional<std::string>`.
+- Five `tests/wal_*` fixtures still constructing `MemoryLogDevice`
+  directly after its constructor went private behind `Create`. Converted to
+  the `SetUp` + `unique_ptr` shape `wal_stream_test` and `wal_manager_test`
+  already use.
+
+**15 tests fail once the tree compiles**, and they are the WAL-recovery
+owner's to answer, not repairs: `UndoPageTest` ×2 and `UndoLogTest` ×2 pin
+pre-RV10 sizes, and `LogScannerTest` ×2, `RedoTest` ×1 and
+`RecoveryUndoTest` ×8 fail on behaviour. None is in the output sort's path
+and none was touched by its repair.
 
 ## Stale claims found in docs (fix at the source when touched)
 

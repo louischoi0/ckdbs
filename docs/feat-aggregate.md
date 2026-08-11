@@ -107,7 +107,7 @@ Refusals, each with an exact byte position:
 | `HAVING …` | `Unsupported` (AG7) |
 | aggregate inside a subquery | `Unsupported` (AG8 / J2) |
 | aggregate over `sys.*` | refused (AG12) |
-| ORDER BY on an aggregated statement | `Unsupported` `[PROPOSED]` — ORDER BY pk orders chain rows, and an aggregated statement's output rows are not chain rows; lifting this needs an output-sort, which is HAVING-adjacent phase-2 work |
+| ORDER BY on an aggregated statement | `Unsupported` `[PROPOSED]` — an aggregated statement's output rows are not chain rows. **`[AMENDED 2026-08-11]`** The output sort this used to be blocked on now exists (`docs/workplan-order-by.md`), so what remains is not a missing mechanism but §10's undecided question: where a post-fold consumer sits, decided with HAVING. Lifting it is now a decision away, not a build away |
 
 ## 3. Semantics `[CONFIRMED]`
 
@@ -325,6 +325,9 @@ statement and leaves nothing behind.
   the "no guard digits" line is load-bearing, because a client that has
   seen `avg(amt)` answer at scale `s` will parse it at scale `s` forever.
 - `MIN/MAX(DISTINCT)` accept-as-no-op vs refuse (§3.2 `[PROPOSED]`).
-- Lifting ORDER BY over aggregated output — needs an output sort; decide
+- Lifting ORDER BY over aggregated output — **`[AMENDED 2026-08-11]` the
+  output sort exists now** (`exec::OutputSort`, a sink decorator at this
+  seam), so this is no longer gated on building one. It stays open because
+  the question it was always half of is still open: decide
   with HAVING, since both are post-fold consumers and should share the
   wrapper seam AG1 established.

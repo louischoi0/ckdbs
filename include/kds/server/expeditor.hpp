@@ -303,6 +303,19 @@ public:
         std::size_t aggregate_max_groups = 65536;
         std::size_t aggregate_max_distinct = 1048576;
 
+        // How many rows one `ORDER BY` may hold (`[PROPOSED]`,
+        // docs/workplan-order-by.md OB4). Counted in rows and not bytes,
+        // for the reason `aggregate_max_groups` counts groups: an entry
+        // count is the number an operator can reason about against a row
+        // width they already know.
+        //
+        // A sort refuses when it hits this, and does not spill or truncate
+        // - it has no fallback to decline to, the way a Cabin does. Under a
+        // `LIMIT` a sort holds only `offset + limit` rows, so this bounds
+        // the unlimited case, which is the one that can grow with the
+        // relation.
+        std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
+
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
         // kGroup batch nobody is waiting on; a drain with nothing pending

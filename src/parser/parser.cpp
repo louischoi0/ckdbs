@@ -1437,13 +1437,20 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
     }
 }
 
-// The pagination tail (spec I11, workplan V09): `[ORDER BY <col> [ASC]]
+// The pagination tail (spec I11, workplan V09, amended by
+// docs/workplan-order-by.md OB1): `[ORDER BY <col> [ASC|DESC] [, ...]]
 // [LIMIT <n>] [OFFSET <m>]`, clause order fixed as written and each clause
 // independently optional. `ORDER`, `BY`, `ASC`, `DESC`, `LIMIT` and
 // `OFFSET` are ordinary identifiers matched by text at clause position,
 // like `GROUP` above and for its reason: no column reference can stand
 // here, so a column may carry any of those names and the fingerprint does
 // not move.
+//
+// What this clause decides and what it refuses to decide: it reads the
+// *shape* - column references, a direction per key, a cap on how many -
+// and stores what was written. Which relation a name belongs to, whether
+// the column exists, and whether the order asked for is one the chain
+// already emits are all catalog questions, answered in the compiler (OB3).
 //
 // Tokens from `Peek()` are bound **by value** throughout. A reference is
 // safe today only because `Token` is trivially copyable and `Next()`
@@ -1473,52 +1480,60 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
         lexer_.Next();
         if (Status s = ExpectKeyword("BY"); !s.ok()) return s;
 
-        // `ORDER BY 1` is a form this engine understands and declines -
-        // the ordinal names a select-list position, and positional naming
-        // is a second spelling of something that already has one.
-        if (const Token ordinal = lexer_.Peek(); ordinal.type == TokenType::kIntLit) {
-            return Status::Unsupported(
-                "ORDER BY an ordinal is not supported (byte " +
-                std::to_string(ordinal.byte_offset) + "); name the column");
-        }
-
-        auto col = ParseColumnName();
-        if (!col.ok()) return col.status();
-
-        // AG9's argument, one clause over: a paren here reads as an
-        // expression - `ORDER BY count(x)` - and refusing it by position
-        // beats a trailing-garbage error pointing past it.
-        if (lexer_.Peek().type == TokenType::kLParen) {
-            return Status::Unsupported(
-                "ORDER BY takes a column reference only, not an expression (byte " +
-                std::to_string(col.value().byte_offset) + ")");
-        }
-        stmt.order_by = std::move(col.value());
-
-        // `ASC` names the order the engine already emits and is accepted
-        // as written. `DESC` is a reverse walk: the heap chain and the
-        // index leaf chain link forward only, so there is nothing it could
-        // compile to - Unsupported, and I11 keeps the word in the grammar
-        // so the refusal does not shift when a reverse walk lands.
-        if (const Token dir = lexer_.Peek(); dir.type == TokenType::kIdent) {
-            if (IEquals(dir.text, "ASC")) {
-                lexer_.Next();
-            } else if (IEquals(dir.text, "DESC")) {
+        // The key list. Written order is significant and preserved: the
+        // first key decides, later keys break its ties.
+        while (true) {
+            // `ORDER BY 1` is a form this engine understands and declines -
+            // the ordinal names a select-list position, and positional naming
+            // is a second spelling of something that already has one.
+            if (const Token ordinal = lexer_.Peek(); ordinal.type == TokenType::kIntLit) {
                 return Status::Unsupported(
-                    "descending order is not supported (byte " +
-                    std::to_string(dir.byte_offset) +
-                    "); every chain links forward only, and a reverse walk does not exist");
+                    "ORDER BY an ordinal is not supported (byte " +
+                    std::to_string(ordinal.byte_offset) + "); name the column");
             }
-        }
 
-        // A second sort key would need the output sort the first one
-        // deliberately does not: the accepted form names an order the
-        // chain already has, and `pk, anything` is not one.
-        if (const Token comma = lexer_.Peek(); comma.type == TokenType::kComma) {
-            return Status::Unsupported(
-                "ORDER BY takes a single column (byte " + std::to_string(comma.byte_offset) +
-                "); ordering is the driving relation's pk, and a second key would need an "
-                "output sort this engine does not have");
+            auto col = ParseColumnName();
+            if (!col.ok()) return col.status();
+
+            // AG9's argument, one clause over: a paren here reads as an
+            // expression - `ORDER BY count(x)` - and refusing it by position
+            // beats a trailing-garbage error pointing past it.
+            if (lexer_.Peek().type == TokenType::kLParen) {
+                return Status::Unsupported(
+                    "ORDER BY takes a column reference only, not an expression (byte " +
+                    std::to_string(col.value().byte_offset) + ")");
+            }
+
+            // The cap is checked against what this key would make the list,
+            // and refuses at the byte of the key that crossed it - so the
+            // client is pointed at the ninth key, not at the clause.
+            if (stmt.order_by.size() >= kMaxSortKeys) {
+                return Status::Unsupported(
+                    "ORDER BY takes at most " + std::to_string(kMaxSortKeys) +
+                    " keys (byte " + std::to_string(col.value().byte_offset) +
+                    "); every key costs a comparison on every row pair, and sorting by a "
+                    "prefix of what was written would answer a question nobody asked");
+            }
+
+            SortKey key;
+            key.column = std::move(col.value());
+
+            // `ASC` is the default spelled out; `DESC` reverses this key's
+            // comparison and nothing else. Neither word is reserved, so a
+            // trailing identifier that is neither falls through to
+            // trailing-garbage exactly as it did before this clause grew.
+            if (const Token dir = lexer_.Peek(); dir.type == TokenType::kIdent) {
+                if (IEquals(dir.text, "ASC")) {
+                    lexer_.Next();
+                } else if (IEquals(dir.text, "DESC")) {
+                    lexer_.Next();
+                    key.descending = true;
+                }
+            }
+            stmt.order_by.push_back(std::move(key));
+
+            if (lexer_.Peek().type != TokenType::kComma) break;
+            lexer_.Next();
         }
     }
 

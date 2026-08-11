@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
+
 #include "kds/server/superblock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -42,13 +44,19 @@ std::vector<std::byte> Bytes(std::size_t n, unsigned char fill) {
 
 class RedoTest : public ::testing::Test {
 protected:
-    MemoryLogDevice device_{kSegmentSize};
+    void SetUp() override {
+        auto created = MemoryLogDevice::Create(kSegmentSize);
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        device_ = std::move(created.value());
+    }
+
+    std::unique_ptr<MemoryLogDevice> device_;
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
 
     // Appends PAGE_INIT for a heap page plus `n` tuple inserts, and returns
     // the analysis of the resulting stream.
     void WriteHeapStream(int n, unsigned char fill = 0xA1) {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok()) << s.status().message();
 
         std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
@@ -74,7 +82,7 @@ protected:
     }
 
     AnalysisResult Analyzed() {
-        auto a = Analyze(device_, 0, AnalysisStart{});
+        auto a = Analyze(*device_, 0, AnalysisStart{});
         EXPECT_TRUE(a.ok()) << a.status().message();
         return a.ok() ? a.value() : AnalysisResult{};
     }
@@ -91,7 +99,7 @@ protected:
 
 TEST_F(RedoTest, ReplaysAHeapStreamOntoAStoreThatNeverSawIt) {
     WriteHeapStream(3);
-    auto r = Redo(device_, 0, store_, Analyzed());
+    auto r = Redo(*device_, 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().applied, 4u);       // one PAGE_INIT + three inserts
     EXPECT_EQ(r.value().pages_created, 1u);
@@ -114,10 +122,10 @@ TEST_F(RedoTest, ReplayingTwiceIsAByteForByteNoOp) {
     WriteHeapStream(4);
     const AnalysisResult analysis = Analyzed();
 
-    ASSERT_TRUE(Redo(device_, 0, store_, analysis).ok());
+    ASSERT_TRUE(Redo(*device_, 0, store_, analysis).ok());
     const std::vector<std::byte> after_first = PageBytes(kPage);
 
-    auto second = Redo(device_, 0, store_, analysis);
+    auto second = Redo(*device_, 0, store_, analysis);
     ASSERT_TRUE(second.ok()) << second.status().message();
     EXPECT_EQ(PageBytes(kPage), after_first);
 
@@ -136,7 +144,7 @@ TEST_F(RedoTest, ARecordAtOrBelowThePagesLsnIsSkipped) {
     storage::FormatPage(created.value(), PageType::kHeap);
     storage::SetPageLsn(created.value(), analysis.end_lsn + 1);
 
-    auto r = Redo(device_, 0, store_, analysis);
+    auto r = Redo(*device_, 0, store_, analysis);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().applied, 0u);
     EXPECT_EQ(r.value().skipped_by_lsn, 3u);
@@ -145,7 +153,7 @@ TEST_F(RedoTest, ARecordAtOrBelowThePagesLsnIsSkipped) {
 TEST_F(RedoTest, AFullPageImageRestoresTheWholePage) {
     std::vector<std::byte> image(kPageSize, std::byte{0});
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         // A page built by hand, logged whole.
         auto view = heap::PageView::CreateEmpty(
@@ -161,7 +169,7 @@ TEST_F(RedoTest, AFullPageImageRestoresTheWholePage) {
         ASSERT_TRUE(s.value()->Sync().ok());
     }
 
-    auto r = Redo(device_, 0, store_, Analyzed());
+    auto r = Redo(*device_, 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().page_images, 1u);
 
@@ -174,13 +182,13 @@ TEST_F(RedoTest, AFullPageImageRestoresTheWholePage) {
 
 TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnBegin, 1, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnCommit, 1, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Sync().ok());
     }
-    auto r = Redo(device_, 0, store_, Analyzed());
+    auto r = Redo(*device_, 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().applied, 0u);
     EXPECT_EQ(r.value().no_page, 2u);
@@ -196,7 +204,7 @@ TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {
     // row rather than fail.
     const auto image = Bytes(8, 0x5A);
     {
-        auto s = WalStream::Open(&device_, 0);
+        auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
         const PageInitPayload f{0, static_cast<std::uint8_t>(PageType::kUndo), {0, 0, 0}};
@@ -222,7 +230,7 @@ TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {
         ASSERT_TRUE(s.value()->Sync().ok());
     }
 
-    auto r = Redo(device_, 0, store_, Analyzed());
+    auto r = Redo(*device_, 0, store_, Analyzed());
     ASSERT_TRUE(r.ok()) << r.status().message();
 
     auto page = store_.Get(kPage);

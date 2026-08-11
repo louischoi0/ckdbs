@@ -35,7 +35,8 @@ statements, not style.
 | Clustered B+ tree | Built | `docs/heap-and-tuple.md` |
 | WAL | Every data mutation logged (heap, undo, var-heap, index, assertions); **catalog/DDL writes are not**, and **recovery not implemented** — nothing reads the log back | `docs/wal.md` |
 | Transactions & MVCC | Built (T01-T14); no purge, and MVCC ships before recovery (see §8's gap) | `docs/txn.md`, `docs/txn-workplan.md` |
-| Query language, parser, step chains, joins, subqueries | Built (V01-V19; V09 pagination — ORDER BY pk / LIMIT / OFFSET — done 2026-08-10). Open: V08's `IN (value list)`, V11 (`WITH (...)` table options), V12 (`SET DURABILITY`, the session/admin classes), V20's test, and phase V-6's blueprint parser | `docs/parser-v2.md`, `docs/parser-v2-workplan.md` |
+| Query language, parser, step chains, joins, subqueries | Built (V01-V19; V09 pagination 2026-08-10). Open: V08's `IN (value list)`, V11 (`WITH (...)` table options), V12 (`SET DURABILITY`, the session/admin classes), V20's test, and phase V-6's blueprint parser | `docs/parser-v2.md`, `docs/parser-v2-workplan.md` |
+| `ORDER BY` (the output sort) | **Built 2026-08-11** (OB1-OB7): any columns, pk or not, of any relation in a non-aggregated statement, each `ASC`/`DESC`, up to 8 keys. A sink decorator at the AG1 seam, `sort_max_rows`-capped, with a top-N heap under `LIMIT` and the pk-ascending form elided to zero cost. Refused and left open by decision: ordering over aggregated output | `docs/workplan-order-by.md` |
 | Aggregation (GROUP BY, COUNT/SUM/MIN/MAX/AVG) | Built (AG01-AG10) | `docs/feat-aggregate.md`, `docs/workplan-aggregate.md` |
 | Aggregate performance | AP01-AP03 built, AP05 next | `docs/workplan-aggregate-perf.md` (start at "Where to pick this up") |
 | Types: DATE, TIMESTAMP, DECIMAL, DECIMAL128 | Built (TY01-TY11); `float` stays refused | `docs/spec-types.md`, `docs/workplan-types.md` |
