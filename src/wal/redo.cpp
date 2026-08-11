@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -239,10 +240,14 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // crash can have lost the allocation that created it. PAGE_INIT and
         // an FPI both describe a whole page, so either can create one;
         // anything else needs the page to be there already.
-        std::span<std::byte, kPageSize> page;
+        //
+        // Held in an optional because a fixed-extent span has no default
+        // constructor: every arm below either fills this or returns, and
+        // the deref after the chain is what states that.
+        std::optional<std::span<std::byte, kPageSize>> acquired;
         auto got = store.Get(page_id);
         if (got.ok()) {
-            page = got.value();
+            acquired = got.value();
         } else if (got.status().code() == StatusCode::kCorruption) {
             // Checksum failure. Held, not failed: an FPI later in the
             // stream is exactly what heals this (page.md §10).
@@ -254,7 +259,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page = created.value();
+            acquired = created.value();
             if (poisoned.erase(page_id) != 0) {
                 ++stats.pages_healed;
             }
@@ -263,11 +268,12 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page = created.value();
+            acquired = created.value();
             ++stats.pages_created;
         } else {
             return got.status();
         }
+        std::span<std::byte, kPageSize> page = *acquired;
 
         // A page still poisoned is one no image has healed yet; its
         // ordinary records cannot be applied to bytes nobody trusts.

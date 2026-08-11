@@ -2645,7 +2645,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
             // wrote one record for the batch would leave the rest of the
             // rows unreachable from it (RV10).
             txn::UndoRecordFields rec{};
-            rec.prior_trx_id = kNoTrxId;
+            rec.prior_trx_id = txn::kNoTrxId;
             rec.prior_undo_ptr = txn::kNoUndoPtr;
             rec.target_page_id = filled.value().rows[k].page_id;
             rec.target_slot = filled.value().rows[k].slot;
@@ -2899,13 +2899,13 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // rule intact.
     if (scope.txn != nullptr) {
         txn::UndoRecordFields rec{};
-        rec.prior_trx_id = kNoTrxId;
+        rec.prior_trx_id = txn::kNoTrxId;
         rec.prior_undo_ptr = txn::kNoUndoPtr;
         rec.target_page_id = placed.value().page_id;
         rec.target_slot = placed.value().slot;
         rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
         auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
-        if (!ptr.ok()) return {"ERR " + ptr.status().message(), false};
+        if (!ptr.ok()) return "ERR " + ptr.status().message();
 
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);

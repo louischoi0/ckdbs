@@ -212,8 +212,16 @@ static_assert(offsetof(UndoRecordFields, image_len) == kUndoRecImageLenOffset);
 static_assert(offsetof(UndoRecordFields, type) == kUndoRecTypeOffset);
 static_assert(offsetof(UndoRecordFields, flags) == kUndoRecFlagsOffset);
 static_assert(offsetof(UndoRecordFields, reserved) == kUndoRecReservedOffset);
-static_assert(offsetof(UndoRecordFields, txn_prev_undo_ptr) == kUndoRecTxnPrevUndoPtrOffset);
-static_assert(offsetof(UndoRecordFields, pk) == kUndoRecPkOffset);
+// RV10's two fields are **not** asserted against offsetof, and cannot be: a
+// uint64_t appended after a 28-byte prefix takes the struct's 8-byte
+// alignment, so the compiler places them at 32 and 40 while the record places
+// them at 28 and 36. That divergence is harmless for exactly the reason the
+// sizeof note below gives - every field crosses the page through a memcpy at
+// the constants above, never as a struct image - but it does mean these two
+// offsets are pinned against the unpadded layout they encode instead.
+static_assert(kUndoRecTxnPrevUndoPtrOffset == kUndoRecReservedOffset + sizeof(std::uint16_t));
+static_assert(kUndoRecPkOffset == kUndoRecTxnPrevUndoPtrOffset + sizeof(std::uint64_t));
+static_assert(kUndoRecordHeaderSize == kUndoRecPkOffset + sizeof(std::uint64_t));
 // sizeof(UndoRecordFields) is 48, not 44: the u64 members give the struct
 // 8-byte alignment, so its size rounds up. Deliberately not asserted
 // against - those four tail bytes are never touched, because fields are
@@ -224,14 +232,17 @@ static_assert(offsetof(UndoRecordFields, pk) == kUndoRecPkOffset);
 // record space, less the one record header it needs.
 //
 // **Known ceiling, recorded rather than hidden** (txn.md section 3.3): undo
-// overhead is 32 + 24 + 28 = 84 bytes against the heap page's
-// 32 + 16 + 5 + 20 + 4 = 77, so a tuple within ~7 bytes of the maximum heap
+// overhead is 32 + 24 + 44 = 100 bytes against the heap page's
+// 32 + 16 + 5 + 20 + 4 = 77, so a tuple within ~23 bytes of the maximum heap
 // payload cannot be updated - the undo append fails OutOfSpace naming the
-// *undo* page. The deferred fix is a spilling image or a long-image record
-// type; neither is invented here to answer a question nobody has hit.
+// *undo* page. **RV10 widened that band from ~7 bytes to ~23** by growing the
+// record header 28 -> 44, which is the same 16 bytes the header's own note
+// prices, reaching a second consequence. The deferred fix is a spilling image
+// or a long-image record type; neither is invented here to answer a question
+// nobody has hit.
 inline constexpr std::size_t kMaxUndoImageLen = kUndoPageCapacity - kUndoRecordHeaderSize;
 
-static_assert(kMaxUndoImageLen == 8108);
+static_assert(kMaxUndoImageLen == 8092);
 
 // ---- undo_ptr ------------------------------------------------------------
 //
