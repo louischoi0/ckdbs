@@ -199,15 +199,24 @@ There is no purge pass, and readers are deliberately unregistered
   by a named gate; `physical_optimizer = on` is refused at startup naming
   all three.
 
-## Recovery work landed uncompiled at RC06 — repaired 2026-08-11
+## Recovery work landed uncompiled at RC06 — closed 2026-08-11
 
 **`main` did not build at `393b5a4`**, and had not since RC06 (`c09353e`,
 "the per-transaction undo chain, and a durable insert record (RV10)"). Found
 while building the output sort, which could not be verified until the tree
-compiled; repaired there, and recorded here because the *cause* is a process
-gap, not a code one — a commit that was never compiled cannot have been
-tested either, and 15 WAL/undo tests fail for reasons that predate any of
-this (see below).
+compiled.
+
+**Closed upstream, not here.** `c1370e8` made main build again and
+`b11cc81` fixed the eleven recovery failures that became visible once it
+did — two engine bugs and two wrong tests — and `28ee297` added the push
+guard that refuses a commit which does not build and pass. The output-sort
+branch had made its own unblocking repairs to the same files; they were
+resolved away in favour of the upstream ones, which go further.
+
+Kept as a record because the *cause* was a process gap rather than a code
+one — a commit that was never compiled cannot have been tested either, and
+what it hid was two real engine bugs, not just stale literals. `28ee297` is
+the fix for the cause; the entry below is what it was fixing.
 
 What was broken, all of it stale-by-one-commit rather than wrong by design:
 
@@ -229,11 +238,10 @@ What was broken, all of it stale-by-one-commit rather than wrong by design:
   the `SetUp` + `unique_ptr` shape `wal_stream_test` and `wal_manager_test`
   already use.
 
-**15 tests fail once the tree compiles**, and they are the WAL-recovery
-owner's to answer, not repairs: `UndoPageTest` ×2 and `UndoLogTest` ×2 pin
-pre-RV10 sizes, and `LogScannerTest` ×2, `RedoTest` ×1 and
-`RecoveryUndoTest` ×8 fail on behaviour. None is in the output sort's path
-and none was touched by its repair.
+**15 tests failed once the tree compiled** — `UndoPageTest` ×2 and
+`UndoLogTest` ×2 pinning pre-RV10 sizes, `LogScannerTest` ×2, `RedoTest` ×1
+and `RecoveryUndoTest` ×8 on behaviour. None was in the output sort's path.
+All fixed by `b11cc81`; the suite is green.
 
 ## Stale claims found in docs (fix at the source when touched)
 
