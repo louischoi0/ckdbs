@@ -183,7 +183,18 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
         ASSERT_TRUE(s.value()->Append({RecordType::kTxnCommit, 1, kInvalidPageId}).ok());
         ASSERT_TRUE(s.value()->Sync().ok());
     }
-    auto r = Redo((*device_), 0, store_, Analyzed());
+    // Redone from the head of the log, deliberately. What is under test is
+    // the *classification* - that a transaction boundary reaches redo and is
+    // counted as touching no page - and an honest analysis of this stream
+    // makes redo skip it entirely: no record here dirties a page, so
+    // `RedoStartFrom` returns end_lsn and there is correctly nothing to
+    // replay (wal.md §11-3). Asking for the classification means arranging
+    // for the records to be visited; the redo-start optimization is a
+    // separate claim with its own tests.
+    AnalysisResult from_head = Analyzed();
+    from_head.redo_start_lsn = 0;
+
+    auto r = Redo((*device_), 0, store_, from_head);
     ASSERT_TRUE(r.ok()) << r.status().message();
     EXPECT_EQ(r.value().applied, 0u);
     EXPECT_EQ(r.value().no_page, 2u);

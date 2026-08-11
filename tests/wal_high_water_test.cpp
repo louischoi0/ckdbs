@@ -234,20 +234,32 @@ TEST(HighWaterTest, TheFloorOnlyEverRises) {
     EXPECT_EQ(created.value().first, 501u);
 }
 
-TEST(HighWaterTest, AnInMemoryStoreStopsReportingAlreadyExistsAfterTheRaise) {
-    // This store's CreateNew() does not skip ids that already exist, and a
-    // failed CreateAt() returns before the increment - so a replay that
-    // CreateAt'd the page at `next_new_page_id_` wedges every later
-    // allocation at AlreadyExists for good. The raise is the only thing
-    // that moves the counter past it.
+TEST(HighWaterTest, ThePlacedPageIsSkippedAndTheRaiseIsStillWhatCoversTheLog) {
+    // **Two different hazards, and only one of them is the raise's.**
+    //
+    // A replay CreateAt's the pages the log describes. Handing one of those
+    // back from CreateNew() is a bug the store answers itself: the id is
+    // occupied, so the cursor steps over it. This test used to assert the
+    // opposite - that CreateNew() wedged at AlreadyExists until a raise
+    // moved the counter - which was a deficiency of InMemoryPageStore
+    // written down rather than a contract. DevicePageStore never had it,
+    // because its CreateAt marks the free map its CreateNew searches.
     storage::InMemoryPageStore store(kFirstUser);
     ASSERT_TRUE(store.CreateAt(kFirstUser).ok());
-    EXPECT_EQ(store.CreateNew().status().code(), StatusCode::kAlreadyExists);
 
-    ASSERT_TRUE(RaiseHighWater(store, Named(kFirstUser)).ok());
-    auto created = store.CreateNew();
-    ASSERT_TRUE(created.ok()) << created.status().message();
-    EXPECT_EQ(created.value().first, kFirstUser + 1);
+    auto after_place = store.CreateNew();
+    ASSERT_TRUE(after_place.ok()) << after_place.status().message();
+    EXPECT_EQ(after_place.value().first, kFirstUser + 1)
+        << "an occupied id must be stepped over, not reported as a collision";
+
+    // The raise covers what skipping cannot: a page the log *names* but that
+    // the crash left unallocated here. Nothing about it is occupied, so no
+    // amount of stepping over existing ids protects it - which is why RV4
+    // exists and why this half of the test outlives the other.
+    ASSERT_TRUE(RaiseHighWater(store, Named(kFirstUser + 40)).ok());
+    auto after_raise = store.CreateNew();
+    ASSERT_TRUE(after_raise.ok()) << after_raise.status().message();
+    EXPECT_EQ(after_raise.value().first, kFirstUser + 41);
 }
 
 // ---- Refusals ------------------------------------------------------------
