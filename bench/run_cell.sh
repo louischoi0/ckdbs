@@ -19,6 +19,14 @@ KDS_SERVER=${KDS_SERVER:-./build-release/kds_server}
 KDS_PORT=${KDS_PORT:-15432}
 DRIVER=${DRIVER:-./tools/scenario3_library.py}
 
+# `pgrep -c` prints its count *and* exits non-zero when nothing matched, so a
+# bare `|| echo 0` fallback appends a second line and yields "0\n0".
+cc1plus_count() {
+    local n
+    n=$(pgrep -c cc1plus 2>/dev/null | head -1)
+    echo "${n:-0}"
+}
+
 if [ $# -lt 3 ]; then
     echo "usage: $0 <cell-name> <config> -- <driver args...>" >&2
     exit 2
@@ -43,7 +51,7 @@ mkdir -p "$WAL"
     echo "=== commit: $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD))"
     echo "=== dirty: $([ -n "$(git status --porcelain)" ] && echo true || echo false)"
     echo "=== server mtime: $(stat -c %y "$KDS_SERVER")"
-    echo "=== cc1plus before: $(pgrep -c cc1plus || true)"
+    echo "=== cc1plus before: $(cc1plus_count)"
     echo "=== uptime before: $(uptime)"
 } >"$LOG"
 
@@ -82,8 +90,19 @@ python3 "$DRIVER" --port "$KDS_PORT" --json "$JSON" "$@" >>"$LOG" 2>&1
 RC=$?
 set -e
 
+CC_AFTER=$(cc1plus_count)
 echo "=== driver rc: $RC" >>"$LOG"
+echo "=== cc1plus after: $CC_AFTER" >>"$LOG"
 echo "=== uptime after: $(uptime)" >>"$LOG"
+
+# A compiler that started *during* the cell contaminates it just as surely as
+# one that was running before it. Say so in the cell's own result line rather
+# than leaving it to be inferred from a load average later.
+if [ "$CC_AFTER" -gt 0 ]; then
+    echo "=== CONTENDED: $CC_AFTER cc1plus at cell end" >>"$LOG"
+    echo "$CELL rc=$RC CONTENDED json=$JSON log=$LOG"
+    exit 8
+fi
 
 kill $SRV 2>/dev/null || true
 wait $SRV 2>/dev/null || true
