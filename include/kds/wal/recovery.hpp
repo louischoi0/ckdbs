@@ -4,6 +4,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/sched/clock.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/analysis.hpp"
 #include "kds/wal/high_water.hpp"
@@ -85,10 +86,28 @@ public:
     virtual Status RollBack(storage::PageStore& store, const AnalysisResult& analysis) = 0;
 };
 
+// How long each phase took (`docs/wal.md` §13's "recovery phase timings",
+// RC09). Zero throughout when no clock was supplied, which `timed` says
+// explicitly - an operator reading four zeroes must be able to tell "instant"
+// from "never measured", and a duration is the one number where those two look
+// identical.
+struct RecoveryTimings {
+    bool timed = false;
+    sched::MonoTimeNs analysis_ns = 0;
+    sched::MonoTimeNs redo_ns = 0;
+    sched::MonoTimeNs high_water_ns = 0;
+    sched::MonoTimeNs undo_ns = 0;
+
+    sched::MonoTimeNs total_ns() const noexcept {
+        return analysis_ns + redo_ns + high_water_ns + undo_ns;
+    }
+};
+
 struct RecoveryReport {
     AnalysisResult analysis;
     RedoStats redo;
     HighWaterRepair high_water;
+    RecoveryTimings timings;
 
     // Whether an UndoPhase ran. False with no losers (nothing to do) and
     // false with none installed (in which case recovery failed and this
@@ -117,8 +136,14 @@ struct RecoveryReport {
 //
 // Every one of those is a refusal rather than a partial success, which is
 // the whole of `txn.md` §8's instruction.
+// `clock`, when given, times each phase into `RecoveryReport::timings`. Passed
+// rather than read from the platform, because `sched::Clock` is the engine's
+// only clock (`sched/clock.hpp`) and a deterministic caller - the simulator, a
+// test - must be able to supply its own. A null clock is not an error: the
+// report simply says it was not timed.
 StatusOr<RecoveryReport> RecoverCore(LogDevice& device, std::uint32_t core_id,
                                      storage::PageStore& store, const AnalysisStart& start,
-                                     UndoPhase* undo = nullptr);
+                                     UndoPhase* undo = nullptr,
+                                     const sched::Clock* clock = nullptr);
 
 }  // namespace kds::wal

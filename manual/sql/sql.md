@@ -619,7 +619,7 @@ Dispatcher commands, not parser statements:
 
 | Command | Answers |
 |---|---|
-| `SHOW META` | instance metadata (superblock, format version, config) |
+| `SHOW META` | instance metadata (superblock, format version, config), plus what the last mount's recovery did — records scanned, transactions committed and rolled back, per-phase timings, and `catalog_recovered=0`, which is a standing statement that DDL is unlogged rather than a number that will change (`docs/client-manual.md` has the field list) |
 | `SHOW TABLES` | the relation list |
 | `SHOW PAGE <id> [VALUES]` | one page's header and slots; `VALUES` hex-dumps tuple payloads |
 | `SHOW PATTERNS` | `sys.patterns` — registered patterns, ids, Waystone state |

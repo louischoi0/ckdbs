@@ -10,7 +10,7 @@ uncommitted mount wiring described in RC11 below:
 | RC10's first half | **done**: `kRecoveryImplemented` is flipped, so SIM04's crash contract is asserted, and its firing is proved against a `skip_recovery` boot |
 | RC07 | unblocked by AS6a, not started |
 | **RC08 — completion checkpoint** | **built 2026-08-12** for core 0 and for the harness; peer cores deliberately excluded, see the task |
-| RC09 | unblocked, not started |
+| **RC09 — observability** | **built 2026-08-12**: phase timings, `SHOW META`'s recovery block, and RV3's counter split into the half that can be computed and the half that is stated |
 | RC10's remainder | the `txn.md` §8 amendment and EVT08's crash-matrix points |
 
 **The previous status line said "nothing in this series has ever been built
@@ -842,11 +842,68 @@ so pays the checkpoint without ever taking the cheaper scan. The scan-volume
 evidence above is what carries the benefit; a multi-mount wall-clock benchmark
 belongs in `bench/` and was **not run**.
 
-**RC09 — Observability and the honest counter.**
-`wal.md` §13's recovery phase timings, plus RV3's counter: records
-naming a relation the catalog no longer describes, reported rather than
-skipped silently. `SHOW META` gains the last recovery's summary.
+**RC09 — Observability and the honest counter. BUILT 2026-08-12.**
+`wal.md` §13's recovery phase timings, plus RV3's counter. `SHOW META` gains
+the last mount's recovery block; `docs/client-manual.md` carries the field
+list.
+
+**The counter RV3 asked for cannot be computed, and that is the finding.**
+RV3 wanted "records naming a relation the catalog no longer describes".
+Resolving a page to its relation needs a page→relation index; `page.md` has
+none, and its absence is already a named gate elsewhere
+(`feat-physical-optimizer.md` §6 gate 3 blocks page reuse for exactly the same
+missing map). The only alternative is walking every live relation's chains to
+build the set, which is O(every page in the database) at every mount — that is
+not a counter, it is a second recovery. So RC09 splits the gap in two and
+reports both halves honestly:
+
+- **Computable, and now computed**: user relations the catalog still describes
+  whose descriptor or var-heap root page the crash took.
+  `AuditCatalogAfterRecovery`, O(relations) with one page read each. It
+  **reports rather than refuses** — an unopenable relation is the finding, not
+  an error hit while producing it.
+- **Not computable, and now stated**: rows whose relation the catalog lost.
+  `SHOW META` prints `catalog_recovered=0` as a standing constant, so
+  "recovery succeeded" can never be read as "nothing was lost".
+
+Three things the implementation had to get right, each found by a test failing:
+
+- **`GetSysTableRow`, not `InitTableAccess`.** An access is cached and a row
+  read never is (`catalog.hpp`), so an audit on the cached path answers from
+  memory for any relation something already opened. The first version missed
+  one of two dead relations for exactly that reason.
+- **User relations only.** A bootstrap catalog relation is listed in
+  `sys.objects` and has no `sys.tables` row at all, so opening one fails for a
+  reason that has nothing to do with a crash. The first version reported **nine
+  missing relations on a healthy mount**.
+- **`timings.timed`, and durations omitted without it.** Four zeroes from an
+  untimed run and four from an instant one are the same bytes, and an operator
+  tuning RTO has to tell them apart. The sim passes no clock deliberately: its
+  `ManualClock` never advances, so timing against it would print zeroes
+  wearing a measurement's face.
+
 *Done when:* an operator can read what recovery did and what it could not.
+**Held, on a real server** rather than in a test: `durability = strict`,
+`checkpoint_interval_ms = 3600000` so no cadence checkpoint flushes the page,
+two INSERTs, `kill -9`, restart. `SHOW META` reports
+`recovery_records=11 recovery_committed=2 recovery_redo_applied=5
+recovery_relations_checked=1 recovery_relations_missing_pages=0
+catalog_recovered=0`, and `SELECT * FROM t` returns both rows — replayed from
+the log, because the pages were never written back. That is the engine's first
+crash recovery of acknowledged data, read back through the operator surface.
+
+**A cost RC09's own timings exposed, and it dominates the mount.** On the same
+server, three separate mounts each reported `recovery_analysis_us≈44000` and
+`recovery_redo_us≈42000` — **86 ms of a ~90 ms mount, on a log holding
+nothing**. The cause is not the phases: `ScanLog` allocates and reads a
+segment's **entire body** (`body.assign(...)`, one `ReadAt`), analysis and redo
+each run their own scan, and the default segment is 64 MiB — so a mount reads
+128 MiB and allocates two 64 MiB buffers before it can serve a statement.
+`log_scanner.cpp`'s own comment anticipated it ("when segments are 64 MiB this
+becomes a streaming read"); now it has a number. It is a **performance finding,
+not a defect**, and it is not RC09's to fix: the fix is to read only as far as
+the durable end, or to stream in chunks, and it belongs beside the segment-size
+decision (`wal.md` §15, still `[OPEN]`). Recorded in `docs/known-gaps.md`.
 
 **RC10 — Flip the gates.**
 Enable SIM04/SIM11's `[GATED: recovery]` assertions; set the

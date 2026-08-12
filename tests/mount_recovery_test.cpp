@@ -10,7 +10,9 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -321,6 +323,68 @@ TEST_F(MountRecoveryTest, TheAnchorItPublishesIsHonestAboutTheDurableEnd) {
     EXPECT_TRUE(recovered.ok()) << recovered.status().message();
 }
 
+// ---- RC09: what an operator can read afterwards --------------------------
+
+TEST_F(MountRecoveryTest, PhasesAreTimedWhenAClockIsSuppliedAndSayWhenTheyAreNot) {
+    // `docs/wal.md` §13 asks for recovery phase timings. The property worth a
+    // test is not the numbers - they are wall clock - but the **flag**: four
+    // zeroes from an untimed run and four zeroes from an instant one are the
+    // same bytes, and an operator tuning RTO has to be able to tell them apart.
+    WriteStream(/*txn_id=*/7, wal::RecordType::kTxnCommit);
+
+    auto untimed = Recover(WalAnchorFields{});
+    ASSERT_TRUE(untimed.ok()) << untimed.status().message();
+    EXPECT_FALSE(untimed.value().timings.timed);
+    EXPECT_EQ(untimed.value().timings.total_ns(), 0u);
+
+    // A clock that does move, so the phases can report something. ManualClock
+    // is the deterministic one this engine tests with, and it advances only
+    // when told - which is exactly what makes the assertion below exact rather
+    // than a race against a real clock.
+    class TickingClock final : public sched::Clock {
+    public:
+        sched::MonoTimeNs Now() const override {
+            now_ += 1000;  // 1 us per read
+            return now_;
+        }
+
+    private:
+        mutable sched::MonoTimeNs now_ = 0;
+    };
+    TickingClock clock;
+    storage::InMemoryPageStore fresh{kFirstUserPageId};
+    txn::UndoLog fresh_undo(fresh);
+    auto timed = RecoverCoreAtMount(/*core_id=*/0, WalAnchorFields{}, *device_, fresh, fresh_undo,
+                                    /*wal=*/nullptr, /*log=*/nullptr, &clock);
+    ASSERT_TRUE(timed.ok()) << timed.status().message();
+    EXPECT_TRUE(timed.value().timings.timed);
+    // Analysis and redo both ran, so both are two clock reads apart.
+    EXPECT_GT(timed.value().timings.analysis_ns, 0u);
+    EXPECT_GT(timed.value().timings.redo_ns, 0u);
+    // No losers in this stream, so undo never ran - and an unrun phase reports
+    // zero rather than the cost of the phase beside it.
+    EXPECT_EQ(timed.value().timings.undo_ns, 0u);
+}
+
+TEST_F(MountRecoveryTest, TheCompletionCheckpointReportsItsOwnDuration) {
+    WriteStream(/*txn_id=*/7, wal::RecordType::kTxnCommit);
+
+    sched::ManualClock clock(1000);
+    auto manager = wal::WalManager::Open(device_.get(), clock, /*core_id=*/0);
+    ASSERT_TRUE(manager.ok()) << manager.status().message();
+
+    NoDirtyPages target;
+    wal::InMemoryCheckpointAnchor published;
+    sched::MonoTimeNs elapsed = 12345;  // overwritten, or the test proves nothing
+    ASSERT_TRUE(CheckpointAfterRecovery(/*core_id=*/0, *manager.value(), target, published,
+                                        /*log=*/nullptr, &clock, &elapsed)
+                    .ok());
+    // A ManualClock does not move on its own, so the honest answer is zero -
+    // and zero is what a caller passing a frozen clock must get, rather than
+    // the field being left at whatever it held.
+    EXPECT_EQ(elapsed, 0u);
+}
+
 TEST_F(MountRecoveryTest, RecoveringTwiceIsANoOp) {
     // A crash during a mount re-runs the whole thing, so the seam has to be
     // as idempotent as the driver under it.
@@ -339,6 +403,126 @@ TEST_F(MountRecoveryTest, RecoveringTwiceIsANoOp) {
     auto again = store_.Get(kPage);
     ASSERT_TRUE(again.ok());
     EXPECT_EQ(std::vector<std::byte>(again.value().begin(), again.value().end()), after_first);
+}
+
+// ---- RC09: RV3's audit, and what SHOW META says about it -----------------
+
+// A store that can be told to stop serving user pages, which is what a crash
+// that lost a relation's pages leaves behind. Catalog pages live below
+// `kFirstUserPageId` (in_memory_page_store.hpp), so the fault keeps the catalog
+// itself readable - the audit has to be able to *list* relations in order to
+// report that it cannot open them.
+class UserPagesGone final : public storage::PageStore {
+public:
+    explicit UserPagesGone(storage::PageStore& inner) noexcept : inner_(inner) {}
+
+    void ArmFault() noexcept { armed_ = true; }
+
+    StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override {
+        return inner_.CreateAt(page_id);
+    }
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override {
+        return inner_.CreateNew();
+    }
+    StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override {
+        if (Failing(page_id)) return Status::NotFound("page id not found");
+        return inner_.Get(page_id);
+    }
+    StatusOr<std::span<std::byte, kPageSize>> GetForRead(PageId page_id) override {
+        if (Failing(page_id)) return Status::NotFound("page id not found");
+        return inner_.GetForRead(page_id);
+    }
+
+private:
+    bool Failing(PageId page_id) const noexcept { return armed_ && page_id >= kFirstUserPageId; }
+
+    storage::PageStore& inner_;
+    bool armed_ = false;
+};
+
+class RecoveryAuditTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        faulty_.emplace(inner_);
+        auto boot = bootstrap::BootstrapDatabase(*faulty_, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(boot.ok()) << boot.status().message();
+        boot_.emplace(std::move(boot.value()));
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, *faulty_);
+    }
+
+    std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+
+    storage::InMemoryPageStore inner_{kFirstUserPageId};
+    std::optional<UserPagesGone> faulty_;
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+TEST_F(RecoveryAuditTest, EveryRelationTheCatalogDescribesIsOpenedAndCounted) {
+    ASSERT_EQ(Run("CREATE TABLE a (id int64, v int32)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE TABLE b (id int64, s varchar)").substr(0, 7), "CREATED");
+
+    const MountRecovery audited =
+        AuditCatalogAfterRecovery(boot_->catalog, *faulty_, MountRecovery{}, /*log=*/nullptr);
+    // Exactly the two user relations. The bootstrap catalogs are listed in
+    // sys.objects and have no sys.tables row (catalog/well_known.hpp), so
+    // counting them here would report nine missing pages on a healthy mount -
+    // which is what the first draft of this audit did.
+    EXPECT_EQ(audited.relations_checked, 2u);
+    EXPECT_EQ(audited.relations_missing_pages, 0u);
+}
+
+TEST_F(RecoveryAuditTest, ARelationWhosePagesTheCrashTookIsCountedRatherThanRefused) {
+    // RV3's detectable half: `CREATE TABLE` is unlogged, so a crash can keep
+    // the catalog row and lose the pages it points at. The audit's job is to
+    // say so as a number - **not** to fail the mount, because an unopenable
+    // relation is the finding rather than an error hit while producing it.
+    ASSERT_EQ(Run("CREATE TABLE a (id int64, v int32)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE TABLE b (id int64, s varchar)").substr(0, 7), "CREATED");
+    faulty_->ArmFault();
+
+    const MountRecovery audited =
+        AuditCatalogAfterRecovery(boot_->catalog, *faulty_, MountRecovery{}, /*log=*/nullptr);
+    EXPECT_EQ(audited.relations_checked, 2u);
+    EXPECT_EQ(audited.relations_missing_pages, 2u)
+        << "the pages are gone and the audit reported none of them missing";
+}
+
+TEST_F(RecoveryAuditTest, ShowMetaCarriesTheRecoveryBlockOnlyWhenAReportIsInstalled) {
+    // Absent, not zeroed: a dispatcher with no report has no answer about
+    // recovery, and printing zeroes would be an answer - the same rule
+    // SHOW ASSERTIONS follows for an absent surface.
+    EXPECT_EQ(Run("SHOW META").find("recovery_records="), std::string::npos);
+
+    MountRecovery report;
+    report.records = 41;
+    report.winners = 3;
+    report.transactions_rolled_back = 2;
+    report.relations_checked = 7;
+    report.timings.timed = true;
+    report.timings.redo_ns = 5000;
+    dispatcher_->set_recovery(&report);
+
+    const std::string meta = Run("SHOW META");
+    EXPECT_NE(meta.find("recovery_records=41"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("recovery_rolled_back=2"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("recovery_redo_us=5"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("recovery_relations_checked=7"), std::string::npos) << meta;
+    // RV3's standing statement, printed rather than implied: recovery does not
+    // restore the catalog, so "it succeeded" must never read as "nothing was
+    // lost" (mount_recovery.hpp says why the converse is undetectable).
+    EXPECT_NE(meta.find("catalog_recovered=0"), std::string::npos) << meta;
+}
+
+TEST_F(RecoveryAuditTest, AnUntimedRecoveryPrintsNoDurations) {
+    MountRecovery report;
+    report.records = 5;
+    dispatcher_->set_recovery(&report);
+
+    const std::string meta = Run("SHOW META");
+    EXPECT_NE(meta.find("recovery_records=5"), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("recovery_redo_us="), std::string::npos)
+        << "an unmeasured phase must not print a duration of zero: " << meta;
 }
 
 }  // namespace

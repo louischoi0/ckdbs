@@ -584,9 +584,17 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                         expeditor->database_->superblock.wal_anchor(0),
                                         *expeditor->log_device_, *expeditor->store_,
                                         *expeditor->undo_log_, &*expeditor->wal_,
-                                        &*expeditor->logger_);
+                                        &*expeditor->logger_, &expeditor->clock_);
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
+
+    // RV3's audit (RC09): the catalog survived unlogged, so ask it whether the
+    // relations it still describes can actually be opened. O(relations), one
+    // page read each, and it reports rather than refuses - an unopenable
+    // relation is the finding, not an error hit while producing it.
+    expeditor->recovery_ = AuditCatalogAfterRecovery(
+        expeditor->database_->catalog, *expeditor->store_, expeditor->recovery_,
+        &*expeditor->logger_);
 
     // The transaction ceiling recovery computed, applied and made durable
     // before the sequence that caches it is built. `SetNextTrxId` refuses to
@@ -621,7 +629,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
     if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
                                            *expeditor->checkpoint_target_,
-                                           *expeditor->checkpoint_anchor_, &*expeditor->logger_);
+                                           *expeditor->checkpoint_anchor_, &*expeditor->logger_,
+                                           &expeditor->clock_,
+                                           &expeditor->recovery_.checkpoint_ns);
         !s.ok()) {
         return s;
     }
@@ -651,6 +661,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});
     expeditor->dispatcher_->set_sort_max_rows(expeditor->config_.sort_max_rows);
+    // SHOW META's recovery block (RC09). A pointer into the member rather than
+    // a copy, so the block reports the mount's own report and cannot drift from
+    // it; `recovery_` is declared above the dispatcher and so outlives it.
+    expeditor->dispatcher_->set_recovery(&expeditor->recovery_);
     expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
                                          expeditor->config_.decay_half_life_ns);
     // PHY01's collector, wired to both feeders: the dispatcher touches

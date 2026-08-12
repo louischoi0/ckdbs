@@ -30,11 +30,39 @@ the owner's workplan.
   rescanning the stream — **except on a peer core**, which cannot write page 0
   and so still scans from whatever anchor core 0 last wrote it (costless today:
   a peer holds no transaction ids, so its stream carries no writes of its own).
-  **What is still missing, and none of it is the phases:** RC07 (Bound Cabin
-  replay, so a restart resumes assertion enforcement) and RC09 (the phase
-  timings and RV3's orphan counter) — which is what keeps this entry struck
-  rather than deleted. The two defects below are what running recovery *found*,
-  in code that predates it; both are fixed, and neither was in the phases.
+  `SHOW META` reports what the last mount's recovery did — records scanned,
+  transactions committed and rolled back, per-phase timings, and the audit below
+  (RC09, built the same day).
+  **What is still missing:** RC07 (Bound Cabin replay, so a restart resumes
+  assertion enforcement), which is what keeps this entry struck rather than
+  deleted. The three findings below are what running recovery *produced* — two
+  defects in code that predates it, both fixed, and one measured cost.
+
+- **The catalog is still not recovered, and `catalog_recovered=0` says so on
+  every `SHOW META`** (RV3, RC09). A crash can still lose a `CREATE TABLE`, so
+  recovery's promise is *"every acknowledged commit to a relation that survived
+  is restored"* and never "nothing was lost". Half of that gap is now counted:
+  `recovery_relations_missing_pages` reports user relations the catalog still
+  describes whose descriptor or var-heap root page the crash took, in
+  O(relations). **The other half cannot be counted at all** — rows whose
+  relation the catalog lost — because resolving a page to its relation needs a
+  page→relation index that `page.md` does not have, and whose absence is
+  already the named blocker on page reuse
+  (`docs/feat-physical-optimizer.md` §6 gate 3). Building the set instead would
+  mean walking every page of every relation at every mount.
+
+- **A mount reads each WAL segment's whole body, twice** — measured 2026-08-12
+  by RC09's own timings, which is what made a long-invisible cost visible.
+  `ScanLog` allocates and reads a segment's entire body in one go, analysis and
+  redo each run their own scan, and the default segment is 64 MiB: so a mount
+  reads 128 MiB and allocates two 64 MiB buffers **before it can serve a
+  statement, on a log holding nothing**. On a real server that is
+  `recovery_analysis_us≈44000` + `recovery_redo_us≈42000` — 86 ms of a ~90 ms
+  mount, reproduced on three consecutive mounts. Not a defect and not new
+  (`log_scanner.cpp` anticipated it: "when segments are 64 MiB this becomes a
+  streaming read"), and not recovery's to fix alone: the fix is to read only as
+  far as the durable end, or to stream in chunks, and it belongs beside the
+  segment-size decision that is still `[OPEN]` (`docs/wal.md` §15).
 
 - ~~**Var-heap page growth and UPDATE's spills are not logged, and recovery
   found it**~~ — **fixed 2026-08-12**, all three holes, with the reproducer

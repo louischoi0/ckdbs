@@ -1,6 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
 #include "kds/exec/type_literals.hpp"
+#include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
 
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/pattern_defs.hpp"
@@ -460,6 +461,37 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " last_mount_time=" << superblock_.last_mount_time()
        << " wal_anchor_count=" << superblock_.wal_anchor_count()
        << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off");
+
+    // The last recovery, for the operator who has to answer "what did the
+    // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
+    // report is installed - a dispatcher built without one (every socket-free
+    // test) has not "recovered nothing", it has no answer, and printing zeroes
+    // would be an answer.
+    if (recovery_ != nullptr) {
+        os << " recovery_records=" << recovery_->records
+           << " recovery_committed=" << recovery_->winners
+           << " recovery_rolled_back=" << recovery_->transactions_rolled_back
+           << " recovery_compensations=" << recovery_->compensations
+           << " recovery_redo_applied=" << recovery_->redo_applied
+           << " recovery_pages_healed=" << recovery_->pages_healed
+           << " recovery_torn_tail=" << (recovery_->torn_tail ? 1 : 0);
+        if (recovery_->timings.timed) {
+            os << " recovery_analysis_us=" << recovery_->timings.analysis_ns / 1000
+               << " recovery_redo_us=" << recovery_->timings.redo_ns / 1000
+               << " recovery_high_water_us=" << recovery_->timings.high_water_ns / 1000
+               << " recovery_undo_us=" << recovery_->timings.undo_ns / 1000
+               << " recovery_checkpoint_us=" << recovery_->checkpoint_ns / 1000;
+        }
+        // RV3's report, both halves. `relations_missing_pages` is the one that
+        // is computable; `catalog_recovered=0` is the standing statement that
+        // the converse - rows whose relation the crash erased - is **not
+        // detectable**, because no page names its relation
+        // (mount_recovery.hpp). Printed as a flag rather than left unsaid, so
+        // "recovery succeeded" is never read as "nothing was lost".
+        os << " recovery_relations_checked=" << recovery_->relations_checked
+           << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
+           << " catalog_recovered=0";
+    }
     return {os.str(), false};
 }
 

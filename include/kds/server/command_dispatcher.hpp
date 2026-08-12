@@ -130,6 +130,12 @@
 
 namespace kds::server {
 
+// What the mount's recovery did (`server/mount_recovery.hpp`), reported by
+// SHOW META. Forward-declared rather than included: only the pointer is held
+// here, and the definition drags in the WAL and catalog headers that every
+// consumer of this file would then pay for.
+struct MountRecovery;
+
 // The `physical_optimizer` config key's two legal states
 // (docs/feat-physical-optimizer.md R3). There is deliberately no `kOn`:
 // the config layer refuses `on` at startup naming §6's gates, so a mode a
@@ -759,6 +765,13 @@ public:
     }
     bool cabin_optimizer_enabled() const noexcept { return cabin_optimizer_enabled_; }
 
+    // What the mount's recovery did, for `SHOW META` (RC09). A pointer into
+    // the report the mount owns - `Expeditor::recovery_`, which outlives this
+    // dispatcher - and null everywhere that mounts nothing, where SHOW META
+    // then omits the block rather than printing zeroes that read as "recovery
+    // ran and found nothing".
+    void set_recovery(const MountRecovery* recovery) noexcept { recovery_ = recovery; }
+
     // The view's two sources (workplan PHY06), a setter for
     // `set_optimizer_signals`'s reason. Both null - every construction
     // site without the controller - and `SHOW CABIN_OPTIMIZER` then
@@ -1173,6 +1186,7 @@ private:
     stats::OptimizerSignals* optimizer_signals_ = nullptr;
     exec::ExecStats exec_stats_;
     bool cabin_optimizer_enabled_ = false;  // §II.6: off, experimental
+    const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
 
     // PHY06's view sources: the controller's managed table and decision
     // log, the executor's applied-action counters. Read-only - the view

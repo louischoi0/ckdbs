@@ -5,12 +5,15 @@
 #include "kds/base/common.hpp"
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
+#include "kds/catalog/catalog.hpp"
+#include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/undo_log.hpp"
 #include "kds/wal/checkpointer.hpp"
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/manager.hpp"
+#include "kds/wal/recovery.hpp"
 
 // Recovery at mount (docs/workplan-wal-recovery.md RV1/RV2) - the caller
 // `wal/recovery.hpp` declined to be, and that nothing else was.
@@ -100,6 +103,26 @@ struct MountRecovery {
     bool page_floor_raised = false;
     std::uint64_t next_trx_id = 0;
 
+    // ---- What it cost (RC09, `docs/wal.md` §13) ----
+    //
+    // `timings.timed` is false when no clock was supplied, which is what keeps
+    // four zeroes from reading as "instant" (`wal/recovery.hpp`).
+    wal::RecoveryTimings timings;
+    sched::MonoTimeNs checkpoint_ns = 0;  // RC08's completion checkpoint
+
+    // ---- What it could not promise (RV3, RC09) ----
+    //
+    // Relations the catalog still describes whose pages the crash took with it
+    // - the *detectable* half of the unlogged-DDL gap, filled by
+    // `AuditCatalogAfterRecovery` and left at zero until it runs. The other
+    // half is not detectable at all; the audit's own comment says why.
+    //
+    // **User relations only.** A bootstrap catalog relation has no `sys.tables`
+    // row and lives on a fixed page, so it is neither checkable this way nor at
+    // risk in the way a user relation is.
+    std::uint32_t relations_checked = 0;
+    std::uint32_t relations_missing_pages = 0;
+
     // Nothing to recover: an unwritten log, or one whose whole range the
     // last clean shutdown's checkpoint already covers. The common mount,
     // and the one that must cost nothing.
@@ -120,10 +143,40 @@ struct MountRecovery {
 // the shape socket-free tests use. A real mount installs one, because an
 // unlogged compensation is a rollback the next recovery cannot see happened
 // (`txn/recovery_undo.hpp`).
+// `clock`, when given, times the phases into `MountRecovery::timings` (RC09).
 StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
-                                          Logger* log);
+                                          Logger* log, const sched::Clock* clock = nullptr);
+
+// RV3's honest counter, and **the half of it that can actually be computed**
+// (RC09).
+//
+// RV3 says v1 recovers data and not the catalog, and asks for "the counter that
+// says when it did not" rather than letting the gap read as closed. The gap has
+// two faces, and they are not equally knowable:
+//
+//   - **A relation the catalog describes whose pages the crash lost.** Cheap
+//     and exact: ask the catalog for each relation and try to open it. One page
+//     read per relation, O(relations), no chain walks. That is this function.
+//   - **Data whose relation the catalog lost** - the unlogged `CREATE TABLE`
+//     that a crash undid while the log still held inserts into its pages.
+//     **This is not detectable**, and saying so is the honest half of RC09:
+//     resolving a page to its relation needs a page→relation index, `page.md`
+//     has none, and its absence is already a named gate elsewhere
+//     (`docs/feat-physical-optimizer.md` §6 gate 3, which blocks page reuse for
+//     the same missing map). The alternative - walking every live relation's
+//     chains to build the set - is O(every page in the database) at every
+//     mount, which is not a counter, it is a second recovery.
+//
+// So `SHOW META` reports this number and states the other case in words. A
+// counter that silently returned 0 for both would be the "gap reading as
+// closed" that RV3 exists to prevent.
+//
+// Never fails the mount: an unreadable relation is what it is *reporting*, not
+// an error it hit. Returns the two counts, writes one log line per finding.
+MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::PageStore& store,
+                                        MountRecovery report, Logger* log);
 
 // Recovery's completion checkpoint (RC08, `docs/wal.md` §12-4): the last step
 // of a mount, and what bounds the *next* crash's work.
@@ -157,8 +210,10 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
 // more than it should, which is a promise silently withdrawn rather than a
 // wrong answer - but it happens at mount, where there is still a caller to
 // tell.
+// `elapsed_ns`, when given, receives how long the checkpoint took (RC09).
 Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
                                wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
-                               Logger* log);
+                               Logger* log, const sched::Clock* clock = nullptr,
+                               sched::MonoTimeNs* elapsed_ns = nullptr);
 
 }  // namespace kds::server
