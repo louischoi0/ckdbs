@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "kds/base/log.hpp"
@@ -88,9 +89,21 @@ public:
 // RC07). A WAL-layer shape rather than `exec::BoundCabin`'s own, for the reason
 // `CheckpointTarget` is a seam: this file must not depend on the assertion
 // engine, and the assertion registry is what converts.
+// One group as the seam hands it over. The key is **owned** rather than a span:
+// a directory's keys live in its own headers, and every implementation of the
+// seam would otherwise have to keep a parallel buffer alive across the call -
+// which the first one written did, with a `mutable` vector, before this changed.
+// The checkpointer views into these when it encodes.
+struct AssertionSnapshotGroup {
+    std::uint32_t group_id = 0;
+    std::int64_t count = 0;
+    std::int64_t sum = 0;
+    std::string key;
+};
+
 struct AssertionCabinSnapshot {
     std::uint64_t assertion_id = 0;
-    std::vector<SnapshotGroupEntry> groups;  // keys must outlive the call
+    std::vector<AssertionSnapshotGroup> groups;
 };
 
 // Where the checkpoint gets those snapshots. Implemented by whoever owns the

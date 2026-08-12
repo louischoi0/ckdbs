@@ -772,6 +772,13 @@ public:
     // ran and found nothing".
     void set_recovery(const MountRecovery* recovery) noexcept { recovery_ = recovery; }
 
+    // The assertion registry, exposed for the two things only a mount does:
+    // refilling it after recovery (RC07's `ResumeAssertionsAfterRecovery`) and
+    // handing it to the checkpointer as AS6a's snapshot source. Every other
+    // caller reaches assertions through the write paths on this class, which is
+    // why this is the only accessor and why it is not const.
+    exec::AssertionEnforcer& assertions() noexcept { return enforcer_; }
+
     // The view's two sources (workplan PHY06), a setter for
     // `set_optimizer_signals`'s reason. Both null - every construction
     // site without the controller - and `SHOW CABIN_OPTIMIZER` then

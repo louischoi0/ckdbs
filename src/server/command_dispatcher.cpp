@@ -491,6 +491,13 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         os << " recovery_relations_checked=" << recovery_->relations_checked
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
            << " catalog_recovered=0";
+        // RC07: what the mount could resume enforcing, and the honest
+        // remainder. A surviving declaration whose directory could not be
+        // rebuilt is counted here and left *out* of the registry, so
+        // SHOW ASSERTIONS reports `enforcing=0` for it rather than a
+        // constraint that would admit every write.
+        os << " recovery_assertions_enforcing=" << recovery_->assertions_enforcing
+           << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered;
     }
     return {os.str(), false};
 }

@@ -6,6 +6,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/assertion_check.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/page_store.hpp"
@@ -123,6 +124,15 @@ struct MountRecovery {
     std::uint32_t relations_checked = 0;
     std::uint32_t relations_missing_pages = 0;
 
+    // ---- Assertion enforcement, resumed (RC07) ----
+    //
+    // `assertions_enforcing` is what `SHOW ASSERTIONS` will report `enforcing=1`
+    // for; `assertions_unrecovered` is the honest remainder - a surviving
+    // declaration whose directory could not be rebuilt, which stays out of the
+    // registry rather than enforcing against zero.
+    std::uint32_t assertions_enforcing = 0;
+    std::uint32_t assertions_unrecovered = 0;
+
     // Nothing to recover: an unwritten log, or one whose whole range the
     // last clean shutdown's checkpoint already covers. The common mount,
     // and the one that must cost nothing.
@@ -178,6 +188,40 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
 MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::PageStore& store,
                                         MountRecovery report, Logger* log);
 
+// Assertion enforcement, resumed (RC07's mount wiring, AS6a).
+//
+// `feat-assertion.md` §7 promises enforcement "immediately at restart - no
+// rebuild scan, no enforcement gap", and until this ran the engine contradicted
+// it: `SHOW ASSERTIONS` reported `enforcing=0` for every surviving assertion,
+// honestly, because the registry is memory-resident and nothing refilled it.
+//
+// Three steps per surviving assertion, and each can fail on its own without
+// costing the mount:
+//
+//   1. **Revive the shell** from the stored declaration
+//      (`exec::ReviveAssertion`): §8.2 keeps `source_text` as the canon exactly
+//      so the group columns can be recovered by re-parsing it.
+//   2. **Refill the directory** through `exec::RecoverAssertions`: the group
+//      headers from the last checkpoint's snapshot, the entry linkage from the
+//      cabin's own pages, then the `ASSERT_*` records after the snapshot.
+//   3. **Adopt only what came back whole.** An assertion the pass could not
+//      base is left out of the registry, so it reports `enforcing=0` - which is
+//      the honest answer and the one that was already true.
+//
+// **Adopting an unrecovered cabin would be the worst outcome available**, worse
+// than not enforcing: a directory at zero admits every write, so the constraint
+// would appear enforcing and enforce nothing. That is why the pass reports per
+// assertion and why this refuses to adopt on anything less than success.
+//
+// Called after `RecoverCoreAtMount` and before the listener binds. `from_lsn` is
+// the anchor's `checkpoint_lsn`, which is what makes the scan AS6a's "from the
+// last checkpoint".
+MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
+                                           storage::PageStore& store, wal::LogDevice& device,
+                                           std::uint32_t core_id, wal::Lsn from_lsn,
+                                           exec::AssertionEnforcer& enforcer,
+                                           MountRecovery report, Logger* log);
+
 // Recovery's completion checkpoint (RC08, `docs/wal.md` §12-4): the last step
 // of a mount, and what bounds the *next* crash's work.
 //
@@ -211,9 +255,18 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
 // wrong answer - but it happens at mount, where there is still a caller to
 // tell.
 // `elapsed_ns`, when given, receives how long the checkpoint took (RC09).
+//
+// `assertions`, when given, makes this checkpoint carry AS6a's group snapshots -
+// and a mount that has resumed enforcement **must** pass it. The completion
+// checkpoint becomes the anchor, so the next mount folds from *this* record: a
+// completion checkpoint written without the snapshots leaves that mount with no
+// base, and enforcement would survive exactly one restart. That is why this
+// call is sequenced after `ResumeAssertionsAfterRecovery` rather than beside the
+// recovery it completes.
 Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
                                wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
                                Logger* log, const sched::Clock* clock = nullptr,
-                               sched::MonoTimeNs* elapsed_ns = nullptr);
+                               sched::MonoTimeNs* elapsed_ns = nullptr,
+                               const wal::AssertionSnapshotSource* assertions = nullptr);
 
 }  // namespace kds::server

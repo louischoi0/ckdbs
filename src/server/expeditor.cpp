@@ -613,29 +613,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                      " past what the log names");
     }
 
-    // **The completion checkpoint** (RC08), which is what makes the next
-    // recovery cheap: it publishes an anchor past everything just replayed, so
-    // a second crash scans from here instead of from wherever the last periodic
-    // checkpoint left off - or, on a database that had never completed one,
-    // from the head of the stream every single mount.
-    //
-    // The target and the anchor are built here rather than beside the
-    // checkpointer below, because this call needs them and it must happen
-    // before any statement can dirty a page. Both are members, so the
-    // checkpointer built later borrows the same two objects and the anchor's
-    // publish count spans the mount and the cadence.
-    expeditor->checkpoint_target_.emplace(*expeditor->store_);
-    expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
-    expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
-    if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
-                                           *expeditor->checkpoint_target_,
-                                           *expeditor->checkpoint_anchor_, &*expeditor->logger_,
-                                           &expeditor->clock_,
-                                           &expeditor->recovery_.checkpoint_ns);
-        !s.ok()) {
-        return s;
-    }
-
     // The rest of the transaction stack, before the dispatcher that reads
     // through it. The persist callback is what makes a reserved id block
     // durable: the superblock is unlogged, so a block is only safe once the
@@ -665,6 +642,53 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // a copy, so the block reports the mount's own report and cannot drift from
     // it; `recovery_` is declared above the dispatcher and so outlives it.
     expeditor->dispatcher_->set_recovery(&expeditor->recovery_);
+
+    // **Assertion enforcement, resumed** (RC07, AS6a). Here rather than beside
+    // the recovery call above, because the registry it refills lives on the
+    // dispatcher and the dispatcher did not exist yet - and still before
+    // `Serve()`, so no statement is accepted against an unenforcing constraint.
+    //
+    // `checkpoint_lsn` from this core's anchor is the scan start: that is the
+    // checkpoint whose snapshot is the base, which is what AS6a's "from the last
+    // checkpoint" means. The anchor read here is the one recovery already used,
+    // so the two cannot disagree about which checkpoint that was.
+    expeditor->recovery_ = ResumeAssertionsAfterRecovery(
+        expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
+        /*core_id=*/0, expeditor->database_->superblock.wal_anchor(0).checkpoint_lsn,
+        expeditor->dispatcher_->assertions(), expeditor->recovery_, &*expeditor->logger_);
+
+    // **The completion checkpoint** (RC08), which is what makes the next
+    // recovery cheap: it publishes an anchor past everything just replayed, so
+    // a second crash scans from here instead of from wherever the last periodic
+    // checkpoint left off - or, on a database that had never completed one,
+    // from the head of the stream every single mount.
+    //
+    // The target and the anchor are built here rather than beside the
+    // checkpointer below, because this call needs them and it must happen
+    // before any statement can dirty a page. Both are members, so the
+    // checkpointer built later borrows the same two objects and the anchor's
+    // publish count spans the mount and the cadence.
+    //
+    // **Sequenced after the assertion resume above, not before it.** This
+    // checkpoint becomes the anchor, so it is the record the *next* mount folds
+    // its assertion directories from - and it can only carry their group
+    // snapshots if the registry has already been refilled. Written the other way
+    // round, enforcement survived exactly one restart: the mount after this one
+    // would scan from a checkpoint holding no snapshot and find no base.
+    expeditor->checkpoint_target_.emplace(*expeditor->store_);
+    expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
+    expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
+    if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
+                                           *expeditor->checkpoint_target_,
+                                           *expeditor->checkpoint_anchor_, &*expeditor->logger_,
+                                           &expeditor->clock_,
+                                           &expeditor->recovery_.checkpoint_ns,
+                                           &expeditor->dispatcher_->assertions());
+        !s.ok()) {
+        return s;
+    }
+
+
     expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
                                          expeditor->config_.decay_half_life_ns);
     // PHY01's collector, wired to both feeders: the dispatcher touches
@@ -700,6 +724,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->checkpointer_.emplace(*expeditor->wal_, *expeditor->checkpoint_target_,
                                      *expeditor->txn_manager_,
                                      *expeditor->checkpoint_anchor_);
+    // AS6a's snapshot source (RC07): every cadence checkpoint from here on writes
+    // each live cabin's group headers, which is what the *next* mount folds onto.
+    // The registry is the source because it owns the directories.
+    expeditor->checkpointer_->SetAssertionSource(&expeditor->dispatcher_->assertions());
     expeditor->checkpointer_->SetLogger(&*expeditor->logger_);
 
     if (Status s = expeditor->Sync(); !s.ok()) return s;

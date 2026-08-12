@@ -48,7 +48,7 @@ Status Checkpointer::LogAssertionSnapshots() {
         // loader tell an empty cabin from an absent snapshot - and those two
         // must not read alike, because the second means the fold has no base.
         do {
-            std::vector<SnapshotGroupEntry> chunk;
+            std::vector<SnapshotGroupEntry> chunk;  // views into the owned keys
             std::size_t bytes = kAssertSnapshotFixedSize;
             while (at < cabin.groups.size()) {
                 const std::size_t cost = AssertSnapshotGroupBytes(cabin.groups[at].key.size());
@@ -66,7 +66,14 @@ Status Checkpointer::LogAssertionSnapshots() {
                         " bytes, which no ASSERT_SNAPSHOT record can carry");
                 }
                 bytes += cost;
-                chunk.push_back(cabin.groups[at]);
+                const AssertionSnapshotGroup& group = cabin.groups[at];
+                SnapshotGroupEntry entry;
+                entry.group_id = group.group_id;
+                entry.count = group.count;
+                entry.sum = group.sum;
+                entry.key = std::as_bytes(std::span<const char>(group.key.data(),
+                                                                group.key.size()));
+                chunk.push_back(entry);
                 ++at;
             }
 

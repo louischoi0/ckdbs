@@ -1,5 +1,9 @@
 #include "kds/exec/assertion_catalog.hpp"
 
+#include <variant>
+
+#include "kds/parser/parser.hpp"
+
 #include <array>
 #include <utility>
 
@@ -452,6 +456,88 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
     live.cabin = std::move(build.value().cabin);
     result.live.emplace(std::move(live));
     return result;
+}
+
+StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::PageStore& store,
+                                       const AssertionDef& def) {
+    if (def.cabin_root == kInvalidPageId) {
+        return Status::InvalidArgument("assertion \"" + def.name +
+                                      "\" carries no Bound Cabin root, so it was never built");
+    }
+
+    // §8.2's canon, re-parsed. The declaration is stored verbatim exactly so
+    // this is possible: the group columns are positions nothing persists, and
+    // re-deriving them from the text is what keeps the GROUP BY list uncapped.
+    parser::Parser declaration(def.source_text);
+    auto parsed = declaration.Parse();
+    if (!parsed.ok()) {
+        return parsed.status().WithContext("reviving assertion \"" + def.name +
+                                          "\": its stored declaration no longer parses");
+    }
+    const auto* stmt_ptr = std::get_if<parser::AssertionStmt>(&parsed.value());
+    if (stmt_ptr == nullptr) {
+        // The row's source text is not a CREATE ASSERTION at all, which the
+        // publish path cannot produce - so this is a corrupted row rather than
+        // a declaration to interpret.
+        return Status::Corruption("assertion \"" + def.name +
+                                 "\" stores a declaration that is not a CREATE ASSERTION");
+    }
+    const parser::AssertionStmt& stmt_value = *stmt_ptr;
+
+    auto access = catalog.InitTableAccess(def.target_oid);
+    if (!access.ok()) {
+        return access.status().WithContext("reviving assertion \"" + def.name + "\"");
+    }
+
+    // Resolved against the schema as it is **now**, not as it was: a column an
+    // ALTER renamed makes the declaration unenforceable, and that has to be a
+    // reported failure rather than a silently different constraint.
+    std::vector<std::uint16_t> group_cols;
+    group_cols.reserve(stmt_value.group_columns.size());
+    for (const parser::IndexColumnRef& col : stmt_value.group_columns) {
+        auto pos = ResolveColumn(*access.value(), col, stmt_value.table_name);
+        if (!pos.ok()) {
+            return pos.status().WithContext("reviving assertion \"" + def.name + "\"");
+        }
+        group_cols.push_back(pos.value());
+    }
+
+    std::uint16_t sum_col = 0;
+    if (stmt_value.func == parser::AggFunc::kSum) {
+        auto pos = ResolveColumn(*access.value(), stmt_value.sum_column,
+                                 stmt_value.table_name);
+        if (!pos.ok()) {
+            return pos.status().WithContext("reviving assertion \"" + def.name + "\"");
+        }
+        sum_col = pos.value();
+    }
+
+    LiveAssertion live;
+    live.assertion_id = def.id;
+    live.target_oid = def.target_oid;
+    live.name = def.name;
+    live.aggregate = stmt_value.func == parser::AggFunc::kSum ? BoundAggregate::kSum
+                                                               : BoundAggregate::kCount;
+    live.group_cols = group_cols;
+    live.sum_col = sum_col;
+    live.sum_col_name = stmt_value.sum_column.name;
+    for (std::size_t i = 0; i < group_cols.size(); ++i) {
+        live.group_col_names.push_back(stmt_value.group_columns[i].name);
+        live.group_type_vals.push_back(access.value()->schema.columns[group_cols[i]].type_val);
+    }
+
+    // The writer takes over the chain the entries are already on; a fresh one
+    // would grow a second chain beside it.
+    live.chain = BoundCabinChainWriter(def.id);
+    if (Status s = live.chain.AdoptChain(store, def.cabin_root); !s.ok()) {
+        return s.WithContext("reviving assertion \"" + def.name + "\"");
+    }
+
+    // The directory is deliberately empty: `exec::RecoverAssertions` fills it
+    // from the checkpoint snapshot and the records after it (AS6a). Adopting
+    // this as-is would enforce against zero, which admits every write.
+    live.cabin = BoundCabin(live.aggregate, stmt_value.enforced_max());
+    return live;
 }
 
 StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageStore& store,

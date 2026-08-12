@@ -58,6 +58,35 @@ Status Refuse(const LiveAssertion& a, std::span<const parser::AstValue> values,
 
 }  // namespace
 
+std::vector<wal::AssertionCabinSnapshot> AssertionEnforcer::SnapshotAssertions() const {
+    // AS6a's base, one record's worth per cabin: headers only, keys owned, and
+    // never the entry lists - those are O(all writes, forever) and are rebuilt
+    // at recovery from the entries' own `group_id` instead.
+    std::vector<wal::AssertionCabinSnapshot> out;
+    out.reserve(live_.size());
+    for (const auto& [assertion_id, assertion] : live_) {
+        wal::AssertionCabinSnapshot cabin;
+        cabin.assertion_id = assertion_id;
+        for (const BoundCabin::GroupSnapshot& group : assertion.cabin.SnapshotGroups()) {
+            wal::AssertionSnapshotGroup entry;
+            entry.group_id = group.group_id;
+            entry.count = group.count;
+            entry.sum = group.sum;
+            entry.key = group.key;
+            cabin.groups.push_back(std::move(entry));
+        }
+        out.push_back(std::move(cabin));
+    }
+    // Ordered by assertion id, for the reason SnapshotGroups() orders by group
+    // id: a checkpoint's bytes must be a function of its input, and an
+    // unordered_map's iteration order is not one (sched.md §8).
+    std::sort(out.begin(), out.end(),
+              [](const wal::AssertionCabinSnapshot& a, const wal::AssertionCabinSnapshot& b) {
+                  return a.assertion_id < b.assertion_id;
+              });
+    return out;
+}
+
 void AssertionEnforcer::Adopt(LiveAssertion assertion) {
     const std::uint64_t id = assertion.assertion_id;
     const catalog::Oid oid = assertion.target_oid;

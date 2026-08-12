@@ -1,7 +1,11 @@
 #include "kds/server/mount_recovery.hpp"
 
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "kds/exec/assertion_catalog.hpp"
+#include "kds/exec/assertion_recover.hpp"
 #include "kds/txn/recovery_undo.hpp"
 #include "kds/wal/recovery.hpp"
 
@@ -158,10 +162,101 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
     return report;
 }
 
+MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
+                                           storage::PageStore& store, wal::LogDevice& device,
+                                           std::uint32_t core_id, wal::Lsn from_lsn,
+                                           exec::AssertionEnforcer& enforcer,
+                                           MountRecovery report, Logger* log) {
+    auto defs = exec::ListAssertions(catalog, store);
+    if (!defs.ok()) {
+        if (log != nullptr) {
+            log->Error("recovery", "could not list assertions after recovery, so none can be "
+                                   "resumed: " +
+                                       defs.status().message());
+        }
+        return report;
+    }
+    if (defs.value().empty()) {
+        return report;  // nothing declared: no scan, no cost
+    }
+
+    // The shells first, so the pass has somewhere to put the headers. Each is
+    // held in a stable slot for the life of the call, because the pass takes
+    // pointers into the cabins.
+    std::vector<exec::LiveAssertion> revived;
+    revived.reserve(defs.value().size());
+    for (const exec::AssertionDef& def : defs.value()) {
+        auto live = exec::ReviveAssertion(catalog, store, def);
+        if (!live.ok()) {
+            ++report.assertions_unrecovered;
+            if (log != nullptr) {
+                log->Error("recovery", "assertion \"" + def.name +
+                                           "\" cannot be revived, so it will not enforce: " +
+                                           live.status().message());
+            }
+            continue;
+        }
+        revived.push_back(std::move(live.value()));
+    }
+    if (revived.empty()) {
+        return report;
+    }
+
+    std::vector<exec::RecoverableAssertion> targets;
+    targets.reserve(revived.size());
+    for (std::size_t i = 0; i < revived.size(); ++i) {
+        exec::RecoverableAssertion target;
+        target.assertion_id = revived[i].assertion_id;
+        target.root_page_id = revived[i].chain.root();
+        target.cabin = &revived[i].cabin;
+        targets.push_back(target);
+    }
+
+    auto recovered = exec::RecoverAssertions(device, core_id, from_lsn, store, targets, log);
+    if (!recovered.ok()) {
+        // Reported, not fatal: a mount that refused here would refuse to open a
+        // database whose *data* is intact over a constraint that can be rebuilt
+        // by re-creating the assertion. What must not happen is adopting the
+        // half-built directories, and returning early is what prevents it.
+        report.assertions_unrecovered += static_cast<std::uint32_t>(revived.size());
+        if (log != nullptr) {
+            log->Error("recovery", "assertion recovery failed, so no assertion will enforce: " +
+                                       recovered.status().message());
+        }
+        return report;
+    }
+
+    for (std::size_t i = 0; i < revived.size(); ++i) {
+        const auto& results = recovered.value().assertions;
+        const bool whole =
+            i < results.size() && results[i].assertion_id == revived[i].assertion_id &&
+            results[i].recovered;
+        if (!whole) {
+            // **Not adopted, deliberately.** A directory the pass could not base
+            // is a directory at zero, and a cabin at zero admits every write - so
+            // adopting it would report `enforcing=1` for a constraint enforcing
+            // nothing, which is worse than the honest `enforcing=0`.
+            ++report.assertions_unrecovered;
+            continue;
+        }
+        enforcer.Adopt(std::move(revived[i]));
+        ++report.assertions_enforcing;
+    }
+
+    if (log != nullptr) {
+        log->Info("recovery", "assertions resumed: " +
+                                  std::to_string(report.assertions_enforcing) + " enforcing, " +
+                                  std::to_string(report.assertions_unrecovered) +
+                                  " unrecovered");
+    }
+    return report;
+}
+
 Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
                                wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
                                Logger* log, const sched::Clock* clock,
-                               sched::MonoTimeNs* elapsed_ns) {
+                               sched::MonoTimeNs* elapsed_ns,
+                               const wal::AssertionSnapshotSource* assertions) {
     const sched::MonoTimeNs started = clock != nullptr ? clock->Now() : 0;
     // Empty by fact, not by omission - see the header. A checkpoint written
     // here with a *stale* active list would be worse than none: recovery would
@@ -169,6 +264,10 @@ Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
     wal::NoActiveTransactions none;
     wal::Checkpointer checkpointer(wal, target, none, anchor);
     checkpointer.SetLogger(log);
+    // AS6a: this checkpoint becomes the anchor, so it has to carry the base the
+    // *next* mount folds from. Without it enforcement would survive one restart
+    // and not the one after (see the header).
+    checkpointer.SetAssertionSource(assertions);
 
     // Run to completion rather than paced: there is no reactor to spread this
     // across yet, and the whole point is that the mount does not finish until

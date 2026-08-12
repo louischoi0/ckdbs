@@ -73,13 +73,7 @@ Status SimInstance::Boot() {
         // stream, because nothing here runs the periodic checkpointer - so the
         // harness would be measuring a mount cost no server pays and missing
         // the one property RC08 adds.
-        storage::PageStoreCheckpointTarget target(*store_);
-        server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
-        if (Status s = server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
-                                                      /*log=*/nullptr);
-            !s.ok()) {
-            return s;
-        }
+        recovery_checkpoint_pending_ = true;
     }
 
     // The persist callback, exactly as the expeditor wires it: the harness
@@ -94,6 +88,29 @@ Status SimInstance::Boot() {
                         exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
                         /*access_statistics=*/true, /*cabins=*/nullptr, &*txn_);
     session_ = server::Session();
+
+    // Assertion enforcement and the completion checkpoint, in the expeditor's
+    // order and for its reason (RC07/RC08): the registry lives on the dispatcher
+    // that has only just been built, and the checkpoint has to be written *after*
+    // it is refilled, because that checkpoint becomes the anchor the next mount
+    // folds its directories from.
+    if (recovery_checkpoint_pending_) {
+        recovery_checkpoint_pending_ = false;
+        server::ResumeAssertionsAfterRecovery(
+            boot_->catalog, *store_, *log_device_, /*core_id=*/0,
+            boot_->superblock.wal_anchor(0).checkpoint_lsn, dispatcher_->assertions(),
+            server::MountRecovery{}, /*log=*/nullptr);
+
+        storage::PageStoreCheckpointTarget target(*store_);
+        server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
+        if (Status s = server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
+                                                      /*log=*/nullptr, /*clock=*/nullptr,
+                                                      /*elapsed_ns=*/nullptr,
+                                                      &dispatcher_->assertions());
+            !s.ok()) {
+            return s;
+        }
+    }
     return Status::OK();
 }
 

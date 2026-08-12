@@ -84,6 +84,17 @@ public:
     // relation.
     Status EnsureRoot(storage::PageStore& store, wal::WalManager* wal);
 
+    // Takes over an **existing** chain, for an assertion that survived a
+    // restart (RC07's mount wiring): the root comes from `sys.assertions` and
+    // the tail is found by following the links, because the writer appends
+    // there and a fresh writer would otherwise start growing a second chain
+    // beside the one the entries are already on.
+    //
+    // Fails with Corruption on a page that is not a `kCabinBound` page or a
+    // link cycle - both mean the root is not the chain it claims to be, and
+    // appending into it would scatter entries no directory could relink.
+    Status AdoptChain(storage::PageStore& store, PageId root);
+
     // Appends one entry, growing the chain when the tail is full, and logs
     // it as `type` owned by `txn_id` against the page it landed in.
     StatusOr<std::pair<PageId, std::uint16_t>> Append(storage::PageStore& store,

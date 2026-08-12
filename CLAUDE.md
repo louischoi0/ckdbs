@@ -33,7 +33,7 @@ statements, not style.
 |---|---|---|
 | Pages, semi-sorted heap, Keystone, fixed-length tuples, var-heap | Built | `docs/heap-and-tuple.md` (authoritative), `docs/rule-fixed-length-tuple.md`, `docs/page.md` |
 | Clustered B+ tree | Built | `docs/heap-and-tuple.md` |
-| WAL | Every data mutation logged (heap, undo, var-heap, index, assertions); **catalog/DDL writes are not**, and **recovery not implemented** — nothing reads the log back | `docs/wal.md` |
+| WAL | Every data mutation logged (heap, undo, var-heap, index, assertions); **catalog/DDL writes are not**. **Recovery runs at mount 2026-08-12** (RC01-RC11): analysis/redo/high-water/undo per core before the listener binds, a completion checkpoint bounding the next crash, `SHOW META`'s recovery block, and assertion enforcement resumed. The catalog is still not recovered (RV3) | `docs/wal.md`, `docs/workplan-wal-recovery.md` |
 | Transactions & MVCC | Built (T01-T14); no purge, and MVCC ships before recovery (see §8's gap) | `docs/txn.md`, `docs/txn-workplan.md` |
 | Query language, parser, step chains, joins, subqueries | Built (V01-V19; V09 pagination 2026-08-10). Open: V08's `IN (value list)`, V11 (`WITH (...)` table options), V12 (`SET DURABILITY`, the session/admin classes), V20's test, and phase V-6's blueprint parser | `docs/parser-v2.md`, `docs/parser-v2-workplan.md` |
 | `ORDER BY` (the output sort) | **Built 2026-08-11** (OB1-OB7): any columns, pk or not, of any relation in a non-aggregated statement, each `ASC`/`DESC`, up to 8 keys. A sink decorator at the AG1 seam, `sort_max_rows`-capped, with a top-N heap under `LIMIT` and the pk-ascending form elided to zero cost. Refused and left open by decision: ordering over aggregated output | `docs/workplan-order-by.md` |
@@ -45,7 +45,7 @@ statements, not style.
 | Cabin (value-observed authoritative store) | v1 built (CB01-CB11); entry sets memory-resident | `docs/feat-cabin.md`, `docs/cabin-workplan.md` |
 | Secondary indexes (multi-column, covering) | All built (IX01-IX16) | `docs/feat-index.md`, `docs/workplan-index.md` |
 | Foreign keys | Declared and enforced (FK-M1..FK-M5); CASCADE/SET NULL out of v1 | `docs/impl-foreign-keys.md` |
-| Assertions (group-level constraints) | **Complete and enforcing** (AST01-AST10); recovery-side registry rebuild outside the series | `docs/feat-assertion.md`, `docs/workplan-assertion.md` |
+| Assertions (group-level constraints) | **Complete and enforcing** (AST01-AST10). The recovery-side registry rebuild — outside the AST series — **landed 2026-08-12** as `docs/workplan-wal-recovery.md` RC07: `enforcing=1` immediately after a restart | `docs/feat-assertion.md`, `docs/workplan-assertion.md` |
 | Access statistics | Built (`SHOW ACCESS`) | `docs/heap-and-tuple.md` §7 |
 | ALTER TABLE | Built 2026-08-10 (AL1-AL9, ALT01-ALT05): catalog-only — RENAME TO / RENAME COLUMN; assertions RESTRICT; everything data-moving refused | `docs/spec-alter.md`, `docs/workplan-alter.md` |
 | DROP TABLE | Built 2026-08-10 (DT1-DT6, DT01-DT05): catalog-scoped — oid tombstoned and never reissued, pages orphan (reclamation gated), fkeys/assertions RESTRICT | `docs/spec-drop-table.md`, `docs/workplan-drop-table.md` |

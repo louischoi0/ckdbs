@@ -10,6 +10,12 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/bootstrap/bootstrap.hpp"
+#include "kds/server/command_dispatcher.hpp"
+#include "kds/server/mount_recovery.hpp"
+#include "kds/storage/device_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
+#include "kds/storage/page_store_checkpoint_target.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/wal/checkpointer.hpp"
@@ -125,29 +131,25 @@ protected:
         public:
             explicit Source(const BoundCabin& cabin) : cabin_(cabin) {}
             std::vector<wal::AssertionCabinSnapshot> SnapshotAssertions() const override {
+                // The seam owns its keys, so this is a straight copy - the
+                // first version of this fixture had to keep a `mutable` vector
+                // of strings alive across the call, which is the trap that
+                // moved the seam to owned keys.
                 wal::AssertionCabinSnapshot out;
                 out.assertion_id = kAssertionId;
-                keys_.clear();
                 for (const BoundCabin::GroupSnapshot& g : cabin_.SnapshotGroups()) {
-                    keys_.push_back(g.key);
-                }
-                std::size_t i = 0;
-                for (const BoundCabin::GroupSnapshot& g : cabin_.SnapshotGroups()) {
-                    wal::SnapshotGroupEntry entry;
+                    wal::AssertionSnapshotGroup entry;
                     entry.group_id = g.group_id;
                     entry.count = g.count;
                     entry.sum = g.sum;
-                    entry.key = std::as_bytes(std::span<const char>(keys_[i].data(),
-                                                                    keys_[i].size()));
-                    out.groups.push_back(entry);
-                    ++i;
+                    entry.key = g.key;
+                    out.groups.push_back(std::move(entry));
                 }
                 return {out};
             }
 
         private:
             const BoundCabin& cabin_;
-            mutable std::vector<std::string> keys_;  // the spans must outlive the call
         };
 
         class NoPages final : public wal::CheckpointTarget {
@@ -307,6 +309,129 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
     EXPECT_EQ(report.value().assertions[0].groups_restored, groups)
         << "a chunk was lost, so the base under-counts and an admission check on it is wrong";
     EXPECT_EQ(rebuilt.group_count(), groups);
+}
+
+// ---- The mount wiring (RC07): a real assertion, resumed --------------------
+
+// Everything above drives the pass directly. This drives it the way a mount
+// does: a real `CREATE ASSERTION` through the dispatcher, a real checkpoint
+// through the registry-as-snapshot-source, then a **fresh** registry resumed
+// from the log - which is what a restart is, minus the process boundary.
+class AssertionResumeTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto page_device = storage::MemoryPageDevice::Create(/*extent_pages=*/64,
+                                                             /*initial_pages=*/64);
+        ASSERT_TRUE(page_device.ok()) << page_device.status().message();
+        page_device_ = std::move(page_device.value());
+
+        auto log_device = wal::MemoryLogDevice::Create(kSegmentSize);
+        ASSERT_TRUE(log_device.ok()) << log_device.status().message();
+        log_device_ = std::move(log_device.value());
+
+        auto manager = wal::WalManager::Open(log_device_.get(), clock_, /*core_id=*/0);
+        ASSERT_TRUE(manager.ok()) << manager.status().message();
+        wal_ = std::move(manager.value());
+
+        auto store = storage::DevicePageStore::Open(*page_device_, server::kFirstUserPageId);
+        ASSERT_TRUE(store.ok()) << store.status().message();
+        store_ = std::move(store.value());
+        store_->SetWalGate(wal_.get());
+
+        auto boot = bootstrap::BootstrapDatabase(*store_, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(boot.ok()) << boot.status().message();
+        boot_.emplace(std::move(boot.value()));
+
+        trx_ids_.emplace(boot_->superblock);
+        undo_.emplace(*store_, wal_.get());
+        txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get());
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, *store_, /*log=*/nullptr,
+                            /*clock=*/nullptr, wal_.get(), wal::DurabilityClass::kStrict,
+                            Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            /*access_statistics=*/true, /*cabins=*/nullptr, &*txn_);
+    }
+
+    std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+
+    std::unique_ptr<storage::MemoryPageDevice> page_device_;
+    std::unique_ptr<wal::MemoryLogDevice> log_device_;
+    std::unique_ptr<wal::WalManager> wal_;
+    std::unique_ptr<storage::DevicePageStore> store_;
+    sched::ManualClock clock_;
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<txn::TrxIdSequence> trx_ids_;
+    std::optional<txn::UndoLog> undo_;
+    std::optional<txn::TransactionManager> txn_;
+    std::optional<server::CommandDispatcher> dispatcher_;
+};
+
+TEST_F(AssertionResumeTest, AFreshRegistryResumesEnforcingWithTheRecoveredAggregate) {
+    ASSERT_EQ(Run("CREATE TABLE accounts (id int64, branch int32, amount int64)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON accounts GROUP BY (branch) "
+                  "CHECK SUM(amount) <= 100").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO accounts VALUES (1, 40)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO accounts VALUES (1, 30)").substr(0, 8), "INSERTED");
+
+    // The checkpoint, with the registry as AS6a's source - the same wiring
+    // `Expeditor::Open` does, which is what makes the base below the one a real
+    // mount would find.
+    storage::PageStoreCheckpointTarget target(*store_);
+    wal::NoActiveTransactions none;
+    wal::InMemoryCheckpointAnchor anchor;
+    wal::Checkpointer checkpointer(*wal_, target, none, anchor);
+    checkpointer.SetAssertionSource(&dispatcher_->assertions());
+    ASSERT_TRUE(checkpointer.RunToCompletion().ok());
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    // The restart: a registry that holds nothing, refilled from the log.
+    AssertionEnforcer fresh;
+    EXPECT_TRUE(fresh.empty());
+    const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
+        boot_->catalog, *store_, *log_device_, /*core_id=*/0,
+        anchor.anchor().checkpoint_lsn, fresh, server::MountRecovery{}, /*log=*/nullptr);
+
+    EXPECT_EQ(report.assertions_enforcing, 1u);
+    EXPECT_EQ(report.assertions_unrecovered, 0u);
+    EXPECT_FALSE(fresh.empty()) << "SHOW ASSERTIONS derives enforcing=1 from exactly this";
+
+    // And the aggregate is the **recovered** one, not zero: the admission
+    // boundary has to answer identically either side of the restart, which is
+    // RC07's done-when. A directory at zero would admit all three of these.
+    std::vector<parser::AstValue> row(2);
+    row[0].type = parser::ValueType::kInt;
+    row[1].type = parser::ValueType::kInt;
+    const auto admit = [&](std::int64_t amount) {
+        row[0].int_val = 1;  // branch
+        row[1].int_val = amount;
+        return fresh.AdmitInsert(4000, row);
+    };
+    EXPECT_EQ(admit(50).code(), StatusCode::kAssertionViolation) << "70 + 50 > 100";
+    EXPECT_TRUE(admit(30).ok()) << "70 + 30 == 100, exactly at the bound";
+}
+
+TEST_F(AssertionResumeTest, WithNoSnapshotTheAssertionIsNotAdoptedAtAll) {
+    ASSERT_EQ(Run("CREATE TABLE accounts (id int64, branch int32, amount int64)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON accounts GROUP BY (branch) "
+                  "CHECK SUM(amount) <= 100").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO accounts VALUES (1, 40)").substr(0, 8), "INSERTED");
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    // No checkpoint, so no base. **Not adopted** - because a cabin at zero
+    // admits every write, so reporting `enforcing=1` for it would be worse than
+    // the honest `enforcing=0`: the constraint would look enforced and enforce
+    // nothing.
+    AssertionEnforcer fresh;
+    const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
+        boot_->catalog, *store_, *log_device_, /*core_id=*/0, /*from_lsn=*/0, fresh,
+        server::MountRecovery{}, /*log=*/nullptr);
+
+    EXPECT_EQ(report.assertions_enforcing, 0u);
+    EXPECT_EQ(report.assertions_unrecovered, 1u);
+    EXPECT_TRUE(fresh.empty());
 }
 
 }  // namespace

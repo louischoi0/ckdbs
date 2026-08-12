@@ -8,7 +8,7 @@ uncommitted mount wiring described in RC11 below:
 | RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **built, compiled and green** (upstream `c1370e8` / `b11cc81` made the tree build and fixed the eleven failures that became visible; `28ee297` added the push guard) |
 | **RC11 — recovery at mount** | **built 2026-08-12**, the caller RC04a listed and no task owned. `server/mount_recovery.hpp`, wired into `Expeditor::Open`, `CoreRuntime::Open` and `SimInstance::Boot` |
 | RC10's first half | **done**: `kRecoveryImplemented` is flipped, so SIM04's crash contract is asserted, and its firing is proved against a `skip_recovery` boot |
-| **RC07 — Bound Cabin replay** | **parts 1-3 built 2026-08-12** — both persisted formats, the directory primitives, the `ASSERT_SNAPSHOT` record, the checkpointer seam, and `exec::RecoverAssertions`. **The mount wiring is not built**: no registry implements the seam and no mount calls the pass, so a restart still reports `enforcing=0` |
+| **RC07 — Bound Cabin replay** | **complete 2026-08-12**. `SHOW ASSERTIONS` reports `enforcing=1` after a restart and the admission boundary answers identically either side of a crash — verified on a running server, not only in tests |
 | **RC08 — completion checkpoint** | **built 2026-08-12** for core 0 and for the harness; peer cores deliberately excluded, see the task |
 | **RC09 — observability** | **built 2026-08-12**: phase timings, `SHOW META`'s recovery block, and RV3's counter split into the half that can be computed and the half that is stated |
 | RC10's remainder | the `txn.md` §8 amendment and EVT08's crash-matrix points |
@@ -786,10 +786,28 @@ Four parts, in dependency order:
    empty" cannot read like "no base found" — the first may enforce, the second
    may not.
 
-   **What remains**: the mount wiring. The assertion registry does not yet
-   implement the seam, `Expeditor` does not hand it to its checkpointer, and no
-   mount calls `RecoverAssertions` or flips `enforcing`. Until that lands the
-   mechanism is exercised only by its tests.
+   **The mount wiring, built the same day.** `AssertionEnforcer` implements the
+   seam (it owns the directories, so it is what can snapshot them);
+   `Expeditor::Open` calls `ResumeAssertionsAfterRecovery`, which revives each
+   surviving declaration through `exec::ReviveAssertion` — §8.2's `source_text`
+   is the canon precisely so the group columns can be recovered by re-parsing it
+   — refills the directories through the pass, and **adopts only what came back
+   whole**. `SimInstance::Boot` does the same, so the harness mounts what a
+   server mounts.
+
+   Two ordering traps, both found by building it and both now written into the
+   code:
+
+   - **The resume must precede the completion checkpoint.** That checkpoint
+     becomes the anchor, so it is the record the *next* mount folds from — and it
+     can only carry the group snapshots if the registry has already been
+     refilled. Written the other way round (as the first version was),
+     enforcement survived exactly one restart and the mount after it found no
+     base.
+   - **An unrecovered cabin is never adopted.** A directory at zero admits every
+     write, so adopting one would report `enforcing=1` for a constraint enforcing
+     nothing — strictly worse than the honest `enforcing=0` that was already
+     true.
 4. **Part 4, folded into part 3's tests.** `VerifyAgainstEntries` now runs over a
    directory rebuilt from a snapshot plus the cabin's real pages
    (`AssertionRecoverTest.TheLinkageComesBackFromTheCabinsOwnPages`) — a check of
@@ -801,11 +819,22 @@ Both format touches are free while nothing has read a stream back and cost
 a format-version event afterwards, which is why AS6a was ratified before
 this task rather than during it.
 
-*Done when (still open):* `SHOW ASSERTIONS` reports `enforcing=1` immediately
+*Done when:* `SHOW ASSERTIONS` reports `enforcing=1` immediately
 after a restart — the claim `feat-assertion.md` §7 makes and the engine currently
 contradicts — and the admission boundary answers identically either side
-of a crash. Add one test that a group whose entries span a checkpoint
-re-sums correctly, since that is the boundary the snapshot introduces.
+of a crash. **Held, on a running server**: `CREATE ASSERTION cap ON accounts
+GROUP BY (branch) CHECK SUM(amount) <= 100`, two inserts summing to 70,
+`kill -9`, restart. `SHOW ASSERTIONS` reports `enforcing=1`, `SHOW META` reports
+`recovery_assertions_enforcing=1 recovery_assertions_unrecovered=0`, and the
+boundary answers identically to pre-crash: `+50` refused, `+30` admitted
+(70 + 30 = 100, exactly at the bound), `+1` then refused. The last three are what
+prove the *recovered aggregate* is 70 — neither 0 (which would admit all three)
+nor 140 (which would refuse all three).
+
+The workplan's named extra test is
+`AssertionRecoverTest.AGroupWhoseEntriesSpanTheCheckpointReSumsCorrectly`; the
+wiring itself is guarded by `AssertionResumeTest`'s two, which drive a real
+`CREATE ASSERTION` and then resume a **fresh** registry from the log.
 
 **RC11 — Recovery at mount. BUILT 2026-08-12.** `server/mount_recovery.hpp`
 + `src/server/mount_recovery.cpp`: `RecoverCoreAtMount(core_id, anchor,

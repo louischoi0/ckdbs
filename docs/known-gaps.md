@@ -33,10 +33,12 @@ the owner's workplan.
   `SHOW META` reports what the last mount's recovery did — records scanned,
   transactions committed and rolled back, per-phase timings, and the audit below
   (RC09, built the same day).
-  **What is still missing:** RC07's mount wiring (Bound Cabin replay — its
-  mechanism is built, nothing calls it), which is what keeps this entry struck
-  rather than deleted. The findings below are what running recovery *produced* —
-  three defects in code that predates it, all fixed, and one measured cost.
+  **RC07 closed the same day**, so every task in the series is built. What keeps
+  this entry struck rather than deleted is what v1 still does not promise (§6):
+  the catalog is not recovered (RV3, below), nothing is purged, and `D3`'s window
+  is bounded rather than zero. The findings below are what running recovery
+  *produced* — three defects in code that predates it, all fixed, and one
+  measured cost.
 
 - **The catalog is still not recovered, and `catalog_recovered=0` says so on
   every `SHOW META`** (RV3, RC09). A crash can still lose a `CREATE TABLE`, so
@@ -159,26 +161,27 @@ the owner's workplan.
 - **Cabin entry sets** are memory-resident by design
   (`docs/feat-cabin.md` §9): the `sys.cabins` row survives, the sets
   re-observe from traffic.
-- **Assertion enforcement**: the registry/directory is memory-resident, so
-  a surviving assertion honestly reports `enforcing=0` until recovery can
-  replay the directory (`docs/feat-assertion.md`). The durable Bound Cabin
-  pages and the catalog row survive. **Partly closed 2026-08-12**: AS6a's two
-  persisted formats landed (`BoundCabinEntry::group_id` in AST04's padding word,
-  `AssertEntryPayload::group_id`) together with the directory primitives replay
-  needs — dense per-cabin ids, `SnapshotGroups`, `RestoreGroup`, `AttachEntry`,
-  and `AdoptGroupId`, which refuses to let a fold's ids drift from the ids the
-  entries on the pages already carry. **Part 3 built the same day**: `ASSERT_SNAPSHOT`
-  carries a cabin's group headers (chunked, since a group count is bounded by the
-  data), the checkpointer asks a seam for them and writes them right after
-  `CHECKPOINT_BEGIN`, and `exec::RecoverAssertions` restores a snapshot, relinks
-  the entries from the cabin's own pages, and folds the records after it —
-  scanning from the anchor's `checkpoint_lsn`, which is what AS6a's "from the last
-  checkpoint" means in code. An assertion whose records appear with no snapshot is
-  reported unrecovered rather than folded onto nothing, because those aggregates
-  would be too small and an admission check on them admits a violating write.
-  **What is still missing is the mount wiring** — no registry implements the seam
-  and no mount calls the pass (`docs/workplan-wal-recovery.md` RC07) — so the
-  reported state is unchanged: `enforcing=0` after a restart.
+- ~~**Assertion enforcement**: the registry/directory is memory-resident, so a
+  surviving assertion honestly reports `enforcing=0` until recovery can replay
+  the directory~~ — **closed 2026-08-12** (RC07, AS6a). A mount revives each
+  surviving declaration from `sys.assertions` (§8.2 keeps `source_text` as the
+  canon so the group columns can be recovered by re-parsing it), restores its
+  group headers from the last checkpoint's `ASSERT_SNAPSHOT`, relinks the entries
+  by scanning the cabin's own pages — bounded by the assertion's entry count, not
+  the relation's rows — and folds the `ASSERT_*` records after the snapshot.
+  `SHOW ASSERTIONS` reports `enforcing=1` immediately, which is what
+  `docs/feat-assertion.md` §7 always claimed and the engine contradicted until
+  now.
+
+  Two things stay true and are reported rather than assumed. An assertion whose
+  directory could not be rebuilt — no snapshot in range, a declaration that no
+  longer parses, a group column an `ALTER` renamed — is **left out of the
+  registry** and counted in `SHOW META`'s
+  `recovery_assertions_unrecovered`: a cabin at zero admits every write, so
+  adopting one would report `enforcing=1` for a constraint enforcing nothing. And
+  the §9 counters still restart at zero, because they live and die with the
+  directory by design.
+
 - **Waystone sighting counts** restart (a performance event, never a
   correctness one — invariant 8).
 
