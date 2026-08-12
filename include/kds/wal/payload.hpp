@@ -453,6 +453,14 @@ struct AssertEntryPayload {
     std::uint16_t entry_len;     // bytes of entry that follow
     std::uint16_t key_len;       // bytes of group key that follow the entry
     std::uint16_t reserved;      // 0
+
+    // **AS6a.** The group the entry belongs to, so replay reads the id rather
+    // than re-deriving it - which it could not do correctly anyway: ids are
+    // dense per cabin and assigned in group-creation order, so re-deriving one
+    // would mean reproducing the live run's allocation order from a record
+    // range that may start mid-cabin. Appended past `reserved`, so no existing
+    // offset moved.
+    std::uint32_t group_id;
 };
 
 inline constexpr std::size_t kAssertEntryAssertionIdOffset = 0;
@@ -460,15 +468,26 @@ inline constexpr std::size_t kAssertEntryIndexOffset = 8;
 inline constexpr std::size_t kAssertEntryEntryLenOffset = 10;
 inline constexpr std::size_t kAssertEntryKeyLenOffset = 12;
 inline constexpr std::size_t kAssertEntryReservedOffset = 14;
-// 8+2+2+2+2 = 16; entry bytes begin here, key bytes after them.
-inline constexpr std::size_t kAssertEntryFixedSize = 16;
+inline constexpr std::size_t kAssertEntryGroupIdOffset = 16;
+// 8+2+2+2+2+4 = 20; entry bytes begin here, key bytes after them.
+inline constexpr std::size_t kAssertEntryFixedSize = 20;
 
 static_assert(offsetof(AssertEntryPayload, assertion_id) == kAssertEntryAssertionIdOffset);
 static_assert(offsetof(AssertEntryPayload, index) == kAssertEntryIndexOffset);
 static_assert(offsetof(AssertEntryPayload, entry_len) == kAssertEntryEntryLenOffset);
 static_assert(offsetof(AssertEntryPayload, key_len) == kAssertEntryKeyLenOffset);
 static_assert(offsetof(AssertEntryPayload, reserved) == kAssertEntryReservedOffset);
-static_assert(sizeof(AssertEntryPayload) == kAssertEntryFixedSize);
+static_assert(offsetof(AssertEntryPayload, group_id) == kAssertEntryGroupIdOffset);
+
+// **No `sizeof` assert, and the reason is the one `undo_page.hpp` records.**
+// The serialized payload is 20 bytes and unpadded by design - the codec
+// memcpy's through the offsets above - while the C++ struct pads its tail to
+// 24 for the `uint64_t` at offset 0. Asserting `sizeof` against the wire size
+// would compare a layout with a format and could never hold; every offset that
+// the codec actually uses is asserted instead, which is the property that
+// matters. (This is the same shape as the RV10 asserts that shipped broken at
+// RC06 - see `docs/known-gaps.md`.)
+static_assert(kAssertEntryFixedSize == 20);
 
 struct DecodedAssertEntry {
     AssertEntryPayload fields;

@@ -109,6 +109,17 @@ Status AssertionEnforcer::ReserveOne(storage::PageStore& store, wal::WalManager*
     entry.page_epoch = 0;
     entry.slot = row_slot;
     entry.value = value;
+    // AS6a, and the departure case is why this is not `EnsureGroupId`
+    // unconditionally: a departure's group must already exist (the row it
+    // removes was incorporated by build or insert), and creating one here would
+    // create a group to immediately go negative in - which `ApplyDeparture`
+    // answers NotFound for, deliberately.
+    if (departure) {
+        const GroupHeader* header = a.cabin.Find(key);
+        entry.group_id = header != nullptr ? header->group_id : 0;
+    } else {
+        entry.group_id = a.cabin.EnsureGroupId(key);
+    }
 
     auto at = a.chain.Append(store, wal, entry, key, wal::RecordType::kAssertReserve, txn_id);
     if (!at.ok()) return at.status();

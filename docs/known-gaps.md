@@ -145,7 +145,15 @@ the owner's workplan.
 - **Assertion enforcement**: the registry/directory is memory-resident, so
   a surviving assertion honestly reports `enforcing=0` until recovery can
   replay the directory (`docs/feat-assertion.md`). The durable Bound Cabin
-  pages and the catalog row survive.
+  pages and the catalog row survive. **Partly closed 2026-08-12**: AS6a's two
+  persisted formats landed (`BoundCabinEntry::group_id` in AST04's padding word,
+  `AssertEntryPayload::group_id`) together with the directory primitives replay
+  needs — dense per-cabin ids, `SnapshotGroups`, `RestoreGroup`, `AttachEntry`,
+  and `AdoptGroupId`, which refuses to let a fold's ids drift from the ids the
+  entries on the pages already carry. What is still missing is the plumbing:
+  nothing writes a snapshot at a checkpoint and nothing loads one at a mount
+  (`docs/workplan-wal-recovery.md` RC07 parts 3-4), so the reported state is
+  unchanged.
 - **Waystone sighting counts** restart (a performance event, never a
   correctness one — invariant 8).
 

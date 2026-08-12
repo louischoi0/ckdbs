@@ -8,7 +8,7 @@ uncommitted mount wiring described in RC11 below:
 | RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **built, compiled and green** (upstream `c1370e8` / `b11cc81` made the tree build and fixed the eleven failures that became visible; `28ee297` added the push guard) |
 | **RC11 — recovery at mount** | **built 2026-08-12**, the caller RC04a listed and no task owned. `server/mount_recovery.hpp`, wired into `Expeditor::Open`, `CoreRuntime::Open` and `SimInstance::Boot` |
 | RC10's first half | **done**: `kRecoveryImplemented` is flipped, so SIM04's crash contract is asserted, and its firing is proved against a `skip_recovery` boot |
-| RC07 | unblocked by AS6a, not started |
+| **RC07 — Bound Cabin replay** | **parts 1-2 built 2026-08-12** (both persisted formats, and the directory's id/snapshot/rebuild primitives); **parts 3-4 not built** — nothing writes or loads a snapshot, so a restart still reports `enforcing=0` |
 | **RC08 — completion checkpoint** | **built 2026-08-12** for core 0 and for the harness; peer cores deliberately excluded, see the task |
 | **RC09 — observability** | **built 2026-08-12**: phase timings, `SHOW META`'s recovery block, and RV3's counter split into the half that can be computed and the half that is stated |
 | RC10's remainder | the `txn.md` §8 amendment and EVT08's crash-matrix points |
@@ -718,28 +718,73 @@ would miss silently; the measured cost is in `bench/`.
 
 **RC07 — Bound Cabin replay.** *(unblocked 2026-08-11 — §4's first item is
 answered; build to `feat-assertion.md` AS6a)*
+
+**Parts 1 and 2 built 2026-08-12; parts 3 and 4 are what remain.** The two
+persisted formats have moved, which was the half AS6a said had to happen while
+it was still free, and the directory now has the primitives the replay path
+will call. What is *not* built is the plumbing: nothing writes a snapshot at a
+checkpoint, nothing loads one at a mount, and `SHOW ASSERTIONS` still reports
+`enforcing=0` after a restart.
+
+Built:
+
+- `BoundCabinEntry::group_id` (uint32) in the first 4 bytes of AST04's padding
+  word, which was written as a literal zero — so the 32-byte width is unchanged
+  and every entry on every existing page reads back as `group_id = 0`. Stamped
+  at all three writing sites: the CREATE-time builder, the enforcer's reserve
+  path, and (adopted rather than assigned) the replay fold.
+- `AssertEntryPayload::group_id`, appended past `reserved`, so no existing
+  offset moved. **Its `sizeof` assert had to go** — the wire payload is 20
+  bytes and the C++ struct pads to 24 for its leading `uint64_t`, which is
+  exactly the layout-versus-format confusion that shipped broken at RC06; the
+  offsets the codec actually uses are asserted instead.
+- `GroupHeader::group_id`, dense per cabin from 1, assigned at the **one**
+  creation site (`EnsureGroup`) so a group cannot be born without an id — an
+  entry stamped 0 is one recovery cannot attribute.
+- `EnsureGroupId` / `AdoptGroupId` / `RestoreGroup` / `AttachEntry` /
+  `SnapshotGroups`: the primitives for AS6a's recovery order. `AdoptGroupId` is
+  the one worth reading — the fold must take the **record's** id rather than let
+  `Apply` assign one, because a fold starting from a checkpoint meets groups in
+  record order and the ids would drift from the entries already on the pages,
+  misattributing them at the *next* recovery. It refuses a disagreement rather
+  than picking.
+
+A departure reads its group's id instead of ensuring one, mirroring the live
+path's own asymmetry: a departure's group must already exist, and creating one
+would be creating a group to immediately go negative in.
+
 Four parts, in dependency order:
 
-1. **`BoundCabinEntry` gains `group_id` (uint32)**, in the 4 bytes
-   `EncodeEntry` writes as a literal zero. Width stays 32 B.
-2. **`AssertEntryPayload` gains `group_id`**, so replay reads the id rather
-   than re-deriving it and never has to reproduce the live run's allocation
-   order. The payload already carries the group key, so nothing else moves.
-3. **The checkpoint snapshots each cabin's group headers** —
+1. ~~**`BoundCabinEntry` gains `group_id` (uint32)**~~ — **built**, in the 4
+   bytes `EncodeEntry` wrote as a literal zero. Width stays 32 B.
+2. ~~**`AssertEntryPayload` gains `group_id`**~~ — **built**, so replay reads
+   the id rather than re-deriving it and never has to reproduce the live run's
+   allocation order. The payload already carried the group key, so nothing else
+   moved.
+3. **NOT BUILT. The checkpoint snapshots each cabin's group headers** —
    `{group_id, key, count, sum}` — and recovery loads it, rebuilds the
    linkage by scanning the cabin's pages and bucketing by `group_id`, then
    feeds `exec::ReplayAssertionRecord` the range **from that checkpoint
    forward**.
-4. **Verify** `header == Σ(entries)` through `VerifyAgainstEntries`, which
-   is now a check of a rebuilt structure against durable bytes rather than
-   of a structure against itself.
+   Nothing writes or reads a snapshot yet. What this needs and does not have:
+   a record type to carry it, a seam for the checkpointer to ask the assertion
+   registry for each cabin's `SnapshotGroups()` (the shape
+   `wal::ActiveTransactions` already has), a mount-side loader that calls
+   `RestoreGroup` then walks the cabin's page chain calling `AttachEntry`, and
+   the registry flipping `enforcing` once a cabin is whole.
+4. **NOT BUILT. Verify** `header == Σ(entries)` through
+   `VerifyAgainstEntries`, which is now a check of a rebuilt structure against
+   durable bytes rather than of a structure against itself. The hook exists and
+   is exercised over a hand-rebuilt directory
+   (`BoundCabinTest.ASnapshotPlusTheScannedEntriesRebuildsTheDirectory`); what
+   is missing is the mount calling it.
 
 Both format touches are free while nothing has read a stream back and cost
 a format-version event afterwards, which is why AS6a was ratified before
 this task rather than during it.
 
-*Done when:* `SHOW ASSERTIONS` reports `enforcing=1` immediately after a
-restart — the claim `feat-assertion.md` §7 makes and the engine currently
+*Done when (still open):* `SHOW ASSERTIONS` reports `enforcing=1` immediately
+after a restart — the claim `feat-assertion.md` §7 makes and the engine currently
 contradicts — and the admission boundary answers identically either side
 of a crash. Add one test that a group whose entries span a checkpoint
 re-sums correctly, since that is the boundary the snapshot introduces.

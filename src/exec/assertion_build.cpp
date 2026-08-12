@@ -68,6 +68,9 @@ StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
         wal::AssertEntryPayload fields{};
         fields.assertion_id = assertion_id_;
         fields.index = index.value();
+        // AS6a: the same id the entry bytes carry, so replay binds the group by
+        // id instead of re-deriving one in its own allocation order.
+        fields.group_id = entry.group_id;
         auto used = wal::EncodeAssertEntry(
             payload, fields, entry_bytes,
             std::as_bytes(std::span<const char>(key.data(), key.size())));
@@ -225,6 +228,10 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
             entry.page_epoch = 0;  // no page epoch exists; written 0 like every hint
             entry.slot = row.slot;
             entry.value = delta;
+            // AS6a: stamped before the append, because the page write precedes
+            // the Apply that would otherwise create the group. An entry written
+            // with `group_id = 0` is an entry recovery cannot attribute.
+            entry.group_id = build.cabin.EnsureGroupId(key);
 
             auto at = build.chain.Append(store, wal, entry, key,
                                          wal::RecordType::kAssertBuild, wal::kNoTxnId);

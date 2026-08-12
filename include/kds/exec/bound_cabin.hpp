@@ -65,6 +65,16 @@ struct GroupHeader {
     // this, never trusted on the hash alone.
     std::string key;
 
+    // **AS6a's id**: dense per cabin, assigned at group creation, never reused
+    // while the cabin lives. It is what an entry carries
+    // (`storage/cabin_bound_page.hpp`) and what the checkpoint snapshot is keyed
+    // by, so the header->entry linkage can be rebuilt by scanning the cabin's
+    // own pages instead of being persisted at O(all entries) per checkpoint.
+    //
+    // Numbered from 1, leaving 0 as "no group" - which is also what every entry
+    // written before AS6a reads back as, since those bytes were padding.
+    std::uint32_t group_id = 0;
+
     // Committed **plus reserved** cardinality and sum. Reservations count
     // from the moment of admission, which is what makes a false admission
     // impossible (§6.2) at the price of bounded false rejections.
@@ -130,6 +140,60 @@ public:
     // The header for `key`, or nullptr. Confirms the stored key, so a
     // colliding hash answers nullptr rather than someone else's group.
     const GroupHeader* Find(const std::string& key) const;
+
+    // AS6a: the id of `key`'s group, creating the group empty if it is new.
+    //
+    // Called **before** the entry is appended, because the entry has to carry
+    // the id (`cabin_bound_page.hpp`) and the page write happens before
+    // `Apply`. Creating the header early is safe and is not a state a check can
+    // see wrongly: a group at (0, 0) admits exactly what no group admits, and
+    // the very next step is the `Apply` that populates it.
+    //
+    // Not used by the departure path, which requires an existing group and
+    // reads `Find(key)->group_id` - a departure that created a group would be
+    // creating one to immediately go negative in.
+    std::uint32_t EnsureGroupId(const std::string& key);
+
+    // AS6a: bind `key`'s group to the id a replayed record carries, creating
+    // the group if the fold has not met it yet.
+    //
+    // **Why replay cannot just let `Apply` create the group.** `Apply` assigns
+    // the next dense id, which is the live run's allocation order - and a fold
+    // starting from a checkpoint sees groups in record order, not creation
+    // order. The ids would drift, and the *next* recovery's linkage rebuild
+    // would attribute entries to the wrong groups. So the record's id is
+    // authoritative and this is where it is adopted.
+    //
+    // Corruption when an existing group already carries a different id: the
+    // record and the directory then disagree about which entries are that
+    // group's, and there is no safe way to pick.
+    Status AdoptGroupId(const std::string& key, std::uint32_t group_id);
+
+    // Restores one group's header from a checkpoint snapshot (AS6a, RC07):
+    // the id, the key, and the aggregates as of the snapshot, with an empty
+    // entry list that the cabin-page scan then fills.
+    //
+    // Fails with InvalidArgument on a duplicate id or key, because a snapshot
+    // that names one group twice is not a base to fold onto.
+    Status RestoreGroup(std::uint32_t group_id, const std::string& key, std::int64_t count,
+                        std::int64_t sum);
+
+    // Attaches one scanned entry to the group its `group_id` names (AS6a's
+    // linkage rebuild). NotFound when no restored group carries that id -
+    // which is a real condition rather than a defect: an entry whose group is
+    // not in the snapshot belongs to a group created after it, and the
+    // ASSERT_* fold from the checkpoint forward is what creates that group.
+    Status AttachEntry(std::uint32_t group_id, PageId page_id, std::uint16_t index);
+
+    // The snapshot AS6a asks a checkpoint to write: one record per group,
+    // `{group_id, key, count, sum}`, O(groups) and never the entry lists.
+    struct GroupSnapshot {
+        std::uint32_t group_id = 0;
+        std::string key;
+        std::int64_t count = 0;
+        std::int64_t sum = 0;
+    };
+    std::vector<GroupSnapshot> SnapshotGroups() const;
 
     // Would applying `delta` to `key`'s aggregate exceed the bound?
     //
@@ -201,8 +265,27 @@ private:
 
     GroupHeader* FindMutable(const std::string& key);
 
+    // The one place a group is born, so the one place an id is assigned. Two
+    // creation sites would be two chances to leave `group_id` at 0, which reads
+    // as "no group" and would silently unlink every entry of that group at the
+    // next recovery.
+    GroupHeader& EnsureGroup(const std::string& key);
+
+    // The group a `group_id` names, for the linkage rebuild. A linear walk of
+    // the buckets rather than a second index: it runs once per scanned entry
+    // during recovery and never on a check path, and a parallel id->header map
+    // would be a second container to keep true (the note above on why there is
+    // only one).
+    GroupHeader* FindById(std::uint32_t group_id);
+
     BoundAggregate aggregate_;
     std::int64_t bound_;
+
+    // AS6a's dense per-cabin counter. Ids are never reused while the cabin
+    // lives, so this only ever rises; a restore raises it past every id the
+    // snapshot carried, which is what keeps a group created after the snapshot
+    // from being handed an id the snapshot already used.
+    std::uint32_t next_group_id_ = 1;
 };
 
 }  // namespace kds::exec

@@ -108,6 +108,21 @@ struct BoundCabinEntry {
     // The row's SUM column value, or 1 for a COUNT assertion.
     std::int64_t value = 0;
 
+    // **AS6a.** Which group of this cabin the entry belongs to - authoritative,
+    // not advisory: it is what lets recovery rebuild the header->entry linkage
+    // by scanning the cabin's own pages instead of persisting O(all entries) at
+    // every checkpoint (`feat-assertion.md` §5.1, §7).
+    //
+    // An id and **not a group-key hash**, and the difference is correctness:
+    // `HashGroupKey`'s collisions are expected and are resolved by confirming
+    // the stored key, which an entry does not carry - so an entry holding a
+    // hash could not be attributed between two colliding groups.
+    //
+    // It occupies the first 4 bytes of what AST04 shipped as padding and wrote
+    // as a literal zero, so the 32-byte width is unchanged and every entry on
+    // every page in existence already reads as `group_id = 0`.
+    std::uint32_t group_id = 0;
+
     bool reserved() const noexcept { return (flags & kEntryReserved) != 0; }
     bool departure() const noexcept { return (flags & kEntryDeparture) != 0; }
     bool hint_valid() const noexcept {

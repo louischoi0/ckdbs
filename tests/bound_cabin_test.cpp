@@ -409,6 +409,135 @@ TEST(BoundCabinTest, ReSummingTheEntriesAgreesWithTheHeaderAndCatchesADivergence
 
 // ---- EV3: the eviction guarantee AST04 rests on -------------------------
 
+// ---- AS6a: group ids, the snapshot, and the linkage rebuild --------------
+
+TEST(BoundCabinTest, GroupIdsAreDenseFromOneAndStableForTheGroupsLife) {
+    BoundCabin cabin(BoundAggregate::kCount, /*bound=*/100);
+
+    const std::uint32_t a = cabin.EnsureGroupId(Key({Str("a")}));
+    const std::uint32_t b = cabin.EnsureGroupId(Key({Str("b")}));
+    EXPECT_EQ(a, 1u) << "ids number from 1, leaving 0 as 'no group'";
+    EXPECT_EQ(b, 2u);
+    // Asking again is not a new group: an id is the group's for its life, and
+    // an entry written yesterday still names it.
+    EXPECT_EQ(cabin.EnsureGroupId(Key({Str("a")})), a);
+
+    // And `Apply` uses the same creation site, so a group born through the
+    // write path carries an id too - an entry stamped 0 is one recovery cannot
+    // attribute, which is the whole reason the field exists.
+    ASSERT_TRUE(cabin.Apply(Key({Str("c")}), 1, /*page_id=*/500, /*index=*/0).ok());
+    const GroupHeader* c = cabin.Find(Key({Str("c")}));
+    ASSERT_NE(c, nullptr);
+    EXPECT_EQ(c->group_id, 3u);
+}
+
+TEST(BoundCabinTest, TheSnapshotIsHeadersOnlyOrderedByIdAndNeverTheEntryLists) {
+    BoundCabin cabin(BoundAggregate::kSum, /*bound=*/100);
+    ASSERT_TRUE(cabin.Apply(Key({Str("x")}), 5, 500, 0).ok());
+    ASSERT_TRUE(cabin.Apply(Key({Str("x")}), 7, 500, 1).ok());
+    ASSERT_TRUE(cabin.Apply(Key({Str("y")}), 3, 500, 2).ok());
+
+    const std::vector<BoundCabin::GroupSnapshot> snapshot = cabin.SnapshotGroups();
+    ASSERT_EQ(snapshot.size(), 2u);
+    // Ordered by id, because a checkpoint's bytes must be a function of its
+    // input and bucket order is not one (sched.md §8).
+    EXPECT_LT(snapshot[0].group_id, snapshot[1].group_id);
+    EXPECT_EQ(snapshot[0].key, Key({Str("x")}));
+    EXPECT_EQ(snapshot[0].count, 2);
+    EXPECT_EQ(snapshot[0].sum, 12);
+    EXPECT_EQ(snapshot[1].sum, 3);
+    // O(groups): three entries, two records. That is the whole point of AS6a -
+    // the linkage is rebuilt from the pages, never written at every checkpoint.
+    EXPECT_EQ(snapshot.size(), cabin.group_count());
+}
+
+TEST(BoundCabinTest, ASnapshotPlusTheScannedEntriesRebuildsTheDirectory) {
+    // AS6a's recovery order, without the WAL: restore the headers, then attach
+    // each entry the cabin's pages carry by its `group_id`, then verify the
+    // header against the entries it now links.
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/100);
+    const std::uint32_t gx = live.EnsureGroupId(Key({Str("x")}));
+    ASSERT_TRUE(live.Apply(Key({Str("x")}), 5, /*page_id=*/500, /*index=*/0).ok());
+    ASSERT_TRUE(live.Apply(Key({Str("x")}), 7, /*page_id=*/500, /*index=*/1).ok());
+    const std::uint32_t gy = live.EnsureGroupId(Key({Str("y")}));
+    ASSERT_TRUE(live.Apply(Key({Str("y")}), 3, /*page_id=*/500, /*index=*/2).ok());
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/100);
+    for (const BoundCabin::GroupSnapshot& g : live.SnapshotGroups()) {
+        ASSERT_TRUE(rebuilt.RestoreGroup(g.group_id, g.key, g.count, g.sum).ok());
+    }
+    // The scan of the cabin's own pages, in page order - which is where the
+    // entries' `group_id` is read from on a real mount.
+    ASSERT_TRUE(rebuilt.AttachEntry(gx, 500, 0).ok());
+    ASSERT_TRUE(rebuilt.AttachEntry(gx, 500, 1).ok());
+    ASSERT_TRUE(rebuilt.AttachEntry(gy, 500, 2).ok());
+
+    const GroupHeader* x = rebuilt.Find(Key({Str("x")}));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->group_id, gx);
+    EXPECT_EQ(x->count, 2);
+    EXPECT_EQ(x->sum, 12);
+    ASSERT_EQ(x->entries.size(), 2u);
+
+    // §7's verification hook over the rebuilt structure: header == Σ(entries),
+    // which is now a check of a rebuild against durable bytes rather than of a
+    // structure against itself.
+    auto read = [](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        BoundCabinEntry entry;
+        entry.page_id = page_id;
+        entry.slot = index;
+        entry.value = index == 0 ? 5 : (index == 1 ? 7 : 3);
+        return entry;
+    };
+    EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok());
+}
+
+TEST(BoundCabinTest, AnEntryNamingAGroupTheSnapshotDoesNotHoldIsNotFound) {
+    // Not a defect: an entry whose group is absent from the snapshot belongs to
+    // a group created after it, and the ASSERT_* fold from the checkpoint
+    // forward is what creates that group. The caller has to be able to tell.
+    BoundCabin rebuilt(BoundAggregate::kCount, /*bound=*/10);
+    ASSERT_TRUE(rebuilt.RestoreGroup(/*group_id=*/1, Key({Str("x")}), 1, 1).ok());
+    EXPECT_EQ(rebuilt.AttachEntry(/*group_id=*/9, 500, 0).code(), StatusCode::kNotFound);
+}
+
+TEST(BoundCabinTest, ARestoreThatNamesAGroupTwiceIsRefused) {
+    BoundCabin rebuilt(BoundAggregate::kCount, /*bound=*/10);
+    ASSERT_TRUE(rebuilt.RestoreGroup(1, Key({Str("x")}), 1, 1).ok());
+    EXPECT_EQ(rebuilt.RestoreGroup(1, Key({Str("y")}), 1, 1).code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(rebuilt.RestoreGroup(2, Key({Str("x")}), 1, 1).code(),
+              StatusCode::kInvalidArgument);
+    // Id 0 is the reserved "no group" value and is what every pre-AS6a entry
+    // reads back as, so a snapshot may not name it.
+    EXPECT_EQ(rebuilt.RestoreGroup(0, Key({Str("z")}), 1, 1).code(),
+              StatusCode::kInvalidArgument);
+}
+
+TEST(BoundCabinTest, AdoptingAGroupIdRefusesToDisagreeWithTheDirectory) {
+    BoundCabin cabin(BoundAggregate::kCount, /*bound=*/10);
+    const std::uint32_t id = cabin.EnsureGroupId(Key({Str("x")}));
+
+    EXPECT_TRUE(cabin.AdoptGroupId(Key({Str("x")}), id).ok());
+    // The record says one id, the directory holds another: there is no safe way
+    // to pick, because the choice decides which entries are this group's.
+    EXPECT_EQ(cabin.AdoptGroupId(Key({Str("x")}), id + 5).code(), StatusCode::kCorruption);
+    // The same id claimed by a second key is the same disagreement, mirrored.
+    EXPECT_EQ(cabin.AdoptGroupId(Key({Str("y")}), id).code(), StatusCode::kCorruption);
+    // A pre-AS6a record carries 0, and attributing it would need the allocation
+    // order the id exists to replace.
+    EXPECT_EQ(cabin.AdoptGroupId(Key({Str("z")}), 0).code(), StatusCode::kCorruption);
+
+    // A fresh key with a fresh id is the ordinary fold case: the group is
+    // created carrying the record's id, not one of the cabin's choosing.
+    ASSERT_TRUE(cabin.AdoptGroupId(Key({Str("w")}), 40).ok());
+    const GroupHeader* w = cabin.Find(Key({Str("w")}));
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->group_id, 40u);
+    // And the next group created cannot reuse an id the fold adopted.
+    EXPECT_GT(cabin.EnsureGroupId(Key({Str("later")})), 40u);
+}
+
 TEST(BoundCabinPinningTest, TheSweepNeverReclaimsABoundCabinPageEvenUnpinned) {
     auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
     ASSERT_TRUE(device.ok());

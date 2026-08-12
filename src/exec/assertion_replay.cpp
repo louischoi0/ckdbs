@@ -88,6 +88,11 @@ Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
     // assertion writes 1), so the directory fold reads it and nothing else -
     // with the departure flag saying which sign it applies under.
     const std::string key = KeyOf(d.key);
+    // AS6a: the record's id decides which group this is, before the fold can
+    // create one under an id of its own choosing (`bound_cabin.hpp`).
+    if (Status s = cabin->AdoptGroupId(key, d.fields.group_id); !s.ok()) {
+        return s.WithContext("assert replay: binding the entry's group id");
+    }
     Status applied = entry.departure()
                          ? cabin->ApplyDeparture(key, entry.value, record.header.page_id,
                                                  d.fields.index)

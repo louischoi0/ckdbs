@@ -93,6 +93,116 @@ GroupHeader* BoundCabin::FindMutable(const std::string& key) {
     return const_cast<GroupHeader*>(Find(key));
 }
 
+GroupHeader& BoundCabin::EnsureGroup(const std::string& key) {
+    if (GroupHeader* header = FindMutable(key); header != nullptr) {
+        return *header;
+    }
+    auto& bucket = groups_by_hash_[HashGroupKey(key)];
+    GroupHeader fresh;
+    fresh.key = key;
+    fresh.group_id = next_group_id_++;  // AS6a: dense, from 1, never reused
+    bucket.push_back(std::move(fresh));
+    return bucket.back();
+}
+
+std::uint32_t BoundCabin::EnsureGroupId(const std::string& key) {
+    return EnsureGroup(key).group_id;
+}
+
+GroupHeader* BoundCabin::FindById(std::uint32_t group_id) {
+    for (auto& [hash, bucket] : groups_by_hash_) {
+        for (GroupHeader& header : bucket) {
+            if (header.group_id == group_id) return &header;
+        }
+    }
+    return nullptr;
+}
+
+Status BoundCabin::AdoptGroupId(const std::string& key, std::uint32_t group_id) {
+    if (group_id == 0) {
+        // Every entry written before AS6a reads back as 0, and a stream holding
+        // one is a stream from before the field existed. Refused rather than
+        // guessed: attributing it would need the allocation order the id exists
+        // to replace.
+        return Status::Corruption(
+            "bound cabin: a replayed record carries group id 0, which predates AS6a's entry field "
+            "(docs/feat-assertion.md §5.1)");
+    }
+    if (GroupHeader* existing = FindMutable(key); existing != nullptr) {
+        if (existing->group_id != group_id) {
+            return Status::Corruption(
+                "bound cabin: replayed record names group id " + std::to_string(group_id) +
+                " for a group the directory holds as " + std::to_string(existing->group_id));
+        }
+        return Status::OK();
+    }
+    if (FindById(group_id) != nullptr) {
+        return Status::Corruption("bound cabin: replayed group id " + std::to_string(group_id) +
+                                  " already belongs to a different group key");
+    }
+    return RestoreGroup(group_id, key, /*count=*/0, /*sum=*/0);
+}
+
+Status BoundCabin::RestoreGroup(std::uint32_t group_id, const std::string& key,
+                               std::int64_t count, std::int64_t sum) {
+    if (group_id == 0) {
+        return Status::InvalidArgument(
+            "bound cabin: a snapshot named group id 0, which is the reserved 'no group' value");
+    }
+    if (FindById(group_id) != nullptr) {
+        return Status::InvalidArgument("bound cabin: snapshot names group id " +
+                                       std::to_string(group_id) + " twice");
+    }
+    if (Find(key) != nullptr) {
+        return Status::InvalidArgument(
+            "bound cabin: snapshot names the same group key twice, so one of them would be "
+            "unreachable by key");
+    }
+
+    auto& bucket = groups_by_hash_[HashGroupKey(key)];
+    GroupHeader restored;
+    restored.key = key;
+    restored.group_id = group_id;
+    restored.count = count;
+    restored.sum = sum;
+    bucket.push_back(std::move(restored));
+
+    // Past every id the snapshot carried, so a group the fold creates after it
+    // cannot be handed an id an entry on a page already means.
+    if (group_id >= next_group_id_) {
+        next_group_id_ = group_id + 1;
+    }
+    return Status::OK();
+}
+
+Status BoundCabin::AttachEntry(std::uint32_t group_id, PageId page_id, std::uint16_t index) {
+    GroupHeader* header = FindById(group_id);
+    if (header == nullptr) {
+        return Status::NotFound("bound cabin: no restored group carries id " +
+                                std::to_string(group_id));
+    }
+    header->entries.emplace_back(page_id, index);
+    return Status::OK();
+}
+
+std::vector<BoundCabin::GroupSnapshot> BoundCabin::SnapshotGroups() const {
+    std::vector<GroupSnapshot> out;
+    out.reserve(group_count());
+    for (const auto& [hash, bucket] : groups_by_hash_) {
+        for (const GroupHeader& header : bucket) {
+            out.push_back(GroupSnapshot{header.group_id, header.key, header.count, header.sum});
+        }
+    }
+    // Ordered by id, because sched.md §8 wants a checkpoint whose bytes are a
+    // function of its input alone - `groups_by_hash_` iterates in bucket order,
+    // which is not one.
+    std::sort(out.begin(), out.end(),
+              [](const GroupSnapshot& a, const GroupSnapshot& b) {
+                  return a.group_id < b.group_id;
+              });
+    return out;
+}
+
 StatusOr<AdmissionResult> BoundCabin::Admit(const std::string& key, std::int64_t delta) const {
     const GroupHeader* header = Find(key);
     const std::int64_t current = header != nullptr ? header->aggregate(aggregate_) : 0;
@@ -116,14 +226,8 @@ StatusOr<AdmissionResult> BoundCabin::Admit(const std::string& key, std::int64_t
 
 Status BoundCabin::Apply(const std::string& key, std::int64_t delta, PageId page_id,
                          std::uint16_t index) {
-    GroupHeader* header = FindMutable(key);
-    if (header == nullptr) {
-        auto& bucket = groups_by_hash_[HashGroupKey(key)];
-        GroupHeader fresh;
-        fresh.key = key;
-        bucket.push_back(std::move(fresh));
-        header = &bucket.back();
-    }
+    // One creation site (EnsureGroup), so a group cannot be born without an id.
+    GroupHeader* header = &EnsureGroup(key);
 
     // Checked here too, and not merely in Admit. The CREATE-time builder
     // (AST06) accumulates without admitting - it validates once at the end -

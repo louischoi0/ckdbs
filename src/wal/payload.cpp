@@ -553,6 +553,7 @@ StatusOr<std::size_t> EncodeAssertEntry(std::span<std::byte> out,
                          static_cast<std::uint16_t>(entry.size()));
     Store<std::uint16_t>(out, kAssertEntryKeyLenOffset, static_cast<std::uint16_t>(key.size()));
     Store<std::uint16_t>(out, kAssertEntryReservedOffset, 0);
+    Store<std::uint32_t>(out, kAssertEntryGroupIdOffset, fields.group_id);
     if (!entry.empty()) {
         std::memcpy(out.data() + kAssertEntryFixedSize, entry.data(), entry.size());
     }
@@ -573,6 +574,7 @@ StatusOr<DecodedAssertEntry> DecodeAssertEntry(std::span<const std::byte> in) {
     decoded.fields.entry_len = Load<std::uint16_t>(in, kAssertEntryEntryLenOffset);
     decoded.fields.key_len = Load<std::uint16_t>(in, kAssertEntryKeyLenOffset);
     decoded.fields.reserved = Load<std::uint16_t>(in, kAssertEntryReservedOffset);
+    decoded.fields.group_id = Load<std::uint32_t>(in, kAssertEntryGroupIdOffset);
 
     const std::size_t tail =
         std::size_t{decoded.fields.entry_len} + std::size_t{decoded.fields.key_len};
