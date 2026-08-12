@@ -270,13 +270,25 @@ TEST(AssertPayloadTest, ATruncatedTailIsCorruptionNotATornEnd) {
 TEST(AssertRecordTest, TheFiveTypesAreAssignedNamedAndClassified) {
     EXPECT_TRUE(wal::IsAssignedRecordType(18));
     EXPECT_TRUE(wal::IsAssignedRecordType(22));
-    EXPECT_FALSE(wal::IsAssignedRecordType(23));
+    // **This used to assert that 23 was unassigned**, which was true when 22 was
+    // the last type - and it is why `kHeapDeleteUnmark = 23` shipped unwritable:
+    // the test agreed with the stale bound instead of with the enum. What it
+    // meant to say is that the five assertion records are contiguous and
+    // assigned, which is what it says now (record.hpp, and
+    // WalRecordTest.EveryNamedTypeIsWritable is the general guard).
+    for (std::uint8_t raw = 18; raw <= 22; ++raw) {
+        EXPECT_TRUE(wal::IsAssignedRecordType(raw)) << "assertion record " << +raw;
+    }
 
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertReserve), "ASSERT_RESERVE");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertCommit), "ASSERT_COMMIT");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertRollback), "ASSERT_ROLLBACK");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertBuild), "ASSERT_BUILD");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertDrop), "ASSERT_DROP");
+    // AS6a's sixth, appended past the original five (RC07).
+    EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertSnapshot), "ASSERT_SNAPSHOT");
+    EXPECT_TRUE(wal::IsAssignedRecordType(
+        static_cast<std::uint8_t>(wal::RecordType::kAssertSnapshot)));
 
     EXPECT_TRUE(IsAssertionRecord(wal::RecordType::kAssertReserve));
     EXPECT_TRUE(IsAssertionRecord(wal::RecordType::kAssertDrop));

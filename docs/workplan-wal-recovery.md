@@ -8,7 +8,7 @@ uncommitted mount wiring described in RC11 below:
 | RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **built, compiled and green** (upstream `c1370e8` / `b11cc81` made the tree build and fixed the eleven failures that became visible; `28ee297` added the push guard) |
 | **RC11 — recovery at mount** | **built 2026-08-12**, the caller RC04a listed and no task owned. `server/mount_recovery.hpp`, wired into `Expeditor::Open`, `CoreRuntime::Open` and `SimInstance::Boot` |
 | RC10's first half | **done**: `kRecoveryImplemented` is flipped, so SIM04's crash contract is asserted, and its firing is proved against a `skip_recovery` boot |
-| **RC07 — Bound Cabin replay** | **parts 1-2 built 2026-08-12** (both persisted formats, and the directory's id/snapshot/rebuild primitives); **parts 3-4 not built** — nothing writes or loads a snapshot, so a restart still reports `enforcing=0` |
+| **RC07 — Bound Cabin replay** | **parts 1-3 built 2026-08-12** — both persisted formats, the directory primitives, the `ASSERT_SNAPSHOT` record, the checkpointer seam, and `exec::RecoverAssertions`. **The mount wiring is not built**: no registry implements the seam and no mount calls the pass, so a restart still reports `enforcing=0` |
 | **RC08 — completion checkpoint** | **built 2026-08-12** for core 0 and for the harness; peer cores deliberately excluded, see the task |
 | **RC09 — observability** | **built 2026-08-12**: phase timings, `SHOW META`'s recovery block, and RV3's counter split into the half that can be computed and the half that is stated |
 | RC10's remainder | the `txn.md` §8 amendment and EVT08's crash-matrix points |
@@ -761,23 +761,41 @@ Four parts, in dependency order:
    the id rather than re-deriving it and never has to reproduce the live run's
    allocation order. The payload already carried the group key, so nothing else
    moved.
-3. **NOT BUILT. The checkpoint snapshots each cabin's group headers** —
+3. **Mechanism built 2026-08-12; the mount wiring is what remains.** The
+   checkpoint snapshots each cabin's group headers —
    `{group_id, key, count, sum}` — and recovery loads it, rebuilds the
    linkage by scanning the cabin's pages and bucketing by `group_id`, then
    feeds `exec::ReplayAssertionRecord` the range **from that checkpoint
    forward**.
-   Nothing writes or reads a snapshot yet. What this needs and does not have:
-   a record type to carry it, a seam for the checkpointer to ask the assertion
-   registry for each cabin's `SnapshotGroups()` (the shape
-   `wal::ActiveTransactions` already has), a mount-side loader that calls
-   `RestoreGroup` then walks the cabin's page chain calling `AttachEntry`, and
-   the registry flipping `enforcing` once a cabin is whole.
-4. **NOT BUILT. Verify** `header == Σ(entries)` through
-   `VerifyAgainstEntries`, which is now a check of a rebuilt structure against
-   durable bytes rather than of a structure against itself. The hook exists and
-   is exercised over a hand-rebuilt directory
-   (`BoundCabinTest.ASnapshotPlusTheScannedEntriesRebuildsTheDirectory`); what
-   is missing is the mount calling it.
+   Built: `RecordType::kAssertSnapshot` and its payload, **chunked** because a
+   cabin's group count is bounded by the data and a record must fit a segment —
+   the loader is additive over chunks, so no continuation flag exists;
+   `wal::AssertionSnapshotSource`, the seam the checkpointer asks (the shape
+   `ActiveTransactions` already had), emitted immediately after
+   `CHECKPOINT_BEGIN` so the base precedes every record folded onto it; and
+   `exec::RecoverAssertions`, which scans **from the anchor's `checkpoint_lsn`**
+   rather than from redo's start — a narrower range in which the first snapshot
+   per assertion is by construction its base, which is what makes the pass a
+   single forward walk with nothing buffered.
+
+   Two rules it enforces rather than assumes. An assertion whose records appear
+   with **no snapshot** is left unrecovered and counted
+   (`records_without_a_base`): folding onto nothing yields aggregates that are
+   too small, and an admission check on those *admits a write that violates the
+   assertion*. And an **empty** cabin still gets a record, so "recovered and
+   empty" cannot read like "no base found" — the first may enforce, the second
+   may not.
+
+   **What remains**: the mount wiring. The assertion registry does not yet
+   implement the seam, `Expeditor` does not hand it to its checkpointer, and no
+   mount calls `RecoverAssertions` or flips `enforcing`. Until that lands the
+   mechanism is exercised only by its tests.
+4. **Part 4, folded into part 3's tests.** `VerifyAgainstEntries` now runs over a
+   directory rebuilt from a snapshot plus the cabin's real pages
+   (`AssertionRecoverTest.TheLinkageComesBackFromTheCabinsOwnPages`) — a check of
+   a rebuild against durable bytes rather than of a structure against itself.
+   What is missing is the same wiring: a mount that calls it.
+
 
 Both format touches are free while nothing has read a stream back and cost
 a format-version event afterwards, which is why AS6a was ratified before

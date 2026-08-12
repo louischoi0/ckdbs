@@ -442,7 +442,11 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertRollback), 20);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertBuild), 21);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertDrop), 22);
-    EXPECT_EQ(kMaxAssignedRecordType, 22);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kHeapDeleteUnmark), 23);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertSnapshot), 24);
+    // Derived from the enum now, not typed here: pinning it as a literal is
+    // what let type 23 ship unwritable (record.hpp).
+    EXPECT_EQ(kMaxAssignedRecordType, 24);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));

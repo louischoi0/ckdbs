@@ -152,6 +152,19 @@ enum class RecordType : std::uint8_t {
     // Appending them later is exactly what this enum's append-only rule is
     // for.
     //
+    // One Bound Cabin's group headers as of a checkpoint (AS6a, RC07):
+    // `{group_id, key, count, sum}` per group, O(groups) and never the entry
+    // lists. It is what gives assertion replay a durable base to fold onto, so
+    // the fold starts at the last checkpoint instead of at the cabin's birth -
+    // which would make RTO a function of the assertion's lifetime and make WAL
+    // retention a correctness setting (`docs/feat-assertion.md` §7).
+    //
+    // Emitted inside the checkpoint, right after CHECKPOINT_BEGIN, and **one
+    // record per chunk of groups** rather than one per cabin: a payload has to
+    // fit a segment, and a cabin's group count is bounded by the data rather
+    // than by anything this engine controls. The loader is additive over
+    // whatever chunks it meets, so no continuation flag is needed.
+    kAssertSnapshot = 24,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A
@@ -161,7 +174,21 @@ enum class RecordType : std::uint8_t {
     // nodes already do. A record type nothing can write is worse than none.
 };
 
-inline constexpr std::uint8_t kMaxAssignedRecordType = 22;
+// The highest assigned type, **derived from the enum rather than typed as a
+// number** - and that is a bug fix, not tidiness.
+//
+// `EncodeRecord` refuses any type above this bound, so a hand-maintained value
+// silently un-assigns whatever was appended after it. That is exactly what
+// happened: RC05 added `kHeapDeleteUnmark = 23` and left the constant at 22,
+// so **the record could not be written at all** - `TransactionManager::Compensate`
+// and `txn::RecoveryUndo` both failed with "unassigned record type" when
+// rolling back a DELETE, and every test that covers that path runs unlogged
+// (`wal = nullptr`), which is what hid it until 2026-08-12.
+//
+// Keep this pinned to the last enumerator when appending a type; the test that
+// every named type encodes is what proves it stayed pinned.
+inline constexpr std::uint8_t kMaxAssignedRecordType =
+    static_cast<std::uint8_t>(RecordType::kAssertSnapshot);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

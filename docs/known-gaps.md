@@ -33,10 +33,10 @@ the owner's workplan.
   `SHOW META` reports what the last mount's recovery did — records scanned,
   transactions committed and rolled back, per-phase timings, and the audit below
   (RC09, built the same day).
-  **What is still missing:** RC07 (Bound Cabin replay, so a restart resumes
-  assertion enforcement), which is what keeps this entry struck rather than
-  deleted. The three findings below are what running recovery *produced* — two
-  defects in code that predates it, both fixed, and one measured cost.
+  **What is still missing:** RC07's mount wiring (Bound Cabin replay — its
+  mechanism is built, nothing calls it), which is what keeps this entry struck
+  rather than deleted. The findings below are what running recovery *produced* —
+  three defects in code that predates it, all fixed, and one measured cost.
 
 - **The catalog is still not recovered, and `catalog_recovered=0` says so on
   every `SHOW META`** (RV3, RC09). A crash can still lose a `CREATE TABLE`, so
@@ -91,6 +91,23 @@ the owner's workplan.
   `ckdbs-sim --seed 7 --ops 3000 --mode crash --iterations 3`.
   `wal::ApplyPageInit` already formatted a `kVarHeap` page (RC03 anticipated
   it), so what was missing was the record nobody wrote and never an applier.
+
+- **`HEAP_DELETE_UNMARK` could not be written at all** — found and **fixed
+  2026-08-12**, and it is the third defect recovery work exposed rather than
+  introduced. RC05 added the type as 23 and left `kMaxAssignedRecordType` at 22,
+  which is the bound `EncodeRecord` enforces — so every attempt to log one
+  answered *"unassigned record type"*. `TransactionManager::Compensate` could not
+  log the compensation for an aborted DELETE, and `txn::RecoveryUndo` could not
+  either, so a mount that had to roll back a loser's DELETE **failed**. It hid
+  because every test that covers those paths runs with `wal = nullptr`, where no
+  record is written, and because a test asserted `IsAssignedRecordType(23) ==
+  false` — agreeing with the stale bound instead of with the enum.
+
+  The constant is now **derived from the last enumerator** rather than typed, so
+  appending a type cannot leave it stale, and
+  `WalRecordTest.EveryNamedTypeIsWritable` is the general guard: a type with a
+  name is a type some site intends to write, so it must encode. Verified to fail
+  against the old bound.
 
 - **A segment sealed with no room for a PAD was read as a torn tail** — found
   and **fixed 2026-08-12** (`src/wal/log_scanner.cpp`), and it is the second
@@ -150,10 +167,18 @@ the owner's workplan.
   `AssertEntryPayload::group_id`) together with the directory primitives replay
   needs — dense per-cabin ids, `SnapshotGroups`, `RestoreGroup`, `AttachEntry`,
   and `AdoptGroupId`, which refuses to let a fold's ids drift from the ids the
-  entries on the pages already carry. What is still missing is the plumbing:
-  nothing writes a snapshot at a checkpoint and nothing loads one at a mount
-  (`docs/workplan-wal-recovery.md` RC07 parts 3-4), so the reported state is
-  unchanged.
+  entries on the pages already carry. **Part 3 built the same day**: `ASSERT_SNAPSHOT`
+  carries a cabin's group headers (chunked, since a group count is bounded by the
+  data), the checkpointer asks a seam for them and writes them right after
+  `CHECKPOINT_BEGIN`, and `exec::RecoverAssertions` restores a snapshot, relinks
+  the entries from the cabin's own pages, and folds the records after it —
+  scanning from the anchor's `checkpoint_lsn`, which is what AS6a's "from the last
+  checkpoint" means in code. An assertion whose records appear with no snapshot is
+  reported unrecovered rather than folded onto nothing, because those aggregates
+  would be too small and an admission check on them admits a violating write.
+  **What is still missing is the mount wiring** — no registry implements the seam
+  and no mount calls the pass (`docs/workplan-wal-recovery.md` RC07) — so the
+  reported state is unchanged: `enforcing=0` after a restart.
 - **Waystone sighting counts** restart (a performance event, never a
   correctness one — invariant 8).
 

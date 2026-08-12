@@ -30,6 +30,63 @@ Status Checkpointer::LogBegin(std::span<const CheckpointActiveTxn> active_txns,
     return Status::OK();
 }
 
+Status Checkpointer::LogAssertionSnapshots() {
+    if (assertions_ == nullptr) {
+        return Status::OK();  // no assertions on this core: no records, no cost
+    }
+
+    // The chunk bound: what one record's payload may hold, leaving the record
+    // header out of the segment's usable space. A cabin's group count is bounded
+    // by the data, so a cabin can need several records - the loader is additive
+    // over them (payload.hpp), which is why no continuation flag exists.
+    const std::size_t budget = wal_.usable_payload_bytes();
+
+    for (const AssertionCabinSnapshot& cabin : assertions_->SnapshotAssertions()) {
+        std::size_t at = 0;
+        // A cabin with no groups still gets one record. It says "this assertion
+        // existed at the checkpoint and had nothing", which is what lets the
+        // loader tell an empty cabin from an absent snapshot - and those two
+        // must not read alike, because the second means the fold has no base.
+        do {
+            std::vector<SnapshotGroupEntry> chunk;
+            std::size_t bytes = kAssertSnapshotFixedSize;
+            while (at < cabin.groups.size()) {
+                const std::size_t cost = AssertSnapshotGroupBytes(cabin.groups[at].key.size());
+                if (!chunk.empty() && bytes + cost > budget) {
+                    break;
+                }
+                if (bytes + cost > budget) {
+                    // One group too large for an entire record. Refused rather
+                    // than dropped: a snapshot missing a group is a base that
+                    // silently under-counts, and an admission check built on it
+                    // would admit a write that violates the assertion.
+                    return Status::OutOfSpace(
+                        "checkpointer: assertion " + std::to_string(cabin.assertion_id) +
+                        " has a group key of " + std::to_string(cabin.groups[at].key.size()) +
+                        " bytes, which no ASSERT_SNAPSHOT record can carry");
+                }
+                bytes += cost;
+                chunk.push_back(cabin.groups[at]);
+                ++at;
+            }
+
+            payload_scratch_.assign(bytes, std::byte{0});
+            AssertSnapshotPayload fields{};
+            fields.assertion_id = cabin.assertion_id;
+            auto encoded = EncodeAssertSnapshot(payload_scratch_, fields, chunk);
+            if (!encoded.ok()) {
+                return encoded.status();
+            }
+            auto lsn = wal_.Append({RecordType::kAssertSnapshot, kNoTxnId, kInvalidPageId, 0},
+                                   std::span(payload_scratch_).first(encoded.value()));
+            if (!lsn.ok()) {
+                return lsn.status();
+            }
+        } while (at < cabin.groups.size());
+    }
+    return Status::OK();
+}
+
 Status Checkpointer::Start() {
     if (in_progress_) {
         return Status::AlreadyExists("checkpointer: a checkpoint is already in progress");
@@ -41,6 +98,13 @@ Status Checkpointer::Start() {
     const std::vector<CheckpointDirtyPage> dirty = target_.DirtyTable();
 
     if (Status s = LogBegin(active_txns, dirty); !s.ok()) {
+        return s;
+    }
+
+    // AS6a's base, immediately after BEGIN: ahead of every ASSERT_* record that
+    // will be folded onto it, and inside the checkpoint the anchor names, which
+    // is what lets replay find it without scanning to the cabin's birth.
+    if (Status s = LogAssertionSnapshots(); !s.ok()) {
         return s;
     }
 

@@ -84,6 +84,33 @@ public:
     std::vector<CheckpointActiveTxn> Snapshot() const override { return {}; }
 };
 
+// One Bound Cabin's group headers, as the checkpointer asks for them (AS6a,
+// RC07). A WAL-layer shape rather than `exec::BoundCabin`'s own, for the reason
+// `CheckpointTarget` is a seam: this file must not depend on the assertion
+// engine, and the assertion registry is what converts.
+struct AssertionCabinSnapshot {
+    std::uint64_t assertion_id = 0;
+    std::vector<SnapshotGroupEntry> groups;  // keys must outlive the call
+};
+
+// Where the checkpoint gets those snapshots. Implemented by whoever owns the
+// live assertions; absent (null) on a core that has none, in which case a
+// checkpoint writes no ASSERT_SNAPSHOT records at all and costs nothing.
+//
+// **Why the checkpoint is the right place.** The snapshot is the base assertion
+// replay folds onto, so it has to sit at a point recovery can find and ahead of
+// every record folded onto it. The checkpoint is already both: the anchor names
+// it, and `CHECKPOINT_BEGIN` is where the active-transaction table is taken for
+// the same reason.
+class AssertionSnapshotSource {
+public:
+    virtual ~AssertionSnapshotSource() = default;
+
+    // One entry per live assertion. Called on the checkpointer's thread while
+    // nothing else touches the directories (core-local, §6.1).
+    virtual std::vector<AssertionCabinSnapshot> SnapshotAssertions() const = 0;
+};
+
 // The pages a checkpoint has to get on disk, and the way to do it. The
 // per-core BufferPool is the real implementation (BufferPoolCheckpointTarget
 // below); the seam keeps this file from depending on the storage layer and
@@ -174,6 +201,12 @@ public:
     // recovery needs the anchor it never published.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
+    // AS6a's snapshot source (RC07), null by default: a core with no assertions
+    // writes no ASSERT_SNAPSHOT records. `source` must outlive this.
+    void SetAssertionSource(const AssertionSnapshotSource* source) noexcept {
+        assertions_ = source;
+    }
+
     bool in_progress() const noexcept { return in_progress_; }
     const CheckpointStats& stats() const noexcept { return stats_; }
 
@@ -209,12 +242,18 @@ private:
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
                     std::span<const CheckpointDirtyPage> dirty_pages);
 
+    // AS6a: every live cabin's group headers, chunked so no record outgrows a
+    // segment. Emitted immediately after CHECKPOINT_BEGIN, which is what puts
+    // the base ahead of every record folded onto it.
+    Status LogAssertionSnapshots();
+
     WalManager& wal_;
     CheckpointTarget& target_;
     ActiveTransactions& txns_;
     CheckpointAnchor& anchor_;
     CheckpointerConfig config_;
     Logger* log_ = nullptr;
+    const AssertionSnapshotSource* assertions_ = nullptr;  // AS6a, may be null
     CheckpointStats stats_;
 
     bool in_progress_ = false;

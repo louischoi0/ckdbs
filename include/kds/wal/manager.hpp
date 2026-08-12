@@ -146,6 +146,15 @@ public:
 
     std::uint32_t core_id() const noexcept { return stream_->core_id(); }
     std::uint64_t segment_size() const noexcept { return stream_->segment_size(); }
+
+    // Bytes a single record's payload may occupy, for a caller that has to chunk
+    // its own data to fit one (AS6a's group snapshots are the first). The record
+    // header is subtracted here rather than by every such caller, since a caller
+    // that forgot would produce a record the append path refuses at the worst
+    // possible moment - mid-checkpoint.
+    std::size_t usable_payload_bytes() const noexcept {
+        return static_cast<std::size_t>(stream_->usable_segment_bytes()) - kRecordHeaderSize;
+    }
     const WalStats& stats() const noexcept { return stats_; }
 
     // Where the next record goes; every byte below it has been appended.

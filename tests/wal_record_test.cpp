@@ -246,5 +246,30 @@ TEST(WalRecordTest, TypeNamesCoverEveryAssignedValue) {
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
 }
 
+TEST(WalRecordTest, EveryNamedTypeIsWritable) {
+    // **The converse of the test above, and the one that was missing.**
+    //
+    // That test walks up to `kMaxAssignedRecordType`, so a type appended *past*
+    // a stale bound is invisible to it - which is how `kHeapDeleteUnmark = 23`
+    // shipped unwritable at RC05 with the constant left at 22: `EncodeRecord`
+    // answered "unassigned record type" for it, so rolling back a DELETE could
+    // not be logged, and every test of that path runs unlogged.
+    //
+    // A named type is a type some site intends to write. Walking well past the
+    // bound is the point: the failure mode is a name that exists above it.
+    for (std::uint8_t raw = 1; raw < 64; ++raw) {
+        const auto type = static_cast<RecordType>(raw);
+        if (std::string_view(RecordTypeName(type)) == "UNKNOWN") continue;
+
+        EXPECT_TRUE(IsAssignedRecordType(raw))
+            << RecordTypeName(type) << " (" << +raw
+            << ") has a name but is above kMaxAssignedRecordType, so EncodeRecord refuses it";
+
+        std::array<std::byte, 128> buf{};
+        EXPECT_TRUE(EncodeRecord(buf, {type, /*txn_id=*/7, /*page_id=*/100}, /*lsn=*/4096, {}).ok())
+            << RecordTypeName(type) << " cannot be encoded";
+    }
+}
+
 }  // namespace
 }  // namespace kds::wal
