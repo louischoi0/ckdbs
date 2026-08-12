@@ -605,6 +605,27 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                      " past what the log names");
     }
 
+    // **The completion checkpoint** (RC08), which is what makes the next
+    // recovery cheap: it publishes an anchor past everything just replayed, so
+    // a second crash scans from here instead of from wherever the last periodic
+    // checkpoint left off - or, on a database that had never completed one,
+    // from the head of the stream every single mount.
+    //
+    // The target and the anchor are built here rather than beside the
+    // checkpointer below, because this call needs them and it must happen
+    // before any statement can dirty a page. Both are members, so the
+    // checkpointer built later borrows the same two objects and the anchor's
+    // publish count spans the mount and the cadence.
+    expeditor->checkpoint_target_.emplace(*expeditor->store_);
+    expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
+    expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
+    if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
+                                           *expeditor->checkpoint_target_,
+                                           *expeditor->checkpoint_anchor_, &*expeditor->logger_);
+        !s.ok()) {
+        return s;
+    }
+
     // The rest of the transaction stack, before the dispatcher that reads
     // through it. The persist callback is what makes a reserved id block
     // durable: the superblock is unlogged, so a block is only safe once the
@@ -659,9 +680,9 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                  ", isolation " +
                                  txn::IsolationLevelName(expeditor->config_.isolation));
 
-    expeditor->checkpoint_target_.emplace(*expeditor->store_);
-    expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
-    expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
+    // The target and the anchor already exist - the completion checkpoint
+    // above built them, and re-emplacing here would hand the cadence a fresh
+    // anchor whose publish count starts at zero, hiding the mount's own.
     expeditor->checkpointer_.emplace(*expeditor->wal_, *expeditor->checkpoint_target_,
                                      *expeditor->txn_manager_,
                                      *expeditor->checkpoint_anchor_);

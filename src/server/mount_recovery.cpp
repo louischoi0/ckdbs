@@ -66,4 +66,34 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     return out;
 }
 
+Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
+                               wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
+                               Logger* log) {
+    // Empty by fact, not by omission - see the header. A checkpoint written
+    // here with a *stale* active list would be worse than none: recovery would
+    // walk the undo chain of a transaction that no longer exists.
+    wal::NoActiveTransactions none;
+    wal::Checkpointer checkpointer(wal, target, none, anchor);
+    checkpointer.SetLogger(log);
+
+    // Run to completion rather than paced: there is no reactor to spread this
+    // across yet, and the whole point is that the mount does not finish until
+    // the anchor is durable (wal.md §8-3's ordering is inside Complete()).
+    if (Status s = checkpointer.RunToCompletion(); !s.ok()) {
+        return s.WithContext("recovery of core " + std::to_string(core_id) +
+                             ": completion checkpoint");
+    }
+
+    if (log != nullptr) {
+        log->Info("recovery", "core " + std::to_string(core_id) +
+                                 ": completion checkpoint at lsn " +
+                                 std::to_string(checkpointer.last_checkpoint_lsn()) +
+                                 ", the next recovery starts at " +
+                                 std::to_string(checkpointer.redo_start_lsn()) + " (" +
+                                 std::to_string(checkpointer.stats().pages_flushed) +
+                                 " page(s) flushed)");
+    }
+    return Status::OK();
+}
+
 }  // namespace kds::server

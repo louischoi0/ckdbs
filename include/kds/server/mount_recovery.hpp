@@ -8,6 +8,7 @@
 #include "kds/server/superblock.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "kds/wal/checkpointer.hpp"
 #include "kds/wal/log_device.hpp"
 #include "kds/wal/manager.hpp"
 
@@ -123,5 +124,41 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                                           wal::LogDevice& device, storage::PageStore& store,
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
                                           Logger* log);
+
+// Recovery's completion checkpoint (RC08, `docs/wal.md` §12-4): the last step
+// of a mount, and what bounds the *next* crash's work.
+//
+// ---- Why a mount without one is a mount that gets slower ------------------
+//
+// Recovery starts where the anchor says, and until this ran nothing published
+// an anchor after replaying - so every mount scanned from wherever the last
+// periodic checkpoint left off, and a database that had never completed one
+// scanned its whole stream, every time, forever. Measured at RC11: ~55-70 ms
+// per mount over a ~1500-op stream, growing linearly with the log. The cost of
+// this call is one flush of the dirty table plus two records; what it buys is
+// that the next recovery starts here instead.
+//
+// ---- Why the active-transaction table is empty, and why that is a fact ----
+//
+// `CHECKPOINT_BEGIN` carries the live transactions so recovery's undo phase
+// can find its losers (RV10). Immediately after recovery there are none: every
+// loser was rolled back and given its `TXN_ABORT`, every winner had committed
+// before the crash, and no statement has been accepted yet because the listener
+// is not bound (RV1). So `wal::NoActiveTransactions` is the *correct* table
+// here and not a stand-in for one - which is why this function takes no
+// transaction source and cannot be handed the wrong one.
+//
+// The caller supplies the target and the anchor because both are its layer's:
+// a `DevicePageStore` knows its dirty table, and where an anchor becomes
+// durable is the superblock owner's business (`superblock_checkpoint_anchor.hpp`).
+//
+// Fails with whatever the checkpoint reports, and a failure is the mount's
+// (RV1): an anchor that was not published leaves the next recovery replaying
+// more than it should, which is a promise silently withdrawn rather than a
+// wrong answer - but it happens at mount, where there is still a caller to
+// tell.
+Status CheckpointAfterRecovery(std::uint32_t core_id, wal::WalManager& wal,
+                               wal::CheckpointTarget& target, wal::CheckpointAnchor& anchor,
+                               Logger* log);
 
 }  // namespace kds::server

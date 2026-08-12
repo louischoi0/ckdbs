@@ -88,6 +88,17 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
             "page 0 and per-core id leases (docs/workplan-crosscore.md P5)");
     }
 
+    // **No completion checkpoint here** (RC08), and the reason is the same one
+    // that makes the refusal above a refusal: publishing an anchor means
+    // writing page 0, which belongs to the system core (M5), and the ring this
+    // core would send it over (remote_checkpoint_anchor.hpp) is not attached
+    // until AttachTransport(). So a peer's next mount still scans from whatever
+    // anchor core 0 last wrote for it.
+    //
+    // That costs nothing today - a peer cannot reserve a transaction id, so its
+    // stream holds no writes of its own to rescan - and it is stated rather than
+    // left to be discovered when P5's id leases make peer writes real. Core 0's
+    // own checkpoint runs in Expeditor::Open.
     runtime->store_->SetCoreOwnership(config.core_id, &runtime->lease_, kFirstUserPageId);
 
     // The catalog, read-only in practice: DDL is core 0's, and the store

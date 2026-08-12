@@ -25,13 +25,16 @@ the owner's workplan.
   stream before the listener binds, and `SimInstance::Boot` does the same, so
   SIM04's crash contract is armed rather than counted
   (`sim/loop.hpp`'s `kRecoveryImplemented`, RC10's first half).
+  A mount ends by publishing an anchor past everything it replayed (RC08, built
+  the same day), so the next crash replays only what followed rather than
+  rescanning the stream — **except on a peer core**, which cannot write page 0
+  and so still scans from whatever anchor core 0 last wrote it (costless today:
+  a peer holds no transaction ids, so its stream carries no writes of its own).
   **What is still missing, and none of it is the phases:** RC07 (Bound Cabin
-  replay, so a restart resumes assertion enforcement), RC08 (the completion
-  checkpoint — until it lands, every mount replays the whole stream, because
-  nothing publishes an anchor after recovery), and RC09 (the phase timings and
-  RV3's orphan counter) — which is what keeps this entry struck rather than
-  deleted. The two defects below are what running recovery *found*, in code
-  that predates it; both are fixed, and neither was in the phases.
+  replay, so a restart resumes assertion enforcement) and RC09 (the phase
+  timings and RV3's orphan counter) — which is what keeps this entry struck
+  rather than deleted. The two defects below are what running recovery *found*,
+  in code that predates it; both are fixed, and neither was in the phases.
 
 - ~~**Var-heap page growth and UPDATE's spills are not logged, and recovery
   found it**~~ — **fixed 2026-08-12**, all three holes, with the reproducer

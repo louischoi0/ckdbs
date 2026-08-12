@@ -4,6 +4,8 @@
 
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/server/superblock_checkpoint_anchor.hpp"
+#include "kds/storage/page_store_checkpoint_target.hpp"
 
 namespace kds::sim {
 
@@ -64,6 +66,19 @@ Status SimInstance::Boot() {
                 return s;
             }
             if (Status s = PersistSuperBlock(); !s.ok()) return s;
+        }
+
+        // The completion checkpoint (RC08), for the reason the harness runs
+        // recovery at all: without it every reboot rescans from the head of the
+        // stream, because nothing here runs the periodic checkpointer - so the
+        // harness would be measuring a mount cost no server pays and missing
+        // the one property RC08 adds.
+        storage::PageStoreCheckpointTarget target(*store_);
+        server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
+        if (Status s = server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
+                                                      /*log=*/nullptr);
+            !s.ok()) {
+            return s;
         }
     }
 

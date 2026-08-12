@@ -10,9 +10,11 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/sched/clock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/undo_log.hpp"
+#include "kds/wal/checkpointer.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/stream.hpp"
@@ -232,6 +234,91 @@ TEST_F(MountRecoveryTest, AnUnwrittenStreamCostsNothingAndSaysSo) {
         << "a stream naming no page must not move the allocation floor";
     EXPECT_EQ(r.value().next_trx_id, 0u);
     EXPECT_EQ(store_.page_count(), 0u);
+}
+
+// ---- RC08: the completion checkpoint bounds the next crash ---------------
+
+// A dirty table with nothing in it, which is the honest one here: this
+// fixture's records were scripted into the log rather than written through a
+// store, so no page is dirty. The checkpoint then takes its redo start from its
+// own CHECKPOINT_BEGIN (checkpointer.hpp), which is exactly the bound under
+// test - "the next recovery starts here".
+class NoDirtyPages final : public wal::CheckpointTarget {
+public:
+    std::vector<wal::CheckpointDirtyPage> DirtyTable() const override { return {}; }
+    Status FlushPages(std::span<const PageId>) override { return Status::OK(); }
+};
+
+TEST_F(MountRecoveryTest, TheCompletionCheckpointStopsTheNextRecoveryRescanningTheStream) {
+    // RC08's done-when, and the reason it matters is a measurement rather than
+    // an argument: before this, a mount with no anchor scanned the whole stream
+    // every time (~55-70 ms per mount over a ~1500-op log at RC11), and it grew
+    // with the log forever because nothing published an anchor after replaying.
+    WriteStream(/*txn_id=*/7, wal::RecordType::kTxnCommit);
+
+    sched::ManualClock clock;
+    auto manager = wal::WalManager::Open(device_.get(), clock, /*core_id=*/0);
+    ASSERT_TRUE(manager.ok()) << manager.status().message();
+
+    auto first = RecoverCoreAtMount(/*core_id=*/0, WalAnchorFields{}, *device_, store_,
+                                    *undo_log_, &*manager.value(), /*log=*/nullptr);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    ASSERT_EQ(first.value().records, 3u);
+
+    NoDirtyPages target;
+    wal::InMemoryCheckpointAnchor published;
+    ASSERT_TRUE(CheckpointAfterRecovery(/*core_id=*/0, *manager.value(), target, published,
+                                        /*log=*/nullptr)
+                    .ok());
+    EXPECT_EQ(published.publishes(), 1u) << "the mount published no anchor";
+    EXPECT_GT(published.anchor().redo_start_lsn, 0u);
+
+    // The anchor as the superblock would carry it - which is the caller's job
+    // (`SuperBlockCheckpointAnchor`), and the shape the next mount reads.
+    WalAnchorFields anchor{};
+    anchor.checkpoint_lsn = published.anchor().checkpoint_lsn;
+    anchor.redo_start_lsn = published.anchor().redo_start_lsn;
+    anchor.durable_lsn = published.anchor().durable_lsn;
+    anchor.segment_no = published.anchor().segment_no;
+
+    auto second = RecoverCoreAtMount(/*core_id=*/0, anchor, *device_, store_, *undo_log_,
+                                     &*manager.value(), /*log=*/nullptr);
+    ASSERT_TRUE(second.ok()) << second.status().message();
+
+    // Only the two checkpoint records, which name no page. The heap records are
+    // not skipped-by-LSN - they are **not scanned at all**, which is the
+    // difference between a bounded recovery and a cheap-looking one.
+    EXPECT_EQ(second.value().records, 2u);
+    EXPECT_EQ(second.value().redo_applied, 0u);
+    EXPECT_EQ(second.value().redo_skipped_by_lsn, 0u)
+        << "the second mount re-read the records the checkpoint bounded away";
+    EXPECT_LT(second.value().records, first.value().records);
+}
+
+TEST_F(MountRecoveryTest, TheAnchorItPublishesIsHonestAboutTheDurableEnd) {
+    // `Analyze` refuses a mount whose stream cannot reach the anchor's durable
+    // point - the check that stops a lost tail reading as a clean shutdown
+    // (analysis.hpp). So an anchor this function publishes has to satisfy it,
+    // or RC08 would hand the next mount a refusal.
+    WriteStream(/*txn_id=*/7, wal::RecordType::kTxnCommit);
+
+    sched::ManualClock clock;
+    auto manager = wal::WalManager::Open(device_.get(), clock, /*core_id=*/0);
+    ASSERT_TRUE(manager.ok()) << manager.status().message();
+
+    NoDirtyPages target;
+    wal::InMemoryCheckpointAnchor published;
+    ASSERT_TRUE(CheckpointAfterRecovery(/*core_id=*/0, *manager.value(), target, published,
+                                        /*log=*/nullptr)
+                    .ok());
+
+    WalAnchorFields anchor{};
+    anchor.redo_start_lsn = published.anchor().redo_start_lsn;
+    anchor.durable_lsn = published.anchor().durable_lsn;
+
+    auto recovered = RecoverCoreAtMount(/*core_id=*/0, anchor, *device_, store_, *undo_log_,
+                                       &*manager.value(), /*log=*/nullptr);
+    EXPECT_TRUE(recovered.ok()) << recovered.status().message();
 }
 
 TEST_F(MountRecoveryTest, RecoveringTwiceIsANoOp) {

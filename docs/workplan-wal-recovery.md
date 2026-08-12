@@ -9,7 +9,8 @@ uncommitted mount wiring described in RC11 below:
 | **RC11 — recovery at mount** | **built 2026-08-12**, the caller RC04a listed and no task owned. `server/mount_recovery.hpp`, wired into `Expeditor::Open`, `CoreRuntime::Open` and `SimInstance::Boot` |
 | RC10's first half | **done**: `kRecoveryImplemented` is flipped, so SIM04's crash contract is asserted, and its firing is proved against a `skip_recovery` boot |
 | RC07 | unblocked by AS6a, not started |
-| RC08, RC09 | unblocked, not started — and RC08 is now the *measured* next step, see below |
+| **RC08 — completion checkpoint** | **built 2026-08-12** for core 0 and for the harness; peer cores deliberately excluded, see the task |
+| RC09 | unblocked, not started |
 | RC10's remainder | the `txn.md` §8 amendment and EVT08's crash-matrix points |
 
 **The previous status line said "nothing in this series has ever been built
@@ -791,11 +792,55 @@ path changed, so steady-state per-statement cost is zero by construction** —
 this is mount cost, and it grows with the log because **nothing publishes an
 anchor after recovery**. That is RC08, and this measurement is its argument.
 
-**RC08 — Completion checkpoint and the anchor.**
+**RC08 — Completion checkpoint and the anchor. BUILT 2026-08-12.**
 Recovery ends by writing a checkpoint and publishing the anchor, bounding
-the next crash's work (§12-4).
+the next crash's work (§12-4). `server::CheckpointAfterRecovery` in
+`mount_recovery.hpp`, called by `Expeditor::Open` and by `SimInstance::Boot`
+right after the ceiling is applied.
+
+Three things it settled:
+
+- **The active-transaction table is empty as a fact, not as a stand-in.**
+  `CHECKPOINT_BEGIN` carries the live set so undo can find its losers (RV10),
+  and immediately after recovery there are none: losers rolled back and given
+  their `TXN_ABORT`, winners committed before the crash, no statement accepted
+  because the listener is not bound (RV1). So the function takes no transaction
+  source and **cannot be handed a stale one** - which matters, because a
+  checkpoint written with a stale active list would send the next recovery
+  walking the undo chain of a transaction that no longer exists.
+- **It runs unconditionally, including when the scan found nothing.** A
+  database that has never completed a checkpoint has a zeroed anchor, and a
+  zeroed anchor means "scan from the head of the stream" - so the mount that
+  recovers nothing is exactly the mount whose *successor* pays. Two records and
+  one dirty-table flush is the price of not being that.
+- **`Expeditor` builds its checkpoint target and anchor early** and the cadence
+  checkpointer borrows the same two objects, so the anchor's publish count spans
+  the mount and the interval rather than resetting when the reactor starts.
+
+**Not done for peer cores, deliberately and by name.** Publishing means writing
+page 0, which is the system core's (M5), and the ring a peer would send its
+anchor over is not attached until `AttachTransport()`. A peer's next mount
+therefore still scans from whatever anchor core 0 last wrote it. That costs
+nothing today - a peer cannot reserve a transaction id, so its stream holds no
+writes of its own - and it is written into `core_runtime.cpp` rather than left
+to be discovered when P5's id leases make peer writes real.
+
 *Done when:* a second crash immediately after recovery replays only what
-followed the completion checkpoint.
+followed the completion checkpoint. **Held**, in
+`MountRecoveryTest.TheCompletionCheckpointStopsTheNextRecoveryRescanningTheStream`:
+the second mount reads **2 records** where the first read 5, with
+`redo_skipped_by_lsn == 0` - the bounded records are not scanned-then-skipped,
+they are not scanned at all, which is the difference between a bounded recovery
+and a cheap-looking one. A second test asserts the published anchor satisfies
+analysis's own durable-point check, since an anchor that failed it would hand
+the next mount a refusal.
+
+**Measured**, `build-release`, interleaved A/B against `--skip-recovery`, three
+reps × three seeds: 0.21-0.34 s per crash run either side of the change -
+**cost-neutral to within noise**, because the harness reboots once per log and
+so pays the checkpoint without ever taking the cheaper scan. The scan-volume
+evidence above is what carries the benefit; a multi-mount wall-clock benchmark
+belongs in `bench/` and was **not run**.
 
 **RC09 — Observability and the honest counter.**
 `wal.md` §13's recovery phase timings, plus RV3's counter: records
