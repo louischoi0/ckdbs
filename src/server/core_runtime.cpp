@@ -9,6 +9,7 @@
 
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
+#include "kds/server/mount_recovery.hpp"
 
 namespace kds::server {
 
@@ -47,8 +48,47 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     if (!store.ok()) return store.status();
     runtime->store_ = std::move(store.value());
     runtime->store_->SetLogger(log);
-    runtime->store_->SetCoreOwnership(config.core_id, &runtime->lease_, kFirstUserPageId);
     runtime->store_->SetWalGate(runtime->wal_.get());
+
+    // **This core's recovery** (RV1/RV2, server/mount_recovery.hpp): each
+    // stream is independent, so a peer recovers its own rather than waiting
+    // on core 0 - and no order between the two is introduced, which is what
+    // workplan-crosscore.md guideline 3 forbids.
+    //
+    // It runs **before `SetCoreOwnership`**, deliberately. RC04's repair
+    // raises the store's allocation floor, and `DevicePageStore` refuses that
+    // raise once a lease is installed - correctly, since a leased core takes
+    // its ids from its extent and never consults the floor. Installing the
+    // lease first would therefore make every peer with a non-empty stream
+    // refuse its own mount.
+    //
+    // The undo log is built here for the same reason: recovery's undo phase
+    // writes through it, and the rest of the transaction stack must not exist
+    // yet, because `TrxIdSequence` caches the transaction ceiling at
+    // construction (txn/trx_id.hpp).
+    runtime->undo_log_.emplace(*runtime->store_, &*runtime->wal_);
+    auto recovered =
+        RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
+                           *runtime->store_, *runtime->undo_log_, &*runtime->wal_, log);
+    if (!recovered.ok()) return recovered.status();
+
+    // A peer may not raise the durable transaction ceiling - the superblock is
+    // page 0 and belongs to the system core (M5), and `superblock_` here is a
+    // copy. Refused rather than applied to the copy, which would be a raise
+    // nothing persists and a ceiling core 0 never learns of. Unreachable
+    // today, because a peer cannot reserve an id block either (the persist
+    // callback below refuses it), so its stream names no transaction of its
+    // own; stated so it stays a refusal rather than becoming a silent hole
+    // when P5's id leases land.
+    if (recovered.value().next_trx_id > runtime->superblock_.next_trx_id()) {
+        return Status::Unsupported(
+            "core " + std::to_string(config.core_id) + ": its log names transaction id " +
+            std::to_string(recovered.value().next_trx_id - 1) +
+            ", above the ceiling the superblock carries; raising it needs the system core's "
+            "page 0 and per-core id leases (docs/workplan-crosscore.md P5)");
+    }
+
+    runtime->store_->SetCoreOwnership(config.core_id, &runtime->lease_, kFirstUserPageId);
 
     // The catalog, read-only in practice: DDL is core 0's, and the store
     // above refuses a write to the pages it lives on. What this instance
@@ -78,7 +118,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                     "belongs to the system core and per-core id leases are "
                                     "workplan P5");
     });
-    runtime->undo_log_.emplace(*runtime->store_, &*runtime->wal_);
+    // The undo log is already built - recovery wrote its compensations
+    // through it above, before this stack existed.
     runtime->txn_manager_.emplace(*runtime->trx_ids_, *runtime->undo_log_, *runtime->store_,
                                   &*runtime->wal_);
 

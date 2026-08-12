@@ -271,7 +271,16 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             page_bytes = created.value();
             ++stats.pages_created;
         } else {
-            return got.status();
+            // Named, because "page id not found" alone says nothing about
+            // which record described a page nobody has - and this refusal is
+            // reachable through RV3's unlogged catalog (a relation's pages are
+            // created by DDL without a PAGE_INIT, so a crash can lose the page
+            // while the log still holds writes to it).
+            return got.status().WithContext(
+                std::string("redo: ") + RecordTypeName(record.type()) + " at lsn " +
+                std::to_string(record.header.lsn) + " names page " + std::to_string(page_id) +
+                ", which the store does not hold and no PAGE_INIT or full page image in the "
+                "replay range creates");
         }
 
         // Every path that reaches here assigned a whole page.

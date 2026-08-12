@@ -53,6 +53,18 @@ struct SimInstanceOptions {
     std::uint32_t extent_pages = 64;
     std::uint32_t initial_pages = 64;
     wal::DurabilityClass durability = wal::DurabilityClass::kGroup;
+
+    // **A fault injection, and the only reason it exists**: boot without the
+    // recovery phase a real mount runs (server/mount_recovery.hpp). It is
+    // how the crash contract's assertion is proved to *fire* — with recovery
+    // wired in, no seed loses an acknowledged row any more, so the gate
+    // could otherwise only be shown to pass, and a gate that cannot fail is
+    // not a gate (docs/workplan-wal-recovery.md RC10).
+    //
+    // Never true in a production shape, and never a "recovery off" mode: an
+    // instance booted this way has a loser's writes on its pages, which
+    // txn.md §8's gap then reads as committed.
+    bool skip_recovery = false;
 };
 
 class SimInstance {

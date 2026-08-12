@@ -15,22 +15,61 @@ the owner's workplan.
 
 ## Durability and recovery
 
-- **WAL recovery is not implemented.** The log is written and never read
-  back; a crash is protected only by the last checkpoint / `SYNC` / clean
-  shutdown. Do not attempt a partial recovery (`docs/wal.md`,
-  `docs/txn.md` §8's instruction). **Planned 2026-08-10:**
-  `docs/workplan-wal-recovery.md` (RV1-RV9, RC01-RC10) — and its survey
-  corrects the impression this entry gives, that the substrate is missing
-  too. It is not: the scan with torn-tail detection, both checkpoint
-  tables, the per-core anchors, the `page_lsn` gate, FPI and the
-  acceptance tests all exist. What is missing is the phases, the
-  per-record appliers, and **a durable record of an INSERT** — rollback
-  walks an in-memory trail that a crash destroys, so a loser's inserts
-  cannot be undone from the log today.
-- **MVCC ships before recovery** (`docs/txn.md` §8): an uncommitted row
-  surviving a crash reads as **committed** on the next boot — its writer id
-  is below the new high-water mark and in no live set. No cheap mitigation
-  exists; closing it requires a persisted commit watermark, i.e. recovery.
+- ~~**WAL recovery is not implemented.** The log is written and never read
+  back~~ — **recovery runs at mount as of 2026-08-12** (`RV1`,
+  `docs/workplan-wal-recovery.md`, `include/kds/server/mount_recovery.hpp`).
+  RC01-RC06 were built earlier and **nothing called them**: `RecoverCore`
+  was reachable only from `tests/wal_recovery_test.cpp`, so every crash
+  still recovered nothing. `Expeditor::Open` and `CoreRuntime::Open` now run
+  analysis → redo → the high-water repair → undo against their own core's
+  stream before the listener binds, and `SimInstance::Boot` does the same, so
+  SIM04's crash contract is armed rather than counted
+  (`sim/loop.hpp`'s `kRecoveryImplemented`, RC10's first half).
+  **What is still missing, and none of it is the phases:** RC07 (Bound Cabin
+  replay, so a restart resumes assertion enforcement), RC08 (the completion
+  checkpoint — until it lands, every mount replays the whole stream, because
+  nothing publishes an anchor after recovery), RC09 (the phase timings and
+  RV3's orphan counter), and the var-heap logging defect below, which is
+  what stops this entry being deleted rather than struck.
+
+- **Var-heap page growth and UPDATE's spills are not logged, and recovery
+  found it** (2026-08-12, `src/storage/varheap.cpp`,
+  `src/server/command_dispatcher.cpp`). `docs/wal.md`'s "every data mutation
+  logged (heap, undo, **var-heap**, index, assertions)" overstates three
+  things:
+
+  1. `varheap::ChainAppend` grows a chain with `store.CreateNew()` +
+     `FormatPage()` and logs **no `PAGE_INIT`** for the new page — while the
+     heap and btree paths log one for every page they create.
+  2. The **chain link edit** on the old tail is unlogged, so a replay can
+     leave a value page that exists and is unreachable.
+  3. **An UPDATE's spills are not logged at all**: its `VarHeapSink` is
+     built with no `appended` collector, so no `VARHEAP_APPEND` is ever
+     written for a value an UPDATE spilled. The INSERT path collects and
+     logs; the UPDATE path does not.
+
+  Reachable, and loud rather than silent for (1): a crash that loses a new
+  var-heap page's write-back leaves a durable `VARHEAP_APPEND` naming a page
+  no `PAGE_INIT` creates, and redo **refuses the mount**. Reproduced in
+  `build-release` at `ckdbs-sim --seed 7 --ops 3000 --mode crash
+  --iterations 3` — *"VARHEAP_APPEND at lsn 700128 names page 172, which the
+  store does not hold"*. The committed seed corpus runs at 1500 ops and does
+  not reach it, so **the suite is green and the defect is real**; seed 7 is
+  deliberately not appended to `tests/testdata/sim_seeds.txt` until the fix
+  lands, because a corpus seed that fails is a broken CI rather than a
+  recorded regression. `ApplyPageInit` already formats a `kVarHeap` page
+  (RC03 anticipated this), so the fix is the record nobody wrote, not a new
+  applier.
+- ~~**MVCC ships before recovery** (`docs/txn.md` §8): an uncommitted row
+  surviving a crash reads as **committed** on the next boot~~ — **closed for
+  the mount path 2026-08-12.** Undo now runs before the listener binds, so a
+  loser's rows are rolled back rather than published, and `RecoverCore`
+  refuses the mount outright if it cannot do that (RV1). The gap's *shape*
+  survives only where recovery is bypassed: `SimInstanceOptions::skip_recovery`
+  is the harness's fault injection and boots into exactly the old behaviour,
+  which is how the durability assertion is proved able to fail
+  (`tests/sim_loop_test.cpp`). `docs/txn.md` §8 needs amending at the source
+  (RC10).
 - **DDL and catalog writes are unlogged**, and DDL is not transactional
   (`docs/txn.md` §7): `CREATE TABLE` inside a transaction is not rolled
   back.

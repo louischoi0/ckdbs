@@ -23,7 +23,8 @@ int Usage(const char* argv0) {
     std::fprintf(stderr,
                  "usage: %s --seed N [--ops N] [--iterations N]\n"
                  "          [--mode clean|sync-crash|crash]\n"
-                 "          [--profile uniform|zipfian|colliding]\n",
+                 "          [--profile uniform|zipfian|colliding]\n"
+                 "          [--skip-recovery]\n",
                  argv0);
     return 2;
 }
@@ -61,6 +62,13 @@ int main(int argc, char** argv) {
             else if (profile == "colliding") config.profile = kds::sim::Profile::kColliding;
             else return Usage(argv[0]);
             ++i;
+        } else if (arg == "--skip-recovery") {
+            // The fault injection, not a mode (sim/instance.hpp): boot over
+            // the crashed devices without the recovery phase, which is the
+            // engine as it stood before RV1. What it is for is showing that
+            // the crash contract's assertion can fail - and what it costs,
+            // measured, is the mount work recovery does.
+            config.skip_recovery = true;
         } else {
             return Usage(argv[0]);
         }

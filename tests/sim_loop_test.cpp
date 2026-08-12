@@ -125,25 +125,38 @@ TEST(SimLoop, CrashAnywhereFabricatesNothingOnEveryCommittedSeed) {
     }
 }
 
-// The [GATED: recovery] assertion must be able to fire — a gate that cannot
-// fail is not a gate. Seed 4 at these parameters loses acknowledged rows to
-// the crash (asserted first), so flipping the gate on must turn that same
-// run into a failure naming them.
-TEST(SimLoop, TheRecoveryGateFiresWhenFlippedOn) {
-    SimConfig gated;
-    gated.seed = 4;
-    gated.ops = 500;
-    gated.mode = SimMode::kCrash;
-    gated.iterations = 3;
-    const SimVerdict counted = RunSimulation(gated);
-    ASSERT_TRUE(counted.ok) << counted.Summary(gated);
-    ASSERT_GT(counted.gated_missing_rows, 0u)
-        << "this seed no longer loses rows; pick one that does or the gate test is vacuous";
-
-    SimConfig armed = gated;
+// The durability assertion must be able to fire — a gate that cannot fail is
+// not a gate (docs/workplan-wal-recovery.md RC10).
+//
+// **How this test had to change when recovery landed.** It used to run seed 4
+// with the gate off, assert that the seed lost acknowledged rows, then arm the
+// gate and watch the same run fail. That premise is gone: with recovery
+// running at mount, seed 4 loses nothing, and the old test failed on its own
+// `ASSERT_GT(gated_missing_rows, 0)` — "this seed no longer loses rows; pick
+// one that does or the gate test is vacuous". Which was the harness correctly
+// reporting that the engine had improved underneath it.
+//
+// So the violating image is hand-fed now, per RC10: `skip_recovery` boots the
+// same crashed devices *without* the phase, which is exactly the engine as it
+// stood before RV1 — and the armed assertion must fail on it, naming rows.
+// The pair is what carries the proof: same seed, same crash, recovery the only
+// difference.
+TEST(SimLoop, TheDurabilityAssertionFiresOnARecoverylessBoot) {
+    SimConfig armed;
+    armed.seed = 4;
+    armed.ops = 500;
+    armed.mode = SimMode::kCrash;
+    armed.iterations = 3;
     armed.assert_recovery = true;
-    const SimVerdict fired = RunSimulation(armed);
-    EXPECT_FALSE(fired.ok);
+
+    const SimVerdict recovered = RunSimulation(armed);
+    EXPECT_TRUE(recovered.ok) << recovered.Summary(armed);
+    EXPECT_EQ(recovered.gated_missing_rows, 0u);
+
+    SimConfig without = armed;
+    without.skip_recovery = true;
+    const SimVerdict fired = RunSimulation(without);
+    ASSERT_FALSE(fired.ok) << "the assertion cannot fail, so it proves nothing";
     EXPECT_NE(fired.detail.find("missing"), std::string::npos) << fired.detail;
 }
 

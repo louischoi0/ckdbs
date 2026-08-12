@@ -245,7 +245,9 @@ bool RunIteration(const SimConfig& config, std::size_t iteration, SimVerdict& ve
     const Rng iteration_rng =
         Rng(config.seed).Fork("iteration/" + std::to_string(iteration));
 
-    auto instance_or = SimInstance::Create();
+    SimInstance::Options options;
+    options.skip_recovery = config.skip_recovery;
+    auto instance_or = SimInstance::Create(options);
     if (!instance_or.ok()) {
         Fail(verdict, config.seed, iteration,
              "instance creation failed: " + instance_or.status().message());

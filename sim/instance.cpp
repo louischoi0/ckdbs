@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "kds/server/mount_recovery.hpp"
 #include "kds/server/superblock.hpp"
 
 namespace kds::sim {
@@ -43,12 +44,34 @@ Status SimInstance::Boot() {
     if (!boot.ok()) return boot.status();
     boot_.emplace(std::move(boot.value()));
 
+    // **Recovery, exactly where the expeditor runs it** (RV1,
+    // server/mount_recovery.hpp). The harness is a full instance, and a
+    // reboot that skipped the phase a real mount runs would grade an engine
+    // this project does not ship: SIM04's crash contract is what recovery is
+    // *for*, so the loop must be measuring the recovered image.
+    //
+    // The undo log comes first because undo writes through it, and the id
+    // sequence comes after because it caches the transaction ceiling at
+    // construction (txn/trx_id.hpp) - the same ordering Expeditor::Open has.
+    undo_.emplace(*store_, wal_.get());
+    if (!options_.skip_recovery) {
+        auto recovered = server::RecoverCoreAtMount(/*core_id=*/0, boot_->superblock.wal_anchor(0),
+                                                    *log_device_, *store_, *undo_, wal_.get(),
+                                                    /*log=*/nullptr);
+        if (!recovered.ok()) return recovered.status();
+        if (recovered.value().next_trx_id > boot_->superblock.next_trx_id()) {
+            if (Status s = boot_->superblock.SetNextTrxId(recovered.value().next_trx_id); !s.ok()) {
+                return s;
+            }
+            if (Status s = PersistSuperBlock(); !s.ok()) return s;
+        }
+    }
+
     // The persist callback, exactly as the expeditor wires it: the harness
     // is a full instance, and the null-persist path is the socket-free
     // tests' — ids reissued across a restart would be *this harness's*
     // fault, not the engine's.
     trx_ids_.emplace(boot_->superblock, [this] { return PersistSuperBlock(); });
-    undo_.emplace(*store_, wal_.get());
     txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get());
 
     dispatcher_.emplace(boot_->superblock, boot_->catalog, *store_, /*log=*/nullptr,

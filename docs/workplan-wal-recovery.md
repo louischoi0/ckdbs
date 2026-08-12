@@ -1,20 +1,42 @@
 # WAL recovery — workplan
 
-Status as of 2026-08-11, on `main` at `ee2250a`:
+Status as of 2026-08-12, on `works-known-gaps` at `ed03b44` plus the
+uncommitted mount wiring described in RC11 below:
 
 | | |
 |---|---|
-| RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **written, never compiled** |
+| RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **built, compiled and green** (upstream `c1370e8` / `b11cc81` made the tree build and fixed the eleven failures that became visible; `28ee297` added the push guard) |
+| **RC11 — recovery at mount** | **built 2026-08-12**, the caller RC04a listed and no task owned. `server/mount_recovery.hpp`, wired into `Expeditor::Open`, `CoreRuntime::Open` and `SimInstance::Boot` |
+| RC10's first half | **done**: `kRecoveryImplemented` is flipped, so SIM04's crash contract is asserted, and its firing is proved against a `skip_recovery` boot |
 | RC07 | unblocked by AS6a, not started |
-| RC08, RC09 | unblocked, not started |
-| RC10 | not started, and **not completable without a toolchain** — its done-when is that the harness *runs* |
+| RC08, RC09 | unblocked, not started — and RC08 is now the *measured* next step, see below |
+| RC10's remainder | the `txn.md` §8 amendment and EVT08's crash-matrix points |
 
-**Nothing in this series has ever been built or executed.** The environment
-it was written in has no C++ toolchain, and that is a property of every
-task below, not a note on one of them. Two done-when clauses are already
-unmet by their own text and say so: RC06's measured INSERT cost, and RC05's
-byte-for-byte live-vs-recovered comparison. **The next action on this plan
-is `scripts/test.sh` on a machine with a compiler, not RC07.**
+**The previous status line said "nothing in this series has ever been built
+or executed", and that was true of the environment it was written in.** This
+one has a toolchain: `scripts/test.sh` runs, and the whole suite is green
+(2226 tests) with recovery running at every mount.
+
+**Two findings from actually running it, both worth more than the wiring:**
+
+- **RC01-RC06 were dead code.** Every phase was built and tested, and
+  `grep RecoverCore src/ include/` matched only the test file — no mount ran
+  a phase, so a crash recovered nothing. §2's second item named the entry
+  point and RC04a built the driver; **what was missing was the caller**, and
+  it went unwritten for the same reason the driver had: no task's *Done
+  when* mentioned it. That is now RC11, and its lesson is the one RC04a
+  already recorded once — a step nobody's done-when names is a step nobody
+  builds.
+- **Var-heap page growth is unlogged, and recovery is what exposed it.** A
+  crash that loses a new var-heap page's write-back now **refuses the
+  mount**: `VARHEAP_APPEND` names a page no `PAGE_INIT` creates, because
+  `varheap::ChainAppend` calls `store.CreateNew()` and logs nothing. Two
+  more holes sit beside it — the chain link edit is unlogged, and an
+  UPDATE's spills are not logged at all (its `VarHeapSink` carries no
+  collector). Reproducer, in `build-release`: `ckdbs-sim --seed 7 --ops 3000
+  --mode crash --iterations 3`. `docs/known-gaps.md` carries the full entry.
+  **This blocks nothing in the series and everything in the promise** — it
+  is the first thing to fix, ahead of RC07/RC08.
 
 Both of §4's blocking decisions are answered — the assertion replay range
 by AS6a (RC07), the insert/enumeration question by RV10 (RC06, and so
@@ -706,6 +728,54 @@ restart — the claim `feat-assertion.md` §7 makes and the engine currently
 contradicts — and the admission boundary answers identically either side
 of a crash. Add one test that a group whose entries span a checkpoint
 re-sums correctly, since that is the boundary the snapshot introduces.
+
+**RC11 — Recovery at mount. BUILT 2026-08-12.** `server/mount_recovery.hpp`
++ `src/server/mount_recovery.cpp`: `RecoverCoreAtMount(core_id, anchor,
+device, store, undo_log, wal, log)` turns the anchor into an `AnalysisStart`,
+installs `txn::RecoveryUndo`, runs `RecoverCore`, and returns the report.
+Called once per core by whoever owns that core's stack — `Expeditor::Open`
+for core 0, `CoreRuntime::Open` for each peer, `SimInstance::Boot` for the
+harness — so RV2's independence is structural rather than promised.
+
+Numbered `11` rather than inserted, for the reason RC04a gave: the series is
+cited elsewhere and renumbering it would break those citations.
+
+Four things it had to get right, none of them in any task's text:
+
+- **The anchor cannot be read from the superblock in front of you.** A
+  peer's `CoreRuntime::superblock_` is a default-constructed copy whose
+  anchor slots are all zero, and a peer's checkpointer publishes *through*
+  core 0 (`remote_checkpoint_anchor.hpp`). So `CoreRuntime::Config` gains an
+  `anchor` copied on the startup thread. A zeroed anchor is legal — "no
+  checkpoint yet, scan from the head" — which is exactly why getting this
+  wrong would have been silent.
+- **`TrxIdSequence` caches the ceiling at construction** (`txn/trx_id.hpp`),
+  so the ceiling must be applied and persisted *before* the sequence exists.
+  Raising it afterwards writes a field nothing reads again, and the sequence
+  hands out ids the log already names — RV4's transaction half, defeated by
+  ordering alone.
+- **A peer recovers before `SetCoreOwnership`.** `DevicePageStore` refuses to
+  raise its allocation floor once a lease is installed (RC04's own decision,
+  and correct), so a peer that took its lease first would refuse its own
+  mount the moment its stream held anything.
+- **The extent allocator's hint is RC04's obligation 1, and it was unmet.**
+  `Expeditor::Serve` built `ExtentAllocator` at `kFirstUserPageId`; it now
+  starts above `page_floor`. `Reserve` never scans below its hint
+  (`extent_lease.cpp`), so that is a guarantee rather than an optimization.
+
+*Done when:* a mount recovers its own stream and refuses rather than serving
+a partial database; the anchor's two fields both reach analysis; the two
+caller obligations come back as numbers. Eight tests in
+`tests/mount_recovery_test.cpp`, written against what the *seam* adds rather
+than re-testing the driver — each of them fails on a seam that would pass
+every test in `wal_recovery_test.cpp`.
+
+**Measured** (`build-release`, interleaved A/B against `--skip-recovery`,
+three reps × three seeds): recovery adds ~0.16-0.21 s to a 3000-op crash run
+of three reboots, ≈55-70 ms per mount over a ~1500-op stream. **No statement
+path changed, so steady-state per-statement cost is zero by construction** —
+this is mount cost, and it grows with the log because **nothing publishes an
+anchor after recovery**. That is RC08, and this measurement is its argument.
 
 **RC08 — Completion checkpoint and the anchor.**
 Recovery ends by writing a checkpoint and publishing the anchor, bounding

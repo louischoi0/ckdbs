@@ -19,6 +19,7 @@
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/server/extent_lease_service.hpp"
+#include "kds/server/mount_recovery.hpp"
 #include "kds/server/row_id_lease_service.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
@@ -482,6 +483,11 @@ public:
     }
     wal::WalManager& wal() noexcept { return *wal_; }
 
+    // What recovery did to this core's stream at mount. Zeroed on a database
+    // whose log held nothing, which is the common case and a fact worth
+    // being able to assert rather than assume.
+    const MountRecovery& recovery() const noexcept { return recovery_; }
+
     // The server's log. Always non-null: with no file configured it is a
     // Logger over a null sink, so call sites never test for one.
     Logger& log() noexcept { return *logger_; }
@@ -534,6 +540,14 @@ private:
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
+
+    // What core 0's recovery did at mount (RV1). Kept rather than logged and
+    // dropped, because two later steps of Open() read it: the extent
+    // allocator's search hint owes `page_floor` (RC04's obligation 1), and
+    // the transaction ceiling is applied from it before the id sequence that
+    // caches one is built. Default-constructed means "recovery has not run
+    // yet", which is only true before that call.
+    MountRecovery recovery_;
 
     // The cabin optimizer's decision core and executor (workplan PHY04).
     // After everything they hold references into - the catalog (via

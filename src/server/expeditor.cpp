@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <sched.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <limits>
@@ -552,15 +553,66 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->trail_recorder_.emplace(expeditor->database_->catalog, *expeditor->store_,
                                            &expeditor->clock_);
     }
-    // The transaction stack, before the dispatcher that reads through it.
-    // The persist callback is what makes a reserved id block durable: the
-    // superblock is unlogged, so a block is only safe once the page has
-    // been written and synced (txn/trx_id.hpp records the exposure that
-    // leaves).
+    // The undo log, ahead of the rest of the transaction stack, because
+    // recovery's undo phase writes through it and must run before anything
+    // else in that stack exists (below).
+    expeditor->undo_log_.emplace(*expeditor->store_, &*expeditor->wal_);
+
+    // **Recovery, before anything can read a page or issue an id** (RV1,
+    // server/mount_recovery.hpp). This is core 0's stream; every peer's is
+    // recovered by its own CoreRuntime::Open (RV2 - no order between
+    // streams).
+    //
+    // Where it sits is not a preference. Three things must already be true
+    // and two must not yet be:
+    //
+    //   - the WAL manager is open, so its stream is positioned past the
+    //     crash tail and undo's compensations append rather than overwrite
+    //     (wal/stream.cpp's ScanTail);
+    //   - the WAL gate is installed, so redo's page write-backs obey
+    //     WAL-before-data like every other write;
+    //   - the superblock is decoded, because the anchor recovery starts
+    //     from lives in it;
+    //   - **`TrxIdSequence` does not exist yet**, because it caches the
+    //     ceiling at construction (txn/trx_id.hpp): raising `next_trx_id`
+    //     after building it would change a field nothing reads again, and
+    //     the sequence would hand out ids the log already names;
+    //   - **no extent has been carved**, because the allocator's search hint
+    //     must start above the floor recovery establishes (RC04's
+    //     obligation 1, applied at StartPeers below).
+    auto recovered = RecoverCoreAtMount(/*core_id=*/0,
+                                        expeditor->database_->superblock.wal_anchor(0),
+                                        *expeditor->log_device_, *expeditor->store_,
+                                        *expeditor->undo_log_, &*expeditor->wal_,
+                                        &*expeditor->logger_);
+    if (!recovered.ok()) return recovered.status();
+    expeditor->recovery_ = recovered.value();
+
+    // The transaction ceiling recovery computed, applied and made durable
+    // before the sequence that caches it is built. `SetNextTrxId` refuses to
+    // lower one, so the guard is what keeps a log that names nothing from
+    // being an error.
+    if (expeditor->recovery_.next_trx_id > expeditor->database_->superblock.next_trx_id()) {
+        if (Status s =
+                expeditor->database_->superblock.SetNextTrxId(expeditor->recovery_.next_trx_id);
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = expeditor->PersistSuperBlock(); !s.ok()) return s;
+        expeditor->logger_->Info("recovery",
+                                 "transaction-id ceiling raised to " +
+                                     std::to_string(expeditor->recovery_.next_trx_id) +
+                                     " past what the log names");
+    }
+
+    // The rest of the transaction stack, before the dispatcher that reads
+    // through it. The persist callback is what makes a reserved id block
+    // durable: the superblock is unlogged, so a block is only safe once the
+    // page has been written and synced (txn/trx_id.hpp records the exposure
+    // that leaves).
     Expeditor* self = expeditor.get();
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
                                 [self] { return self->PersistSuperBlock(); });
-    expeditor->undo_log_.emplace(*expeditor->store_, &*expeditor->wal_);
     expeditor->txn_manager_.emplace(*expeditor->trx_ids_, *expeditor->undo_log_,
                                     *expeditor->store_, &*expeditor->wal_);
 
@@ -829,7 +881,22 @@ Status Expeditor::Serve() {
 
         // Every peer's page-id lease is carved here, on the startup thread,
         // out of core 0's free map - which is the only writer of it (M5).
-        extents_.emplace(store_->free_map_bytes(), kFirstUserPageId);
+        //
+        // The search starts above recovery's page floor, not at
+        // `kFirstUserPageId` (RC04's obligation 1, `wal/high_water.hpp`).
+        // The free map is unlogged, so a crash can revert it while the log
+        // still names pages above it; recovery raises the *store's*
+        // allocation floor past them, but an extent is carved from the map
+        // rather than through that floor - so a lease could otherwise cover
+        // exactly the pages redo just wrote. Same hazard, multicore shape.
+        // `Reserve` never scans below its hint (extent_lease.cpp), so raising
+        // it is a guarantee and not an optimization. Floored at
+        // `kFirstUserPageId` because a log naming only system pages must not
+        // *lower* where user extents start.
+        const PageId extent_hint = recovery_.page_floor_raised
+                                       ? std::max<PageId>(recovery_.page_floor, kFirstUserPageId)
+                                       : kFirstUserPageId;
+        extents_.emplace(store_->free_map_bytes(), extent_hint);
 
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             auto lease = extents_->Reserve(storage::kDefaultExtentPages);
@@ -846,6 +913,13 @@ Status Expeditor::Serve() {
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
             core_config.lease = lease.value();
+            // This peer's own anchor, copied out of the superblock core 0
+            // decoded. A peer's `SuperBlock` member is a default-constructed
+            // one whose anchor slots are all zero, and a peer's checkpointer
+            // publishes through core 0 (remote_checkpoint_anchor.hpp) - so
+            // without this copy every peer would recover from the head of its
+            // stream while core 0 recovered from its checkpoint.
+            core_config.anchor = database_->superblock.wal_anchor(core_id);
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

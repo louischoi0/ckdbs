@@ -44,10 +44,19 @@
 
 namespace kds::sim {
 
-// The recovery gate (see above). Flipping this without a WAL redo pass
-// makes kCrash fail immediately — which is the acceptance test recovery
-// must pass on the day it lands.
-inline constexpr bool kRecoveryImplemented = false;
+// The recovery gate (see above). **Flipped on 2026-08-12**, the day recovery
+// began running at mount (docs/workplan-wal-recovery.md RV1, RC10's first
+// half): `SimInstance::Boot` now runs analysis / redo / high-water / undo
+// over the surviving log before the first statement, so kCrash's full
+// durability assertion is armed rather than counted.
+//
+// What arming it means, exactly: every row the oracle accepted whose commit
+// record reached the device must be present and equal after the crash, and
+// every loser's row must be gone. What it does **not** cover is stated where
+// it is true — a table created after the last SYNC is still lost, because
+// CREATE TABLE is unlogged by design (RV3), and `unlogged_ddl_lost_tables`
+// stays a counter rather than becoming an assertion.
+inline constexpr bool kRecoveryImplemented = true;
 
 enum class SimMode : std::uint8_t {
     kClean = 0,
@@ -68,6 +77,12 @@ struct SimConfig {
     // assertion *fires* when hand-fed the flag — a gate that cannot fail is
     // not a gate. Production default is the engine's actual state.
     bool assert_recovery = kRecoveryImplemented;
+
+    // Boot without the recovery phase (SimInstanceOptions::skip_recovery).
+    // A fault injection, not a mode: it exists so the armed assertion above
+    // can be shown to fail, which since recovery landed is the only way to
+    // show it at all — no seed loses an acknowledged row any more.
+    bool skip_recovery = false;
 };
 
 struct SimVerdict {

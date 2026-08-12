@@ -1,0 +1,69 @@
+#include "kds/server/mount_recovery.hpp"
+
+#include <string>
+
+#include "kds/txn/recovery_undo.hpp"
+#include "kds/wal/recovery.hpp"
+
+namespace kds::server {
+
+StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAnchorFields& anchor,
+                                          wal::LogDevice& device, storage::PageStore& store,
+                                          txn::UndoLog& undo_log, wal::WalManager* wal,
+                                          Logger* log) {
+    // A zeroed slot means no checkpoint was ever published: scan from the
+    // head of the stream, and disable the durable-point check because there
+    // is no published point to hold the scan to (`analysis.hpp`).
+    wal::AnalysisStart start;
+    start.redo_start_lsn = anchor.redo_start_lsn;
+    start.anchor_durable_lsn = anchor.durable_lsn;
+
+    txn::RecoveryUndo undo(undo_log, wal);
+    auto report = wal::RecoverCore(device, core_id, store, start, &undo);
+    if (!report.ok()) {
+        // Propagated, not logged-and-continued. The status already carries
+        // the phase and the core (`recovery.cpp`), and RV1 makes it the
+        // mount's answer rather than a warning on a database that is then
+        // served anyway.
+        return report.status();
+    }
+
+    MountRecovery out;
+    out.records = report.value().analysis.records;
+    out.torn_tail = report.value().analysis.stopped_early;
+    out.winners = report.value().analysis.winners;
+    out.aborted = report.value().analysis.aborted;
+    out.losers = report.value().analysis.losers;
+    out.redo_applied = report.value().redo.applied;
+    out.redo_skipped_by_lsn = report.value().redo.skipped_by_lsn;
+    out.pages_healed = report.value().redo.pages_healed;
+    out.transactions_rolled_back = undo.transactions();
+    out.compensations = undo.compensations();
+    out.page_floor = report.value().high_water.page_floor;
+    out.page_floor_raised = report.value().high_water.page_floor_raised;
+    out.next_trx_id = report.value().high_water.next_trx_id;
+
+    if (log != nullptr) {
+        if (out.empty()) {
+            // Said out loud rather than left silent, because "no records"
+            // and "recovery never ran" look identical in a log that only
+            // reports work (`analysis.hpp`'s own argument for the
+            // durable-point check).
+            log->Info("recovery", "core " + std::to_string(core_id) +
+                                      ": stream holds no records, nothing to recover");
+        } else {
+            log->Info("recovery",
+                      "core " + std::to_string(core_id) + ": " + std::to_string(out.records) +
+                          " records scanned, " + std::to_string(out.winners) + " committed, " +
+                          std::to_string(out.aborted) + " aborted, " + std::to_string(out.losers) +
+                          " rolled back; redo applied " + std::to_string(out.redo_applied) +
+                          ", skipped " + std::to_string(out.redo_skipped_by_lsn) +
+                          ", healed " + std::to_string(out.pages_healed) + " page(s); undo wrote " +
+                          std::to_string(out.compensations) + " compensation(s)" +
+                          (out.torn_tail ? "; tail was torn" : ""));
+        }
+    }
+    return out;
+}
+
+}  // namespace kds::server
