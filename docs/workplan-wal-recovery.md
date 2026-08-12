@@ -971,10 +971,14 @@ Recurring cost is 7-8 ms and ~4.3 KB per mount, against 36 B for a mount that
 writes no checkpoint. 68% of the 10k saving is the fat checkpoint the first mount
 had to write, which is the point: RC08 moves that work off every *later* mount.
 
-**And it found what RC08 does not cover:** a **clean shutdown publishes no
-anchor**, so the first mount after a graceful stop rescans everything the last
-run wrote. Recorded in `docs/known-gaps.md`; the fix is this same call on the way
-out.
+**And it found what RC08 did not cover:** a clean shutdown published no anchor,
+so the first mount after a graceful stop rescanned everything the last run wrote.
+**Fixed the same day** — `Expeditor::Serve` checkpoints on its way out, *after*
+the final sync so the dirty table is empty and the redo start is the checkpoint's
+own LSN (checkpointing before the sync publishes the oldest dirty page's recLSN
+instead, which measured as 1205 re-read records rather than 2). A separate gap
+remains and is recorded: the server installs no signal handler, so only a client
+typing `STOP` reaches that path at all.
 
 **RC09 — Observability and the honest counter. BUILT 2026-08-12.**
 `wal.md` §13's recovery phase timings, plus RV3's counter. `SHOW META` gains

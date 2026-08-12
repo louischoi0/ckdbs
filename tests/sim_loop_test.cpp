@@ -151,6 +151,47 @@ TEST(SimLoop, ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow) {
     EXPECT_EQ(verdict.gated_missing_rows, 0u);
 }
 
+// A clean shutdown has to publish an anchor, or the next mount re-reads
+// everything the last run wrote.
+//
+// RC08 bounded the mount after a *crash* by checkpointing at the end of
+// recovery. A graceful stop had no equivalent: it synced and left the anchor
+// wherever the last cadence tick put it, so the first mount afterwards rescanned
+// every record since - measured as a cleanly stopped 2000-row instance re-reading
+// all 10,883 of its own records (`bench/results-wal-recovery.md`). The harness
+// runs no cadence checkpointer at all, which makes it the sharpest place to
+// assert this: without the shutdown checkpoint the anchor here would still be the
+// *mount's* one, and every row written after it would be rescanned.
+TEST(SimInstanceTest, AMountAfterACleanStopDoesNotRereadTheRunsWholeLog) {
+    auto instance = SimInstance::Create();
+    ASSERT_TRUE(instance.ok()) << instance.status().message();
+    SimInstance& db = *instance.value();
+
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    for (int i = 0; i < 200; ++i) {
+        const std::string reply = db.Execute("INSERT INTO t VALUES (" + std::to_string(i) + ")");
+        ASSERT_EQ(reply.rfind("INSERTED", 0), 0u) << reply;
+    }
+
+    ASSERT_TRUE(db.CleanShutdown().ok());
+    ASSERT_TRUE(db.Reboot().ok());
+
+    // The 200 inserts are below the shutdown checkpoint's anchor, so the mount
+    // sees only what followed it: the checkpoint's own two records. The exact
+    // number is not the property - "far fewer than were written" is - so this
+    // asserts the bound rather than the constant.
+    EXPECT_LT(db.recovery().records, 20u)
+        << "the mount re-read " << db.recovery().records
+        << " records after a clean stop, so the shutdown published no usable anchor";
+    EXPECT_EQ(db.recovery().redo_applied, 0u)
+        << "a cleanly stopped instance has nothing to redo";
+
+    // And the rows are all there, which is what makes the cheap mount honest
+    // rather than a mount that skipped work it owed.
+    const std::string count = db.Execute("SELECT COUNT(*) FROM t");
+    EXPECT_NE(count.find("200"), std::string::npos) << count;
+}
+
 // The durability assertion must be able to fire — a gate that cannot fail is
 // not a gate (docs/workplan-wal-recovery.md RC10).
 //

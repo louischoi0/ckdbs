@@ -65,6 +65,7 @@ Status SimInstance::Boot() {
                                                     *log_device_, *store_, *undo_, wal_.get(),
                                                     /*log=*/nullptr);
         if (!recovered.ok()) return recovered.status();
+        recovery_ = recovered.value();
         if (recovered.value().next_trx_id > boot_->superblock.next_trx_id()) {
             if (Status s = boot_->superblock.SetNextTrxId(recovered.value().next_trx_id); !s.ok()) {
                 return s;
@@ -98,22 +99,21 @@ Status SimInstance::Boot() {
     // it is refilled, because that checkpoint becomes the anchor the next mount
     // folds its directories from.
     if (run_recovery_tail) {
-        server::ResumeAssertionsAfterRecovery(
+        recovery_ = server::ResumeAssertionsAfterRecovery(
             boot_->catalog, *store_, *log_device_, /*core_id=*/0,
             boot_->superblock.wal_anchor(0).checkpoint_lsn, dispatcher_->assertions(),
-            server::MountRecovery{}, /*log=*/nullptr);
-
-        storage::PageStoreCheckpointTarget target(*store_);
-        server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
-        if (Status s = server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
-                                                      /*log=*/nullptr, /*clock=*/nullptr,
-                                                      /*elapsed_ns=*/nullptr,
-                                                      &dispatcher_->assertions());
-            !s.ok()) {
-            return s;
-        }
+            recovery_, /*log=*/nullptr);
+        if (Status s = RunCheckpoint(); !s.ok()) return s;
     }
     return Status::OK();
+}
+
+Status SimInstance::RunCheckpoint() {
+    storage::PageStoreCheckpointTarget target(*store_);
+    server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
+    return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
+                                           /*log=*/nullptr, /*clock=*/nullptr,
+                                           /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
 }
 
 void SimInstance::TearDown() {
@@ -146,6 +146,10 @@ Status SimInstance::CleanShutdown() {
     if (reply.rfind("OK", 0) != 0) {
         return Status::IoError("clean shutdown: SYNC answered: " + reply);
     }
+    // The anchor, on the way out. `Expeditor::Serve` does this for the reason
+    // this harness has to as well: a stop that syncs and publishes nothing
+    // leaves the next mount re-reading every record this run wrote.
+    if (Status s = RunCheckpoint(); !s.ok()) return s;
     TearDown();
     return Status::OK();
 }

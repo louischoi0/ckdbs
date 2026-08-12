@@ -141,13 +141,39 @@ the owner's workplan.
   hole that was there: at the previous commit it wrote 361 B, exactly what an
   *inline* update writes, because its value was not logged at all.)
 
-- **A clean shutdown publishes no anchor**, so the first mount after one rescans
-  everything the last run wrote and redoes none of it — found 2026-08-12 by the
-  mount measurement (a cleanly stopped 2000-row cell re-read all 10,883 of its
-  records). RC08 gives a *crash* a bounded next mount; a graceful stop still
-  leaves the anchor wherever the last cadence checkpoint put it. The fix is the
-  same call the mount already makes, on the way out instead of the way in, and it
-  is not written yet.
+- ~~**A clean shutdown publishes no anchor**~~ — **fixed 2026-08-12** for the
+  graceful path: `Expeditor::Serve` now checkpoints on its way out, and
+  `SimInstance::CleanShutdown` does the same so the harness stops the way the
+  server does. Verified on a running server: after a `STOP`, the next mount reads
+  **2 records where it read 1205**, with every row still present.
+
+  **The order is the fix, not the call.** A checkpoint's redo start is
+  `min(recLSN)` over the dirty table it snapshots at BEGIN (`wal.md` §11-3), so
+  checkpointing *before* the final sync publishes an anchor pointing at the oldest
+  still-dirty page — near the start of the log on any busy run. Written that way
+  first, it changed 10,883 re-read records into 1205. Synced first, the dirty
+  table is empty and the redo start is the `CHECKPOINT_BEGIN` LSN itself.
+
+  **What it does not buy, measured**: mount wall time barely moves at this size
+  (`recovery_analysis_us` ~34 ms either way), because the scan reads the whole
+  segment body regardless of how many records are in it — the still-open entry
+  above. What the anchor bounds is the *work*: records decoded, and redo actually
+  applied where pages had not been flushed. It also makes the anchor honest, so
+  the narrower-read fix pays off when it lands.
+
+- **A process-manager stop is not the graceful path — the server handles no
+  signals at all** (found 2026-08-12 while verifying the entry above). `main.cpp`
+  installs no `SIGTERM` or `SIGINT` handler, so `systemctl stop`, a container
+  stop, and Ctrl-C all terminate the process mid-flight: no final sync, no
+  shutdown checkpoint, and the next mount recovers as if from a crash. The only
+  route to `Serve()`'s shutdown tail is a client typing `STOP`.
+
+  That is why the fix above reads as ineffective when measured through a harness
+  that sends `SIGTERM` and calls it a clean stop — it is a crash wearing that
+  label. Closing it means a handler that sets a flag and a reactor that polls it
+  (a handler may do almost nothing else safely), which is a change to how the
+  server responds to the outside world and belongs in its own change rather than
+  smuggled into a recovery fix.
 
 - **`varheap::ChainAppend` walks the chain root-to-tail on every append**, with
   no tail cache, so a spilling INSERT is O(chain length) and unbounded — found

@@ -32,6 +32,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/mount_recovery.hpp"
 #include "kds/server/session.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -81,8 +82,13 @@ public:
     void Crash();
 
     // Log sync + store sync through the dispatcher's own SYNC — the same
-    // path a client's SYNC takes — then tear the stack down without a
-    // crash. What the devices hold afterwards is the clean-shutdown image.
+    // path a client's SYNC takes — then a checkpoint, then tear the stack down
+    // without a crash. What the devices hold afterwards is the clean-shutdown
+    // image.
+    //
+    // The checkpoint is what `Expeditor::Serve` does on its way out, and for its
+    // reason: without one the anchor stays wherever the last tick left it, so the
+    // *next* mount re-reads every record this run wrote and redoes none of them.
     Status CleanShutdown();
 
     // Brings the engine back up over whatever the devices hold. Legal after
@@ -90,6 +96,12 @@ public:
     Status Reboot();
 
     bool running() const { return dispatcher_.has_value(); }
+
+    // What the last Boot()'s recovery did. Zeroed on the first boot of fresh
+    // devices, which is honest: there was nothing to recover. Exposed because
+    // the harness is where "a mount after a clean stop reads almost nothing" is
+    // checkable at all.
+    const server::MountRecovery& recovery() const noexcept { return recovery_; }
 
     // One statement through the front door, on this instance's session.
     // Never fails outward — errors come back as "ERR ..." replies, exactly
@@ -115,6 +127,11 @@ private:
     // shape): encode the superblock into page 0 and sync the store.
     Status PersistSuperBlock();
 
+    // One checkpoint to completion, publishing the superblock anchor. Two
+    // callers, the same two the server has: the tail of a mount (RC08) and a
+    // clean shutdown.
+    Status RunCheckpoint();
+
     // Reverse construction order, no I/O.
     void TearDown();
 
@@ -134,6 +151,7 @@ private:
     std::optional<txn::TransactionManager> txn_;
     std::optional<server::CommandDispatcher> dispatcher_;
     server::Session session_;
+    server::MountRecovery recovery_;
 };
 
 }  // namespace kds::sim

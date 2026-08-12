@@ -1236,6 +1236,23 @@ Status Expeditor::Serve() {
     // registered with it.
     listener.value().Detach();
 
+    // **A checkpoint on the way out, so the next mount does not re-read this
+    // run's whole log.** A clean stop used to sync and stop there, which left
+    // the anchor wherever the last cadence tick had put it - so the first mount
+    // after a graceful shutdown rescanned every record written since, and redid
+    // none of them. Measured: a cleanly stopped 2000-row instance re-read all
+    // 10,883 of its own records (`bench/results-wal-recovery.md`).
+    //
+    // RC08 gave a *crash* a bounded next mount by checkpointing at the end of
+    // recovery; this is the same call at the other end, and it is what makes the
+    // bound hold for a stop as well. It also carries the assertion group
+    // snapshots, because the cadence checkpointer already has that source
+    // installed - so enforcement resumes from this record too.
+    //
+    // Not fatal if it fails, and it must not be: the data is already durable
+    // through the syncs above, and refusing to exit over a slower *next* start
+    // would trade a real shutdown for a bounded inconvenience. Reported and
+    // continued, the cadence path's rule.
     Status s = Sync();
     if (!s.ok()) {
         logger_->Error("expeditor", "final sync failed: " + s.message());
@@ -1243,6 +1260,25 @@ Status Expeditor::Serve() {
         logger_->Info("expeditor", "stopped cleanly; " +
                                        std::to_string(store_->allocated_pages()) +
                                        " pages persisted");
+    }
+
+    // **The checkpoint goes after the sync, and the order is the whole point.**
+    //
+    // A checkpoint's redo start is `min(recLSN)` over the dirty table it
+    // snapshots at BEGIN (wal.md §11-3) - so checkpointing *before* the final
+    // sync publishes an anchor pointing at the oldest page still dirty, which on
+    // a busy run is near the start of the log. Measured: a 300-row instance
+    // stopped that way still had its next mount read 1205 records. Synced first,
+    // the dirty table is empty, the redo start is the CHECKPOINT_BEGIN LSN
+    // itself, and the next mount reads only this checkpoint's own two records.
+    //
+    // This is the same trick RC08's mount checkpoint gets for free: it runs
+    // before any statement has dirtied anything.
+    if (Status ckpt = Checkpoint(); !ckpt.ok()) {
+        logger_->Error("expeditor",
+                       "the shutdown checkpoint failed, so the next mount will replay from the "
+                       "previous anchor: " +
+                           ckpt.message());
     }
     return s;
 }
