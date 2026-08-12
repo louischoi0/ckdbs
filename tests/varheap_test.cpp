@@ -163,9 +163,52 @@ TEST_F(VarHeapChainTest, AppendAndFetchRoundTrip) {
     auto ptr = ChainAppend(store_, root.value(), Bytes("a spilled value"));
     ASSERT_TRUE(ptr.ok()) << ptr.status().message();
 
-    auto fetched = Fetch(store_, ptr.value());
+    auto fetched = Fetch(store_, ptr.value().ptr);
     ASSERT_TRUE(fetched.ok()) << fetched.status().message();
     EXPECT_EQ(TextOf(fetched.value()), "a spilled value");
+
+    // The root had room, so nothing structural happened - and saying so is
+    // what keeps a caller from logging a PAGE_INIT for a page it did not
+    // create.
+    EXPECT_FALSE(ptr.value().grew());
+    EXPECT_EQ(ptr.value().created_page_id, kInvalidPageId);
+    EXPECT_EQ(ptr.value().linked_page_id, kInvalidPageId);
+}
+
+TEST_F(VarHeapChainTest, GrowthReportsThePageItCreatedAndTheTailItLinked) {
+    // The report the WAL needs and did not have: a VARHEAP_APPEND describes
+    // neither the page's creation nor the link that reaches it, so recovery
+    // met an append naming a page nothing created and refused the mount
+    // (docs/known-gaps.md's var-heap entry).
+    auto root = CreateChain(store_);
+    ASSERT_TRUE(root.ok());
+
+    PageId last_tail = root.value();
+    int growths = 0;
+    for (int i = 0; i < 40; ++i) {
+        auto appended =
+            ChainAppend(store_, root.value(), std::vector<std::byte>(1000, std::byte{'z'}));
+        ASSERT_TRUE(appended.ok()) << appended.status().message();
+
+        if (!appended.value().grew()) {
+            // No growth means no structural record is owed, and the value
+            // landed in the page that was already the tail.
+            EXPECT_EQ(appended.value().linked_page_id, kInvalidPageId);
+            EXPECT_EQ(appended.value().ptr.page_id, last_tail);
+            continue;
+        }
+        ++growths;
+        // The created page is the one the value landed in, and the linked
+        // page is the tail it came after - which is exactly the pair
+        // PAGE_INIT and the full page image are logged for.
+        EXPECT_EQ(appended.value().created_page_id, appended.value().ptr.page_id);
+        EXPECT_EQ(appended.value().linked_page_id, last_tail);
+        EXPECT_EQ(PageNextPageId(store_.GetForRead(last_tail).value()),
+                  appended.value().created_page_id)
+            << "the reported link is not the link the page carries";
+        last_tail = appended.value().created_page_id;
+    }
+    EXPECT_GT(growths, 0) << "the chain never grew; the test proves nothing";
 }
 
 TEST_F(VarHeapChainTest, GrowsByTailAppendAndKeepsEveryEarlierPointerValid) {
@@ -179,7 +222,7 @@ TEST_F(VarHeapChainTest, GrowsByTailAppendAndKeepsEveryEarlierPointerValid) {
         values.push_back(std::string(1000, static_cast<char>('a' + (i % 26))));
         auto ptr = ChainAppend(store_, root.value(), Bytes(values.back()));
         ASSERT_TRUE(ptr.ok()) << ptr.status().message();
-        pointers.push_back(ptr.value());
+        pointers.push_back(ptr.value().ptr);
     }
 
     auto length = ChainLength(store_, root.value());

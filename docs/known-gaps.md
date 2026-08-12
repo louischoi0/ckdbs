@@ -28,15 +28,21 @@ the owner's workplan.
   **What is still missing, and none of it is the phases:** RC07 (Bound Cabin
   replay, so a restart resumes assertion enforcement), RC08 (the completion
   checkpoint — until it lands, every mount replays the whole stream, because
-  nothing publishes an anchor after recovery), RC09 (the phase timings and
-  RV3's orphan counter), and the var-heap logging defect below, which is
-  what stops this entry being deleted rather than struck.
+  nothing publishes an anchor after recovery), and RC09 (the phase timings and
+  RV3's orphan counter) — which is what keeps this entry struck rather than
+  deleted. The two defects below are what running recovery *found*, in code
+  that predates it; both are fixed, and neither was in the phases.
 
-- **Var-heap page growth and UPDATE's spills are not logged, and recovery
-  found it** (2026-08-12, `src/storage/varheap.cpp`,
-  `src/server/command_dispatcher.cpp`). `docs/wal.md`'s "every data mutation
-  logged (heap, undo, **var-heap**, index, assertions)" overstates three
-  things:
+- ~~**Var-heap page growth and UPDATE's spills are not logged, and recovery
+  found it**~~ — **fixed 2026-08-12**, all three holes, with the reproducer
+  now a test rather than a seed. `varheap::ChainAppend` returns a
+  `ChainAppendResult` naming the page it created and the tail it linked;
+  `CommandDispatcher::LogSpills` logs a `kVarHeap` `PAGE_INIT`, a full page
+  image of the linked tail, then the `VARHEAP_APPEND` — and **UPDATE now calls
+  it**, its `VarHeapSink` having previously carried no collector at all.
+  Pinned by `InsertWalTest.GrowingTheVarHeapChainLogsTheNewPageAndTheLinkThatReachesIt`
+  and `InsertWalTest.AnUpdateThatSpillsLogsTheValueItSpilled`. What was
+  wrong, kept because the shape recurs:
 
   1. `varheap::ChainAppend` grows a chain with `store.CreateNew()` +
      `FormatPage()` and logs **no `PAGE_INIT`** for the new page — while the
@@ -48,18 +54,33 @@ the owner's workplan.
      written for a value an UPDATE spilled. The INSERT path collects and
      logs; the UPDATE path does not.
 
-  Reachable, and loud rather than silent for (1): a crash that loses a new
-  var-heap page's write-back leaves a durable `VARHEAP_APPEND` naming a page
-  no `PAGE_INIT` creates, and redo **refuses the mount**. Reproduced in
-  `build-release` at `ckdbs-sim --seed 7 --ops 3000 --mode crash
-  --iterations 3` — *"VARHEAP_APPEND at lsn 700128 names page 172, which the
-  store does not hold"*. The committed seed corpus runs at 1500 ops and does
-  not reach it, so **the suite is green and the defect is real**; seed 7 is
-  deliberately not appended to `tests/testdata/sim_seeds.txt` until the fix
-  lands, because a corpus seed that fails is a broken CI rather than a
-  recorded regression. `ApplyPageInit` already formats a `kVarHeap` page
-  (RC03 anticipated this), so the fix is the record nobody wrote, not a new
-  applier.
+  It was reachable, and loud rather than silent for (1): a crash losing a new
+  var-heap page's write-back left a durable `VARHEAP_APPEND` naming a page no
+  `PAGE_INIT` creates, and redo **refused the mount** — reproduced at
+  `ckdbs-sim --seed 7 --ops 3000 --mode crash --iterations 3`.
+  `wal::ApplyPageInit` already formatted a `kVarHeap` page (RC03 anticipated
+  it), so what was missing was the record nobody wrote and never an applier.
+
+- **A segment sealed with no room for a PAD was read as a torn tail** — found
+  and **fixed 2026-08-12** (`src/wal/log_scanner.cpp`), and it is the second
+  defect recovery exposed rather than introduced. `WalStream::Seal` writes its
+  marker only when the tail can hold a record header; a shorter tail is left as
+  the zeroes the segment was created with, and `stream.cpp`'s comment claimed a
+  reader would take that to "mean exactly what the marker means". `ScanLog` did
+  not: it stopped there, so **every record in every later segment was silently
+  dropped** and recovery restored a truncated stream while reporting success.
+  Visible as acknowledged rows missing after a restart, once a run was long
+  enough to roll a segment. The fix tells a seal from a tear by the same
+  `kRecordHeaderSize` bound the writer decides with. `WalStream::ScanTail` was
+  never affected — it only ever reads the last segment.
+
+  **Both defects hid behind a green suite for the same reason**: the committed
+  seed corpus runs at 1500 ops, which neither rolls a 1 MiB segment nor fills a
+  var-heap page. `SimLoop.ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow`
+  now runs seed 24 at 3500 ops for exactly those two boundaries, and
+  `LogScannerTest.ASegmentSealedWithNoRoomForAPadStillContinuesIntoTheNext`
+  lands the tail on 24 bytes deliberately — the existing boundary test used
+  3000-byte payloads, which always leave room for a marker.
 - ~~**MVCC ships before recovery** (`docs/txn.md` §8): an uncommitted row
   surviving a crash reads as **committed** on the next boot~~ — **closed for
   the mount path 2026-08-12.** Undo now runs before the listener binds, so a

@@ -27,16 +27,30 @@ one has a toolchain: `scripts/test.sh` runs, and the whole suite is green
   when* mentioned it. That is now RC11, and its lesson is the one RC04a
   already recorded once — a step nobody's done-when names is a step nobody
   builds.
-- **Var-heap page growth is unlogged, and recovery is what exposed it.** A
-  crash that loses a new var-heap page's write-back now **refuses the
-  mount**: `VARHEAP_APPEND` names a page no `PAGE_INIT` creates, because
-  `varheap::ChainAppend` calls `store.CreateNew()` and logs nothing. Two
-  more holes sit beside it — the chain link edit is unlogged, and an
-  UPDATE's spills are not logged at all (its `VarHeapSink` carries no
-  collector). Reproducer, in `build-release`: `ckdbs-sim --seed 7 --ops 3000
-  --mode crash --iterations 3`. `docs/known-gaps.md` carries the full entry.
-  **This blocks nothing in the series and everything in the promise** — it
-  is the first thing to fix, ahead of RC07/RC08.
+- **Two defects in code that predates this series, both found by running it,
+  both fixed 2026-08-12.** Neither was in the phases, and neither was
+  findable without a mount that reads the log back:
+
+  1. **Var-heap growth was unlogged**, three ways: no `PAGE_INIT` for a page
+     `ChainAppend` created, no image for the link that reached it, and an
+     UPDATE's spills not logged **at all**. A crash losing a new var-heap
+     page's write-back refused the mount.
+  2. **A segment sealed with no room for a PAD was read as a torn tail**, so
+     the scan stopped at the boundary and every record in every later segment
+     was silently dropped — recovery restoring a truncated stream and
+     reporting success. `stream.cpp` had claimed a reader would take an
+     unmarked tail to "mean exactly what the marker means"; `ScanLog` did not,
+     and now does, by the same `kRecordHeaderSize` bound the writer seals with.
+
+  **Both hid behind a green suite for one reason, and it is the reusable
+  lesson**: the committed corpus runs at 1500 ops, which neither rolls a 1 MiB
+  segment nor fills a var-heap page. A crash harness only tests the boundaries
+  its runs actually reach. `SimLoop.ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow`
+  now reaches both.
+
+  Verified after the fixes, `build-release`: 10 committed seeds × 3 profiles at
+  4000 ops × 3 iterations, plus 8 unseen seeds at 6000 ops × 2 iterations — all
+  green with the durability assertion armed.
 
 Both of §4's blocking decisions are answered — the assertion replay range
 by AS6a (RC07), the insert/enumeration question by RV10 (RC06, and so

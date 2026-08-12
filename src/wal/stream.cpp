@@ -156,9 +156,15 @@ Status WalStream::Seal() {
         ring_used_ += written.value();
         append_lsn_ += written.value();
     }
-    // A tail too short to hold even a record header is left as the zeroes
-    // the segment was created with; a reader stops there on an impossible
-    // length, which means exactly what the marker means.
+    // A tail too short to hold even a record header is left as the zeroes the
+    // segment was created with. **This is a seal, and a reader has to be told
+    // so explicitly** - the comment here used to claim the zeroes "mean
+    // exactly what the marker means" to a reader, and they did not:
+    // `ScanLog` read the missing marker as a torn tail and stopped, dropping
+    // every record in every later segment (fixed 2026-08-12, and
+    // `log_scanner.cpp` now tells the two apart by this same
+    // `kRecordHeaderSize` bound). `WalStream::ScanTail` was never wrong about
+    // it, because it only ever reads the *last* segment.
 
     if (Status s = Flush(); !s.ok()) {
         return s;

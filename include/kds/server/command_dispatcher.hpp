@@ -934,6 +934,20 @@ private:
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
 
+    // Every record a set of var-heap appends owes, in replay order: the
+    // PAGE_INIT for a page the append created, the full page image for the
+    // tail whose link now reaches it, then the VARHEAP_APPEND for the value.
+    //
+    // Shared by INSERT and UPDATE deliberately. The first two records were
+    // missing entirely and the third was missing on the UPDATE path
+    // (`docs/known-gaps.md`'s var-heap entry), and two copies of this
+    // sequence is two chances to lose one of them again.
+    //
+    // The caller owes the *ordering*: these records precede the HEAP_INSERT or
+    // HEAP_OVERWRITE whose cell points at the value, so a replay never reaches
+    // a pointer that resolves to nothing (spec §5).
+    Status LogSpills(const std::vector<exec::AppendedSpill>& spills, std::uint64_t txn_id);
+
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer
     // differs:

@@ -132,12 +132,37 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
 
         out.sealed = sealed;
         if (!sealed) {
-            // An unsealed segment is the tail: either the writer stopped
-            // here cleanly, or a record was torn. Either way the stream
-            // ends, and a later segment - if one somehow exists - is not
-            // reachable from it.
-            out.stopped_early = reader.stopped_early();
-            return out;
+            // **A segment can be sealed without a PAD, and this used to be
+            // read as the end of the stream.**
+            //
+            // `WalStream::Seal` writes the marker only when the tail can hold
+            // a record header; a shorter tail is "left as the zeroes the
+            // segment was created with" (stream.cpp), because a PAD is
+            // header-only and there is nowhere to put one. That is a seal, and
+            // the stream continues in the next segment.
+            //
+            // Read as a torn tail instead, the scan returned here and **every
+            // record in every later segment was silently dropped** - which
+            // recovery reported as acknowledged rows missing after a restart,
+            // once a run was long enough to roll a segment. Found by SIM04's
+            // crash loop at 3500 ops, 2026-08-12.
+            //
+            // The remainder is what tells a seal from a tear, and it is
+            // measured against the same constant the writer decided with:
+            // below `kRecordHeaderSize` no marker could have been written, at
+            // or above it the absence of one means a record really was torn -
+            // the expected shape of a crash, and the end of the stream.
+            const std::uint64_t consumed = out.end_lsn - start_lsn;
+            const bool sealed_by_exhaustion =
+                segment_size - consumed < kRecordHeaderSize && segment_no + 1 < segment_count;
+            if (!sealed_by_exhaustion) {
+                out.stopped_early = reader.stopped_early();
+                return out;
+            }
+            // Continue exactly as the PAD path does: the next iteration sets
+            // `end_lsn` from that segment's first record.
+            out.sealed = true;
+            continue;
         }
 
         // Sealed. A sealed *last* segment means the roll never completed:

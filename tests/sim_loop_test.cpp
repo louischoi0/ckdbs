@@ -125,6 +125,32 @@ TEST(SimLoop, CrashAnywhereFabricatesNothingOnEveryCommittedSeed) {
     }
 }
 
+// A run long enough to roll a WAL segment and to grow a var-heap chain, which
+// **the corpus above never does**: at 1500 ops the stream stays inside its
+// first 1 MiB segment and a spilled value rarely fills a var-heap page. Two
+// recovery defects lived in exactly that gap and the suite was green over both
+// of them (2026-08-12):
+//
+//   - a VARHEAP_APPEND naming a page no PAGE_INIT created, because var-heap
+//     growth was unlogged: the mount **refused**;
+//   - a segment sealed with no room for a PAD read as a torn tail, so every
+//     record in every later segment was dropped: rows **missing** after the
+//     restart.
+//
+// Seed 24 at 3500 ops is where the second one was caught. One seed and one
+// iteration, kept cheap on purpose - what this guards is the two boundaries,
+// and the breadth is the corpus's job.
+TEST(SimLoop, ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow) {
+    SimConfig config;
+    config.seed = 24;
+    config.ops = 3500;
+    config.mode = SimMode::kCrash;
+    config.iterations = 1;
+    const SimVerdict verdict = RunSimulation(config);
+    EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+    EXPECT_EQ(verdict.gated_missing_rows, 0u);
+}
+
 // The durability assertion must be able to fire — a gate that cannot fail is
 // not a gate (docs/workplan-wal-recovery.md RC10).
 //

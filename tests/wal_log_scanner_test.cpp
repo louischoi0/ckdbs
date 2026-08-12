@@ -1,5 +1,6 @@
 #include "kds/wal/log_scanner.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <utility>
@@ -127,6 +128,78 @@ TEST_F(LogScannerTest, CrossesASegmentBoundaryLosingAndDuplicatingNothing) {
         EXPECT_EQ(got.payloads[i], Payload(kBig, static_cast<unsigned char>(i)))
             << "record " << i << " came back with another record's bytes";
     }
+}
+
+TEST_F(LogScannerTest, ASegmentSealedWithNoRoomForAPadStillContinuesIntoTheNext) {
+    // **The boundary case the test above cannot reach, and the one that cost
+    // acknowledged rows.**
+    //
+    // `WalStream::Seal` writes its PAD only when the tail can hold a record
+    // header; a shorter tail is left as the zeroes the segment was created
+    // with, which is a seal with no marker. The scanner used to read that as a
+    // torn tail and return - silently dropping **every record in every later
+    // segment**. Recovery reported it as rows missing after a restart, and
+    // SIM04's crash loop found it at 3500 ops once a run rolled a segment.
+    //
+    // 3000-byte payloads (the test above) always leave room for a marker, so
+    // the tail is landed on deliberately here: fill the segment until fewer
+    // than `kRecordHeaderSize` bytes remain, then keep appending.
+    std::vector<Lsn> appended;
+    {
+        auto stream = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(stream.ok()) << stream.status().message();
+
+        // Land the tail on **exactly** 24 bytes - below `kRecordHeaderSize`,
+        // so no marker can be written, and a multiple of `kRecordAlignment`,
+        // so it is reachable at all. Landing merely "near" the end would leave
+        // room for a PAD and the test would pass through the marker path,
+        // proving nothing about the case it is named for.
+        constexpr std::uint64_t kTail = 24;
+        static_assert(kTail < kRecordHeaderSize && kTail % kRecordAlignment == 0);
+        auto remaining = [&] {
+            return kSegmentSize - (stream.value()->append_lsn() % kSegmentSize);
+        };
+        auto append = [&](std::size_t payload) {
+            auto lsn = stream.value()->Append({RecordType::kHeapInsert, 7, 1},
+                                              Payload(payload, 0xA1));
+            ASSERT_TRUE(lsn.ok()) << lsn.status().message();
+            appended.push_back(lsn.value());
+        };
+        while (remaining() - kTail > kRecordHeaderSize + 2048) {
+            append(2048);
+        }
+        // One last record sized to leave the tail exactly. Every quantity here
+        // is a multiple of the alignment, so this is arithmetic and not a
+        // search.
+        const std::uint64_t last = remaining() - kTail;
+        ASSERT_GE(last, kRecordHeaderSize);
+        ASSERT_EQ((last - kRecordHeaderSize) % kRecordAlignment, 0u);
+        append(static_cast<std::size_t>(last - kRecordHeaderSize));
+        ASSERT_EQ(remaining(), kTail) << "the tail was not landed on; a PAD may still fit";
+
+        // Now roll, with a tail too short for a marker, and write past it.
+        for (int i = 0; i < 4; ++i) {
+            auto lsn = stream.value()->Append({RecordType::kHeapInsert, 9, 2},
+                                              Payload(64, static_cast<unsigned char>(i)));
+            ASSERT_TRUE(lsn.ok()) << lsn.status().message();
+            appended.push_back(lsn.value());
+        }
+        ASSERT_TRUE(stream.value()->Sync().ok());
+    }
+    ASSERT_GT(device_->segment_count(), 1u) << "the fixture did not roll; the test proves nothing";
+
+    Collected got;
+    auto outcome = ScanLog((*device_), 0, 0, got.Visitor());
+    ASSERT_TRUE(outcome.ok()) << outcome.status().message();
+
+    // Every record, including the four past the unmarked seal. Before the fix
+    // the scan returned at the boundary and `got.lsns` held only the first
+    // segment's - a clean success reporting a truncated stream, which is the
+    // worst shape a recovery input can have.
+    EXPECT_EQ(got.lsns, appended);
+    EXPECT_EQ(outcome.value().records, appended.size());
+    EXPECT_FALSE(outcome.value().stopped_early)
+        << "an unmarked seal is not a torn tail; reporting one hides a complete stream";
 }
 
 TEST_F(LogScannerTest, APadMarkerIsFramingAndNeverReachesTheVisitor) {
