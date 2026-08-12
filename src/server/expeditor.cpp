@@ -1119,6 +1119,34 @@ Status Expeditor::Serve() {
                                        " cores; core 0 serves every statement until the "
                                        "per-core catalog cache exists (workplan P6)");
     }
+    // **The stop signal, as an ordinary readable fd** (`server/stop_signal.hpp`).
+    // Registered here rather than polled, so a `systemctl stop` or a Ctrl-C takes
+    // the same path a client's `STOP` does: the scheduler stops, the workers
+    // join, and the shutdown tail below runs its final sync and checkpoint. Until
+    // this, those signals killed the process mid-statement and the next mount
+    // recovered as if from a crash.
+    //
+    // Absent for every in-process caller, which is what keeps a test from
+    // inheriting signal behaviour it did not ask for.
+    if (stop_signal_ != nullptr && stop_signal_->installed()) {
+        StopSignal* stop = stop_signal_;
+        Logger* log = &*logger_;
+        sched::Scheduler* sched_ptr = &scheduler;
+        if (Status s = scheduler.RegisterIoHandler(
+                stop->fd(), sched::IoInterest::kReadable,
+                [stop, log, sched_ptr](const sched::IoEvent&) {
+                    // Drained, or a level-triggered epoll reports the same
+                    // delivery forever and the reactor spins instead of stopping.
+                    const std::uint32_t signo = stop->Consume();
+                    log->Info("expeditor", "stopping on signal " + std::to_string(signo) +
+                                               "; the shutdown sync and checkpoint follow");
+                    sched_ptr->Stop();
+                });
+            !s.ok()) {
+            return s;
+        }
+    }
+
     if (Status s = listener.value().Attach(scheduler, *dispatcher_, &*logger_); !s.ok()) {
         return s;
     }

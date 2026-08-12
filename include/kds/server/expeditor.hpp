@@ -21,6 +21,7 @@
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/row_id_lease_service.hpp"
+#include "kds/server/stop_signal.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
 #include "kds/txn/undo_log.hpp"
@@ -488,6 +489,18 @@ public:
     // being able to assert rather than assume.
     const MountRecovery& recovery() const noexcept { return recovery_; }
 
+    // The `SIGTERM`/`SIGINT` descriptor the platform layer installed
+    // (`server/stop_signal.hpp`). `Serve()` registers it with its reactor, so a
+    // process-manager stop takes the same path a client's `STOP` does - the
+    // final sync and the shutdown checkpoint included.
+    //
+    // Handed in rather than installed here, because blocking those signals has
+    // to happen before **any** thread exists and this class starts the WAL
+    // writer in `Open()`. `main.cpp` owns that ordering; this owns the reactor.
+    // Unset means "no signal handling", which is what every in-process caller
+    // and every test wants.
+    void set_stop_signal(StopSignal* stop) noexcept { stop_signal_ = stop; }
+
     // The server's log. Always non-null: with no file configured it is a
     // Logger over a null sink, so call sites never test for one.
     Logger& log() noexcept { return *logger_; }
@@ -548,6 +561,10 @@ private:
     // caches one is built. Default-constructed means "recovery has not run
     // yet", which is only true before that call.
     MountRecovery recovery_;
+
+    // Not owned: the platform layer installs it before this object exists and
+    // outlives Serve().
+    StopSignal* stop_signal_ = nullptr;
 
     // The cabin optimizer's decision core and executor (workplan PHY04).
     // After everything they hold references into - the catalog (via

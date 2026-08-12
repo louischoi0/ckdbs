@@ -132,6 +132,7 @@ add_executable(kds_tests
     wal_high_water_test.cpp
     wal_recovery_test.cpp
     mount_recovery_test.cpp
+    stop_signal_test.cpp
     assertion_recover_test.cpp
     recovery_undo_test.cpp
     wal_manager_test.cpp
