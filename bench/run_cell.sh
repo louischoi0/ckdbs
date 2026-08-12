@@ -4,8 +4,8 @@
 #
 # It exists because a benchmark whose numbers cannot be traced back to the
 # machine state that produced them is a data dump, not a measurement. Every
-# cell therefore records `uptime` immediately before and after the driver and
-# `pgrep -c cc1plus` before it, so a reader can see whether a build was
+# cell therefore records `uptime` and `pgrep -c cc1plus` immediately before
+# and after the driver, so a reader can see whether a build was
 # competing for the two vCPUs -- the exact contention that voided the
 # 2026-08-08 refresh of bench/results-scenario3-library.md.
 #
@@ -20,11 +20,30 @@ KDS_PORT=${KDS_PORT:-15432}
 DRIVER=${DRIVER:-./tools/scenario3_library.py}
 
 # `pgrep -c` prints its count *and* exits non-zero when nothing matched, so a
-# bare `|| echo 0` fallback appends a second line and yields "0\n0".
+# bare `|| echo 0` fallback appends a second line and yields "0\n0". `|| true`
+# keeps the count and drops the status, which also keeps `set -e` out of it:
+# `n=$(failing-pipeline)` aborts the shell when this is called anywhere but
+# inside a command substitution.
 cc1plus_count() {
     local n
-    n=$(pgrep -c cc1plus 2>/dev/null | head -1)
+    n=$(pgrep -c cc1plus 2>/dev/null || true)
     echo "${n:-0}"
+}
+
+# True when something is already accepting connections on the port.
+port_open() {
+    python3 -c "import socket,sys
+s = socket.socket()
+s.settimeout(0.2)
+sys.exit(0 if s.connect_ex(('127.0.0.1', $KDS_PORT)) == 0 else 1)" 2>/dev/null
+}
+
+SRV=
+teardown() {
+    [ -n "$SRV" ] || return 0
+    kill "$SRV" 2>/dev/null || true
+    wait "$SRV" 2>/dev/null || true
+    SRV=
 }
 
 if [ $# -lt 3 ]; then
@@ -33,6 +52,27 @@ if [ $# -lt 3 ]; then
 fi
 CELL=$1; CONFIG=$2; shift 2
 [ "${1:-}" = "--" ] && shift
+
+# Checked before anything is deleted. $CELL becomes an `rm -rf` argument
+# below, and an empty one expands "$S3ROOT/wal/$CELL" to the WAL *root*:
+# one mistyped call would take every other cell's log directory with it.
+case "$CELL" in
+    ""|*/*)
+        echo "cell name must be non-empty and contain no '/': '$CELL'" >&2
+        exit 2
+        ;;
+esac
+[ -r "$CONFIG" ] || { echo "config not readable: $CONFIG" >&2; exit 2; }
+[ -x "$KDS_SERVER" ] || { echo "server not executable: $KDS_SERVER" >&2; exit 2; }
+
+# A server left over from an earlier cell answers the readiness probe below
+# just as well as this cell's does, and then serves the driver out of *its*
+# data file under *its* config. That is a wrong number rather than a failed
+# run, so refuse the port instead of measuring through it.
+if port_open; then
+    echo "port $KDS_PORT already has a listener; refusing to measure against it" >&2
+    exit 4
+fi
 
 DB="$S3ROOT/db/$CELL.kds"
 WAL="$S3ROOT/wal/$CELL"
@@ -55,29 +95,35 @@ mkdir -p "$WAL"
     echo "=== uptime before: $(uptime)"
 } >"$LOG"
 
-# The config file carries the data_file and wal_dir for this cell only.
+# The config file carries the data_file and wal_dir for this cell only. The
+# blank line is load-bearing: a base config whose last line has no trailing
+# newline would otherwise absorb `data_file` into that line's value, the key
+# would go missing, and the server would fall back to its default `kds.db`
+# in the CWD -- shared by every cell and never cleared by the rm above. The
+# parser skips blank lines (src/server/config_file.cpp), so it costs nothing.
 CELLCONF="$S3ROOT/conf/$CELL.conf"
-cat "$CONFIG" >"$CELLCONF"
 {
+    cat "$CONFIG"
+    echo
     echo "data_file = $DB"
     echo "wal_dir = $WAL"
     echo "port = $KDS_PORT"
-} >>"$CELLCONF"
+} >"$CELLCONF"
 
 "$KDS_SERVER" --config "$CELLCONF" >>"$LOG" 2>&1 &
 SRV=$!
-trap 'kill $SRV 2>/dev/null || true; wait $SRV 2>/dev/null || true' EXIT
+trap teardown EXIT
 
-# Wait for the listener rather than sleeping a guess.
+# Wait for the listener rather than sleeping a guess, and stop waiting the
+# moment the server is gone -- a refused bind or a bad config key otherwise
+# costs the full 20 s before the same exit 3.
 READY=0
 for _ in $(seq 1 200); do
-    if python3 -c "import socket,sys
-s = socket.socket()
-s.settimeout(0.2)
-sys.exit(0 if s.connect_ex(('127.0.0.1', $KDS_PORT)) == 0 else 1)" 2>/dev/null; then
+    if port_open; then
         READY=1
         break
     fi
+    kill -0 "$SRV" 2>/dev/null || break
     sleep 0.1
 done
 if [ "$READY" -ne 1 ]; then
@@ -100,12 +146,19 @@ echo "=== uptime after: $(uptime)" >>"$LOG"
 # than leaving it to be inferred from a load average later.
 if [ "$CC_AFTER" -gt 0 ]; then
     echo "=== CONTENDED: $CC_AFTER cc1plus at cell end" >>"$LOG"
-    echo "$CELL rc=$RC CONTENDED json=$JSON log=$LOG"
+    # The driver writes its JSON before it can know the cell is being
+    # discarded, so a complete-looking result is already on disk: leaving it
+    # there lets a skip-if-exists matrix adopt the contended run as the
+    # cell's number. Both artefacts move aside rather than being deleted,
+    # because the re-run overwrites the log and the record that a discard
+    # happened at all would otherwise vanish with it.
+    mv -f "$JSON" "$JSON.contended" 2>/dev/null || true
+    mv -f "$LOG" "$LOG.contended" 2>/dev/null || true
+    echo "$CELL rc=$RC CONTENDED json=$JSON.contended log=$LOG.contended"
     exit 8
 fi
 
-kill $SRV 2>/dev/null || true
-wait $SRV 2>/dev/null || true
+teardown
 trap - EXIT
 
 echo "$CELL rc=$RC json=$JSON log=$LOG"
