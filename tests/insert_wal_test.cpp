@@ -79,6 +79,22 @@ protected:
                                  /*clock=*/nullptr, wal_.get(), durability);
     }
 
+    // The same, with a TransactionManager behind it - which UPDATE needs
+    // before it logs anything at all: its records are written under
+    // `scope.txn`, so a dispatcher with no manager leaves an UPDATE unlogged
+    // (the state command_dispatcher.cpp's HEAP_OVERWRITE comment describes).
+    // INSERT does not need one, which is why the fixture's default has none.
+    CommandDispatcher TransactionalDispatcher(wal::DurabilityClass durability) {
+        trx_ids_.emplace(boot_->superblock);
+        undo_log_.emplace(*store_, wal_.get());
+        txn_manager_.emplace(*trx_ids_, *undo_log_, *store_, wal_.get());
+        return CommandDispatcher(boot_->superblock, boot_->catalog, *store_, /*log=*/nullptr,
+                                 /*clock=*/nullptr, wal_.get(), durability, exec::Budget(),
+                                 /*recorder=*/nullptr, /*replay_enabled=*/false,
+                                 /*access_statistics=*/true, /*cabins=*/nullptr,
+                                 &*txn_manager_);
+    }
+
     // Every record the *device* holds, in stream order. Deliberately read
     // back through the device rather than asked of the manager: what the
     // manager believes it appended is not evidence of what a crash leaves.
@@ -126,6 +142,12 @@ protected:
     std::unique_ptr<wal::WalManager> wal_;
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;
+
+    // Only TransactionalDispatcher() fills these, and they are declared after
+    // everything they reference so teardown is the reverse of construction.
+    std::optional<txn::TrxIdSequence> trx_ids_;
+    std::optional<txn::UndoLog> undo_log_;
+    std::optional<txn::TransactionManager> txn_manager_;
 };
 
 // ---- 1. The records describe the tuple that was written -----------------
@@ -349,6 +371,115 @@ TEST_F(InsertWalTest, ASpilledValueIsLoggedBeforeTheTupleThatPointsAtIt) {
     // tuple - is an unreferenced value purge collects, which is why this
     // direction is the one that is asserted.
     EXPECT_LT(vh, insert) << "VARHEAP_APPEND must precede the HEAP_INSERT pointing at it";
+}
+
+TEST_F(InsertWalTest, GrowingTheVarHeapChainLogsTheNewPageAndTheLinkThatReachesIt) {
+    // The hole recovery walked into. `varheap::ChainAppend` grows a chain
+    // through the store's plain allocation path, and a VARHEAP_APPEND says
+    // nothing about a page being new - so a crash that lost the new page's
+    // write-back left a durable append naming a page no record creates, and
+    // redo refused the mount:
+    //
+    //   VARHEAP_APPEND at lsn 700128 names page 172, which the store does not
+    //   hold and no PAGE_INIT or full page image in the replay range creates
+    //
+    // Reproduced before the fix at `ckdbs-sim --seed 7 --ops 3000 --mode
+    // crash --iterations 3`; asserted here as records rather than as a seed.
+    CommandDispatcher d = Dispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
+
+    // Fill the root page and then some: each value is a fifth of a page, so
+    // the chain must grow inside this loop.
+    const std::string spilled(1600, 'g');
+    for (int i = 0; i < 12; ++i) {
+        ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('" + spilled + "')").response.substr(0, 8),
+                  "INSERTED");
+    }
+
+    std::vector<std::vector<std::byte>> storage;
+    std::vector<wal::DecodedRecord> records = DeviceRecords(storage);
+
+    // A PAGE_INIT whose payload says kVarHeap - the record that was missing.
+    // `wal::ApplyPageInit` formats that class already, so what was absent was
+    // the record and never the applier.
+    std::size_t varheap_inits = 0;
+    for (const wal::DecodedRecord& record : records) {
+        if (record.type() != wal::RecordType::kPageInit) continue;
+        auto fields = wal::DecodePageInit(record.payload);
+        ASSERT_TRUE(fields.ok()) << fields.status().message();
+        if (static_cast<PageType>(fields.value().page_type) == PageType::kVarHeap) {
+            ++varheap_inits;
+        }
+    }
+    EXPECT_GT(varheap_inits, 0u) << "the chain grew and no var-heap PAGE_INIT was logged";
+
+    // And the link edit that makes the new page reachable, as a full page
+    // image of the *old* tail - no record type describes a next-page link, so
+    // this is the same answer the heap path gives. Without it a replay leaves
+    // a value page that exists and no chain walk reaches.
+    //
+    // Found by walking the chain: every page but the last is a tail whose link
+    // was edited, so each must carry an image.
+    auto oid = boot_->catalog.FindTableOidByName("t");
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    PageId page_id = access.value()->varheap_page_id;
+    ASSERT_NE(page_id, kInvalidPageId);
+
+    std::vector<PageId> imaged;
+    for (const wal::DecodedRecord& record : records) {
+        if (record.type() == wal::RecordType::kFullPageImage) imaged.push_back(record.header.page_id);
+    }
+
+    std::size_t links = 0;
+    while (true) {
+        auto page = store_->GetForRead(page_id);
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        const PageId next = varheap::PageNextPageId(page.value());
+        if (next == kInvalidPageId) break;
+        ++links;
+        EXPECT_NE(std::find(imaged.begin(), imaged.end(), page_id), imaged.end())
+            << "page " << page_id << " links to " << next << " and no image describes that link";
+        page_id = next;
+    }
+    EXPECT_GT(links, 0u) << "the chain never grew; the test proves nothing";
+}
+
+TEST_F(InsertWalTest, AnUpdateThatSpillsLogsTheValueItSpilled) {
+    // The third hole, and the quietest: the UPDATE path built its VarHeapSink
+    // with no collector, so a value an UPDATE spilled was written into a
+    // var-heap page and **never logged at all**. Recovery then restored a
+    // tuple whose cell pointed at bytes no record described.
+    CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, s varchar)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(d.Dispatch("INSERT INTO t VALUES ('short')").response.substr(0, 8), "INSERTED");
+    // The insert stayed inline, so every var-heap record after this point
+    // belongs to the UPDATE - which is what makes the count below an
+    // assertion about the UPDATE path rather than about both.
+    ASSERT_EQ(CountOf(RecordTypes(), wal::RecordType::kVarHeapAppend), 0u);
+
+    const std::string spilled(900, 'u');
+    ASSERT_EQ(d.Dispatch("UPDATE t SET s = '" + spilled + "' WHERE id = 1").response.substr(0, 7),
+              "UPDATED");
+
+    std::vector<wal::RecordType> types = RecordTypes();
+    const std::size_t vh = CountOf(types, wal::RecordType::kVarHeapAppend);
+    EXPECT_EQ(vh, 1u) << "the UPDATE spilled and logged no VARHEAP_APPEND";
+
+    // Same ordering rule the INSERT path obeys: the value precedes the tuple
+    // record whose cell points at it.
+    auto index_of = [&](wal::RecordType type) -> std::size_t {
+        for (std::size_t i = 0; i < types.size(); ++i) {
+            if (types[i] == type) return i;
+        }
+        return types.size();
+    };
+    const std::size_t append = index_of(wal::RecordType::kVarHeapAppend);
+    const std::size_t overwrite = index_of(wal::RecordType::kHeapOverwrite);
+    ASSERT_LT(append, types.size());
+    ASSERT_LT(overwrite, types.size());
+    EXPECT_LT(append, overwrite) << "VARHEAP_APPEND must precede the HEAP_OVERWRITE";
 }
 
 TEST_F(InsertWalTest, AnInlineValueLogsNoVarHeapRecord) {

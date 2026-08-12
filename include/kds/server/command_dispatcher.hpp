@@ -130,6 +130,12 @@
 
 namespace kds::server {
 
+// What the mount's recovery did (`server/mount_recovery.hpp`), reported by
+// SHOW META. Forward-declared rather than included: only the pointer is held
+// here, and the definition drags in the WAL and catalog headers that every
+// consumer of this file would then pay for.
+struct MountRecovery;
+
 // The `physical_optimizer` config key's two legal states
 // (docs/feat-physical-optimizer.md R3). There is deliberately no `kOn`:
 // the config layer refuses `on` at startup naming §6's gates, so a mode a
@@ -759,6 +765,20 @@ public:
     }
     bool cabin_optimizer_enabled() const noexcept { return cabin_optimizer_enabled_; }
 
+    // What the mount's recovery did, for `SHOW META` (RC09). A pointer into
+    // the report the mount owns - `Expeditor::recovery_`, which outlives this
+    // dispatcher - and null everywhere that mounts nothing, where SHOW META
+    // then omits the block rather than printing zeroes that read as "recovery
+    // ran and found nothing".
+    void set_recovery(const MountRecovery* recovery) noexcept { recovery_ = recovery; }
+
+    // The assertion registry, exposed for the two things only a mount does:
+    // refilling it after recovery (RC07's `ResumeAssertionsAfterRecovery`) and
+    // handing it to the checkpointer as AS6a's snapshot source. Every other
+    // caller reaches assertions through the write paths on this class, which is
+    // why this is the only accessor and why it is not const.
+    exec::AssertionEnforcer& assertions() noexcept { return enforcer_; }
+
     // The view's two sources (workplan PHY06), a setter for
     // `set_optimizer_signals`'s reason. Both null - every construction
     // site without the controller - and `SHOW CABIN_OPTIMIZER` then
@@ -933,6 +953,34 @@ private:
                      const std::vector<exec::AppendedSpill>& spills = {},
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
+
+    // One page's full image, logged and the page stamped behind it.
+    //
+    // **Four call sites wrote these ten lines identically** - an index split, a
+    // var-heap link edit, a heap structural change, and bulk insert's per-page
+    // images - and a fifth lives in `assertion_build.cpp`. An image is the
+    // instrument for "no record type describes this change", so the pattern
+    // recurs by design; what does not need to recur is the stamp, which is the
+    // step a copy can silently omit (`redo.cpp` gates every record on
+    // `page_lsn`, so a missing stamp is a record that replays when it should
+    // not).
+    //
+    // No-op with no WAL attached, like every other logging helper here.
+    Status LogFullPageImage(PageId page_id, std::uint64_t txn_id);
+
+    // Every record a set of var-heap appends owes, in replay order: the
+    // PAGE_INIT for a page the append created, the full page image for the
+    // tail whose link now reaches it, then the VARHEAP_APPEND for the value.
+    //
+    // Shared by INSERT and UPDATE deliberately. The first two records were
+    // missing entirely and the third was missing on the UPDATE path
+    // (`docs/known-gaps.md`'s var-heap entry), and two copies of this
+    // sequence is two chances to lose one of them again.
+    //
+    // The caller owes the *ordering*: these records precede the HEAP_INSERT or
+    // HEAP_OVERWRITE whose cell points at the value, so a replay never reaches
+    // a pointer that resolves to nothing (spec §5).
+    Status LogSpills(const std::vector<exec::AppendedSpill>& spills, std::uint64_t txn_id);
 
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer
@@ -1159,6 +1207,7 @@ private:
     stats::OptimizerSignals* optimizer_signals_ = nullptr;
     exec::ExecStats exec_stats_;
     bool cabin_optimizer_enabled_ = false;  // §II.6: off, experimental
+    const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
 
     // PHY06's view sources: the controller's managed table and decision
     // log, the executor's applied-action counters. Read-only - the view

@@ -225,6 +225,15 @@ Exact bit packing is an implementation detail of AST04; the normative facts
 are: fixed 32 B, pk authoritative, hint advisory, value inline, `group_id`
 authoritative.
 
+**Built 2026-08-12** (`docs/workplan-wal-recovery.md` RC07 parts 1-2): the
+field exists on the entry, on `AssertEntryPayload`, and on the in-memory group
+header, and all three writing sites stamp it. The replay fold **adopts** the
+id a record carries rather than assigning one, because a fold starting from a
+checkpoint meets groups in record order and an id assigned in that order would
+drift from the ids the entries already on the pages carry — misattributing them
+at the next recovery. What is not built is where the snapshot comes from: RC07
+parts 3-4.
+
 `group_id` occupies the first 4 bytes of what AST04 shipped as padding and
 wrote as a literal zero, so the 32 B width is unchanged. **An id and not a
 group-key hash**, and the difference is correctness rather than taste:

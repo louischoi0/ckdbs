@@ -453,6 +453,14 @@ struct AssertEntryPayload {
     std::uint16_t entry_len;     // bytes of entry that follow
     std::uint16_t key_len;       // bytes of group key that follow the entry
     std::uint16_t reserved;      // 0
+
+    // **AS6a.** The group the entry belongs to, so replay reads the id rather
+    // than re-deriving it - which it could not do correctly anyway: ids are
+    // dense per cabin and assigned in group-creation order, so re-deriving one
+    // would mean reproducing the live run's allocation order from a record
+    // range that may start mid-cabin. Appended past `reserved`, so no existing
+    // offset moved.
+    std::uint32_t group_id;
 };
 
 inline constexpr std::size_t kAssertEntryAssertionIdOffset = 0;
@@ -460,15 +468,26 @@ inline constexpr std::size_t kAssertEntryIndexOffset = 8;
 inline constexpr std::size_t kAssertEntryEntryLenOffset = 10;
 inline constexpr std::size_t kAssertEntryKeyLenOffset = 12;
 inline constexpr std::size_t kAssertEntryReservedOffset = 14;
-// 8+2+2+2+2 = 16; entry bytes begin here, key bytes after them.
-inline constexpr std::size_t kAssertEntryFixedSize = 16;
+inline constexpr std::size_t kAssertEntryGroupIdOffset = 16;
+// 8+2+2+2+2+4 = 20; entry bytes begin here, key bytes after them.
+inline constexpr std::size_t kAssertEntryFixedSize = 20;
 
 static_assert(offsetof(AssertEntryPayload, assertion_id) == kAssertEntryAssertionIdOffset);
 static_assert(offsetof(AssertEntryPayload, index) == kAssertEntryIndexOffset);
 static_assert(offsetof(AssertEntryPayload, entry_len) == kAssertEntryEntryLenOffset);
 static_assert(offsetof(AssertEntryPayload, key_len) == kAssertEntryKeyLenOffset);
 static_assert(offsetof(AssertEntryPayload, reserved) == kAssertEntryReservedOffset);
-static_assert(sizeof(AssertEntryPayload) == kAssertEntryFixedSize);
+static_assert(offsetof(AssertEntryPayload, group_id) == kAssertEntryGroupIdOffset);
+
+// **No `sizeof` assert, and the reason is the one `undo_page.hpp` records.**
+// The serialized payload is 20 bytes and unpadded by design - the codec
+// memcpy's through the offsets above - while the C++ struct pads its tail to
+// 24 for the `uint64_t` at offset 0. Asserting `sizeof` against the wire size
+// would compare a layout with a format and could never hold; every offset that
+// the codec actually uses is asserted instead, which is the property that
+// matters. (This is the same shape as the RV10 asserts that shipped broken at
+// RC06 - see `docs/known-gaps.md`.)
+static_assert(kAssertEntryFixedSize == 20);
 
 struct DecodedAssertEntry {
     AssertEntryPayload fields;
@@ -599,5 +618,92 @@ static_assert(offsetof(AssertDropPayload, assertion_id) == kAssertDropAssertionI
 StatusOr<std::size_t> EncodeAssertDrop(std::span<std::byte> out,
                                        const AssertDropPayload& fields);
 StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in);
+
+// ---- ASSERT_SNAPSHOT (AS6a, RC07) ----------------------------------------
+//
+// One chunk of one Bound Cabin's group headers as of a checkpoint. It is the
+// durable base assertion replay folds onto, which is what lets the fold start
+// at the last checkpoint instead of at the cabin's birth
+// (`docs/feat-assertion.md` §7).
+//
+// **Headers only, never the entry lists.** A group's entry list is O(all
+// writes, forever) - `BoundCabin::Apply` appends one pair per checked write and
+// only removes one on abort - so persisting it would mean writing O(all
+// entries) at every checkpoint. The entry carries its `group_id` instead
+// (`storage/cabin_bound_page.hpp`), so the linkage is rebuilt by scanning the
+// cabin's own pages, and this payload stays O(groups).
+//
+// **Chunked, with no continuation flag.** A payload must fit a segment and a
+// cabin's group count is bounded by the data, so a cabin may need several
+// records. The loader is additive over whatever chunks it meets - each names
+// its own groups and nothing else - so there is nothing for a flag to say. The
+// only ordering that matters is that every chunk precedes the ASSERT_* records
+// folded onto it, which putting them inside the checkpoint achieves.
+struct AssertSnapshotPayload {
+    std::uint64_t assertion_id;
+    std::uint32_t group_count;  // groups in *this* chunk
+    std::uint32_t reserved;     // 0
+};
+
+inline constexpr std::size_t kAssertSnapshotAssertionIdOffset = 0;
+inline constexpr std::size_t kAssertSnapshotGroupCountOffset = 8;
+inline constexpr std::size_t kAssertSnapshotReservedOffset = 12;
+// 8+4+4 = 16; the groups follow, each one a header block then its key bytes.
+inline constexpr std::size_t kAssertSnapshotFixedSize = 16;
+
+static_assert(offsetof(AssertSnapshotPayload, assertion_id) ==
+              kAssertSnapshotAssertionIdOffset);
+static_assert(offsetof(AssertSnapshotPayload, group_count) ==
+              kAssertSnapshotGroupCountOffset);
+static_assert(offsetof(AssertSnapshotPayload, reserved) == kAssertSnapshotReservedOffset);
+static_assert(sizeof(AssertSnapshotPayload) == kAssertSnapshotFixedSize);
+
+// One group inside the payload: `{group_id, key, count, sum}` per AS6a, with
+// the key length ahead of the key so the block is self-delimiting.
+struct AssertSnapshotGroup {
+    std::uint32_t group_id = 0;
+    std::uint32_t key_len = 0;
+    std::int64_t count = 0;
+    std::int64_t sum = 0;
+};
+
+inline constexpr std::size_t kAssertSnapshotGroupIdOffset = 0;
+inline constexpr std::size_t kAssertSnapshotGroupKeyLenOffset = 4;
+inline constexpr std::size_t kAssertSnapshotGroupCountValueOffset = 8;
+inline constexpr std::size_t kAssertSnapshotGroupSumOffset = 16;
+inline constexpr std::size_t kAssertSnapshotGroupFixedSize = 24;
+
+static_assert(offsetof(AssertSnapshotGroup, group_id) == kAssertSnapshotGroupIdOffset);
+static_assert(offsetof(AssertSnapshotGroup, key_len) == kAssertSnapshotGroupKeyLenOffset);
+static_assert(offsetof(AssertSnapshotGroup, count) == kAssertSnapshotGroupCountValueOffset);
+static_assert(offsetof(AssertSnapshotGroup, sum) == kAssertSnapshotGroupSumOffset);
+static_assert(sizeof(AssertSnapshotGroup) == kAssertSnapshotGroupFixedSize);
+
+// What one group looks like to a caller, key included.
+struct SnapshotGroupEntry {
+    std::uint32_t group_id = 0;
+    std::int64_t count = 0;
+    std::int64_t sum = 0;
+    std::span<const std::byte> key;  // view into the caller's buffer
+};
+
+struct DecodedAssertSnapshot {
+    AssertSnapshotPayload fields;
+    std::vector<SnapshotGroupEntry> groups;  // keys view into `in`
+};
+
+// `fields.group_count` is ignored on encode - it is set from `groups`, so the
+// count on disk and the blocks on disk cannot disagree. Fails with
+// InvalidArgument on a key longer than a uint32 length or an output too small.
+StatusOr<std::size_t> EncodeAssertSnapshot(std::span<std::byte> out,
+                                          const AssertSnapshotPayload& fields,
+                                          std::span<const SnapshotGroupEntry> groups);
+StatusOr<DecodedAssertSnapshot> DecodeAssertSnapshot(std::span<const std::byte> in);
+
+// Bytes one group costs in the payload, so a chunker can size its records
+// without duplicating the layout.
+inline std::size_t AssertSnapshotGroupBytes(std::size_t key_len) noexcept {
+    return kAssertSnapshotGroupFixedSize + key_len;
+}
 
 }  // namespace kds::wal

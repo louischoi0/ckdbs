@@ -95,6 +95,10 @@ std::vector<std::byte> EntryRecord(wal::RecordType type, std::uint64_t txn_id,
     wal::AssertEntryPayload fields{};
     fields.assertion_id = kAssertionId;
     fields.index = index;
+    // AS6a: from the entry, never a separate argument - the record and the
+    // entry bytes disagreeing about the group is exactly what replay's
+    // AdoptGroupId refuses, so a test must not be able to produce it.
+    fields.group_id = entry.group_id;
     auto used = wal::EncodeAssertEntry(payload, fields, entry_bytes, Bytes(key));
     EXPECT_TRUE(used.ok()) << used.status().message();
     return WholeRecord(type, txn_id, kEntryPage, payload);
@@ -266,13 +270,25 @@ TEST(AssertPayloadTest, ATruncatedTailIsCorruptionNotATornEnd) {
 TEST(AssertRecordTest, TheFiveTypesAreAssignedNamedAndClassified) {
     EXPECT_TRUE(wal::IsAssignedRecordType(18));
     EXPECT_TRUE(wal::IsAssignedRecordType(22));
-    EXPECT_FALSE(wal::IsAssignedRecordType(23));
+    // **This used to assert that 23 was unassigned**, which was true when 22 was
+    // the last type - and it is why `kHeapDeleteUnmark = 23` shipped unwritable:
+    // the test agreed with the stale bound instead of with the enum. What it
+    // meant to say is that the five assertion records are contiguous and
+    // assigned, which is what it says now (record.hpp, and
+    // WalRecordTest.EveryNamedTypeIsWritable is the general guard).
+    for (std::uint8_t raw = 18; raw <= 22; ++raw) {
+        EXPECT_TRUE(wal::IsAssignedRecordType(raw)) << "assertion record " << +raw;
+    }
 
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertReserve), "ASSERT_RESERVE");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertCommit), "ASSERT_COMMIT");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertRollback), "ASSERT_ROLLBACK");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertBuild), "ASSERT_BUILD");
     EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertDrop), "ASSERT_DROP");
+    // AS6a's sixth, appended past the original five (RC07).
+    EXPECT_STREQ(wal::RecordTypeName(wal::RecordType::kAssertSnapshot), "ASSERT_SNAPSHOT");
+    EXPECT_TRUE(wal::IsAssignedRecordType(
+        static_cast<std::uint8_t>(wal::RecordType::kAssertSnapshot)));
 
     EXPECT_TRUE(IsAssertionRecord(wal::RecordType::kAssertReserve));
     EXPECT_TRUE(IsAssertionRecord(wal::RecordType::kAssertDrop));
@@ -302,7 +318,11 @@ protected:
                             std::int64_t value, std::int64_t group) {
         const std::uint8_t flags =
             type == wal::RecordType::kAssertReserve ? kEntryReserved : std::uint8_t{0};
-        const BoundCabinEntry entry = Entry(pk, value, flags);
+        BoundCabinEntry entry = Entry(pk, value, flags);
+        // The live writer's order (AS6a): the group's id is assigned and
+        // stamped onto the entry *before* the page append, because the append
+        // precedes the Apply that would otherwise create the group.
+        entry.group_id = live_.EnsureGroupId(KeyOf(group));
 
         auto page = live_store_.Get(kEntryPage);
         EXPECT_TRUE(page.ok());
@@ -416,9 +436,14 @@ TEST_F(AssertionReplayTest, ADepartureFoldsWithItsSignAndItsRollbackRestoresIt) 
     LiveEntry(wal::RecordType::kAssertBuild, wal::kNoTxnId, 1, 5, /*group=*/7);
 
     // The departure, live and recorded.
-    const BoundCabinEntry leaving =
+    BoundCabinEntry leaving =
         Entry(1, 5, static_cast<std::uint8_t>(kEntryReserved |
                                               storage::cabin::kEntryDeparture));
+    // A departure's group must already exist, so its id is *read* rather than
+    // ensured - the same asymmetry the live check path has (assertion_check.cpp).
+    const GroupHeader* departing_from = live_.Find(KeyOf(7));
+    ASSERT_NE(departing_from, nullptr);
+    leaving.group_id = departing_from->group_id;
     auto page = live_store_.Get(kEntryPage);
     ASSERT_TRUE(page.ok());
     auto view = BoundCabinPage::Open(page.value());

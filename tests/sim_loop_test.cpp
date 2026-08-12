@@ -125,25 +125,105 @@ TEST(SimLoop, CrashAnywhereFabricatesNothingOnEveryCommittedSeed) {
     }
 }
 
-// The [GATED: recovery] assertion must be able to fire — a gate that cannot
-// fail is not a gate. Seed 4 at these parameters loses acknowledged rows to
-// the crash (asserted first), so flipping the gate on must turn that same
-// run into a failure naming them.
-TEST(SimLoop, TheRecoveryGateFiresWhenFlippedOn) {
-    SimConfig gated;
-    gated.seed = 4;
-    gated.ops = 500;
-    gated.mode = SimMode::kCrash;
-    gated.iterations = 3;
-    const SimVerdict counted = RunSimulation(gated);
-    ASSERT_TRUE(counted.ok) << counted.Summary(gated);
-    ASSERT_GT(counted.gated_missing_rows, 0u)
-        << "this seed no longer loses rows; pick one that does or the gate test is vacuous";
+// A run long enough to roll a WAL segment and to grow a var-heap chain, which
+// **the corpus above never does**: at 1500 ops the stream stays inside its
+// first 1 MiB segment and a spilled value rarely fills a var-heap page. Two
+// recovery defects lived in exactly that gap and the suite was green over both
+// of them (2026-08-12):
+//
+//   - a VARHEAP_APPEND naming a page no PAGE_INIT created, because var-heap
+//     growth was unlogged: the mount **refused**;
+//   - a segment sealed with no room for a PAD read as a torn tail, so every
+//     record in every later segment was dropped: rows **missing** after the
+//     restart.
+//
+// Seed 24 at 3500 ops is where the second one was caught. One seed and one
+// iteration, kept cheap on purpose - what this guards is the two boundaries,
+// and the breadth is the corpus's job.
+TEST(SimLoop, ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow) {
+    SimConfig config;
+    config.seed = 24;
+    config.ops = 3500;
+    config.mode = SimMode::kCrash;
+    config.iterations = 1;
+    const SimVerdict verdict = RunSimulation(config);
+    EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+    EXPECT_EQ(verdict.gated_missing_rows, 0u);
+}
 
-    SimConfig armed = gated;
+// A clean shutdown has to publish an anchor, or the next mount re-reads
+// everything the last run wrote.
+//
+// RC08 bounded the mount after a *crash* by checkpointing at the end of
+// recovery. A graceful stop had no equivalent: it synced and left the anchor
+// wherever the last cadence tick put it, so the first mount afterwards rescanned
+// every record since - measured as a cleanly stopped 2000-row instance re-reading
+// all 10,883 of its own records (`bench/results-wal-recovery.md`). The harness
+// runs no cadence checkpointer at all, which makes it the sharpest place to
+// assert this: without the shutdown checkpoint the anchor here would still be the
+// *mount's* one, and every row written after it would be rescanned.
+TEST(SimInstanceTest, AMountAfterACleanStopDoesNotRereadTheRunsWholeLog) {
+    auto instance = SimInstance::Create();
+    ASSERT_TRUE(instance.ok()) << instance.status().message();
+    SimInstance& db = *instance.value();
+
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    for (int i = 0; i < 200; ++i) {
+        const std::string reply = db.Execute("INSERT INTO t VALUES (" + std::to_string(i) + ")");
+        ASSERT_EQ(reply.rfind("INSERTED", 0), 0u) << reply;
+    }
+
+    ASSERT_TRUE(db.CleanShutdown().ok());
+    ASSERT_TRUE(db.Reboot().ok());
+
+    // The 200 inserts are below the shutdown checkpoint's anchor, so the mount
+    // sees only what followed it: the checkpoint's own two records. The exact
+    // number is not the property - "far fewer than were written" is - so this
+    // asserts the bound rather than the constant.
+    EXPECT_LT(db.recovery().records, 20u)
+        << "the mount re-read " << db.recovery().records
+        << " records after a clean stop, so the shutdown published no usable anchor";
+    EXPECT_EQ(db.recovery().redo_applied, 0u)
+        << "a cleanly stopped instance has nothing to redo";
+
+    // And the rows are all there, which is what makes the cheap mount honest
+    // rather than a mount that skipped work it owed.
+    const std::string count = db.Execute("SELECT COUNT(*) FROM t");
+    EXPECT_NE(count.find("200"), std::string::npos) << count;
+}
+
+// The durability assertion must be able to fire — a gate that cannot fail is
+// not a gate (docs/workplan-wal-recovery.md RC10).
+//
+// **How this test had to change when recovery landed.** It used to run seed 4
+// with the gate off, assert that the seed lost acknowledged rows, then arm the
+// gate and watch the same run fail. That premise is gone: with recovery
+// running at mount, seed 4 loses nothing, and the old test failed on its own
+// `ASSERT_GT(gated_missing_rows, 0)` — "this seed no longer loses rows; pick
+// one that does or the gate test is vacuous". Which was the harness correctly
+// reporting that the engine had improved underneath it.
+//
+// So the violating image is hand-fed now, per RC10: `skip_recovery` boots the
+// same crashed devices *without* the phase, which is exactly the engine as it
+// stood before RV1 — and the armed assertion must fail on it, naming rows.
+// The pair is what carries the proof: same seed, same crash, recovery the only
+// difference.
+TEST(SimLoop, TheDurabilityAssertionFiresOnARecoverylessBoot) {
+    SimConfig armed;
+    armed.seed = 4;
+    armed.ops = 500;
+    armed.mode = SimMode::kCrash;
+    armed.iterations = 3;
     armed.assert_recovery = true;
-    const SimVerdict fired = RunSimulation(armed);
-    EXPECT_FALSE(fired.ok);
+
+    const SimVerdict recovered = RunSimulation(armed);
+    EXPECT_TRUE(recovered.ok) << recovered.Summary(armed);
+    EXPECT_EQ(recovered.gated_missing_rows, 0u);
+
+    SimConfig without = armed;
+    without.skip_recovery = true;
+    const SimVerdict fired = RunSimulation(without);
+    ASSERT_FALSE(fired.ok) << "the assertion cannot fail, so it proves nothing";
     EXPECT_NE(fired.detail.find("missing"), std::string::npos) << fired.detail;
 }
 

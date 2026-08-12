@@ -223,14 +223,47 @@ PageId PageNextPageId(std::span<const std::byte, kPageSize> page);
 // fixed by DDL and stays a cacheable fact (catalog_cache.hpp's rule).
 StatusOr<PageId> CreateChain(storage::PageStore& store);
 
+// What an append changed besides writing the value, so a logging caller can
+// describe all of it.
+//
+// **Why this is a struct and not just a pointer.** A `VARHEAP_APPEND` record
+// says "these bytes, at this slot, on this page". It does not say the page was
+// *created*, and it does not say the previous tail's next-page link now points
+// at it - and both of those happen here, in memory, through the store's plain
+// allocation path. A caller that logged only the append left recovery with a
+// record naming a page nothing creates (redo refuses the mount) or a value
+// page that exists and is unreachable (silent loss). The heap and btree paths
+// already report their structural changes for exactly this reason
+// (`insert_placement.hpp`, and `command_dispatcher.cpp`'s loop over them);
+// this is the var-heap's, and its absence was `docs/known-gaps.md`'s var-heap
+// entry.
+struct ChainAppendResult {
+    VarHeapPtr ptr;
+
+    // The page this append created, or kInvalidPageId when the tail had room.
+    // Needs a PAGE_INIT with page_type kVarHeap before the append record -
+    // which `wal::ApplyPageInit` already formats, so nothing new is needed on
+    // the replay side.
+    PageId created_page_id = kInvalidPageId;
+
+    // The old tail, whose next-page link now points at `created_page_id`.
+    // kInvalidPageId whenever nothing was linked. No record type describes a
+    // link edit, so the caller logs a full page image - the same answer the
+    // heap path gives for the same question.
+    PageId linked_page_id = kInvalidPageId;
+
+    bool grew() const noexcept { return created_page_id != kInvalidPageId; }
+};
+
 // Appends `value` to the chain rooted at `root`, growing it by one page if
-// the tail is full, and returns the pointer to write into the tuple's cell.
+// the tail is full, and returns the pointer to write into the tuple's cell
+// plus whatever growth it had to do (above).
 //
 // Fails with Unsupported if `value` is larger than kMaxValueSize (see
 // there - the cap is an open decision this layer refuses to make), and
 // with whatever the store reports otherwise.
-StatusOr<VarHeapPtr> ChainAppend(storage::PageStore& store, PageId root,
-                                  std::span<const std::byte> value);
+StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
+                                        std::span<const std::byte> value);
 
 // Resolves `ptr`. Fetches exactly one page - the pointer names it directly,
 // so this is never a walk.

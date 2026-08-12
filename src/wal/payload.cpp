@@ -553,6 +553,7 @@ StatusOr<std::size_t> EncodeAssertEntry(std::span<std::byte> out,
                          static_cast<std::uint16_t>(entry.size()));
     Store<std::uint16_t>(out, kAssertEntryKeyLenOffset, static_cast<std::uint16_t>(key.size()));
     Store<std::uint16_t>(out, kAssertEntryReservedOffset, 0);
+    Store<std::uint32_t>(out, kAssertEntryGroupIdOffset, fields.group_id);
     if (!entry.empty()) {
         std::memcpy(out.data() + kAssertEntryFixedSize, entry.data(), entry.size());
     }
@@ -573,6 +574,7 @@ StatusOr<DecodedAssertEntry> DecodeAssertEntry(std::span<const std::byte> in) {
     decoded.fields.entry_len = Load<std::uint16_t>(in, kAssertEntryEntryLenOffset);
     decoded.fields.key_len = Load<std::uint16_t>(in, kAssertEntryKeyLenOffset);
     decoded.fields.reserved = Load<std::uint16_t>(in, kAssertEntryReservedOffset);
+    decoded.fields.group_id = Load<std::uint32_t>(in, kAssertEntryGroupIdOffset);
 
     const std::size_t tail =
         std::size_t{decoded.fields.entry_len} + std::size_t{decoded.fields.key_len};
@@ -696,6 +698,101 @@ StatusOr<AssertDropPayload> DecodeAssertDrop(std::span<const std::byte> in) {
     AssertDropPayload fields{};
     fields.assertion_id = Load<std::uint64_t>(in, kAssertDropAssertionIdOffset);
     return fields;
+}
+
+// ---- ASSERT_SNAPSHOT -----------------------------------------------------
+
+StatusOr<std::size_t> EncodeAssertSnapshot(std::span<std::byte> out,
+                                          const AssertSnapshotPayload& fields,
+                                          std::span<const SnapshotGroupEntry> groups) {
+    std::size_t total = kAssertSnapshotFixedSize;
+    for (const SnapshotGroupEntry& group : groups) {
+        if (group.key.size() > 0xFFFFFFFFull) {
+            return Status::InvalidArgument(
+                "wal payload: assert snapshot group key longer than a uint32 length");
+        }
+        total += AssertSnapshotGroupBytes(group.key.size());
+    }
+    if (Status s = CheckOutputSize(out, total, "ASSERT_SNAPSHOT"); !s.ok()) {
+        return s;
+    }
+
+    Store<std::uint64_t>(out, kAssertSnapshotAssertionIdOffset, fields.assertion_id);
+    // From the span, never the caller's field, so the count on disk and the
+    // blocks on disk cannot disagree.
+    Store<std::uint32_t>(out, kAssertSnapshotGroupCountOffset,
+                         static_cast<std::uint32_t>(groups.size()));
+    Store<std::uint32_t>(out, kAssertSnapshotReservedOffset, 0);
+
+    std::size_t at = kAssertSnapshotFixedSize;
+    for (const SnapshotGroupEntry& group : groups) {
+        Store<std::uint32_t>(out, at + kAssertSnapshotGroupIdOffset, group.group_id);
+        Store<std::uint32_t>(out, at + kAssertSnapshotGroupKeyLenOffset,
+                             static_cast<std::uint32_t>(group.key.size()));
+        Store<std::uint64_t>(out, at + kAssertSnapshotGroupCountValueOffset,
+                             static_cast<std::uint64_t>(group.count));
+        Store<std::uint64_t>(out, at + kAssertSnapshotGroupSumOffset,
+                             static_cast<std::uint64_t>(group.sum));
+        if (!group.key.empty()) {
+            std::memcpy(out.data() + at + kAssertSnapshotGroupFixedSize, group.key.data(),
+                        group.key.size());
+        }
+        at += AssertSnapshotGroupBytes(group.key.size());
+    }
+    return total;
+}
+
+StatusOr<DecodedAssertSnapshot> DecodeAssertSnapshot(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kAssertSnapshotFixedSize, "ASSERT_SNAPSHOT"); !s.ok()) {
+        return s;
+    }
+
+    DecodedAssertSnapshot decoded{};
+    decoded.fields.assertion_id = Load<std::uint64_t>(in, kAssertSnapshotAssertionIdOffset);
+    decoded.fields.group_count = Load<std::uint32_t>(in, kAssertSnapshotGroupCountOffset);
+    decoded.fields.reserved = Load<std::uint32_t>(in, kAssertSnapshotReservedOffset);
+
+    // Sized from the payload before anything is reserved, the rule
+    // `DecodeCheckpointBegin` above follows and for the same reason: the count
+    // is bytes off a device, and a corrupt `group_count` must not ask for an
+    // allocation the record does not back with bytes. Each block costs at least
+    // its fixed part, so that is the bound.
+    const std::size_t max_groups =
+        (in.size() - kAssertSnapshotFixedSize) / kAssertSnapshotGroupFixedSize;
+    if (decoded.fields.group_count > max_groups) {
+        return Status::Corruption("wal payload: ASSERT_SNAPSHOT claims " +
+                                  std::to_string(decoded.fields.group_count) +
+                                  " groups, more than its " + std::to_string(in.size()) +
+                                  " bytes can hold");
+    }
+
+    std::size_t at = kAssertSnapshotFixedSize;
+    decoded.groups.reserve(decoded.fields.group_count);
+    for (std::uint32_t i = 0; i < decoded.fields.group_count; ++i) {
+        // Every block is bounds-checked before it is read, because
+        // `group_count` is bytes off a device: a record claiming more groups
+        // than it carries must be Corruption and never a read past the end.
+        if (Status s = CheckInputSize(in, at + kAssertSnapshotGroupFixedSize, "ASSERT_SNAPSHOT");
+            !s.ok()) {
+            return s;
+        }
+        SnapshotGroupEntry group;
+        group.group_id = Load<std::uint32_t>(in, at + kAssertSnapshotGroupIdOffset);
+        const std::uint32_t key_len = Load<std::uint32_t>(in, at + kAssertSnapshotGroupKeyLenOffset);
+        group.count = static_cast<std::int64_t>(
+            Load<std::uint64_t>(in, at + kAssertSnapshotGroupCountValueOffset));
+        group.sum = static_cast<std::int64_t>(
+            Load<std::uint64_t>(in, at + kAssertSnapshotGroupSumOffset));
+
+        const std::size_t key_at = at + kAssertSnapshotGroupFixedSize;
+        if (Status s = CheckInputSize(in, key_at + key_len, "ASSERT_SNAPSHOT"); !s.ok()) {
+            return s;
+        }
+        group.key = in.subspan(key_at, key_len);
+        decoded.groups.push_back(group);
+        at = key_at + key_len;
+    }
+    return decoded;
 }
 
 }  // namespace kds::wal

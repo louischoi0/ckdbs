@@ -15,22 +15,266 @@ the owner's workplan.
 
 ## Durability and recovery
 
-- **WAL recovery is not implemented.** The log is written and never read
-  back; a crash is protected only by the last checkpoint / `SYNC` / clean
-  shutdown. Do not attempt a partial recovery (`docs/wal.md`,
-  `docs/txn.md` §8's instruction). **Planned 2026-08-10:**
-  `docs/workplan-wal-recovery.md` (RV1-RV9, RC01-RC10) — and its survey
-  corrects the impression this entry gives, that the substrate is missing
-  too. It is not: the scan with torn-tail detection, both checkpoint
-  tables, the per-core anchors, the `page_lsn` gate, FPI and the
-  acceptance tests all exist. What is missing is the phases, the
-  per-record appliers, and **a durable record of an INSERT** — rollback
-  walks an in-memory trail that a crash destroys, so a loser's inserts
-  cannot be undone from the log today.
-- **MVCC ships before recovery** (`docs/txn.md` §8): an uncommitted row
-  surviving a crash reads as **committed** on the next boot — its writer id
-  is below the new high-water mark and in no live set. No cheap mitigation
-  exists; closing it requires a persisted commit watermark, i.e. recovery.
+- ~~**WAL recovery is not implemented.** The log is written and never read
+  back~~ — **recovery runs at mount as of 2026-08-12** (`RV1`,
+  `docs/workplan-wal-recovery.md`, `include/kds/server/mount_recovery.hpp`).
+  RC01-RC06 were built earlier and **nothing called them**: `RecoverCore`
+  was reachable only from `tests/wal_recovery_test.cpp`, so every crash
+  still recovered nothing. `Expeditor::Open` and `CoreRuntime::Open` now run
+  analysis → redo → the high-water repair → undo against their own core's
+  stream before the listener binds, and `SimInstance::Boot` does the same, so
+  SIM04's crash contract is armed rather than counted
+  (`sim/loop.hpp`'s `kRecoveryImplemented`, RC10's first half).
+  A mount ends by publishing an anchor past everything it replayed (RC08, built
+  the same day), so the next crash replays only what followed rather than
+  rescanning the stream — **except on a peer core**, which cannot write page 0
+  and so still scans from whatever anchor core 0 last wrote it (costless today:
+  a peer holds no transaction ids, so its stream carries no writes of its own).
+  `SHOW META` reports what the last mount's recovery did — records scanned,
+  transactions committed and rolled back, per-phase timings, and the audit below
+  (RC09, built the same day).
+  **RC07 closed the same day**, so every task in the series is built. What keeps
+  this entry struck rather than deleted is what v1 still does not promise (§6):
+  the catalog is not recovered (RV3, below), nothing is purged, and `D3`'s window
+  is bounded rather than zero. The findings below are what running recovery
+  *produced* — three defects in code that predates it, all fixed, and one
+  measured cost.
+
+- **The catalog is still not recovered, and `catalog_recovered=0` says so on
+  every `SHOW META`** (RV3, RC09). A crash can still lose a `CREATE TABLE`, so
+  recovery's promise is *"every acknowledged commit to a relation that survived
+  is restored"* and never "nothing was lost". Half of that gap is now counted:
+  `recovery_relations_missing_pages` reports user relations the catalog still
+  describes whose descriptor or var-heap root page the crash took, in
+  O(relations). **The other half cannot be counted at all** — rows whose
+  relation the catalog lost — because resolving a page to its relation needs a
+  page→relation index that `page.md` does not have, and whose absence is
+  already the named blocker on page reuse
+  (`docs/feat-physical-optimizer.md` §6 gate 3). Building the set instead would
+  mean walking every page of every relation at every mount.
+
+- **A recovered Bound Cabin's entry list is a superset of the live one, and
+  `VerifyAgainstEntries` cannot be run on it** — found by review 2026-08-12,
+  **half fixed**. Two independent causes:
+
+  1. ~~the page walk and the `ASSERT_*` fold both attach the linkage for an entry
+     written after the checkpoint into a group that existed at it~~ — **fixed**:
+     `BoundCabin::DedupeEntryLinkage` reconciles them once at the end of a
+     rebuild, and `AssertionRecoveryResult::duplicate_links_dropped` reports how
+     many overlapped. A slot holds one entry, so a repeated `(page_id, index)` is
+     always the duplicate.
+  2. **an aborted reservation's orphaned entry cannot be told from a live one.**
+     `AssertionEnforcer::AbortTxn` leaves the entry bytes on the page by design —
+     "the orphaned slot is the recorded leak that rides on purge" — and the
+     rebuild has no way to distinguish it, so any cabin whose history includes a
+     pre-checkpoint abort relinks an entry the live directory had dropped.
+
+  The **aggregate is correct either way** (snapshot + folded deltas), so
+  admission answers right and the constraint enforces correctly. What does not
+  hold is the structural proof `docs/feat-assertion.md` §5.2 names — "the entries
+  remain the authority, the snapshot is a derived cache, and
+  `VerifyAgainstEntries` is what proves one against the other" — because on a
+  recovered cabin that check reports `Corruption` for a directory that is right.
+
+  **This is an AS6a decision, not a bug to pick a fix for**: either the fold owns
+  linkage and the page walk stops attaching (which costs AS6a's `Unapply`
+  ordering note), or an aborted entry becomes distinguishable on the page (which
+  is a flag write on the abort path, i.e. a format touch), or §5.2's proof is
+  narrowed to say it holds on a live cabin only. Owned by
+  `docs/feat-assertion.md` §7.
+
+- **Assertion recovery is a third full `ScanLog` per mount whenever the anchor is
+  zero** — noted by review 2026-08-12. `exec::RecoverAssertions` scans from the
+  anchor's `checkpoint_lsn`, which is *narrower* than redo's range only once a
+  checkpoint has been published; on a database that has never completed one it is
+  the whole stream. Combined with the two-scan entry below, that is three passes
+  and 192 MiB of reads on a default 64 MiB segment before the first statement.
+  Exactly zero when no assertion is declared (the pass early-returns), and RC08
+  makes the zero-anchor case a first-mount-only state. Same fix as below: read to
+  the durable end, or stream in chunks.
+
+- **A mount reads each WAL segment's whole body, once per scan, and there are
+  three scans** — measured 2026-08-12 and **partly closed the same day**;
+  `bench/results-wal-recovery.md` carries the numbers and the method.
+  `ScanLog` reads from the anchor to the *segment's* end, so the cost tracks
+  segment bytes and not record count: 0.63 ms/MiB, constant to 4% across 64.0 /
+  63.6 / 56.9 / 28.1 MiB while the record count stayed at 2. **An empty log is
+  therefore the worst case, which is the opposite of the intuition**, and
+  `kDefaultSegmentSize` has quietly become a startup-latency knob.
+
+  Three scans, not two: `WalStream::ScanTail` at WAL open, then analysis, then
+  redo — and a fourth whenever an assertion is declared
+  (`exec::RecoverAssertions`, which scans the whole stream while no anchor
+  exists).
+
+  **Closed half of it**: the scan buffer is no longer value-initialised
+  (`make_unique_for_overwrite`, so `ReadAt` writes each byte exactly once), which
+  measured **−24.7 to −26.0 ms per mount** in an interleaved A/B — 137 ms → 112
+  ms, ~18%, at −8 ms per scan.
+
+  **Still open, and this is the corrected number**: a mount is **112 ms** where
+  the pre-recovery engine was **49.5 ms**, and ~65 ms of it is the reads
+  themselves. An earlier version of this entry said "86 ms of a ~90 ms mount";
+  the ~90 was wrong — a mount was 132-140 ms before the buffer fix and 49.5 ms
+  before recovery existed at all, so recovery is ~64% of a mount and not ~96%.
+  The remaining fix is a **narrower read** — to the durable end, or streamed in
+  chunks — and it belongs beside the segment-size decision that is still
+  `[OPEN]` (`docs/wal.md` §15).
+
+- **An INSERT-with-spill writes 1.8-2.0× the WAL bytes it used to, and that
+  multiplies a 487 ms stall** — measured 2026-08-12,
+  `bench/results-wal-recovery.md`. The `PAGE_INIT` + 8 KiB `FULL_PAGE_IMAGE` per
+  var-heap chain growth is what the correctness fix above costs: 3764 B against
+  2122 B per spilling INSERT at 1600-byte values, 16,886 against 8626 at 8100.
+  **Per-statement latency did not regress** — the delta is inside a ~9 µs noise
+  floor at 1600 B, and +2.7 µs (+3.5%) at the pathological size where every row
+  grows the chain, with p0 identical on both sides.
+
+  The cost that matters is indirect: `FileLogDevice::CreateSegment` takes
+  **487 ms** on the statement thread (`posix_fallocate` + a 64 × 1 MiB prewrite +
+  two fsyncs), so WAL volume decides how often a client waits for one. At 10k
+  rows of 8100-byte values that moved from two segment creations to three.
+  Pre-existing and unrelated to this change, but now amplified by it, and the
+  reason a segment's creation cost belongs on someone's list.
+
+  (An UPDATE-with-spill writes 10-46× more, and that number is the size of the
+  hole that was there: at the previous commit it wrote 361 B, exactly what an
+  *inline* update writes, because its value was not logged at all.)
+
+- ~~**A clean shutdown publishes no anchor**~~ — **fixed 2026-08-12** for the
+  graceful path: `Expeditor::Serve` now checkpoints on its way out, and
+  `SimInstance::CleanShutdown` does the same so the harness stops the way the
+  server does. Verified on a running server: after a `STOP`, the next mount reads
+  **2 records where it read 1205**, with every row still present.
+
+  **The order is the fix, not the call.** A checkpoint's redo start is
+  `min(recLSN)` over the dirty table it snapshots at BEGIN (`wal.md` §11-3), so
+  checkpointing *before* the final sync publishes an anchor pointing at the oldest
+  still-dirty page — near the start of the log on any busy run. Written that way
+  first, it changed 10,883 re-read records into 1205. Synced first, the dirty
+  table is empty and the redo start is the `CHECKPOINT_BEGIN` LSN itself.
+
+  **What it does not buy, measured**: mount wall time barely moves at this size
+  (`recovery_analysis_us` ~34 ms either way), because the scan reads the whole
+  segment body regardless of how many records are in it — the still-open entry
+  above. What the anchor bounds is the *work*: records decoded, and redo actually
+  applied where pages had not been flushed. It also makes the anchor honest, so
+  the narrower-read fix pays off when it lands.
+
+- **A process-manager stop is not the graceful path — the server handles no
+  signals at all** (found 2026-08-12 while verifying the entry above). `main.cpp`
+  installs no `SIGTERM` or `SIGINT` handler, so `systemctl stop`, a container
+  stop, and Ctrl-C all terminate the process mid-flight: no final sync, no
+  shutdown checkpoint, and the next mount recovers as if from a crash. The only
+  route to `Serve()`'s shutdown tail is a client typing `STOP`.
+
+  That is why the fix above reads as ineffective when measured through a harness
+  that sends `SIGTERM` and calls it a clean stop — it is a crash wearing that
+  label. Closing it means a handler that sets a flag and a reactor that polls it
+  (a handler may do almost nothing else safely), which is a change to how the
+  server responds to the outside world and belongs in its own change rather than
+  smuggled into a recovery fix.
+
+- **`varheap::ChainAppend` walks the chain root-to-tail on every append**, with
+  no tail cache, so a spilling INSERT is O(chain length) and unbounded — found
+  2026-08-12 while measuring the var-heap write path, and **pre-existing**
+  (identical on both sides of the change). Visible as p25 rising 71.7 µs → 107-135
+  µs from 1k to 10k spilling rows while the inline control does not move. The
+  heap chain solved this with a tail hint (`heap_tail_hint`); the var-heap has
+  no equivalent.
+
+- ~~**Var-heap page growth and UPDATE's spills are not logged, and recovery
+  found it**~~ — **fixed 2026-08-12**, all three holes, with the reproducer
+  now a test rather than a seed. `varheap::ChainAppend` returns a
+  `ChainAppendResult` naming the page it created and the tail it linked;
+  `CommandDispatcher::LogSpills` logs a `kVarHeap` `PAGE_INIT`, a full page
+  image of the linked tail, then the `VARHEAP_APPEND` — and **UPDATE now calls
+  it**, its `VarHeapSink` having previously carried no collector at all.
+  Pinned by `InsertWalTest.GrowingTheVarHeapChainLogsTheNewPageAndTheLinkThatReachesIt`
+  and `InsertWalTest.AnUpdateThatSpillsLogsTheValueItSpilled`. What was
+  wrong, kept because the shape recurs:
+
+  1. `varheap::ChainAppend` grows a chain with `store.CreateNew()` +
+     `FormatPage()` and logs **no `PAGE_INIT`** for the new page — while the
+     heap and btree paths log one for every page they create.
+  2. The **chain link edit** on the old tail is unlogged, so a replay can
+     leave a value page that exists and is unreachable.
+  3. **An UPDATE's spills are not logged at all**: its `VarHeapSink` is
+     built with no `appended` collector, so no `VARHEAP_APPEND` is ever
+     written for a value an UPDATE spilled. The INSERT path collects and
+     logs; the UPDATE path does not.
+
+  It was reachable, and loud rather than silent for (1): a crash losing a new
+  var-heap page's write-back left a durable `VARHEAP_APPEND` naming a page no
+  `PAGE_INIT` creates, and redo **refused the mount** — reproduced at
+  `ckdbs-sim --seed 7 --ops 3000 --mode crash --iterations 3`.
+  `wal::ApplyPageInit` already formatted a `kVarHeap` page (RC03 anticipated
+  it), so what was missing was the record nobody wrote and never an applier.
+
+- **`HEAP_DELETE_UNMARK` could not be written at all** — found and **fixed
+  2026-08-12**, and it is the third defect recovery work exposed rather than
+  introduced. RC05 added the type as 23 and left `kMaxAssignedRecordType` at 22,
+  which is the bound `EncodeRecord` enforces — so every attempt to log one
+  answered *"unassigned record type"*. `TransactionManager::Compensate` could not
+  log the compensation for an aborted DELETE, and `txn::RecoveryUndo` could not
+  either, so a mount that had to roll back a loser's DELETE **failed**. It hid
+  because every test that covers those paths runs with `wal = nullptr`, where no
+  record is written, and because a test asserted `IsAssignedRecordType(23) ==
+  false` — agreeing with the stale bound instead of with the enum.
+
+  The constant is now **derived from the last enumerator** rather than typed, so
+  appending a type cannot leave it stale, and
+  `WalRecordTest.EveryNamedTypeIsWritable` is the general guard: a type with a
+  name is a type some site intends to write, so it must encode. Verified to fail
+  against the old bound.
+
+- **`AssertEntryPayload`'s offsets moved with no format-version bump, and the
+  argument that licensed it expired inside the same eight commits** — noted by
+  review 2026-08-12, deliberately not "fixed". AS6a's licence was that both
+  format touches are free *"today … no WAL stream has ever been read back"*, and
+  `6d7b91b` in that very range is what makes streams get read back.
+  `kAssertEntryFixedSize` went 16 → 20, so every byte after offset 16 shifted,
+  while `kSegmentFormatVersion` is still 1. A database written between AST05 and
+  this work and then mounted with this build mis-decodes `ASSERT_*` records — it
+  fails loudly (`CheckInputSize` short by 4), never silently, and no such
+  database is known to exist pre-1.0.
+
+  Left as a record rather than a bump because moving a persisted format version
+  is a decision with its own blast radius (it refuses older streams outright),
+  and `docs/wal.md` §15 still lists the segment format as open. What is *not*
+  left ambiguous is the reasoning: the "free today" argument may not be reused
+  again without checking whether it is still true.
+
+- **A segment sealed with no room for a PAD was read as a torn tail** — found
+  and **fixed 2026-08-12** (`src/wal/log_scanner.cpp`), and it is the second
+  defect recovery exposed rather than introduced. `WalStream::Seal` writes its
+  marker only when the tail can hold a record header; a shorter tail is left as
+  the zeroes the segment was created with, and `stream.cpp`'s comment claimed a
+  reader would take that to "mean exactly what the marker means". `ScanLog` did
+  not: it stopped there, so **every record in every later segment was silently
+  dropped** and recovery restored a truncated stream while reporting success.
+  Visible as acknowledged rows missing after a restart, once a run was long
+  enough to roll a segment. The fix tells a seal from a tear by the same
+  `kRecordHeaderSize` bound the writer decides with. `WalStream::ScanTail` was
+  never affected — it only ever reads the last segment.
+
+  **Both defects hid behind a green suite for the same reason**: the committed
+  seed corpus runs at 1500 ops, which neither rolls a 1 MiB segment nor fills a
+  var-heap page. `SimLoop.ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow`
+  now runs seed 24 at 3500 ops for exactly those two boundaries, and
+  `LogScannerTest.ASegmentSealedWithNoRoomForAPadStillContinuesIntoTheNext`
+  lands the tail on 24 bytes deliberately — the existing boundary test used
+  3000-byte payloads, which always leave room for a marker.
+- ~~**MVCC ships before recovery** (`docs/txn.md` §8): an uncommitted row
+  surviving a crash reads as **committed** on the next boot~~ — **closed for
+  the mount path 2026-08-12.** Undo now runs before the listener binds, so a
+  loser's rows are rolled back rather than published, and `RecoverCore`
+  refuses the mount outright if it cannot do that (RV1). The gap's *shape*
+  survives only where recovery is bypassed: `SimInstanceOptions::skip_recovery`
+  is the harness's fault injection and boots into exactly the old behaviour,
+  which is how the durability assertion is proved able to fail
+  (`tests/sim_loop_test.cpp`). `docs/txn.md` §8 needs amending at the source
+  (RC10).
 - **DDL and catalog writes are unlogged**, and DDL is not transactional
   (`docs/txn.md` §7): `CREATE TABLE` inside a transaction is not rolled
   back.
@@ -51,10 +295,27 @@ the owner's workplan.
 - **Cabin entry sets** are memory-resident by design
   (`docs/feat-cabin.md` §9): the `sys.cabins` row survives, the sets
   re-observe from traffic.
-- **Assertion enforcement**: the registry/directory is memory-resident, so
-  a surviving assertion honestly reports `enforcing=0` until recovery can
-  replay the directory (`docs/feat-assertion.md`). The durable Bound Cabin
-  pages and the catalog row survive.
+- ~~**Assertion enforcement**: the registry/directory is memory-resident, so a
+  surviving assertion honestly reports `enforcing=0` until recovery can replay
+  the directory~~ — **closed 2026-08-12** (RC07, AS6a). A mount revives each
+  surviving declaration from `sys.assertions` (§8.2 keeps `source_text` as the
+  canon so the group columns can be recovered by re-parsing it), restores its
+  group headers from the last checkpoint's `ASSERT_SNAPSHOT`, relinks the entries
+  by scanning the cabin's own pages — bounded by the assertion's entry count, not
+  the relation's rows — and folds the `ASSERT_*` records after the snapshot.
+  `SHOW ASSERTIONS` reports `enforcing=1` immediately, which is what
+  `docs/feat-assertion.md` §7 always claimed and the engine contradicted until
+  now.
+
+  Two things stay true and are reported rather than assumed. An assertion whose
+  directory could not be rebuilt — no snapshot in range, a declaration that no
+  longer parses, a group column an `ALTER` renamed — is **left out of the
+  registry** and counted in `SHOW META`'s
+  `recovery_assertions_unrecovered`: a cabin at zero admits every write, so
+  adopting one would report `enforcing=1` for a constraint enforcing nothing. And
+  the §9 counters still restart at zero, because they live and die with the
+  directory by design.
+
 - **Waystone sighting counts** restart (a performance event, never a
   correctness one — invariant 8).
 

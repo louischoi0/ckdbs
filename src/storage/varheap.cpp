@@ -211,8 +211,8 @@ StatusOr<PageId> CreateChain(storage::PageStore& store) {
     return page_id;
 }
 
-StatusOr<VarHeapPtr> ChainAppend(storage::PageStore& store, PageId root,
-                                  std::span<const std::byte> value) {
+StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
+                                        std::span<const std::byte> value) {
     if (root == kInvalidPageId) {
         return Status::InvalidArgument(
             "this relation has no var-heap chain; it was created without a spillable column");
@@ -245,7 +245,11 @@ StatusOr<VarHeapPtr> ChainAppend(storage::PageStore& store, PageId root,
 
     auto slot = PageAppend(Fixed(tail.value()), value);
     if (slot.ok()) {
-        return VarHeapPtr{tail_id, slot.value()};
+        // The common case, and the one that needs no structural record: an
+        // existing page took the value, and the append record describes it
+        // completely.
+        return ChainAppendResult{VarHeapPtr{tail_id, slot.value()}, kInvalidPageId,
+                                 kInvalidPageId};
     }
     if (slot.status().code() != StatusCode::kOutOfSpace) {
         return slot.status();  // a real failure, not a full page
@@ -275,7 +279,9 @@ StatusOr<VarHeapPtr> ChainAppend(storage::PageStore& store, PageId root,
     if (!tail_again.ok()) return tail_again.status();
     std::memcpy(tail_again.value().data() + kNextPageIdOffset, &new_id, sizeof(new_id));
 
-    return VarHeapPtr{new_id, new_slot.value()};
+    // Both halves of the growth reported, because neither is described by the
+    // append record the caller is about to write (ChainAppendResult).
+    return ChainAppendResult{VarHeapPtr{new_id, new_slot.value()}, new_id, tail_id};
 }
 
 StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr ptr) {

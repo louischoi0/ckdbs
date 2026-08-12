@@ -114,6 +114,24 @@ public:
         // This core's page-id lease, carved by core 0's ExtentAllocator
         // before the worker starts.
         storage::Extent lease;
+
+        // This core's WAL anchor, copied out of core 0's superblock on the
+        // startup thread - where recovery starts this stream's scan (RV1/RV2,
+        // server/mount_recovery.hpp). It cannot be read from `superblock_`
+        // below: that is a default-constructed copy whose anchor slots are
+        // all zero, and a peer's checkpointer publishes its anchor *through*
+        // core 0 (remote_checkpoint_anchor.hpp) rather than into its own.
+        // A zeroed anchor is legal and means "no checkpoint yet, scan from
+        // the head of the stream" - which is why the mistake would be silent.
+        //
+        // Value-initialized, and that brace is load-bearing:
+        // `WalAnchorFields` is a plain on-disk layout with no member
+        // initializers (superblock.hpp), so a caller that left this field
+        // alone would otherwise hand recovery whatever was on the stack.
+        // Which is not a subtle failure - it is `ScanLog: lsn 1065353216
+        // names segment 15`, and a mount that refuses because of a
+        // caller's stack contents.
+        WalAnchorFields anchor{};
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and

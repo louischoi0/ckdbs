@@ -2,7 +2,10 @@
 
 #include <utility>
 
+#include "kds/server/mount_recovery.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/server/superblock_checkpoint_anchor.hpp"
+#include "kds/storage/page_store_checkpoint_target.hpp"
 
 namespace kds::sim {
 
@@ -43,12 +46,45 @@ Status SimInstance::Boot() {
     if (!boot.ok()) return boot.status();
     boot_.emplace(std::move(boot.value()));
 
+    // **Recovery, exactly where the expeditor runs it** (RV1,
+    // server/mount_recovery.hpp). The harness is a full instance, and a
+    // reboot that skipped the phase a real mount runs would grade an engine
+    // this project does not ship: SIM04's crash contract is what recovery is
+    // *for*, so the loop must be measuring the recovered image.
+    //
+    // The undo log comes first because undo writes through it, and the id
+    // sequence comes after because it caches the transaction ceiling at
+    // construction (txn/trx_id.hpp) - the same ordering Expeditor::Open has.
+    // Whether this boot owes the two steps that have to follow the dispatcher
+    // (see below). A local: both the set and the read are inside this function.
+    const bool run_recovery_tail = !options_.skip_recovery;
+
+    undo_.emplace(*store_, wal_.get());
+    if (!options_.skip_recovery) {
+        auto recovered = server::RecoverCoreAtMount(/*core_id=*/0, boot_->superblock.wal_anchor(0),
+                                                    *log_device_, *store_, *undo_, wal_.get(),
+                                                    /*log=*/nullptr);
+        if (!recovered.ok()) return recovered.status();
+        recovery_ = recovered.value();
+        if (recovered.value().next_trx_id > boot_->superblock.next_trx_id()) {
+            if (Status s = boot_->superblock.SetNextTrxId(recovered.value().next_trx_id); !s.ok()) {
+                return s;
+            }
+            if (Status s = PersistSuperBlock(); !s.ok()) return s;
+        }
+
+        // The completion checkpoint (RC08), for the reason the harness runs
+        // recovery at all: without it every reboot rescans from the head of the
+        // stream, because nothing here runs the periodic checkpointer - so the
+        // harness would be measuring a mount cost no server pays and missing
+        // the one property RC08 adds.
+    }
+
     // The persist callback, exactly as the expeditor wires it: the harness
     // is a full instance, and the null-persist path is the socket-free
     // tests' — ids reissued across a restart would be *this harness's*
     // fault, not the engine's.
     trx_ids_.emplace(boot_->superblock, [this] { return PersistSuperBlock(); });
-    undo_.emplace(*store_, wal_.get());
     txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get());
 
     dispatcher_.emplace(boot_->superblock, boot_->catalog, *store_, /*log=*/nullptr,
@@ -56,7 +92,28 @@ Status SimInstance::Boot() {
                         exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
                         /*access_statistics=*/true, /*cabins=*/nullptr, &*txn_);
     session_ = server::Session();
+
+    // Assertion enforcement and the completion checkpoint, in the expeditor's
+    // order and for its reason (RC07/RC08): the registry lives on the dispatcher
+    // that has only just been built, and the checkpoint has to be written *after*
+    // it is refilled, because that checkpoint becomes the anchor the next mount
+    // folds its directories from.
+    if (run_recovery_tail) {
+        recovery_ = server::ResumeAssertionsAfterRecovery(
+            boot_->catalog, *store_, *log_device_, /*core_id=*/0,
+            boot_->superblock.wal_anchor(0).checkpoint_lsn, dispatcher_->assertions(),
+            recovery_, /*log=*/nullptr);
+        if (Status s = RunCheckpoint(); !s.ok()) return s;
+    }
     return Status::OK();
+}
+
+Status SimInstance::RunCheckpoint() {
+    storage::PageStoreCheckpointTarget target(*store_);
+    server::SuperBlockCheckpointAnchor anchor(boot_->superblock, *store_);
+    return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, anchor,
+                                           /*log=*/nullptr, /*clock=*/nullptr,
+                                           /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
 }
 
 void SimInstance::TearDown() {
@@ -89,6 +146,10 @@ Status SimInstance::CleanShutdown() {
     if (reply.rfind("OK", 0) != 0) {
         return Status::IoError("clean shutdown: SYNC answered: " + reply);
     }
+    // The anchor, on the way out. `Expeditor::Serve` does this for the reason
+    // this harness has to as well: a stop that syncs and publishes nothing
+    // leaves the next mount re-reading every record this run wrote.
+    if (Status s = RunCheckpoint(); !s.ok()) return s;
     TearDown();
     return Status::OK();
 }

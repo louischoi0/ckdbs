@@ -12,6 +12,7 @@
 #include "kds/exec/bound_cabin.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/wal/checkpointer.hpp"  // AS6a: the snapshot seam this registry implements
 
 // The write-path admission and reservation protocol (docs/feat-assertion.md
 // §§4.2, 6.2; workplan AST07): the one place a write is checked against a
@@ -110,7 +111,12 @@ struct LiveAssertion {
     LiveAssertion() : cabin(BoundAggregate::kCount, 0) {}
 };
 
-class AssertionEnforcer {
+// The registry, and - since RC07 - the checkpoint's snapshot source: it is what
+// holds the live directories, so it is what can hand their group headers to a
+// checkpoint (AS6a). Implementing the seam here rather than wrapping it
+// elsewhere keeps "who owns the directory" and "who can snapshot it" the same
+// answer.
+class AssertionEnforcer final : public wal::AssertionSnapshotSource {
 public:
     bool empty() const noexcept { return live_.empty(); }
     bool Holds(std::uint64_t assertion_id) const { return live_.count(assertion_id) != 0; }
@@ -126,6 +132,12 @@ public:
 
     void Adopt(LiveAssertion assertion);
     void Evict(std::uint64_t assertion_id);
+
+    // The checkpoint's base (AS6a, RC07): every live cabin's group headers,
+    // `{group_id, key, count, sum}` and never the entry lists. Keys are owned by
+    // the returned value, so nothing here dangles once the checkpoint encodes
+    // them.
+    std::vector<wal::AssertionCabinSnapshot> SnapshotAssertions() const override;
 
     // INSERT's admission, pure - run before the row id is allocated, FK's
     // ordering, so a refusal burns nothing. `values` are the statement's

@@ -1,5 +1,7 @@
 #include "kds/wal/log_scanner.hpp"
 
+#include <memory>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -87,7 +89,22 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
     // One buffer, reused across segments. The visitor contract says a
     // payload does not outlive its call, which is what makes that legal.
     std::vector<std::byte> header_block(kSegmentHeaderSize);
-    std::vector<std::byte> body;
+
+    // **Allocated once and never zeroed**, and that is a measured decision, not
+    // a micro-optimisation. `body.assign(body_bytes, std::byte{0})` per segment
+    // was **78% of a scan's cost** - zeroing 64 MiB that the very next `ReadAt`
+    // overwrites in full (`bench/results-wal-recovery.md`: 30.3 ms to
+    // alloc+zero, 8.4 ms to read it). A mount runs two of these scans, three
+    // once an assertion is declared, so it was ~60-90 ms of startup spent
+    // writing bytes nobody reads.
+    //
+    // `make_unique_for_overwrite` is the one allocation that skips value
+    // initialisation. Every byte handed to `RecordReader` below has been written
+    // by `ReadAt` first: the span is exactly the range that call filled, so no
+    // uninitialised byte is ever read - which is the property that makes this
+    // safe rather than merely fast.
+    const std::size_t body_capacity = static_cast<std::size_t>(segment_size - kSegmentHeaderSize);
+    auto body_storage = std::make_unique_for_overwrite<std::byte[]>(body_capacity);
 
     for (; segment_no < segment_count; ++segment_no) {
         const Lsn start_lsn = segment_no * segment_size;
@@ -104,7 +121,10 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
             (segment_no == start_segment) ? start_offset : kSegmentHeaderSize;
         const std::uint64_t body_bytes = segment_size - body_offset;
 
-        body.assign(static_cast<std::size_t>(body_bytes), std::byte{0});
+        // The first segment of a scan may start part-way in, so the span is the
+        // tail of the buffer's capacity rather than all of it.
+        const std::span<std::byte> body(body_storage.get(),
+                                        static_cast<std::size_t>(body_bytes));
         if (Status s = device.ReadAt(segment_no, body_offset, body); !s.ok()) {
             return s;
         }
@@ -132,12 +152,37 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
 
         out.sealed = sealed;
         if (!sealed) {
-            // An unsealed segment is the tail: either the writer stopped
-            // here cleanly, or a record was torn. Either way the stream
-            // ends, and a later segment - if one somehow exists - is not
-            // reachable from it.
-            out.stopped_early = reader.stopped_early();
-            return out;
+            // **A segment can be sealed without a PAD, and this used to be
+            // read as the end of the stream.**
+            //
+            // `WalStream::Seal` writes the marker only when the tail can hold
+            // a record header; a shorter tail is "left as the zeroes the
+            // segment was created with" (stream.cpp), because a PAD is
+            // header-only and there is nowhere to put one. That is a seal, and
+            // the stream continues in the next segment.
+            //
+            // Read as a torn tail instead, the scan returned here and **every
+            // record in every later segment was silently dropped** - which
+            // recovery reported as acknowledged rows missing after a restart,
+            // once a run was long enough to roll a segment. Found by SIM04's
+            // crash loop at 3500 ops, 2026-08-12.
+            //
+            // The remainder is what tells a seal from a tear, and it is
+            // measured against the same constant the writer decided with:
+            // below `kRecordHeaderSize` no marker could have been written, at
+            // or above it the absence of one means a record really was torn -
+            // the expected shape of a crash, and the end of the stream.
+            const std::uint64_t consumed = out.end_lsn - start_lsn;
+            const bool sealed_by_exhaustion =
+                segment_size - consumed < kRecordHeaderSize && segment_no + 1 < segment_count;
+            if (!sealed_by_exhaustion) {
+                out.stopped_early = reader.stopped_early();
+                return out;
+            }
+            // Continue exactly as the PAD path does: the next iteration sets
+            // `end_lsn` from that segment's first record.
+            out.sealed = true;
+            continue;
         }
 
         // Sealed. A sealed *last* segment means the roll never completed:

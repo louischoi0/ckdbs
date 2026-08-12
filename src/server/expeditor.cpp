@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <sched.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <limits>
@@ -552,15 +553,74 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->trail_recorder_.emplace(expeditor->database_->catalog, *expeditor->store_,
                                            &expeditor->clock_);
     }
-    // The transaction stack, before the dispatcher that reads through it.
-    // The persist callback is what makes a reserved id block durable: the
-    // superblock is unlogged, so a block is only safe once the page has
-    // been written and synced (txn/trx_id.hpp records the exposure that
-    // leaves).
+    // The undo log, ahead of the rest of the transaction stack, because
+    // recovery's undo phase writes through it and must run before anything
+    // else in that stack exists (below).
+    expeditor->undo_log_.emplace(*expeditor->store_, &*expeditor->wal_);
+
+    // **Recovery, before anything can read a page or issue an id** (RV1,
+    // server/mount_recovery.hpp). This is core 0's stream; every peer's is
+    // recovered by its own CoreRuntime::Open (RV2 - no order between
+    // streams).
+    //
+    // Where it sits is not a preference. Three things must already be true
+    // and two must not yet be:
+    //
+    //   - the WAL manager is open, so its stream is positioned past the
+    //     crash tail and undo's compensations append rather than overwrite
+    //     (wal/stream.cpp's ScanTail);
+    //   - the WAL gate is installed, so redo's page write-backs obey
+    //     WAL-before-data like every other write;
+    //   - the superblock is decoded, because the anchor recovery starts
+    //     from lives in it;
+    //   - **`TrxIdSequence` does not exist yet**, because it caches the
+    //     ceiling at construction (txn/trx_id.hpp): raising `next_trx_id`
+    //     after building it would change a field nothing reads again, and
+    //     the sequence would hand out ids the log already names;
+    //   - **no extent has been carved**, because the allocator's search hint
+    //     must start above the floor recovery establishes (RC04's
+    //     obligation 1, applied at StartPeers below).
+    auto recovered = RecoverCoreAtMount(/*core_id=*/0,
+                                        expeditor->database_->superblock.wal_anchor(0),
+                                        *expeditor->log_device_, *expeditor->store_,
+                                        *expeditor->undo_log_, &*expeditor->wal_,
+                                        &*expeditor->logger_, &expeditor->clock_);
+    if (!recovered.ok()) return recovered.status();
+    expeditor->recovery_ = recovered.value();
+
+    // RV3's audit (RC09): the catalog survived unlogged, so ask it whether the
+    // relations it still describes can actually be opened. O(relations), one
+    // page read each, and it reports rather than refuses - an unopenable
+    // relation is the finding, not an error hit while producing it.
+    expeditor->recovery_ = AuditCatalogAfterRecovery(
+        expeditor->database_->catalog, *expeditor->store_, expeditor->recovery_,
+        &*expeditor->logger_);
+
+    // The transaction ceiling recovery computed, applied and made durable
+    // before the sequence that caches it is built. `SetNextTrxId` refuses to
+    // lower one, so the guard is what keeps a log that names nothing from
+    // being an error.
+    if (expeditor->recovery_.next_trx_id > expeditor->database_->superblock.next_trx_id()) {
+        if (Status s =
+                expeditor->database_->superblock.SetNextTrxId(expeditor->recovery_.next_trx_id);
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = expeditor->PersistSuperBlock(); !s.ok()) return s;
+        expeditor->logger_->Info("recovery",
+                                 "transaction-id ceiling raised to " +
+                                     std::to_string(expeditor->recovery_.next_trx_id) +
+                                     " past what the log names");
+    }
+
+    // The rest of the transaction stack, before the dispatcher that reads
+    // through it. The persist callback is what makes a reserved id block
+    // durable: the superblock is unlogged, so a block is only safe once the
+    // page has been written and synced (txn/trx_id.hpp records the exposure
+    // that leaves).
     Expeditor* self = expeditor.get();
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
                                 [self] { return self->PersistSuperBlock(); });
-    expeditor->undo_log_.emplace(*expeditor->store_, &*expeditor->wal_);
     expeditor->txn_manager_.emplace(*expeditor->trx_ids_, *expeditor->undo_log_,
                                     *expeditor->store_, &*expeditor->wal_);
 
@@ -578,6 +638,57 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});
     expeditor->dispatcher_->set_sort_max_rows(expeditor->config_.sort_max_rows);
+    // SHOW META's recovery block (RC09). A pointer into the member rather than
+    // a copy, so the block reports the mount's own report and cannot drift from
+    // it; `recovery_` is declared above the dispatcher and so outlives it.
+    expeditor->dispatcher_->set_recovery(&expeditor->recovery_);
+
+    // **Assertion enforcement, resumed** (RC07, AS6a). Here rather than beside
+    // the recovery call above, because the registry it refills lives on the
+    // dispatcher and the dispatcher did not exist yet - and still before
+    // `Serve()`, so no statement is accepted against an unenforcing constraint.
+    //
+    // `checkpoint_lsn` from this core's anchor is the scan start: that is the
+    // checkpoint whose snapshot is the base, which is what AS6a's "from the last
+    // checkpoint" means. The anchor read here is the one recovery already used,
+    // so the two cannot disagree about which checkpoint that was.
+    expeditor->recovery_ = ResumeAssertionsAfterRecovery(
+        expeditor->database_->catalog, *expeditor->store_, *expeditor->log_device_,
+        /*core_id=*/0, expeditor->database_->superblock.wal_anchor(0).checkpoint_lsn,
+        expeditor->dispatcher_->assertions(), expeditor->recovery_, &*expeditor->logger_);
+
+    // **The completion checkpoint** (RC08), which is what makes the next
+    // recovery cheap: it publishes an anchor past everything just replayed, so
+    // a second crash scans from here instead of from wherever the last periodic
+    // checkpoint left off - or, on a database that had never completed one,
+    // from the head of the stream every single mount.
+    //
+    // The target and the anchor are built here rather than beside the
+    // checkpointer below, because this call needs them and it must happen
+    // before any statement can dirty a page. Both are members, so the
+    // checkpointer built later borrows the same two objects and the anchor's
+    // publish count spans the mount and the cadence.
+    //
+    // **Sequenced after the assertion resume above, not before it.** This
+    // checkpoint becomes the anchor, so it is the record the *next* mount folds
+    // its assertion directories from - and it can only carry their group
+    // snapshots if the registry has already been refilled. Written the other way
+    // round, enforcement survived exactly one restart: the mount after this one
+    // would scan from a checkpoint holding no snapshot and find no base.
+    expeditor->checkpoint_target_.emplace(*expeditor->store_);
+    expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
+    expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
+    if (Status s = CheckpointAfterRecovery(/*core_id=*/0, *expeditor->wal_,
+                                           *expeditor->checkpoint_target_,
+                                           *expeditor->checkpoint_anchor_, &*expeditor->logger_,
+                                           &expeditor->clock_,
+                                           &expeditor->recovery_.checkpoint_ns,
+                                           &expeditor->dispatcher_->assertions());
+        !s.ok()) {
+        return s;
+    }
+
+
     expeditor->dispatcher_->set_relayout(expeditor->config_.physical_optimizer,
                                          expeditor->config_.decay_half_life_ns);
     // PHY01's collector, wired to both feeders: the dispatcher touches
@@ -607,12 +718,16 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
                                  ", isolation " +
                                  txn::IsolationLevelName(expeditor->config_.isolation));
 
-    expeditor->checkpoint_target_.emplace(*expeditor->store_);
-    expeditor->checkpoint_anchor_.emplace(expeditor->database_->superblock, *expeditor->store_);
-    expeditor->checkpoint_anchor_->SetLogger(&*expeditor->logger_);
+    // The target and the anchor already exist - the completion checkpoint
+    // above built them, and re-emplacing here would hand the cadence a fresh
+    // anchor whose publish count starts at zero, hiding the mount's own.
     expeditor->checkpointer_.emplace(*expeditor->wal_, *expeditor->checkpoint_target_,
                                      *expeditor->txn_manager_,
                                      *expeditor->checkpoint_anchor_);
+    // AS6a's snapshot source (RC07): every cadence checkpoint from here on writes
+    // each live cabin's group headers, which is what the *next* mount folds onto.
+    // The registry is the source because it owns the directories.
+    expeditor->checkpointer_->SetAssertionSource(&expeditor->dispatcher_->assertions());
     expeditor->checkpointer_->SetLogger(&*expeditor->logger_);
 
     if (Status s = expeditor->Sync(); !s.ok()) return s;
@@ -829,7 +944,22 @@ Status Expeditor::Serve() {
 
         // Every peer's page-id lease is carved here, on the startup thread,
         // out of core 0's free map - which is the only writer of it (M5).
-        extents_.emplace(store_->free_map_bytes(), kFirstUserPageId);
+        //
+        // The search starts above recovery's page floor, not at
+        // `kFirstUserPageId` (RC04's obligation 1, `wal/high_water.hpp`).
+        // The free map is unlogged, so a crash can revert it while the log
+        // still names pages above it; recovery raises the *store's*
+        // allocation floor past them, but an extent is carved from the map
+        // rather than through that floor - so a lease could otherwise cover
+        // exactly the pages redo just wrote. Same hazard, multicore shape.
+        // `Reserve` never scans below its hint (extent_lease.cpp), so raising
+        // it is a guarantee and not an optimization. Floored at
+        // `kFirstUserPageId` because a log naming only system pages must not
+        // *lower* where user extents start.
+        const PageId extent_hint = recovery_.page_floor_raised
+                                       ? std::max<PageId>(recovery_.page_floor, kFirstUserPageId)
+                                       : kFirstUserPageId;
+        extents_.emplace(store_->free_map_bytes(), extent_hint);
 
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             auto lease = extents_->Reserve(storage::kDefaultExtentPages);
@@ -846,6 +976,13 @@ Status Expeditor::Serve() {
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
             core_config.lease = lease.value();
+            // This peer's own anchor, copied out of the superblock core 0
+            // decoded. A peer's `SuperBlock` member is a default-constructed
+            // one whose anchor slots are all zero, and a peer's checkpointer
+            // publishes through core 0 (remote_checkpoint_anchor.hpp) - so
+            // without this copy every peer would recover from the head of its
+            // stream while core 0 recovered from its checkpoint.
+            core_config.anchor = database_->superblock.wal_anchor(core_id);
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
@@ -1099,6 +1236,23 @@ Status Expeditor::Serve() {
     // registered with it.
     listener.value().Detach();
 
+    // **A checkpoint on the way out, so the next mount does not re-read this
+    // run's whole log.** A clean stop used to sync and stop there, which left
+    // the anchor wherever the last cadence tick had put it - so the first mount
+    // after a graceful shutdown rescanned every record written since, and redid
+    // none of them. Measured: a cleanly stopped 2000-row instance re-read all
+    // 10,883 of its own records (`bench/results-wal-recovery.md`).
+    //
+    // RC08 gave a *crash* a bounded next mount by checkpointing at the end of
+    // recovery; this is the same call at the other end, and it is what makes the
+    // bound hold for a stop as well. It also carries the assertion group
+    // snapshots, because the cadence checkpointer already has that source
+    // installed - so enforcement resumes from this record too.
+    //
+    // Not fatal if it fails, and it must not be: the data is already durable
+    // through the syncs above, and refusing to exit over a slower *next* start
+    // would trade a real shutdown for a bounded inconvenience. Reported and
+    // continued, the cadence path's rule.
     Status s = Sync();
     if (!s.ok()) {
         logger_->Error("expeditor", "final sync failed: " + s.message());
@@ -1106,6 +1260,25 @@ Status Expeditor::Serve() {
         logger_->Info("expeditor", "stopped cleanly; " +
                                        std::to_string(store_->allocated_pages()) +
                                        " pages persisted");
+    }
+
+    // **The checkpoint goes after the sync, and the order is the whole point.**
+    //
+    // A checkpoint's redo start is `min(recLSN)` over the dirty table it
+    // snapshots at BEGIN (wal.md §11-3) - so checkpointing *before* the final
+    // sync publishes an anchor pointing at the oldest page still dirty, which on
+    // a busy run is near the start of the log. Measured: a 300-row instance
+    // stopped that way still had its next mount read 1205 records. Synced first,
+    // the dirty table is empty, the redo start is the CHECKPOINT_BEGIN LSN
+    // itself, and the next mount reads only this checkpoint's own two records.
+    //
+    // This is the same trick RC08's mount checkpoint gets for free: it runs
+    // before any statement has dirtied anything.
+    if (Status ckpt = Checkpoint(); !ckpt.ok()) {
+        logger_->Error("expeditor",
+                       "the shutdown checkpoint failed, so the next mount will replay from the "
+                       "previous anchor: " +
+                           ckpt.message());
     }
     return s;
 }

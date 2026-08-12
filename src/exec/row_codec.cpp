@@ -207,17 +207,19 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             }
 
             auto bytes = std::as_bytes(std::span<const char>(val.str_val));
-            auto ptr = varheap::ChainAppend(*varheap.store, varheap.root, bytes);
-            if (!ptr.ok()) return ptr.status().WithContext("column '" + NameOf() + "'");
+            auto appended = varheap::ChainAppend(*varheap.store, varheap.root, bytes);
+            if (!appended.ok()) return appended.status().WithContext("column '" + NameOf() + "'");
+            const varheap::ChainAppendResult& grew = appended.value();
 
             if (varheap.appended != nullptr) {
                 varheap.appended->push_back(
-                    AppendedSpill{ptr.value(), std::vector<std::byte>(bytes.begin(), bytes.end())});
+                    AppendedSpill{grew.ptr, std::vector<std::byte>(bytes.begin(), bytes.end()),
+                                  grew.created_page_id, grew.linked_page_id});
             }
 
             return storage::EncodeSpilledCell(cell,
                                               static_cast<std::uint32_t>(val.str_val.size()),
-                                              varheap::EncodePtr(ptr.value()))
+                                              varheap::EncodePtr(grew.ptr))
                 .WithContext("column '" + NameOf() + "'");
         }
         case kTypeValFloat:

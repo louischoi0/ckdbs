@@ -146,6 +146,12 @@ enum class RecordType : std::uint8_t {
     // know whether a record adds or removes state is one substitution away
     // from the same defect.
     kHeapDeleteUnmark = 23,
+    // One Bound Cabin's group headers as of a checkpoint (AS6a): the base
+    // assertion replay folds onto, so the fold starts at the last checkpoint
+    // rather than at the cabin's birth. Chunked, because a cabin's group count is
+    // bounded by the data and a record must fit a segment; `payload.hpp` carries
+    // the format and the reason no continuation flag is needed.
+    kAssertSnapshot = 24,
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
     // there is no B+ tree page format to describe, and a number reserved
     // for a payload nobody can encode is a number that gets used wrong.
@@ -161,7 +167,21 @@ enum class RecordType : std::uint8_t {
     // nodes already do. A record type nothing can write is worse than none.
 };
 
-inline constexpr std::uint8_t kMaxAssignedRecordType = 22;
+// The highest assigned type, **derived from the enum rather than typed as a
+// number** - and that is a bug fix, not tidiness.
+//
+// `EncodeRecord` refuses any type above this bound, so a hand-maintained value
+// silently un-assigns whatever was appended after it. That is exactly what
+// happened: RC05 added `kHeapDeleteUnmark = 23` and left the constant at 22,
+// so **the record could not be written at all** - `TransactionManager::Compensate`
+// and `txn::RecoveryUndo` both failed with "unassigned record type" when
+// rolling back a DELETE, and every test that covers that path runs unlogged
+// (`wal = nullptr`), which is what hid it until 2026-08-12.
+//
+// Keep this pinned to the last enumerator when appending a type; the test that
+// every named type encodes is what proves it stayed pinned.
+inline constexpr std::uint8_t kMaxAssignedRecordType =
+    static_cast<std::uint8_t>(RecordType::kAssertSnapshot);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

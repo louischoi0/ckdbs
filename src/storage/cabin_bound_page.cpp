@@ -12,9 +12,14 @@ namespace {
 inline constexpr std::size_t kOffKeystone = 0;   // pk:40 | flags:8 | reserved:16
 inline constexpr std::size_t kOffHint = 8;       // page_id:32 | epoch:16 | slot:16
 inline constexpr std::size_t kOffValue = 16;     // int64
-inline constexpr std::size_t kOffPadding = 24;
+// AS6a: the first 4 bytes of AST04's 8-byte padding word, which was written
+// as a literal zero on every page in existence - so `group_id = 0` is what an
+// entry written before this field reads back as, and the width did not move.
+inline constexpr std::size_t kOffGroupId = 24;
+inline constexpr std::size_t kOffPadding = 28;
 
-static_assert(kOffPadding + 8 == kEntryBytes, "the four words tile the 32-byte entry exactly");
+static_assert(kOffPadding + 4 == kEntryBytes,
+              "keystone(8) + hint(8) + value(8) + group_id(4) + padding(4) tiles 32 exactly");
 
 // Offsets inside the page header that follows the common one.
 inline constexpr std::size_t kOffEntryCount = kPageBodyOffset + 0;  // u16
@@ -87,7 +92,8 @@ Status EncodeEntry(const BoundCabinEntry& entry, std::span<std::byte, kEntryByte
     Store16(out.subspan(kOffHint + 6, 2), entry.slot);
 
     Store64(out.subspan(kOffValue, 8), static_cast<std::uint64_t>(entry.value));
-    Store64(out.subspan(kOffPadding, 8), 0);
+    Store32(out.subspan(kOffGroupId, 4), entry.group_id);
+    Store32(out.subspan(kOffPadding, 4), 0);
     return Status::OK();
 }
 
@@ -102,6 +108,7 @@ BoundCabinEntry DecodeEntry(std::span<const std::byte, kEntryBytes> in) {
     entry.slot = Load16(in.subspan(kOffHint + 6, 2));
 
     entry.value = static_cast<std::int64_t>(Load64(in.subspan(kOffValue, 8)));
+    entry.group_id = Load32(in.subspan(kOffGroupId, 4));
     return entry;
 }
 

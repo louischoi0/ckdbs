@@ -1,6 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
 #include "kds/exec/type_literals.hpp"
+#include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
 
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/pattern_defs.hpp"
@@ -460,6 +461,44 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " last_mount_time=" << superblock_.last_mount_time()
        << " wal_anchor_count=" << superblock_.wal_anchor_count()
        << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off");
+
+    // The last recovery, for the operator who has to answer "what did the
+    // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
+    // report is installed - a dispatcher built without one (every socket-free
+    // test) has not "recovered nothing", it has no answer, and printing zeroes
+    // would be an answer.
+    if (recovery_ != nullptr) {
+        os << " recovery_records=" << recovery_->records
+           << " recovery_committed=" << recovery_->winners
+           << " recovery_rolled_back=" << recovery_->transactions_rolled_back
+           << " recovery_compensations=" << recovery_->compensations
+           << " recovery_redo_applied=" << recovery_->redo_applied
+           << " recovery_pages_healed=" << recovery_->pages_healed
+           << " recovery_torn_tail=" << (recovery_->torn_tail ? 1 : 0);
+        if (recovery_->timings.timed) {
+            os << " recovery_analysis_us=" << recovery_->timings.analysis_ns / 1000
+               << " recovery_redo_us=" << recovery_->timings.redo_ns / 1000
+               << " recovery_high_water_us=" << recovery_->timings.high_water_ns / 1000
+               << " recovery_undo_us=" << recovery_->timings.undo_ns / 1000
+               << " recovery_checkpoint_us=" << recovery_->checkpoint_ns / 1000;
+        }
+        // RV3's report, both halves. `relations_missing_pages` is the one that
+        // is computable; `catalog_recovered=0` is the standing statement that
+        // the converse - rows whose relation the crash erased - is **not
+        // detectable**, because no page names its relation
+        // (mount_recovery.hpp). Printed as a flag rather than left unsaid, so
+        // "recovery succeeded" is never read as "nothing was lost".
+        os << " recovery_relations_checked=" << recovery_->relations_checked
+           << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
+           << " catalog_recovered=0";
+        // RC07: what the mount could resume enforcing, and the honest
+        // remainder. A surviving declaration whose directory could not be
+        // rebuilt is counted here and left *out* of the registry, so
+        // SHOW ASSERTIONS reports `enforcing=0` for it rather than a
+        // constraint that would admit every write.
+        os << " recovery_assertions_enforcing=" << recovery_->assertions_enforcing
+           << " recovery_assertions_unrecovered=" << recovery_->assertions_unrecovered;
+    }
     return {os.str(), false};
 }
 
@@ -2107,18 +2146,7 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
         // entry-array division (wal/record.hpp).
         if (!write.restructured.empty()) {
             for (PageId page_id : write.restructured) {
-                auto bytes = page_store_.Get(page_id);
-                if (!bytes.ok()) return bytes.status();
-                std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-                if (auto n = wal::EncodeFullPageImage(
-                        image, std::span<const std::byte, kPageSize>(bytes.value()));
-                    !n.ok()) {
-                    return n.status();
-                }
-                auto fpi = wal_->Append(
-                    wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id}, image);
-                if (!fpi.ok()) return fpi.status();
-                if (Status s = page_store_.StampPageLsn(page_id, fpi.value()); !s.ok()) return s;
+                if (Status s = LogFullPageImage(page_id, txn_id); !s.ok()) return s;
             }
             continue;
         }
@@ -2133,6 +2161,82 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
             wal::RecordSpec{wal::RecordType::kIndexInsert, txn_id, write.page_id}, buf);
         if (!rec.ok()) return rec.status();
         if (Status s = page_store_.StampPageLsn(write.page_id, rec.value()); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id) {
+    if (wal_ == nullptr) return Status::OK();
+
+    auto bytes = page_store_.Get(page_id);
+    if (!bytes.ok()) return bytes.status();
+
+    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+    if (auto n = wal::EncodeFullPageImage(image,
+                                          std::span<const std::byte, kPageSize>(bytes.value()));
+        !n.ok()) {
+        return n.status();
+    }
+    auto fpi = wal_->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id},
+                            image);
+    if (!fpi.ok()) return fpi.status();
+    // The stamp is the half a hand-copied block loses: redo gates on page_lsn,
+    // so an unstamped page replays a record whose effect it already holds.
+    return page_store_.StampPageLsn(page_id, fpi.value());
+}
+
+Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spills,
+                                   std::uint64_t txn_id) {
+    if (wal_ == nullptr) return Status::OK();
+
+    for (const exec::AppendedSpill& spill : spills) {
+        // ---- The page the append created ---------------------------------
+        //
+        // `varheap::ChainAppend` grows a chain through the store's plain
+        // allocation path, and a VARHEAP_APPEND does not say its page is new -
+        // so without this record redo meets an append naming a page nothing
+        // creates, and refuses the mount. `wal::ApplyPageInit` already formats
+        // a kVarHeap page, so this is the record nobody wrote rather than an
+        // applier nobody built.
+        //
+        // Unstamped, for the reason the heap path gives for a new tuple page:
+        // the append below lands in exactly this page and stamps it.
+        if (spill.created_page_id != kInvalidPageId) {
+            std::array<std::byte, wal::kPageInitPayloadSize> init{};
+            const wal::PageInitPayload init_fields{
+                /*min_key=*/0, static_cast<std::uint8_t>(PageType::kVarHeap), {0, 0, 0}};
+            if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
+            if (auto rec = wal_->Append(
+                    wal::RecordSpec{wal::RecordType::kPageInit, txn_id, spill.created_page_id},
+                    init);
+                !rec.ok()) {
+                return rec.status();
+            }
+        }
+
+        // ---- The link that made it reachable -----------------------------
+        //
+        // A full page image, because no record type describes a next-page
+        // link - the same answer this function's caller gives for a heap link
+        // edit. Losing it is the quieter half of the same defect: the value
+        // page survives redo and no chain walk ever reaches it.
+        if (spill.linked_page_id != kInvalidPageId) {
+            if (Status s = LogFullPageImage(spill.linked_page_id, txn_id); !s.ok()) return s;
+        }
+
+        // ---- The value itself --------------------------------------------
+        std::vector<std::byte> vh(wal::kVarHeapAppendFixedSize + spill.value.size());
+        const wal::VarHeapAppendPayload vh_fields{
+            spill.ptr.slot, 0, static_cast<std::uint32_t>(spill.value.size())};
+        if (auto n = wal::EncodeVarHeapAppend(vh, vh_fields, spill.value); !n.ok()) {
+            return n.status();
+        }
+        auto rec = wal_->Append(
+            wal::RecordSpec{wal::RecordType::kVarHeapAppend, txn_id, spill.ptr.page_id}, vh);
+        if (!rec.ok()) return rec.status();
+        if (Status s = page_store_.StampPageLsn(spill.ptr.page_id, rec.value()); !s.ok()) {
+            return s;
+        }
     }
     return Status::OK();
 }
@@ -2181,19 +2285,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
             continue;
         }
 
-        auto bytes = page_store_.Get(change.page_id);
-        if (!bytes.ok()) return bytes.status();
-
-        std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-        if (auto n = wal::EncodeFullPageImage(
-                image, std::span<const std::byte, kPageSize>(bytes.value()));
-            !n.ok()) {
-            return n.status();
-        }
-        auto fpi = wal_->Append(
-            wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, change.page_id}, image);
-        if (!fpi.ok()) return fpi.status();
-        if (Status s = page_store_.StampPageLsn(change.page_id, fpi.value()); !s.ok()) return s;
+        if (Status s = LogFullPageImage(change.page_id, txn_id); !s.ok()) return s;
     }
 
     // The var-heap values this tuple points at, before the tuple itself.
@@ -2201,20 +2293,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     // section 5): a replay must never reach a cell whose pointer resolves
     // to nothing, and the reverse failure - a value with no tuple - is an
     // unreferenced value purge collects.
-    for (const exec::AppendedSpill& spill : spills) {
-        std::vector<std::byte> vh(wal::kVarHeapAppendFixedSize + spill.value.size());
-        const wal::VarHeapAppendPayload vh_fields{
-            spill.ptr.slot, 0, static_cast<std::uint32_t>(spill.value.size())};
-        if (auto n = wal::EncodeVarHeapAppend(vh, vh_fields, spill.value); !n.ok()) {
-            return n.status();
-        }
-        auto rec = wal_->Append(
-            wal::RecordSpec{wal::RecordType::kVarHeapAppend, txn_id, spill.ptr.page_id}, vh);
-        if (!rec.ok()) return rec.status();
-        if (Status s = page_store_.StampPageLsn(spill.ptr.page_id, rec.value()); !s.ok()) {
-            return s;
-        }
-    }
+    if (Status s = LogSpills(spills, txn_id); !s.ok()) return s;
 
     // The index entries this row is now reachable through, before the row
     // itself (docs/feat-index.md §12.1). Same direction as the var-heap
@@ -2677,19 +2756,9 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // smaller than the records it replaces. TXN framing is the manager's.
     if (wal_ != nullptr) {
         for (const heap::BatchTouchedPage& page : filled.value().pages) {
-            auto bytes = page_store_.Get(page.page_id);
-            if (!bytes.ok()) return {"ERR " + bytes.status().message(), false};
-            std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-            if (auto n = wal::EncodeFullPageImage(
-                    image, std::span<const std::byte, kPageSize>(bytes.value()));
-                !n.ok()) {
-                return {"ERR " + n.status().message(), false};
-            }
-            auto fpi = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kFullPageImage, WriterId(scope), page.page_id},
-                image);
-            if (!fpi.ok()) return {"ERR " + fpi.status().message(), false};
-            if (Status s = page_store_.StampPageLsn(page.page_id, fpi.value()); !s.ok()) {
+            // The one site that answers a client rather than a caller, so the
+            // helper's Status is turned into this path's reply shape here.
+            if (Status s = LogFullPageImage(page.page_id, WriterId(scope)); !s.ok()) {
                 return {"ERR " + s.message(), false};
             }
         }
@@ -4240,8 +4309,22 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             }
         }
 
-        auto encoded = exec::EncodeRow(ta.schema, ta.layout, id.value(), body,
-                                        exec::VarHeapSink{&page_store_, ta.varheap_page_id});
+        // The spills this re-encode appended, collected so they can be logged
+        // below. **They were not collected before, and so not logged at all**:
+        // an UPDATE that spilled a value wrote the bytes into a var-heap page
+        // and told the log nothing, leaving a recovered tuple whose cell
+        // points at bytes no record describes (`docs/known-gaps.md`'s var-heap
+        // entry, hole 3). Collected only when there is a log to write them to,
+        // the same condition the index half above uses.
+        //
+        // `appended_spills`, not `spills`: the enclosing scope already has a
+        // `PendingSpill` list, which is the opposite direction - values this
+        // statement *read* out of the var-heap to evaluate the WHERE clause.
+        std::vector<exec::AppendedSpill> appended_spills;
+        auto encoded = exec::EncodeRow(
+            ta.schema, ta.layout, id.value(), body,
+            exec::VarHeapSink{&page_store_, ta.varheap_page_id,
+                              wal_ != nullptr ? &appended_spills : nullptr});
         if (!encoded.ok()) return encoded.status();
 
         // HOT-style in-place overwrite - see PageView::OverwriteTuple's
@@ -4346,6 +4429,11 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         // index entry names is a row a probe cannot find
         // (docs/feat-index.md §12.1).
         if (wal_ != nullptr && scope.txn != nullptr) {
+            // The var-heap first, for the reason the comment above gives and
+            // INSERT already obeyed: the cell in the tuple record below points
+            // into these pages, so the records that create, link and fill them
+            // must precede it.
+            if (Status s = LogSpills(appended_spills, scope.txn->id()); !s.ok()) return s;
             if (Status s = LogIndexWrites(index_writes, scope.txn->id()); !s.ok()) return s;
 
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());

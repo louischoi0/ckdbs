@@ -1,20 +1,57 @@
 # WAL recovery — workplan
 
-Status as of 2026-08-11, on `main` at `ee2250a`:
+Status as of 2026-08-12, on `works-known-gaps` at `ed03b44` plus the
+uncommitted mount wiring described in RC11 below:
 
 | | |
 |---|---|
-| RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **written, never compiled** |
-| RC07 | unblocked by AS6a, not started |
-| RC08, RC09 | unblocked, not started |
-| RC10 | not started, and **not completable without a toolchain** — its done-when is that the harness *runs* |
+| RC01, RC02, RC03, RC04, RC04a, RC05, RC06 | **built, compiled and green** (upstream `c1370e8` / `b11cc81` made the tree build and fixed the eleven failures that became visible; `28ee297` added the push guard) |
+| **RC11 — recovery at mount** | **built 2026-08-12**, the caller RC04a listed and no task owned. `server/mount_recovery.hpp`, wired into `Expeditor::Open`, `CoreRuntime::Open` and `SimInstance::Boot` |
+| RC10's first half | **done**: `kRecoveryImplemented` is flipped, so SIM04's crash contract is asserted, and its firing is proved against a `skip_recovery` boot |
+| **RC07 — Bound Cabin replay** | **complete 2026-08-12**. `SHOW ASSERTIONS` reports `enforcing=1` after a restart and the admission boundary answers identically either side of a crash — verified on a running server, not only in tests |
+| **RC08 — completion checkpoint** | **built 2026-08-12** for core 0 and for the harness; peer cores deliberately excluded, see the task |
+| **RC09 — observability** | **built 2026-08-12**: phase timings, `SHOW META`'s recovery block, and RV3's counter split into the half that can be computed and the half that is stated |
+| RC10's remainder | the `txn.md` §8 amendment and EVT08's crash-matrix points |
 
-**Nothing in this series has ever been built or executed.** The environment
-it was written in has no C++ toolchain, and that is a property of every
-task below, not a note on one of them. Two done-when clauses are already
-unmet by their own text and say so: RC06's measured INSERT cost, and RC05's
-byte-for-byte live-vs-recovered comparison. **The next action on this plan
-is `scripts/test.sh` on a machine with a compiler, not RC07.**
+**The previous status line said "nothing in this series has ever been built
+or executed", and that was true of the environment it was written in.** This
+one has a toolchain: `scripts/test.sh` runs, and the whole suite is green
+(2226 tests) with recovery running at every mount.
+
+**Two findings from actually running it, both worth more than the wiring:**
+
+- **RC01-RC06 were dead code.** Every phase was built and tested, and
+  `grep RecoverCore src/ include/` matched only the test file — no mount ran
+  a phase, so a crash recovered nothing. §2's second item named the entry
+  point and RC04a built the driver; **what was missing was the caller**, and
+  it went unwritten for the same reason the driver had: no task's *Done
+  when* mentioned it. That is now RC11, and its lesson is the one RC04a
+  already recorded once — a step nobody's done-when names is a step nobody
+  builds.
+- **Two defects in code that predates this series, both found by running it,
+  both fixed 2026-08-12.** Neither was in the phases, and neither was
+  findable without a mount that reads the log back:
+
+  1. **Var-heap growth was unlogged**, three ways: no `PAGE_INIT` for a page
+     `ChainAppend` created, no image for the link that reached it, and an
+     UPDATE's spills not logged **at all**. A crash losing a new var-heap
+     page's write-back refused the mount.
+  2. **A segment sealed with no room for a PAD was read as a torn tail**, so
+     the scan stopped at the boundary and every record in every later segment
+     was silently dropped — recovery restoring a truncated stream and
+     reporting success. `stream.cpp` had claimed a reader would take an
+     unmarked tail to "mean exactly what the marker means"; `ScanLog` did not,
+     and now does, by the same `kRecordHeaderSize` bound the writer seals with.
+
+  **Both hid behind a green suite for one reason, and it is the reusable
+  lesson**: the committed corpus runs at 1500 ops, which neither rolls a 1 MiB
+  segment nor fills a var-heap page. A crash harness only tests the boundaries
+  its runs actually reach. `SimLoop.ALongRunRollsASegmentAndStillRecoversEveryAcknowledgedRow`
+  now reaches both.
+
+  Verified after the fixes, `build-release`: 10 committed seeds × 3 profiles at
+  4000 ops × 3 iterations, plus 8 unseen seeds at 6000 ops × 2 iterations — all
+  green with the durability assertion armed.
 
 Both of §4's blocking decisions are answered — the assertion replay range
 by AS6a (RC07), the insert/enumeration question by RV10 (RC06, and so
@@ -681,43 +718,330 @@ would miss silently; the measured cost is in `bench/`.
 
 **RC07 — Bound Cabin replay.** *(unblocked 2026-08-11 — §4's first item is
 answered; build to `feat-assertion.md` AS6a)*
+
+**Parts 1 and 2 built 2026-08-12; parts 3 and 4 are what remain.** The two
+persisted formats have moved, which was the half AS6a said had to happen while
+it was still free, and the directory now has the primitives the replay path
+will call. What is *not* built is the plumbing: nothing writes a snapshot at a
+checkpoint, nothing loads one at a mount, and `SHOW ASSERTIONS` still reports
+`enforcing=0` after a restart.
+
+Built:
+
+- `BoundCabinEntry::group_id` (uint32) in the first 4 bytes of AST04's padding
+  word, which was written as a literal zero — so the 32-byte width is unchanged
+  and every entry on every existing page reads back as `group_id = 0`. Stamped
+  at all three writing sites: the CREATE-time builder, the enforcer's reserve
+  path, and (adopted rather than assigned) the replay fold.
+- `AssertEntryPayload::group_id`, appended past `reserved`, so no existing
+  offset moved. **Its `sizeof` assert had to go** — the wire payload is 20
+  bytes and the C++ struct pads to 24 for its leading `uint64_t`, which is
+  exactly the layout-versus-format confusion that shipped broken at RC06; the
+  offsets the codec actually uses are asserted instead.
+- `GroupHeader::group_id`, dense per cabin from 1, assigned at the **one**
+  creation site (`EnsureGroup`) so a group cannot be born without an id — an
+  entry stamped 0 is one recovery cannot attribute.
+- `EnsureGroupId` / `AdoptGroupId` / `RestoreGroup` / `AttachEntry` /
+  `SnapshotGroups`: the primitives for AS6a's recovery order. `AdoptGroupId` is
+  the one worth reading — the fold must take the **record's** id rather than let
+  `Apply` assign one, because a fold starting from a checkpoint meets groups in
+  record order and the ids would drift from the entries already on the pages,
+  misattributing them at the *next* recovery. It refuses a disagreement rather
+  than picking.
+
+A departure reads its group's id instead of ensuring one, mirroring the live
+path's own asymmetry: a departure's group must already exist, and creating one
+would be creating a group to immediately go negative in.
+
 Four parts, in dependency order:
 
-1. **`BoundCabinEntry` gains `group_id` (uint32)**, in the 4 bytes
-   `EncodeEntry` writes as a literal zero. Width stays 32 B.
-2. **`AssertEntryPayload` gains `group_id`**, so replay reads the id rather
-   than re-deriving it and never has to reproduce the live run's allocation
-   order. The payload already carries the group key, so nothing else moves.
-3. **The checkpoint snapshots each cabin's group headers** —
+1. ~~**`BoundCabinEntry` gains `group_id` (uint32)**~~ — **built**, in the 4
+   bytes `EncodeEntry` wrote as a literal zero. Width stays 32 B.
+2. ~~**`AssertEntryPayload` gains `group_id`**~~ — **built**, so replay reads
+   the id rather than re-deriving it and never has to reproduce the live run's
+   allocation order. The payload already carried the group key, so nothing else
+   moved.
+3. **Mechanism built 2026-08-12; the mount wiring is what remains.** The
+   checkpoint snapshots each cabin's group headers —
    `{group_id, key, count, sum}` — and recovery loads it, rebuilds the
    linkage by scanning the cabin's pages and bucketing by `group_id`, then
    feeds `exec::ReplayAssertionRecord` the range **from that checkpoint
    forward**.
-4. **Verify** `header == Σ(entries)` through `VerifyAgainstEntries`, which
-   is now a check of a rebuilt structure against durable bytes rather than
-   of a structure against itself.
+   Built: `RecordType::kAssertSnapshot` and its payload, **chunked** because a
+   cabin's group count is bounded by the data and a record must fit a segment —
+   the loader is additive over chunks, so no continuation flag exists;
+   `wal::AssertionSnapshotSource`, the seam the checkpointer asks (the shape
+   `ActiveTransactions` already had), emitted immediately after
+   `CHECKPOINT_BEGIN` so the base precedes every record folded onto it; and
+   `exec::RecoverAssertions`, which scans **from the anchor's `checkpoint_lsn`**
+   rather than from redo's start — a narrower range in which the first snapshot
+   per assertion is by construction its base, which is what makes the pass a
+   single forward walk with nothing buffered.
+
+   Two rules it enforces rather than assumes. An assertion whose records appear
+   with **no snapshot** is left unrecovered and counted
+   (`records_without_a_base`): folding onto nothing yields aggregates that are
+   too small, and an admission check on those *admits a write that violates the
+   assertion*. And an **empty** cabin still gets a record, so "recovered and
+   empty" cannot read like "no base found" — the first may enforce, the second
+   may not.
+
+   **The mount wiring, built the same day.** `AssertionEnforcer` implements the
+   seam (it owns the directories, so it is what can snapshot them);
+   `Expeditor::Open` calls `ResumeAssertionsAfterRecovery`, which revives each
+   surviving declaration through `exec::ReviveAssertion` — §8.2's `source_text`
+   is the canon precisely so the group columns can be recovered by re-parsing it
+   — refills the directories through the pass, and **adopts only what came back
+   whole**. `SimInstance::Boot` does the same, so the harness mounts what a
+   server mounts.
+
+   Two ordering traps, both found by building it and both now written into the
+   code:
+
+   - **The resume must precede the completion checkpoint.** That checkpoint
+     becomes the anchor, so it is the record the *next* mount folds from — and it
+     can only carry the group snapshots if the registry has already been
+     refilled. Written the other way round (as the first version was),
+     enforcement survived exactly one restart and the mount after it found no
+     base.
+   - **An unrecovered cabin is never adopted.** A directory at zero admits every
+     write, so adopting one would report `enforcing=1` for a constraint enforcing
+     nothing — strictly worse than the honest `enforcing=0` that was already
+     true.
+4. **Part 4, folded into part 3's tests.** `VerifyAgainstEntries` now runs over a
+   directory rebuilt from a snapshot plus the cabin's real pages
+   (`AssertionRecoverTest.TheLinkageComesBackFromTheCabinsOwnPages`) — a check of
+   a rebuild against durable bytes rather than of a structure against itself.
+   What is missing is the same wiring: a mount that calls it.
+
 
 Both format touches are free while nothing has read a stream back and cost
 a format-version event afterwards, which is why AS6a was ratified before
 this task rather than during it.
 
-*Done when:* `SHOW ASSERTIONS` reports `enforcing=1` immediately after a
-restart — the claim `feat-assertion.md` §7 makes and the engine currently
+**Reviewed 2026-08-12, and the review found three bugs plus two things I had to
+stop and not decide.** Fixed: a second checkpoint's snapshot inside the scan
+range failed the whole pass (the *ordinary* crash shape — the anchor is published
+only at `Complete()`, so a crash mid-checkpoint leaves its snapshot records in
+range — and it left every assertion unenforcing); a chunked snapshot relinked
+each earlier chunk's entries again; `DecodeAssertSnapshot` reserved from an
+unvalidated on-disk count. Also fixed, from the reported half: an assertion
+created after the last checkpoint could **never** recover — it stayed out of the
+registry, and the completion checkpoint snapshots only the registry, so
+`enforcing=0` was permanent until DROP + CREATE. `CREATE ASSERTION` now writes
+its own base at publish through the shared `wal::LogAssertionSnapshot`.
+
+Two findings are recorded in `docs/known-gaps.md` rather than fixed, because both
+are AS6a's call and not a maintainer's: a recovered cabin's entry list is a
+superset of the live one wherever a pre-checkpoint abort orphaned an entry (the
+aggregate is right; §5.2's `VerifyAgainstEntries` proof is what breaks), and
+`AssertEntryPayload`'s offsets moved without a format-version bump while the
+"nothing has read a stream back" licence expired in the same range.
+
+**A test that was 0.5% short of the boundary it was named for.**
+`ManyGroupsChunkAcrossRecords…` used 600 groups against a 61,408-byte budget and
+came to 61,106 — so it never chunked, and the chunk-relink bug it should have
+caught went unnoticed. It now asserts `SnapshotRecords(...) > 1` rather than
+trusting arithmetic done by eye. Same lesson as the corpus running at 1500 ops:
+a test named for a boundary has to be made to *reach* it.
+
+*Done when:* `SHOW ASSERTIONS` reports `enforcing=1` immediately
+after a restart — the claim `feat-assertion.md` §7 makes and the engine currently
 contradicts — and the admission boundary answers identically either side
-of a crash. Add one test that a group whose entries span a checkpoint
-re-sums correctly, since that is the boundary the snapshot introduces.
+of a crash. **Held, on a running server**: `CREATE ASSERTION cap ON accounts
+GROUP BY (branch) CHECK SUM(amount) <= 100`, two inserts summing to 70,
+`kill -9`, restart. `SHOW ASSERTIONS` reports `enforcing=1`, `SHOW META` reports
+`recovery_assertions_enforcing=1 recovery_assertions_unrecovered=0`, and the
+boundary answers identically to pre-crash: `+50` refused, `+30` admitted
+(70 + 30 = 100, exactly at the bound), `+1` then refused. The last three are what
+prove the *recovered aggregate* is 70 — neither 0 (which would admit all three)
+nor 140 (which would refuse all three).
 
-**RC08 — Completion checkpoint and the anchor.**
+The workplan's named extra test is
+`AssertionRecoverTest.AGroupWhoseEntriesSpanTheCheckpointReSumsCorrectly`; the
+wiring itself is guarded by `AssertionResumeTest`'s two, which drive a real
+`CREATE ASSERTION` and then resume a **fresh** registry from the log.
+
+**RC11 — Recovery at mount. BUILT 2026-08-12.** `server/mount_recovery.hpp`
++ `src/server/mount_recovery.cpp`: `RecoverCoreAtMount(core_id, anchor,
+device, store, undo_log, wal, log)` turns the anchor into an `AnalysisStart`,
+installs `txn::RecoveryUndo`, runs `RecoverCore`, and returns the report.
+Called once per core by whoever owns that core's stack — `Expeditor::Open`
+for core 0, `CoreRuntime::Open` for each peer, `SimInstance::Boot` for the
+harness — so RV2's independence is structural rather than promised.
+
+Numbered `11` rather than inserted, for the reason RC04a gave: the series is
+cited elsewhere and renumbering it would break those citations.
+
+Four things it had to get right, none of them in any task's text:
+
+- **The anchor cannot be read from the superblock in front of you.** A
+  peer's `CoreRuntime::superblock_` is a default-constructed copy whose
+  anchor slots are all zero, and a peer's checkpointer publishes *through*
+  core 0 (`remote_checkpoint_anchor.hpp`). So `CoreRuntime::Config` gains an
+  `anchor` copied on the startup thread. A zeroed anchor is legal — "no
+  checkpoint yet, scan from the head" — which is exactly why getting this
+  wrong would have been silent.
+- **`TrxIdSequence` caches the ceiling at construction** (`txn/trx_id.hpp`),
+  so the ceiling must be applied and persisted *before* the sequence exists.
+  Raising it afterwards writes a field nothing reads again, and the sequence
+  hands out ids the log already names — RV4's transaction half, defeated by
+  ordering alone.
+- **A peer recovers before `SetCoreOwnership`.** `DevicePageStore` refuses to
+  raise its allocation floor once a lease is installed (RC04's own decision,
+  and correct), so a peer that took its lease first would refuse its own
+  mount the moment its stream held anything.
+- **The extent allocator's hint is RC04's obligation 1, and it was unmet.**
+  `Expeditor::Serve` built `ExtentAllocator` at `kFirstUserPageId`; it now
+  starts above `page_floor`. `Reserve` never scans below its hint
+  (`extent_lease.cpp`), so that is a guarantee rather than an optimization.
+
+*Done when:* a mount recovers its own stream and refuses rather than serving
+a partial database; the anchor's two fields both reach analysis; the two
+caller obligations come back as numbers. Eight tests in
+`tests/mount_recovery_test.cpp`, written against what the *seam* adds rather
+than re-testing the driver — each of them fails on a seam that would pass
+every test in `wal_recovery_test.cpp`.
+
+**Measured** (`build-release`, interleaved A/B against `--skip-recovery`,
+three reps × three seeds): recovery adds ~0.16-0.21 s to a 3000-op crash run
+of three reboots, ≈55-70 ms per mount over a ~1500-op stream. **No statement
+path changed, so steady-state per-statement cost is zero by construction** —
+this is mount cost, and it grows with the log because **nothing publishes an
+anchor after recovery**. That is RC08, and this measurement is its argument.
+
+**RC08 — Completion checkpoint and the anchor. BUILT 2026-08-12.**
 Recovery ends by writing a checkpoint and publishing the anchor, bounding
-the next crash's work (§12-4).
-*Done when:* a second crash immediately after recovery replays only what
-followed the completion checkpoint.
+the next crash's work (§12-4). `server::CheckpointAfterRecovery` in
+`mount_recovery.hpp`, called by `Expeditor::Open` and by `SimInstance::Boot`
+right after the ceiling is applied.
 
-**RC09 — Observability and the honest counter.**
-`wal.md` §13's recovery phase timings, plus RV3's counter: records
-naming a relation the catalog no longer describes, reported rather than
-skipped silently. `SHOW META` gains the last recovery's summary.
+Three things it settled:
+
+- **The active-transaction table is empty as a fact, not as a stand-in.**
+  `CHECKPOINT_BEGIN` carries the live set so undo can find its losers (RV10),
+  and immediately after recovery there are none: losers rolled back and given
+  their `TXN_ABORT`, winners committed before the crash, no statement accepted
+  because the listener is not bound (RV1). So the function takes no transaction
+  source and **cannot be handed a stale one** - which matters, because a
+  checkpoint written with a stale active list would send the next recovery
+  walking the undo chain of a transaction that no longer exists.
+- **It runs unconditionally, including when the scan found nothing.** A
+  database that has never completed a checkpoint has a zeroed anchor, and a
+  zeroed anchor means "scan from the head of the stream" - so the mount that
+  recovers nothing is exactly the mount whose *successor* pays. Two records and
+  one dirty-table flush is the price of not being that.
+- **`Expeditor` builds its checkpoint target and anchor early** and the cadence
+  checkpointer borrows the same two objects, so the anchor's publish count spans
+  the mount and the interval rather than resetting when the reactor starts.
+
+**Not done for peer cores, deliberately and by name.** Publishing means writing
+page 0, which is the system core's (M5), and the ring a peer would send its
+anchor over is not attached until `AttachTransport()`. A peer's next mount
+therefore still scans from whatever anchor core 0 last wrote it. That costs
+nothing today - a peer cannot reserve a transaction id, so its stream holds no
+writes of its own - and it is written into `core_runtime.cpp` rather than left
+to be discovered when P5's id leases make peer writes real.
+
+*Done when:* a second crash immediately after recovery replays only what
+followed the completion checkpoint. **Held**, in
+`MountRecoveryTest.TheCompletionCheckpointStopsTheNextRecoveryRescanningTheStream`:
+the second mount reads **2 records** where the first read 5, with
+`redo_skipped_by_lsn == 0` - the bounded records are not scanned-then-skipped,
+they are not scanned at all, which is the difference between a bounded recovery
+and a cheap-looking one. A second test asserts the published anchor satisfies
+analysis's own durable-point check, since an anchor that failed it would hand
+the next mount a refusal.
+
+**Measured twice, and the second measurement is the one to quote.** The first
+was `ckdbs-sim`'s A/B against `--skip-recovery`: 0.21-0.34 s per crash run either
+side, cost-neutral to within noise - because the harness reboots once per log and
+so pays the checkpoint without ever taking the cheaper scan. A ck-tester pass
+then built the multi-mount measurement that shape cannot produce
+(`tools/mount_cost_benchmark.py`, `bench/results-wal-recovery.md`), and **the
+benefit is large**:
+
+| log before the sweep | mount 1 | mounts 2-9 p50 | saved |
+|---|---|---|---|
+| 200 rows, SIGKILL | 142.7 ms | 133.1 ms | 9.6 ms |
+| 2000 rows, SIGKILL | 184.2 ms | 128.0 ms | 56.2 ms |
+| 10000 rows, SIGKILL | 336.9 ms | 93.8 ms | **243.1 ms** (3.6×) |
+
+Recurring cost is 7-8 ms and ~4.3 KB per mount, against 36 B for a mount that
+writes no checkpoint. 68% of the 10k saving is the fat checkpoint the first mount
+had to write, which is the point: RC08 moves that work off every *later* mount.
+
+**And it found what RC08 did not cover:** a clean shutdown published no anchor,
+so the first mount after a graceful stop rescanned everything the last run wrote.
+**Fixed the same day** — `Expeditor::Serve` checkpoints on its way out, *after*
+the final sync so the dirty table is empty and the redo start is the checkpoint's
+own LSN (checkpointing before the sync publishes the oldest dirty page's recLSN
+instead, which measured as 1205 re-read records rather than 2). A separate gap
+remains and is recorded: the server installs no signal handler, so only a client
+typing `STOP` reaches that path at all.
+
+**RC09 — Observability and the honest counter. BUILT 2026-08-12.**
+`wal.md` §13's recovery phase timings, plus RV3's counter. `SHOW META` gains
+the last mount's recovery block; `docs/client-manual.md` carries the field
+list.
+
+**The counter RV3 asked for cannot be computed, and that is the finding.**
+RV3 wanted "records naming a relation the catalog no longer describes".
+Resolving a page to its relation needs a page→relation index; `page.md` has
+none, and its absence is already a named gate elsewhere
+(`feat-physical-optimizer.md` §6 gate 3 blocks page reuse for exactly the same
+missing map). The only alternative is walking every live relation's chains to
+build the set, which is O(every page in the database) at every mount — that is
+not a counter, it is a second recovery. So RC09 splits the gap in two and
+reports both halves honestly:
+
+- **Computable, and now computed**: user relations the catalog still describes
+  whose descriptor or var-heap root page the crash took.
+  `AuditCatalogAfterRecovery`, O(relations) with one page read each. It
+  **reports rather than refuses** — an unopenable relation is the finding, not
+  an error hit while producing it.
+- **Not computable, and now stated**: rows whose relation the catalog lost.
+  `SHOW META` prints `catalog_recovered=0` as a standing constant, so
+  "recovery succeeded" can never be read as "nothing was lost".
+
+Three things the implementation had to get right, each found by a test failing:
+
+- **`GetSysTableRow`, not `InitTableAccess`.** An access is cached and a row
+  read never is (`catalog.hpp`), so an audit on the cached path answers from
+  memory for any relation something already opened. The first version missed
+  one of two dead relations for exactly that reason.
+- **User relations only.** A bootstrap catalog relation is listed in
+  `sys.objects` and has no `sys.tables` row at all, so opening one fails for a
+  reason that has nothing to do with a crash. The first version reported **nine
+  missing relations on a healthy mount**.
+- **`timings.timed`, and durations omitted without it.** Four zeroes from an
+  untimed run and four from an instant one are the same bytes, and an operator
+  tuning RTO has to tell them apart. The sim passes no clock deliberately: its
+  `ManualClock` never advances, so timing against it would print zeroes
+  wearing a measurement's face.
+
 *Done when:* an operator can read what recovery did and what it could not.
+**Held, on a real server** rather than in a test: `durability = strict`,
+`checkpoint_interval_ms = 3600000` so no cadence checkpoint flushes the page,
+two INSERTs, `kill -9`, restart. `SHOW META` reports
+`recovery_records=11 recovery_committed=2 recovery_redo_applied=5
+recovery_relations_checked=1 recovery_relations_missing_pages=0
+catalog_recovered=0`, and `SELECT * FROM t` returns both rows — replayed from
+the log, because the pages were never written back. That is the engine's first
+crash recovery of acknowledged data, read back through the operator surface.
+
+**A cost RC09's own timings exposed, and it dominates the mount.** On the same
+server, three separate mounts each reported `recovery_analysis_us≈44000` and
+`recovery_redo_us≈42000` — **86 ms of a ~90 ms mount, on a log holding
+nothing**. The cause is not the phases: `ScanLog` allocates and reads a
+segment's **entire body** (`body.assign(...)`, one `ReadAt`), analysis and redo
+each run their own scan, and the default segment is 64 MiB — so a mount reads
+128 MiB and allocates two 64 MiB buffers before it can serve a statement.
+`log_scanner.cpp`'s own comment anticipated it ("when segments are 64 MiB this
+becomes a streaming read"); now it has a number. It is a **performance finding,
+not a defect**, and it is not RC09's to fix: the fix is to read only as far as
+the durable end, or to stream in chunks, and it belongs beside the segment-size
+decision (`wal.md` §15, still `[OPEN]`). Recorded in `docs/known-gaps.md`.
 
 **RC10 — Flip the gates.**
 Enable SIM04/SIM11's `[GATED: recovery]` assertions; set the

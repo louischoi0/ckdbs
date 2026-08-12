@@ -105,6 +105,16 @@ struct PendingSpill {
 struct AppendedSpill {
     varheap::VarHeapPtr ptr;
     std::vector<std::byte> value;
+
+    // What the append had to change structurally, carried straight through
+    // from `varheap::ChainAppendResult` - the page it created and the tail it
+    // linked, both kInvalidPageId when the tail had room. The caller logs
+    // these *before* this spill's own VARHEAP_APPEND: a PAGE_INIT for the
+    // created page and a full page image for the linked one. Without them a
+    // replay meets an append naming a page nothing creates, or a value page
+    // no chain walk reaches.
+    PageId created_page_id = kInvalidPageId;
+    PageId linked_page_id = kInvalidPageId;
 };
 
 // Where EncodeRow() puts a value that does not fit inline: one relation's

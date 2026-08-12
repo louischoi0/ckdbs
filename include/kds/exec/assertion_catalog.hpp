@@ -179,6 +179,31 @@ struct AssertionDdlResult {
     std::optional<LiveAssertion> live;
 };
 
+// The live half of a **surviving** assertion, rebuilt from its stored
+// declaration (RC07's mount wiring, `docs/workplan-wal-recovery.md`).
+//
+// §8.2 keeps `source_text` as the canon precisely so this is possible: the
+// group columns are not stored as positions, they are "recovered by re-parsing
+// it", which is what this does. Everything else - the aggregate, the enforced
+// ceiling, the SUM column - comes from the same parse, resolved against the
+// relation's current schema exactly as `CreateAssertion` resolves it.
+//
+// **The directory is left empty.** This builds the shell a Bound Cabin needs -
+// the aggregate, the bound, the chain writer over the stored root - and nothing
+// else; filling the group headers is `exec::RecoverAssertions`' job, from the
+// checkpoint snapshot and the records after it (AS6a). A caller that adopted the
+// result of this alone would be enforcing against zero, which admits every
+// write.
+//
+// Fails the way `CreateAssertion` fails for the same declaration: a source text
+// that no longer parses, a group column the relation no longer has (an `ALTER`
+// that renamed one), a SUM column that is not int64. Each is a reason this
+// assertion cannot enforce, and a caller reports it per assertion rather than
+// failing the mount - one unenforceable constraint is not a database that must
+// not open.
+StatusOr<LiveAssertion> ReviveAssertion(catalog::Catalog& catalog, storage::PageStore& store,
+                                       const AssertionDef& def);
+
 // `CREATE ASSERTION`: §3.1's remaining create-time checks - the ones only
 // the catalog can answer - then the AST06 build, then the publish.
 //

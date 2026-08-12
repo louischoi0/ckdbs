@@ -40,6 +40,38 @@ Status BoundCabinChainWriter::EnsureRoot(storage::PageStore& store, wal::WalMana
     return tail_ == kInvalidPageId ? Grow(store, wal) : Status::OK();
 }
 
+Status BoundCabinChainWriter::AdoptChain(storage::PageStore& store, PageId root) {
+    if (root == kInvalidPageId) {
+        return Status::InvalidArgument(
+            "bound cabin chain: cannot adopt an invalid root; an assertion whose row carries no "
+            "root was never built");
+    }
+
+    PageId page_id = root;
+    std::size_t pages = 0;
+    while (true) {
+        if (++pages > heap::kMaxChainPages) {
+            return Status::Corruption("bound cabin chain from page " + std::to_string(root) +
+                                      " exceeds the maximum length; the links may form a cycle");
+        }
+        auto page = store.Get(page_id);
+        if (!page.ok()) return page.status();
+        // Open() is what proves the page class: a root that is not a
+        // kCabinBound page is not this cabin's chain, and appending into it
+        // would put entries where nothing can relink them.
+        auto view = BoundCabinPage::Open(page.value());
+        if (!view.ok()) return view.status();
+        const PageId next = view.value().next_page_id();
+        if (next == kInvalidPageId) break;
+        page_id = next;
+    }
+
+    root_ = root;
+    tail_ = page_id;
+    pages_ = pages;
+    return Status::OK();
+}
+
 StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
     storage::PageStore& store, wal::WalManager* wal, const BoundCabinEntry& entry,
     const std::string& key, wal::RecordType type, std::uint64_t txn_id) {
@@ -68,6 +100,9 @@ StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
         wal::AssertEntryPayload fields{};
         fields.assertion_id = assertion_id_;
         fields.index = index.value();
+        // AS6a: the same id the entry bytes carry, so replay binds the group by
+        // id instead of re-deriving one in its own allocation order.
+        fields.group_id = entry.group_id;
         auto used = wal::EncodeAssertEntry(
             payload, fields, entry_bytes,
             std::as_bytes(std::span<const char>(key.data(), key.size())));
@@ -225,6 +260,10 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
             entry.page_epoch = 0;  // no page epoch exists; written 0 like every hint
             entry.slot = row.slot;
             entry.value = delta;
+            // AS6a: stamped before the append, because the page write precedes
+            // the Apply that would otherwise create the group. An entry written
+            // with `group_id = 0` is an entry recovery cannot attribute.
+            entry.group_id = build.cabin.EnsureGroupId(key);
 
             auto at = build.chain.Append(store, wal, entry, key,
                                          wal::RecordType::kAssertBuild, wal::kNoTxnId);
