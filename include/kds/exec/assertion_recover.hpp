@@ -65,6 +65,12 @@ struct AssertionRecoveryResult {
     std::uint32_t groups_restored = 0;   // from the snapshot
     std::uint64_t entries_attached = 0;  // from the cabin's own pages
     std::uint64_t records_folded = 0;    // ASSERT_* after the snapshot
+
+    // Linkage pairs the page walk and the fold both attached, reconciled at the
+    // end of the rebuild (`BoundCabin::DedupeEntryLinkage`). Not a fault: both
+    // steps are correct in isolation, and this is the number that says how much
+    // they overlapped.
+    std::uint64_t duplicate_links_dropped = 0;
 };
 
 struct AssertionRecoveryReport {

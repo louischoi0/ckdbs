@@ -183,7 +183,49 @@ public:
     // which is a real condition rather than a defect: an entry whose group is
     // not in the snapshot belongs to a group created after it, and the
     // ASSERT_* fold from the checkpoint forward is what creates that group.
+    //
+    // **Prefer `AttachEntries` for a whole cabin.** This resolves the id by
+    // walking every bucket, so one call per scanned entry is O(entries × groups)
+    // - ~2.5e8 comparisons for a 1000-page cabin with 1000 groups, on a mount
+    // already measured at ~90 ms.
     Status AttachEntry(std::uint32_t group_id, PageId page_id, std::uint16_t index);
+
+    // One scanned entry, as the cabin-page walk reads it.
+    struct ScannedEntry {
+        std::uint32_t group_id = 0;
+        PageId page_id = kInvalidPageId;
+        std::uint16_t index = 0;
+    };
+
+    // The batch form, and the one a rebuild should use: it builds the
+    // id -> header index **once** and then attaches in one pass, so the cost is
+    // O(entries + groups) rather than their product.
+    //
+    // The map is scratch, local to the call and gone when it returns. That is
+    // deliberately not a member: the objection to a persistent id index (a second
+    // container to keep true across every mutation) is a good one and does not
+    // apply to one built inside a single walk.
+    //
+    // Returns how many entries were attached. An entry whose group no restored
+    // header carries is **skipped, not an error**, for `AttachEntry`'s reason -
+    // it belongs to a group the fold has yet to create.
+    StatusOr<std::uint64_t> AttachEntries(std::span<const ScannedEntry> entries);
+
+    // Drops a duplicated `(page_id, index)` pair from every group's entry list,
+    // and reports how many it dropped.
+    //
+    // **Why a recovered cabin has any.** The page walk attaches every entry the
+    // cabin's pages carry, including one written *after* the checkpoint into a
+    // group that existed *at* it; the fold then replays that entry's record and
+    // `Apply` appends the same pair again. Both steps are right on their own -
+    // the walk cannot know which entries the fold will also see, and the fold
+    // must append for a group it creates itself - so the reconciliation belongs
+    // here, once, at the end of a rebuild.
+    //
+    // A slot holds one entry, so a repeated pair is always the duplicate and
+    // never two distinct entries. Nothing on the live path calls this: a live
+    // directory cannot produce one.
+    std::uint64_t DedupeEntryLinkage();
 
     // The snapshot AS6a asks a checkpoint to write: one record per group,
     // `{group_id, key, count, sum}`, O(groups) and never the entry lists.

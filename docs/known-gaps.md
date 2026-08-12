@@ -53,6 +53,46 @@ the owner's workplan.
   (`docs/feat-physical-optimizer.md` §6 gate 3). Building the set instead would
   mean walking every page of every relation at every mount.
 
+- **A recovered Bound Cabin's entry list is a superset of the live one, and
+  `VerifyAgainstEntries` cannot be run on it** — found by review 2026-08-12,
+  **half fixed**. Two independent causes:
+
+  1. ~~the page walk and the `ASSERT_*` fold both attach the linkage for an entry
+     written after the checkpoint into a group that existed at it~~ — **fixed**:
+     `BoundCabin::DedupeEntryLinkage` reconciles them once at the end of a
+     rebuild, and `AssertionRecoveryResult::duplicate_links_dropped` reports how
+     many overlapped. A slot holds one entry, so a repeated `(page_id, index)` is
+     always the duplicate.
+  2. **an aborted reservation's orphaned entry cannot be told from a live one.**
+     `AssertionEnforcer::AbortTxn` leaves the entry bytes on the page by design —
+     "the orphaned slot is the recorded leak that rides on purge" — and the
+     rebuild has no way to distinguish it, so any cabin whose history includes a
+     pre-checkpoint abort relinks an entry the live directory had dropped.
+
+  The **aggregate is correct either way** (snapshot + folded deltas), so
+  admission answers right and the constraint enforces correctly. What does not
+  hold is the structural proof `docs/feat-assertion.md` §5.2 names — "the entries
+  remain the authority, the snapshot is a derived cache, and
+  `VerifyAgainstEntries` is what proves one against the other" — because on a
+  recovered cabin that check reports `Corruption` for a directory that is right.
+
+  **This is an AS6a decision, not a bug to pick a fix for**: either the fold owns
+  linkage and the page walk stops attaching (which costs AS6a's `Unapply`
+  ordering note), or an aborted entry becomes distinguishable on the page (which
+  is a flag write on the abort path, i.e. a format touch), or §5.2's proof is
+  narrowed to say it holds on a live cabin only. Owned by
+  `docs/feat-assertion.md` §7.
+
+- **Assertion recovery is a third full `ScanLog` per mount whenever the anchor is
+  zero** — noted by review 2026-08-12. `exec::RecoverAssertions` scans from the
+  anchor's `checkpoint_lsn`, which is *narrower* than redo's range only once a
+  checkpoint has been published; on a database that has never completed one it is
+  the whole stream. Combined with the two-scan entry below, that is three passes
+  and 192 MiB of reads on a default 64 MiB segment before the first statement.
+  Exactly zero when no assertion is declared (the pass early-returns), and RC08
+  makes the zero-anchor case a first-mount-only state. Same fix as below: read to
+  the durable end, or stream in chunks.
+
 - **A mount reads each WAL segment's whole body, twice** — measured 2026-08-12
   by RC09's own timings, which is what made a long-invisible cost visible.
   `ScanLog` allocates and reads a segment's entire body in one go, analysis and
@@ -110,6 +150,23 @@ the owner's workplan.
   `WalRecordTest.EveryNamedTypeIsWritable` is the general guard: a type with a
   name is a type some site intends to write, so it must encode. Verified to fail
   against the old bound.
+
+- **`AssertEntryPayload`'s offsets moved with no format-version bump, and the
+  argument that licensed it expired inside the same eight commits** — noted by
+  review 2026-08-12, deliberately not "fixed". AS6a's licence was that both
+  format touches are free *"today … no WAL stream has ever been read back"*, and
+  `6d7b91b` in that very range is what makes streams get read back.
+  `kAssertEntryFixedSize` went 16 → 20, so every byte after offset 16 shifted,
+  while `kSegmentFormatVersion` is still 1. A database written between AST05 and
+  this work and then mounted with this build mis-decodes `ASSERT_*` records — it
+  fails loudly (`CheckInputSize` short by 4), never silently, and no such
+  database is known to exist pre-1.0.
+
+  Left as a record rather than a bump because moving a persisted format version
+  is a decision with its own blast radius (it refuses older streams outright),
+  and `docs/wal.md` §15 still lists the segment format as open. What is *not*
+  left ambiguous is the reasoning: the "free today" argument may not be reused
+  again without checking whether it is still true.
 
 - **A segment sealed with no room for a PAD was read as a torn tail** — found
   and **fixed 2026-08-12** (`src/wal/log_scanner.cpp`), and it is the second

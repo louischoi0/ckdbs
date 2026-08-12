@@ -819,6 +819,32 @@ Both format touches are free while nothing has read a stream back and cost
 a format-version event afterwards, which is why AS6a was ratified before
 this task rather than during it.
 
+**Reviewed 2026-08-12, and the review found three bugs plus two things I had to
+stop and not decide.** Fixed: a second checkpoint's snapshot inside the scan
+range failed the whole pass (the *ordinary* crash shape — the anchor is published
+only at `Complete()`, so a crash mid-checkpoint leaves its snapshot records in
+range — and it left every assertion unenforcing); a chunked snapshot relinked
+each earlier chunk's entries again; `DecodeAssertSnapshot` reserved from an
+unvalidated on-disk count. Also fixed, from the reported half: an assertion
+created after the last checkpoint could **never** recover — it stayed out of the
+registry, and the completion checkpoint snapshots only the registry, so
+`enforcing=0` was permanent until DROP + CREATE. `CREATE ASSERTION` now writes
+its own base at publish through the shared `wal::LogAssertionSnapshot`.
+
+Two findings are recorded in `docs/known-gaps.md` rather than fixed, because both
+are AS6a's call and not a maintainer's: a recovered cabin's entry list is a
+superset of the live one wherever a pre-checkpoint abort orphaned an entry (the
+aggregate is right; §5.2's `VerifyAgainstEntries` proof is what breaks), and
+`AssertEntryPayload`'s offsets moved without a format-version bump while the
+"nothing has read a stream back" licence expired in the same range.
+
+**A test that was 0.5% short of the boundary it was named for.**
+`ManyGroupsChunkAcrossRecords…` used 600 groups against a 61,408-byte budget and
+came to 61,106 — so it never chunked, and the chunk-relink bug it should have
+caught went unnoticed. It now asserts `SnapshotRecords(...) > 1` rather than
+trusting arithmetic done by eye. Same lesson as the corpus running at 1500 ops:
+a test named for a boundary has to be made to *reach* it.
+
 *Done when:* `SHOW ASSERTIONS` reports `enforcing=1` immediately
 after a restart — the claim `feat-assertion.md` §7 makes and the engine currently
 contradicts — and the admission boundary answers identically either side

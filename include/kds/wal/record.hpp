@@ -146,25 +146,18 @@ enum class RecordType : std::uint8_t {
     // know whether a record adds or removes state is one substitution away
     // from the same defect.
     kHeapDeleteUnmark = 23,
+    // One Bound Cabin's group headers as of a checkpoint (AS6a): the base
+    // assertion replay folds onto, so the fold starts at the last checkpoint
+    // rather than at the cabin's birth. Chunked, because a cabin's group count is
+    // bounded by the data and a record must fit a segment; `payload.hpp` carries
+    // the format and the reason no continuation flag is needed.
+    kAssertSnapshot = 24,
     // BTREE_INSERT/BTREE_SPLIT (wal.md section 5.2) are not assigned yet:
     // there is no B+ tree page format to describe, and a number reserved
     // for a payload nobody can encode is a number that gets used wrong.
     // Appending them later is exactly what this enum's append-only rule is
     // for.
     //
-    // One Bound Cabin's group headers as of a checkpoint (AS6a, RC07):
-    // `{group_id, key, count, sum}` per group, O(groups) and never the entry
-    // lists. It is what gives assertion replay a durable base to fold onto, so
-    // the fold starts at the last checkpoint instead of at the cabin's birth -
-    // which would make RTO a function of the assertion's lifetime and make WAL
-    // retention a correctness setting (`docs/feat-assertion.md` §7).
-    //
-    // Emitted inside the checkpoint, right after CHECKPOINT_BEGIN, and **one
-    // record per chunk of groups** rather than one per cabin: a payload has to
-    // fit a segment, and a cabin's group count is bounded by the data rather
-    // than by anything this engine controls. The loader is additive over
-    // whatever chunks it meets, so no continuation flag is needed.
-    kAssertSnapshot = 24,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A

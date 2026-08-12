@@ -120,13 +120,20 @@ GroupHeader* BoundCabin::FindById(std::uint32_t group_id) {
 
 Status BoundCabin::AdoptGroupId(const std::string& key, std::uint32_t group_id) {
     if (group_id == 0) {
-        // Every entry written before AS6a reads back as 0, and a stream holding
-        // one is a stream from before the field existed. Refused rather than
-        // guessed: attributing it would need the allocation order the id exists
-        // to replace.
+        // Refused rather than guessed: attributing it would need the allocation
+        // order the id exists to replace.
+        //
+        // **Not "a pre-AS6a stream", which an earlier comment here claimed.** A
+        // record written before the field existed does not decode `group_id` as
+        // 0 - `kAssertEntryFixedSize` grew 16 -> 20, so the field reads the
+        // *entry bytes* that used to start at offset 16, i.e. the pk's low 32
+        // bits. The genuinely-zero case is a **page** entry, which AST04 wrote as
+        // a literal zero, and the cabin-page walk skips those
+        // (`assertion_recover.cpp`). So this branch defends a corrupt or
+        // hand-built record, which is worth refusing on its own terms.
         return Status::Corruption(
-            "bound cabin: a replayed record carries group id 0, which predates AS6a's entry field "
-            "(docs/feat-assertion.md §5.1)");
+            "bound cabin: a replayed record carries group id 0, which is the reserved 'no group' "
+            "value (docs/feat-assertion.md §5.1)");
     }
     if (GroupHeader* existing = FindMutable(key); existing != nullptr) {
         if (existing->group_id != group_id) {
@@ -183,6 +190,50 @@ Status BoundCabin::AttachEntry(std::uint32_t group_id, PageId page_id, std::uint
     }
     header->entries.emplace_back(page_id, index);
     return Status::OK();
+}
+
+StatusOr<std::uint64_t> BoundCabin::AttachEntries(std::span<const ScannedEntry> entries) {
+    // The id -> header index, built once. `FindById`'s per-entry walk is
+    // O(entries x groups); this is O(entries + groups), which is the difference
+    // between a mount and a mount nobody waits for.
+    std::unordered_map<std::uint32_t, GroupHeader*> by_id;
+    by_id.reserve(group_count());
+    for (auto& [hash, bucket] : groups_by_hash_) {
+        for (GroupHeader& header : bucket) {
+            by_id.emplace(header.group_id, &header);
+        }
+    }
+
+    std::uint64_t attached = 0;
+    for (const ScannedEntry& entry : entries) {
+        auto it = by_id.find(entry.group_id);
+        if (it == by_id.end()) {
+            // Its group is not in the snapshot, so it belongs to one the fold
+            // has yet to create - skipped, exactly as AttachEntry answers
+            // NotFound for the same case.
+            continue;
+        }
+        it->second->entries.emplace_back(entry.page_id, entry.index);
+        ++attached;
+    }
+    return attached;
+}
+
+std::uint64_t BoundCabin::DedupeEntryLinkage() {
+    std::uint64_t dropped = 0;
+    for (auto& [hash, bucket] : groups_by_hash_) {
+        for (GroupHeader& header : bucket) {
+            const std::size_t before = header.entries.size();
+            // Sorted then uniqued rather than a per-insert scan: this runs once
+            // per group at the end of a rebuild, and a linear membership test per
+            // entry would be the O(entries^2) the batch attach exists to avoid.
+            std::sort(header.entries.begin(), header.entries.end());
+            header.entries.erase(std::unique(header.entries.begin(), header.entries.end()),
+                                 header.entries.end());
+            dropped += before - header.entries.size();
+        }
+    }
+    return dropped;
 }
 
 std::vector<BoundCabin::GroupSnapshot> BoundCabin::SnapshotGroups() const {

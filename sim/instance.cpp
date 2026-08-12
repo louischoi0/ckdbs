@@ -55,6 +55,10 @@ Status SimInstance::Boot() {
     // The undo log comes first because undo writes through it, and the id
     // sequence comes after because it caches the transaction ceiling at
     // construction (txn/trx_id.hpp) - the same ordering Expeditor::Open has.
+    // Whether this boot owes the two steps that have to follow the dispatcher
+    // (see below). A local: both the set and the read are inside this function.
+    const bool run_recovery_tail = !options_.skip_recovery;
+
     undo_.emplace(*store_, wal_.get());
     if (!options_.skip_recovery) {
         auto recovered = server::RecoverCoreAtMount(/*core_id=*/0, boot_->superblock.wal_anchor(0),
@@ -73,7 +77,6 @@ Status SimInstance::Boot() {
         // stream, because nothing here runs the periodic checkpointer - so the
         // harness would be measuring a mount cost no server pays and missing
         // the one property RC08 adds.
-        recovery_checkpoint_pending_ = true;
     }
 
     // The persist callback, exactly as the expeditor wires it: the harness
@@ -94,8 +97,7 @@ Status SimInstance::Boot() {
     // that has only just been built, and the checkpoint has to be written *after*
     // it is refilled, because that checkpoint becomes the anchor the next mount
     // folds its directories from.
-    if (recovery_checkpoint_pending_) {
-        recovery_checkpoint_pending_ = false;
+    if (run_recovery_tail) {
         server::ResumeAssertionsAfterRecovery(
             boot_->catalog, *store_, *log_device_, /*core_id=*/0,
             boot_->superblock.wal_anchor(0).checkpoint_lsn, dispatcher_->assertions(),

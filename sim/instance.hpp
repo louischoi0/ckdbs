@@ -134,11 +134,6 @@ private:
     std::optional<txn::TransactionManager> txn_;
     std::optional<server::CommandDispatcher> dispatcher_;
     server::Session session_;
-
-    // Set by Boot() once recovery has run, cleared when the assertion resume and
-    // the completion checkpoint have followed it - both of which need the
-    // dispatcher, which is built after recovery.
-    bool recovery_checkpoint_pending_ = false;
 };
 
 }  // namespace kds::sim

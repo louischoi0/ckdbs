@@ -19,6 +19,7 @@
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/wal/checkpointer.hpp"
+#include "kds/wal/log_scanner.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
@@ -169,6 +170,22 @@ protected:
         return anchor.anchor().checkpoint_lsn;
     }
 
+    // How many ASSERT_SNAPSHOT records the stream holds from `from_lsn`. A
+    // chunking test that did not reach the boundary would pass vacuously, and
+    // the arithmetic that decides how many chunks a cabin needs is not something
+    // a reader of the test can check by eye.
+    std::uint64_t SnapshotRecords(wal::Lsn from_lsn) {
+        EXPECT_TRUE(wal_->Flush().ok());
+        std::uint64_t n = 0;
+        auto scanned = wal::ScanLog(*device_, /*core_id=*/0, from_lsn,
+                                    [&n](const wal::DecodedRecord& record) {
+                                        if (record.type() == wal::RecordType::kAssertSnapshot) ++n;
+                                        return Status::OK();
+                                    });
+        EXPECT_TRUE(scanned.ok()) << scanned.status().message();
+        return n;
+    }
+
     StatusOr<AssertionRecoveryReport> Recover(wal::Lsn from_lsn, BoundCabin& into) {
         RecoverableAssertion a;
         a.assertion_id = kAssertionId;
@@ -291,17 +308,24 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
     // the loader is additive over the chunks, which is the property that makes a
     // continuation flag unnecessary.
     //
-    // Groups only, no entries: 600 headers with these keys exceed what one
-    // record's payload can hold, which is the boundary under test. Entries would
-    // add nothing to it and would need a chain of pages (one holds 254), so the
-    // linkage rebuild is left to the test above that is about it.
+    // Groups only, no entries: these headers exceed what one record's payload can
+    // hold, which is the boundary under test. Entries would add nothing to it and
+    // would need a chain of pages (one holds 254), so the linkage rebuild is left
+    // to the test above that is about it.
+    //
+    // **700 and not 600.** At 600 the payload came to 61,106 bytes against a
+    // 61,408-byte budget - 302 bytes short of chunking, so the test asserted the
+    // boundary without reaching it. The record count below is what keeps that
+    // from happening silently again.
     BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
-    for (int i = 0; i < 600; ++i) {
+    for (int i = 0; i < 700; ++i) {
         live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
     }
     const std::size_t groups = live.group_count();
-    ASSERT_EQ(groups, 600u);
+    ASSERT_EQ(groups, 700u);
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
+    ASSERT_GT(SnapshotRecords(checkpoint_lsn), 1u) << "this cabin fits one record, so the "
+                                                     "chunking path is not under test at all";
 
     BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
     auto report = Recover(checkpoint_lsn, rebuilt);
@@ -309,6 +333,100 @@ TEST_F(AssertionRecoverTest, ManyGroupsChunkAcrossRecordsAndAllOfThemComeBack) {
     EXPECT_EQ(report.value().assertions[0].groups_restored, groups)
         << "a chunk was lost, so the base under-counts and an admission check on it is wrong";
     EXPECT_EQ(rebuilt.group_count(), groups);
+}
+
+TEST_F(AssertionRecoverTest, ASecondCheckpointsSnapshotInRangeDoesNotFailThePass) {
+    // The anchor is published at Complete(), so a crash *during* a later
+    // checkpoint leaves that checkpoint's snapshot records inside the range the
+    // anchor still points at. Restoring them a second time hits RestoreGroup's
+    // duplicate-id refusal, and the whole pass then fails - which leaves every
+    // assertion unenforcing after an ordinary crash.
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, Key("x"), 5, /*pk=*/1);
+    const wal::Lsn first = Checkpoint(live);
+
+    // An entry between the two checkpoints, so the fold has work whose result
+    // proves the *first* snapshot is still the base.
+    const std::uint32_t gx = live.Find(Key("x"))->group_id;
+    const std::uint16_t after = Write(live, Key("x"), 7, /*pk=*/2);
+    LogEntry(after, Key("x"), gx);
+    Checkpoint(live);  // the second one, whose anchor the crash never published
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
+    auto report = Recover(first, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered);
+
+    const GroupHeader* x = rebuilt.Find(Key("x"));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->sum, 12) << "5 from the first snapshot, 7 from the fold";
+    EXPECT_EQ(x->count, 2);
+    EXPECT_EQ(x->group_id, gx);
+}
+
+TEST_F(AssertionRecoverTest, AChunkedSnapshotRelinksEachEntryExactlyOnce) {
+    // The linkage rebuild reads the cabin's pages once the base is whole, not
+    // once per chunk: a later chunk's walk sees the earlier chunks' groups
+    // already restored, so running it per chunk attaches their entries again -
+    // and a duplicated pair is exactly what §7's VerifyAgainstEntries catches.
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1'000'000);
+    Write(live, Key("x"), 5, /*pk=*/1);  // group id 1, so it lands in chunk one
+    for (int i = 0; i < 700; ++i) {
+        live.EnsureGroupId(Key("group-" + std::string(60, 'k') + std::to_string(i)));
+    }
+    const wal::Lsn checkpoint_lsn = Checkpoint(live);
+    ASSERT_GT(SnapshotRecords(checkpoint_lsn), 1u) << "one chunk cannot double-attach anything";
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1'000'000);
+    auto report = Recover(checkpoint_lsn, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].groups_restored, live.group_count());
+    EXPECT_EQ(report.value().assertions[0].entries_attached, 1u)
+        << "one entry on the pages, so one relink however many chunks the base took";
+
+    const GroupHeader* x = rebuilt.Find(Key("x"));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->entries.size(), 1u);
+}
+
+TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
+    // Both steps are right in isolation and they overlap: the page walk attaches
+    // every entry the pages carry, and the fold appends again for a
+    // post-checkpoint entry whose group already existed. Left alone, §7's
+    // VerifyAgainstEntries double-counts that entry and answers Corruption on a
+    // directory whose aggregate is correct.
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, Key("x"), 5, /*pk=*/1);
+    const wal::Lsn checkpoint_lsn = Checkpoint(live);
+
+    const std::uint32_t gx = live.Find(Key("x"))->group_id;
+    const std::uint16_t after = Write(live, Key("x"), 7, /*pk=*/2);
+    LogEntry(after, Key("x"), gx);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
+    auto report = Recover(checkpoint_lsn, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_EQ(report.value().assertions[0].duplicate_links_dropped, 1u)
+        << "the post-checkpoint entry was attached by the walk and by the fold";
+
+    const GroupHeader* x = rebuilt.Find(Key("x"));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->sum, 12);
+    EXPECT_EQ(x->count, 2);
+    ASSERT_EQ(x->entries.size(), 2u) << "one pair per entry, not one per attachment";
+    EXPECT_EQ(x->entries.size(), live.Find(Key("x"))->entries.size());
+
+    // The proof §5.2 names, over the rebuild: header == sum(entries). It is this
+    // that the duplicate broke.
+    auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        auto page = store_.Get(page_id);
+        if (!page.ok()) return page.status();
+        auto view = BoundCabinPage::Open(page.value());
+        if (!view.ok()) return view.status();
+        return view.value().Read(index);
+    };
+    EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok())
+        << "a recovered cabin must satisfy the check the spec calls the proof";
 }
 
 // ---- The mount wiring (RC07): a real assertion, resumed --------------------
@@ -411,22 +529,71 @@ TEST_F(AssertionResumeTest, AFreshRegistryResumesEnforcingWithTheRecoveredAggreg
     EXPECT_TRUE(admit(30).ok()) << "70 + 30 == 100, exactly at the bound";
 }
 
-TEST_F(AssertionResumeTest, WithNoSnapshotTheAssertionIsNotAdoptedAtAll) {
+TEST_F(AssertionResumeTest, AnAssertionCreatedAfterTheLastCheckpointStillRecovers) {
+    // The permanence trap: an unbased assertion stays out of the registry, and
+    // the completion checkpoint snapshots only the registry - so without a base
+    // written at CREATE, `enforcing=0` would survive every later restart until
+    // DROP + CREATE. With a long checkpoint interval that is every new assertion.
+    //
+    // No checkpoint is taken anywhere in this test. The only base in the stream
+    // is the one CREATE ASSERTION wrote at its publish.
     ASSERT_EQ(Run("CREATE TABLE accounts (id int64, branch int32, amount int64)").substr(0, 7),
               "CREATED");
     ASSERT_EQ(Run("CREATE ASSERTION cap ON accounts GROUP BY (branch) "
                   "CHECK SUM(amount) <= 100").substr(0, 7),
               "CREATED");
     ASSERT_EQ(Run("INSERT INTO accounts VALUES (1, 40)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("INSERT INTO accounts VALUES (1, 30)").substr(0, 8), "INSERTED");
     ASSERT_TRUE(wal_->Flush().ok());
 
-    // No checkpoint, so no base. **Not adopted** - because a cabin at zero
-    // admits every write, so reporting `enforcing=1` for it would be worse than
-    // the honest `enforcing=0`: the constraint would look enforced and enforce
-    // nothing.
     AssertionEnforcer fresh;
     const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
         boot_->catalog, *store_, *log_device_, /*core_id=*/0, /*from_lsn=*/0, fresh,
+        server::MountRecovery{}, /*log=*/nullptr);
+
+    EXPECT_EQ(report.assertions_enforcing, 1u);
+    EXPECT_EQ(report.assertions_unrecovered, 0u);
+
+    // And with the right aggregate: the create-time base carries the built
+    // groups (none here), and the two inserts' records fold onto it.
+    std::vector<parser::AstValue> row(2);
+    row[0].type = parser::ValueType::kInt;
+    row[1].type = parser::ValueType::kInt;
+    const auto admit = [&](std::int64_t amount) {
+        row[0].int_val = 1;
+        row[1].int_val = amount;
+        return fresh.AdmitInsert(4000, row);
+    };
+    EXPECT_EQ(admit(50).code(), StatusCode::kAssertionViolation) << "70 + 50 > 100";
+    EXPECT_TRUE(admit(30).ok()) << "70 + 30 == 100";
+}
+
+TEST_F(AssertionResumeTest, WithNoBaseInRangeTheAssertionIsNotAdoptedAtAll) {
+    // **This test's premise changed when CREATE ASSERTION started writing its own
+    // base.** It used to produce "no snapshot" by simply not checkpointing; that
+    // is now impossible, and the test failed - correctly - the moment the create
+    // path closed the hole. The property it guards is unchanged and still worth
+    // guarding, so it is produced the only way it can now arise: a base that has
+    // fallen *out of the scan range*, which is what a later checkpoint's redo
+    // start does to an older record.
+    //
+    // Not adopted, because a cabin at zero admits every write: reporting
+    // `enforcing=1` for it would be worse than the honest `enforcing=0`.
+    ASSERT_EQ(Run("CREATE TABLE accounts (id int64, branch int32, amount int64)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON accounts GROUP BY (branch) "
+                  "CHECK SUM(amount) <= 100").substr(0, 7),
+              "CREATED");
+
+    // Everything the create wrote, including its base, is now below this point.
+    const wal::Lsn after_create = wal_->appended_lsn();
+
+    ASSERT_EQ(Run("INSERT INTO accounts VALUES (1, 40)").substr(0, 8), "INSERTED");
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    AssertionEnforcer fresh;
+    const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
+        boot_->catalog, *store_, *log_device_, /*core_id=*/0, after_create, fresh,
         server::MountRecovery{}, /*log=*/nullptr);
 
     EXPECT_EQ(report.assertions_enforcing, 0u);

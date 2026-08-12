@@ -19,13 +19,10 @@
 // Recovery at mount (docs/workplan-wal-recovery.md RV1/RV2) - the caller
 // `wal/recovery.hpp` declined to be, and that nothing else was.
 //
-// RC04a built the driver and listed three things it left "to its caller":
-// reading the anchor, applying `HighWaterRepair::next_trx_id`, and looping
-// the cores. No task in RC01-RC10 owned that caller, so `RecoverCore` was
-// reachable only from `tests/wal_recovery_test.cpp` - analysis, eight redo
-// appliers, the high-water repair and `txn::RecoveryUndo` all built, and a
-// crash still recovering nothing. That is the same shape of hole RC04a
-// itself was written to close, one layer up.
+// RC04a built the driver and left three things "to its caller": reading the
+// anchor, applying `HighWaterRepair::next_trx_id`, and looping the cores. No
+// task owned that caller, so nothing ran a phase at mount. The workplan's RC11
+// entry carries the history; what belongs here is the contract below.
 //
 // ---- One core, and why the loop is not here ------------------------------
 //
@@ -159,29 +156,18 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                                           txn::UndoLog& undo_log, wal::WalManager* wal,
                                           Logger* log, const sched::Clock* clock = nullptr);
 
-// RV3's honest counter, and **the half of it that can actually be computed**
-// (RC09).
+// RV3's honest counter - **the half of it that can be computed**.
 //
-// RV3 says v1 recovers data and not the catalog, and asks for "the counter that
-// says when it did not" rather than letting the gap read as closed. The gap has
-// two faces, and they are not equally knowable:
+// Cheap and exact: ask the catalog for each relation and try to open it, one page
+// read per relation, no chain walks. That is what this does.
 //
-//   - **A relation the catalog describes whose pages the crash lost.** Cheap
-//     and exact: ask the catalog for each relation and try to open it. One page
-//     read per relation, O(relations), no chain walks. That is this function.
-//   - **Data whose relation the catalog lost** - the unlogged `CREATE TABLE`
-//     that a crash undid while the log still held inserts into its pages.
-//     **This is not detectable**, and saying so is the honest half of RC09:
-//     resolving a page to its relation needs a page→relation index, `page.md`
-//     has none, and its absence is already a named gate elsewhere
-//     (`docs/feat-physical-optimizer.md` §6 gate 3, which blocks page reuse for
-//     the same missing map). The alternative - walking every live relation's
-//     chains to build the set - is O(every page in the database) at every
-//     mount, which is not a counter, it is a second recovery.
-//
-// So `SHOW META` reports this number and states the other case in words. A
-// counter that silently returned 0 for both would be the "gap reading as
-// closed" that RV3 exists to prevent.
+// The other half - rows whose relation the catalog lost - **cannot be computed
+// at all**: resolving a page to its relation needs a page->relation index,
+// `page.md` has none, and its absence is already the named blocker on page reuse
+// (`docs/feat-physical-optimizer.md` §6 gate 3). Building the set instead means
+// walking every page of every relation at every mount. So `SHOW META` reports
+// this number and states the other case in words; RC09's task entry carries the
+// full argument.
 //
 // Never fails the mount: an unreadable relation is what it is *reporting*, not
 // an error it hit. Returns the two counts, writes one log line per finding.
@@ -230,10 +216,10 @@ MountRecovery ResumeAssertionsAfterRecovery(catalog::Catalog& catalog,
 // Recovery starts where the anchor says, and until this ran nothing published
 // an anchor after replaying - so every mount scanned from wherever the last
 // periodic checkpoint left off, and a database that had never completed one
-// scanned its whole stream, every time, forever. Measured at RC11: ~55-70 ms
-// per mount over a ~1500-op stream, growing linearly with the log. The cost of
-// this call is one flush of the dirty table plus two records; what it buys is
-// that the next recovery starts here instead.
+// scanned its whole stream, every time, forever. The cost of this call is one
+// flush of the dirty table plus two records; what it buys is that the next
+// recovery starts here instead. (Numbers live in the workplan and in `bench/`,
+// which name the commit they were measured at; a header cannot.)
 //
 // ---- Why the active-transaction table is empty, and why that is a fact ----
 //

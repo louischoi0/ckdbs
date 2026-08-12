@@ -106,6 +106,24 @@ struct AssertionCabinSnapshot {
     std::vector<AssertionSnapshotGroup> groups;
 };
 
+// Writes one cabin's group headers as `ASSERT_SNAPSHOT` records, chunked so no
+// record outgrows a segment (`payload.hpp`).
+//
+// **Two callers, and the second is why this is not private to the
+// checkpointer.** A checkpoint writes every live cabin's base; `CREATE
+// ASSERTION` writes the new cabin's base at its publish. Without that second
+// call an assertion created after the last checkpoint has no base in any
+// range - the mount cannot recover it, so it stays out of the registry, so the
+// completion checkpoint (which snapshots the registry) cannot give it one
+// either. `enforcing=0` would be **permanent** until DROP + CREATE, and with a
+// long `checkpoint_interval_ms` that is every new assertion.
+//
+// A cabin with no groups still gets one record: it says "this assertion existed
+// and had nothing", which is what lets a loader tell an empty cabin from an
+// absent base - and those must not read alike, because the second means the
+// fold has nothing to fold onto.
+Status LogAssertionSnapshot(WalManager& wal, const AssertionCabinSnapshot& cabin);
+
 // Where the checkpoint gets those snapshots. Implemented by whoever owns the
 // live assertions; absent (null) on a core that has none, in which case a
 // checkpoint writes no ASSERT_SNAPSHOT records at all and costs nothing.

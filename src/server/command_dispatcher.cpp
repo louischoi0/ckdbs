@@ -2146,18 +2146,7 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
         // entry-array division (wal/record.hpp).
         if (!write.restructured.empty()) {
             for (PageId page_id : write.restructured) {
-                auto bytes = page_store_.Get(page_id);
-                if (!bytes.ok()) return bytes.status();
-                std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-                if (auto n = wal::EncodeFullPageImage(
-                        image, std::span<const std::byte, kPageSize>(bytes.value()));
-                    !n.ok()) {
-                    return n.status();
-                }
-                auto fpi = wal_->Append(
-                    wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id}, image);
-                if (!fpi.ok()) return fpi.status();
-                if (Status s = page_store_.StampPageLsn(page_id, fpi.value()); !s.ok()) return s;
+                if (Status s = LogFullPageImage(page_id, txn_id); !s.ok()) return s;
             }
             continue;
         }
@@ -2174,6 +2163,26 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
         if (Status s = page_store_.StampPageLsn(write.page_id, rec.value()); !s.ok()) return s;
     }
     return Status::OK();
+}
+
+Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id) {
+    if (wal_ == nullptr) return Status::OK();
+
+    auto bytes = page_store_.Get(page_id);
+    if (!bytes.ok()) return bytes.status();
+
+    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+    if (auto n = wal::EncodeFullPageImage(image,
+                                          std::span<const std::byte, kPageSize>(bytes.value()));
+        !n.ok()) {
+        return n.status();
+    }
+    auto fpi = wal_->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id},
+                            image);
+    if (!fpi.ok()) return fpi.status();
+    // The stamp is the half a hand-copied block loses: redo gates on page_lsn,
+    // so an unstamped page replays a record whose effect it already holds.
+    return page_store_.StampPageLsn(page_id, fpi.value());
 }
 
 Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spills,
@@ -2212,21 +2221,7 @@ Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spil
         // edit. Losing it is the quieter half of the same defect: the value
         // page survives redo and no chain walk ever reaches it.
         if (spill.linked_page_id != kInvalidPageId) {
-            auto bytes = page_store_.Get(spill.linked_page_id);
-            if (!bytes.ok()) return bytes.status();
-            std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-            if (auto n = wal::EncodeFullPageImage(
-                    image, std::span<const std::byte, kPageSize>(bytes.value()));
-                !n.ok()) {
-                return n.status();
-            }
-            auto fpi = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, spill.linked_page_id},
-                image);
-            if (!fpi.ok()) return fpi.status();
-            if (Status s = page_store_.StampPageLsn(spill.linked_page_id, fpi.value()); !s.ok()) {
-                return s;
-            }
+            if (Status s = LogFullPageImage(spill.linked_page_id, txn_id); !s.ok()) return s;
         }
 
         // ---- The value itself --------------------------------------------
@@ -2290,19 +2285,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
             continue;
         }
 
-        auto bytes = page_store_.Get(change.page_id);
-        if (!bytes.ok()) return bytes.status();
-
-        std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-        if (auto n = wal::EncodeFullPageImage(
-                image, std::span<const std::byte, kPageSize>(bytes.value()));
-            !n.ok()) {
-            return n.status();
-        }
-        auto fpi = wal_->Append(
-            wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, change.page_id}, image);
-        if (!fpi.ok()) return fpi.status();
-        if (Status s = page_store_.StampPageLsn(change.page_id, fpi.value()); !s.ok()) return s;
+        if (Status s = LogFullPageImage(change.page_id, txn_id); !s.ok()) return s;
     }
 
     // The var-heap values this tuple points at, before the tuple itself.
@@ -2773,19 +2756,9 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     // smaller than the records it replaces. TXN framing is the manager's.
     if (wal_ != nullptr) {
         for (const heap::BatchTouchedPage& page : filled.value().pages) {
-            auto bytes = page_store_.Get(page.page_id);
-            if (!bytes.ok()) return {"ERR " + bytes.status().message(), false};
-            std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-            if (auto n = wal::EncodeFullPageImage(
-                    image, std::span<const std::byte, kPageSize>(bytes.value()));
-                !n.ok()) {
-                return {"ERR " + n.status().message(), false};
-            }
-            auto fpi = wal_->Append(
-                wal::RecordSpec{wal::RecordType::kFullPageImage, WriterId(scope), page.page_id},
-                image);
-            if (!fpi.ok()) return {"ERR " + fpi.status().message(), false};
-            if (Status s = page_store_.StampPageLsn(page.page_id, fpi.value()); !s.ok()) {
+            // The one site that answers a client rather than a caller, so the
+            // helper's Status is turned into this path's reply shape here.
+            if (Status s = LogFullPageImage(page.page_id, WriterId(scope)); !s.ok()) {
                 return {"ERR " + s.message(), false};
             }
         }

@@ -954,6 +954,20 @@ private:
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
 
+    // One page's full image, logged and the page stamped behind it.
+    //
+    // **Four call sites wrote these ten lines identically** - an index split, a
+    // var-heap link edit, a heap structural change, and bulk insert's per-page
+    // images - and a fifth lives in `assertion_build.cpp`. An image is the
+    // instrument for "no record type describes this change", so the pattern
+    // recurs by design; what does not need to recur is the stamp, which is the
+    // step a copy can silently omit (`redo.cpp` gates every record on
+    // `page_lsn`, so a missing stamp is a record that replays when it should
+    // not).
+    //
+    // No-op with no WAL attached, like every other logging helper here.
+    Status LogFullPageImage(PageId page_id, std::uint64_t txn_id);
+
     // Every record a set of var-heap appends owes, in replay order: the
     // PAGE_INIT for a page the append created, the full page image for the
     // tail whose link now reaches it, then the VARHEAP_APPEND for the value.

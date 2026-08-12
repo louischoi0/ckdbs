@@ -752,6 +752,20 @@ StatusOr<DecodedAssertSnapshot> DecodeAssertSnapshot(std::span<const std::byte> 
     decoded.fields.group_count = Load<std::uint32_t>(in, kAssertSnapshotGroupCountOffset);
     decoded.fields.reserved = Load<std::uint32_t>(in, kAssertSnapshotReservedOffset);
 
+    // Sized from the payload before anything is reserved, the rule
+    // `DecodeCheckpointBegin` above follows and for the same reason: the count
+    // is bytes off a device, and a corrupt `group_count` must not ask for an
+    // allocation the record does not back with bytes. Each block costs at least
+    // its fixed part, so that is the bound.
+    const std::size_t max_groups =
+        (in.size() - kAssertSnapshotFixedSize) / kAssertSnapshotGroupFixedSize;
+    if (decoded.fields.group_count > max_groups) {
+        return Status::Corruption("wal payload: ASSERT_SNAPSHOT claims " +
+                                  std::to_string(decoded.fields.group_count) +
+                                  " groups, more than its " + std::to_string(in.size()) +
+                                  " bytes can hold");
+    }
+
     std::size_t at = kAssertSnapshotFixedSize;
     decoded.groups.reserve(decoded.fields.group_count);
     for (std::uint32_t i = 0; i < decoded.fields.group_count; ++i) {

@@ -1,12 +1,15 @@
 #include "kds/exec/assertion_recover.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "kds/storage/cabin_bound_page.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/wal/log_scanner.hpp"
 #include "kds/wal/payload.hpp"
 
@@ -26,12 +29,16 @@ using storage::cabin::BoundCabinPage;
 // linkage itself when it applies the record.
 StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId root,
                                                BoundCabin& cabin) {
-    std::uint64_t attached = 0;
+    // Collected first, attached in one batch: resolving each entry's group id
+    // individually is O(entries x groups) (`bound_cabin.hpp`).
+    std::vector<BoundCabin::ScannedEntry> scanned;
     PageId page_id = root;
     // The same cycle bound the chain walks elsewhere use: a damaged link must be
     // a reported Corruption and never a hang.
     for (std::uint32_t steps = 0; page_id != kInvalidPageId; ++steps) {
-        if (steps > (1u << 20)) {
+        // The same bound `AdoptChain` walks under, named rather than repeated:
+        // one chain, one cycle guard.
+        if (steps > heap::kMaxChainPages) {
             return Status::Corruption("assertion recovery: cabin page chain from " +
                                       std::to_string(root) +
                                       " exceeds the maximum length; the links may form a cycle");
@@ -43,9 +50,12 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
         }
         // `Open` is what proves this is a kCabinBound page; a page of another
         // class here means the root or a link is not what it claims.
-        auto view = BoundCabinPage::Open(
-            std::span<std::byte, kPageSize>(const_cast<std::byte*>(page.value().data()),
-                                           kPageSize));
+        //
+        // `GetForRead` already hands back a mutable `span<byte, kPageSize>` -
+        // the read-only promise is by contract, not by type (page_store.hpp) -
+        // so the span goes straight in. This walk calls only entry_count(),
+        // Read() and next_page_id(), none of which write.
+        auto view = BoundCabinPage::Open(page.value());
         if (!view.ok()) {
             return view.status().WithContext("assertion recovery: cabin page " +
                                              std::to_string(page_id));
@@ -56,21 +66,17 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
             auto entry = view.value().Read(index);
             if (!entry.ok()) return entry.status();
             if (entry.value().group_id == 0) {
-                // Written before AS6a, so there is nothing to attribute it by.
-                // Skipped rather than guessed: the alternative is inventing the
+                // A page entry written before AS6a: AST04 wrote that word as a
+                // literal zero, so there is nothing to attribute it by. Skipped
+                // rather than guessed - the alternative is inventing the
                 // allocation order the id exists to replace.
                 continue;
             }
-            Status s = cabin.AttachEntry(entry.value().group_id, page_id, index);
-            if (s.ok()) {
-                ++attached;
-            } else if (s.code() != StatusCode::kNotFound) {
-                return s;
-            }
+            scanned.push_back(BoundCabin::ScannedEntry{entry.value().group_id, page_id, index});
         }
         page_id = view.value().next_page_id();
     }
-    return attached;
+    return cabin.AttachEntries(scanned);
 }
 
 // The fold's context over a fixed set of cabins, plus the "has a base" rule.
@@ -125,6 +131,34 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         return nullptr;
     };
 
+    // Assertions whose base is still being read: a cabin's snapshot is
+    // **chunked** (`wal/payload.hpp`), so more `ASSERT_SNAPSHOT` records for the
+    // same assertion may still follow. Bounded by the assertion count, so a
+    // vector and a linear find rather than a second set.
+    std::vector<std::uint64_t> open_base;
+
+    // The base is complete: rebuild the linkage from the cabin's own pages,
+    // once, and mark the assertion foldable. **Once and not once per chunk** -
+    // the second chunk's walk sees the first chunk's groups already restored and
+    // would attach their entries a second time, which is the duplicate §7's
+    // `VerifyAgainstEntries` exists to catch. And **before the fold**, because a
+    // reservation made before the checkpoint and rolled back after it needs its
+    // (page, index) pair present for `Unapply` to find (AS6a's own note).
+    auto close_bases = [&]() -> Status {
+        for (std::uint64_t id : open_base) {
+            const RecoverableAssertion* a = by_id.at(id);
+            auto attached = AttachEntriesFromPages(store, a->root_page_id, *a->cabin);
+            if (!attached.ok()) return attached.status();
+            if (AssertionRecoveryResult* r = result_for(id); r != nullptr) {
+                r->entries_attached += attached.value();
+                r->recovered = true;
+            }
+            context.MarkBased(id);
+        }
+        open_base.clear();
+        return Status::OK();
+    };
+
     auto visit = [&](const wal::DecodedRecord& record) -> Status {
         if (record.type() == wal::RecordType::kAssertSnapshot) {
             auto decoded = wal::DecodeAssertSnapshot(record.payload);
@@ -136,6 +170,21 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
                 // A snapshot for an assertion the caller did not ask about -
                 // dropped since, or belonging to a relation the crash lost
                 // (RV3). Skipped, exactly as the fold skips an unknown id.
+                return Status::OK();
+            }
+            if (context.based(id)) {
+                // **A later checkpoint's snapshot, and it is skipped.** The scan
+                // starts at the anchor's `checkpoint_lsn`, and a crash during a
+                // *subsequent* checkpoint - the ordinary case, since the anchor
+                // is only published at Complete() - leaves that checkpoint's
+                // snapshot records inside this range. Restoring them would hit
+                // `RestoreGroup`'s duplicate-id refusal and fail the whole pass,
+                // leaving every assertion unenforcing after a routine crash.
+                //
+                // Skipping is not a loss: the base already loaded plus every
+                // `ASSERT_*` record folded onto it since is the same state the
+                // later snapshot describes, because an assertion mutation is
+                // logged whether or not a checkpoint follows it.
                 return Status::OK();
             }
             AssertionRecoveryResult* r = result_for(id);
@@ -152,15 +201,19 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
                 ++r->groups_restored;
             }
 
-            // AS6a's step 3, here rather than after the scan: every entry page
-            // is already redone, and doing it at the snapshot means the fold
-            // below sees a directory that is whole.
-            auto attached = AttachEntriesFromPages(store, known->second->root_page_id, cabin);
-            if (!attached.ok()) return attached.status();
-            r->entries_attached += attached.value();
-            r->recovered = true;
-            context.MarkBased(id);
+            // AS6a's step 3 waits for the rest of the chunks - see `close_bases`.
+            if (std::find(open_base.begin(), open_base.end(), id) == open_base.end()) {
+                open_base.push_back(id);
+            }
             return Status::OK();
+        }
+
+        // The first record that is not a snapshot ends the snapshot run, which
+        // is what says the base is whole. `LogAssertionSnapshots` emits a
+        // cabin's chunks consecutively inside the checkpoint (checkpointer.cpp),
+        // so nothing else can land between them.
+        if (!open_base.empty()) {
+            if (Status s = close_bases(); !s.ok()) return s;
         }
 
         if (!IsAssertionRecord(record.type())) {
@@ -203,6 +256,23 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
         // visitor's non-ok Status unchanged, which is why this needs no second
         // error channel (log_scanner.hpp's veto rule).
         return scanned.status().WithContext("assertion recovery");
+    }
+    // A stream whose last record is a snapshot leaves the base open - the shape
+    // a crash between the last chunk and CHECKPOINT_END gives.
+    if (Status s = close_bases(); !s.ok()) {
+        return s.WithContext("assertion recovery");
+    }
+
+    // The linkage the walk and the fold both attached, reconciled once - see
+    // `BoundCabin::DedupeEntryLinkage`. Without it §7's `VerifyAgainstEntries`
+    // double-counts an entry written after the checkpoint into a group that
+    // existed at it, and answers Corruption on a directory that is in fact
+    // correct.
+    for (const RecoverableAssertion& a : assertions) {
+        if (AssertionRecoveryResult* r = result_for(a.assertion_id);
+            r != nullptr && r->recovered) {
+            r->duplicate_links_dropped = a.cabin->DedupeEntryLinkage();
+        }
     }
 
     if (log != nullptr) {
