@@ -6,6 +6,7 @@
 
 #include "kds/server/config_file.hpp"
 #include "kds/server/expeditor.hpp"
+#include "kds/server/stop_signal.hpp"
 
 // Entrypoint of the DB master server process. Platform layer only: argv,
 // the wall clock, and stdout. Everything else belongs to the Expeditor,
@@ -120,12 +121,29 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // **Before Open(), and that is the whole of the ordering.** Open() starts the
+    // WAL writer thread, and a signal is delivered to whichever thread does not
+    // block it - so installing this afterwards would leave a thread that still
+    // takes the default action and kills the process, intermittently. Blocking
+    // here means every thread this process ever starts inherits the block
+    // (`server/stop_signal.hpp`).
+    //
+    // Fatal if it fails: a server that cannot hear a stop is a server that has to
+    // be killed, and being killed - no final sync, no shutdown checkpoint, a next
+    // mount that recovers as if from a crash - is exactly what this prevents.
+    auto stop_signal = kds::server::StopSignal::Install();
+    if (!stop_signal.ok()) {
+        std::cerr << "startup failed: " << stop_signal.status().message() << "\n";
+        return EXIT_FAILURE;
+    }
+
     auto expeditor = kds::server::Expeditor::Open(config, NowUnixSeconds());
     if (!expeditor.ok()) {
         std::cerr << "startup failed: " << expeditor.status().message() << "\n";
         return EXIT_FAILURE;
     }
     auto& db = *expeditor.value();
+    db.set_stop_signal(&stop_signal.value());
 
     std::cout << "ckdbs on " << db.config().data_file << ": "
               << db.store().allocated_pages() << " pages, superblock version "

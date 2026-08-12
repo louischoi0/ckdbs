@@ -976,9 +976,11 @@ so the first mount after a graceful stop rescanned everything the last run wrote
 **Fixed the same day** — `Expeditor::Serve` checkpoints on its way out, *after*
 the final sync so the dirty table is empty and the redo start is the checkpoint's
 own LSN (checkpointing before the sync publishes the oldest dirty page's recLSN
-instead, which measured as 1205 re-read records rather than 2). A separate gap
-remains and is recorded: the server installs no signal handler, so only a client
-typing `STOP` reaches that path at all.
+instead, which measured as 1205 re-read records rather than 2). And the gap that made that fix
+reachable only by typing `STOP` is closed too: `SIGTERM`/`SIGINT` arrive as a
+`signalfd` the reactor registers, so a process-manager stop takes the graceful
+path (`docs/known-gaps.md`). Measured through the same harness: mount 1 after a
+`SIGTERM` went from 10,883 re-read records to 2.
 
 **RC09 — Observability and the honest counter. BUILT 2026-08-12.**
 `wal.md` §13's recovery phase timings, plus RV3's counter. `SHOW META` gains

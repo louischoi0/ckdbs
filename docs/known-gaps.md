@@ -161,19 +161,30 @@ the owner's workplan.
   applied where pages had not been flushed. It also makes the anchor honest, so
   the narrower-read fix pays off when it lands.
 
-- **A process-manager stop is not the graceful path — the server handles no
-  signals at all** (found 2026-08-12 while verifying the entry above). `main.cpp`
-  installs no `SIGTERM` or `SIGINT` handler, so `systemctl stop`, a container
-  stop, and Ctrl-C all terminate the process mid-flight: no final sync, no
-  shutdown checkpoint, and the next mount recovers as if from a crash. The only
-  route to `Serve()`'s shutdown tail is a client typing `STOP`.
+- ~~**A process-manager stop is not the graceful path — the server handles no
+  signals at all**~~ — **fixed 2026-08-12.** `SIGTERM` and `SIGINT` are now
+  blocked and delivered through a `signalfd` that `Expeditor::Serve` registers
+  with its reactor (`include/kds/server/stop_signal.hpp`), so `systemctl stop`, a
+  container stop and Ctrl-C all take the same path a client's `STOP` does —
+  scheduler stop, worker join, final sync, shutdown checkpoint.
 
-  That is why the fix above reads as ineffective when measured through a harness
-  that sends `SIGTERM` and calls it a clean stop — it is a crash wearing that
-  label. Closing it means a handler that sets a flag and a reactor that polls it
-  (a handler may do almost nothing else safely), which is a change to how the
-  server responds to the outside world and belongs in its own change rather than
-  smuggled into a recovery fix.
+  A `signalfd` rather than a handler-plus-flag on purpose: a handler may do almost
+  nothing safely, so the usual shape costs a polling interval and a second thing
+  to get right, while this reactor already accepts arbitrary fds and turns the
+  delivery into an ordinary readable event on the reactor's own thread.
+
+  **The ordering is the part that would have failed intermittently.** The signals
+  are blocked in `main` *before* `Expeditor::Open`, because Open starts the WAL
+  writer thread and a signal goes to whichever thread does not block it — install
+  it later and that thread still takes the default action and kills the process,
+  sometimes. Blocking before the first thread means every thread inherits it.
+
+  Verified end to end on a running server: 300 rows, `SIGTERM`, restart — the next
+  mount reports **`recovery_records=2`** with all 300 rows, where the same signal
+  through the same measurement harness previously left mount 1 re-reading **10,883
+  records** and writing a 42 ms checkpoint. `SIGKILL` is unblockable and still an
+  immediate kill, which is correct: that is the crash path, and recovery is what
+  covers it.
 
 - **`varheap::ChainAppend` walks the chain root-to-tail on every append**, with
   no tail cache, so a spilling INSERT is O(chain length) and unbounded — found
