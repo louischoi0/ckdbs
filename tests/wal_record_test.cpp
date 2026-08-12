@@ -237,6 +237,30 @@ TEST(WalSegmentTest, NewerFormatVersionIsRefusedNotMisparsed) {
     EXPECT_NE(decoded.status().message().find("format_version"), std::string::npos);
 }
 
+// The other half of the bump, and the half a version field does not give for
+// free: `DecodeSegmentHeader` refuses only what is *newer*, so a stream written
+// before `AssertEntryPayload` grew `group_id` would otherwise be accepted and
+// its ASSERT_* records decoded four bytes out of place.
+TEST(WalSegmentTest, AStreamOlderThanTheRecordLayoutIsRefusedNotMisparsed) {
+    ASSERT_GT(kMinReadableSegmentFormatVersion, 1u)
+        << "this build claims to read v1 streams, whose ASSERT_* offsets moved";
+
+    std::vector<std::byte> block(kSegmentHeaderSize);
+    SegmentHeaderFields fields{};
+    fields.format_version = kMinReadableSegmentFormatVersion - 1;
+    ASSERT_TRUE(EncodeSegmentHeader(block, fields).ok());
+
+    auto decoded = DecodeSegmentHeader(block);
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+    // Names both versions: there is no migration, so the operator's next step
+    // is to discard the stream and the message has to be enough to decide that.
+    EXPECT_NE(decoded.status().message().find("predates"), std::string::npos)
+        << decoded.status().message();
+    EXPECT_NE(decoded.status().message().find(std::to_string(kMinReadableSegmentFormatVersion)),
+              std::string::npos)
+        << decoded.status().message();
+}
+
 TEST(WalRecordTest, TypeNamesCoverEveryAssignedValue) {
     for (std::uint8_t raw = 1; raw <= kMaxAssignedRecordType; ++raw) {
         EXPECT_TRUE(IsAssignedRecordType(raw));

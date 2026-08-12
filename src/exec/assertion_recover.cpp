@@ -65,6 +65,19 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
         for (std::uint16_t index = 0; index < count; ++index) {
             auto entry = view.value().Read(index);
             if (!entry.ok()) return entry.status();
+            if (entry.value().orphaned()) {
+                // The reservation that wrote it aborted, so it is no group's -
+                // `Unapply` dropped the linkage on the live side and this is
+                // how a scan that reads only pages reaches the same answer.
+                // Without the mark the two are indistinguishable, and a cabin
+                // whose history holds one pre-checkpoint abort re-attaches an
+                // entry the live directory had dropped: the aggregate stays
+                // right (snapshot + folded deltas) but §5.2's
+                // `VerifyAgainstEntries` proof reports Corruption for a
+                // directory that is correct. That is the AS6a decision taken
+                // 2026-08-12 (`docs/feat-assertion.md` §7).
+                continue;
+            }
             if (entry.value().group_id == 0) {
                 // A page entry written before AS6a: AST04 wrote that word as a
                 // literal zero, so there is nothing to attribute it by. Skipped

@@ -16,6 +16,7 @@ using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryDeparture;
 using storage::cabin::kEntryHintValid;
+using storage::cabin::kEntryOrphaned;
 using storage::cabin::kEntryReserved;
 
 // Schema position -> the caller's value. INSERT statements carry columns
@@ -329,6 +330,26 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
                             : a.cabin.Unapply(it->key, it->value, it->page, it->index);
         if (!undone.ok()) return undone;
         ++a.counters.aborted;
+
+        // The entry bytes stay - the slot is the recorded leak that rides on
+        // purge - but they are marked, so a rebuild scanning only these pages
+        // reaches the same directory this `Unapply` just produced
+        // (`storage/cabin_bound_page.hpp`'s `kEntryOrphaned`, the AS6a decision
+        // in `docs/feat-assertion.md` §7). Unconditional, not `wal != nullptr`:
+        // the mark is a data change, and skipping it without a log would leave
+        // a page the next scan misreads.
+        auto page = store.Get(it->page);
+        if (!page.ok()) return page.status().WithContext("assert abort: fetching the entry page");
+        auto view = BoundCabinPage::Open(page.value());
+        if (!view.ok()) return view.status().WithContext("assert abort: opening the entry page");
+        auto entry = view.value().Read(it->index);
+        if (!entry.ok()) return entry.status().WithContext("assert abort: reading the entry");
+        BoundCabinEntry orphaned = entry.value();
+        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
+        if (Status s = view.value().Write(it->index, orphaned); !s.ok()) {
+            return s.WithContext("assert abort: marking the entry orphaned");
+        }
+
         if (wal != nullptr) {
             std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
             wal::AssertRollbackPayload fields{};
@@ -343,6 +364,7 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
             spec.flags = it->departure ? wal::kAssertRollbackFlagDeparture : 0;
             auto rec = wal->Append(spec, payload);
             if (!rec.ok()) return rec.status();
+            if (Status s = store.StampPageLsn(it->page, rec.value()); !s.ok()) return s;
         }
     }
     pending_.erase(pending);

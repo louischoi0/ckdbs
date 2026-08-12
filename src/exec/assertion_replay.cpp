@@ -13,6 +13,7 @@ namespace {
 using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
+using storage::cabin::kEntryOrphaned;
 using storage::cabin::kEntryReserved;
 
 std::string KeyOf(std::span<const std::byte> bytes) {
@@ -129,7 +130,8 @@ Status ReplayCommit(const wal::DecodedRecord& record, storage::PageStore& store,
     return Status::OK();
 }
 
-Status ReplayRollback(const wal::DecodedRecord& record, AssertionReplayContext& context) {
+Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& store,
+                      AssertionReplayContext& context) {
     auto decoded = wal::DecodeAssertRollback(record.payload);
     if (!decoded.ok()) return decoded.status();
     const wal::DecodedAssertRollback& d = decoded.value();
@@ -137,12 +139,29 @@ Status ReplayRollback(const wal::DecodedRecord& record, AssertionReplayContext& 
     BoundCabin* cabin = context.CabinOf(d.fields.assertion_id);
     if (cabin == nullptr) return Status::OK();
 
-    // The page is deliberately not touched: abort is a removal the directory
-    // performs (cabin_bound_page.hpp), and the orphaned slot is the recorded
-    // leak that rides on purge. The (page_id, index) pair is the entry's
-    // *name* here, which Unapply confirms against the group's list. The
-    // envelope's flag byte says whether the reservation was a departure,
-    // which decides the sign the compensation restores under.
+    // Nothing shrinks: the orphaned slot is still the recorded leak that rides
+    // on purge. What the page does take is the `kEntryOrphaned` mark a live
+    // abort writes, so a replayed page and a live one agree - the linkage
+    // rebuild reads these pages and nothing else, so a mark only the live path
+    // wrote would make a recovered cabin disagree with a crashed-and-recovered
+    // one (`docs/feat-assertion.md` §7).
+    //
+    // The (page_id, index) pair is the entry's *name* here, which Unapply
+    // confirms against the group's list. The envelope's flag byte says whether
+    // the reservation was a departure, which decides the sign the compensation
+    // restores under.
+    auto page = store.Get(record.header.page_id);
+    if (!page.ok()) return page.status().WithContext("assert replay: fetching the entry page");
+    auto opened = BoundCabinPage::Open(page.value());
+    if (!opened.ok()) return opened.status().WithContext("assert replay: opening the entry page");
+    auto entry = opened.value().Read(d.fields.index);
+    if (!entry.ok()) return entry.status().WithContext("assert replay: reading at rollback");
+    BoundCabinEntry orphaned = entry.value();
+    orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
+    if (Status s = opened.value().Write(d.fields.index, orphaned); !s.ok()) {
+        return s.WithContext("assert replay: marking the entry orphaned");
+    }
+
     const std::string key = KeyOf(d.key);
     const bool departure =
         (record.header.flags & wal::kAssertRollbackFlagDeparture) != 0;
@@ -178,7 +197,7 @@ Status ReplayAssertionRecord(const wal::DecodedRecord& record, storage::PageStor
         case wal::RecordType::kAssertCommit:
             return ReplayCommit(record, store, context);
         case wal::RecordType::kAssertRollback:
-            return ReplayRollback(record, context);
+            return ReplayRollback(record, store, context);
         case wal::RecordType::kAssertDrop: {
             auto decoded = wal::DecodeAssertDrop(record.payload);
             if (!decoded.ok()) return decoded.status();

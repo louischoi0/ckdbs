@@ -51,6 +51,8 @@ One WAL stream per core, matching shared-nothing ownership (and the per-core buf
 
 - A stream is a sequence of fixed-size **segment files** (default 64 MiB `[OPEN: size]`), named by `(core_id, segment_no)`.
 - Segment header (one 4 KiB block): magic, format version, `core_id`, `segment_no`, `start_lsn`, header CRC32C.
+- **Format version is 2 since 2026-08-12, and this build reads version 2 only** (`kSegmentFormatVersion`, `kMinReadableSegmentFormatVersion`). Two record payloads had moved under AS6a's licence "free today — no WAL stream has ever been read back": `AssertEntryPayload` gained `group_id` (16 → 20 bytes, so every byte after offset 16 shifted) and RC03's `UNDO_WRITE` correction. Recovery running at mount is what expired that licence, so the version moved with it. **A floor and not just a bump**: `DecodeSegmentHeader` refuses only what is *newer* than this build, so a version bump alone would have left a v1 segment accepted and mis-decoded rather than refused. The floor tracks the current version while no compatibility promise exists (pre-1.0); the day one does, it stops tracking and a decoder per supported version replaces it — with a migration story, which is a decision to take then and not a default to inherit.
+- The **"free today" argument may not be reused without re-checking that it is still true.** It was sound when written and false eight commits later; what makes a format touch free is that nothing reads the format back, and that property now has an expiry date.
 - Records are 8-byte aligned and **never span segments**: a non-fitting record pads the tail with `PAD` and seals the segment. Oversized payloads are a design error, not a spanning case.
 - A sealed segment is immutable — the unit of archiving (§13) and recycling (§11).
 

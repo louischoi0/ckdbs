@@ -39,6 +39,7 @@ using storage::InMemoryPageStore;
 using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
+using storage::cabin::kEntryOrphaned;
 using storage::cabin::kEntryReserved;
 
 constexpr std::uint64_t kAssertionId = 42;
@@ -356,6 +357,19 @@ protected:
                       std::int64_t group) {
         const std::string key = KeyOf(group);
         ASSERT_TRUE(live_.Unapply(key, delta, kEntryPage, index).ok());
+        // The live writer's order again: the directory drops the entry and the
+        // page keeps the bytes with `kEntryOrphaned` set, which is what lets a
+        // linkage rebuild reading only pages agree with the directory
+        // (`AssertionEnforcer::AbortTxn`, `docs/feat-assertion.md` §7).
+        auto page = live_store_.Get(kEntryPage);
+        ASSERT_TRUE(page.ok());
+        auto view = BoundCabinPage::Open(page.value());
+        ASSERT_TRUE(view.ok());
+        auto entry = view.value().Read(index);
+        ASSERT_TRUE(entry.ok());
+        BoundCabinEntry orphaned = entry.value();
+        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
+        ASSERT_TRUE(view.value().Write(index, orphaned).ok());
         log_.push_back(RollbackRecord(txn_id, delta, index, key));
     }
 

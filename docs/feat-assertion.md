@@ -214,7 +214,7 @@ shared lookup machinery but different lifecycle contracts:
 | Field | Width | Notes |
 |---|---|---|
 | pk | 40 bit | Keystone id, authoritative (K1 invariants: never reused, never changed) |
-| flags | 8 bit | includes `RESERVED` bit for in-flight entries (§6) |
+| flags | 8 bit | includes `RESERVED` for in-flight entries (§6) and, since AS6b, `ORPHANED` for an entry whose reservation aborted (§7) |
 | reserved | 16 bit | alignment / future |
 | location hint: page id / epoch / slot | 64 bit | advisory; shares Waystone validation rules; on hint failure fall back to pk descent and heal in place |
 | aggregate value | 64 bit | the row's `SUM` column value, inline (int64). For COUNT-only assertions this field is written as 1. |
@@ -388,6 +388,47 @@ by this protocol.
   >
   > **Unchanged:** the write amplification budgeted below, the admission
   > check, and its O(1) read.
+
+  > **AS6b — an aborted entry is distinguishable on the page. Decided and
+  > built 2026-08-12**; closes the half of the recovered-linkage defect that
+  > `DedupeEntryLinkage` could not.
+  >
+  > **The defect.** AS6a rebuilds the header→entry linkage by scanning the
+  > cabin's own pages. `AssertionEnforcer::AbortTxn` removes an aborted
+  > reservation's entry from the group's list but leaves the bytes on the page
+  > by design — the orphaned slot is the recorded leak that rides on purge —
+  > and the scan could not tell those bytes from a live entry's. Any cabin
+  > whose history includes an abort **before the last checkpoint** therefore
+  > recovered with an entry list the live directory had dropped. The abort's
+  > `ASSERT_ROLLBACK` is outside the fold's range in exactly that case, so no
+  > amount of folding could have repaired it.
+  >
+  > **What was and was not wrong.** The aggregate was correct either way —
+  > it is the snapshot plus the folded deltas, never a re-sum — so admission
+  > answered right and the constraint enforced correctly. What broke was
+  > §5.2's proof: `VerifyAgainstEntries` reported `Corruption` for a directory
+  > that was right, which disables the one check that would catch a real
+  > divergence precisely after a restart, when it is most worth running.
+  >
+  > **The rule.** `flags` bit 3, `kEntryOrphaned`, is set on the entry when
+  > its reservation aborts, by the live path and by `ASSERT_ROLLBACK` replay
+  > alike, and the linkage scan skips a marked entry. Nothing shrinks and no
+  > width moves: AST04 shipped three flags, so bit 3 reads 0 on every entry
+  > written before this and "0" means "not aborted", which is true of them.
+  >
+  > **Why not the other two options.** Letting the fold own linkage and
+  > stopping the walk from attaching costs AS6a's own `Unapply` ordering note
+  > — a reservation made before a checkpoint and rolled back after it would
+  > have no entry to remove, and the mount would fail. Narrowing §5.2 to
+  > "holds on a live cabin only" keeps every byte as it is and gives up the
+  > proof at the one moment it earns its keep.
+  >
+  > **What it costs.** Abort becomes a page write where it was a memory-only
+  > operation: one read-modify-write and one `StampPageLsn` per aborted
+  > reservation, on the path a transaction takes when it is already rolling
+  > back. Commit was already paying exactly this to clear `kEntryReserved`
+  > (§6.2 step 4), so the two halves of the protocol now cost the same.
+
 - Verification: an offline/maintenance check may re-sum entries against group
   headers (hooks into the integrity sweep of the testing harness, S-1).
 

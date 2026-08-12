@@ -239,6 +239,17 @@ StatusOr<SegmentHeaderFields> DecodeSegmentHeader(std::span<const std::byte> in)
                                   std::to_string(f.format_version) +
                                   " is not supported by this build");
     }
+    if (f.format_version < kMinReadableSegmentFormatVersion) {
+        // Refused rather than decoded: the record payloads moved (record.hpp on
+        // `kMinReadableSegmentFormatVersion`), so reading one of these would
+        // misparse rather than fail. Says which version and which this build
+        // needs, because the operator's next step is to discard the stream and
+        // there is no migration to point at.
+        return Status::Corruption(
+            "wal segment: format_version " + std::to_string(f.format_version) +
+            " predates this build's record layout and cannot be read; the oldest readable is " +
+            std::to_string(kMinReadableSegmentFormatVersion));
+    }
 
     f.core_id = Load<std::uint32_t>(in, kSegmentCoreIdOffset);
     f.segment_no = Load<std::uint64_t>(in, kSegmentNoOffset);

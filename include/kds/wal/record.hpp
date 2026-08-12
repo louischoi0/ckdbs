@@ -330,7 +330,33 @@ inline constexpr std::size_t kSegmentHeaderSize = 4096;
 static_assert(kSegmentUsedSize <= kSegmentHeaderSize);
 
 inline constexpr std::uint64_t kSegmentMagic = 0x314C41575344584BULL;  // "KXDSWAL1"
-inline constexpr std::uint32_t kSegmentFormatVersion = 1;
+// **2 since 2026-08-12**, and the bump is the D2 decision `docs/known-gaps.md`
+// carried: two record payloads moved under the licence "free today, no WAL
+// stream has ever been read back", and `6d7b91b` - inside the same handful of
+// commits - is what makes streams get read back.
+//
+// What moved: `AssertEntryPayload` gained `group_id` (AS6a), taking
+// `kAssertEntryFixedSize` from 16 to 20 so every byte after offset 16 shifted;
+// and RC03's `UNDO_WRITE` correction moved under the same argument. Version 1
+// therefore names a stream this build cannot decode.
+inline constexpr std::uint32_t kSegmentFormatVersion = 2;
+
+// **The oldest stream this build will read**, and it is deliberately equal to
+// the current version rather than 1.
+//
+// A version field alone does not refuse anything: `DecodeSegmentHeader` rejects
+// only what is *newer* than this build, so bumping the version without this
+// floor would leave a v1 segment accepted and its `ASSERT_*` records decoded at
+// the wrong offsets - a short read at best, four bytes of someone else's field
+// at worst. Refusing outright is what the bump is for.
+//
+// Raised with `kSegmentFormatVersion` while no compatibility promise exists
+// (pre-1.0, and no v1 database is known). The day one does exist, this stops
+// tracking the current version and a decoder per supported version is what
+// takes its place - which is a decision to make then, with a migration story,
+// not a default to inherit now.
+inline constexpr std::uint32_t kMinReadableSegmentFormatVersion = 2;
+static_assert(kMinReadableSegmentFormatVersion <= kSegmentFormatVersion);
 
 // Zeroes the block and writes the header into it. `out` must be at least
 // kSegmentHeaderSize bytes.

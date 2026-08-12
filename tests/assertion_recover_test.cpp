@@ -48,6 +48,7 @@ using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
 using storage::cabin::kEntryHintValid;
+using storage::cabin::kEntryOrphaned;
 
 constexpr std::uint64_t kSegmentSize = 64 * 1024;
 constexpr std::uint64_t kAssertionId = 77;
@@ -427,6 +428,67 @@ TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
     };
     EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok())
         << "a recovered cabin must satisfy the check the spec calls the proof";
+}
+
+// The AS6a decision of 2026-08-12 (`docs/feat-assertion.md` §7), and the case
+// no fold can reach: the abort happens **before** the checkpoint, so its
+// ASSERT_ROLLBACK is not in the scan's range and the page walk is the only
+// thing that sees the entry. Before `kEntryOrphaned` the walk could not tell it
+// from a live one, so a recovered directory carried an entry the live one had
+// dropped - the aggregate stayed right (snapshot + folded deltas) and §5.2's
+// proof, the one check that would have caught a real divergence, reported
+// Corruption on a directory that was correct.
+TEST_F(AssertionRecoverTest, AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkToRelink) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, Key("x"), 5, /*pk=*/1);
+
+    // The reservation that aborts. The live abort path: the directory drops the
+    // linkage, the page keeps the bytes and takes the mark
+    // (`AssertionEnforcer::AbortTxn`).
+    const std::uint16_t rolled_back = Write(live, Key("x"), 7, /*pk=*/2);
+    ASSERT_TRUE(live.Unapply(Key("x"), 7, kCabinPage, rolled_back).ok());
+    {
+        auto page = store_.Get(kCabinPage);
+        ASSERT_TRUE(page.ok());
+        auto view = BoundCabinPage::Open(page.value());
+        ASSERT_TRUE(view.ok());
+        auto entry = view.value().Read(rolled_back);
+        ASSERT_TRUE(entry.ok());
+        BoundCabinEntry orphaned = entry.value();
+        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
+        ASSERT_TRUE(view.value().Write(rolled_back, orphaned).ok());
+    }
+
+    const wal::Lsn checkpoint_lsn = Checkpoint(live);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
+    auto report = Recover(checkpoint_lsn, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+
+    const GroupHeader* x = rebuilt.Find(Key("x"));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->sum, 5);
+    EXPECT_EQ(x->count, 1);
+    ASSERT_EQ(x->entries.size(), 1u) << "the orphan was relinked; the walk cannot tell it apart";
+    EXPECT_EQ(x->entries.size(), live.Find(Key("x"))->entries.size());
+
+    // The bytes are still there - abort has never shrunk a page, and the slot
+    // stays the recorded leak that rides on purge. Only the linkage is gone.
+    auto page = store_.Get(kCabinPage);
+    ASSERT_TRUE(page.ok());
+    auto view = BoundCabinPage::Open(page.value());
+    ASSERT_TRUE(view.ok());
+    EXPECT_EQ(view.value().entry_count(), 2);
+
+    auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        auto p = store_.Get(page_id);
+        if (!p.ok()) return p.status();
+        auto v = BoundCabinPage::Open(p.value());
+        if (!v.ok()) return v.status();
+        return v.value().Read(index);
+    };
+    EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok())
+        << "§5.2's proof must hold on a recovered cabin, which is where it earns its keep";
 }
 
 // ---- The mount wiring (RC07): a real assertion, resumed --------------------

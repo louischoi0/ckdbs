@@ -84,6 +84,34 @@ inline constexpr std::uint8_t kEntryHintValid = 0x2;
 // value-independence, survives intact.
 inline constexpr std::uint8_t kEntryDeparture = 0x4;
 
+// `flags` bit 3: the reservation that wrote this entry **aborted**. The bytes
+// stay - abort has never rewritten a page and the slot is the recorded leak
+// that rides on purge - but they are no longer any group's, and this is what
+// says so on the page itself.
+//
+// **Why the page has to carry it** (`docs/feat-assertion.md` §7, the AS6a
+// decision taken 2026-08-12). A live abort removes the entry from the group's
+// list in memory, so the directory is right and `VerifyAgainstEntries` holds.
+// A *recovered* directory rebuilds that linkage by scanning these pages
+// (`exec/assertion_recover.cpp`), and a scan cannot tell an aborted entry from
+// a live one: it re-attached the orphan, and §5.2's proof - "the entries remain
+// the authority, the snapshot is a derived cache, and `VerifyAgainstEntries` is
+// what proves one against the other" - then reported `Corruption` for a
+// directory that was correct. The aggregate was right either way, so what was
+// broken was the check, which is the one thing that must not be.
+//
+// The two rejected alternatives, because the reasoning is the durable part:
+// letting the `ASSERT_*` fold own linkage and stopping the page walk from
+// attaching costs AS6a's `Unapply` ordering note (a reservation made before a
+// checkpoint and rolled back after it has no entry to remove); narrowing §5.2
+// to live cabins only keeps every byte as it was and gives up the proof exactly
+// where recovery makes it worth having.
+//
+// Free at bit 3: AST04 shipped three flags and every entry on every page in
+// existence reads 0 here, so the 32-byte width (§5.1) does not move and an
+// older page reads as "nothing aborted" - which is what it means.
+inline constexpr std::uint8_t kEntryOrphaned = 0x8;
+
 // One entry, exactly 32 bytes on disk (§5.1's normative width).
 //
 // A plain struct with explicit encode/decode rather than a memcpy'd overlay:
@@ -125,6 +153,7 @@ struct BoundCabinEntry {
 
     bool reserved() const noexcept { return (flags & kEntryReserved) != 0; }
     bool departure() const noexcept { return (flags & kEntryDeparture) != 0; }
+    bool orphaned() const noexcept { return (flags & kEntryOrphaned) != 0; }
     bool hint_valid() const noexcept {
         return (flags & kEntryHintValid) != 0 && page_id != kInvalidPageId;
     }
@@ -183,9 +212,11 @@ public:
 
     StatusOr<BoundCabinEntry> Read(std::uint16_t index) const;
 
-    // Rewrites an entry in place. The one mutation the format needs: commit
-    // clears `kEntryReserved` and abort is a removal the *directory* performs,
-    // so nothing here ever shrinks. An entry's pk never changes.
+    // Rewrites an entry in place. The only mutations the format needs are flag
+    // moves - commit clears `kEntryReserved`, abort sets `kEntryOrphaned` - so
+    // nothing here ever shrinks and an entry's pk never changes. Abort still
+    // removes the entry from the *directory*; the flag is what lets a rebuild
+    // that reads only these pages agree with it.
     Status Write(std::uint16_t index, const BoundCabinEntry& entry);
 
 private:

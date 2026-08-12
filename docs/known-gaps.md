@@ -63,25 +63,37 @@ the owner's workplan.
      rebuild, and `AssertionRecoveryResult::duplicate_links_dropped` reports how
      many overlapped. A slot holds one entry, so a repeated `(page_id, index)` is
      always the duplicate.
-  2. **an aborted reservation's orphaned entry cannot be told from a live one.**
+  2. ~~**an aborted reservation's orphaned entry cannot be told from a live one.**
      `AssertionEnforcer::AbortTxn` leaves the entry bytes on the page by design —
      "the orphaned slot is the recorded leak that rides on purge" — and the
      rebuild has no way to distinguish it, so any cabin whose history includes a
-     pre-checkpoint abort relinks an entry the live directory had dropped.
+     pre-checkpoint abort relinks an entry the live directory had dropped~~ —
+     **decided and fixed 2026-08-12** as AS6b (`docs/feat-assertion.md` §7).
+     `flags` bit 3, `kEntryOrphaned`, is set on abort by the live path and by
+     `ASSERT_ROLLBACK` replay alike, and the linkage scan skips a marked entry.
+     Bit 3 was free — AST04 shipped three flags — so no width moved and an older
+     entry reads as "not aborted", which is what it is.
 
-  The **aggregate is correct either way** (snapshot + folded deltas), so
-  admission answers right and the constraint enforces correctly. What does not
+  The **aggregate was correct either way** (snapshot + folded deltas), so
+  admission answered right and the constraint enforced correctly. What did not
   hold is the structural proof `docs/feat-assertion.md` §5.2 names — "the entries
   remain the authority, the snapshot is a derived cache, and
   `VerifyAgainstEntries` is what proves one against the other" — because on a
-  recovered cabin that check reports `Corruption` for a directory that is right.
+  recovered cabin that check reported `Corruption` for a directory that was
+  right, i.e. the one check that catches a real divergence was disabled exactly
+  after a restart.
 
-  **This is an AS6a decision, not a bug to pick a fix for**: either the fold owns
-  linkage and the page walk stops attaching (which costs AS6a's `Unapply`
-  ordering note), or an aborted entry becomes distinguishable on the page (which
-  is a flag write on the abort path, i.e. a format touch), or §5.2's proof is
-  narrowed to say it holds on a live cabin only. Owned by
-  `docs/feat-assertion.md` §7.
+  **It was an AS6a decision rather than a bug to pick a fix for**, and the two
+  rejected options are why: letting the fold own linkage and stopping the page
+  walk from attaching costs AS6a's `Unapply` ordering note — a reservation made
+  before a checkpoint and rolled back after it would have no entry to remove, and
+  the mount would fail — and narrowing §5.2 to live cabins only gives up the
+  proof at the one moment it earns its keep. The cost taken instead: abort
+  becomes a page write (one read-modify-write plus a `StampPageLsn` per aborted
+  reservation), which is what commit was already paying to clear
+  `kEntryReserved`.
+  `AssertionRecoverTest.AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkToRelink`
+  pins it and was verified to fail without the skip.
 
 - **Assertion recovery is a third full `ScanLog` per mount whenever the anchor is
   zero** — noted by review 2026-08-12. `exec::RecoverAssertions` scans from the
@@ -239,22 +251,30 @@ the owner's workplan.
   name is a type some site intends to write, so it must encode. Verified to fail
   against the old bound.
 
-- **`AssertEntryPayload`'s offsets moved with no format-version bump, and the
-  argument that licensed it expired inside the same eight commits** — noted by
-  review 2026-08-12, deliberately not "fixed". AS6a's licence was that both
-  format touches are free *"today … no WAL stream has ever been read back"*, and
-  `6d7b91b` in that very range is what makes streams get read back.
+- ~~**`AssertEntryPayload`'s offsets moved with no format-version bump, and the
+  argument that licensed it expired inside the same eight commits**~~ —
+  **decided and fixed 2026-08-12**, `docs/wal.md` §4.1. AS6a's licence was that
+  both format touches are free *"today … no WAL stream has ever been read
+  back"*, and `6d7b91b` in that very range is what makes streams get read back.
   `kAssertEntryFixedSize` went 16 → 20, so every byte after offset 16 shifted,
-  while `kSegmentFormatVersion` is still 1. A database written between AST05 and
-  this work and then mounted with this build mis-decodes `ASSERT_*` records — it
-  fails loudly (`CheckInputSize` short by 4), never silently, and no such
-  database is known to exist pre-1.0.
+  while `kSegmentFormatVersion` was still 1.
 
-  Left as a record rather than a bump because moving a persisted format version
-  is a decision with its own blast radius (it refuses older streams outright),
-  and `docs/wal.md` §15 still lists the segment format as open. What is *not*
-  left ambiguous is the reasoning: the "free today" argument may not be reused
-  again without checking whether it is still true.
+  `kSegmentFormatVersion` is now **2**, and the bump alone would not have been
+  the fix: `DecodeSegmentHeader` refuses only what is *newer* than the build, so
+  a v1 segment would still have been accepted and mis-decoded. The refusal comes
+  from a second constant, `kMinReadableSegmentFormatVersion`, raised alongside
+  it — so a v1 stream is refused by name, naming both versions, because there is
+  no migration and the operator's next step is to discard it. The floor tracks
+  the current version only while no compatibility promise exists (pre-1.0); once
+  one does, it stops tracking and a decoder per supported version replaces it,
+  which is a decision to take then rather than a default to inherit now.
+  `WalSegmentTest.AStreamOlderThanTheRecordLayoutIsRefusedNotMisparsed` pins it.
+
+  The bump covers RC03's `UNDO_WRITE` correction too, which moved under the same
+  argument. What is *not* left ambiguous is the reasoning, and it outlives this
+  entry: the "free today" argument may not be reused again without checking
+  whether it is still true. It was sound when written and false eight commits
+  later.
 
 - **A segment sealed with no room for a PAD was read as a torn tail** — found
   and **fixed 2026-08-12** (`src/wal/log_scanner.cpp`), and it is the second
