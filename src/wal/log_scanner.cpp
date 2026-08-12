@@ -1,5 +1,7 @@
 #include "kds/wal/log_scanner.hpp"
 
+#include <memory>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -87,7 +89,22 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
     // One buffer, reused across segments. The visitor contract says a
     // payload does not outlive its call, which is what makes that legal.
     std::vector<std::byte> header_block(kSegmentHeaderSize);
-    std::vector<std::byte> body;
+
+    // **Allocated once and never zeroed**, and that is a measured decision, not
+    // a micro-optimisation. `body.assign(body_bytes, std::byte{0})` per segment
+    // was **78% of a scan's cost** - zeroing 64 MiB that the very next `ReadAt`
+    // overwrites in full (`bench/results-wal-recovery.md`: 30.3 ms to
+    // alloc+zero, 8.4 ms to read it). A mount runs two of these scans, three
+    // once an assertion is declared, so it was ~60-90 ms of startup spent
+    // writing bytes nobody reads.
+    //
+    // `make_unique_for_overwrite` is the one allocation that skips value
+    // initialisation. Every byte handed to `RecordReader` below has been written
+    // by `ReadAt` first: the span is exactly the range that call filled, so no
+    // uninitialised byte is ever read - which is the property that makes this
+    // safe rather than merely fast.
+    const std::size_t body_capacity = static_cast<std::size_t>(segment_size - kSegmentHeaderSize);
+    auto body_storage = std::make_unique_for_overwrite<std::byte[]>(body_capacity);
 
     for (; segment_no < segment_count; ++segment_no) {
         const Lsn start_lsn = segment_no * segment_size;
@@ -104,7 +121,10 @@ StatusOr<ScanOutcome> ScanLog(LogDevice& device, std::uint32_t core_id, Lsn from
             (segment_no == start_segment) ? start_offset : kSegmentHeaderSize;
         const std::uint64_t body_bytes = segment_size - body_offset;
 
-        body.assign(static_cast<std::size_t>(body_bytes), std::byte{0});
+        // The first segment of a scan may start part-way in, so the span is the
+        // tail of the buffer's capacity rather than all of it.
+        const std::span<std::byte> body(body_storage.get(),
+                                        static_cast<std::size_t>(body_bytes));
         if (Status s = device.ReadAt(segment_no, body_offset, body); !s.ok()) {
             return s;
         }

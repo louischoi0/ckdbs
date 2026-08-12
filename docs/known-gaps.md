@@ -93,18 +93,69 @@ the owner's workplan.
   makes the zero-anchor case a first-mount-only state. Same fix as below: read to
   the durable end, or stream in chunks.
 
-- **A mount reads each WAL segment's whole body, twice** — measured 2026-08-12
-  by RC09's own timings, which is what made a long-invisible cost visible.
-  `ScanLog` allocates and reads a segment's entire body in one go, analysis and
-  redo each run their own scan, and the default segment is 64 MiB: so a mount
-  reads 128 MiB and allocates two 64 MiB buffers **before it can serve a
-  statement, on a log holding nothing**. On a real server that is
-  `recovery_analysis_us≈44000` + `recovery_redo_us≈42000` — 86 ms of a ~90 ms
-  mount, reproduced on three consecutive mounts. Not a defect and not new
-  (`log_scanner.cpp` anticipated it: "when segments are 64 MiB this becomes a
-  streaming read"), and not recovery's to fix alone: the fix is to read only as
-  far as the durable end, or to stream in chunks, and it belongs beside the
-  segment-size decision that is still `[OPEN]` (`docs/wal.md` §15).
+- **A mount reads each WAL segment's whole body, once per scan, and there are
+  three scans** — measured 2026-08-12 and **partly closed the same day**;
+  `bench/results-wal-recovery.md` carries the numbers and the method.
+  `ScanLog` reads from the anchor to the *segment's* end, so the cost tracks
+  segment bytes and not record count: 0.63 ms/MiB, constant to 4% across 64.0 /
+  63.6 / 56.9 / 28.1 MiB while the record count stayed at 2. **An empty log is
+  therefore the worst case, which is the opposite of the intuition**, and
+  `kDefaultSegmentSize` has quietly become a startup-latency knob.
+
+  Three scans, not two: `WalStream::ScanTail` at WAL open, then analysis, then
+  redo — and a fourth whenever an assertion is declared
+  (`exec::RecoverAssertions`, which scans the whole stream while no anchor
+  exists).
+
+  **Closed half of it**: the scan buffer is no longer value-initialised
+  (`make_unique_for_overwrite`, so `ReadAt` writes each byte exactly once), which
+  measured **−24.7 to −26.0 ms per mount** in an interleaved A/B — 137 ms → 112
+  ms, ~18%, at −8 ms per scan.
+
+  **Still open, and this is the corrected number**: a mount is **112 ms** where
+  the pre-recovery engine was **49.5 ms**, and ~65 ms of it is the reads
+  themselves. An earlier version of this entry said "86 ms of a ~90 ms mount";
+  the ~90 was wrong — a mount was 132-140 ms before the buffer fix and 49.5 ms
+  before recovery existed at all, so recovery is ~64% of a mount and not ~96%.
+  The remaining fix is a **narrower read** — to the durable end, or streamed in
+  chunks — and it belongs beside the segment-size decision that is still
+  `[OPEN]` (`docs/wal.md` §15).
+
+- **An INSERT-with-spill writes 1.8-2.0× the WAL bytes it used to, and that
+  multiplies a 487 ms stall** — measured 2026-08-12,
+  `bench/results-wal-recovery.md`. The `PAGE_INIT` + 8 KiB `FULL_PAGE_IMAGE` per
+  var-heap chain growth is what the correctness fix above costs: 3764 B against
+  2122 B per spilling INSERT at 1600-byte values, 16,886 against 8626 at 8100.
+  **Per-statement latency did not regress** — the delta is inside a ~9 µs noise
+  floor at 1600 B, and +2.7 µs (+3.5%) at the pathological size where every row
+  grows the chain, with p0 identical on both sides.
+
+  The cost that matters is indirect: `FileLogDevice::CreateSegment` takes
+  **487 ms** on the statement thread (`posix_fallocate` + a 64 × 1 MiB prewrite +
+  two fsyncs), so WAL volume decides how often a client waits for one. At 10k
+  rows of 8100-byte values that moved from two segment creations to three.
+  Pre-existing and unrelated to this change, but now amplified by it, and the
+  reason a segment's creation cost belongs on someone's list.
+
+  (An UPDATE-with-spill writes 10-46× more, and that number is the size of the
+  hole that was there: at the previous commit it wrote 361 B, exactly what an
+  *inline* update writes, because its value was not logged at all.)
+
+- **A clean shutdown publishes no anchor**, so the first mount after one rescans
+  everything the last run wrote and redoes none of it — found 2026-08-12 by the
+  mount measurement (a cleanly stopped 2000-row cell re-read all 10,883 of its
+  records). RC08 gives a *crash* a bounded next mount; a graceful stop still
+  leaves the anchor wherever the last cadence checkpoint put it. The fix is the
+  same call the mount already makes, on the way out instead of the way in, and it
+  is not written yet.
+
+- **`varheap::ChainAppend` walks the chain root-to-tail on every append**, with
+  no tail cache, so a spilling INSERT is O(chain length) and unbounded — found
+  2026-08-12 while measuring the var-heap write path, and **pre-existing**
+  (identical on both sides of the change). Visible as p25 rising 71.7 µs → 107-135
+  µs from 1k to 10k spilling rows while the inline control does not move. The
+  heap chain solved this with a tail hint (`heap_tail_hint`); the var-heap has
+  no equivalent.
 
 - ~~**Var-heap page growth and UPDATE's spills are not logged, and recovery
   found it**~~ — **fixed 2026-08-12**, all three holes, with the reproducer

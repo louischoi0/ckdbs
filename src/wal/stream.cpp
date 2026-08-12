@@ -1,5 +1,6 @@
 #include "kds/wal/stream.hpp"
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -99,7 +100,14 @@ Status WalStream::ScanTail(std::uint64_t segment_no) {
     // The whole body at once. Fine at the sizes recovery sees today; when
     // segments are 64 MiB this becomes a streaming read, which changes
     // nothing about the walk below.
-    std::vector<std::byte> body(segment_size_ - kSegmentHeaderSize);
+    //
+    // Unzeroed, for `log_scanner.cpp`'s measured reason: a `vector<byte>(n)`
+    // here value-initialises 64 MiB that the `ReadAt` on the next line
+    // overwrites entirely. Every byte the walk below touches was written by that
+    // call.
+    const std::size_t body_bytes = static_cast<std::size_t>(segment_size_ - kSegmentHeaderSize);
+    auto body_storage = std::make_unique_for_overwrite<std::byte[]>(body_bytes);
+    const std::span<std::byte> body(body_storage.get(), body_bytes);
     if (Status s = device_->ReadAt(segment_no, kSegmentHeaderSize, body); !s.ok()) {
         return s;
     }

@@ -953,12 +953,28 @@ and a cheap-looking one. A second test asserts the published anchor satisfies
 analysis's own durable-point check, since an anchor that failed it would hand
 the next mount a refusal.
 
-**Measured**, `build-release`, interleaved A/B against `--skip-recovery`, three
-reps × three seeds: 0.21-0.34 s per crash run either side of the change -
-**cost-neutral to within noise**, because the harness reboots once per log and
-so pays the checkpoint without ever taking the cheaper scan. The scan-volume
-evidence above is what carries the benefit; a multi-mount wall-clock benchmark
-belongs in `bench/` and was **not run**.
+**Measured twice, and the second measurement is the one to quote.** The first
+was `ckdbs-sim`'s A/B against `--skip-recovery`: 0.21-0.34 s per crash run either
+side, cost-neutral to within noise - because the harness reboots once per log and
+so pays the checkpoint without ever taking the cheaper scan. A ck-tester pass
+then built the multi-mount measurement that shape cannot produce
+(`tools/mount_cost_benchmark.py`, `bench/results-wal-recovery.md`), and **the
+benefit is large**:
+
+| log before the sweep | mount 1 | mounts 2-9 p50 | saved |
+|---|---|---|---|
+| 200 rows, SIGKILL | 142.7 ms | 133.1 ms | 9.6 ms |
+| 2000 rows, SIGKILL | 184.2 ms | 128.0 ms | 56.2 ms |
+| 10000 rows, SIGKILL | 336.9 ms | 93.8 ms | **243.1 ms** (3.6×) |
+
+Recurring cost is 7-8 ms and ~4.3 KB per mount, against 36 B for a mount that
+writes no checkpoint. 68% of the 10k saving is the fat checkpoint the first mount
+had to write, which is the point: RC08 moves that work off every *later* mount.
+
+**And it found what RC08 does not cover:** a **clean shutdown publishes no
+anchor**, so the first mount after a graceful stop rescans everything the last
+run wrote. Recorded in `docs/known-gaps.md`; the fix is this same call on the way
+out.
 
 **RC09 — Observability and the honest counter. BUILT 2026-08-12.**
 `wal.md` §13's recovery phase timings, plus RV3's counter. `SHOW META` gains
