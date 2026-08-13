@@ -86,13 +86,13 @@ struct Tree {
         auto created = store.CreateNew();
         EXPECT_TRUE(created.ok()) << created.status().message();
         auto [page_id, bytes] = created.value();
-        Status s = FormatRoot(bytes);
+        Status s = FormatRoot(bytes, /*owner_oid=*/0);
         EXPECT_TRUE(s.ok()) << s.message();
         root = page_id;
     }
 
     StatusOr<storage::InsertPlacement> Insert(std::uint64_t id, std::size_t filler) {
-        auto r = BtreeInsert(store, root, id, MakeTuple(id, filler), /*trx_id=*/1);
+        auto r = BtreeInsert(store, root, id, MakeTuple(id, filler), /*trx_id=*/1, /*owner_oid=*/0);
         if (r.ok() && r.value().new_root != kInvalidPageId) root = r.value().new_root;
         return r;
     }
@@ -138,6 +138,40 @@ std::uint64_t MinKeyOf(storage::PageStore& store, PageId page_id) {
 }
 
 // ---- Shape of a fresh tree ---------------------------------------------
+
+TEST(BtreeTest, EveryPageASplitCreatesCarriesTheOwnerOid) {
+    // page.md section 2a: the new leaf, the rebuilt old leaf and the new
+    // internal root all carry the relation's oid after the first split.
+    storage::InMemoryPageStore store(128);
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    auto [root_id, root_bytes] = created.value();
+    ASSERT_TRUE(FormatRoot(root_bytes, /*owner_oid=*/4001).ok());
+    PageId root = root_id;
+
+    storage::InsertPlacement split{};
+    bool grew = false;
+    for (std::uint64_t id = 1; id <= 200 && !grew; ++id) {
+        auto r = BtreeInsert(store, root, id, MakeTuple(id, 1016), /*trx_id=*/1,
+                             /*owner_oid=*/4001);
+        ASSERT_TRUE(r.ok()) << r.status().message();
+        if (r.value().new_root != kInvalidPageId) {
+            split = r.value();
+            root = r.value().new_root;
+            grew = true;
+        }
+    }
+    ASSERT_TRUE(grew) << "the tree never grew a level";
+
+    for (const auto& change : split.changes()) {
+        auto bytes = store.Get(change.page_id);
+        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+        EXPECT_EQ(storage::GetOwnerOid(bytes.value()), 4001u) << "page " << change.page_id;
+    }
+    auto root_again = store.Get(root);
+    ASSERT_TRUE(root_again.ok()) << root_again.status().message();
+    EXPECT_EQ(storage::GetOwnerOid(root_again.value()), 4001u);
+}
 
 TEST(BtreeTest, AFreshRootIsASingleEmptyLeaf) {
     storage::InMemoryPageStore store(128);
@@ -495,7 +529,7 @@ TEST(BtreeTest, ALookupFindsAnIdInALeafWhoseSlotsAreOutOfOrder) {
 
     const std::vector<std::uint64_t> ids = {50, 10, 40, 20, 30};
     for (std::uint64_t id : ids) {
-        auto slot = leaf.value().InsertTuple(MakeTuple(id, kSmallFiller), /*trx_id=*/1);
+        auto slot = leaf.value().InsertTuple(MakeTuple(id, kSmallFiller), /*trx_id=*/1, /*owner_oid=*/0);
         ASSERT_TRUE(slot.ok()) << "id " << id << ": " << slot.status().message();
     }
 
@@ -681,7 +715,7 @@ TEST(BtreeTest, APayloadWhoseKeystoneDisagreesWithTheIdIsRefused) {
     storage::InMemoryPageStore store(128);
     Tree tree(store);
 
-    auto r = BtreeInsert(store, tree.root, /*id=*/7, MakeTuple(9, kSmallFiller), /*trx_id=*/1);
+    auto r = BtreeInsert(store, tree.root, /*id=*/7, MakeTuple(9, kSmallFiller), /*trx_id=*/1, /*owner_oid=*/0);
     EXPECT_FALSE(r.ok());
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption)
         << "two disagreeing copies of a tuple's identity is a defect, not a choice of which wins";
@@ -1027,7 +1061,7 @@ TEST(BtreeTest, AnIdBelowItsLeafsMinKeyIsRefused) {
     auto root = InternalView::CreateEmpty(root_bytes, /*level=*/1, /*leftmost_child=*/leaf_id);
     ASSERT_TRUE(root.ok()) << root.status().message();
 
-    auto r = BtreeInsert(store, root_id, /*id=*/150, MakeTuple(150, kSmallFiller), /*trx_id=*/1);
+    auto r = BtreeInsert(store, root_id, /*id=*/150, MakeTuple(150, kSmallFiller), /*trx_id=*/1, /*owner_oid=*/0);
     EXPECT_FALSE(r.ok());
     EXPECT_EQ(r.status().code(), StatusCode::kOutOfRange);
 }

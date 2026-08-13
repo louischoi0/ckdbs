@@ -77,17 +77,28 @@ StatusOr<std::size_t> EncodePageInit(std::span<std::byte> out, const PageInitPay
     Store<std::uint64_t>(out, kPageInitMinKeyOffset, fields.min_key);
     Store<std::uint8_t>(out, kPageInitPageTypeOffset, fields.page_type);
     std::memset(out.data() + kPageInitReservedOffset, 0, 3);
+    Store<std::uint32_t>(out, kPageInitReserved2Offset, 0);
+    Store<std::uint64_t>(out, kPageInitOwnerOidOffset, fields.owner_oid);
     return kPageInitPayloadSize;
 }
 
 StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in) {
-    if (Status s = CheckInputSize(in, kPageInitPayloadSize, "PAGE_INIT"); !s.ok()) {
-        return s;
+    // Two legal lengths (page.md §2a): the 24-byte form, and the 12-byte
+    // pre-owner form whose owner reads as 0. Anything else is CRC-vouched
+    // and wrong, the same hard error an unknown record type is.
+    if (in.size() != kPageInitPayloadSize && in.size() != kPageInitPayloadSizeLegacy) {
+        return Status::Corruption("wal payload: PAGE_INIT payload is " +
+                                  std::to_string(in.size()) + " bytes, needs " +
+                                  std::to_string(kPageInitPayloadSizeLegacy) + " or " +
+                                  std::to_string(kPageInitPayloadSize));
     }
 
     PageInitPayload fields{};
     fields.min_key = Load<std::uint64_t>(in, kPageInitMinKeyOffset);
     fields.page_type = Load<std::uint8_t>(in, kPageInitPageTypeOffset);
+    if (in.size() == kPageInitPayloadSize) {
+        fields.owner_oid = Load<std::uint64_t>(in, kPageInitOwnerOidOffset);
+    }
     if (fields.min_key > kMaxKeystoneId) {
         return Status::Corruption("wal payload: PAGE_INIT min_key exceeds the 40-bit id space");
     }

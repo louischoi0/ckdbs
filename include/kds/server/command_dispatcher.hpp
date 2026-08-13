@@ -948,8 +948,12 @@ private:
     // `own_txn` false means a TransactionManager owns the transaction and
     // has already logged TXN_BEGIN; this emits only the page records and
     // leaves TXN_COMMIT and its durability wait to EndWrite().
+    // `owner_oid` (page.md §2a): the target relation's oid, carried by any
+    // PAGE_INIT this insert emits so redo re-stamps what the live path
+    // stamped.
     Status LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                      std::span<const std::byte> tuple, std::uint64_t trx_id,
+                     std::uint64_t owner_oid,
                      const std::vector<exec::AppendedSpill>& spills = {},
                      const std::vector<exec::IndexWrite>& index_writes = {},
                      bool own_txn = true);
@@ -980,7 +984,8 @@ private:
     // The caller owes the *ordering*: these records precede the HEAP_INSERT or
     // HEAP_OVERWRITE whose cell points at the value, so a replay never reaches
     // a pointer that resolves to nothing (spec §5).
-    Status LogSpills(const std::vector<exec::AppendedSpill>& spills, std::uint64_t txn_id);
+    Status LogSpills(const std::vector<exec::AppendedSpill>& spills, std::uint64_t txn_id,
+                     std::uint64_t owner_oid);
 
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer

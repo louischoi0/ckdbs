@@ -181,8 +181,11 @@ static_assert(DecodePtr(EncodePtr(VarHeapPtr{0x01020304u, 0x0506})) ==
 
 // ---- Page operations -----------------------------------------------------
 
-// Formats `page` as a brand-new, empty var-heap page.
-Status FormatPage(std::span<std::byte, kPageSize> page);
+// Formats `page` as a brand-new, empty var-heap page. `owner_oid`
+// (page.md §2a) is the owning relation's oid — a chain is per-relation, so
+// every page of it carries the same owner; 0 only from replay of a
+// pre-§2a record.
+Status FormatPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid = 0);
 
 // Appends `value` to this page alone, returning its slot. Fails with
 // OutOfSpace if the page has no room - which is the signal the chain uses
@@ -221,7 +224,9 @@ PageId PageNextPageId(std::span<const std::byte, kPageSize> page);
 // Creates a relation's var-heap root page and returns its id. Called once,
 // at CREATE TABLE, for a relation whose schema can spill - so the root is
 // fixed by DDL and stays a cacheable fact (catalog_cache.hpp's rule).
-StatusOr<PageId> CreateChain(storage::PageStore& store);
+// `owner_oid` is that relation's oid (page.md §2a) — deliberately not
+// defaulted: every chain has a relation, so every caller can say which.
+StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid);
 
 // What an append changed besides writing the value, so a logging caller can
 // describe all of it.
@@ -263,7 +268,8 @@ struct ChainAppendResult {
 // there - the cap is an open decision this layer refuses to make), and
 // with whatever the store reports otherwise.
 StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
-                                        std::span<const std::byte> value);
+                                        std::span<const std::byte> value,
+                                        std::uint64_t owner_oid);
 
 // Resolves `ptr`. Fetches exactly one page - the pointer names it directly,
 // so this is never a walk.

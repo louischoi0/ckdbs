@@ -466,11 +466,14 @@ Status Catalog::BootstrapPatternDefs() {
     auto created = store_.CreateAt(kCatalogPagePatternDefs);
     if (!created.ok()) return created.status();
     // min_key 0: like the other catalog pages, this relation is scanned in
-    // full - by name or by pattern_id, never by key range.
-    auto root = heap::PageView::CreateEmpty(created.value(), 0);
+    // full - by name or by pattern_id, never by key range. Stamped with the
+    // relation's own oid (page.md §2a), unlike the fixed catalog core:
+    // this chain grows through ChainInsert, which stamps, so the root must
+    // agree with the pages that follow it.
+    auto root = heap::PageView::CreateEmpty(created.value(), 0, kSysPatternDefsTable);
     if (!root.ok()) return root.status();
 
-    auto varheap_root = varheap::CreateChain(store_);
+    auto varheap_root = varheap::CreateChain(store_, kSysPatternDefsTable);
     if (!varheap_root.ok()) return varheap_root.status();
 
     if (Status s = InsertObjectRow(kSysPatternDefsTable, kNamespaceSys, kTypeTable,
@@ -567,11 +570,12 @@ Status Catalog::BootstrapAssertions() {
     auto created = store_.CreateAt(kCatalogPageAssertions);
     if (!created.ok()) return created.status();
     // min_key 0: scanned in full, by name or by target_oid, never by key
-    // range - like every other catalog page.
-    auto root = heap::PageView::CreateEmpty(created.value(), 0);
+    // range - like every other catalog page. Stamped for the reason
+    // pattern_defs' root is: this chain grows through ChainInsert.
+    auto root = heap::PageView::CreateEmpty(created.value(), 0, kSysAssertionsTable);
     if (!root.ok()) return root.status();
 
-    auto varheap_root = varheap::CreateChain(store_);
+    auto varheap_root = varheap::CreateChain(store_, kSysAssertionsTable);
     if (!varheap_root.ok()) return varheap_root.status();
 
     if (Status s = InsertObjectRow(kSysAssertionsTable, kNamespaceSys, kTypeTable, "assertions");
@@ -775,6 +779,14 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         return layout.status();
     }
 
+    // The oid, issued before any page is formatted so every page of the
+    // relation carries it from birth (page.md §2a). An oid burned by a
+    // failure below is fine by this function's own argument: an oid counts
+    // objects ever created, not objects that exist.
+    auto generated_oid = GenerateUserOid();
+    if (!generated_oid.ok()) return generated_oid.status();
+    const Oid new_oid = generated_oid.value();
+
     auto created = store_.CreateNew();
     if (!created.ok()) return created.status();
     auto [root_id, root_bytes] = created.value();
@@ -788,12 +800,12 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     Status formatted = Status::OK();
     switch (clustered_type) {
         case ClusteredType::kHeap: {
-            auto root_page = heap::PageView::CreateEmpty(root_bytes, 0);
+            auto root_page = heap::PageView::CreateEmpty(root_bytes, 0, new_oid);
             if (!root_page.ok()) formatted = root_page.status();
             break;
         }
         case ClusteredType::kBtree:
-            formatted = btree::FormatRoot(root_bytes);
+            formatted = btree::FormatRoot(root_bytes, new_oid);
             break;
     }
     if (!formatted.ok()) return formatted;
@@ -808,14 +820,10 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // page at all.
     PageId varheap_root = kInvalidPageId;
     if (SchemaCanSpill(schema)) {
-        auto created_varheap = varheap::CreateChain(store_);
+        auto created_varheap = varheap::CreateChain(store_, new_oid);
         if (!created_varheap.ok()) return created_varheap.status();
         varheap_root = created_varheap.value();
     }
-
-    auto generated_oid = GenerateUserOid();
-    if (!generated_oid.ok()) return generated_oid.status();
-    const Oid new_oid = generated_oid.value();
 
     // Placement (docs/workplan-crosscore.md M1). The rotation counter is
     // how many relations already exist, read off the page rather than
@@ -2083,11 +2091,17 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
     // someone remembers to ask is not a check.
     if (Status s = CheckIndexDef(def); !s.ok()) return s;
 
-    auto index_oid = AllocateRowId(kSysIndexesTable);
-    if (!index_oid.ok()) return index_oid.status();
+    // A caller that formatted pages already pre-issued the oid to stamp
+    // them (IndexDef::index_oid); allocate only when it did not.
+    std::uint64_t issued = def.index_oid;
+    if (issued == 0) {
+        auto index_oid = AllocateRowId(kSysIndexesTable);
+        if (!index_oid.ok()) return index_oid.status();
+        issued = index_oid.value();
+    }
 
     SysIndexRow row{};
-    row.index_oid = index_oid.value();
+    row.index_oid = issued;
     row.table_oid = def.table_oid;
     row.root_page_id = def.root_page_id;
     row.key_width = def.key_width;

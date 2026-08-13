@@ -60,12 +60,13 @@ void PageView::WriteSlot(std::uint16_t idx, const HeapSlotFields& s) {
 }
 
 StatusOr<PageView> PageView::CreateEmpty(std::span<std::byte, kPageSize> page,
-                                          std::uint64_t min_key) {
-    return CreateEmptyAs(page, min_key, PageType::kHeap);
+                                          std::uint64_t min_key, std::uint64_t owner_oid) {
+    return CreateEmptyAs(page, min_key, PageType::kHeap, owner_oid);
 }
 
 StatusOr<PageView> PageView::CreateEmptyAs(std::span<std::byte, kPageSize> page,
-                                            std::uint64_t min_key, PageType type) {
+                                            std::uint64_t min_key, PageType type,
+                                            std::uint64_t owner_oid) {
     if (type != PageType::kHeap && type != PageType::kBtreeLeaf) {
         return Status::InvalidArgument("only kHeap and kBtreeLeaf pages carry a heap page body");
     }
@@ -76,7 +77,7 @@ StatusOr<PageView> PageView::CreateEmptyAs(std::span<std::byte, kPageSize> page,
     // Zeroes the page and writes the common header (the requested page
     // type, page_lsn 0, checksum 0 - the checksum is stamped at flush
     // time, page.md section 8). Everything this file writes lives above it.
-    storage::FormatPage(page, type);
+    storage::FormatPage(page, type, /*flags=*/0, owner_oid);
 
     PageView view(page);
 

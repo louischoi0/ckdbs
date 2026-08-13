@@ -232,7 +232,8 @@ struct InternalDivision {
 
 StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId node_id,
                                                std::uint64_t sep, PageId child,
-                                               storage::InsertPlacement& out) {
+                                               storage::InsertPlacement& out,
+                                               std::uint64_t owner_oid) {
     std::vector<BtreeInternalEntryFields> entries;
     std::uint16_t level = 0;
     PageId leftmost = kInvalidPageId;
@@ -274,7 +275,7 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     if (!created.ok()) return created.status();
     auto [right_id, right_bytes] = created.value();
 
-    auto right = InternalView::CreateEmpty(right_bytes, level, median.child);
+    auto right = InternalView::CreateEmpty(right_bytes, level, median.child, owner_oid);
     if (!right.ok()) return right.status();
     for (std::size_t k = m + 1; k < entries.size(); ++k) {
         if (Status s = right.value().InsertEntry(entries[k].sep_key, entries[k].child); !s.ok()) {
@@ -290,7 +291,11 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     // Re-fetched because CreateNew() above may have handed out a new frame.
     auto again = store.Get(node_id);
     if (!again.ok()) return again.status();
-    auto rebuilt = InternalView::CreateEmpty(AsPage(again.value()), level, leftmost);
+    // The rebuild keeps the page's own stamp (page.md §2a): re-initializing
+    // in place is the one legal re-write of owner_oid, and the owner cannot
+    // have changed — pages never move between relations.
+    const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(again.value()));
+    auto rebuilt = InternalView::CreateEmpty(AsPage(again.value()), level, leftmost, old_owner);
     if (!rebuilt.ok()) return rebuilt.status();
     for (std::size_t k = 0; k < m; ++k) {
         if (Status s = rebuilt.value().InsertEntry(entries[k].sep_key, entries[k].child);
@@ -313,7 +318,8 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
 StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
                                                      const Descent& descent, std::uint64_t sep,
                                                      PageId child,
-                                                     storage::InsertPlacement out) {
+                                                     storage::InsertPlacement out,
+                                                     std::uint64_t owner_oid) {
     std::uint16_t old_root_level = 0;  // the root is a leaf unless proven otherwise
 
     for (int d = static_cast<int>(descent.depth) - 1; d >= 0; --d) {
@@ -347,7 +353,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
         if (!appends.ok()) return appends.status();
 
         if (!appends.value()) {
-            auto divided = DivideInternalNode(store, parent_id, sep, child, out);
+            auto divided = DivideInternalNode(store, parent_id, sep, child, out, owner_oid);
             if (!divided.ok()) return divided.status();
             sep = divided.value().sep;
             child = divided.value().child;
@@ -359,7 +365,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
         if (!created_node.ok()) return created_node.status();
         auto [new_node_id, new_node_bytes] = created_node.value();
 
-        auto new_node = InternalView::CreateEmpty(new_node_bytes, level, child);
+        auto new_node = InternalView::CreateEmpty(new_node_bytes, level, child, owner_oid);
         if (!new_node.ok()) return new_node.status();
 
         out.Record(new_node_id, /*is_new_page=*/false, 0);
@@ -376,7 +382,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
 
     auto new_root = InternalView::CreateEmpty(new_root_bytes,
                                                static_cast<std::uint16_t>(old_root_level + 1),
-                                               old_root);
+                                               old_root, owner_oid);
     if (!new_root.ok()) return new_root.status();
     if (Status s = new_root.value().InsertEntry(sep, child); !s.ok()) return s;
 
@@ -416,7 +422,8 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
                                                        const Descent& descent, PageId leaf_id,
                                                        std::uint64_t id,
                                                        std::span<const std::byte> payload,
-                                                       std::uint64_t trx_id) {
+                                                       std::uint64_t trx_id,
+                                                       std::uint64_t owner_oid) {
     // Every live version on the page, copied out whole before anything is
     // written. Two reasons it is a copy and not a set of slot indices: a
     // Tuple's `payload` is a view into the page, and the page is about to be
@@ -480,7 +487,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     auto [new_leaf_id, new_leaf_bytes] = created.value();
 
     auto new_leaf = heap::PageView::CreateEmptyAs(new_leaf_bytes, /*min_key=*/split_key,
-                                                   PageType::kBtreeLeaf);
+                                                   PageType::kBtreeLeaf, owner_oid);
     if (!new_leaf.ok()) return new_leaf.status();
 
     for (std::size_t k = split_at; k < live.size(); ++k) {
@@ -514,8 +521,11 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     // a division is legal at all: the low bound a reader may have pruned by
     // without a latch does not move. Everything staying is at or above it
     // already, so invariant 3 holds on both sides.
+    // Rebuild keeps the page's own stamp, the same rule as the internal
+    // node's rebuild above.
+    const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(old_bytes.value()));
     auto rebuilt = heap::PageView::CreateEmptyAs(AsPage(old_bytes.value()), old_min_key,
-                                                  PageType::kBtreeLeaf);
+                                                  PageType::kBtreeLeaf, old_owner);
     if (!rebuilt.ok()) return rebuilt.status();
 
     for (std::size_t k = 0; k < split_at; ++k) {
@@ -570,13 +580,14 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     out.Record(new_leaf_id, /*is_new_page=*/false, 0);
     out.Record(leaf_id, /*is_new_page=*/false, 0);
 
-    return PromoteSeparator(store, descent, split_key, new_leaf_id, std::move(out));
+    return PromoteSeparator(store, descent, split_key, new_leaf_id, std::move(out), owner_oid);
 }
 
 }  // namespace
 
-Status FormatRoot(std::span<std::byte, kPageSize> page) {
-    auto leaf = heap::PageView::CreateEmptyAs(page, /*min_key=*/0, PageType::kBtreeLeaf);
+Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid) {
+    auto leaf = heap::PageView::CreateEmptyAs(page, /*min_key=*/0, PageType::kBtreeLeaf,
+                                              owner_oid);
     if (!leaf.ok()) return leaf.status();
     return Status::OK();
 }
@@ -584,7 +595,8 @@ Status FormatRoot(std::span<std::byte, kPageSize> page) {
 StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
                                                 std::uint64_t id,
                                                 std::span<const std::byte> payload,
-                                                std::uint64_t trx_id) {
+                                                std::uint64_t trx_id,
+                                                std::uint64_t owner_oid) {
     // Same cross-check ChainInsert makes, for the same reason: two
     // disagreeing copies of a tuple's identity is the kind of defect that
     // stays silent for months.
@@ -656,7 +668,8 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     auto max_id = MaxLiveId(leaf);
     if (!max_id.ok()) return max_id.status();
     if (id < max_id.value()) {
-        return SplitLeafAndInsert(store, descent.value(), leaf_id, id, payload, trx_id);
+        return SplitLeafAndInsert(store, descent.value(), leaf_id, id, payload, trx_id,
+                                  owner_oid);
     }
 
     // The leaf this one is being spliced in *front of*, read before anything
@@ -676,7 +689,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     auto [new_leaf_id, new_leaf_bytes] = created.value();
 
     auto new_leaf = heap::PageView::CreateEmptyAs(new_leaf_bytes, /*min_key=*/id,
-                                                   PageType::kBtreeLeaf);
+                                                   PageType::kBtreeLeaf, owner_oid);
     if (!new_leaf.ok()) return new_leaf.status();
     // Safe to publish before the tuple is in: nothing reaches this page
     // until the old leaf's link is repointed at it, below.
@@ -714,7 +727,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // min_key - the same number, never a separately derived boundary
     // (btree_page.hpp's routing rule).
     return PromoteSeparator(store, descent.value(), /*sep=*/id, /*child=*/new_leaf_id,
-                            std::move(out));
+                            std::move(out), owner_oid);
 }
 
 StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint64_t id) {

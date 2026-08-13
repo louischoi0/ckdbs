@@ -61,10 +61,10 @@ std::span<std::byte, kPageSize> Fixed(std::span<std::byte, kPageSize> page) { re
 
 }  // namespace
 
-Status FormatPage(std::span<std::byte, kPageSize> page) {
+Status FormatPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid) {
     // Zeroes the page and writes the common header: page_type kVarHeap,
     // page_lsn 0, checksum 0 (stamped at flush time, page.md section 8).
-    storage::FormatPage(page, PageType::kVarHeap);
+    storage::FormatPage(page, PageType::kVarHeap, /*flags=*/0, owner_oid);
 
     VarHeapPageHeaderFields h{};
     h.flags = kHeaderFlagInitialized;
@@ -202,17 +202,18 @@ StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSi
 
 // ---- Chain ---------------------------------------------------------------
 
-StatusOr<PageId> CreateChain(storage::PageStore& store) {
+StatusOr<PageId> CreateChain(storage::PageStore& store, std::uint64_t owner_oid) {
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
     auto [page_id, bytes] = created.value();
 
-    if (Status s = FormatPage(bytes); !s.ok()) return s;
+    if (Status s = FormatPage(bytes, owner_oid); !s.ok()) return s;
     return page_id;
 }
 
 StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
-                                        std::span<const std::byte> value) {
+                                        std::span<const std::byte> value,
+                                        std::uint64_t owner_oid) {
     if (root == kInvalidPageId) {
         return Status::InvalidArgument(
             "this relation has no var-heap chain; it was created without a spillable column");
@@ -261,7 +262,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
     auto [new_id, new_bytes] = created.value();
-    if (Status s = FormatPage(new_bytes); !s.ok()) return s;
+    if (Status s = FormatPage(new_bytes, owner_oid); !s.ok()) return s;
 
     auto new_slot = PageAppend(Fixed(new_bytes), value);
     if (!new_slot.ok()) {

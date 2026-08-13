@@ -61,7 +61,8 @@ void InternalView::WriteEntry(std::uint16_t idx, const BtreeInternalEntryFields&
 }
 
 StatusOr<InternalView> InternalView::CreateEmpty(std::span<std::byte, kPageSize> page,
-                                                  std::uint16_t level, PageId leftmost_child) {
+                                                  std::uint16_t level, PageId leftmost_child,
+                                                  std::uint64_t owner_oid) {
     if (level == 0) {
         return Status::InvalidArgument("level 0 is a leaf, not an internal node");
     }
@@ -69,7 +70,7 @@ StatusOr<InternalView> InternalView::CreateEmpty(std::span<std::byte, kPageSize>
     // Zeroes the page and writes the common header (page_type
     // kBtreeInternal, page_lsn 0, checksum 0 - stamped at flush time,
     // page.md section 8). Everything below lives above that header.
-    storage::FormatPage(page, PageType::kBtreeInternal);
+    storage::FormatPage(page, PageType::kBtreeInternal, /*flags=*/0, owner_oid);
 
     InternalView view(page);
 

@@ -98,12 +98,13 @@ std::size_t IndexLeafView::EntryOffset(std::uint16_t idx) const {
 }
 
 StatusOr<IndexLeafView> IndexLeafView::CreateEmpty(std::span<std::byte, kPageSize> page,
-                                                    const IndexLayout& layout) {
+                                                    const IndexLayout& layout,
+                                                    std::uint64_t owner_oid) {
     if (Status s = CheckIndexLayout(layout); !s.ok()) return s;
 
     // Zeroes the page and writes the common header (page_type kIndexLeaf,
     // page_lsn 0, checksum 0 - stamped at flush time, page.md section 8).
-    storage::FormatPage(page, PageType::kIndexLeaf);
+    storage::FormatPage(page, PageType::kIndexLeaf, /*flags=*/0, owner_oid);
 
     IndexLeafView view(page);
     IndexLeafHeaderFields h{};
@@ -297,13 +298,14 @@ std::size_t IndexInternalView::EntryOffset(std::uint16_t idx) const {
 StatusOr<IndexInternalView> IndexInternalView::CreateEmpty(std::span<std::byte, kPageSize> page,
                                                             const IndexLayout& layout,
                                                             std::uint16_t level,
-                                                            PageId leftmost_child) {
+                                                            PageId leftmost_child,
+                                                            std::uint64_t owner_oid) {
     if (Status s = CheckIndexLayout(layout); !s.ok()) return s;
     if (level == 0) {
         return Status::InvalidArgument("level 0 is a leaf, not an index internal node");
     }
 
-    storage::FormatPage(page, PageType::kIndexInternal);
+    storage::FormatPage(page, PageType::kIndexInternal, /*flags=*/0, owner_oid);
 
     IndexInternalView view(page);
     IndexInternalHeaderFields h{};

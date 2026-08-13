@@ -54,17 +54,27 @@ struct PageInitPayload {
     std::uint64_t min_key;      // heap pages only; 0 for other page types
     std::uint8_t page_type;     // kds::PageType
     std::uint8_t reserved[3];   // 0
+    std::uint32_t reserved2;    // 0 — keeps owner_oid naturally aligned in this mirror
+    std::uint64_t owner_oid;    // page.md §2a: owning object's oid; 0 = unattributed
 };
 
 inline constexpr std::size_t kPageInitMinKeyOffset = 0;
 inline constexpr std::size_t kPageInitPageTypeOffset = 8;
 inline constexpr std::size_t kPageInitReservedOffset = 9;
-// 8+1+3 = 12 bytes on disk.
-inline constexpr std::size_t kPageInitPayloadSize = 12;
+inline constexpr std::size_t kPageInitReserved2Offset = 12;
+inline constexpr std::size_t kPageInitOwnerOidOffset = 16;
+// 8+1+3+4+8 = 24 bytes on disk. Before §2a (2026-08-13) the payload was
+// the first 12 bytes; DecodePageInit still accepts that length, reading
+// owner 0 — the same compatible-zero rule as the header field's arrival.
+inline constexpr std::size_t kPageInitPayloadSize = 24;
+inline constexpr std::size_t kPageInitPayloadSizeLegacy = 12;
 
 static_assert(offsetof(PageInitPayload, min_key) == kPageInitMinKeyOffset);
 static_assert(offsetof(PageInitPayload, page_type) == kPageInitPageTypeOffset);
 static_assert(offsetof(PageInitPayload, reserved) == kPageInitReservedOffset);
+static_assert(offsetof(PageInitPayload, reserved2) == kPageInitReserved2Offset);
+static_assert(offsetof(PageInitPayload, owner_oid) == kPageInitOwnerOidOffset);
+static_assert(sizeof(PageInitPayload) == kPageInitPayloadSize);
 
 StatusOr<std::size_t> EncodePageInit(std::span<std::byte> out, const PageInitPayload& fields);
 StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in);

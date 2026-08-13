@@ -143,7 +143,8 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     // unbounded the other way - one entry per write, forever.
     if (!touched) return kInvalidPageId;
 
-    auto placed = index::IndexInsert(store, ix.root_page_id, layout, key, pk, covered);
+    auto placed = index::IndexInsert(store, ix.root_page_id, layout, key, pk, covered,
+                                     ix.index_oid);
     if (!placed.ok()) {
         // Failed shut. An index missing an entry is a row lost to every
         // later probe, so unlike the Cabin's hook there is nothing to

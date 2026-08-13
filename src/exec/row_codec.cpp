@@ -207,7 +207,8 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
             }
 
             auto bytes = std::as_bytes(std::span<const char>(val.str_val));
-            auto appended = varheap::ChainAppend(*varheap.store, varheap.root, bytes);
+            auto appended = varheap::ChainAppend(*varheap.store, varheap.root, bytes,
+                                                 varheap.owner_oid);
             if (!appended.ok()) return appended.status().WithContext("column '" + NameOf() + "'");
             const varheap::ChainAppendResult& grew = appended.value();
 

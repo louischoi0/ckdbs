@@ -225,13 +225,15 @@ taste into a number, per relation, on a live workload.
    live the moment a mover frees a page. Owner: shared with free-map
    reclamation (open) — candidate fixes are a never-reset allocation epoch
    or a page-ownership check, and the quarantine rule (§4) is the stand-in.
-   **The ownership check now has a confirmed design** (2026-08-13):
-   `docs/page.md` §2a puts the owning relation's oid in the common header's
-   `reserved1` word, giving this gate its missing proof — a quarantined
-   page whose `owner_oid` resolves to a `kTypeDroppedTable` tombstone is
-   provably orphaned, ABA-proof because oids are never reissued. The gate
-   stays closed until §2a is built; nothing here is enacted by the design
-   alone.
+   **The ownership check is built** (2026-08-13): `docs/page.md` §2a puts
+   the owning object's oid in the common header's `reserved1` word, so a
+   quarantined page whose `owner_oid` resolves to a `kTypeDroppedTable`
+   tombstone (or, for index page types, to no `sys.indexes` row) is
+   provably orphaned — ABA-proof because neither oid space ever reissues.
+   The gate still does not open: reclamation also needs the free map
+   (`page.md` §5) and a mover, and every pre-§2a page reads owner 0 —
+   permanently unattributed by §2a's no-backfill decision — so quarantine
+   remains the rule for those.
 
 Not a gate, but a standing constraint worth restating: raw page spans are
 safe only because nothing evicts (`page.md` §3). A mover neither evicts nor

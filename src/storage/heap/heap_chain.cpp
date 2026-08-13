@@ -69,7 +69,8 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head) {
 
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload,
-                                        std::uint64_t trx_id, PageId* tail_hint) {
+                                        std::uint64_t trx_id, std::uint64_t owner_oid,
+                                        PageId* tail_hint) {
     // The caller passes `id` separately from the payload that encodes it;
     // disagreeing copies of a tuple's identity is the kind of thing that
     // is silent for months, so they are checked against each other once,
@@ -147,7 +148,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
     if (!created.ok()) return created.status();
     auto [new_id, new_bytes] = created.value();
 
-    auto new_page = PageView::CreateEmpty(new_bytes, id);
+    auto new_page = PageView::CreateEmpty(new_bytes, id, owner_oid);
     if (!new_page.ok()) return new_page.status();
 
     auto new_slot = new_page.value().InsertTuple(payload, trx_id);
@@ -181,7 +182,8 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, PageId head,
                                                   std::uint64_t first_id,
                                                   std::span<const std::vector<std::byte>> payloads,
-                                                  std::uint64_t trx_id, PageId* tail_hint) {
+                                                  std::uint64_t trx_id, std::uint64_t owner_oid,
+                                                  PageId* tail_hint) {
     ChainAppendBatchResult out;
     out.rows.reserve(payloads.size());
 
@@ -248,7 +250,7 @@ StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, Pag
         auto created = store.CreateNew();
         if (!created.ok()) return created.status();
         auto [new_id, new_bytes] = created.value();
-        if (auto p = PageView::CreateEmpty(new_bytes, first_id + i); !p.ok()) {
+        if (auto p = PageView::CreateEmpty(new_bytes, first_id + i, owner_oid); !p.ok()) {
             return p.status();
         }
 

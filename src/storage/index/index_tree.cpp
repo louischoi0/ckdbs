@@ -144,8 +144,9 @@ StatusOr<bool> FindExactDuplicate(IndexLeafView& leaf, std::span<const std::byte
 
 }  // namespace
 
-Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layout) {
-    auto leaf = IndexLeafView::CreateEmpty(page, layout);
+Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layout,
+                  std::uint64_t owner_oid) {
+    auto leaf = IndexLeafView::CreateEmpty(page, layout, owner_oid);
     if (!leaf.ok()) return leaf.status();
     return Status::OK();
 }
@@ -153,7 +154,8 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layou
 StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
                                         std::span<const std::byte> key, std::uint64_t pk,
-                                        std::span<const std::byte> covered) {
+                                        std::span<const std::byte> covered,
+                                        std::uint64_t owner_oid) {
     if (Status s = CheckIndexLayout(layout); !s.ok()) return s;
     if (key.size() != layout.key_width || covered.size() != layout.covered_width) {
         return Status::InvalidArgument(
@@ -213,7 +215,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     if (!created.ok()) return created.status();
     auto [new_leaf_id, new_leaf_bytes] = created.value();
 
-    auto new_leaf = IndexLeafView::CreateEmpty(new_leaf_bytes, layout);
+    auto new_leaf = IndexLeafView::CreateEmpty(new_leaf_bytes, layout, owner_oid);
     if (!new_leaf.ok()) return new_leaf.status();
 
     // CreateNew() may have handed out a new frame, so the leaf is re-fetched
@@ -283,7 +285,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
         auto [new_node_id, new_node_bytes] = created_node.value();
 
         auto new_node = IndexInternalView::CreateEmpty(new_node_bytes, layout, level,
-                                                        /*leftmost_child=*/kInvalidPageId);
+                                                        /*leftmost_child=*/kInvalidPageId,
+                                                        owner_oid);
         if (!new_node.ok()) return new_node.status();
 
         auto parent_again = store.Get(parent_id);
@@ -314,7 +317,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     auto [new_root_id, new_root_bytes] = created_root.value();
 
     auto new_root = IndexInternalView::CreateEmpty(
-        new_root_bytes, layout, static_cast<std::uint16_t>(old_root_level + 1), old_root);
+        new_root_bytes, layout, static_cast<std::uint16_t>(old_root_level + 1), old_root,
+        owner_oid);
     if (!new_root.ok()) return new_root.status();
     if (Status s = new_root.value().InsertEntry(layout, sep, child); !s.ok()) return s;
 

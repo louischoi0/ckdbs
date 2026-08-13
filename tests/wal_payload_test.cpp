@@ -87,12 +87,51 @@ TEST(WalPayloadTest, PageInitRejectsAnUnknownPageType) {
     ASSERT_TRUE(EncodePageInit(out, fields).ok());
 
     // Written by a newer build, or garbage: replaying it would format the
-    // page as something this build does not understand.
+    // page as something this build does not understand. Sliced to the
+    // payload's exact size so the *type* check is what fires, not the
+    // length discrimination below.
+    const auto payload = std::span<const std::byte>(out).first(kPageInitPayloadSize);
     out[kPageInitPageTypeOffset] = static_cast<std::byte>(kMaxAssignedPageType + 1);
-    EXPECT_EQ(DecodePageInit(out).status().code(), StatusCode::kCorruption);
+    EXPECT_EQ(DecodePageInit(payload).status().code(), StatusCode::kCorruption);
 
     out[kPageInitPageTypeOffset] = static_cast<std::byte>(PageType::kInvalid);
-    EXPECT_EQ(DecodePageInit(out).status().code(), StatusCode::kCorruption);
+    EXPECT_EQ(DecodePageInit(payload).status().code(), StatusCode::kCorruption);
+}
+
+TEST(WalPayloadTest, PageInitCarriesTheOwnerOid) {
+    PageInitPayload fields{};
+    fields.min_key = 99;
+    fields.page_type = static_cast<std::uint8_t>(PageType::kHeap);
+    fields.owner_oid = 4001;
+
+    const auto record = ThroughEnvelope(RecordType::kPageInit, [&](std::span<std::byte> out) {
+        return EncodePageInit(out, fields);
+    });
+    auto decoded = DecodePageInit(PayloadOf(record));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().owner_oid, 4001u);
+}
+
+TEST(WalPayloadTest, PageInitLegacyTwelveByteFormDecodesAsUnattributed) {
+    // A record written before page.md section 2a: min_key, page_type, three
+    // reserved bytes, nothing else. It must decode, and its owner is 0.
+    std::array<std::byte, kPageInitPayloadSizeLegacy> legacy{};
+    const std::uint64_t min_key = 77;
+    std::memcpy(legacy.data() + kPageInitMinKeyOffset, &min_key, sizeof(min_key));
+    legacy[kPageInitPageTypeOffset] = static_cast<std::byte>(PageType::kVarHeap);
+
+    auto decoded = DecodePageInit(legacy);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().min_key, 77u);
+    EXPECT_EQ(decoded.value().owner_oid, 0u);
+}
+
+TEST(WalPayloadTest, PageInitRejectsALengthThatIsNeitherForm) {
+    // CRC-vouched bytes at a length no build ever wrote: intact and wrong,
+    // the same hard error an unknown record type is.
+    std::array<std::byte, 16> neither{};
+    neither[kPageInitPageTypeOffset] = static_cast<std::byte>(PageType::kHeap);
+    EXPECT_EQ(DecodePageInit(neither).status().code(), StatusCode::kCorruption);
 }
 
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------

@@ -128,8 +128,11 @@ struct IndexInsertResult {
 
 // Formats `page` as a brand-new index's root: an empty leaf with no sibling,
 // so an index that never outgrows one page is exactly one page. The tree
-// gains its first internal level only when this leaf splits.
-Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layout);
+// gains its first internal level only when this leaf splits. `owner_oid`
+// (page.md §2a) is the index's own oid — the immediate-owner rule — and is
+// not defaulted: every index has one.
+Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layout,
+                  std::uint64_t owner_oid);
 
 // Inserts `key || pk || covered` into the tree rooted at `root`.
 //
@@ -151,7 +154,8 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layou
 StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
                                         std::span<const std::byte> key, std::uint64_t pk,
-                                        std::span<const std::byte> covered);
+                                        std::span<const std::byte> covered,
+                                        std::uint64_t owner_oid);
 
 // The leaf that holds `sort_key`, or that *would* hold it - the descent
 // alone, with no question about whether anything matches.

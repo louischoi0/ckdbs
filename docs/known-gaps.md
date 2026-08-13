@@ -51,12 +51,14 @@ the owner's workplan.
   page→relation index that `page.md` does not have, and whose absence is
   already the named blocker on page reuse
   (`docs/feat-physical-optimizer.md` §6 gate 3). Building the set instead would
-  mean walking every page of every relation at every mount. **Designed but
-  not built** (2026-08-13): `docs/page.md` §2a (confirmed) stamps the owning
-  relation's oid into every page's common header, which turns this census
-  into one sequential file scan needing no catalog — pages of a lost
-  relation keep their attribution on the page itself. Until §2a is
-  implemented, the half stays uncounted and this entry stands.
+  mean walking every page of every relation at every mount. **Substrate built
+  2026-08-13**: `docs/page.md` §2a stamps the owning object's oid into the
+  common header of every page created from that build on, which makes this
+  census one sequential file scan needing no catalog — pages of a lost
+  relation keep their attribution on the page itself. The census *scan*
+  is not written, and pre-§2a pages read owner 0 forever (no backfill, by
+  §2a's decision), so the half stays uncounted and this entry stands until
+  the scan exists.
 
 - **A recovered Bound Cabin's entry list is a superset of the live one, and
   `VerifyAgainstEntries` cannot be run on it** — found by review 2026-08-12,

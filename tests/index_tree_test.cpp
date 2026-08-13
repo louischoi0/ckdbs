@@ -72,13 +72,13 @@ struct Fixture {
         auto created = store.CreateNew();
         EXPECT_TRUE(created.ok()) << created.status().message();
         root = created.value().first;
-        Status s = FormatRoot(created.value().second, layout);
+        Status s = FormatRoot(created.value().second, layout, /*owner_oid=*/0);
         EXPECT_TRUE(s.ok()) << s.message();
     }
 
     Status Insert(std::uint32_t key, std::uint64_t pk,
                   std::span<const std::byte> covered = {}) {
-        auto out = IndexInsert(store, root, layout, Key(key, layout.key_width), pk, covered);
+        auto out = IndexInsert(store, root, layout, Key(key, layout.key_width), pk, covered, /*owner_oid=*/0);
         if (!out.ok()) return out.status();
         if (out.value().new_root != kInvalidPageId) root = out.value().new_root;
         return Status::OK();
@@ -262,7 +262,7 @@ TEST(IndexTreeTest, AByteIdenticalEntryIsReportedRatherThanStoredTwice) {
     Fixture f;
     ASSERT_TRUE(f.Insert(7, 3).ok());
 
-    auto again = IndexInsert(f.store, f.root, f.layout, Key(7), 3, {});
+    auto again = IndexInsert(f.store, f.root, f.layout, Key(7), 3, {}, /*owner_oid=*/0);
     ASSERT_TRUE(again.ok()) << again.status().message();
     EXPECT_TRUE(again.value().already_present);
     EXPECT_FALSE(again.value().restructured());
@@ -282,7 +282,7 @@ TEST(IndexTreeTest, TwoEntriesDifferingOnlyInCoveredBytesAreBothKept) {
     EXPECT_EQ(2u, f.Walk().size());
 
     // ...and a third that repeats one of them is still deduplicated.
-    auto third = IndexInsert(f.store, f.root, f.layout, Key(7), 3, b);
+    auto third = IndexInsert(f.store, f.root, f.layout, Key(7), 3, b, /*owner_oid=*/0);
     ASSERT_TRUE(third.ok());
     EXPECT_TRUE(third.value().already_present);
     EXPECT_EQ(2u, f.Walk().size());
@@ -391,7 +391,7 @@ TEST(IndexTreeTest, AnOrdinaryInsertReportsNoStructureAndASplitReportsBoth) {
     // (wal/record.hpp). This asserted the opposite when IX02 landed, before
     // there was a record type to describe an entry.
     Fixture f;
-    auto first = IndexInsert(f.store, f.root, f.layout, Key(1), 1, {});
+    auto first = IndexInsert(f.store, f.root, f.layout, Key(1), 1, {}, /*owner_oid=*/0);
     ASSERT_TRUE(first.ok());
     EXPECT_FALSE(first.value().restructured());
     EXPECT_TRUE(first.value().changes().empty());
@@ -401,7 +401,7 @@ TEST(IndexTreeTest, AnOrdinaryInsertReportsNoStructureAndASplitReportsBoth) {
     for (std::uint32_t k = 2; k <= per_leaf; ++k) {
         ASSERT_TRUE(f.Insert(k, k).ok()) << "key " << k;
     }
-    auto split = IndexInsert(f.store, f.root, f.layout, Key(per_leaf + 1), per_leaf + 1, {});
+    auto split = IndexInsert(f.store, f.root, f.layout, Key(per_leaf + 1), per_leaf + 1, {}, /*owner_oid=*/0);
     ASSERT_TRUE(split.ok()) << split.status().message();
     EXPECT_TRUE(split.value().restructured());
     EXPECT_NE(kInvalidPageId, split.value().new_root) << "the first split must grow a root";

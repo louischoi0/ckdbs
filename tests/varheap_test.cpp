@@ -157,10 +157,10 @@ protected:
 };
 
 TEST_F(VarHeapChainTest, AppendAndFetchRoundTrip) {
-    auto root = CreateChain(store_);
+    auto root = CreateChain(store_, /*owner_oid=*/0);
     ASSERT_TRUE(root.ok()) << root.status().message();
 
-    auto ptr = ChainAppend(store_, root.value(), Bytes("a spilled value"));
+    auto ptr = ChainAppend(store_, root.value(), Bytes("a spilled value"), /*owner_oid=*/0);
     ASSERT_TRUE(ptr.ok()) << ptr.status().message();
 
     auto fetched = Fetch(store_, ptr.value().ptr);
@@ -180,14 +180,14 @@ TEST_F(VarHeapChainTest, GrowthReportsThePageItCreatedAndTheTailItLinked) {
     // neither the page's creation nor the link that reaches it, so recovery
     // met an append naming a page nothing created and refused the mount
     // (docs/known-gaps.md's var-heap entry).
-    auto root = CreateChain(store_);
+    auto root = CreateChain(store_, /*owner_oid=*/0);
     ASSERT_TRUE(root.ok());
 
     PageId last_tail = root.value();
     int growths = 0;
     for (int i = 0; i < 40; ++i) {
         auto appended =
-            ChainAppend(store_, root.value(), std::vector<std::byte>(1000, std::byte{'z'}));
+            ChainAppend(store_, root.value(), std::vector<std::byte>(1000, std::byte{'z'}), 0);
         ASSERT_TRUE(appended.ok()) << appended.status().message();
 
         if (!appended.value().grew()) {
@@ -212,7 +212,7 @@ TEST_F(VarHeapChainTest, GrowthReportsThePageItCreatedAndTheTailItLinked) {
 }
 
 TEST_F(VarHeapChainTest, GrowsByTailAppendAndKeepsEveryEarlierPointerValid) {
-    auto root = CreateChain(store_);
+    auto root = CreateChain(store_, /*owner_oid=*/0);
     ASSERT_TRUE(root.ok());
 
     // Values sized so several pages are needed.
@@ -220,7 +220,7 @@ TEST_F(VarHeapChainTest, GrowsByTailAppendAndKeepsEveryEarlierPointerValid) {
     std::vector<std::string> values;
     for (int i = 0; i < 40; ++i) {
         values.push_back(std::string(1000, static_cast<char>('a' + (i % 26))));
-        auto ptr = ChainAppend(store_, root.value(), Bytes(values.back()));
+        auto ptr = ChainAppend(store_, root.value(), Bytes(values.back()), 0);
         ASSERT_TRUE(ptr.ok()) << ptr.status().message();
         pointers.push_back(ptr.value().ptr);
     }
@@ -241,11 +241,11 @@ TEST_F(VarHeapChainTest, GrowsByTailAppendAndKeepsEveryEarlierPointerValid) {
 TEST_F(VarHeapChainTest, TheRootNeverMovesWhenTheChainGrows) {
     // Why sys.tables can cache varheap_page_id: growth edits the tail's
     // link, never the root, so the root is fixed by DDL.
-    auto root = CreateChain(store_);
+    auto root = CreateChain(store_, /*owner_oid=*/0);
     ASSERT_TRUE(root.ok());
 
     for (int i = 0; i < 40; ++i) {
-        ASSERT_TRUE(ChainAppend(store_, root.value(), std::vector<std::byte>(1000, std::byte{'q'}))
+        ASSERT_TRUE(ChainAppend(store_, root.value(), std::vector<std::byte>(1000, std::byte{'q'}), 0)
                         .ok());
     }
     auto length = ChainLength(store_, root.value());
@@ -272,7 +272,7 @@ TEST_F(VarHeapChainTest, FetchingThroughAPointerAtANonVarHeapPageIsRefused) {
 }
 
 TEST_F(VarHeapChainTest, AppendingWithNoChainIsRefused) {
-    auto ptr = ChainAppend(store_, kInvalidPageId, Bytes("nowhere to go"));
+    auto ptr = ChainAppend(store_, kInvalidPageId, Bytes("nowhere to go"), 0);
     ASSERT_FALSE(ptr.ok());
     EXPECT_EQ(ptr.status().code(), StatusCode::kInvalidArgument);
 }

@@ -92,6 +92,28 @@ protected:
 
 // ---- The phase -----------------------------------------------------------
 
+TEST_F(RedoTest, PageInitReplaysTheOwnerStamp) {
+    // page.md section 2a: the owner rides the PAGE_INIT record, so a page
+    // recreated by redo is exactly as attributed as the live path left it.
+    auto s = WalStream::Open(device_.get(), 0);
+    ASSERT_TRUE(s.ok()) << s.status().message();
+    std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+    const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap),
+                                 {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/4001};
+    ASSERT_TRUE(EncodePageInit(init, fields).ok());
+    ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
+    ASSERT_TRUE(s.value()->Sync().ok());
+
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_TRUE(r.ok()) << r.status().message();
+
+    const auto bytes = PageBytes(kPage);
+    ASSERT_EQ(bytes.size(), kPageSize);
+    EXPECT_EQ(storage::GetOwnerOid(
+                  std::span<const std::byte, kPageSize>(bytes.data(), kPageSize)),
+              4001u);
+}
+
 TEST_F(RedoTest, ReplaysAHeapStreamOntoAStoreThatNeverSawIt) {
     WriteHeapStream(3);
     auto r = Redo((*device_), 0, store_, Analyzed());
