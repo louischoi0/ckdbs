@@ -923,5 +923,70 @@ TEST_F(DispatcherLogTest, ANullLoggerLeavesEveryCommandWorking) {
     EXPECT_TRUE(sink_.lines.empty());
 }
 
+// ---- Authorization (role.hpp; docs/protocol.md §14) -----------------------
+//
+// The statement-class matrix, exercised at the dispatcher - the one
+// choke point - with sessions holding each rank. The default-constructed
+// Session is the admin row, which is also the auth-off contract every
+// other test in this file has silently relied on since roles landed.
+
+TEST_F(CommandDispatcherTest, RolesGateStatementClasses) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    Session admin;  // default kAdmin
+    Session writer;
+    writer.set_role(Role::kReadWrite);
+    Session reader;
+    reader.set_role(Role::kReadOnly);
+
+    const auto refused = [](const DispatchOutcome& out) {
+        return out.response.rfind("ERR permission: ", 0) == 0;
+    };
+
+    ASSERT_FALSE(refused(d.Dispatch("CREATE TABLE t (id INT64, v INT64)", &admin)));
+
+    // The readonly floor: reads, liveness, transaction control, own SET.
+    EXPECT_EQ(d.Dispatch("PING", &reader).response, "PONG");
+    EXPECT_FALSE(refused(d.Dispatch("SELECT * FROM t", &reader)));
+    EXPECT_FALSE(refused(d.Dispatch("ANALYZE SELECT * FROM t", &reader)));
+    EXPECT_FALSE(refused(d.Dispatch("SHOW META", &reader)));
+    EXPECT_FALSE(refused(d.Dispatch("DESCRIBE tables", &reader)));
+    EXPECT_FALSE(refused(d.Dispatch("SET ISOLATION LEVEL READ COMMITTED", &reader)));
+    EXPECT_FALSE(refused(d.Dispatch("BEGIN", &reader)));
+    EXPECT_FALSE(refused(d.Dispatch("ROLLBACK", &reader)));
+
+    // Writes need readwrite.
+    EXPECT_TRUE(refused(d.Dispatch("INSERT INTO t VALUES (7)", &reader)));
+    EXPECT_TRUE(refused(d.Dispatch("UPDATE t SET v = 1 WHERE id = 1", &reader)));
+    EXPECT_TRUE(refused(d.Dispatch("DELETE FROM t WHERE id = 1", &reader)));
+    EXPECT_FALSE(refused(d.Dispatch("INSERT INTO t VALUES (7)", &writer)));
+
+    // DDL, the server's own switches, durability and shutdown need admin.
+    for (Session* s : {&reader, &writer}) {
+        EXPECT_TRUE(refused(d.Dispatch("CREATE TABLE u (id INT64)", s)));
+        EXPECT_TRUE(refused(d.Dispatch("DROP TABLE t", s)));
+        EXPECT_TRUE(refused(d.Dispatch("ALTER TABLE t RENAME TO u", s)));
+        EXPECT_TRUE(refused(d.Dispatch("SYNC", s)));
+        EXPECT_TRUE(refused(d.Dispatch("STOP", s)));
+        EXPECT_TRUE(refused(d.Dispatch("SET CABIN_OPTIMIZER ON", s)));
+    }
+
+    // The refusal names both roles - actionable without a manual.
+    auto out = d.Dispatch("DROP TABLE t", &reader);
+    EXPECT_NE(out.response.find("needs admin"), std::string::npos) << out.response;
+    EXPECT_NE(out.response.find("this connection is readonly"), std::string::npos)
+        << out.response;
+
+    // Unclassified commands are admin's (refused by default, never
+    // admitted by omission) - and an admin's typo still reads as a typo,
+    // not as a permission problem.
+    EXPECT_TRUE(refused(d.Dispatch("FROBNICATE", &writer)));
+    EXPECT_EQ(d.Dispatch("FROBNICATE", &admin).response, "ERR unknown command");
+
+    // Admin covers everything below it.
+    EXPECT_FALSE(refused(d.Dispatch("SELECT * FROM t", &admin)));
+    EXPECT_FALSE(refused(d.Dispatch("SYNC", &admin)));
+}
+
 }  // namespace
 }  // namespace kds::server

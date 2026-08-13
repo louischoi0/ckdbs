@@ -380,7 +380,9 @@ TEST_F(TcpServerTest, AuthGateRefusesThenAdmitsOverRealSocket) {
     constexpr std::uint16_t kPort = 25419;
     auto verifier = scram::DeriveVerifier("pencil", "0123456789abcdef", 4096);
     ASSERT_TRUE(verifier.ok());
-    auto store = FileCredentialStore::Parse("user " + verifier.value().Serialize() + "\n",
+    auto store = FileCredentialStore::Parse("user admin " + verifier.value().Serialize() +
+                                                "\nviewer readonly " +
+                                                verifier.value().Serialize() + "\n",
                                             "users.probe");
     ASSERT_TRUE(store.ok()) << store.status().message();
 
@@ -408,6 +410,22 @@ TEST_F(TcpServerTest, AuthGateRefusesThenAdmitsOverRealSocket) {
     EXPECT_EQ(::read(anon, &probe, 1), 0) << "the refused connection must reach EOF";
     ::close(anon);
 
+    // A readonly user clears the gate but not the write wall: the role
+    // travelled gate -> session -> dispatcher through the whole stack.
+    int viewer = ConnectToLoopback(kPort);
+    ASSERT_GE(viewer, 0);
+    scram::Client viewer_client("viewer", "pencil");
+    std::string vf = SendAndReceiveLine(viewer, "AUTH SCRAM-SHA-256 " + viewer_client.First());
+    ASSERT_EQ(vf.rfind("AUTH+ ", 0), 0u) << vf;
+    auto vcf = viewer_client.OnServerFirst(vf.substr(6));
+    ASSERT_TRUE(vcf.ok());
+    ASSERT_EQ(SendAndReceiveLine(viewer, "AUTH " + vcf.value()).rfind("AUTH+ ", 0), 0u);
+    EXPECT_EQ(SendAndReceiveLine(viewer, "PING"), "PONG");
+    std::string refusal = SendAndReceiveLine(viewer, "INSERT INTO t VALUES (1)");
+    EXPECT_EQ(refusal.rfind("ERR permission: ", 0), 0u) << refusal;
+    EXPECT_NE(refusal.find("this connection is readonly"), std::string::npos) << refusal;
+    ::close(viewer);
+
     // The real exchange, then the dispatcher path as usual.
     int fd = ConnectToLoopback(kPort);
     ASSERT_GE(fd, 0);
@@ -430,7 +448,7 @@ TEST_F(TcpServerTest, WrongPasswordOverSocketClosesAndServerSurvives) {
     constexpr std::uint16_t kPort = 25420;
     auto verifier = scram::DeriveVerifier("pencil", "0123456789abcdef", 4096);
     ASSERT_TRUE(verifier.ok());
-    auto store = FileCredentialStore::Parse("user " + verifier.value().Serialize() + "\n",
+    auto store = FileCredentialStore::Parse("user admin " + verifier.value().Serialize() + "\n",
                                             "users.probe");
     ASSERT_TRUE(store.ok());
 

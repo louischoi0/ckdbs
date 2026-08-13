@@ -3,6 +3,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include "kds/server/config_file.hpp"
@@ -39,7 +40,8 @@ namespace {
 constexpr const char* kUsage =
     "usage: kds_server [<data_file>] [--config <path>] [--port <n>]\n"
     "                  [--log-file <name>] [--log-dir <dir>] [--log-level <level>]\n"
-    "       kds_server --add-user <name> [--users-file <path>] [--config <path>]\n"
+    "       kds_server --add-user <name> [--role readonly|readwrite|admin]\n"
+    "                  [--users-file <path>] [--config <path>]\n"
     "\n"
     "  --config <path>   key = value settings file; see docs/client-manual.md\n"
     "  <data_file>       positional, overrides data_file from the config\n"
@@ -95,7 +97,8 @@ std::string PromptPassword(const char* prompt) {
 // exists to close, through a different attribute. Raising the count is
 // future work tied to teaching the mock the deployment's own number
 // (docs/protocol.md §14).
-int AddUser(const std::string& users_file, const std::string& username) {
+int AddUser(const std::string& users_file, const std::string& username,
+            kds::server::Role role) {
     const std::uint32_t iterations = kds::server::scram::kDefaultIterations;
     if (users_file.empty()) {
         std::cerr << "--add-user needs a users file: pass --users-file or set "
@@ -127,7 +130,7 @@ int AddUser(const std::string& users_file, const std::string& username) {
         }
         if (store.value().Has(username)) {
             std::cerr << "user '" << username << "' already exists in " << users_file
-                      << " (password change is delete-then-add for now)\n";
+                      << " (changing a password or a role is delete-then-add for now)\n";
             return EXIT_FAILURE;
         }
     }
@@ -159,7 +162,8 @@ int AddUser(const std::string& users_file, const std::string& username) {
     // but the server's. Only on creation: an operator who widened an
     // existing file's mode on purpose keeps their decision.
     if (creating) (void)::chmod(users_file.c_str(), 0600);
-    out << username << " " << verifier.value().Serialize() << "\n";
+    out << username << " " << kds::server::RoleName(role) << " " << verifier.value().Serialize()
+        << "\n";
     // Closed here rather than at destruction: a stream flushed by its
     // destructor reports nothing, so a users file that failed on the way
     // out (a full or read-only filesystem) would print as provisioned.
@@ -168,8 +172,8 @@ int AddUser(const std::string& users_file, const std::string& username) {
         std::cerr << "cannot write " << users_file << ": " << std::strerror(errno) << "\n";
         return EXIT_FAILURE;
     }
-    std::cout << "user '" << username << "' added to " << users_file << " (" << iterations
-              << " PBKDF2 iterations)\n";
+    std::cout << "user '" << username << "' added to " << users_file << " as "
+              << kds::server::RoleName(role) << " (" << iterations << " PBKDF2 iterations)\n";
     return EXIT_SUCCESS;
 }
 
@@ -178,6 +182,11 @@ int AddUser(const std::string& users_file, const std::string& username) {
 // What the argv asked for besides serving: provisioning mode.
 struct CliMode {
     std::string add_user;  // empty = run the server
+    // Least privilege when absent: admin is a word someone must type.
+    // Unset rather than defaulted in place, so `--role` *without*
+    // `--add-user` can be refused instead of silently ignored - a flag
+    // accepted and not acted on is a lie about what the process did.
+    std::optional<kds::server::Role> role;
 };
 
 // Returns false and prints why on a bad argument list.
@@ -247,6 +256,15 @@ bool ParseArgs(int argc, char** argv, kds::server::Expeditor::Config& config, Cl
             const char* v = next("--add-user");
             if (v == nullptr) return false;
             mode.add_user = v;
+        } else if (arg == "--role") {
+            const char* v = next("--role");
+            if (v == nullptr) return false;
+            auto role = kds::server::ParseRole(v);
+            if (!role.ok()) {
+                std::cerr << role.status().message() << "\n";
+                return false;
+            }
+            mode.role = role.value();
         } else if (arg == "--users-file") {
             const char* v = next("--users-file");
             if (v == nullptr) return false;
@@ -270,9 +288,18 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // `--role` provisions; it says nothing about a running server. Refused
+    // rather than ignored, in the same posture as every other refusal here:
+    // an operator who typed it meant something by it.
+    if (mode.role.has_value() && mode.add_user.empty()) {
+        std::cerr << "--role only applies to --add-user\n" << kUsage;
+        return EXIT_FAILURE;
+    }
+
     if (!mode.add_user.empty()) {
 #if KDS_WITH_TLS
-        return AddUser(config.users_file, mode.add_user);
+        return AddUser(config.users_file, mode.add_user,
+                       mode.role.value_or(kds::server::Role::kReadOnly));
 #else
         std::cerr << "--add-user requires a build with KDS_WITH_TLS (OpenSSL)\n";
         return EXIT_FAILURE;

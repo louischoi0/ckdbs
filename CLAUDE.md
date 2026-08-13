@@ -55,7 +55,7 @@ statements, not style.
 | Buffer-pool eviction | EVT01/EVT02 partly, EVT03 (writeback) and EVT06 (scan ring) built; full CLOCK reclamation still gated on the `PageRef` migration | `docs/spec-eviction.md`, `docs/workplan-eviction.md`, `docs/page.md` §3 |
 | Cross-core execution | P0, P1, P2, P6 (catalog half + CC7 decision + P6b handoff + P6c placement), P5-shape row-id leasing, P4 restriction half — all built by 2026-08-10. P4a-P4c built 2026-08-10 — the engine's first cross-core statement executes (single-step star SELECT, served by the owning core). **Remaining: P4d (multi-step wiring + the executor's coroutine conversion) and P4e (equivalence + the benchmark re-run)** | `docs/crosscore.md`, `docs/workplan-crosscore.md`, `docs/sched.md` |
 | Task representation | Decided and built: C++20 stackless coroutines | `docs/sched.md` §3 |
-| Wire protocol KWP/1 | Frame codec only; the server speaks the newline text protocol. **Direct TLS and SCRAM-SHA-256 auth built 2026-08-13**: TLS 1.3 at the transport seam, connection auth behind an `AUTH` gate (`auth = scram`, `users_file`, `--add-user`), both off by default; authorization stays an Open Decision | `docs/protocol.md`, `docs/protocol-wp.md`, `docs/client-manual.md` |
+| Wire protocol KWP/1 | Frame codec only; the server speaks the newline text protocol. **Direct TLS, SCRAM-SHA-256 auth, and statement-class authorization all built 2026-08-13**: TLS 1.3 at the transport seam; connection auth behind an `AUTH` gate (`auth = scram`, `users_file`, `--add-user`); three ranked roles (readonly/readwrite/admin) enforced per statement at the dispatcher. All off by default; per-relation grants stay future (catalog-recovery-gated) | `docs/protocol.md`, `docs/protocol-wp.md`, `docs/client-manual.md` |
 | Keystone id issue-once contract | K-M1, K-M3, K-M4 built (K-M3 2026-08-10: `exec::CompileAssignments` refuses a pk UPDATE at compile with `Unsupported` and a byte); K1 does not hold across a crash — read the findings before quoting the invariant | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md` |
 | Key mode (`EXPLICIT` pk) | **Built 2026-08-11** (PK01-PK07): the caller may supply a pk and it need not ascend; uniqueness is proved by the btree descent, so the mode is `BTREE`-only and a full leaf now divides. The pk stays non-updatable. **Complete** — PK09 (dividing a full internal node) landed the same day, so no part of the feature is refused for being unbuilt | `docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` |
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
@@ -208,8 +208,9 @@ interface that keeps every listed option viable.
   retention and `SnapshotTooOld`; trx-id wraparound; `kTrxIdBlockSize`;
   cross-core commit and recovery under a changed core count.
 - **Protocol** (`docs/protocol.md`): frame/batch/timeout sizing;
-  compression; flow control; the authorization model (authentication
-  landed 2026-08-13 — TLS §1, SCRAM §14 — authorization did not).
+  compression; flow control. (TLS §1, SCRAM §14 and statement-class
+  authorization §14 all landed 2026-08-13; what remains open there is
+  per-relation grants, gated on catalog recovery.)
 - **Parser** (`docs/parser-v2.md`): statement-class ratification; slot-table
   cap; whether `kUnclassified` is production-legal.
 - **Cabin** (`docs/feat-cabin.md` §11): budgets and caps; the `CABIN AUTO`
