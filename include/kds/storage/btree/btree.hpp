@@ -177,6 +177,23 @@ Status BtreeVisit(
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn);
 
+// The leftmost leaf - where a full walk starts. BtreeVisit descends
+// through it; exposed for callers that own the page loop themselves
+// (exec's RunWalkStep, workplan-crosscore.md P4d-3).
+StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root);
+
+// One leaf of the walk BtreeVisit makes: calls `fn` per slot of exactly
+// `leaf`, under the same visitor contract, and returns the right sibling
+// the walk continues at - kInvalidPageId when `fn` stopped the walk or
+// this is the rightmost leaf. Pin discipline as heap::ChainVisitOnePage:
+// the leaf's pin is held only inside this call, so the gap between two
+// calls is a legal suspension point, and the caller owns the cycle guard
+// the whole-chain forms apply (heap::kMaxChainPages).
+StatusOr<PageId> BtreeVisitLeafPage(
+    storage::PageStore& store, PageId leaf, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn);
+
 // Levels from root to leaf inclusive: 1 while the root is still a leaf.
 // For DESCRIBE/SHOW and tests, not a hot path.
 StatusOr<std::uint16_t> BtreeHeight(storage::PageStore& store, PageId root);

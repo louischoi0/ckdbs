@@ -149,10 +149,21 @@ const txn::Snapshot kSeesEverything{};
 // makes the frame stack a stack.
 // Drives a spine coroutine to completion synchronously - the two walk
 // visitor call sites and the sync Execute() wrapper use it. Correct
-// precisely while nothing suspends beneath (P4d-2's contract); P4d-3
-// dissolves the visitor uses when awaits move to the page boundary.
+// precisely while nothing suspends beneath (P4d-2's contract), and as of
+// P4d-3 that contract is *enforced* rather than assumed: a coroutine that
+// parks on a wait beneath this driver is a hard error, because the driver
+// is synchronous and cannot deliver what the wait waits for - resuming
+// past it would fabricate the reply (the 5ec61da review finding).
+// Multi-step descent through this seam is P4d-4's batching to dissolve.
 Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
-    while (!coro.done()) coro.ResumeDeepest();
+    while (!coro.done()) {
+        if (!coro.TryResumeDeepest()) {
+            return Status::InvalidArgument(
+                "a coroutine parked on a wait beneath a synchronous walk boundary; awaits "
+                "belong at the page boundary, never beneath a visitor "
+                "(docs/workplan-crosscore.md P4d-3)");
+        }
+    }
     return coro.result();
 }
 
@@ -1105,6 +1116,14 @@ private:
 
         NoteFetch();
 
+        // Converted to std::function once, outside the page loop: the
+        // primitives take `const std::function&`, and re-wrapping the
+        // by-reference lambda per page would be a heap allocation per page
+        // where the whole-chain walk paid one per walk.
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>
+            visit_fn = visitor;
+
         // ---- The head seek (kRange on a clustered relation) --------------
         //
         // Tail pruning above ends the walk; this is what stops it starting
@@ -1119,26 +1138,55 @@ private:
         // *is* the walk. The residual carries both bounds either way, which
         // is what makes the seek an accelerator that cannot change the
         // answer - the same property tail pruning rests on.
-        if (pruning && access.clustered_type == catalog::ClusteredType::kBtree) {
-            auto first = btree::BtreeSeekLeaf(store_, access.desc_page_id, step.range->low);
-            if (first.ok()) {
-                Status seeked =
-                    btree::BtreeVisitFrom(store_, first.value(), storage::PageAccess::kRead,
-                                          visitor);
-                if (!inner.ok()) co_return inner;
-                co_return seeked;
+        const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
+        PageId cur = kInvalidPageId;
+        if (is_btree) {
+            if (pruning) {
+                auto first = btree::BtreeSeekLeaf(store_, access.desc_page_id, step.range->low);
+                // A descent that failed is a reason to walk, not to fail:
+                // the walk is the authoritative path and reaches the same
+                // rows.
+                if (first.ok()) cur = first.value();
             }
-            // A descent that failed is a reason to walk, not to fail: the
-            // walk is the authoritative path and reaches the same rows.
+            if (cur == kInvalidPageId) {
+                auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);
+                if (!first.ok()) co_return first.status();
+                cur = first.value();
+            }
+        } else {
+            cur = access.desc_page_id;
         }
 
-        Status walked = access.clustered_type == catalog::ClusteredType::kBtree
-                            ? btree::BtreeVisit(store_, access.desc_page_id,
-                                                storage::PageAccess::kRead, visitor)
-                            : heap::ChainVisit(store_, access.desc_page_id,
-                                               storage::PageAccess::kRead, visitor);
-        if (!inner.ok()) co_return inner;
-        co_return walked;
+        // ---- The page loop, owned by the coroutine (P4d-3) ---------------
+        //
+        // The walk used to hand the whole chain to storage; now this
+        // coroutine steps it page by page. Each *OnePage call holds its
+        // page's pin only for the call, so the bottom of this loop - no
+        // pin, no span - is the executor's legal suspension point: the
+        // pipeline's awaits (credit, cancellation) land exactly there
+        // (P4d-4). Nothing suspends yet, which is what keeps this
+        // bit-identical to the whole-chain walk it replaces.
+        const PageId walk_origin = cur;
+        for (std::uint32_t pages = 0; cur != kInvalidPageId; ++pages) {
+            // The cycle guard the whole-chain walks apply, owed equally
+            // here: a cyclic page link must not become an infinite loop
+            // inside a statement.
+            if (pages >= heap::kMaxChainPages) {
+                co_return Status::Corruption(
+                    "walk from page " + std::to_string(walk_origin) + " exceeds " +
+                    std::to_string(heap::kMaxChainPages) +
+                    " pages; the page links are cyclic or corrupt");
+            }
+            auto next = is_btree ? btree::BtreeVisitLeafPage(store_, cur,
+                                                             storage::PageAccess::kRead, visit_fn)
+                                 : heap::ChainVisitOnePage(store_, cur,
+                                                           storage::PageAccess::kRead, visit_fn);
+            if (!inner.ok()) co_return inner;
+            if (!next.ok()) co_return next.status();
+            cur = next.value();
+            // ---- page boundary: the pin is dropped, every span is dead.
+        }
+        co_return Status::OK();
     }
 
     // Decodes one tuple into this step's frame slots, evaluates the
@@ -1627,7 +1675,12 @@ void ResetPageSpanGuard() noexcept { g_guard_tripped = false; }
 
 int LivePageSpans() noexcept { return g_live_spans; }
 
-void InstallSuspendAudit() noexcept {
+// The installing core's store, for the audit's pin check. Thread-local
+// for the reason g_live_spans is: the audit is installed per core, on the
+// core's own thread, and each core has its own store.
+thread_local const storage::PageStore* g_audit_store = nullptr;
+
+void InstallSuspendAudit(const storage::PageStore* store) noexcept {
     // The executor's answer to "is it safe to be suspended right now?".
     //
     // R1 already forbids a page *fetch* under a live span, because nothing
@@ -1636,11 +1689,22 @@ void InstallSuspendAudit() noexcept {
     // statement that runs on this core in between - so a store that ever
     // evicts turns it from a latent bug into a routine one.
     //
+    // The pin half is the same rule one layer down (P4d-3): a span is a
+    // window into a pinned frame, and a suspension holding *any* pin keeps
+    // a frame unreclaimable for arbitrary wall time. Every legal
+    // suspension point - between statements, between pages of a walk -
+    // holds no pin, so the check is an equality with zero, not a budget.
+    //
     // Installed here rather than checked here: `sched/` sits below this
     // layer and must not know what a page is (coro.hpp's SuspendAuditFn).
+    g_audit_store = store;
     sched::SetSuspendAudit([]() -> std::string_view {
         if (g_live_spans > 0) {
             return "a coroutine suspended while holding a page span (parser-v2.md I15 R1)";
+        }
+        if (g_audit_store != nullptr && g_audit_store->live_pins() != 0) {
+            return "a coroutine suspended while holding a page pin "
+                   "(workplan-crosscore.md P4d-3)";
         }
         return {};
     });

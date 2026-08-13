@@ -206,4 +206,22 @@ Status ChainVisit(
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
     storage::ScanFetcher* fetcher = nullptr);
 
+// One page of the walk ChainVisit makes: calls `fn` per slot of exactly
+// `page_id`, under the same visitor contract, and returns the page the
+// walk continues at - kInvalidPageId when `fn` stopped the walk or the
+// chain ends here (the two need no telling apart: either way the walk is
+// over, successfully).
+//
+// It exists so a caller can own the page loop (exec's RunWalkStep,
+// workplan-crosscore.md P4d-3): the page's pin is held only inside this
+// call, so the gap between two calls - no pin, no span - is a legal
+// suspension point, which a whole-chain walk driving a visitor can never
+// offer. The caller owns the cycle guard the loop here applied
+// (kMaxChainPages); ChainVisit remains the whole-chain form and applies
+// its own.
+StatusOr<PageId> ChainVisitOnePage(
+    storage::PageStore& store, PageId page_id, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
+    storage::ScanFetcher* fetcher = nullptr);
+
 }  // namespace kds::heap

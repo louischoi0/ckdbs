@@ -157,19 +157,43 @@ public:
         if (handle_ != nullptr && !handle_.done()) handle_.resume();
     }
 
-    // Resumes the deepest pending coroutine in this chain - the same walk
-    // CoroTask::Poll makes, exposed for the synchronous boundary drivers
-    // (P4d-2's RunToCompletionAtWalkBoundary). Resume() alone re-enters a
-    // parent suspended on `co_await child` before the child ever ran,
-    // which is exactly the bug the first conversion shipped for one build.
-    void ResumeDeepest() {
-        if (handle_ == nullptr || handle_.done()) return;
-        auto active = handle_;
+    // The deepest pending coroutine in a chain - the one a resume must
+    // enter. A parent suspended on `co_await child` makes no progress until
+    // the child finishes, and resuming it early re-enters the await (the
+    // bug the first conversion shipped for one build); a finished child
+    // stops the walk at its parent, whose resume runs await_resume and
+    // takes the result. One walk, shared by CoroTask::Poll and
+    // TryResumeDeepest, so the two cannot drift.
+    static std::coroutine_handle<promise_type> DeepestPending(
+        std::coroutine_handle<promise_type> from) noexcept {
+        auto active = from;
         while (active.promise().active_child != nullptr &&
                !active.promise().active_child.done()) {
             active = active.promise().active_child;
         }
+        return active;
+    }
+
+    // Resumes the deepest pending coroutine - unless it is parked on a
+    // wait that does not currently hold, in which case nothing is resumed
+    // and `false` comes back. The synchronous boundary drivers (P4d-2's
+    // RunToCompletionAtWalkBoundary) run on this instead of a bare resume:
+    // a synchronous caller cannot deliver what a wait waits for, and
+    // resuming past an unsatisfied `WaitFor` acts as though the reply had
+    // arrived (the 5ec61da review finding). A satisfied wait is consumed
+    // exactly as CoroTask::Poll consumes one, stale-flag discipline
+    // included.
+    bool TryResumeDeepest() {
+        if (handle_ == nullptr || handle_.done()) return true;
+        auto active = DeepestPending(handle_);
+        const bool* flag = active.promise().wait_flag;
+        if (flag != nullptr && !*flag) return false;
+        const std::function<bool()>* pred = active.promise().wait_pred;
+        if (pred != nullptr && !(*pred)()) return false;
+        active.promise().wait_flag = nullptr;
+        active.promise().wait_pred = nullptr;
         active.resume();
+        return true;
     }
 
     // Hands the frame to a new owner - CoroTask, in every intended use.
@@ -306,16 +330,9 @@ public:
         // chain whose child just finished: stopping after each level would
         // charge one scheduler round-trip per stack frame (P4d-1).
         while (!handle_.done()) {
-            // The deepest pending coroutine is the one a resume must enter:
-            // a parent suspended on `co_await child` makes no progress until
-            // the child finishes, and resuming it early would re-enter the
-            // await. A finished child stops the walk at its parent, whose
-            // resume runs await_resume and takes the result.
-            auto active = handle_;
-            while (active.promise().active_child != nullptr &&
-                   !active.promise().active_child.done()) {
-                active = active.promise().active_child;
-            }
+            // The deepest pending coroutine is the one a resume must enter
+            // (Coro::DeepestPending's rationale).
+            auto active = Coro::DeepestPending(handle_);
 
             // The wait check, before the resume: a coroutine parked on a
             // condition that still does not hold costs one predicate call

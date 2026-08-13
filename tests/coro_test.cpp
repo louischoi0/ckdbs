@@ -469,5 +469,42 @@ TEST(CoroNestedTest, DroppingATaskMidAwaitDestroysTheWholeChain) {
     EXPECT_TRUE(leaf_destroyed) << "the chain's frames must die with the task";
 }
 
+TEST(CoroNestedTest, TryResumeDeepestRefusesAnUnsatisfiedWait) {
+    // The synchronous boundary drivers' contract (P4d-3): a caller that
+    // cannot wait must not resume a coroutine parked on a wait, because
+    // entering the body acts as though the reply had arrived. `false` and
+    // no resume - never a fabricated wake-up.
+    bool batch_ready = false;
+    int leaf_entries = 0;
+
+    auto leaf = [&]() -> Coro {
+        ++leaf_entries;
+        co_await WaitFor{&batch_ready};
+        ++leaf_entries;
+        co_return Status::OK();
+    };
+    auto spine = [&]() -> Coro { co_return co_await leaf(); };
+
+    Coro coro = spine();
+    EXPECT_TRUE(coro.TryResumeDeepest());  // spine runs to co_await leaf()
+    EXPECT_TRUE(coro.TryResumeDeepest());  // leaf runs to its wait
+    EXPECT_EQ(leaf_entries, 1);
+
+    // Parked and unsatisfied: refused, repeatedly, with no body re-entry.
+    EXPECT_FALSE(coro.TryResumeDeepest());
+    EXPECT_FALSE(coro.TryResumeDeepest());
+    EXPECT_EQ(leaf_entries, 1);
+    EXPECT_FALSE(coro.done());
+
+    // Satisfied: consumed exactly as CoroTask::Poll consumes one, and the
+    // chain then drives to completion.
+    batch_ready = true;
+    while (!coro.done()) {
+        EXPECT_TRUE(coro.TryResumeDeepest());
+    }
+    EXPECT_EQ(leaf_entries, 2);
+    EXPECT_TRUE(coro.result().ok());
+}
+
 }  // namespace
 }  // namespace kds::sched

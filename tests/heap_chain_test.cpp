@@ -397,6 +397,59 @@ TEST(HeapChainTest, StoppingOnAPagesLastSlotNeverFetchesTheNextPage) {
     EXPECT_EQ(pages_seen.front(), first_page);
 }
 
+TEST(HeapChainTest, SteppingOnePageAtATimeVisitsExactlyWhatTheWholeChainWalkDoes) {
+    // ChainVisitOnePage is the page-boundary form the executor's walk loop
+    // owns (workplan-crosscore.md P4d-3). The contract: stepping the chain
+    // by returned next-page ids visits the same (page, slot) sequence as
+    // ChainVisit, and the last page answers kInvalidPageId.
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 40, /*filler=*/1016);
+
+    std::vector<std::pair<PageId, std::uint16_t>> whole;
+    Status s = ChainVisit(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId page_id, PageView&, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            whole.emplace_back(page_id, slot);
+            return storage::VisitControl::kContinue;
+        });
+    ASSERT_TRUE(s.ok()) << s.message();
+
+    std::vector<std::pair<PageId, std::uint16_t>> stepped;
+    std::size_t boundaries = 0;
+    PageId cur = head;
+    while (cur != kInvalidPageId) {
+        auto next = ChainVisitOnePage(
+            store, cur, storage::PageAccess::kRead,
+            [&](PageId page_id, PageView&, std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                stepped.emplace_back(page_id, slot);
+                return storage::VisitControl::kContinue;
+            });
+        ASSERT_TRUE(next.ok()) << next.status().message();
+        cur = next.value();
+        ++boundaries;
+    }
+    EXPECT_EQ(stepped, whole);
+    EXPECT_GT(boundaries, 1u) << "test needs a multi-page chain to exercise a real boundary";
+}
+
+TEST(HeapChainTest, AStopInsideOnePageEndsTheSteppedWalk) {
+    // kStop and end-of-chain deliberately share kInvalidPageId: either way
+    // the walk is over, successfully, and the caller need not tell them
+    // apart - the same shape ChainVisit gives its callers.
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+    FillChain(store, head, 40, /*filler=*/1016);
+
+    auto next = ChainVisitOnePage(
+        store, head, storage::PageAccess::kRead,
+        [&](PageId, PageView&, std::uint16_t) -> StatusOr<storage::VisitControl> {
+            return storage::VisitControl::kStop;
+        });
+    ASSERT_TRUE(next.ok()) << next.status().message();
+    EXPECT_EQ(next.value(), kInvalidPageId);
+}
+
 TEST(HeapChainTest, StoppingOnTheLastSlotOfTheChainIsIndistinguishableFromFinishing) {
     storage::InMemoryPageStore store(128);
     const PageId head = MakeHead(store);

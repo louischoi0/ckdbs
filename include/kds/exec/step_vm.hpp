@@ -298,8 +298,16 @@ int LivePageSpans() noexcept;
 // SuspendAuditFn), so a coroutine that suspends while holding a page span
 // is detected rather than merely forbidden in prose.
 //
-// Call once per core, before running statements. It is idempotent and
-// core-local, like the guard counters it reads.
-void InstallSuspendAudit() noexcept;
+// `store`, when given, extends the audit with the pin half of the same
+// rule (workplan-crosscore.md P4d-3): with the PageRef migration landed,
+// "suspending while holding a page" is mechanically
+// `store->live_pins() != 0` at the suspension point, checked against the
+// installing core's own store - pins are per-store and cores share none.
+// Null keeps the span check alone, for callers with no store at hand.
+//
+// Call once per core, on the core's own thread, before running
+// statements. It is idempotent and core-local, like the guard counters
+// and the store pointer it reads.
+void InstallSuspendAudit(const storage::PageStore* store = nullptr) noexcept;
 
 }  // namespace kds::exec

@@ -192,6 +192,13 @@ public:
     virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
 
+    // Outstanding pins across the store, for the suspend audit
+    // (exec::InstallSuspendAudit): "a coroutine may not suspend holding a
+    // pin" is mechanically `live_pins() == 0` at the suspension point. A
+    // store whose PinFrame is the no-op above counts nothing and answers
+    // 0, which is honest - it has no reclaim for a pin to hold off.
+    virtual std::size_t live_pins() const noexcept { return 0; }
+
     // ---- The raw seam: protected since MG06 ----------------------------
     //
     // What a store implements - and, since MG06, *only* what a store

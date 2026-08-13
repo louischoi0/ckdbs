@@ -348,8 +348,9 @@ void CoreRuntime::Run() {
 
     // Per core, on the thread that will run the statements - the audit's
     // counters are core-local (exec/step_vm.cpp), so installing it once on
-    // the startup thread would leave every worker unguarded.
-    exec::InstallSuspendAudit();
+    // the startup thread would leave every worker unguarded. The core's
+    // own store rides along for the pin half of the rule (P4d-3).
+    exec::InstallSuspendAudit(store_.get());
 
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor running");

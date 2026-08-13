@@ -276,53 +276,62 @@ Status ChainVisit(
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
         if (Status s = CheckHopBudget(steps, head); !s.ok()) return s;
-
-        // Ring mode is a read path only (spec-eviction §5): a writer's walk
-        // takes the ordinary route, because the ring never bypasses the
-        // dirty protocol. The visitor's per-page discipline is what makes
-        // the ring's stricter lifetime safe: each page is finished before
-        // the next fetch can rotate its frame away.
-        // Peak pins held by this walk: 1 - the ref is reassigned on the
-        // next iteration, so the previous page's pin drops before another
-        // is taken. The ring branch holds no pin at all: its frame's
-        // lifetime is the ring's own (valid until the next Fetch), which
-        // is exactly the per-page discipline described above.
-        storage::PageRef page_ref;
-        std::byte* page_data = nullptr;
-        if (access == storage::PageAccess::kWrite) {
-            auto fetched = store.Get(current);
-            if (!fetched.ok()) return fetched.status();
-            page_ref = std::move(fetched.value());
-            page_data = page_ref.bytes().data();
-        } else if (fetcher != nullptr) {
-            auto fetched = fetcher->Fetch(current);
-            if (!fetched.ok()) return fetched.status();
-            page_data = fetched.value().data();
-        } else {
-            auto fetched = store.GetForRead(current);
-            if (!fetched.ok()) return fetched.status();
-            page_ref = std::move(fetched.value());
-            page_data = page_ref.bytes().data();
-        }
-        const std::span<std::byte, kPageSize> page_bytes(page_data, kPageSize);
-        PageView page(page_bytes);
-
-        const std::uint16_t n = page.slot_count();
-        for (std::uint16_t i = 0; i < n; ++i) {
-            // Liveness is re-tested by the callback through ReadTuple();
-            // skipping here as well would mean two reads of every slot.
-            auto outcome = storage::ResolveVisit(fn(current, page, i), "ChainVisit");
-            if (!outcome.ok()) return outcome.status();
-            // A successful early exit: the caller has what it came for, and
-            // the rest of the chain is not fetched. Distinct from an error
-            // precisely so the caller need not tell them apart.
-            if (outcome.value() == storage::VisitControl::kStop) return Status::OK();
-        }
-
-        const PageId next = page.next_page_id();
-        if (next == kInvalidPageId) return Status::OK();
-        current = next;
+        // A bad `current` (an invalid head included) fails inside the
+        // fetch, exactly as the inlined loop did.
+        auto next = ChainVisitOnePage(store, current, access, fn, fetcher);
+        if (!next.ok()) return next.status();
+        if (next.value() == kInvalidPageId) return Status::OK();
+        current = next.value();
     }
+}
+
+StatusOr<PageId> ChainVisitOnePage(
+    storage::PageStore& store, PageId page_id, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,
+    storage::ScanFetcher* fetcher) {
+    // Ring mode is a read path only (spec-eviction §5): a writer's walk
+    // takes the ordinary route, because the ring never bypasses the
+    // dirty protocol. The visitor's per-page discipline is what makes
+    // the ring's stricter lifetime safe: each page is finished before
+    // the next fetch can rotate its frame away.
+    // Peak pins held by this call: 1 - dropped on return, which is the
+    // between-pages suspension property the header promises. The ring
+    // branch holds no pin at all: its frame's lifetime is the ring's own
+    // (valid until the next Fetch), which is exactly the same per-page
+    // discipline.
+    storage::PageRef page_ref;
+    std::byte* page_data = nullptr;
+    if (access == storage::PageAccess::kWrite) {
+        auto fetched = store.Get(page_id);
+        if (!fetched.ok()) return fetched.status();
+        page_ref = std::move(fetched.value());
+        page_data = page_ref.bytes().data();
+    } else if (fetcher != nullptr) {
+        auto fetched = fetcher->Fetch(page_id);
+        if (!fetched.ok()) return fetched.status();
+        page_data = fetched.value().data();
+    } else {
+        auto fetched = store.GetForRead(page_id);
+        if (!fetched.ok()) return fetched.status();
+        page_ref = std::move(fetched.value());
+        page_data = page_ref.bytes().data();
+    }
+    const std::span<std::byte, kPageSize> page_bytes(page_data, kPageSize);
+    PageView page(page_bytes);
+
+    const std::uint16_t n = page.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        // Liveness is re-tested by the callback through ReadTuple();
+        // skipping here as well would mean two reads of every slot.
+        auto outcome = storage::ResolveVisit(fn(page_id, page, i), "ChainVisit");
+        if (!outcome.ok()) return outcome.status();
+        // A successful early exit: the caller has what it came for, and
+        // the rest of the chain is not fetched. Distinct from an error
+        // precisely so the caller need not tell them apart.
+        if (outcome.value() == storage::VisitControl::kStop) return kInvalidPageId;
+    }
+
+    return page.next_page_id();
 }
 
 }  // namespace kds::heap

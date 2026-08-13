@@ -588,6 +588,48 @@ TEST(BtreeTest, AVisitWalksEveryLeafLeftToRightInIdOrder) {
     }
 }
 
+TEST(BtreeTest, SteppingLeafPagesVisitsExactlyWhatTheWholeTreeWalkDoes) {
+    // BtreeVisitLeafPage + BtreeLeftmostLeaf are the page-boundary form
+    // the executor's walk loop owns (workplan-crosscore.md P4d-3), under
+    // the same contract as heap::ChainVisitOnePage: stepping by returned
+    // sibling ids visits the same (leaf, slot) sequence as BtreeVisit,
+    // and the rightmost leaf answers kInvalidPageId.
+    storage::InMemoryPageStore store(128);
+    Tree tree(store);
+    tree.Fill(40, kOnePerLeafFiller);
+
+    std::vector<std::pair<PageId, std::uint16_t>> whole;
+    Status s = BtreeVisit(
+        store, tree.root, storage::PageAccess::kRead,
+        [&](PageId page_id, heap::PageView&,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            whole.emplace_back(page_id, slot);
+            return storage::VisitControl::kContinue;
+        });
+    ASSERT_TRUE(s.ok()) << s.message();
+
+    auto first = BtreeLeftmostLeaf(store, tree.root);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+
+    std::vector<std::pair<PageId, std::uint16_t>> stepped;
+    std::size_t boundaries = 0;
+    PageId cur = first.value();
+    while (cur != kInvalidPageId) {
+        auto next = BtreeVisitLeafPage(
+            store, cur, storage::PageAccess::kRead,
+            [&](PageId page_id, heap::PageView&,
+                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                stepped.emplace_back(page_id, slot);
+                return storage::VisitControl::kContinue;
+            });
+        ASSERT_TRUE(next.ok()) << next.status().message();
+        cur = next.value();
+        ++boundaries;
+    }
+    EXPECT_EQ(stepped, whole);
+    EXPECT_GT(boundaries, 1u) << "test needs a multi-leaf tree to exercise a real boundary";
+}
+
 TEST(BtreeTest, AVisitorsErrorStopsTheWalk) {
     storage::InMemoryPageStore store(128);
     Tree tree(store);

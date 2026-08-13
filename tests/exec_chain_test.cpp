@@ -15,8 +15,10 @@
 #include "kds/parser/parser.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/memory_page_device.hpp"
 
 // V17 - the step VM, linear chains (docs/parser-v2-workplan.md).
 //
@@ -436,6 +438,37 @@ TEST(ExecSuspendAuditTest, TheExecutorReportsAPageSpanAsUnsafeToSuspendUnder) {
     EXPECT_EQ(exec::LivePageSpans(), 0);
     EXPECT_TRUE(sched::suspend_audit()().empty());
 
+    sched::SetSuspendAudit(nullptr);
+}
+
+TEST(ExecSuspendAuditTest, TheExecutorReportsALivePinAsUnsafeToSuspendUnder) {
+    // The pin half of the same rule (workplan-crosscore.md P4d-3): with
+    // the PageRef migration landed, "suspending while holding a page" is
+    // mechanically live_pins() != 0 against the installing core's store.
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = storage::DevicePageStore::Open(*device.value(), /*first_new_page_id=*/16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+
+    exec::InstallSuspendAudit(store.value().get());
+    ASSERT_NE(sched::suspend_audit(), nullptr);
+    EXPECT_TRUE(sched::suspend_audit()().empty());
+
+    {
+        auto created = store.value()->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        ASSERT_NE(store.value()->live_pins(), 0u);
+        EXPECT_NE(sched::suspend_audit()().find("pin"), std::string_view::npos)
+            << "a held PageRef must make the suspension point unsafe";
+    }
+    // Ref released: the boundary between pages holds nothing, and the
+    // audit must go quiet again - the legal suspension point.
+    EXPECT_EQ(store.value()->live_pins(), 0u);
+    EXPECT_TRUE(sched::suspend_audit()().empty());
+
+    // Uninstall the store before it dies: the audit's pointer is
+    // thread-local and would otherwise dangle into the next test.
+    exec::InstallSuspendAudit();
     sched::SetSuspendAudit(nullptr);
 }
 

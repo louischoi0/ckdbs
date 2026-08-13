@@ -462,7 +462,7 @@ public:
     // Pin accounting (MG04). Live pins across all frames, and the highest
     // that count has ever been - the number the per-operation ceiling
     // decision needs measured rather than assumed.
-    std::size_t live_pins() const noexcept { return live_pins_; }
+    std::size_t live_pins() const noexcept override { return live_pins_; }
     std::size_t pin_high_water() const noexcept { return pin_high_water_; }
 
     // One clock pass, reclaiming at most `budget` frames. Returns how many

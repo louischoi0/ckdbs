@@ -790,30 +790,43 @@ Status BtreeVisitFrom(
                                       std::to_string(heap::kMaxChainPages) +
                                       " pages; the sibling links are cyclic or corrupt");
         }
-
-        auto bytes = access == storage::PageAccess::kWrite ? store.Get(current)
-                                                           : store.GetForRead(current);
-        if (!bytes.ok()) return bytes.status();
-        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeLeaf); !s.ok()) {
-            return s;
-        }
-        heap::PageView leaf(bytes.value().bytes());
-
-        const std::uint16_t n = leaf.slot_count();
-        for (std::uint16_t i = 0; i < n; ++i) {
-            // Liveness is re-tested by the callback through ReadTuple();
-            // skipping here as well would mean two reads of every slot.
-            auto outcome = storage::ResolveVisit(fn(current, leaf, i), "BtreeVisit");
-            if (!outcome.ok()) return outcome.status();
-            // Successful early exit, as in ChainVisit: the leaves to the
-            // right of this one are never fetched.
-            if (outcome.value() == storage::VisitControl::kStop) return Status::OK();
-        }
-
-        const PageId next = leaf.next_page_id();
-        if (next == kInvalidPageId) return Status::OK();
-        current = next;
+        // A bad `current` (an invalid first_leaf included) fails inside
+        // the fetch, exactly as the inlined loop did.
+        auto next = BtreeVisitLeafPage(store, current, access, fn);
+        if (!next.ok()) return next.status();
+        if (next.value() == kInvalidPageId) return Status::OK();
+        current = next.value();
     }
+}
+
+StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root) {
+    return LeftmostLeaf(store, root);
+}
+
+StatusOr<PageId> BtreeVisitLeafPage(
+    storage::PageStore& store, PageId leaf_id, storage::PageAccess access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn) {
+    auto bytes = access == storage::PageAccess::kWrite ? store.Get(leaf_id)
+                                                       : store.GetForRead(leaf_id);
+    if (!bytes.ok()) return bytes.status();
+    if (Status s = RequireType(bytes.value().bytes(), leaf_id, PageType::kBtreeLeaf); !s.ok()) {
+        return s;
+    }
+    heap::PageView leaf(bytes.value().bytes());
+
+    const std::uint16_t n = leaf.slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        // Liveness is re-tested by the callback through ReadTuple();
+        // skipping here as well would mean two reads of every slot.
+        auto outcome = storage::ResolveVisit(fn(leaf_id, leaf, i), "BtreeVisit");
+        if (!outcome.ok()) return outcome.status();
+        // Successful early exit, as in ChainVisit: the leaves to the
+        // right of this one are never fetched.
+        if (outcome.value() == storage::VisitControl::kStop) return kInvalidPageId;
+    }
+
+    return leaf.next_page_id();
 }
 
 StatusOr<std::uint16_t> BtreeHeight(storage::PageStore& store, PageId root) {

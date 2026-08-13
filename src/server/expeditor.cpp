@@ -1056,11 +1056,11 @@ Status Expeditor::Serve() {
     scheduler.SetLogger(&*logger_);
 
     // Core-local, and installed before any statement runs: from here on a
-    // coroutine that suspends while holding a page span is detected rather
-    // than merely forbidden in prose (exec/step_vm.hpp, sched/coro.hpp).
-    // Nothing in the executor suspends yet - this is in place *before* the
-    // first thing that can.
-    exec::InstallSuspendAudit();
+    // coroutine that suspends while holding a page span - or, since P4d-3,
+    // a page pin - is detected rather than merely forbidden in prose
+    // (exec/step_vm.hpp, sched/coro.hpp). Nothing in the executor suspends
+    // yet - this is in place *before* the first thing that can.
+    exec::InstallSuspendAudit(store_.get());
 
     // ---- The fan-out (workplan-crosscore.md P2) -------------------------
     //

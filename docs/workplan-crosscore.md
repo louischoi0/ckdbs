@@ -277,17 +277,22 @@ the core serve a message instead.
        remote_step_service ×1). The conversion keeps the synchronous
        signature as a wrapper that drives the coroutine to completion
        inline — legal precisely while nothing suspends, so all four sites
-       and every test stay untouched and bit-identical — and adds
-       `ExecuteAsync` returning `sched::Coro` as the seam the dispatcher
-       awaits when suspension arrives. The spine (`Execute`, `RunStep`,
+       and every test stay untouched and bit-identical. The `ExecuteAsync`
+       seam the dispatcher will await arrives with its first awaiting
+       consumer (P4d-4), not with the conversion — the built P4d-2
+       deliberately did not add it, because an async entry nobody awaits
+       is dead code (this paragraph originally claimed it as part of the
+       conversion; corrected 2026-08-13). The spine (`Execute`, `RunStep`,
        `RunPointStep`, the index paths, `AcceptTupleAt`) becomes
        `sched::Coro`-returning with `co_await` at the recursion edges. At
        the two places `AcceptTupleAt` is reached from *inside a walk
        visitor callback* — which cannot await — the child coroutine is
        driven by a named inline helper (`RunToCompletionAtWalkBoundary`),
-       correct while nothing suspends beneath it and grep-checkable as
-       exactly the seam P4d-3 dissolves when awaits move to the page
-       boundary. **Execution method, so the flip is mechanical**: change
+       correct while nothing suspends beneath it — a contract P4d-3 now
+       *enforces* (the driver refuses an unsatisfied wait instead of
+       resuming past it) and P4d-4's batching dissolves for the multi-step
+       shape (the staging originally read "P4d-3 dissolves"; the terminal
+       split at `95946c4` moved that to P4d-4). **Execution method, so the flip is mechanical**: change
        the seven signatures (`Run`, `RunStep`, `RunPointStep`,
        `RunCabinStep`, `RunIndexStep`, `RunWalkStep`, `AcceptTupleAt`) to
        `sched::Coro` and rebuild - a `return` inside a coroutine is a hard
@@ -311,6 +316,31 @@ the core serve a message instead.
        (2026-08-13), "suspending while holding a page span" is mechanically
        `DevicePageStore::live_pins() != 0`, and the audit should assert
        exactly that.
+
+    **P4d status.** P4d-1 built (`2953340`: the nested awaiter,
+    scheduler-free tests first). P4d-2 built (`0fd7fc3`: the spine is
+    coroutines with zero suspension points; `5ec61da` fixed three
+    pre-existing wrong-answer bugs the conversion made conspicuous;
+    `95946c4`'s terminal split took the per-tuple path back to zero
+    coroutine frames; measured in `bench/results-p4d-executor.md`).
+    **P4d-3 built 2026-08-13**, all three halves of fact 3: (i) the walk's
+    page loop is owned by the coroutine — `heap::ChainVisitOnePage` /
+    `btree::BtreeVisitLeafPage` visit exactly one page under the existing
+    visitor contract and return the next page, the whole-chain forms are
+    loops over them, and `RunWalkStep` steps pages itself with the pin
+    dropped at each boundary, so the between-pages gap is a real
+    suspension point awaiting only its first await (nothing suspends yet —
+    bit-identical by construction); (ii) `RunToCompletionAtWalkBoundary`
+    is gated — `Coro::TryResumeDeepest` consumes a satisfied wait exactly
+    as `CoroTask::Poll` does and *refuses* an unsatisfied one, so a wait
+    beneath a synchronous boundary is a hard `InvalidArgument`, never a
+    fabricated resume (the `5ec61da` review's loudest flag); (iii) the
+    suspend audit takes the installing core's store and asserts
+    `live_pins() == 0` at every suspension, the pin half of R1's rule.
+    **Remaining in P4d: P4d-4** — step k→k+1 wiring, join-key forwarding,
+    per-page batching through the walk boundary (which dissolves the
+    helper's multi-step per-row frames), the `ExecuteAsync` seam with its
+    first awaiting consumer, and the sub-chain await decision.
   - **P4e — equivalence + the benchmark**: pipeline replies byte-identical
     to local execution over the contract shapes; the multicore isolation
     benchmark re-run against `bench/results-multicore.md`'s baseline.
