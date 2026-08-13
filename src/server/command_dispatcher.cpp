@@ -2237,7 +2237,7 @@ Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id)
 }
 
 Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spills,
-                                   std::uint64_t txn_id) {
+                                   std::uint64_t txn_id, std::uint64_t owner_oid) {
     if (wal_ == nullptr) return Status::OK();
 
     for (const exec::AppendedSpill& spill : spills) {
@@ -2255,7 +2255,8 @@ Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spil
         if (spill.created_page_id != kInvalidPageId) {
             std::array<std::byte, wal::kPageInitPayloadSize> init{};
             const wal::PageInitPayload init_fields{
-                /*min_key=*/0, static_cast<std::uint8_t>(PageType::kVarHeap), {0, 0, 0}};
+                /*min_key=*/0, static_cast<std::uint8_t>(PageType::kVarHeap), {0, 0, 0},
+                /*reserved2=*/0, owner_oid};
             if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
             if (auto rec = wal_->Append(
                     wal::RecordSpec{wal::RecordType::kPageInit, txn_id, spill.created_page_id},
@@ -2294,6 +2295,7 @@ Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spil
 
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
+                                    std::uint64_t owner_oid,
                                     const std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
                                     bool own_txn) {
@@ -2322,7 +2324,8 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
             std::array<std::byte, wal::kPageInitPayloadSize> init{};
             const wal::PageInitPayload init_fields{change.min_key,
                                                    static_cast<std::uint8_t>(leaf_type),
-                                                   {0, 0, 0}};
+                                                   {0, 0, 0},
+                                                   /*reserved2=*/0, owner_oid};
             if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
             if (auto rec = wal_->Append(
                     wal::RecordSpec{wal::RecordType::kPageInit, txn_id, change.page_id}, init);
@@ -2344,7 +2347,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     // section 5): a replay must never reach a cell whose pointer resolves
     // to nothing, and the reverse failure - a value with no tuple - is an
     // unreferenced value purge collects.
-    if (Status s = LogSpills(spills, txn_id); !s.ok()) return s;
+    if (Status s = LogSpills(spills, txn_id, owner_oid); !s.ok()) return s;
 
     // The index entries this row is now reachable through, before the row
     // itself (docs/feat-index.md §12.1). Same direction as the var-heap
@@ -2765,7 +2768,8 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     for (std::size_t k = 0; k < stmt.rows.size(); ++k) {
         auto encoded =
             exec::EncodeRow(ta.schema, ta.layout, first.value() + k, stmt.rows[k],
-                            exec::VarHeapSink{&page_store_, ta.varheap_page_id, &no_spills});
+                            exec::VarHeapSink{&page_store_, ta.varheap_page_id, &no_spills,
+                                              ta.oid});
         if (!encoded.ok()) {
             return {"ERR " + encoded.status().message() + " (row " + std::to_string(k + 1) + ")",
                     false};
@@ -2774,7 +2778,7 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
     }
 
     auto filled = heap::ChainAppendBatch(page_store_, ta.desc_page_id, first.value(), payloads,
-                                         WriterId(scope), &ta.heap_tail_hint);
+                                         WriterId(scope), ta.oid, &ta.heap_tail_hint);
     if (!filled.ok()) {
         return {"ERR " + filled.status().message(), false};
     }
@@ -2941,7 +2945,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     std::vector<exec::AppendedSpill> spills;
     auto encoded = exec::EncodeRow(
         ta.schema, ta.layout, row_id, body,
-        exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills});
+        exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills, ta.oid});
     if (!encoded.ok()) {
         return "ERR " + encoded.status().message();
     }
@@ -3049,7 +3053,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // here and what would break it.
     if (Status s = LogInsert(placed.value(),
                              is_btree ? PageType::kBtreeLeaf : PageType::kHeap, encoded.value(),
-                             WriterId(scope), spills, index_writes,
+                             WriterId(scope), oid, spills, index_writes,
                              /*own_txn=*/scope.txn == nullptr);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
@@ -3136,7 +3140,7 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // enforcement live in there - they are heap invariants, not
             // dispatcher policy.
             auto placed = heap::ChainInsert(page_store_, access.desc_page_id, id, payload,
-                                            trx_id, &access.heap_tail_hint);
+                                            trx_id, access.oid, &access.heap_tail_hint);
             if (!placed.ok()) return placed.status();
 
             out.page_id = placed.value().page_id;
@@ -3156,7 +3160,8 @@ StatusOr<storage::InsertPlacement> CommandDispatcher::InsertIntoRelation(
             // same desc page: the descent picks the leaf, and a full leaf
             // splits right without moving a key. Reports its own structural
             // set, and a new root when the tree gained a level.
-            auto placed = btree::BtreeInsert(page_store_, access.desc_page_id, id, payload, trx_id);
+            auto placed = btree::BtreeInsert(page_store_, access.desc_page_id, id, payload,
+                                             trx_id, access.oid);
             if (!placed.ok()) return placed.status();
 
             out.page_id = placed.value().page_id;
@@ -4368,7 +4373,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         auto encoded = exec::EncodeRow(
             ta.schema, ta.layout, id.value(), body,
             exec::VarHeapSink{&page_store_, ta.varheap_page_id,
-                              wal_ != nullptr ? &appended_spills : nullptr});
+                              wal_ != nullptr ? &appended_spills : nullptr, ta.oid});
         if (!encoded.ok()) return encoded.status();
 
         // HOT-style in-place overwrite - see PageView::OverwriteTuple's
@@ -4477,7 +4482,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // INSERT already obeyed: the cell in the tuple record below points
             // into these pages, so the records that create, link and fill them
             // must precede it.
-            if (Status s = LogSpills(appended_spills, scope.txn->id()); !s.ok()) return s;
+            if (Status s = LogSpills(appended_spills, scope.txn->id(), ta.oid); !s.ok()) return s;
             if (Status s = LogIndexWrites(index_writes, scope.txn->id()); !s.ok()) return s;
 
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());

@@ -54,7 +54,7 @@ PageHeaderFields ReadPageHeader(std::span<const std::byte, kPageSize> page) {
     fields.checksum = Load<std::uint32_t>(page, kPageChecksumOffset);
     fields.page_lsn = Load<std::uint64_t>(page, kPageLsnOffset);
     fields.relayout_epoch = Load<std::uint64_t>(page, kPageRelayoutEpochOffset);
-    fields.reserved1 = Load<std::uint64_t>(page, kPageReserved1Offset);
+    fields.owner_oid = Load<std::uint64_t>(page, kPageOwnerOidOffset);
     return fields;
 }
 
@@ -65,10 +65,11 @@ void WritePageHeader(std::span<std::byte, kPageSize> page, const PageHeaderField
     Store<std::uint32_t>(page, kPageChecksumOffset, fields.checksum);
     Store<std::uint64_t>(page, kPageLsnOffset, fields.page_lsn);
     Store<std::uint64_t>(page, kPageRelayoutEpochOffset, fields.relayout_epoch);
-    Store<std::uint64_t>(page, kPageReserved1Offset, fields.reserved1);
+    Store<std::uint64_t>(page, kPageOwnerOidOffset, fields.owner_oid);
 }
 
-void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16_t flags) {
+void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16_t flags,
+                std::uint64_t owner_oid) {
     std::memset(page.data(), 0, page.size());
 
     PageHeaderFields fields{};
@@ -78,7 +79,7 @@ void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16
     fields.checksum = 0;  // stamped at flush, never here
     fields.page_lsn = kNoPageLsn;
     fields.relayout_epoch = 0;
-    fields.reserved1 = 0;
+    fields.owner_oid = owner_oid;
     WritePageHeader(page, fields);
 }
 
@@ -132,6 +133,10 @@ void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn) {
 
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page) {
     return Load<std::uint32_t>(page, kPageChecksumOffset);
+}
+
+std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page) {
+    return Load<std::uint64_t>(page, kPageOwnerOidOffset);
 }
 
 std::uint64_t GetRelayoutEpoch(std::span<const std::byte, kPageSize> page) {

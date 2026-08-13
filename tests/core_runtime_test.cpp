@@ -557,7 +557,7 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
                                        id.value(), {v});
         ASSERT_TRUE(payload.ok());
         auto placed = heap::ChainInsert(*core0_store_, access.value()->desc_page_id,
-                                        id.value(), payload.value(), 1);
+                                        id.value(), payload.value(), 1, access.value()->oid);
         ASSERT_TRUE(placed.ok());
     }
     ASSERT_TRUE(core0_store_->Sync().ok());

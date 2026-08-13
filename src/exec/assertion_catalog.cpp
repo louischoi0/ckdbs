@@ -210,6 +210,7 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std
     VarHeapSink sink;
     sink.store = &store;
     sink.root = rel.varheap_page_id;
+    sink.owner_oid = rel.oid;
 
     auto payload = EncodeRow(rel.schema, rel.layout, id, values, sink);
     if (!payload.ok()) return payload.status();
@@ -218,8 +219,8 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std
     // survives a crash only as far as the next SYNC, which is the guarantee
     // CREATE TABLE already gives and is not made worse here. §7's
     // `ASSERT_BUILD` is about the Bound Cabin's contents, not this row.
-    auto placed =
-        heap::ChainInsert(store, rel.desc_page_id, id, payload.value(), catalog::kBootstrapXid);
+    auto placed = heap::ChainInsert(store, rel.desc_page_id, id, payload.value(),
+                                    catalog::kBootstrapXid, rel.oid);
     if (!placed.ok()) return placed.status();
     return Status::OK();
 }

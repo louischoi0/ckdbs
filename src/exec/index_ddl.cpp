@@ -219,11 +219,18 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     // The root, allocated and formatted before the row that names it. The
     // reverse order would leave a catalog row pointing at a page that does
     // not exist, which is a worse failure than a page nothing points at.
+    // The oid, issued before the root exists so the root and every page
+    // the backfill splits off carry it from birth (page.md §2a). Burned on
+    // a later failure, which the row-id sequence explicitly permits.
+    auto pre_oid = catalog.AllocateRowId(catalog::kSysIndexesTable);
+    if (!pre_oid.ok()) return pre_oid.status();
+    def.index_oid = pre_oid.value();
+
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
     auto& [root_id, root_bytes_ref] = created.value();
     const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
-    if (Status s = index::FormatRoot(root_bytes, layout); !s.ok()) return s;
+    if (Status s = index::FormatRoot(root_bytes, layout, def.index_oid); !s.ok()) return s;
     def.root_page_id = root_id;
 
     // Every refusal, before a page is walked. `Catalog::CreateIndex` runs
@@ -246,7 +253,7 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     // A split during the build moves the root, which is why the final root
     // comes back from here rather than being the page allocated above.
     catalog::TableAccess::IndexRef building;
-    building.index_oid = 0;  // unpublished; nothing reads this field here
+    building.index_oid = def.index_oid;  // pre-issued; the backfill stamps pages with it
     building.root_page_id = root_id;
     building.key_width = def.key_width;
     building.entry_width = def.entry_width;

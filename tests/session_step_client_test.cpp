@@ -67,7 +67,7 @@ protected:
                                            id.value(), {qty});
             ASSERT_TRUE(payload.ok());
             auto placed = heap::ChainInsert(*store_, access.value()->desc_page_id, id.value(),
-                                            payload.value(), 1);
+                                            payload.value(), 1, access.value()->oid);
             ASSERT_TRUE(placed.ok());
         }
 

@@ -636,6 +636,12 @@ public:
     // the key encoding and `catalog/` sits below `exec/`.
     struct IndexDef {
         Oid table_oid = 0;
+        // Pre-issued index oid (AllocateRowId(kSysIndexesTable)), so the
+        // root and every backfill-created page can be stamped with their
+        // owner before the sys.indexes row exists (page.md §2a). 0 means
+        // CreateIndex() allocates - the pre-§2a behavior, kept for callers
+        // that create no pages of their own.
+        Oid index_oid = 0;
         std::string name;
         PageId root_page_id = kInvalidPageId;
         std::uint16_t key_width = 0;

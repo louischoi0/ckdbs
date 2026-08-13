@@ -24,7 +24,14 @@ Status UndoLog::LogPageInit(std::uint64_t trx_id, PageId page_id) {
     std::array<std::byte, wal::kPageInitPayloadSize> buf{};
     // min_key 0: an undo page has no key space. PageInitPayload already
     // provides for that on non-heap page types (payload.hpp).
-    const wal::PageInitPayload fields{0, static_cast<std::uint8_t>(PageType::kUndo), {0, 0, 0}};
+    // owner_oid 0: undo is a system page class, unattributed by page.md
+    // §2a - and it must be spelled, because what redo stamps here has to
+    // equal what UndoPage::Format() stamps on the live path, which is 0.
+    const wal::PageInitPayload fields{0,
+                                      static_cast<std::uint8_t>(PageType::kUndo),
+                                      {0, 0, 0},
+                                      /*reserved2=*/0,
+                                      /*owner_oid=*/0};
     if (auto n = wal::EncodePageInit(buf, fields); !n.ok()) return n.status();
 
     auto rec = wal_->Append(wal::RecordSpec{wal::RecordType::kPageInit, trx_id, page_id}, buf);

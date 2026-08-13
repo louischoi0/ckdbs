@@ -9,6 +9,7 @@
 
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/keystone.hpp"
+#include "kds/storage/page_header.hpp"
 
 // The heap as a chain of pages: growth at the tail, the invariants that
 // make tail-append correct, and the walk that reads it back.
@@ -61,7 +62,7 @@ std::vector<ChainInsertResult> FillChain(storage::PageStore& store, PageId head,
                                           std::size_t filler) {
     std::vector<ChainInsertResult> placed;
     for (std::uint64_t id = 1; id <= n; ++id) {
-        auto r = ChainInsert(store, head, id, MakeTuple(id, filler), /*trx_id=*/1);
+        auto r = ChainInsert(store, head, id, MakeTuple(id, filler), /*trx_id=*/1, /*owner_oid=*/0);
         EXPECT_TRUE(r.ok()) << "id " << id << ": " << r.status().message();
         if (!r.ok()) break;
         placed.push_back(r.value());
@@ -193,7 +194,7 @@ TEST(HeapChainTest, ANewPagesMinKeyIsTheIdThatCausedTheGrowth) {
     std::uint64_t id = 1;
     ChainInsertResult growth{};
     for (; id <= 200; ++id) {
-        auto r = ChainInsert(store, head, id, MakeTuple(id, 1016), /*trx_id=*/1);
+        auto r = ChainInsert(store, head, id, MakeTuple(id, 1016), /*trx_id=*/1, /*owner_oid=*/0);
         ASSERT_TRUE(r.ok()) << r.status().message();
         if (r.value().grew_chain) {
             growth = r.value();
@@ -205,6 +206,29 @@ TEST(HeapChainTest, ANewPagesMinKeyIsTheIdThatCausedTheGrowth) {
     auto bytes = store.Get(growth.page_id);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
     EXPECT_EQ(PageView(bytes.value().bytes()).min_key(), id);
+}
+
+TEST(HeapChainTest, GrowthStampsTheOwnerOidOnTheNewPage) {
+    // page.md section 2a: every page a chain grows carries the relation's
+    // oid the caller passed, readable straight off the common header.
+    storage::InMemoryPageStore store(128);
+    const PageId head = MakeHead(store);
+
+    ChainInsertResult growth{};
+    for (std::uint64_t id = 1; id <= 200; ++id) {
+        auto r = ChainInsert(store, head, id, MakeTuple(id, 1016), /*trx_id=*/1,
+                             /*owner_oid=*/4001);
+        ASSERT_TRUE(r.ok()) << r.status().message();
+        if (r.value().grew_chain) {
+            growth = r.value();
+            break;
+        }
+    }
+    ASSERT_TRUE(growth.grew_chain) << "chain never grew";
+
+    auto bytes = store.Get(growth.page_id);
+    ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+    EXPECT_EQ(storage::GetOwnerOid(bytes.value().bytes()), 4001u);
 }
 
 TEST(HeapChainTest, TheOldTailIsLinkedToTheNewOneAndKeepsItsMinKey) {
@@ -232,7 +256,7 @@ TEST(HeapChainTest, DuplicateIdIsRefused) {
     const PageId head = MakeHead(store);
     FillChain(store, head, 5, /*filler=*/56);
 
-    auto dup = ChainInsert(store, head, 5, MakeTuple(5, 56), /*trx_id=*/1);
+    auto dup = ChainInsert(store, head, 5, MakeTuple(5, 56), /*trx_id=*/1, /*owner_oid=*/0);
     EXPECT_FALSE(dup.ok());
     EXPECT_EQ(dup.status().code(), StatusCode::kAlreadyExists);
 }
@@ -252,7 +276,7 @@ TEST(HeapChainTest, AnIdBelowTheTailsMinKeyIsRefused) {
     // A sequence that went backwards. Writing this tuple would either
     // violate invariant 3 or hide a duplicate on an earlier page; both are
     // worse than refusing.
-    auto backwards = ChainInsert(store, head, 1, MakeTuple(1, 1016), /*trx_id=*/1);
+    auto backwards = ChainInsert(store, head, 1, MakeTuple(1, 1016), /*trx_id=*/1, /*owner_oid=*/0);
     EXPECT_FALSE(backwards.ok());
     EXPECT_EQ(backwards.status().code(), StatusCode::kOutOfRange);
 }
@@ -261,7 +285,7 @@ TEST(HeapChainTest, APayloadWhoseKeystoneDisagreesWithTheIdIsRefused) {
     storage::InMemoryPageStore store(128);
     const PageId head = MakeHead(store);
 
-    auto mismatched = ChainInsert(store, head, 7, MakeTuple(9, 56), /*trx_id=*/1);
+    auto mismatched = ChainInsert(store, head, 7, MakeTuple(9, 56), /*trx_id=*/1, /*owner_oid=*/0);
     EXPECT_FALSE(mismatched.ok());
     EXPECT_EQ(mismatched.status().code(), StatusCode::kCorruption);
 }
@@ -437,8 +461,8 @@ TEST(HeapChainTest, AHintedInsertMatchesTheUnhintedChainAndTracksTheTail) {
     PageId hint = kInvalidPageId;
     for (std::uint64_t id = 1; id <= 30; ++id) {
         auto hinted =
-            ChainInsert(hinted_store, hinted_head, id, MakeTuple(id, 1016), /*trx_id=*/1, &hint);
-        auto plain = ChainInsert(plain_store, plain_head, id, MakeTuple(id, 1016), /*trx_id=*/1);
+            ChainInsert(hinted_store, hinted_head, id, MakeTuple(id, 1016), /*trx_id=*/1, /*owner_oid=*/0, &hint);
+        auto plain = ChainInsert(plain_store, plain_head, id, MakeTuple(id, 1016), /*trx_id=*/1, /*owner_oid=*/0);
         ASSERT_TRUE(hinted.ok()) << hinted.status().message();
         ASSERT_TRUE(plain.ok()) << plain.status().message();
 
@@ -467,7 +491,7 @@ TEST(HeapChainTest, AStaleHintIsBehindNeverWrong) {
     // reaches the true tail, and the insert lands exactly where an
     // unhinted one would.
     PageId hint = head;
-    auto r = ChainInsert(store, head, 21, MakeTuple(21, 1016), /*trx_id=*/1, &hint);
+    auto r = ChainInsert(store, head, 21, MakeTuple(21, 1016), /*trx_id=*/1, /*owner_oid=*/0, &hint);
     ASSERT_TRUE(r.ok()) << r.status().message();
 
     auto tail = ChainTail(store, head);
@@ -484,7 +508,7 @@ TEST(HeapChainTest, ADamagedHintFallsBackToTheHeadAndHeals) {
     // A page id the store cannot resolve: the hinted walk fails, the
     // head walk answers, and the write-back repairs the hint.
     PageId hint = 120;  // never allocated
-    auto r = ChainInsert(store, head, 21, MakeTuple(21, 1016), /*trx_id=*/1, &hint);
+    auto r = ChainInsert(store, head, 21, MakeTuple(21, 1016), /*trx_id=*/1, /*owner_oid=*/0, &hint);
     ASSERT_TRUE(r.ok()) << r.status().message();
 
     auto tail = ChainTail(store, head);
@@ -511,12 +535,12 @@ TEST(HeapChainTest, ABatchFillEqualsTheSequentialChainByteForByte) {
     }
 
     auto batched = ChainAppendBatch(batch_store, batch_head, /*first_id=*/1, payloads,
-                                    /*trx_id=*/1);
+                                    /*trx_id=*/1, /*owner_oid=*/0);
     ASSERT_TRUE(batched.ok()) << batched.status().message();
     ASSERT_EQ(batched.value().rows.size(), kRows);
 
     for (std::uint64_t id = 1; id <= kRows; ++id) {
-        auto r = ChainInsert(seq_store, seq_head, id, payloads[id - 1], /*trx_id=*/1);
+        auto r = ChainInsert(seq_store, seq_head, id, payloads[id - 1], /*trx_id=*/1, /*owner_oid=*/0);
         ASSERT_TRUE(r.ok()) << r.status().message();
         // Placement decisions agree row for row.
         EXPECT_EQ(batched.value().rows[id - 1].page_id, r.value().page_id) << "id " << id;
@@ -541,7 +565,7 @@ TEST(HeapChainTest, ABatchWhosePayloadIdsDisagreeIsCorruption) {
     std::vector<std::vector<std::byte>> payloads;
     payloads.push_back(MakeTuple(1, 56));
     payloads.push_back(MakeTuple(9, 56));  // expected 2
-    auto r = ChainAppendBatch(store, head, /*first_id=*/1, payloads, /*trx_id=*/1);
+    auto r = ChainAppendBatch(store, head, /*first_id=*/1, payloads, /*trx_id=*/1, /*owner_oid=*/0);
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption);
 }

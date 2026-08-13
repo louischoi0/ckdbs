@@ -85,11 +85,11 @@ protected:
 
         if (access.value()->clustered_type == catalog::ClusteredType::kBtree) {
             auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
-                                             payload.value(), /*trx_id=*/1);
+                                             payload.value(), /*trx_id=*/1, access.value()->oid);
             ASSERT_TRUE(placed.ok()) << placed.status().message();
         } else {
             auto placed = heap::ChainInsert(store_, access.value()->desc_page_id, id.value(),
-                                            payload.value(), /*trx_id=*/1);
+                                            payload.value(), /*trx_id=*/1, access.value()->oid);
             ASSERT_TRUE(placed.ok()) << placed.status().message();
         }
     }

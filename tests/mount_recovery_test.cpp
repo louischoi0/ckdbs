@@ -71,7 +71,8 @@ protected:
 
         std::vector<std::byte> init(wal::kPageInitPayloadSize, std::byte{0});
         const wal::PageInitPayload fields{
-            /*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap), {0, 0, 0}};
+            /*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap), {0, 0, 0},
+            /*reserved2=*/0, /*owner_oid=*/0};
         ASSERT_TRUE(wal::EncodePageInit(init, fields).ok());
         auto init_lsn = s.value()->Append({wal::RecordType::kPageInit, txn_id, kPage}, init);
         ASSERT_TRUE(init_lsn.ok()) << init_lsn.status().message();

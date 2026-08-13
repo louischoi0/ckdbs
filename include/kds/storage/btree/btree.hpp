@@ -103,8 +103,10 @@ struct Location {
 // Formats `page` as a brand-new relation's root: an empty leaf with
 // min_key 0, so a relation that never outgrows one page is exactly one
 // page, the same as a heap-clustered one. The tree gains its first
-// internal level only when this leaf splits.
-Status FormatRoot(std::span<std::byte, kPageSize> page);
+// internal level only when this leaf splits. `owner_oid` (page.md §2a) is
+// the relation's oid, stamped into this and every page the tree ever
+// creates — not defaulted, because a clustered tree always has a relation.
+Status FormatRoot(std::span<std::byte, kPageSize> page, std::uint64_t owner_oid);
 
 // Inserts `payload` (whose leading Keystone word must carry `id`) into the
 // tree rooted at `root`, splitting and growing as needed.
@@ -127,7 +129,8 @@ Status FormatRoot(std::span<std::byte, kPageSize> page);
 StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId root,
                                                 std::uint64_t id,
                                                 std::span<const std::byte> payload,
-                                                std::uint64_t trx_id);
+                                                std::uint64_t trx_id,
+                                                std::uint64_t owner_oid);
 
 // Descends to the leaf that owns `id` and finds its live slot. This is the
 // point-lookup the whole structure exists for: O(depth) page fetches plus

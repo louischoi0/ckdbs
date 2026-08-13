@@ -92,7 +92,7 @@ protected:
         auto payload = EncodeRow(access.value()->schema, access.value()->layout, id.value(), body);
         ASSERT_TRUE(payload.ok()) << payload.status().message();
         auto placed = heap::ChainInsert(store_, access.value()->desc_page_id, id.value(),
-                                        payload.value(), /*trx_id=*/1);
+                                        payload.value(), /*trx_id=*/1, access.value()->oid);
         ASSERT_TRUE(placed.ok()) << placed.status().message();
     }
 

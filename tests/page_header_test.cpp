@@ -24,7 +24,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
     written.checksum = 0xDEADBEEF;
     written.page_lsn = 0x0123456789ABCDEFULL;
     written.relayout_epoch = 0xFEDCBA9876543210ULL;
-    written.reserved1 = 0x1122334455667788ULL;
+    written.owner_oid = 0x1122334455667788ULL;
 
     WritePageHeader(Mut(page), written);
     const PageHeaderFields read = ReadPageHeader(Const(page));
@@ -35,7 +35,7 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
     EXPECT_EQ(read.checksum, written.checksum);
     EXPECT_EQ(read.page_lsn, written.page_lsn);
     EXPECT_EQ(read.relayout_epoch, written.relayout_epoch);
-    EXPECT_EQ(read.reserved1, written.reserved1);
+    EXPECT_EQ(read.owner_oid, written.owner_oid);
 }
 
 TEST(PageHeaderTest, WriteHeaderLeavesBodyUntouched) {
@@ -65,10 +65,22 @@ TEST(PageHeaderTest, FormatPageZeroesEverythingAndSetsCurrentVersion) {
     EXPECT_EQ(fields.checksum, 0u);
     EXPECT_EQ(fields.page_lsn, kNoPageLsn);
     EXPECT_EQ(fields.relayout_epoch, 0u);
-    EXPECT_EQ(fields.reserved1, 0u);
+    EXPECT_EQ(fields.owner_oid, 0u);
     for (std::size_t i = kPageBodyOffset; i < kPageSize; ++i) {
         ASSERT_EQ(page[i], std::byte{0}) << "body byte " << i;
     }
+}
+
+TEST(PageHeaderTest, FormatPageStampsOwnerOid) {
+    Page page{};
+    FormatPage(Mut(page), PageType::kHeap, /*flags=*/0, /*owner_oid=*/4001);
+
+    EXPECT_EQ(GetOwnerOid(Const(page)), 4001u);
+    // The stamp lives at the reserved1-era offset, so a pre-§2a page - all
+    // zeroes there - reads back as unattributed through the same accessor.
+    Page legacy{};
+    FormatPage(Mut(legacy), PageType::kHeap);
+    EXPECT_EQ(GetOwnerOid(Const(legacy)), 0u);
 }
 
 TEST(PageHeaderTest, ValidateRejectsUnformattedPage) {

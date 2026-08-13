@@ -132,8 +132,11 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head);
 //   ...            whatever the store reports when a new page cannot be
 //                  allocated (e.g. OutOfSpace), in which case nothing was
 //                  written and the chain is unchanged
+// `owner_oid` (page.md §2a): the relation's oid, stamped into any page the
+// insert creates. Not defaulted — every chain has a relation.
 StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, std::uint64_t id,
                                         std::span<const std::byte> payload, std::uint64_t trx_id,
+                                        std::uint64_t owner_oid,
                                         PageId* tail_hint = nullptr);
 
 // One row's landing place, and the per-page facts a batch fill produces
@@ -168,6 +171,7 @@ struct ChainAppendBatchResult {
 StatusOr<ChainAppendBatchResult> ChainAppendBatch(
     storage::PageStore& store, PageId head, std::uint64_t first_id,
     std::span<const std::vector<std::byte>> payloads, std::uint64_t trx_id,
+    std::uint64_t owner_oid,
     PageId* tail_hint = nullptr);
 
 // Calls `fn` once per live slot of every page in the chain, in chain order

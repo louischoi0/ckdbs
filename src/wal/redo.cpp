@@ -60,17 +60,21 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
     // A heap page (and a btree leaf, which is one) needs its min_key set at
     // format time and never again - invariant 2. Every other class formats
     // through the common header alone.
+    // The owner rides the record (page.md §2a): a 12-byte pre-§2a record
+    // decodes as owner 0, so replaying old log leaves old pages exactly as
+    // unattributed as the build that wrote them did.
+    const std::uint64_t owner_oid = fields.value().owner_oid;
     if (type == PageType::kHeap || type == PageType::kBtreeLeaf) {
-        auto view = heap::PageView::CreateEmptyAs(page, fields.value().min_key, type);
+        auto view = heap::PageView::CreateEmptyAs(page, fields.value().min_key, type, owner_oid);
         if (!view.ok()) {
             return view.status();
         }
         return Status::OK();
     }
     if (type == PageType::kVarHeap) {
-        return varheap::FormatPage(page);
+        return varheap::FormatPage(page, owner_oid);
     }
-    storage::FormatPage(page, type);
+    storage::FormatPage(page, type, /*flags=*/0, owner_oid);
     return Status::OK();
 }
 

@@ -12,6 +12,7 @@ Page allocation, the buffer pool, the file layout, and the I/O path. `[PROPOSED]
 | S7 | Multi-core ownership | **Per-core buffer pools** over core-owned pages (shared-nothing preserved) |
 | S9 | Page checksums | **Adopted** — CRC32C in the common header, computed at flush, verified at load |
 | S11 | Paging mechanism | **Explicit buffer pool with asynchronous I/O (Postgres-style frames). mmap is rejected for data and WAL** (§15) |
+| S12 | Page → relation resolution | **`owner_oid` in the common header** (`reserved1`, §2a) — the page is the mapping, no auxiliary structure. Confirmed and built 2026-08-13 |
 | S3/S4/S6/S8/S10 | Eviction, dirty/checkpoint, SpaceManager detail, frame memory, config/observability | Defaults specified below as `[PROPOSED]` |
 
 ## 1. Page Classes
@@ -33,12 +34,141 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 | 2 | 2 | `flags` | per-type; 0 unless specified |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
-| 16 | 8 | `reserved0` | 0; candidates: epoch (heap), owner core, compaction cursor |
-| 24 | 8 | `reserved1` | 0 |
+| 16 | 8 | `relayout_epoch` | **built** — bumped when tuples on the page move (`docs/feat-physical-optimizer.md` R4); 0 = never relayouted. Its arrival consumed `reserved0` without a format event, the precedent §2a reuses |
+| 24 | 8 | `owner_oid` | **built 2026-08-13** — oid of the owning object, 0 = unattributed (§2a); pre-§2a pages carry 0, which reads correctly |
 
 Codec rules as everywhere (rules.md §2/§5): field-wise memcpy helpers, mirror struct + `offsetof` `static_assert`s, fixed-width LE, no bitfields. A shared `page_header` codec module owns this layout; type-specific codecs compose it and must not re-implement it.
 
 **Amendment consequence:** `heap_page`'s current layout shifts by 32 bytes (existing ad-hoc fields fold into the common header where equivalent). No shipped format exists, so this is a code change, not a migration.
+
+## 2a. Page Ownership — `owner_oid` — confirmed and built 2026-08-13
+
+The engine has forward mappings only (relation → descriptor page, var-heap
+root, index roots); nothing resolves a page back to its relation. Two
+consumers name that absence as their blocker: **page reclamation**
+(`docs/feat-physical-optimizer.md` §6 gate 3 — retired and DROP-TABLE-orphaned
+pages are quarantined forever because no structure can prove an owner) and
+**the uncountable half of catalog recovery** (`docs/known-gaps.md`, RV3 —
+rows whose relation the catalog lost cannot be attributed). WAL recovery
+itself is *not* a consumer: redo is page-id-physical and recovery undo
+resolved its one relation-shaped need by refusing the mount
+(`docs/workplan-wal-recovery.md`, RC05); nothing here reopens that.
+
+**The design is the field and nothing else.** `owner_oid` — the catalog
+`Oid` (u64) of the owning relation — occupies the `reserved1` word at
+offset 24 of the common header. No map pages, no in-memory reverse index,
+no free-list extension: the page itself is the mapping, and the reverse
+query is a scan (below). Any consumer that needs the reverse direction hot
+is a new proposal, not this one.
+
+- **Arrival is not a format event**, by the same rule that let
+  `relayout_epoch` consume `reserved0`: every page ever written carries 0
+  at offset 24, and 0 reads as the correct default — **unattributed**. No
+  `format_version` bump; the layout did not change, a reserved word gained
+  meaning.
+- **Stamping:** written once by `FormatPage` at page initialization
+  (signature gains an owner parameter, default 0) and **immutable until
+  the page is re-initialized** — the `min_key` discipline. Reuse re-stamps
+  through re-initialization, never in place. Written under the
+  initializer's exclusive access, read under an ordinary shared pin;
+  inside the checksummed span like every header field, so flush/verify
+  need nothing new.
+- **Per-class semantics:** heap pages and the relation's `kVarHeap` chain
+  carry the relation's oid. System classes — undo, catalog, superblock,
+  freemap — carry 0; `page_type` already identifies them. Headerless
+  Waystone pages are exempt by class (§1). B+ tree pages carry their
+  **immediate owner** (decided 2026-08-13): clustered-tree pages the
+  relation's oid — the clustered tree *is* the relation's storage — and
+  secondary-index pages the index's own oid. One uniform rule: the object
+  whose structure the page is. **Corrected at implementation, same day**:
+  the confirmation text claimed relations and indexes share the
+  `sys.objects` oid space — false. An index oid is a `sys.indexes` row id
+  (`AllocateRowId(kSysIndexesTable)`), a separate issue-once sequence, and
+  `DropIndex` *retires* the row rather than tombstoning it. So owner
+  resolution is discriminated by `page_type`, which the header carries
+  right next to the oid: `kIndexLeaf`/`kIndexInternal` owners resolve
+  against `sys.indexes` (orphan = no row carries the id, sound because row
+  ids are never reissued), every other class against `sys.objects`
+  (orphan = the DT2 tombstone). A relation-level query over index pages
+  takes the catalog's index → relation edge.
+- **WAL:** redo must reproduce the stamp, so `PAGE_INIT`'s payload gains
+  `owner_oid` (12 → 24 bytes: `owner_oid` at offset 16, four reserved
+  bytes at 12 keeping the codec's mirror struct naturally aligned per
+  rules.md §2, the 12-byte prefix unchanged). The decoder accepts both forms,
+  the 12-byte legacy one decoding as owner 0 — the same compatible-zero rule
+  as the on-page arrival. **Discriminated by a length *floor*, never by
+  equality** (corrected by review, same day): `DecodeRecord` hands a payload
+  codec the record's 8-byte-aligned tail rather than the exact payload, so a
+  12-byte payload arrives as 16 bytes of payload-plus-zero-padding and a
+  24-byte one as exactly 24 — an equality test would refuse every legacy
+  record read through the envelope, which is the sole case the compatibility
+  exists for. The payload change and its versioning mechanics
+  are recorded in `docs/wal.md` §5.2 (amended at confirmation).
+
+What it answers, and at what cost:
+
+1. **Owner of page P:** read the header. O(1) with the page in hand.
+2. **Is P orphaned:** its `owner_oid` resolves to a `kTypeDroppedTable`
+   tombstone row. DT2's retype-never-retire (`docs/spec-drop-table.md`)
+   and the never-reissued oid floor make the test ABA-proof — a stamped
+   oid can never come to mean a *different* live relation. This is gate
+   3's missing ownership proof. An **unattributed page is never
+   reclaimable** — pre-feature pages are safe by default, not at risk.
+3. **Pages of relation X:** a sequential full-file header scan,
+   O(all pages). Deliberately unindexed: the only consumers — background
+   reclamation and RV3's lost-relation census — are rare and sequential,
+   and the single-file arithmetic layout (§4) makes the scan literally
+   one forward read of the file.
+
+What it does not give, stated so nothing is conflated:
+
+- **No free/allocated state.** The SpaceManager's free map (§5) remains
+  the `[PROPOSED]` owner of "is this page free"; `owner_oid` says who a
+  formatted page belongs to, never whether it may be allocated. The two
+  answer different questions and neither substitutes for the other.
+- **No change to recovery's refusal branch.** RC05's mount refusal on an
+  identity mismatch stands. Noted for its owner to argue: a page's
+  `owner_oid` would hand recovery undo the `rel_oid` half of a
+  `RowLocator(rel_oid, pk)` call without touching the undo record format
+  — a cheaper lifting route than the format-version event
+  `docs/workplan-wal-recovery.md` names — but that is RC05's decision,
+  not a consequence of this field.
+
+All three `[OPEN]` items decided 2026-08-13: **B+ tree pages carry their
+immediate owner** (above); **no backfill** — pre-feature pages stay
+permanently unattributed, which is safe by default (owner 0 is never
+reclaimable) and costless because no shipped format exists to migrate;
+**oid 0 verified rather than assumed** — it is *not* free catalog-wide
+(`kNamespaceSys = 0` is a live persisted oid) but it names an object that
+owns no pages, and no page-owning object can carry it (system relations
+sit at oid 115+, user objects from `kUserOidStart` = 4000), so 0 is
+unambiguous as "unattributed" in this field.
+
+Amendments applied at confirmation (2026-08-13): `docs/wal.md` §5.2
+(`PAGE_INIT` payload growth, length-discriminated decode),
+`docs/feat-physical-optimizer.md` §6 gate 3 (names this as the confirmed
+ownership check), `docs/known-gaps.md` (RV3's uncountable half).
+
+**Built the same day.** What landed: the header field and `GetOwnerOid`;
+`FormatPage` and every creation wrapper take the owner (heap
+`CreateEmpty`/`CreateEmptyAs`, var-heap `FormatPage`/`CreateChain`/
+`ChainAppend`, btree `FormatRoot`/`BtreeInsert` and both index
+`CreateEmpty`s, `index::FormatRoot`/`IndexInsert` — the entry points
+non-defaulted so no caller can silently skip stamping); rebuilds
+(`SplitLeafAndInsert`, `DivideInternalNode`) re-read the page's own stamp;
+`PAGE_INIT` is 24 bytes, decoded against a length floor (above), and redo
+re-stamps from it; `CREATE TABLE` and `CREATE INDEX` issue the oid *before*
+the first page so roots and backfill-split pages stamp from birth (the
+index oid is pre-issued via `IndexDef::index_oid`); FPI-created pages carry
+the stamp inside the image for free. Catalog-core fixed pages and their
+overflow stay 0 (the catalog class); `sys.pattern_defs`/`sys.assertions`
+chains stamp their well-known oids because `ChainInsert` grows them. Tests:
+header round-trip and stamp, payload owner / legacy-through-the-envelope /
+shorter-than-legacy, redo stamp, chain-growth stamp, split stamp.
+
+**Not built, deliberately**: every *consumer* — the RV3 census scan, the
+gate-3 orphan test and reclamation — and any backfill (pre-§2a pages stay
+0 forever, unreclaimable by construction).
 
 ## 3. `PageRef` — the Pinned-Page Handle
 
@@ -175,7 +305,7 @@ mmap was evaluated as the paging mechanism (map the single file, let the kernel 
 - Extent size; growth-batch cap; `nr_frames` defaults; bgwriter watermarks; prefetch depth caps.
 - Core-ownership partition function (multi-core milestone).
 - Reserved-page reclamation rule after crash (shared with wal.md).
-- Reserved header field assignment (heap epoch leading candidate for `reserved0`).
+- Reserved header field assignment: both resolved — `reserved0` became `relayout_epoch` (§2), `reserved1` is `owner_oid` (§2a, built; its `[OPEN]` items decided 2026-08-13 — immediate owner for B+ tree pages, no backfill, oid 0 verified unambiguous).
 - I/O backend (inherited); the backend's allocate/metadata-durability verbs are defined with it.
 - Future namespace segmentation (recorded non-goal); file shrink (non-goal v1).
 

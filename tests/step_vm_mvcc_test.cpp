@@ -84,13 +84,15 @@ protected:
         out.id = id.value();
         if (access.value()->clustered_type == catalog::ClusteredType::kBtree) {
             auto placed = btree::BtreeInsert(store_, access.value()->desc_page_id, id.value(),
-                                             payload.value(), catalog::kBootstrapXid);
+                                             payload.value(), catalog::kBootstrapXid,
+                                             access.value()->oid);
             EXPECT_TRUE(placed.ok()) << placed.status().message();
             out.page_id = placed.value().page_id;
             out.slot = placed.value().slot;
         } else {
             auto placed = heap::ChainInsert(store_, access.value()->desc_page_id, id.value(),
-                                            payload.value(), catalog::kBootstrapXid);
+                                            payload.value(), catalog::kBootstrapXid,
+                                            access.value()->oid);
             EXPECT_TRUE(placed.ok()) << placed.status().message();
             out.page_id = placed.value().page_id;
             out.slot = placed.value().slot;

@@ -185,6 +185,7 @@ Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
     exec::VarHeapSink sink;
     sink.store = &store;
     sink.root = rel.varheap_page_id;
+    sink.owner_oid = rel.oid;
 
     auto payload = exec::EncodeRow(rel.schema, rel.layout, id.value(), values, sink);
     if (!payload.ok()) return payload.status();
@@ -194,7 +195,7 @@ Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
     // a crash only as far as the next SYNC, which is the same guarantee
     // CREATE TABLE gives and is not made worse here.
     auto placed = heap::ChainInsert(store, rel.desc_page_id, id.value(), payload.value(),
-                                    catalog::kBootstrapXid);
+                                    catalog::kBootstrapXid, rel.oid);
     if (!placed.ok()) return placed.status();
     return Status::OK();
 }

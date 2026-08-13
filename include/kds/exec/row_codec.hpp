@@ -130,6 +130,10 @@ struct VarHeapSink {
     storage::PageStore* store = nullptr;
     PageId root = kInvalidPageId;
     std::vector<AppendedSpill>* appended = nullptr;
+    // The owning relation's oid, stamped into any page the spill creates
+    // (page.md §2a). A chain is per-relation, so the caller that knows
+    // `root` knows this too; 0 only where no relation exists to name.
+    std::uint64_t owner_oid = 0;
 
     bool usable() const noexcept { return store != nullptr && root != kInvalidPageId; }
 };

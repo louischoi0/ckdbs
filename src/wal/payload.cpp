@@ -77,17 +77,31 @@ StatusOr<std::size_t> EncodePageInit(std::span<std::byte> out, const PageInitPay
     Store<std::uint64_t>(out, kPageInitMinKeyOffset, fields.min_key);
     Store<std::uint8_t>(out, kPageInitPageTypeOffset, fields.page_type);
     std::memset(out.data() + kPageInitReservedOffset, 0, 3);
+    Store<std::uint32_t>(out, kPageInitReserved2Offset, 0);
+    Store<std::uint64_t>(out, kPageInitOwnerOidOffset, fields.owner_oid);
     return kPageInitPayloadSize;
 }
 
 StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in) {
-    if (Status s = CheckInputSize(in, kPageInitPayloadSize, "PAGE_INIT"); !s.ok()) {
+    // Two forms (page.md §2a): the 24-byte one carrying `owner_oid`, and the
+    // 12-byte pre-owner one whose owner reads as 0. **Discriminated by `>=`,
+    // never by `==`**: `DecodeRecord` hands back the record's 8-byte-aligned
+    // tail, not the exact payload, so a 12-byte payload arrives here as 16
+    // bytes of payload-plus-zero-padding while a 24-byte one arrives as
+    // exactly 24. An equality test would refuse every legacy record read
+    // through the envelope - which is the one case the compatibility exists
+    // for. Same `>=` rule every other codec in this file uses, and it also
+    // keeps a future longer form readable at these offsets.
+    if (Status s = CheckInputSize(in, kPageInitPayloadSizeLegacy, "PAGE_INIT"); !s.ok()) {
         return s;
     }
 
     PageInitPayload fields{};
     fields.min_key = Load<std::uint64_t>(in, kPageInitMinKeyOffset);
     fields.page_type = Load<std::uint8_t>(in, kPageInitPageTypeOffset);
+    if (in.size() >= kPageInitPayloadSize) {
+        fields.owner_oid = Load<std::uint64_t>(in, kPageInitOwnerOidOffset);
+    }
     if (fields.min_key > kMaxKeystoneId) {
         return Status::Corruption("wal payload: PAGE_INIT min_key exceeds the 40-bit id space");
     }

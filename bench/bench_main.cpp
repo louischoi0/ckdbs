@@ -614,7 +614,9 @@ Relation MakeRelation(Clustered clustered) {
     // Exactly what Catalog::CreateTable() does for each clustered type:
     // one page either way, and a tree that is still a bare leaf.
     if (clustered == Clustered::kBtree) {
-        if (kds::Status s = kds::btree::FormatRoot(created.value().second.bytes()); !s.ok()) {
+        // owner 0: these relations exist outside any catalog, so there is
+        // no oid to stamp (page.md §2a's "unattributed").
+        if (kds::Status s = kds::btree::FormatRoot(created.value().second.bytes(), 0); !s.ok()) {
             Fatal(s, "formatting a btree root");
         }
     } else {
@@ -632,7 +634,8 @@ Relation MakeRelation(Clustered clustered) {
 // keeps in memory.
 void InsertRow(Relation& rel, std::uint64_t id, std::span<const std::byte> payload) {
     if (rel.clustered == Clustered::kBtree) {
-        auto placed = kds::btree::BtreeInsert(*rel.store, rel.root, id, payload, 1);
+        auto placed = kds::btree::BtreeInsert(*rel.store, rel.root, id, payload, 1,
+                                              /*owner_oid=*/0);
         if (!placed.ok()) {
             Fatal(placed.status(), "btree insert");
         }
@@ -641,7 +644,7 @@ void InsertRow(Relation& rel, std::uint64_t id, std::span<const std::byte> paylo
         }
         return;
     }
-    auto placed = kds::heap::ChainInsert(*rel.store, rel.root, id, payload, 1);
+    auto placed = kds::heap::ChainInsert(*rel.store, rel.root, id, payload, 1, /*owner_oid=*/0);
     if (!placed.ok()) {
         Fatal(placed.status(), "chain insert");
     }

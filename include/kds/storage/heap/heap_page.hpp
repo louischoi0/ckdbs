@@ -199,8 +199,11 @@ public:
     // fixed for the rest of the page's lifetime - no method below ever
     // writes header.min_key again. Fails only if `min_key` does not fit
     // the Keystone column's 40-bit id space (docs/heap-and-tuple.md invariant 7).
+    // `owner_oid` (page.md §2a) is stamped with the same immutability:
+    // the owning relation for a user page, 0 for system callers (catalog).
     static StatusOr<PageView> CreateEmpty(std::span<std::byte, kPageSize> page,
-                                           std::uint64_t min_key);
+                                           std::uint64_t min_key,
+                                           std::uint64_t owner_oid = 0);
 
     // CreateEmpty() for a page that stamps a different `page_type` in the
     // common header while keeping this exact body layout. The one caller
@@ -215,7 +218,8 @@ public:
     // codec and HEAP_INSERT redo all work on a leaf unchanged. `type` must be kHeap or kBtreeLeaf;
     // anything else is InvalidArgument, because nothing else has this body.
     static StatusOr<PageView> CreateEmptyAs(std::span<std::byte, kPageSize> page,
-                                             std::uint64_t min_key, PageType type);
+                                             std::uint64_t min_key, PageType type,
+                                             std::uint64_t owner_oid = 0);
 
     std::uint64_t min_key() const;
     std::uint16_t slot_count() const;
