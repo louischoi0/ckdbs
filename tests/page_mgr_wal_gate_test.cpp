@@ -46,7 +46,7 @@ private:
 // can see how many a flush costs and what a failed one leaves behind.
 class CountingStore final : public PageStore {
 public:
-    explicit CountingStore(PageStore& inner) : inner_(inner) {}
+    explicit CountingStore(InMemoryPageStore& inner) : inner_(inner) {}
 
     StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
         return inner_.CreateAtUnpinned(page_id);
@@ -72,7 +72,7 @@ public:
     void FailNextSync() noexcept { fail_next_ = true; }
 
 private:
-    PageStore& inner_;
+    InMemoryPageStore& inner_;
     std::uint64_t syncs_ = 0;
     bool fail_next_ = false;
     bool durable_ = false;

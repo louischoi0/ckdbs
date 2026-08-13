@@ -192,17 +192,23 @@ public:
     virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
 
-    // ---- The raw seam (docs/workplan-pageref.md; deleted at MG06) ------
+    // ---- The raw seam: protected since MG06 ----------------------------
     //
-    // What a store implements, and the migration-era escape hatch call
-    // sites are being converted off of. The returned span models no pin:
-    // it is valid only while nothing evicts, which is the defect the
-    // migration exists to close. New code calls the pinned accessors.
+    // What a store implements - and, since MG06, *only* what a store
+    // implements: engine code cannot name these through the base class, so
+    // "no caller holds a raw span" is enforced by access control rather
+    // than by review. A concrete store may re-publish its own overrides
+    // (InMemoryPageStore does, for the forwarding test doubles); a store
+    // with real eviction (DevicePageStore) keeps them out of reach. The
+    // returned span models no pin: it is valid only while nothing evicts,
+    // which is the defect the pinned accessors above exist to close.
 
+protected:
     virtual StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) = 0;
 
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() = 0;
 
+public:
     // Raises the floor CreateNew() allocates from: after an OK return, no
     // CreateNew() may hand out an id below `first_allocatable_page_id`.
     //
@@ -235,6 +241,7 @@ public:
             "guarantee it will not re-issue a page id the log names");
     }
 
+protected:
     // Fetches an already-created page's bytes for reading or in-place
     // mutation. Fails with NotFound if page_id was never created.
     virtual StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) = 0;
@@ -277,6 +284,7 @@ public:
         return CreateNewUnpinned();
     }
 
+public:
     // Records that the WAL record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn, which is what a store's write-back path
     // compares against the log's durable watermark (wal.md section 8-1).

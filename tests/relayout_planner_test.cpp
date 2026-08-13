@@ -94,7 +94,7 @@ TEST(RelayoutPlannerMathTest, PredictedBenefitIsPagesTimesWeight) {
 // kFirstUserPageId the assertion is one set intersection.
 class CountingStore final : public storage::PageStore {
 public:
-    explicit CountingStore(storage::PageStore& inner) : inner_(inner) {}
+    explicit CountingStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
 
     StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
         return inner_.CreateAtUnpinned(page_id);
@@ -121,7 +121,7 @@ public:
     bool Fetched(PageId id) const { return fetched_.count(id) != 0; }
 
 private:
-    storage::PageStore& inner_;
+    storage::InMemoryPageStore& inner_;
     std::unordered_set<PageId> fetched_;
 };
 

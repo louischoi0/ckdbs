@@ -414,7 +414,7 @@ TEST_F(MountRecoveryTest, RecoveringTwiceIsANoOp) {
 // report that it cannot open them.
 class UserPagesGone final : public storage::PageStore {
 public:
-    explicit UserPagesGone(storage::PageStore& inner) noexcept : inner_(inner) {}
+    explicit UserPagesGone(storage::InMemoryPageStore& inner) noexcept : inner_(inner) {}
 
     void ArmFault() noexcept { armed_ = true; }
 
@@ -436,7 +436,7 @@ public:
 private:
     bool Failing(PageId page_id) const noexcept { return armed_ && page_id >= kFirstUserPageId; }
 
-    storage::PageStore& inner_;
+    storage::InMemoryPageStore& inner_;
     bool armed_ = false;
 };
 
