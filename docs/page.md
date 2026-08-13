@@ -12,6 +12,7 @@ Page allocation, the buffer pool, the file layout, and the I/O path. `[PROPOSED]
 | S7 | Multi-core ownership | **Per-core buffer pools** over core-owned pages (shared-nothing preserved) |
 | S9 | Page checksums | **Adopted** — CRC32C in the common header, computed at flush, verified at load |
 | S11 | Paging mechanism | **Explicit buffer pool with asynchronous I/O (Postgres-style frames). mmap is rejected for data and WAL** (§15) |
+| S12 | Page → relation resolution | **`owner_oid` in the common header** (`reserved1`, §2a) — the page is the mapping, no auxiliary structure. Confirmed 2026-08-13, not yet built |
 | S3/S4/S6/S8/S10 | Eviction, dirty/checkpoint, SpaceManager detail, frame memory, config/observability | Defaults specified below as `[PROPOSED]` |
 
 ## 1. Page Classes
@@ -33,12 +34,100 @@ Fixed 32 bytes at offset 0 of every headered page. Type-specific content begins 
 | 2 | 2 | `flags` | per-type; 0 unless specified |
 | 4 | 4 | `checksum` | CRC32C over the full 8 KiB with this field zeroed (§10) |
 | 8 | 8 | `page_lsn` | LSN of the last WAL record applied (wal.md §9); 0 = never logged |
-| 16 | 8 | `reserved0` | 0; candidates: epoch (heap), owner core, compaction cursor |
-| 24 | 8 | `reserved1` | 0 |
+| 16 | 8 | `relayout_epoch` | **built** — bumped when tuples on the page move (`docs/feat-physical-optimizer.md` R4); 0 = never relayouted. Its arrival consumed `reserved0` without a format event, the precedent §2a reuses |
+| 24 | 8 | `owner_oid` | **confirmed, not yet built** — oid of the owning relation, 0 = unattributed (§2a); on every page written to date the bytes are 0, which reads correctly |
 
 Codec rules as everywhere (rules.md §2/§5): field-wise memcpy helpers, mirror struct + `offsetof` `static_assert`s, fixed-width LE, no bitfields. A shared `page_header` codec module owns this layout; type-specific codecs compose it and must not re-implement it.
 
 **Amendment consequence:** `heap_page`'s current layout shifts by 32 bytes (existing ad-hoc fields fold into the common header where equivalent). No shipped format exists, so this is a code change, not a migration.
+
+## 2a. Page Ownership — `owner_oid` — confirmed 2026-08-13, not yet built
+
+The engine has forward mappings only (relation → descriptor page, var-heap
+root, index roots); nothing resolves a page back to its relation. Two
+consumers name that absence as their blocker: **page reclamation**
+(`docs/feat-physical-optimizer.md` §6 gate 3 — retired and DROP-TABLE-orphaned
+pages are quarantined forever because no structure can prove an owner) and
+**the uncountable half of catalog recovery** (`docs/known-gaps.md`, RV3 —
+rows whose relation the catalog lost cannot be attributed). WAL recovery
+itself is *not* a consumer: redo is page-id-physical and recovery undo
+resolved its one relation-shaped need by refusing the mount
+(`docs/workplan-wal-recovery.md`, RC05); nothing here reopens that.
+
+**The design is the field and nothing else.** `owner_oid` — the catalog
+`Oid` (u64) of the owning relation — occupies the `reserved1` word at
+offset 24 of the common header. No map pages, no in-memory reverse index,
+no free-list extension: the page itself is the mapping, and the reverse
+query is a scan (below). Any consumer that needs the reverse direction hot
+is a new proposal, not this one.
+
+- **Arrival is not a format event**, by the same rule that let
+  `relayout_epoch` consume `reserved0`: every page ever written carries 0
+  at offset 24, and 0 reads as the correct default — **unattributed**. No
+  `format_version` bump; the layout did not change, a reserved word gained
+  meaning.
+- **Stamping:** written once by `FormatPage` at page initialization
+  (signature gains an owner parameter, default 0) and **immutable until
+  the page is re-initialized** — the `min_key` discipline. Reuse re-stamps
+  through re-initialization, never in place. Written under the
+  initializer's exclusive access, read under an ordinary shared pin;
+  inside the checksummed span like every header field, so flush/verify
+  need nothing new.
+- **Per-class semantics:** heap pages and the relation's `kVarHeap` chain
+  carry the relation's oid. System classes — undo, catalog, superblock,
+  freemap — carry 0; `page_type` already identifies them. Headerless
+  Waystone pages are exempt by class (§1). B+ tree pages: `[OPEN]`
+  whether they carry the index's oid or the owning relation's oid —
+  reclamation wants "reachable from a live object", RV3 counting wants
+  the relation; the choice is one field either way.
+- **WAL:** redo must reproduce the stamp, so `PAGE_INIT`'s payload gains
+  `owner_oid` (12 → 20 bytes). The decoder accepts both lengths, the
+  12-byte legacy form decoding as owner 0 — the same compatible-zero rule
+  as the on-page arrival. The payload change and its versioning mechanics
+  are recorded in `docs/wal.md` §5.2 (amended at confirmation).
+
+What it answers, and at what cost:
+
+1. **Owner of page P:** read the header. O(1) with the page in hand.
+2. **Is P orphaned:** its `owner_oid` resolves to a `kTypeDroppedTable`
+   tombstone row. DT2's retype-never-retire (`docs/spec-drop-table.md`)
+   and the never-reissued oid floor make the test ABA-proof — a stamped
+   oid can never come to mean a *different* live relation. This is gate
+   3's missing ownership proof. An **unattributed page is never
+   reclaimable** — pre-feature pages are safe by default, not at risk.
+3. **Pages of relation X:** a sequential full-file header scan,
+   O(all pages). Deliberately unindexed: the only consumers — background
+   reclamation and RV3's lost-relation census — are rare and sequential,
+   and the single-file arithmetic layout (§4) makes the scan literally
+   one forward read of the file.
+
+What it does not give, stated so nothing is conflated:
+
+- **No free/allocated state.** The SpaceManager's free map (§5) remains
+  the `[PROPOSED]` owner of "is this page free"; `owner_oid` says who a
+  formatted page belongs to, never whether it may be allocated. The two
+  answer different questions and neither substitutes for the other.
+- **No change to recovery's refusal branch.** RC05's mount refusal on an
+  identity mismatch stands. Noted for its owner to argue: a page's
+  `owner_oid` would hand recovery undo the `rel_oid` half of a
+  `RowLocator(rel_oid, pk)` call without touching the undo record format
+  — a cheaper lifting route than the format-version event
+  `docs/workplan-wal-recovery.md` names — but that is RC05's decision,
+  not a consequence of this field.
+
+`[OPEN]`, do not assume: the B+ tree oid choice above; whether
+pre-feature pages get a one-time backfill walk (stamp from the catalog's
+forward structures) or stay permanently unattributed; whether oid 0 is
+formally reserved as invalid in the catalog (assumed here, verify at
+implementation).
+
+Amendments applied at confirmation (2026-08-13): `docs/wal.md` §5.2
+(`PAGE_INIT` payload growth, length-discriminated decode),
+`docs/feat-physical-optimizer.md` §6 gate 3 (names this as the confirmed
+ownership check), `docs/known-gaps.md` (RV3's uncountable half:
+designed-but-not-built note). Pending, lands with implementation: §18's
+test extensions — header codec and `PAGE_INIT` round-trips, redo
+reproducing the stamp, the orphan test against a tombstoned oid.
 
 ## 3. `PageRef` — the Pinned-Page Handle
 
@@ -175,7 +264,7 @@ mmap was evaluated as the paging mechanism (map the single file, let the kernel 
 - Extent size; growth-batch cap; `nr_frames` defaults; bgwriter watermarks; prefetch depth caps.
 - Core-ownership partition function (multi-core milestone).
 - Reserved-page reclamation rule after crash (shared with wal.md).
-- Reserved header field assignment (heap epoch leading candidate for `reserved0`).
+- Reserved header field assignment: both resolved — `reserved0` became `relayout_epoch` (§2), `reserved1` is `owner_oid` (§2a, confirmed). §2a's own `[OPEN]` items (B+ tree oid choice, backfill vs permanent unattribution, oid-0 reservation) gate its implementation.
 - I/O backend (inherited); the backend's allocate/metadata-durability verbs are defined with it.
 - Future namespace segmentation (recorded non-goal); file shrink (non-goal v1).
 
