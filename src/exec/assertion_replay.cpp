@@ -1,7 +1,9 @@
 #include "kds/exec/assertion_replay.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
+#include <utility>
 
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/wal/payload.hpp"
@@ -163,12 +165,33 @@ Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& stor
     }
 
     const std::string key = KeyOf(d.key);
+
+    // **The linkage may legitimately be absent, and then it is restored for
+    // `Unapply` to take away again.** The rebuild that runs before this fold
+    // walks the cabin's pages and *skips* an entry the page already marks
+    // orphaned (`assertion_recover.cpp`) - which is this entry exactly when the
+    // mark reached the device before the crash, the ordinary shape of a crash
+    // during a later checkpoint. The compensation must still happen: the base
+    // snapshot was taken while the reservation was live, so it counts this
+    // delta, and without the subtraction the header keeps a reservation that
+    // aborted. `Unapply`'s missing-pair NotFound is a name check for the *live*
+    // abort path, where the pair comes from the transaction's own reservation
+    // list and its absence is a defect; a rebuild is entitled not to have
+    // restored it, and failing here failed the whole recovery pass.
+    const std::pair<PageId, std::uint16_t> at{record.header.page_id, d.fields.index};
+    if (const GroupHeader* header = cabin->Find(key);
+        header != nullptr &&
+        std::find(header->entries.begin(), header->entries.end(), at) ==
+            header->entries.end()) {
+        if (Status s = cabin->AttachEntry(header->group_id, at.first, at.second); !s.ok()) {
+            return s.WithContext("assert replay: relinking an entry the page walk skipped");
+        }
+    }
+
     const bool departure =
         (record.header.flags & wal::kAssertRollbackFlagDeparture) != 0;
-    Status undone = departure ? cabin->UnapplyDeparture(key, d.fields.delta,
-                                                        record.header.page_id, d.fields.index)
-                              : cabin->Unapply(key, d.fields.delta, record.header.page_id,
-                                               d.fields.index);
+    Status undone = departure ? cabin->UnapplyDeparture(key, d.fields.delta, at.first, at.second)
+                              : cabin->Unapply(key, d.fields.delta, at.first, at.second);
     return undone.WithContext("assert replay: compensating a reservation");
 }
 

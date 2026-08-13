@@ -290,13 +290,12 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
         if (!page.ok()) return page.status();
         auto view = BoundCabinPage::Open(page.value());
         if (!view.ok()) return view.status();
-        for (const std::uint16_t index : indexes) {
-            auto entry = view.value().Read(index);
-            if (!entry.ok()) return entry.status();
-            BoundCabinEntry cleared = entry.value();
-            cleared.flags = static_cast<std::uint8_t>(cleared.flags & ~kEntryReserved);
-            if (Status s = view.value().Write(index, cleared); !s.ok()) return s;
-        }
+        // Log, then clear, then stamp - the order `AbortTxn` documents below,
+        // and the same window it closes: between a flag move and its
+        // `StampPageLsn` the frame still carries an already-durable `page_lsn`,
+        // so the flush gate would let the move out ahead of the record that
+        // describes it.
+        wal::Lsn stamp = wal::kNoLsn;
         if (wal != nullptr) {
             std::vector<std::byte> payload(wal::kAssertCommitFixedSize + indexes.size() * 2);
             wal::AssertCommitPayload fields{};
@@ -306,7 +305,19 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
             auto rec = wal->Append(
                 wal::RecordSpec{wal::RecordType::kAssertCommit, txn_id, group.second}, payload);
             if (!rec.ok()) return rec.status();
-            if (Status s = store.StampPageLsn(group.second, rec.value()); !s.ok()) return s;
+            stamp = rec.value();
+        }
+
+        for (const std::uint16_t index : indexes) {
+            auto entry = view.value().Read(index);
+            if (!entry.ok()) return entry.status();
+            BoundCabinEntry cleared = entry.value();
+            cleared.flags = static_cast<std::uint8_t>(cleared.flags & ~kEntryReserved);
+            if (Status s = view.value().Write(index, cleared); !s.ok()) return s;
+        }
+
+        if (stamp != wal::kNoLsn) {
+            if (Status s = store.StampPageLsn(group.second, stamp); !s.ok()) return s;
         }
     }
     pending_.erase(pending);
@@ -331,10 +342,40 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         if (!undone.ok()) return undone;
         ++a.counters.aborted;
 
+        // **Log, then mark, then stamp** - WAL-before-data, and here the order
+        // is the correctness argument rather than a convention. Marking first
+        // leaves a window where the frame carries its *old*, already-durable
+        // `page_lsn`, so the flush gate would let the mark out ahead of the
+        // record describing it; a failing `Append` then makes that permanent,
+        // and the next recovery meets a header counting a reservation whose
+        // entry the page says is orphaned - `VerifyAgainstEntries` reporting
+        // Corruption for a directory that this time really is wrong.
+        //
+        // `Unapply` above stays ahead of both: its missing-pair refusal is the
+        // check that proves `(page, index)` names *this* group's entry, and it
+        // must run before a flag is OR'd into whatever lives at that slot.
+        wal::Lsn stamp = wal::kNoLsn;
+        if (wal != nullptr) {
+            std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
+            wal::AssertRollbackPayload fields{};
+            fields.assertion_id = it->assertion_id;
+            fields.delta = it->value;
+            fields.index = it->index;
+            auto used = wal::EncodeAssertRollback(
+                payload, fields,
+                std::as_bytes(std::span<const char>(it->key.data(), it->key.size())));
+            if (!used.ok()) return used.status();
+            wal::RecordSpec spec{wal::RecordType::kAssertRollback, txn_id, it->page};
+            spec.flags = it->departure ? wal::kAssertRollbackFlagDeparture : 0;
+            auto rec = wal->Append(spec, payload);
+            if (!rec.ok()) return rec.status();
+            stamp = rec.value();
+        }
+
         // The entry bytes stay - the slot is the recorded leak that rides on
         // purge - but they are marked, so a rebuild scanning only these pages
         // reaches the same directory this `Unapply` just produced
-        // (`storage/cabin_bound_page.hpp`'s `kEntryOrphaned`, the AS6a decision
+        // (`storage/cabin_bound_page.hpp`'s `kEntryOrphaned`, the AS6b decision
         // in `docs/feat-assertion.md` §7). Unconditional, not `wal != nullptr`:
         // the mark is a data change, and skipping it without a log would leave
         // a page the next scan misreads.
@@ -350,21 +391,8 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
             return s.WithContext("assert abort: marking the entry orphaned");
         }
 
-        if (wal != nullptr) {
-            std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + it->key.size());
-            wal::AssertRollbackPayload fields{};
-            fields.assertion_id = it->assertion_id;
-            fields.delta = it->value;
-            fields.index = it->index;
-            auto used = wal::EncodeAssertRollback(
-                payload, fields,
-                std::as_bytes(std::span<const char>(it->key.data(), it->key.size())));
-            if (!used.ok()) return used.status();
-            wal::RecordSpec spec{wal::RecordType::kAssertRollback, txn_id, it->page};
-            spec.flags = it->departure ? wal::kAssertRollbackFlagDeparture : 0;
-            auto rec = wal->Append(spec, payload);
-            if (!rec.ok()) return rec.status();
-            if (Status s = store.StampPageLsn(it->page, rec.value()); !s.ok()) return s;
+        if (stamp != wal::kNoLsn) {
+            if (Status s = store.StampPageLsn(it->page, stamp); !s.ok()) return s;
         }
     }
     pending_.erase(pending);

@@ -89,7 +89,7 @@ inline constexpr std::uint8_t kEntryDeparture = 0x4;
 // that rides on purge - but they are no longer any group's, and this is what
 // says so on the page itself.
 //
-// **Why the page has to carry it** (`docs/feat-assertion.md` §7, the AS6a
+// **Why the page has to carry it** (`docs/feat-assertion.md` §7, the AS6b
 // decision taken 2026-08-12). A live abort removes the entry from the group's
 // list in memory, so the directory is right and `VerifyAgainstEntries` holds.
 // A *recovered* directory rebuilds that linkage by scanning these pages
@@ -106,6 +106,11 @@ inline constexpr std::uint8_t kEntryDeparture = 0x4;
 // checkpoint and rolled back after it has no entry to remove); narrowing §5.2
 // to live cabins only keeps every byte as it was and gives up the proof exactly
 // where recovery makes it worth having.
+//
+// **This flag meets that same ordering note from the other side**, and §7 says
+// where it is answered: once a mark is durable the walk skips an entry whose
+// `ASSERT_ROLLBACK` the fold still has to compensate, so `ReplayRollback`
+// restores the linkage the walk declined before un-applying it.
 //
 // Free at bit 3: AST04 shipped three flags and every entry on every page in
 // existence reads 0 here, so the 32-byte width (§5.1) does not move and an

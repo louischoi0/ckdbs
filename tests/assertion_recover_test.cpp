@@ -126,6 +126,22 @@ protected:
                         .ok());
     }
 
+    // ASSERT_ROLLBACK for an entry the live side has already un-applied and
+    // marked, so the fold has the abort's record to compensate from.
+    void LogRollback(std::uint16_t index, const std::string& key, std::int64_t delta) {
+        std::vector<std::byte> payload(wal::kAssertRollbackFixedSize + key.size());
+        wal::AssertRollbackPayload fields{};
+        fields.assertion_id = kAssertionId;
+        fields.delta = delta;
+        fields.index = index;
+        auto used = wal::EncodeAssertRollback(
+            payload, fields, std::as_bytes(std::span<const char>(key.data(), key.size())));
+        ASSERT_TRUE(used.ok()) << used.status().message();
+        ASSERT_TRUE(wal_->Append({wal::RecordType::kAssertRollback, /*txn_id=*/9, kCabinPage},
+                                 std::span(payload).first(used.value()))
+                        .ok());
+    }
+
     // The checkpoint, through the real Checkpointer and the real seam - so the
     // snapshot under test is the one a mount would actually find.
     wal::Lsn Checkpoint(const BoundCabin& live) {
@@ -430,7 +446,7 @@ TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
         << "a recovered cabin must satisfy the check the spec calls the proof";
 }
 
-// The AS6a decision of 2026-08-12 (`docs/feat-assertion.md` §7), and the case
+// The AS6b decision of 2026-08-12 (`docs/feat-assertion.md` §7), and the case
 // no fold can reach: the abort happens **before** the checkpoint, so its
 // ASSERT_ROLLBACK is not in the scan's range and the page walk is the only
 // thing that sees the entry. Before `kEntryOrphaned` the walk could not tell it
@@ -479,6 +495,64 @@ TEST_F(AssertionRecoverTest, AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkTo
     auto view = BoundCabinPage::Open(page.value());
     ASSERT_TRUE(view.ok());
     EXPECT_EQ(view.value().entry_count(), 2);
+
+    auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
+        auto p = store_.Get(page_id);
+        if (!p.ok()) return p.status();
+        auto v = BoundCabinPage::Open(p.value());
+        if (!v.ok()) return v.status();
+        return v.value().Read(index);
+    };
+    EXPECT_TRUE(rebuilt.VerifyAgainstEntries(read).ok())
+        << "§5.2's proof must hold on a recovered cabin, which is where it earns its keep";
+}
+
+// The mirror of the test above, and the case the mark's *durability* creates:
+// the abort happens **after** the checkpoint, so the fold does carry its
+// ASSERT_ROLLBACK - and the marked page reached the device before the crash,
+// which is the ordinary shape of a crash during a later checkpoint (that
+// checkpoint flushes the page, then dies before Complete() moves the anchor).
+//
+// The walk then skips the entry, so the pair `Unapply` looks for by name is not
+// in the group, and the compensation that the base snapshot *requires* - it was
+// taken while the reservation was live, so it counts the delta - answered
+// NotFound and failed the whole recovery pass. An assertion left unenforcing
+// after an ordinary crash is the failure RC07 exists to prevent.
+TEST_F(AssertionRecoverTest, AnAbortAfterTheCheckpointStillCompensatesWithTheMarkOnDisk) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    Write(live, Key("x"), 5, /*pk=*/1);
+    const std::uint16_t rolled_back = Write(live, Key("x"), 7, /*pk=*/2);
+
+    // The checkpoint sees the reservation live: its snapshot carries 12 over 2.
+    const wal::Lsn checkpoint_lsn = Checkpoint(live);
+
+    // The abort, after it, in `AssertionEnforcer::AbortTxn`'s order: the
+    // directory drops the linkage, the page takes the mark, the record is
+    // appended.
+    ASSERT_TRUE(live.Unapply(Key("x"), 7, kCabinPage, rolled_back).ok());
+    {
+        auto page = store_.Get(kCabinPage);
+        ASSERT_TRUE(page.ok());
+        auto view = BoundCabinPage::Open(page.value());
+        ASSERT_TRUE(view.ok());
+        auto entry = view.value().Read(rolled_back);
+        ASSERT_TRUE(entry.ok());
+        BoundCabinEntry orphaned = entry.value();
+        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
+        ASSERT_TRUE(view.value().Write(rolled_back, orphaned).ok());
+    }
+    LogRollback(rolled_back, Key("x"), /*delta=*/7);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
+    auto report = Recover(checkpoint_lsn, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+
+    const GroupHeader* x = rebuilt.Find(Key("x"));
+    ASSERT_NE(x, nullptr);
+    EXPECT_EQ(x->sum, 5) << "the snapshot's 12 minus the 7 the fold compensated";
+    EXPECT_EQ(x->count, 1);
+    ASSERT_EQ(x->entries.size(), 1u) << "the aborted entry is no group's, on either path";
+    EXPECT_EQ(x->sum, live.Find(Key("x"))->sum) << "the rebuild disagrees with the live directory";
 
     auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
         auto p = store_.Get(page_id);

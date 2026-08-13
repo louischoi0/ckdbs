@@ -74,7 +74,7 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
                 // entry the live directory had dropped: the aggregate stays
                 // right (snapshot + folded deltas) but §5.2's
                 // `VerifyAgainstEntries` proof reports Corruption for a
-                // directory that is correct. That is the AS6a decision taken
+                // directory that is correct. That is the AS6b decision taken
                 // 2026-08-12 (`docs/feat-assertion.md` §7).
                 continue;
             }
@@ -156,7 +156,11 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
     // would attach their entries a second time, which is the duplicate §7's
     // `VerifyAgainstEntries` exists to catch. And **before the fold**, because a
     // reservation made before the checkpoint and rolled back after it needs its
-    // (page, index) pair present for `Unapply` to find (AS6a's own note).
+    // (page, index) pair present for `Unapply` to find (AS6a's own note) - which
+    // this walk supplies only while the abort's mark has not reached the device.
+    // Once it has, the skip below drops the pair and `ReplayRollback` is what
+    // puts it back (AS6b, `assertion_replay.cpp`); the ordering here is still
+    // required, because that is the *other* half of the same note.
     auto close_bases = [&]() -> Status {
         for (std::uint64_t id : open_base) {
             const RecoverableAssertion* a = by_id.at(id);

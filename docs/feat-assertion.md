@@ -423,6 +423,23 @@ by this protocol.
   > "holds on a live cabin only" keeps every byte as it is and gives up the
   > proof at the one moment it earns its keep.
   >
+  > **The chosen option meets that same ordering note, and the fold is where
+  > it is answered.** A mark is durable as soon as the checkpoint that
+  > flushed its page completes, so the *other* order — reserved before the
+  > checkpoint, rolled back **after** it, page on disk before the crash — has
+  > the walk skipping an entry whose `ASSERT_ROLLBACK` is still inside the
+  > fold's range. The compensation must happen anyway (the base snapshot was
+  > taken while the reservation was live and counts its delta), so
+  > `ReplayRollback` **restores a linkage the walk deliberately did not**
+  > before calling `Unapply`. `Unapply`'s missing-pair `NotFound` stays a name
+  > check for the live abort path, where the pair comes from the transaction's
+  > own reservation list; a rebuild is entitled not to have restored it, and
+  > treating that as an error failed the whole recovery pass — an assertion
+  > left unenforcing after an ordinary crash, which is exactly what RC07
+  > exists to prevent.
+  > `AssertionRecoverTest.AnAbortAfterTheCheckpointStillCompensatesWithTheMarkOnDisk`
+  > pins it and was verified to fail without the restore.
+  >
   > **What it costs.** Abort becomes a page write where it was a memory-only
   > operation: one read-modify-write and one `StampPageLsn` per aborted
   > reservation, on the path a transaction takes when it is already rolling
