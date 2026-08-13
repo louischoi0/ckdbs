@@ -444,7 +444,14 @@ There is no purge pass, and readers are deliberately unregistered
   refusal counters.
 - **Buffer-pool eviction is built but disarmed**: nothing calls the sweep,
   because `Get()` hands out raw spans safe only while nothing evicts — the
-  `PageRef` migration (~257 call sites) is a hard prerequisite
+  `PageRef` migration is a hard prerequisite, and **now has a workplan**
+  (`docs/workplan-pageref.md`, MG01-MG06, 2026-08-13; nothing built).
+  Recounted there with the command that produced the number: **~148 engine
+  sites** (`Get` 74 + `GetForRead` 47 + `CreateAt`/`CreateNew` 27 in
+  `src/`+`include/`) plus ~245 in tests — this entry's earlier "~257" was a
+  tree-wide count, right order, wrong denominator for planning. A circulating
+  estimate of 72 counted `Get` alone and understates the engine set by half:
+  `GetForRead` returns the same mutable span with the same lifetime
   (`docs/spec-eviction.md`, `docs/page.md` §3).
 
 ## Storage and key modes
