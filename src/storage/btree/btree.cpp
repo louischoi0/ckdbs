@@ -311,9 +311,14 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
 // division in SplitLeafAndInsert. `sep` is the new subtree's low key and
 // `child` the page that holds it; `out` carries whatever the caller has
 // already recorded, and comes back with the ancestors appended.
-// Peak pins (MG03): 2 per level - the parent and, on the append path, one
-// created node - both dropped before the loop advances a level. Stacked
-// under SplitLeafAndInsert's 2, the whole grow path holds at most 4.
+// Peak pins (MG03): 3, and not cumulative across levels - both locals are
+// per-iteration, so a level's pins drop before the next is fetched. The
+// append path holds 2 (the parent and the created node); the *divide* path
+// holds 3, because DivideInternalNode runs with `parent_bytes` still held
+// and itself holds its created node and its re-fetch of the same node
+// together. Stacked under SplitLeafAndInsert's 2 - which are alive across
+// the tail call below - the whole grow path holds at most 5, under
+// DevicePageStore::kPinCeiling with three frames of slack.
 StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
                                                      const Descent& descent, std::uint64_t sep,
                                                      PageId child,

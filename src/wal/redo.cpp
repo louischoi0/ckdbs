@@ -245,6 +245,12 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // there: a fixed-extent span has no default constructor, and the
         // store hands back dynamic spans besides.
         std::span<std::byte> page_bytes;
+        // The pin outlives the branch that took it. A `PageRef` local
+        // declared inside one of the `CreateAt` arms below would unpin at
+        // that arm's closing brace, leaving `page_bytes` pointing into a
+        // frame nothing holds - the exact lifetime the migration exists to
+        // make visible (workplan-pageref.md §3, Shape C).
+        storage::PageRef created_ref;
         auto got = store.Get(page_id);
         if (got.ok()) {
             page_bytes = got.value().bytes();
@@ -259,7 +265,8 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page_bytes = created.value().bytes();
+            created_ref = std::move(created.value());
+            page_bytes = created_ref.bytes();
             if (poisoned.erase(page_id) != 0) {
                 ++stats.pages_healed;
             }
@@ -268,7 +275,8 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page_bytes = created.value().bytes();
+            created_ref = std::move(created.value());
+            page_bytes = created_ref.bytes();
             ++stats.pages_created;
         } else {
             // Named, because "page id not found" alone says nothing about

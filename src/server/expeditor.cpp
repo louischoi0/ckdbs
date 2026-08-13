@@ -581,7 +581,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
     if (!store.ok()) return store.status();
-    store.value()->SetFrameBudget(config.buffer_pool_frames);
+    // Only when the config asks for one. Zero means "unbounded", which is
+    // already what Open() left unless the debug `KDS_TEST_FRAME_BUDGET`
+    // override set a budget - and setting zero here would silently undo
+    // that override on every server-path store, which is exactly the set
+    // MG05's poisoner run needs under pressure.
+    if (config.buffer_pool_frames != 0) {
+        store.value()->SetFrameBudget(config.buffer_pool_frames);
+    }
 
     // Built here rather than in the initializer list because the members
     // below take references into it, which only become stable once the

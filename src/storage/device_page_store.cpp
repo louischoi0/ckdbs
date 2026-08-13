@@ -433,11 +433,16 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     }
 
     const PageId page_id = *found;
-    auto created = CreateAt(page_id);
+    // The raw sibling, not the pinned base accessor, for the reason
+    // CreateNewHeaderlessUnpinned() states: this *is* the raw seam, and
+    // pinning here takes a pin no handle asked for - balanced only by the
+    // temporary's destructor, and counted against the debug ceiling in
+    // between.
+    auto created = CreateAtUnpinned(page_id);
     if (!created.ok()) return created.status();
 
     next_new_page_id_ = page_id + 1;
-    return std::make_pair(page_id, created.value().bytes());
+    return std::make_pair(page_id, created.value());
 }
 
 Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
