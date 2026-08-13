@@ -492,6 +492,13 @@ is not a tester's change to make — but the correction they need is precise:
 commit's cost is per page-group, abort's is per reservation, and they coincide
 only for a single-reservation transaction.
 
+**Both were corrected at `91abc15`**, after this run and on the strength of it,
+so the sentences quoted above no longer appear in either file. They are kept
+here verbatim because a results file that falsifies a claim has to show the
+claim it falsified — and because the reasoning that produced it is worth not
+repeating: "commit already pays this" was inferred from the two paths writing
+the same kind of thing, without checking that they loop over different things.
+
 **The fix, if one is wanted, is already written next door.** `AbortTxn` could
 group by `(assertion, page)` exactly as `CommitTxn` does; `MarkOrphaned` is
 already a named method on `BoundCabinPage` (`01c8dbe`), so the loop body is a
