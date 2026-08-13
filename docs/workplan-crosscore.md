@@ -287,7 +287,21 @@ the core serve a message instead.
        driven by a named inline helper (`RunToCompletionAtWalkBoundary`),
        correct while nothing suspends beneath it and grep-checkable as
        exactly the seam P4d-3 dissolves when awaits move to the page
-       boundary.
+       boundary. **Execution method, so the flip is mechanical**: change
+       the seven signatures (`Run`, `RunStep`, `RunPointStep`,
+       `RunCabinStep`, `RunIndexStep`, `RunWalkStep`, `AcceptTupleAt`) to
+       `sched::Coro` and rebuild - a `return` inside a coroutine is a hard
+       compile error at every spine site, while the walk visitors' own
+       `VisitControl` returns compile untouched because a lambda is a
+       separate function to the compiler. The error list IS the conversion
+       list, with the lambda discrimination done by the compiler rather
+       than by fallible text matching; `Coro`-to-`Status` conversion
+       errors then mark every recursion edge for `co_await` and the two
+       visitor sites (step_vm.cpp:1031, :1042 at `2953340`) for the
+       boundary helper. Sub-chain evaluation inside `EvaluateConjuncts`
+       stays synchronous and drives any converted runner through the same
+       helper - whether sub-chains ever await is P4d-4's decision, not
+       this task's side effect.
     3. **Walk callbacks cannot await, and the answer is the page boundary.**
        The chain walks are visitor-style; a callback cannot `co_await`.
        Awaits therefore happen *between* pages at the `RunWalkStep` level —
