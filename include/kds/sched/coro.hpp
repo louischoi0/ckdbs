@@ -97,6 +97,16 @@ public:
         // coroutine frame, which outlives every poll that can see it.
         const std::function<bool()>* wait_pred = nullptr;
 
+        // The child this coroutine is co_awaiting, when it is (P4d-1). Set
+        // by AwaitCoro as the parent suspends, cleared by await_resume when
+        // the child's result is taken. It lives on the promise for
+        // wait_flag's reason: the *poller* consults it - CoroTask::Poll
+        // walks this chain to find the deepest pending coroutine, which is
+        // the one a resume must enter. Non-owning: the awaiter object in
+        // the parent's frame owns the child frame, and outlives every poll
+        // that can see this handle by construction.
+        std::coroutine_handle<promise_type> active_child{};
+
         Coro get_return_object() {
             return Coro(std::coroutine_handle<promise_type>::from_promise(*this));
         }
@@ -152,6 +162,10 @@ public:
         return std::exchange(handle_, {});
     }
 
+    // The handle, still owned here - AwaitCoro links it into the parent's
+    // promise while keeping ownership in the awaiter.
+    std::coroutine_handle<promise_type> Handle() const noexcept { return handle_; }
+
 private:
     void Destroy() noexcept {
         if (handle_ != nullptr) {
@@ -162,6 +176,59 @@ private:
 
     std::coroutine_handle<promise_type> handle_{};
 };
+
+// ---- Awaiting a child Coro (P4d-1) ---------------------------------------
+//
+// `co_await SomeCoroFn(...)` inside a Coro: the enabling primitive for the
+// executor conversion, whose call graph is mutually recursive - a parent
+// step cannot call a child step's coroutine without a way to wait for it.
+//
+// Poll-driven like everything here: suspending records the child on the
+// parent's promise, and CoroTask::Poll resumes the *deepest* pending
+// coroutine in that chain - so a grandchild parked on WaitFor costs the
+// same one predicate check its flat equivalent would, and nothing resumes
+// a parent whose child still runs. There is deliberately no symmetric
+// transfer: the scheduler's unit is one Poll, and keeping every resume
+// inside Poll is what keeps the suspend audit's placement (one call site)
+// true.
+//
+// The awaiter owns the child frame (the Coro moves in) and lives in the
+// parent's frame for exactly the span of the co_await expression - which is
+// the lifetime argument in one sentence: the child cannot outlive the
+// await that reads its result, and destroying the parent mid-await
+// destroys the child with it, leak-free, exactly as CoroTask's owning
+// destructor promises for the whole chain.
+class AwaitCoro {
+public:
+    explicit AwaitCoro(Coro child) noexcept : child_(std::move(child)) {}
+
+    // Never ready eagerly: the child is lazily started (initial_suspend
+    // suspends), so it has not run a line yet, and running it here would
+    // put a resume outside Poll.
+    bool await_ready() const noexcept { return false; }
+
+    void await_suspend(std::coroutine_handle<Coro::promise_type> parent) noexcept {
+        parent_ = parent;
+        parent.promise().active_child =
+            std::coroutine_handle<Coro::promise_type>::from_address(child_.Handle().address());
+    }
+
+    Status await_resume() noexcept {
+        if (parent_ != nullptr) parent_.promise().active_child = {};
+        return child_.done() ? child_.result()
+                             : Status::InvalidArgument(
+                                   "co_await resumed before its child coroutine finished");
+    }
+
+private:
+    friend class CoroTask;
+    Coro child_;
+    std::coroutine_handle<Coro::promise_type> parent_{};
+};
+
+inline AwaitCoro operator co_await(Coro&& child) noexcept {
+    return AwaitCoro(std::move(child));
+}
 
 // ---- Suspension safety --------------------------------------------------
 //
@@ -220,20 +287,41 @@ public:
     PollResult Poll() override {
         if (handle_ == nullptr) return PollResult::kDone;
 
-        if (!handle_.done()) {
+        // One Poll runs the chain until it genuinely parks or finishes -
+        // the multi-resume loop is what a flat coroutine gets for free by
+        // running through ready awaits in one resume, owed equally to a
+        // chain whose child just finished: stopping after each level would
+        // charge one scheduler round-trip per stack frame (P4d-1).
+        while (!handle_.done()) {
+            // The deepest pending coroutine is the one a resume must enter:
+            // a parent suspended on `co_await child` makes no progress until
+            // the child finishes, and resuming it early would re-enter the
+            // await. A finished child stops the walk at its parent, whose
+            // resume runs await_resume and takes the result.
+            auto active = handle_;
+            while (active.promise().active_child != nullptr &&
+                   !active.promise().active_child.done()) {
+                active = active.promise().active_child;
+            }
+
             // The wait check, before the resume: a coroutine parked on a
             // condition that still does not hold costs one predicate call
             // this iteration and is not entered at all.
-            const bool* flag = handle_.promise().wait_flag;
+            const bool* flag = active.promise().wait_flag;
             if (flag != nullptr && !*flag) return PollResult::kSuspended;
-            handle_.promise().wait_flag = nullptr;
+            active.promise().wait_flag = nullptr;
 
-            const std::function<bool()>* pred = handle_.promise().wait_pred;
+            const std::function<bool()>* pred = active.promise().wait_pred;
             if (pred != nullptr && !(*pred)()) return PollResult::kSuspended;
-            handle_.promise().wait_pred = nullptr;
+            active.promise().wait_pred = nullptr;
 
             ++resumes_;
-            handle_.resume();
+            active.resume();
+
+            // Parked mid-body (WaitFor/Yield set a wait, or a plain yield):
+            // this Poll is over. A finished child instead loops: the walk
+            // now stops at its parent, which resumes in this same Poll.
+            if (!active.done() && active.promise().active_child == nullptr) break;
         }
         if (!handle_.done()) {
 #ifndef NDEBUG

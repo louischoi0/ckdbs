@@ -383,5 +383,91 @@ TEST(CoroSuspendAuditTest, ACompletedCoroutineIsNeverAudited) {
     ResetSuspendAudit();
 }
 
+
+// ---- Nested awaits (P4d-1): the executor conversion's primitive ----------
+
+TEST(CoroNestedTest, AThreeDeepChainCompletesAndStatusesPropagate) {
+    // The executor's spine is mutually recursive, so the chain shape is the
+    // contract: parent awaits child awaits grandchild, each contributing to
+    // one observable order, and the grandchild's error surfacing at the top
+    // exactly as a return value would have.
+    std::vector<int> order;
+
+    auto grandchild = [&]() -> Coro {
+        order.push_back(3);
+        co_return Status::NotFound("bottom says no");
+    };
+    auto child = [&]() -> Coro {
+        order.push_back(2);
+        Status inner = co_await grandchild();
+        EXPECT_EQ(inner.code(), StatusCode::kNotFound);
+        co_return inner;  // propagated, as the executor's Status returns will be
+    };
+    auto parent = [&]() -> Coro {
+        order.push_back(1);
+        co_return co_await child();
+    };
+
+    Status final_status = Status::OK();
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, parent(),
+                             [&](const Status& s) { final_status = s; });
+    while (task->Poll() != PollResult::kDone) {
+    }
+    EXPECT_EQ(order, (std::vector<int>{1, 2, 3}));
+    EXPECT_EQ(final_status.code(), StatusCode::kNotFound);
+    EXPECT_NE(final_status.message().find("bottom says no"), std::string::npos);
+}
+
+TEST(CoroNestedTest, AChildParkedOnAFlagParksTheWholeChain) {
+    // The pipeline's shape: a step three frames down awaits a remote batch.
+    // Until the flag flips, polls cost predicate checks and no resumes; when
+    // it flips, the chain finishes without re-entering finished frames.
+    bool batch_ready = false;
+    std::vector<int> order;
+
+    auto leaf = [&]() -> Coro {
+        order.push_back(1);
+        co_await WaitFor{&batch_ready};
+        order.push_back(3);
+        co_return Status::OK();
+    };
+    auto spine = [&]() -> Coro { co_return co_await leaf(); };
+
+    auto task = MakeCoroTask(SchedulingGroup::kForeground, spine());
+    EXPECT_EQ(task->Poll(), PollResult::kSuspended);  // ran to the wait
+    EXPECT_EQ(task->Poll(), PollResult::kSuspended);  // parked: no resume
+    EXPECT_EQ(task->Poll(), PollResult::kSuspended);
+    order.push_back(2);
+    batch_ready = true;
+    EXPECT_EQ(task->Poll(), PollResult::kDone);
+    EXPECT_EQ(order, (std::vector<int>{1, 2, 3}));
+}
+
+TEST(CoroNestedTest, DroppingATaskMidAwaitDestroysTheWholeChain) {
+    // CoroTask's owning destructor, extended transitively: the awaiter in
+    // each parent frame owns its child frame, so destroying the top frame
+    // unwinds every level - a cancelled statement leaks no step.
+    bool never_set = false;
+    bool leaf_destroyed = false;
+    struct MarkOnDestroy {
+        bool* flag;
+        ~MarkOnDestroy() { *flag = true; }
+    };
+
+    auto leaf = [&]() -> Coro {
+        MarkOnDestroy mark{&leaf_destroyed};
+        co_await WaitFor{&never_set};
+        co_return Status::OK();
+    };
+    auto spine = [&]() -> Coro { co_return co_await leaf(); };
+
+    {
+        auto task = MakeCoroTask(SchedulingGroup::kForeground, spine());
+        EXPECT_EQ(task->Poll(), PollResult::kSuspended);
+        EXPECT_FALSE(leaf_destroyed);
+    }
+    EXPECT_TRUE(leaf_destroyed) << "the chain's frames must die with the task";
+}
+
 }  // namespace
 }  // namespace kds::sched
