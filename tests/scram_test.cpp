@@ -299,21 +299,22 @@ TEST(ScramVerifierTest, GarbageRefused) {
 
 // ---- The users file ---------------------------------------------------
 
-TEST(FileCredentialStoreTest, ParsesUsersAndComments) {
+TEST(FileCredentialStoreTest, ParsesUsersRolesAndComments) {
     Verifier v = PencilVerifier();
-    std::string text = "# staff\nalice " + v.Serialize() + "\n\nbob " + v.Serialize() +
-                       "  # trailing comment\n";
+    std::string text = "# staff\nalice admin " + v.Serialize() + "\n\nbob readonly " +
+                       v.Serialize() + "  # trailing comment\n";
     auto store = FileCredentialStore::Parse(text, "users.probe");
     ASSERT_TRUE(store.ok()) << store.status().message();
     EXPECT_EQ(store.value().size(), 2u);
     EXPECT_TRUE(store.value().Has("alice"));
-    EXPECT_TRUE(store.value().Lookup("bob").ok());
+    EXPECT_EQ(store.value().Lookup("alice").value().role, Role::kAdmin);
+    EXPECT_EQ(store.value().Lookup("bob").value().role, Role::kReadOnly);
     EXPECT_EQ(store.value().Lookup("mallory").status().code(), StatusCode::kNotFound);
 }
 
 TEST(FileCredentialStoreTest, DuplicateUserRefusedNamingTheLine) {
     Verifier v = PencilVerifier();
-    std::string text = "alice " + v.Serialize() + "\nalice " + v.Serialize() + "\n";
+    std::string text = "alice admin " + v.Serialize() + "\nalice admin " + v.Serialize() + "\n";
     auto store = FileCredentialStore::Parse(text, "users.probe");
     ASSERT_FALSE(store.ok());
     EXPECT_NE(store.status().message().find("users.probe:2"), std::string::npos)
@@ -321,9 +322,29 @@ TEST(FileCredentialStoreTest, DuplicateUserRefusedNamingTheLine) {
 }
 
 TEST(FileCredentialStoreTest, MalformedVerifierRefusedNamingTheLine) {
-    auto store = FileCredentialStore::Parse("alice not-a-verifier\n", "users.probe");
+    auto store = FileCredentialStore::Parse("alice admin not-a-verifier\n", "users.probe");
     ASSERT_FALSE(store.ok());
     EXPECT_NE(store.status().message().find("users.probe:1"), std::string::npos);
+}
+
+TEST(FileCredentialStoreTest, PreAuthzTwoColumnFormatRefusedByName) {
+    // The 2026-08-13-morning format, refused with editing instructions
+    // rather than defaulted - a silently guessed role is a permission
+    // nobody granted.
+    Verifier v = PencilVerifier();
+    auto store = FileCredentialStore::Parse("alice " + v.Serialize() + "\n", "users.probe");
+    ASSERT_FALSE(store.ok());
+    EXPECT_NE(store.status().message().find("role"), std::string::npos)
+        << store.status().message();
+}
+
+TEST(FileCredentialStoreTest, UnknownRoleRefusedNamingTheLine) {
+    Verifier v = PencilVerifier();
+    auto store = FileCredentialStore::Parse("alice root " + v.Serialize() + "\n", "users.probe");
+    ASSERT_FALSE(store.ok());
+    EXPECT_NE(store.status().message().find("users.probe:1"), std::string::npos);
+    EXPECT_NE(store.status().message().find("readonly, readwrite or admin"), std::string::npos)
+        << store.status().message();
 }
 
 // ---- The gate over the store ------------------------------------------
@@ -331,8 +352,8 @@ TEST(FileCredentialStoreTest, MalformedVerifierRefusedNamingTheLine) {
 class GateTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        auto store = FileCredentialStore::Parse("user " + PencilVerifier().Serialize() + "\n",
-                                                "users.probe");
+        auto store = FileCredentialStore::Parse(
+            "user readwrite " + PencilVerifier().Serialize() + "\n", "users.probe");
         ASSERT_TRUE(store.ok());
         store_.emplace(std::move(store.value()));
     }
@@ -355,6 +376,10 @@ TEST_F(GateTest, FullExchangeAuthenticates) {
     EXPECT_FALSE(r2.close);
     ASSERT_EQ(r2.reply.rfind("AUTH+ ", 0), 0u);
     EXPECT_TRUE(client.OnServerFinal(r2.reply.substr(6)).ok());
+    // The identity hand-over: who got in and the store's role for them -
+    // the non-default rank proves it was read, not assumed.
+    EXPECT_EQ(r2.username, kUser);
+    EXPECT_EQ(r2.role, Role::kReadWrite);
 }
 
 TEST_F(GateTest, StatementBeforeAuthIsRefusedAndClosed) {

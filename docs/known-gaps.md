@@ -513,11 +513,14 @@ There is no purge pass, and readers are deliberately unregistered
   closed 2026-08-13**: direct TLS 1.3 at the transport seam
   (`docs/protocol.md` §1, `tls` key) and SCRAM-SHA-256 connection auth
   (`auth = scram` + `users_file`, provisioned with `--add-user`), both
-  off by default. What remains true: the port stays **loopback only**,
-  and **authorization does not exist** — an authenticated user may run
-  every statement, STOP included; who may do what is the Open Decision
-  `docs/protocol.md` §14 still holds. Deferred SCRAM hardening is listed
-  there (channel binding, SASLprep, mock-salt consistency).
+  off by default. What remains true: the port stays **loopback only**.
+  **Authorization landed 2026-08-13** — statement-class roles
+  (readonly/readwrite/admin per user, enforced at the dispatcher;
+  `docs/protocol.md` §14) — with its own recorded limits: no
+  per-relation grants (future, catalog-recovery-gated), role changes are
+  re-provisioning, and `auth = off` means every session is admin.
+  Deferred SCRAM hardening is listed in §14 (channel binding, SASLprep,
+  mock-salt consistency, pre-auth deadline).
 - **`TcpServer::Detach()` leaks the fd of a connection whose statement is
   in flight** (found 2026-08-13 in review): `CloseClient` only *marks*
   such a connection (`closing`), then `Detach` clears the map without

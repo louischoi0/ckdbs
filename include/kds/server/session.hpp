@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "kds/server/role.hpp"
 #include "kds/txn/manager.hpp"
 
 // One client connection's transaction state (docs/txn.md sections 1, 5, 6).
@@ -67,6 +68,16 @@ public:
     // precedence chain `durability` uses.
     txn::IsolationLevel isolation() const noexcept { return isolation_; }
     void set_isolation(txn::IsolationLevel level) noexcept { isolation_ = level; }
+
+    // What this connection may do (role.hpp), checked once per statement
+    // by the dispatcher. **kAdmin by default, and that is the auth-off
+    // contract**: an unauthenticated instance is the operator's own
+    // process, and every in-process construction (tests, tools) predates
+    // roles. The auth gate stamps the real role at the moment its
+    // exchange succeeds (tcp_server.cpp), which is the only code that
+    // ever learns one.
+    Role role() const noexcept { return role_; }
+    void set_role(Role role) noexcept { role_ = role; }
 
     // The open transaction, or null in autocommit. Borrowed from the
     // manager, never owned.
@@ -156,6 +167,7 @@ private:
 
     State state_ = State::kIdle;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
+    Role role_ = Role::kAdmin;
     txn::Transaction* txn_ = nullptr;
     std::uint32_t home_core_ = kUnbound;
 };

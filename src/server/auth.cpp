@@ -49,28 +49,42 @@ StatusOr<FileCredentialStore> FileCredentialStore::Parse(std::string_view text,
         if (line.empty()) continue;
 
         std::size_t space = line.find(' ');
-        if (space == std::string_view::npos) {
-            return Status::InvalidArgument(origin + ":" + std::to_string(line_no) +
-                                            ": expected '<username> <verifier>'");
+        std::size_t space2 =
+            space == std::string_view::npos ? std::string_view::npos : line.find(' ', space + 1);
+        if (space == std::string_view::npos || space2 == std::string_view::npos) {
+            // The two-column shape is the pre-authorization format
+            // (2026-08-13, same day - no deployed population to migrate).
+            // Named so the operator edits a role in instead of hunting.
+            return Status::InvalidArgument(
+                origin + ":" + std::to_string(line_no) +
+                ": expected '<username> <role> <verifier>' - a line without the role "
+                "column is the pre-authorization format; add readonly, readwrite or admin");
         }
         std::string username(line.substr(0, space));
-        std::string_view verifier_text = line.substr(space + 1);
+        std::string_view role_text = line.substr(space + 1, space2 - space - 1);
+        std::string_view verifier_text = line.substr(space2 + 1);
 
         if (store.users_.find(username) != store.users_.end()) {
             return Status::InvalidArgument(origin + ":" + std::to_string(line_no) + ": user '" +
                                             username + "' is listed twice");
+        }
+        auto role = ParseRole(role_text);
+        if (!role.ok()) {
+            return Status::InvalidArgument(origin + ":" + std::to_string(line_no) + ": " +
+                                            role.status().message());
         }
         auto verifier = scram::Verifier::Parse(verifier_text);
         if (!verifier.ok()) {
             return Status::InvalidArgument(origin + ":" + std::to_string(line_no) + ": " +
                                             verifier.status().message());
         }
-        store.users_.emplace(std::move(username), std::move(verifier.value()));
+        store.users_.emplace(std::move(username),
+                             UserRecord{std::move(verifier.value()), role.value()});
     }
     return store;
 }
 
-StatusOr<scram::Verifier> FileCredentialStore::Lookup(std::string_view username) const {
+StatusOr<UserRecord> FileCredentialStore::Lookup(std::string_view username) const {
     auto it = users_.find(std::string(username));
     if (it == users_.end()) {
         return Status::NotFound("no such user");  // mocked by scram::Server, never shown
@@ -98,7 +112,14 @@ AuthGate::Result Refuse() {
 }  // namespace
 
 ScramAuthGate::ScramAuthGate(const CredentialStore* store)
-    : server_([store](std::string_view user) { return store->Lookup(user); }) {}
+    : store_(store),
+      server_([store](std::string_view user) -> StatusOr<scram::Verifier> {
+          // The SCRAM layer proves identity and knows nothing of roles;
+          // the record is projected down to what it may see.
+          auto record = store->Lookup(user);
+          if (!record.ok()) return record.status();
+          return std::move(record.value().verifier);
+      }) {}
 
 AuthGate::Result ScramAuthGate::OnLine(std::string_view line) {
     if (!got_first_) {
@@ -119,7 +140,17 @@ AuthGate::Result ScramAuthGate::OnLine(std::string_view line) {
         // scram::Server, and this collapses the rest.
         return Refuse();
     }
-    return {"AUTH+ " + server_final.value(), /*authenticated=*/true, /*close=*/false};
+    // The proof succeeded, so the user exists and username() is real (it
+    // is empty until the exchange is done). A record that vanishes
+    // between the two lookups - impossible for the immutable file store,
+    // conceivable for a future live one - fails closed as a refusal.
+    auto record = store_->Lookup(server_.username());
+    if (!record.ok()) return Refuse();
+    AuthGate::Result result{"AUTH+ " + server_final.value(), /*authenticated=*/true,
+                            /*close=*/false};
+    result.username = server_.username();
+    result.role = record.value().role;
+    return result;
 }
 
 }  // namespace kds::server

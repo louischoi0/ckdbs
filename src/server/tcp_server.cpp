@@ -198,6 +198,12 @@ void TcpServer::OnListenerReadable() {
             ::close(client_fd);
             return;
         }
+        // Defense in depth: a gated connection starts at the floor, so
+        // "never admin unless the gate said so" is a structural property
+        // of this line, not an argument about the drain loop's control
+        // flow. Unreachable today - the gate absorbs every pre-auth
+        // line - and cheap to make untrue-by-construction anyway.
+        fresh.session.set_role(Role::kReadOnly);
     }
     clients_.emplace(client_fd, std::move(fresh));
     if (logging(LogLevel::kDebug)) {
@@ -384,8 +390,14 @@ bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
             if (!AppendReplyLine(client_fd, conn, std::move(result.reply))) return false;
             if (result.authenticated) {
                 conn.auth_gate.reset();  // authenticated = the gate's absence
+                // The one hand-over of identity: the gate is the only
+                // code that learns who got in, the session is the only
+                // place the dispatcher looks.
+                conn.session.set_role(result.role);
                 if (logging(LogLevel::kDebug)) {
-                    log_->Debug("client", "fd=" + std::to_string(client_fd) + " authenticated");
+                    log_->Debug("client", "fd=" + std::to_string(client_fd) +
+                                              " authenticated as '" + result.username +
+                                              "' role=" + std::string(RoleName(result.role)));
                 }
             }
             if (result.close) {

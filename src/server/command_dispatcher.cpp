@@ -271,11 +271,56 @@ DispatchOutcome CommandDispatcher::Dispatch(std::string_view line, Session* sess
     return outcome;
 }
 
+namespace {
+
+// The statement-class → role table (role.hpp's model, docs/protocol.md
+// §14). Keyed on exactly the tokens DispatchInner routes on, and
+// *total*: a command absent from every readonly/readwrite line below is
+// admin's - including commands that do not exist, so a statement added
+// later is refused by default rather than admitted by omission, the
+// posture Session::AdmittedWhileFailed set.
+Role RequiredRole(std::string_view cmd, std::string_view rest) {
+    // The readonly floor: reads, liveness, and transaction control -
+    // BEGIN/COMMIT are admissible because a REPEATABLE READ transaction
+    // is how a readonly session gets one view across statements; any
+    // write *inside* it is judged as itself.
+    if (IEquals(cmd, "PING") || IEquals(cmd, "SELECT") || IEquals(cmd, "WITH") ||
+        IEquals(cmd, "ANALYZE") || IEquals(cmd, "SHOW") || IEquals(cmd, "DESCRIBE") ||
+        IEquals(cmd, "DESC") || IEquals(cmd, "BEGIN") || IEquals(cmd, "START") ||
+        IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) {
+        return Role::kReadOnly;
+    }
+    if (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE")) {
+        return Role::kReadWrite;
+    }
+    if (IEquals(cmd, "SET")) {
+        // A session may steer its own reads; the server is the admin's.
+        return IEquals(SplitFirstToken(rest).first, "ISOLATION") ? Role::kReadOnly : Role::kAdmin;
+    }
+    // DDL in every spelling, STOP, SYNC - and everything unclassified.
+    return Role::kAdmin;
+}
+
+}  // namespace
+
 DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session& session) {
     auto [cmd, rest] = SplitFirstToken(line);
 
     if (cmd.empty()) {
         return {"ERR empty command", false};
+    }
+
+    // ---- Authorization (role.hpp; docs/protocol.md §14) -----------------
+    //
+    // One check, on the same tokens the routing below reads, before
+    // anything else interprets the line. An admin never fails it, so a
+    // typo still answers "unknown command" to the one role for which a
+    // permission message would be a misdiagnosis.
+    if (Role required = RequiredRole(cmd, rest); !RoleCovers(session.role(), required)) {
+        return {"ERR permission: " + std::string(cmd) + " needs " +
+                    std::string(RoleName(required)) + "; this connection is " +
+                    std::string(RoleName(session.role())),
+                false};
     }
 
     // ---- The failed-txn gate (docs/txn.md section 10-8) -----------------
@@ -311,6 +356,12 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "STOP")) {
         return {"OK bye", true};
     }
+    // Every sub-target under SHOW (and DESCRIBE below) is readonly by
+    // RequiredRole's whole-command classification. That is only true
+    // while every one of them *reads*: a mutating sub-target added here
+    // would be admitted to every rank silently - the one way the role
+    // model fails open. Such a command must take the SET branch's shape
+    // in RequiredRole (sub-token classified, admin by default).
     if (IEquals(cmd, "SHOW")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "META")) return HandleShowMeta();

@@ -111,8 +111,13 @@ tls = off
 #
 #   kds_server --add-user alice --users-file /etc/kds/users
 #
-# Authorization does not exist yet: an authenticated user may run every
-# statement. That model is an open decision (docs/protocol.md §14).
+# Each user carries a role in the users file - readonly, readwrite or
+# admin, ordered by inclusion - checked per statement: reads and
+# transaction control need readonly, DML needs readwrite, DDL and
+# STOP/SYNC/server-wide SET need admin (docs/protocol.md §14). The role
+# is chosen at provisioning (`--add-user --role ...`, default readonly);
+# changing one is delete-then-add. Per-relation GRANT/REVOKE does not
+# exist yet - it is the recorded refinement, gated on catalog recovery.
 #
 # Incompatible with `kwp_port` for now: the KWP load endpoint has no
 # auth stage, so `auth = scram` refuses to start while kwp_port is set -

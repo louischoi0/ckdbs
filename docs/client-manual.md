@@ -48,10 +48,24 @@ S: AUTH+ <server-final-message>        ← connection is now open
 
 The password never crosses the wire (proofs do), and the server's final
 message proves *it* holds the verifier — check it. Provision users with
-`kds_server --add-user <name> --users-file <path>` (prompts for the
-password; the server does not start). There are no roles or permissions
-yet: an authenticated user may run every statement
-(`docs/protocol.md` §14's open authorization model).
+`kds_server --add-user <name> [--role readonly|readwrite|admin]
+--users-file <path>` (prompts for the password; the server does not
+start; the role defaults to `readonly`).
+
+Every authenticated user holds one of three **roles**, checked per
+statement (`docs/protocol.md` §14):
+
+| Role | May run |
+|---|---|
+| `readonly` | `SELECT`, `WITH`, `ANALYZE`, `SHOW *`, `DESCRIBE`, `PING`, `BEGIN`/`COMMIT`/`ROLLBACK`, `SET ISOLATION` |
+| `readwrite` | everything above, plus `INSERT`, `UPDATE`, `DELETE` |
+| `admin` | everything, including `CREATE`/`DROP`/`ALTER`, `STOP`, `SYNC`, `SET CABIN_OPTIMIZER` |
+
+A refused statement answers `ERR permission: <cmd> needs <role>; this
+connection is <role>`. Commands the server does not recognize also
+require `admin` — refused by default, never admitted by omission. A role
+change is re-provisioning (delete the line, `--add-user` again); with
+`auth = off` every connection is `admin`.
 
 Start the server:
 
@@ -77,7 +91,7 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `tls_cert_file` | — | — | PEM certificate presented to every client, leaf first with any chain appended. Read once at startup. |
 | `tls_key_file` | — | — | PEM private key for the certificate, unencrypted. Read once at startup. |
 | `auth` | — | `off` | `off` or `scram`. `scram` gates every connection behind a SCRAM-SHA-256 exchange (see "Connecting"); named values only, so a future method is a new word rather than a reinterpreted boolean. |
-| `users_file` | `--users-file` | — | The verifier store: one `<username> <verifier>` per line, `#` comments. Required (and non-empty) when `auth = scram`; a malformed line refuses startup naming the line. Written by `--add-user`, never by the running server. |
+| `users_file` | `--users-file` | — | The user store: one `<username> <role> <verifier>` per line, `#` comments. Required (and non-empty) when `auth = scram`; a malformed line, unknown role, or missing role column refuses startup naming the line. Written by `--add-user`, never by the running server. |
 | `wal_dir` | — | `<data_file>.wal` | Per-core WAL segment directory. |
 | `isolation` | — | `read committed` | The level a connection starts at, and so the level an autocommit statement runs at (`docs/txn.md` §1). `read committed` takes a read view per **statement**; `repeatable read` takes one per **transaction**. READ COMMITTED is the default for a reason specific to this engine rather than convention: under first-updater-wins with no waiting, holding one view for a whole transaction turns more concurrent writes into retryable aborts. `serializable` is refused with its reason. This is the server rung of a three-level chain — a connection overrides it with `SET ISOLATION LEVEL`, one transaction with `BEGIN ISOLATION LEVEL`. Names are case-insensitive and accept `-`/`_`. |
 | `checkpoint_interval_ms` | — | `5000` | How often dirty pages are flushed (`docs/wal.md` §11). `0` disables the cadence, leaving `SYNC`/shutdown as the only durability points. |
