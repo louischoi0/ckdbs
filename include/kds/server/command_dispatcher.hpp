@@ -190,11 +190,9 @@ std::string ErrorReply(const Status& status);
 struct TupleLocation {
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;
-    // The page's bytes, when whoever produced this location already had
-    // them - a btree descent does. Empty means "fetch page_id yourself";
-    // a reader must handle both. Dynamic extent because it has to have an
-    // unset state (btree.hpp Location::leaf).
-    std::span<std::byte> page{};
+    // No bytes field, for btree.hpp Location's reason: a span here outlived
+    // the pin that made it valid, and every reader already re-fetches by
+    // page_id. Deleted with its one producer 2026-08-13.
 };
 
 class CommandDispatcher {
@@ -1018,7 +1016,6 @@ private:
     // when TupleLocation::page is populated: the span is the same frame
     // either way, but only Get() marks it dirty, and a write to a frame
     // nothing will write back is a write that never happened.
-    StatusOr<std::span<std::byte, kPageSize>> PageForRead(const TupleLocation& at);
 
     // The pk value a WHERE clause is a *bare* equality against, or nullopt
     // if it is anything else - no WHERE, more than one condition, a non-pk

@@ -1,6 +1,16 @@
 # The PageRef Migration — Workplan (MG01–MG06)
 
-Status: **READY FOR EXECUTION. Nothing here is built.**
+Status: **BUILT 2026-08-13** (MG01-MG06). §1's counts are now historical:
+the compiler owns the enumeration, the base class keeps the raw seam
+`protected`, and the acceptance gate (§6) ran green — the full suite under
+`KDS_TEST_FRAME_BUDGET=8` with poisoned reclaims, and the ASan simulator
+clean in clean and crash modes. Two deviations from the letter of the plan,
+both improvements, are recorded in the commits: call sites never carried the
+`*Unpinned` spelling (the pinned accessors took the old names, so the
+compiler enumerated *use* sites), and the escape hatch ended `protected`
+rather than deleted (it is the implementation seam a store overrides; what
+MG06 promised — no engine caller can reach it — holds by access control).
+What §6.5 asks — the release-build A/B of pin/unpin overhead — has not run.
 Spec: `docs/page.md` §3 (S2 PageRef, and §16-7's "PageStore v2 migration",
 which this document is the plan for), `docs/spec-eviction.md` (normative for
 everything eviction-side). Related: `docs/workplan-eviction.md` (whose every

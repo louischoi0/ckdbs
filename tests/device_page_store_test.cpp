@@ -74,12 +74,12 @@ TEST(DevicePageStoreTest, CreateAtThenGetReturnsTheSamePage) {
 
     auto created = store->CreateAt(0);
     ASSERT_TRUE(created.ok()) << created.status().message();
-    Fill(created.value(), 3);
+    Fill(created.value().bytes(), 3);
 
     auto fetched = store->Get(0);
     ASSERT_TRUE(fetched.ok()) << fetched.status().message();
-    EXPECT_EQ(fetched.value().data(), created.value().data());
-    EXPECT_TRUE(Matches(fetched.value(), 3));
+    EXPECT_EQ(fetched.value().bytes().data(), created.value().bytes().data());
+    EXPECT_TRUE(Matches(fetched.value().bytes(), 3));
 
     EXPECT_EQ(store->CreateAt(0).status().code(), StatusCode::kAlreadyExists);
     EXPECT_EQ(store->CreateAt(kFreeMapPageId).status().code(), StatusCode::kAlreadyExists);
@@ -126,11 +126,11 @@ TEST(DevicePageStoreTest, SyncedStateSurvivesReopen) {
 
         auto zero = store->CreateAt(0);
         ASSERT_TRUE(zero.ok());
-        Fill(zero.value(), 1);
+        Fill(zero.value().bytes(), 1);
 
         auto user = store->CreateNew();
         ASSERT_TRUE(user.ok());
-        Fill(user.value().second, 2);
+        Fill(user.value().second.bytes(), 2);
 
         ASSERT_TRUE(store->Sync().ok());
     }
@@ -142,11 +142,11 @@ TEST(DevicePageStoreTest, SyncedStateSurvivesReopen) {
 
     auto zero = store->Get(0);
     ASSERT_TRUE(zero.ok()) << zero.status().message();
-    EXPECT_TRUE(Matches(zero.value(), 1));
+    EXPECT_TRUE(Matches(zero.value().bytes(), 1));
 
     auto user = store->Get(128);
     ASSERT_TRUE(user.ok()) << user.status().message();
-    EXPECT_TRUE(Matches(user.value(), 2));
+    EXPECT_TRUE(Matches(user.value().bytes(), 2));
 
     EXPECT_EQ(store->resident_pages(), 2u);
     EXPECT_EQ(store->Get(129).status().code(), StatusCode::kNotFound);
@@ -167,7 +167,7 @@ TEST(DevicePageStoreTest, UnsyncedWorkIsLostOnCrash) {
         ASSERT_NE(store, nullptr);
         auto created = store->CreateAt(0);
         ASSERT_TRUE(created.ok());
-        Fill(created.value(), 4);
+        Fill(created.value().bytes(), 4);
     }
     device->Crash();
 
@@ -284,7 +284,7 @@ TEST(DevicePageStoreTest, StateSurvivesReopenOnAFile) {
 
         auto created = store->CreateAt(0);
         ASSERT_TRUE(created.ok());
-        Fill(created.value(), 11);
+        Fill(created.value().bytes(), 11);
         ASSERT_TRUE(store->Sync().ok());
     }
 
@@ -295,7 +295,7 @@ TEST(DevicePageStoreTest, StateSurvivesReopenOnAFile) {
 
     auto fetched = store->Get(0);
     ASSERT_TRUE(fetched.ok()) << fetched.status().message();
-    EXPECT_TRUE(Matches(fetched.value(), 11));
+    EXPECT_TRUE(Matches(fetched.value().bytes(), 11));
 
     std::filesystem::remove(path);
 }
@@ -309,7 +309,7 @@ TEST(DevicePageStoreTest, ChecksumsAreStampedOnWriteAndVerifiedOnLoad) {
         ASSERT_NE(store, nullptr);
         auto page = store->CreateAt(0);
         ASSERT_TRUE(page.ok());
-        Fill(page.value(), 21);
+        Fill(page.value().bytes(), 21);
         ASSERT_TRUE(store->Sync().ok());
     }
 
@@ -374,7 +374,7 @@ TEST(DevicePageStoreHeaderlessTest, FlushDoesNotStampAChecksumOverItsBytes) {
     auto raw = store->CreateNewHeaderless();
     ASSERT_TRUE(raw.ok());
     const PageId id = raw.value().first;
-    FillWhole(raw.value().second, 3);
+    FillWhole(raw.value().second.bytes(), 3);
 
     ASSERT_TRUE(store->Flush().ok());
 
@@ -382,7 +382,7 @@ TEST(DevicePageStoreHeaderlessTest, FlushDoesNotStampAChecksumOverItsBytes) {
     // bytes 4..8, which on a headerless page is live entry data.
     auto after = store->Get(id);
     ASSERT_TRUE(after.ok());
-    EXPECT_TRUE(MatchesWhole(after.value(), 3));
+    EXPECT_TRUE(MatchesWhole(after.value().bytes(), 3));
 }
 
 TEST(DevicePageStoreHeaderlessTest, ItSurvivesAReopenWithoutBeingCalledCorrupt) {
@@ -397,7 +397,7 @@ TEST(DevicePageStoreHeaderlessTest, ItSurvivesAReopenWithoutBeingCalledCorrupt) 
         auto raw = store->CreateNewHeaderless();
         ASSERT_TRUE(raw.ok());
         id = raw.value().first;
-        FillWhole(raw.value().second, 9);
+        FillWhole(raw.value().second.bytes(), 9);
         ASSERT_TRUE(store->Sync().ok());
     }
 
@@ -408,7 +408,7 @@ TEST(DevicePageStoreHeaderlessTest, ItSurvivesAReopenWithoutBeingCalledCorrupt) 
     auto page = store->Get(id);
     ASSERT_TRUE(page.ok()) << "a headerless page must not be checksum-verified: "
                            << page.status().message();
-    EXPECT_TRUE(MatchesWhole(page.value(), 9));
+    EXPECT_TRUE(MatchesWhole(page.value().bytes(), 9));
 }
 
 TEST(DevicePageStoreHeaderlessTest, HeaderedPagesAreStillStampedAndVerified) {
@@ -421,7 +421,7 @@ TEST(DevicePageStoreHeaderlessTest, HeaderedPagesAreStillStampedAndVerified) {
         auto plain = store->CreateNew();
         ASSERT_TRUE(plain.ok());
         id = plain.value().first;
-        Fill(plain.value().second, 4);
+        Fill(plain.value().second.bytes(), 4);
         ASSERT_TRUE(store->Sync().ok());
     }
 
@@ -451,7 +451,7 @@ TEST(DevicePageStoreHeaderlessTest, DamageToAHeaderlessPageIsSilentByDesign) {
         auto raw = store->CreateNewHeaderless();
         ASSERT_TRUE(raw.ok());
         id = raw.value().first;
-        FillWhole(raw.value().second, 2);
+        FillWhole(raw.value().second.bytes(), 2);
         ASSERT_TRUE(store->Sync().ok());
     }
 
@@ -465,7 +465,7 @@ TEST(DevicePageStoreHeaderlessTest, DamageToAHeaderlessPageIsSilentByDesign) {
     ASSERT_NE(store, nullptr);
     auto page = store->Get(id);
     EXPECT_TRUE(page.ok()) << "no checksum means no detection, by construction";
-    EXPECT_FALSE(MatchesWhole(page.value(), 2));
+    EXPECT_FALSE(MatchesWhole(page.value().bytes(), 2));
 }
 
 TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesTheId) {
@@ -479,7 +479,7 @@ TEST(DevicePageStoreHeaderlessTest, TheMarkIsWrittenBeforeTheFreeMapPublishesThe
 
     auto raw = store->CreateNewHeaderless();
     ASSERT_TRUE(raw.ok());
-    FillWhole(raw.value().second, 1);
+    FillWhole(raw.value().second.bytes(), 1);
 
     device->ClearTrace();
     ASSERT_TRUE(store->Flush().ok());

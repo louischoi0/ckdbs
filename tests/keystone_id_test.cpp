@@ -114,7 +114,7 @@ TEST_F(KeystoneIdTest, RetiringATupleDoesNotReturnItsIdToTheAllocator) {
     {
         auto bytes = store_.Get(row.value().desc_page_id);
         ASSERT_TRUE(bytes.ok());
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         ASSERT_TRUE(page.RetireSlot(2).ok());  // the tuple holding id 3
     }
     ASSERT_EQ(Ids("t").size(), 4u);
@@ -202,7 +202,7 @@ TEST_F(KeystoneIdTest, AnExhaustedSequenceRefusesRatherThanWrapping) {
     {
         auto bytes = store_.Get(catalog::kCatalogPageTables);
         ASSERT_TRUE(bytes.ok());
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         bool patched = false;
         for (std::uint16_t i = 0; i < page.slot_count(); ++i) {
             auto tuple = page.ReadTuple(i);

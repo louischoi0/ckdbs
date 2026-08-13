@@ -107,7 +107,7 @@ public:
                 continue;
             }
             if (store.IsHeaderless(page_id)) continue;
-            if (Status s = storage::ValidatePageHeader(page.value()); !s.ok()) {
+            if (Status s = storage::ValidatePageHeader(page.value().bytes()); !s.ok()) {
                 Add(CheckKind::kPageHeader, page_id, "header invalid: " + s.message());
             }
         }
@@ -126,7 +126,7 @@ private:
             return;
         }
         auto sb = server::SuperBlock::Decode(
-            std::span<const std::byte, kPageSize>(page.value()));
+            std::span<const std::byte, kPageSize>(page.value().bytes()));
         if (!sb.ok()) {
             Add(CheckKind::kPageHeader, server::kSuperBlockPageId,
                 "superblock does not decode: " + sb.status().message());
@@ -340,7 +340,7 @@ private:
                 "relation '" + name + "': node unreadable: " + page.status().message());
             return;
         }
-        const std::uint8_t raw_type = storage::RawPageType(page.value());
+        const std::uint8_t raw_type = storage::RawPageType(page.value().bytes());
         if (raw_type == static_cast<std::uint8_t>(PageType::kBtreeLeaf)) return;
         if (raw_type != static_cast<std::uint8_t>(PageType::kBtreeInternal)) {
             Add(CheckKind::kBtreeStructure, page_id,
@@ -348,7 +348,7 @@ private:
             return;
         }
 
-        btree::InternalView node(page.value());
+        btree::InternalView node(page.value().bytes());
         const std::uint16_t entries = node.entry_count();
         struct ChildExpectation {
             PageId child;
@@ -386,7 +386,7 @@ private:
                             child.status().message());
                     continue;
                 }
-                heap::PageView view(child.value());
+                heap::PageView view(child.value().bytes());
                 if (view.min_key() != expect.sep_key) {
                     Add(CheckKind::kBtreeStructure, expect.child,
                         "relation '" + name + "': separator " +
@@ -417,12 +417,12 @@ private:
                     break;
                 }
                 ++report_.pages_swept;
-                if (storage::RawPageType(page.value()) !=
+                if (storage::RawPageType(page.value().bytes()) !=
                     static_cast<std::uint8_t>(PageType::kVarHeap)) {
                     Add(CheckKind::kVarHeap, at,
                         "relation '" + name + "': chain page is not kVarHeap");
                 }
-                at = varheap::PageNextPageId(page.value());
+                at = varheap::PageNextPageId(page.value().bytes());
             }
         }
 
@@ -435,7 +435,8 @@ private:
                         ": spilled cell points outside the relation's own chain");
                 continue;
             }
-            auto bytes = varheap::Fetch(store_, ptr);
+            storage::PageRef value_pin;
+            auto bytes = varheap::Fetch(store_, ptr, value_pin);
             if (!bytes.ok()) {
                 Add(CheckKind::kVarHeap, ptr.page_id,
                     "relation '" + name + "' id " + std::to_string(spill.keystone_id) +
@@ -468,7 +469,7 @@ private:
                         ": undo page unreadable: " + page.status().message());
                 continue;
             }
-            if (storage::RawPageType(page.value()) !=
+            if (storage::RawPageType(page.value().bytes()) !=
                 static_cast<std::uint8_t>(PageType::kUndo)) {
                 Add(CheckKind::kUndoPtr, undo_page,
                     "relation '" + name + "' id " + std::to_string(pending.keystone_id) +

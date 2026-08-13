@@ -59,7 +59,7 @@ Status BoundCabinChainWriter::AdoptChain(storage::PageStore& store, PageId root)
         // Open() is what proves the page class: a root that is not a
         // kCabinBound page is not this cabin's chain, and appending into it
         // would put entries where nothing can relink them.
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status();
         const PageId next = view.value().next_page_id();
         if (next == kInvalidPageId) break;
@@ -80,13 +80,13 @@ StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
     }
     auto page = store.Get(tail_);
     if (!page.ok()) return page.status();
-    auto opened = BoundCabinPage::Open(page.value());
+    auto opened = BoundCabinPage::Open(page.value().bytes());
     if (!opened.ok()) return opened.status();
     if (opened.value().full()) {
         if (Status s = Grow(store, wal); !s.ok()) return s;
         page = store.Get(tail_);
         if (!page.ok()) return page.status();
-        opened = BoundCabinPage::Open(page.value());
+        opened = BoundCabinPage::Open(page.value().bytes());
         if (!opened.ok()) return opened.status();
     }
 
@@ -117,7 +117,8 @@ StatusOr<std::pair<PageId, std::uint16_t>> BoundCabinChainWriter::Append(
 Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* wal) {
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [pid, bytes] = created.value();
+    auto& [pid, bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
     if (Status s = BoundCabinPage::Format(bytes); !s.ok()) return s;
     ++pages_;
 
@@ -151,13 +152,13 @@ Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* w
         // growth images its predecessor (docs/wal.md).
         auto old_tail = store.Get(tail_);
         if (!old_tail.ok()) return old_tail.status();
-        auto opened = BoundCabinPage::Open(old_tail.value());
+        auto opened = BoundCabinPage::Open(old_tail.value().bytes());
         if (!opened.ok()) return opened.status();
         opened.value().SetNextPageId(pid);
         if (wal != nullptr) {
             std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
             if (auto n = wal::EncodeFullPageImage(
-                    image, std::span<const std::byte, kPageSize>(old_tail.value()));
+                    image, std::span<const std::byte, kPageSize>(old_tail.value().bytes()));
                 !n.ok()) {
                 return n.status();
             }
@@ -206,7 +207,7 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
         {
             auto bytes = store.GetForRead(leaf);
             if (!bytes.ok()) return bytes.status();
-            heap::PageView page(bytes.value());
+            heap::PageView page(bytes.value().bytes());
             const std::uint16_t n = page.slot_count();
             staged.reserve(n);
             for (std::uint16_t i = 0; i < n; ++i) {

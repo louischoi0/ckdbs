@@ -118,7 +118,7 @@ protected:
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto bytes = store_.Get(catalog::kCatalogPageTables);
         ASSERT_TRUE(bytes.ok());
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         for (std::uint16_t i = 0; i < page.slot_count(); ++i) {
             auto tuple = page.ReadTuple(i);
             if (!tuple.ok()) continue;

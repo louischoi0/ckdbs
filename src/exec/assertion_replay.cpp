@@ -60,7 +60,7 @@ Status ReplayEntry(const wal::DecodedRecord& record, storage::PageStore& store,
 
     auto page = store.Get(record.header.page_id);
     if (!page.ok()) return page.status().WithContext("assert replay: fetching the entry page");
-    auto opened = BoundCabinPage::Open(page.value());
+    auto opened = BoundCabinPage::Open(page.value().bytes());
     if (!opened.ok()) return opened.status().WithContext("assert replay: opening the entry page");
     BoundCabinPage& view = opened.value();
 
@@ -111,7 +111,7 @@ Status ReplayCommit(const wal::DecodedRecord& record, storage::PageStore& store,
 
     auto page = store.Get(record.header.page_id);
     if (!page.ok()) return page.status().WithContext("assert replay: fetching the entry page");
-    auto opened = BoundCabinPage::Open(page.value());
+    auto opened = BoundCabinPage::Open(page.value().bytes());
     if (!opened.ok()) return opened.status().WithContext("assert replay: opening the entry page");
     BoundCabinPage& view = opened.value();
 
@@ -147,7 +147,7 @@ Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& stor
     // restores under.
     auto page = store.Get(record.header.page_id);
     if (!page.ok()) return page.status().WithContext("assert replay: fetching the entry page");
-    auto opened = BoundCabinPage::Open(page.value());
+    auto opened = BoundCabinPage::Open(page.value().bytes());
     if (!opened.ok()) return opened.status().WithContext("assert replay: opening the entry page");
     if (Status s = opened.value().MarkOrphaned(d.fields.index); !s.ok()) {
         return s.WithContext("assert replay: marking the entry orphaned");

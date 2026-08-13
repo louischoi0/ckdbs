@@ -47,7 +47,7 @@ StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head) {
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
 
-        const PageId next = PageView(bytes.value()).next_page_id();
+        const PageId next = PageView(bytes.value().bytes()).next_page_id();
         if (next == kInvalidPageId) return current;
         current = next;
     }
@@ -61,7 +61,7 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head) {
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
 
-        const PageId next = PageView(bytes.value()).next_page_id();
+        const PageId next = PageView(bytes.value().bytes()).next_page_id();
         if (next == kInvalidPageId) return steps + 1;
         current = next;
     }
@@ -98,7 +98,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
 
     auto tail_bytes = store.Get(tail_id.value());
     if (!tail_bytes.ok()) return tail_bytes.status();
-    PageView tail(tail_bytes.value());
+    PageView tail(tail_bytes.value().bytes());
 
     // Invariant 3, enforced at the one door tuples come through. Below the
     // tail's min_key there is no page in this chain that may legally hold
@@ -146,7 +146,8 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
     // min_key is untouched (invariant 2).
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [new_id, new_bytes] = created.value();
+    auto& [new_id, new_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> new_bytes = new_bytes_ref.bytes();
 
     auto new_page = PageView::CreateEmpty(new_bytes, id, owner_oid);
     if (!new_page.ok()) return new_page.status();
@@ -172,7 +173,7 @@ StatusOr<ChainInsertResult> ChainInsert(storage::PageStore& store, PageId head, 
     // (today's do not, tomorrow's buffer pool with eviction will).
     auto tail_again = store.Get(tail_id.value());
     if (!tail_again.ok()) return tail_again.status();
-    PageView(tail_again.value()).set_next_page_id(new_id);
+    PageView(tail_again.value().bytes()).set_next_page_id(new_id);
 
     if (tail_hint != nullptr) *tail_hint = new_id;
     return ChainInsertResult{new_id, new_slot.value(), /*grew_chain=*/true,
@@ -216,7 +217,7 @@ StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, Pag
     while (i < payloads.size()) {
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
-        PageView page(bytes.value());
+        PageView page(bytes.value().bytes());
 
         if (i == 0 && first_id < page.min_key()) {
             return Status::OutOfRange("id " + std::to_string(first_id) + " is below page " +
@@ -249,14 +250,15 @@ StatusOr<ChainAppendBatchResult> ChainAppendBatch(storage::PageStore& store, Pag
         // interleave, and the caller's FPIs describe both pages whole.
         auto created = store.CreateNew();
         if (!created.ok()) return created.status();
-        auto [new_id, new_bytes] = created.value();
+        auto& [new_id, new_bytes_ref] = created.value();
+        const std::span<std::byte, kPageSize> new_bytes = new_bytes_ref.bytes();
         if (auto p = PageView::CreateEmpty(new_bytes, first_id + i, owner_oid); !p.ok()) {
             return p.status();
         }
 
         auto old_again = store.Get(current);
         if (!old_again.ok()) return old_again.status();
-        PageView(old_again.value()).set_next_page_id(new_id);
+        PageView(old_again.value().bytes()).set_next_page_id(new_id);
 
         current_linked_from = current;
         current = new_id;
@@ -280,12 +282,30 @@ Status ChainVisit(
         // dirty protocol. The visitor's per-page discipline is what makes
         // the ring's stricter lifetime safe: each page is finished before
         // the next fetch can rotate its frame away.
-        auto bytes = access == storage::PageAccess::kWrite
-                         ? store.Get(current)
-                         : (fetcher != nullptr ? fetcher->Fetch(current)
-                                               : store.GetForRead(current));
-        if (!bytes.ok()) return bytes.status();
-        PageView page(bytes.value());
+        // Peak pins held by this walk: 1 - the ref is reassigned on the
+        // next iteration, so the previous page's pin drops before another
+        // is taken. The ring branch holds no pin at all: its frame's
+        // lifetime is the ring's own (valid until the next Fetch), which
+        // is exactly the per-page discipline described above.
+        storage::PageRef page_ref;
+        std::byte* page_data = nullptr;
+        if (access == storage::PageAccess::kWrite) {
+            auto fetched = store.Get(current);
+            if (!fetched.ok()) return fetched.status();
+            page_ref = std::move(fetched.value());
+            page_data = page_ref.bytes().data();
+        } else if (fetcher != nullptr) {
+            auto fetched = fetcher->Fetch(current);
+            if (!fetched.ok()) return fetched.status();
+            page_data = fetched.value().data();
+        } else {
+            auto fetched = store.GetForRead(current);
+            if (!fetched.ok()) return fetched.status();
+            page_ref = std::move(fetched.value());
+            page_data = page_ref.bytes().data();
+        }
+        const std::span<std::byte, kPageSize> page_bytes(page_data, kPageSize);
+        PageView page(page_bytes);
 
         const std::uint16_t n = page.slot_count();
         for (std::uint16_t i = 0; i < n; ++i) {

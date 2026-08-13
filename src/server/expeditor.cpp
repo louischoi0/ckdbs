@@ -58,6 +58,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "wal_drain_interval_us", "relaxed_flush_interval_us",
             "log_dir",  "log_file",               "log_level",
             "max_rows_touched",      "max_insert_rows",        "kwp_port",
+            "buffer_pool_frames",
             "inline_cell_width",      "waystone_recording",
             "waystone_replay",
             "access_statistics",       "cabins",   "cabin_max_values",
@@ -118,6 +119,15 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         auto v = file.GetString("wal_dir");
         if (!v.ok()) return v.status();
         wal_dir = std::move(v.value());
+    }
+    if (file.Has("buffer_pool_frames")) {
+        // MG06: how many frames may stay resident per store; 0 (the
+        // default) is unbounded, the exact pre-eviction behaviour. Nonzero
+        // arms the CLOCK sweep on the fault path (spec-eviction EV5's
+        // on-demand trigger).
+        auto v = file.GetUint("buffer_pool_frames");
+        if (!v.ok()) return v.status();
+        buffer_pool_frames = static_cast<std::size_t>(v.value());
     }
     if (file.Has("checkpoint_interval_ms")) {
         auto v = file.GetUint("checkpoint_interval_ms");
@@ -571,6 +581,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
 
     auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
     if (!store.ok()) return store.status();
+    // Only when the config asks for one. Zero means "unbounded", which is
+    // already what Open() left unless the debug `KDS_TEST_FRAME_BUDGET`
+    // override set a budget - and setting zero here would silently undo
+    // that override on every server-path store, which is exactly the set
+    // MG05's poisoner run needs under pressure.
+    if (config.buffer_pool_frames != 0) {
+        store.value()->SetFrameBudget(config.buffer_pool_frames);
+    }
 
     // Built here rather than in the initializer list because the members
     // below take references into it, which only become stable once the
@@ -849,7 +867,7 @@ Status Expeditor::OpenLog() {
 Status Expeditor::PersistSuperBlock() {
     auto page = store_->Get(kSuperBlockPageId);
     if (!page.ok()) return page.status();
-    database_->superblock.Encode(page.value());
+    database_->superblock.Encode(page.value().bytes());
     return Sync();
 }
 

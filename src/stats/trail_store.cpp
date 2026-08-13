@@ -104,7 +104,7 @@ Status WriteTrail(storage::PageStore& store, PageId root, int depth, const Insta
     // Read through GetForRead(), which is the whole point - a Get() here
     // would dirty the page just to look at it and defeat the exercise.
     if (auto existing = store.GetForRead(page_id.value());
-        existing.ok() && TrailIsUnchanged(existing.value(), key, touched)) {
+        existing.ok() && TrailIsUnchanged(existing.value().bytes(), key, touched)) {
         return Status::OK();
     }
 
@@ -115,7 +115,7 @@ Status WriteTrail(storage::PageStore& store, PageId root, int depth, const Insta
     // directory leaves it zeroed rather than formatted, deliberately
     // (waystone_dir.hpp), because formatting is the writer's business and
     // so is what to do about an occupant.
-    if (!WaystonePageHolds(bytes.value(), key) && !TrailDisplacesOnCollision()) {
+    if (!WaystonePageHolds(bytes.value().bytes(), key) && !TrailDisplacesOnCollision()) {
         // Under a *drop* policy this is where a colliding instance gives
         // up. Unreachable while the policy is displace; kept so the branch
         // the other choice needs is written down rather than described.
@@ -127,22 +127,22 @@ Status WriteTrail(storage::PageStore& store, PageId root, int depth, const Insta
     // entry below it becomes unreachable in one step. A merge would have to
     // read the old entries first, and nothing here can tell one that still
     // qualifies from one that does not.
-    FormatWaystonePage(bytes.value(), key, recorded_ts);
+    FormatWaystonePage(bytes.value().bytes(), key, recorded_ts);
 
     for (std::size_t i = 0; i < touched.size(); ++i) {
-        if (Status s = WriteWaystoneEntry(bytes.value(), i, EntryOf(touched[i])); !s.ok()) {
+        if (Status s = WriteWaystoneEntry(bytes.value().bytes(), i, EntryOf(touched[i])); !s.ok()) {
             return s;
         }
     }
 
-    WaystoneHeader header = ReadWaystoneHeader(bytes.value());
+    WaystoneHeader header = ReadWaystoneHeader(bytes.value().bytes());
     header.entry_count = static_cast<std::uint16_t>(touched.size());
     // Always terminal: this layer never continues a trail onto a second
     // page (trail_store.hpp). FormatWaystonePage already set it, and it is
     // restated here so the one place a continuation would be linked is
     // visible.
     header.next_page_id = kInvalidPageId;
-    return WriteWaystoneHeader(bytes.value(), header);
+    return WriteWaystoneHeader(bytes.value().bytes(), header);
 }
 
 StatusOr<std::vector<WaystoneEntry>> ReadTrail(storage::PageStore& store, PageId root, int depth,
@@ -171,15 +171,15 @@ StatusOr<std::vector<WaystoneEntry>> ReadTrail(storage::PageStore& store, PageId
     // a hash of `arg_hash`, so a collision leads here to a real, valid,
     // *wrong* trail. This is what makes that a miss instead of somebody
     // else's rows.
-    if (!WaystonePageHolds(bytes.value(), key)) return out;
+    if (!WaystonePageHolds(bytes.value().bytes(), key)) return out;
 
-    const WaystoneHeader header = ReadWaystoneHeader(bytes.value());
+    const WaystoneHeader header = ReadWaystoneHeader(bytes.value().bytes());
     const std::size_t count = header.entry_count <= kEntriesPerWaystonePage
                                   ? header.entry_count
                                   : kEntriesPerWaystonePage;
     out.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
-        auto entry = ReadWaystoneEntry(bytes.value(), i);
+        auto entry = ReadWaystoneEntry(bytes.value().bytes(), i);
         if (!entry.ok()) return entry.status();
         // A never-written entry reads all-zero; the valid flag is the only
         // safe test for one (waystone.hpp).

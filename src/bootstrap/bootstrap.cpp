@@ -23,7 +23,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
     auto existing = store.Get(server::kSuperBlockPageId);
 
     if (existing.ok()) {
-        auto decoded = server::SuperBlock::Decode(existing.value());
+        auto decoded = server::SuperBlock::Decode(existing.value().bytes());
         if (!decoded.ok()) {
             if (log != nullptr && log->enabled(LogLevel::kError)) {
                 // The refusal below is the right behavior and a confusing
@@ -79,7 +79,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
         }
 
         sb.MarkMounted(now_unix_seconds);
-        sb.Encode(existing.value());
+        sb.Encode(existing.value().bytes());
         if (log != nullptr && log->enabled(LogLevel::kInfo)) {
             log->Info("bootstrap", "mounted existing database, superblock version " +
                                        std::to_string(sb.version()) + ", inline_cell_width " +
@@ -110,7 +110,7 @@ StatusOr<BootstrapResult> BootstrapDatabase(storage::PageStore& store,
 
     server::SuperBlock sb =
         server::SuperBlock::CreateFresh(now_unix_seconds, inline_cell_width, cores);
-    sb.Encode(created.value());
+    sb.Encode(created.value().bytes());
     if (log != nullptr && log->enabled(LogLevel::kInfo)) {
         log->Info("bootstrap", "no superblock found; creating a fresh database (version " +
                                    std::to_string(sb.version()) + ", inline_cell_width " +

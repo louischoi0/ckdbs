@@ -86,7 +86,7 @@ protected:
         auto p = store_.Get(id);
         EXPECT_TRUE(p.ok()) << p.status().message();
         if (!p.ok()) return {};
-        return std::vector<std::byte>(p.value().begin(), p.value().end());
+        return std::vector<std::byte>(p.value().bytes().begin(), p.value().bytes().end());
     }
 };
 
@@ -123,7 +123,7 @@ TEST_F(RedoTest, ReplaysAHeapStreamOntoAStoreThatNeverSawIt) {
 
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    heap::PageView view(page.value());
+    heap::PageView view(page.value().bytes());
     EXPECT_EQ(view.slot_count(), 3u);
     auto tuple = view.ReadTuple(1);
     ASSERT_TRUE(tuple.ok()) << tuple.status().message();
@@ -158,8 +158,8 @@ TEST_F(RedoTest, ARecordAtOrBelowThePagesLsnIsSkipped) {
     // Stamp the page past the whole stream: nothing may be applied.
     auto created = store_.CreateAt(kPage);
     ASSERT_TRUE(created.ok());
-    storage::FormatPage(created.value(), PageType::kHeap);
-    storage::SetPageLsn(created.value(), analysis.end_lsn + 1);
+    storage::FormatPage(created.value().bytes(), PageType::kHeap);
+    storage::SetPageLsn(created.value().bytes(), analysis.end_lsn + 1);
 
     auto r = Redo((*device_), 0, store_, analysis);
     ASSERT_TRUE(r.ok()) << r.status().message();
@@ -192,7 +192,7 @@ TEST_F(RedoTest, AFullPageImageRestoresTheWholePage) {
 
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    heap::PageView view(page.value());
+    heap::PageView view(page.value().bytes());
     EXPECT_EQ(view.min_key(), 5u);
     EXPECT_EQ(view.slot_count(), 1u);
 }
@@ -264,7 +264,7 @@ TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {
 
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    auto back = txn::UndoPageRead(std::span<const std::byte, kPageSize>(page.value()),
+    auto back = txn::UndoPageRead(std::span<const std::byte, kPageSize>(page.value().bytes()),
                                   static_cast<std::uint16_t>(txn::kUndoRecordsOffset));
     ASSERT_TRUE(back.ok()) << back.status().message();
     EXPECT_EQ(back.value().fields.target_page_id, 777u);

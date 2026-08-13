@@ -109,7 +109,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
         {
             auto bytes = store.GetForRead(leaf);
             if (!bytes.ok()) return bytes.status();
-            heap::PageView page(bytes.value());
+            heap::PageView page(bytes.value().bytes());
             const std::uint16_t n = page.slot_count();
             staged.reserve(n);
             for (std::uint16_t i = 0; i < n; ++i) {
@@ -228,7 +228,8 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [root_id, root_bytes] = created.value();
+    auto& [root_id, root_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
     if (Status s = index::FormatRoot(root_bytes, layout, def.index_oid); !s.ok()) return s;
     def.root_page_id = root_id;
 

@@ -35,7 +35,7 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
         return bytes.status().WithContext("undo: page " + std::to_string(rec.target_page_id) +
                                           " named by an undo record");
     }
-    heap::PageView view(bytes.value());
+    heap::PageView view(bytes.value().bytes());
     const std::optional<std::uint64_t> here = PkAt(view, rec.target_slot);
 
     // ---- Already compensated? -------------------------------------------

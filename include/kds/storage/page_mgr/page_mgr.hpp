@@ -257,9 +257,9 @@ public:
     // PageStore for callers (e.g. kds::catalog::Catalog) that only need
     // page bytes and don't need pin/dirty tracking directly - all three
     // funnel through the same frame bookkeeping as AllocNew()/LookupOrLoad().
-    StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override;
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
-    StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override;
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override;
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override;
 
     // Delegated, because the allocator is delegated: CreateNew() takes its
     // id from `backing_`, so the floor that constrains it is backing_'s.

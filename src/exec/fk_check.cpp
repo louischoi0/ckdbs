@@ -88,11 +88,13 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
             if (found.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
             return found.status();
         }
-        if (found.value().leaf.size() != kPageSize) {
-            return Status::Corruption("a descent returned a leaf that is not one page");
-        }
-        std::span<std::byte, kPageSize> fixed(found.value().leaf.data(), kPageSize);
-        heap::PageView leaf(fixed);
+        // Re-fetched by id rather than carried out of the lookup: the span
+        // Location used to carry outlived the descent's pin
+        // (workplan-pageref.md Shape C), where this fetch is a hash hit on
+        // a still-resident frame and the ref holds it for the read below.
+        auto leaf_page = store.GetForRead(found.value().page_id);
+        if (!leaf_page.ok()) return leaf_page.status();
+        heap::PageView leaf(leaf_page.value().bytes());
         auto tuple = leaf.ReadTuple(found.value().slot);
         if (!tuple.ok()) {
             // A retired slot the index still points at - an insert this
@@ -214,7 +216,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
 
                 auto bytes = store.GetForRead(at_page);
                 if (!bytes.ok()) return bytes.status();
-                heap::PageView page(bytes.value());
+                heap::PageView page(bytes.value().bytes());
                 // The hint's epoch tracks the page it names. A no-op for a
                 // verified entry (equality was just checked); the real
                 // stamp for a healed one.

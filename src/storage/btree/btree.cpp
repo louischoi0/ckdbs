@@ -46,13 +46,14 @@ bool IsLeafPage(std::span<const std::byte, kPageSize> page) {
 struct Descent {
     std::array<PageId, storage::kMaxBtreeDepth> path{};
     std::uint16_t depth = 0;  // index of the leaf within `path`
-    // The leaf's bytes, already fetched. Carried out so callers do not
-    // re-Get a page the descent just held - a lookup used to fetch its
-    // leaf three times over (here, again in BtreeLookup, and a third time
-    // in the statement layer to read the located tuple). Dynamic extent
-    // for the same reason Location::leaf is - a fixed-extent span cannot
-    // be default-constructed.
-    std::span<std::byte> leaf{};
+    // The leaf, **held**: the descent's pin rides in the struct, so the
+    // bytes stay valid for exactly as long as the Descent does. This used
+    // to be a bare span with the pin dropped at DescendTo's return - the
+    // one Shape C the stopped review never reached, found by finishing its
+    // checklist: any fault between the descent and the caller's read (a
+    // split's CreateNew is the everyday case) could walk the leaf's usage
+    // down and reclaim it mid-operation. Peak pins (MG03): 1, this ref.
+    storage::PageRef leaf;
 };
 
 // A descent's leaf bytes back at their true fixed extent. The span is
@@ -83,9 +84,9 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
 
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        if (IsLeafPage(bytes.value())) {
+        if (IsLeafPage(bytes.value().bytes())) {
             if (!leaf_for_write) {
-                d.leaf = bytes.value();
+                d.leaf = std::move(bytes.value());
                 return d;
             }
             // Re-fetch for write: the frame is already resident, so this
@@ -93,14 +94,14 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
             // only on the insert path where a WAL append dwarfs it.
             auto writable = store.Get(current);
             if (!writable.ok()) return writable.status();
-            d.leaf = writable.value();
+            d.leaf = std::move(writable.value());
             return d;
         }
 
-        if (Status s = RequireType(bytes.value(), current, PageType::kBtreeInternal); !s.ok()) {
+        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal); !s.ok()) {
             return s;
         }
-        current = InternalView(bytes.value()).ChildFor(key);
+        current = InternalView(bytes.value().bytes()).ChildFor(key);
         ++d.depth;
     }
 }
@@ -115,12 +116,12 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root) {
         }
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        if (IsLeafPage(bytes.value())) return current;
+        if (IsLeafPage(bytes.value().bytes())) return current;
 
-        if (Status s = RequireType(bytes.value(), current, PageType::kBtreeInternal); !s.ok()) {
+        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal); !s.ok()) {
             return s;
         }
-        current = InternalView(bytes.value()).leftmost_child();
+        current = InternalView(bytes.value().bytes()).leftmost_child();
     }
 }
 
@@ -240,7 +241,7 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     {
         auto bytes = store.Get(node_id);
         if (!bytes.ok()) return bytes.status();
-        InternalView node(bytes.value());
+        InternalView node(bytes.value().bytes());
         level = node.level();
         leftmost = node.leftmost_child();
         const std::uint16_t n = node.entry_count();
@@ -273,7 +274,8 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [right_id, right_bytes] = created.value();
+    auto& [right_id, right_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> right_bytes = right_bytes_ref.bytes();
 
     auto right = InternalView::CreateEmpty(right_bytes, level, median.child, owner_oid);
     if (!right.ok()) return right.status();
@@ -296,8 +298,9 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     // stay 0 — upgrading it here would quietly make an unreclaimable page
     // reclaimable. On a stamped page the two are equal, so this costs
     // nothing.
-    const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(again.value()));
-    auto rebuilt = InternalView::CreateEmpty(AsPage(again.value()), level, leftmost, old_owner);
+    const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(again.value().bytes()));
+    auto rebuilt =
+        InternalView::CreateEmpty(AsPage(again.value().bytes()), level, leftmost, old_owner);
     if (!rebuilt.ok()) return rebuilt.status();
     for (std::size_t k = 0; k < m; ++k) {
         if (Status s = rebuilt.value().InsertEntry(entries[k].sep_key, entries[k].child);
@@ -317,6 +320,14 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
 // division in SplitLeafAndInsert. `sep` is the new subtree's low key and
 // `child` the page that holds it; `out` carries whatever the caller has
 // already recorded, and comes back with the ancestors appended.
+// Peak pins (MG03): 3, and not cumulative across levels - both locals are
+// per-iteration, so a level's pins drop before the next is fetched. The
+// append path holds 2 (the parent and the created node); the *divide* path
+// holds 3, because DivideInternalNode runs with `parent_bytes` still held
+// and itself holds its created node and its re-fetch of the same node
+// together. Stacked under SplitLeafAndInsert's 2 - which are alive across
+// the tail call below - the whole grow path holds at most 5, under
+// DevicePageStore::kPinCeiling with three frames of slack.
 StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
                                                      const Descent& descent, std::uint64_t sep,
                                                      PageId child,
@@ -328,7 +339,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
         const PageId parent_id = descent.path[static_cast<std::uint16_t>(d)];
         auto parent_bytes = store.Get(parent_id);
         if (!parent_bytes.ok()) return parent_bytes.status();
-        InternalView parent(parent_bytes.value());
+        InternalView parent(parent_bytes.value().bytes());
 
         if (!parent.IsFull()) {
             if (Status s = parent.InsertEntry(sep, child); !s.ok()) return s;
@@ -365,7 +376,8 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
 
         auto created_node = store.CreateNew();
         if (!created_node.ok()) return created_node.status();
-        auto [new_node_id, new_node_bytes] = created_node.value();
+        auto& [new_node_id, new_node_bytes_ref] = created_node.value();
+        const std::span<std::byte, kPageSize> new_node_bytes = new_node_bytes_ref.bytes();
 
         auto new_node = InternalView::CreateEmpty(new_node_bytes, level, child, owner_oid);
         if (!new_node.ok()) return new_node.status();
@@ -380,7 +392,8 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageStore& store,
     const PageId old_root = descent.path[0];
     auto created_root = store.CreateNew();
     if (!created_root.ok()) return created_root.status();
-    auto [new_root_id, new_root_bytes] = created_root.value();
+    auto& [new_root_id, new_root_bytes_ref] = created_root.value();
+    const std::span<std::byte, kPageSize> new_root_bytes = new_root_bytes_ref.bytes();
 
     auto new_root = InternalView::CreateEmpty(new_root_bytes,
                                                static_cast<std::uint16_t>(old_root_level + 1),
@@ -445,7 +458,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     std::uint64_t old_epoch = 0;
 
     {
-        heap::PageView leaf(AsPage(descent.leaf));
+        heap::PageView leaf(descent.leaf.bytes());
         old_min_key = leaf.min_key();
         old_next = leaf.next_page_id();
         old_epoch = leaf.RelayoutEpoch();
@@ -486,7 +499,8 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [new_leaf_id, new_leaf_bytes] = created.value();
+    auto& [new_leaf_id, new_leaf_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> new_leaf_bytes = new_leaf_bytes_ref.bytes();
 
     auto new_leaf = heap::PageView::CreateEmptyAs(new_leaf_bytes, /*min_key=*/split_key,
                                                    PageType::kBtreeLeaf, owner_oid);
@@ -525,8 +539,8 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     // already, so invariant 3 holds on both sides.
     // The page's *own* stamp, not the caller's — a pre-§2a page must keep
     // its 0; the internal-node rebuild above states the full argument.
-    const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(old_bytes.value()));
-    auto rebuilt = heap::PageView::CreateEmptyAs(AsPage(old_bytes.value()), old_min_key,
+    const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(old_bytes.value().bytes()));
+    auto rebuilt = heap::PageView::CreateEmptyAs(AsPage(old_bytes.value().bytes()), old_min_key,
                                                   PageType::kBtreeLeaf, old_owner);
     if (!rebuilt.ok()) return rebuilt.status();
 
@@ -551,7 +565,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     // one *past* what it was rather than bumped from zero - an epoch that
     // went backwards would let a trail entry recorded at the old value
     // compare equal again, which is the one thing this field exists to stop.
-    storage::SetRelayoutEpoch(AsPage(old_bytes.value()), old_epoch + 1);
+    storage::SetRelayoutEpoch(AsPage(old_bytes.value().bytes()), old_epoch + 1);
 
     storage::InsertPlacement out;
 
@@ -613,7 +627,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
-    heap::PageView leaf(AsPage(descent.value().leaf));
+    heap::PageView leaf(descent.value().leaf.bytes());
 
     // Invariant 3, enforced at the one door tuples come through - and the
     // descent already guarantees no other leaf may hold this id, so being
@@ -688,7 +702,8 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
 
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [new_leaf_id, new_leaf_bytes] = created.value();
+    auto& [new_leaf_id, new_leaf_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> new_leaf_bytes = new_leaf_bytes_ref.bytes();
 
     auto new_leaf = heap::PageView::CreateEmptyAs(new_leaf_bytes, /*min_key=*/id,
                                                    PageType::kBtreeLeaf, owner_oid);
@@ -715,7 +730,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     // will).
     auto leaf_again = store.Get(leaf_id);
     if (!leaf_again.ok()) return leaf_again.status();
-    heap::PageView(leaf_again.value()).set_next_page_id(new_leaf_id);
+    heap::PageView(leaf_again.value().bytes()).set_next_page_id(new_leaf_id);
 
     // Redo order: the new leaf's PAGE_INIT (which the HEAP_INSERT then
     // fills), then the old leaf's image carrying the link that reaches it,
@@ -736,10 +751,10 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
-    heap::PageView leaf(AsPage(descent.value().leaf));
+    heap::PageView leaf(descent.value().leaf.bytes());
 
     auto slot = FindSlotForId(leaf, id, leaf.slot_count());
-    if (slot.ok()) return Location{leaf_id, slot.value(), descent.value().leaf};
+    if (slot.ok()) return Location{leaf_id, slot.value()};
     if (slot.status().code() != StatusCode::kNotFound) return slot.status();
     return Status::NotFound("no tuple with primary key " + std::to_string(id) + " in leaf " +
                             std::to_string(leaf_id));
@@ -779,10 +794,10 @@ Status BtreeVisitFrom(
         auto bytes = access == storage::PageAccess::kWrite ? store.Get(current)
                                                            : store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        if (Status s = RequireType(bytes.value(), current, PageType::kBtreeLeaf); !s.ok()) {
+        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeLeaf); !s.ok()) {
             return s;
         }
-        heap::PageView leaf(bytes.value());
+        heap::PageView leaf(bytes.value().bytes());
 
         const std::uint16_t n = leaf.slot_count();
         for (std::uint16_t i = 0; i < n; ++i) {
@@ -804,10 +819,10 @@ Status BtreeVisitFrom(
 StatusOr<std::uint16_t> BtreeHeight(storage::PageStore& store, PageId root) {
     auto bytes = store.GetForRead(root);
     if (!bytes.ok()) return bytes.status();
-    if (IsLeafPage(bytes.value())) return std::uint16_t{1};
-    if (Status s = RequireType(bytes.value(), root, PageType::kBtreeInternal); !s.ok()) return s;
+    if (IsLeafPage(bytes.value().bytes())) return std::uint16_t{1};
+    if (Status s = RequireType(bytes.value().bytes(), root, PageType::kBtreeInternal); !s.ok()) return s;
 
-    const std::uint16_t level = InternalView(bytes.value()).level();
+    const std::uint16_t level = InternalView(bytes.value().bytes()).level();
     if (level == 0 || level >= storage::kMaxBtreeDepth) {
         return Status::Corruption("btree root " + std::to_string(root) + " reports level " +
                                   std::to_string(level));
@@ -831,7 +846,7 @@ StatusOr<std::uint32_t> BtreeLeafCount(storage::PageStore& store, PageId root) {
         if (!bytes.ok()) return bytes.status();
         ++leaves;
 
-        const PageId next = heap::PageView(bytes.value()).next_page_id();
+        const PageId next = heap::PageView(bytes.value().bytes()).next_page_id();
         if (next == kInvalidPageId) return leaves;
         current = next;
     }

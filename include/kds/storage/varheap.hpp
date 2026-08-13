@@ -278,7 +278,11 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
 // only until the caller touches the store again; every caller in the engine
 // copies it immediately, which is also what keeps the nested-access rule
 // (docs/parser-v2.md I15 R1) satisfiable on the decode path.
-StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr ptr);
+// `pin` keeps the value's page resident: the span points into its frame,
+// and dies with the pin, not with the call. Passing a fresh PageRef per
+// call is the whole contract.
+StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr ptr,
+                                           storage::PageRef& pin);
 
 // Pages in the chain. For tests and inspection, not a hot path.
 StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId root);

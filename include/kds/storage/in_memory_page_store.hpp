@@ -23,9 +23,20 @@ public:
     // it just reports AlreadyExists like CreateAt would.
     explicit InMemoryPageStore(PageId first_new_page_id = 1) noexcept;
 
-    StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override;
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
-    StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
+    // Public on purpose where the base is protected: this store never
+    // evicts, so its raw spans are permanently valid, and the forwarding
+    // test doubles (mount_recovery, page_mgr_wal_gate, ...) reach the raw
+    // seam through this concrete type rather than through the base.
+    // The inherited defaults re-published alongside the overrides below:
+    // this store never evicts, so its raw seam is permanently safe, and the
+    // forwarding test doubles reach it through this concrete type - the
+    // base keeps it protected (MG06).
+    using PageStore::CreateNewHeaderlessUnpinned;
+    using PageStore::GetForReadUnpinned;
+
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override;
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override;
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override;
 
     // The whole of the allocator here is `next_new_page_id_`, so raising
     // the floor is raising it - and this store needs the call more than a

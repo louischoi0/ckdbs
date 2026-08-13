@@ -72,7 +72,7 @@ protected:
     Row PlaceRow(std::string_view payload, std::uint64_t writer, std::uint64_t pk = 1) {
         auto created = store_.CreateNew();
         EXPECT_TRUE(created.ok());
-        auto page = heap::PageView::CreateEmpty(created.value().second, /*min_key=*/0);
+        auto page = heap::PageView::CreateEmpty(created.value().second.bytes(), /*min_key=*/0);
         EXPECT_TRUE(page.ok());
         auto slot = page.value().InsertTuple(BytesOf(payload, pk), writer, kNoUndoPtr);
         EXPECT_TRUE(slot.ok());
@@ -82,7 +82,7 @@ protected:
     std::string PayloadAt(const Row& row) {
         auto bytes = store_.Get(row.page_id);
         EXPECT_TRUE(bytes.ok());
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         auto tuple = page.ReadTuple(row.slot);
         EXPECT_TRUE(tuple.ok());
         return tuple.ok() ? StringOf(tuple.value().payload) : std::string();
@@ -91,7 +91,7 @@ protected:
     heap::PageView::Tuple TupleAt(const Row& row) {
         auto bytes = store_.Get(row.page_id);
         EXPECT_TRUE(bytes.ok());
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         auto tuple = page.ReadTuple(row.slot);
         EXPECT_TRUE(tuple.ok());
         return tuple.value();
@@ -246,7 +246,7 @@ TEST_F(TxnManagerTest, RollbackRestoresTheBytesAnOverwriteReplaced) {
 
     auto bytes = store_.Get(row.page_id);
     ASSERT_TRUE(bytes.ok());
-    heap::PageView page(bytes.value());
+    heap::PageView page(bytes.value().bytes());
     ASSERT_TRUE(page.OverwriteTuple(row.slot, BytesOf("modified"), txn->id(), kNoUndoPtr).ok());
     EXPECT_EQ(PayloadAt(row), "modified");
 
@@ -267,7 +267,7 @@ TEST_F(TxnManagerTest, RollbackClearsTheMarkADeleteSet) {
 
     auto bytes = store_.Get(row.page_id);
     ASSERT_TRUE(bytes.ok());
-    heap::PageView page(bytes.value());
+    heap::PageView page(bytes.value().bytes());
     ASSERT_TRUE(page.DeleteMark(row.slot, txn->id()).ok());
     EXPECT_TRUE(TupleAt(row).deleted);
 
@@ -287,7 +287,7 @@ TEST_F(TxnManagerTest, RollbackRetiresTheSlotAnInsertTook) {
 
     auto bytes = store_.Get(row.page_id);
     ASSERT_TRUE(bytes.ok());
-    heap::PageView page(bytes.value());
+    heap::PageView page(bytes.value().bytes());
     // Physically retired, which is a different thing from delete-marked:
     // the slot reports NotFound rather than a deleted tuple.
     EXPECT_EQ(page.ReadTuple(row.slot).status().code(), StatusCode::kNotFound);
@@ -314,7 +314,7 @@ TEST_F(TxnManagerTest, AMultiRowTransactionUnwindsInReverse) {
                             BytesOf(before_bytes));
         auto bytes = store_.Get(row.page_id);
         ASSERT_TRUE(bytes.ok());
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         ASSERT_TRUE(
             page.OverwriteTuple(row.slot, BytesOf(after_bytes), txn->id(), kNoUndoPtr).ok());
     }

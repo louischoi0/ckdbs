@@ -402,7 +402,7 @@ private:
                 ++stats_.For(step.step_id).pages_fetched;
                 auto bytes = store_.GetForRead(memo_page_);
                 if (bytes.ok()) {
-                    heap::PageView page(bytes.value());
+                    heap::PageView page(bytes.value().bytes());
                     return AcceptTupleAt(steps, index, step, access, memo_page_, page,
                                          memo_slot_);
                 }
@@ -425,15 +425,13 @@ private:
                 memo_key_ = key.value();
                 memo_page_ = found.value().page_id;
                 memo_slot_ = found.value().slot;
-                // The descent carries its leaf out, so the row is read
-                // without asking the store for a page the lookup just had
-                // in hand. The span is dynamic-extent (it has to have an
-                // unset state) and always either empty or exactly a page.
-                if (found.value().leaf.size() != kPageSize) {
-                    return Status::Corruption("a descent returned a leaf that is not one page");
-                }
-                std::span<std::byte, kPageSize> fixed(found.value().leaf.data(), kPageSize);
-                heap::PageView leaf(fixed);
+                // Re-fetched by id rather than carried out of the lookup:
+                // the span Location used to carry outlived the descent's
+                // pin (workplan-pageref.md Shape C). A hash hit on a
+                // still-resident frame, held for the read below.
+                auto leaf_page = store_.GetForRead(found.value().page_id);
+                if (!leaf_page.ok()) return leaf_page.status();
+                heap::PageView leaf(leaf_page.value().bytes());
                 return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                      found.value().slot);
             }
@@ -742,7 +740,7 @@ private:
 
             auto bytes = store_.GetForRead(found.value().page_id);
             if (!bytes.ok()) return bytes.status();
-            heap::PageView page(bytes.value());
+            heap::PageView page(bytes.value().bytes());
             if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
                                          found.value().slot);
                 !s.ok()) {
@@ -899,7 +897,7 @@ private:
                 ++step_stats.cabin_hint_misses;
                 continue;
             }
-            heap::PageView page(bytes.value());
+            heap::PageView page(bytes.value().bytes());
             if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
                 !s.ok()) {
                 return s;

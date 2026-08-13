@@ -103,6 +103,10 @@ public:
         std::string data_file = "kds.db";
         std::uint16_t port = 15432;
 
+        // Resident-frame budget per store; 0 = unbounded (docs/spec-eviction.md,
+        // docs/workplan-pageref.md MG06). The sweep arms only when nonzero.
+        std::size_t buffer_pool_frames = 0;
+
         // Direct TLS on the text port (docs/protocol.md §1, decided
         // 2026-08-13): with `tls = on` the first byte every client sends
         // is a ClientHello, and there is no plaintext fallback and no

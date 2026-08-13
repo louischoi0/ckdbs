@@ -549,12 +549,17 @@ TEST(BoundCabinPinningTest, TheSweepNeverReclaimsABoundCabinPageEvenUnpinned) {
     auto cabin_page = store->CreateNew();
     ASSERT_TRUE(cabin_page.ok());
     const PageId cabin_id = cabin_page.value().first;
-    ASSERT_TRUE(BoundCabinPage::Format(cabin_page.value().second).ok());
+    ASSERT_TRUE(BoundCabinPage::Format(cabin_page.value().second.bytes()).ok());
 
     auto heap_page = store->CreateNew();
     ASSERT_TRUE(heap_page.ok());
     const PageId heap_id = heap_page.value().first;
-    storage::FormatPage(heap_page.value().second, PageType::kHeap);
+    storage::FormatPage(heap_page.value().second.bytes(), PageType::kHeap);
+
+    // Setup handles dropped before the sweep: CreateNew() pins since MG01,
+    // and this test's point is the *class* pin, not the handle pin.
+    cabin_page.value().second.Release();
+    heap_page.value().second.Release();
 
     ASSERT_TRUE(store->Sync().ok());
 
@@ -575,7 +580,7 @@ TEST(BoundCabinPinningTest, TheSweepNeverReclaimsABoundCabinPageEvenUnpinned) {
     auto still = store->GetForRead(cabin_id);
     ASSERT_TRUE(still.ok());
     const storage::PageHeaderFields header =
-        storage::ReadPageHeader(std::span<const std::byte, kPageSize>(still.value()));
+        storage::ReadPageHeader(std::span<const std::byte, kPageSize>(still.value().bytes()));
     EXPECT_EQ(header.page_type, static_cast<std::uint8_t>(PageType::kCabinBound));
     EXPECT_TRUE(store->IsPinnedClass(cabin_id));
 }

@@ -16,10 +16,19 @@
 // buffer pool later means implementing this interface, not rewriting
 // every caller.
 //
-// This deliberately does not attempt to model pinning, dirty tracking, or
-// eviction - it only promises that bytes written through a returned span
-// are visible to a later Get() for the same page_id. Those concerns
-// belong to whatever the real buffer-pool-backed implementation adds.
+// **The pin model (docs/workplan-pageref.md MG01).** The public accessors
+// return a `PageRef` - a move-only handle whose lifetime IS the validity of
+// the bytes: construction pins the frame, destruction unpins it, and a store
+// that never evicts implements pin/unpin as no-ops, which for it is a true
+// statement rather than a stub. There is deliberately **no implicit
+// conversion from PageRef to a span**: `auto s = store.Get(id).value()`
+// followed by using `s` as bytes would compile and dangle the moment the
+// temporary unpinned - the exact bug eviction introduces. Access is
+// `ref.bytes()`, on a named handle whose lifetime is visible in the code.
+//
+// The `*Unpinned` accessors below are the migration-era escape hatch and
+// the implementation seam: they are what MG02/MG03 convert call sites off
+// of, and MG06 deletes them. New code must not call them.
 
 namespace kds::storage {
 
@@ -65,22 +74,141 @@ public:
 // depend on.
 inline constexpr std::size_t kScanRingFrames = 32;
 
+class PageStore;
+
+// The move-only pinned-page handle (page.md S2, workplan-pageref.md).
+// Construction pins, destruction unpins; the bytes are valid exactly as
+// long as the handle is. Copy is deleted rather than refcounted: two
+// handles to one frame is not a thing any caller needs, and making it
+// expressible would make "who unpins" a question.
+class PageRef {
+public:
+    PageRef() noexcept = default;
+    PageRef(const PageRef&) = delete;
+    PageRef& operator=(const PageRef&) = delete;
+    PageRef(PageRef&& other) noexcept { *this = std::move(other); }
+    inline PageRef& operator=(PageRef&& other) noexcept;
+    ~PageRef() { Release(); }
+
+    bool valid() const noexcept { return store_ != nullptr; }
+    PageId page_id() const noexcept { return page_id_; }
+
+    // Valid exactly as long as this handle is. Taking a copy of the span
+    // and dropping the handle is the use-after-free eviction introduces -
+    // which is why no implicit conversion to a span exists.
+    std::span<std::byte, kPageSize> bytes() const noexcept {
+        return std::span<std::byte, kPageSize>(data_, kPageSize);
+    }
+
+    // Marks the frame dirty after the fact, for a handle taken through
+    // GetForRead() that turned out to write. Cheaper than a second fetch
+    // and honest about which frames are written back.
+    inline void MarkDirty() noexcept;
+
+    // Drops the pin early. Idempotent; the destructor calls it.
+    inline void Release() noexcept;
+
+private:
+    friend class PageStore;
+    PageRef(PageStore* store, PageId page_id, std::span<std::byte, kPageSize> bytes) noexcept
+        : store_(store), page_id_(page_id), data_(bytes.data()) {}
+
+    PageStore* store_ = nullptr;
+    PageId page_id_ = kInvalidPageId;
+    // A pointer rather than a span, because `std::span<T, N>` with a fixed
+    // extent has no empty state - and a moved-from or released handle
+    // needs one.
+    std::byte* data_ = nullptr;
+};
+
 class PageStore {
 public:
     virtual ~PageStore() = default;
 
-    // Creates a brand-new page at exactly `page_id`, zero-initialized.
-    // Fails with AlreadyExists if that id is already in use. For callers
-    // that need a page at a specific, well-known id (e.g. the catalog's
-    // fixed bootstrap pages) rather than whatever id the store would
-    // pick.
-    virtual StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) = 0;
+    // ---- The pinned accessors: the engine's API ------------------------
+    //
+    // Non-virtual on purpose: each is the raw fetch plus the pin, and the
+    // seam a store implements is the raw fetch (below) plus the three
+    // frame hooks. Nothing can evict between the fetch and the pin - a
+    // core is single-threaded and nothing here suspends - so the pair is
+    // atomic in the only sense that matters.
+
+    // Fetches an already-created page, pinned, for read or in-place
+    // mutation. Fails with NotFound if page_id was never created.
+    StatusOr<PageRef> Get(PageId page_id) {
+        auto bytes = GetUnpinned(page_id);
+        if (!bytes.ok()) return bytes.status();
+        PinFrame(page_id);
+        return PageRef(this, page_id, bytes.value());
+    }
+
+    // Get() for a caller that will not write through the page. The bytes
+    // are still mutable and the promise is by contract, not by type
+    // (GetForReadUnpinned's note); a read fetch that turns out to write
+    // calls MarkDirty() on the handle.
+    StatusOr<PageRef> GetForRead(PageId page_id) {
+        auto bytes = GetForReadUnpinned(page_id);
+        if (!bytes.ok()) return bytes.status();
+        PinFrame(page_id);
+        return PageRef(this, page_id, bytes.value());
+    }
+
+    // Creates a brand-new page at exactly `page_id`, zero-initialized and
+    // pinned. Fails with AlreadyExists if that id is already in use.
+    StatusOr<PageRef> CreateAt(PageId page_id) {
+        auto bytes = CreateAtUnpinned(page_id);
+        if (!bytes.ok()) return bytes.status();
+        PinFrame(page_id);
+        return PageRef(this, page_id, bytes.value());
+    }
 
     // Creates a brand-new page at an id the store chooses, zero-
-    // initialized. Fails with OutOfSpace if the store has no more ids to
-    // hand out.
-    virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() = 0;
+    // initialized and pinned. Fails with OutOfSpace when out of ids.
+    StatusOr<std::pair<PageId, PageRef>> CreateNew() {
+        auto made = CreateNewUnpinned();
+        if (!made.ok()) return made.status();
+        PinFrame(made.value().first);
+        return std::pair<PageId, PageRef>(
+            made.value().first, PageRef(this, made.value().first, made.value().second));
+    }
 
+    // CreateNew() for a page with no common header - see
+    // CreateNewHeaderlessUnpinned() for who needs that and why.
+    StatusOr<std::pair<PageId, PageRef>> CreateNewHeaderless() {
+        auto made = CreateNewHeaderlessUnpinned();
+        if (!made.ok()) return made.status();
+        PinFrame(made.value().first);
+        return std::pair<PageId, PageRef>(
+            made.value().first, PageRef(this, made.value().first, made.value().second));
+    }
+
+    // ---- The frame hooks: what a pooled store overrides ---------------
+    //
+    // Defaults are no-ops, and for every store without eviction that is
+    // the *true* implementation, not a stub: a frame that can never be
+    // reclaimed needs no pin to stay resident. DevicePageStore overrides
+    // all three onto its Frame metadata (pins, dirty).
+    virtual void PinFrame(PageId page_id) noexcept { (void)page_id; }
+    virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
+    virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
+
+    // ---- The raw seam: protected since MG06 ----------------------------
+    //
+    // What a store implements - and, since MG06, *only* what a store
+    // implements: engine code cannot name these through the base class, so
+    // "no caller holds a raw span" is enforced by access control rather
+    // than by review. A concrete store may re-publish its own overrides
+    // (InMemoryPageStore does, for the forwarding test doubles); a store
+    // with real eviction (DevicePageStore) keeps them out of reach. The
+    // returned span models no pin: it is valid only while nothing evicts,
+    // which is the defect the pinned accessors above exist to close.
+
+protected:
+    virtual StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) = 0;
+
+    virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() = 0;
+
+public:
     // Raises the floor CreateNew() allocates from: after an OK return, no
     // CreateNew() may hand out an id below `first_allocatable_page_id`.
     //
@@ -113,14 +241,15 @@ public:
             "guarantee it will not re-issue a page id the log names");
     }
 
+protected:
     // Fetches an already-created page's bytes for reading or in-place
     // mutation. Fails with NotFound if page_id was never created.
-    virtual StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) = 0;
+    virtual StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) = 0;
 
-    // Get() for a caller that will not write through the returned span.
-    // A store that tracks dirty frames may use this to leave the frame
-    // clean; one that does not is already correct doing nothing, which is
-    // why the default is plain Get().
+    // GetUnpinned() for a caller that will not write through the returned
+    // span. A store that tracks dirty frames may use this to leave the
+    // frame clean; one that does not is already correct doing nothing,
+    // which is why the default is plain GetUnpinned().
     //
     // The span is still mutable, and the promise is by contract rather
     // than by type: the type-safe shape is a const page view, which is a
@@ -130,30 +259,32 @@ public:
     // device.
     //
     // The opt-in direction is the safe one. A caller that forgets to use
-    // this pays an unnecessary write-back; the inverse design - a Get()
+    // this pays an unnecessary write-back; the inverse design - a fetch
     // that leaves frames clean plus an explicit MarkDirty() - loses data
     // the first time someone forgets the call.
-    virtual StatusOr<std::span<std::byte, kPageSize>> GetForRead(PageId page_id) {
-        return Get(page_id);
+    virtual StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) {
+        return GetUnpinned(page_id);
     }
 
-    // CreateNew() for a page that carries no common page header - the
-    // whole 8 KiB belongs to the caller. For a payload that tiles the page
-    // exactly: a power-of-two entry array a header would cost an entry of,
-    // breaking the shift/mask addressing that is the point of it. Its one
-    // caller is the waystone directory's interior pages
+    // CreateNewUnpinned() for a page that carries no common page header -
+    // the whole 8 KiB belongs to the caller. For a payload that tiles the
+    // page exactly: a power-of-two entry array a header would cost an
+    // entry of, breaking the shift/mask addressing that is the point of
+    // it. Its one caller is the waystone directory's interior pages
     // (stats/waystone_dir.hpp) - see DevicePageStore's header for what
     // giving up the header costs.
     //
-    // The default is plain CreateNew(), which is correct for any store
-    // that neither stamps nor verifies a page checksum - there is nothing
-    // to opt out of. A store that does (DevicePageStore) overrides it to
-    // record the fact durably, because getting this wrong writes a
-    // checksum over live data at byte 4.
-    virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderless() {
-        return CreateNew();
+    // The default is plain CreateNewUnpinned(), which is correct for any
+    // store that neither stamps nor verifies a page checksum - there is
+    // nothing to opt out of. A store that does (DevicePageStore)
+    // overrides it to record the fact durably, because getting this wrong
+    // writes a checksum over live data at byte 4.
+    virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>>
+    CreateNewHeaderlessUnpinned() {
+        return CreateNewUnpinned();
     }
 
+public:
     // Records that the WAL record at `lsn` modified `page_id`: stamps the
     // page header's page_lsn, which is what a store's write-back path
     // compares against the log's durable watermark (wal.md section 8-1).
@@ -168,7 +299,7 @@ public:
     virtual Status StampPageLsn(PageId page_id, std::uint64_t lsn) {
         auto page = Get(page_id);
         if (!page.ok()) return page.status();
-        SetPageLsn(page.value(), lsn);
+        SetPageLsn(page.value().bytes(), lsn);
         return Status::OK();
     }
 
@@ -197,19 +328,52 @@ public:
 
 // The pass-through fetcher: GetForRead, page by page. What ring mode
 // *means* on a store that never evicts.
+//
+// Holds the previous fetch's PageRef, which implements the ScanFetcher
+// lifetime contract *exactly*: the span is valid until the next Fetch(),
+// because that is when the previous pin drops.
 class PlainScanFetcher final : public ScanFetcher {
 public:
     explicit PlainScanFetcher(PageStore& store) noexcept : store_(store) {}
     StatusOr<std::span<std::byte, kPageSize>> Fetch(PageId page_id) override {
-        return store_.GetForRead(page_id);
+        auto page = store_.GetForRead(page_id);
+        if (!page.ok()) return page.status();
+        last_ = std::move(page.value());
+        return last_.bytes();
     }
 
 private:
     PageStore& store_;
+    PageRef last_;
 };
 
 inline std::unique_ptr<ScanFetcher> PageStore::OpenScanRing(std::size_t /*frames*/) {
     return std::make_unique<PlainScanFetcher>(*this);
+}
+
+inline PageRef& PageRef::operator=(PageRef&& other) noexcept {
+    if (this != &other) {
+        Release();
+        store_ = other.store_;
+        page_id_ = other.page_id_;
+        data_ = other.data_;
+        other.store_ = nullptr;
+        other.page_id_ = kInvalidPageId;
+        other.data_ = nullptr;
+    }
+    return *this;
+}
+
+inline void PageRef::Release() noexcept {
+    if (store_ != nullptr) {
+        store_->UnpinFrame(page_id_);
+        store_ = nullptr;
+        data_ = nullptr;
+    }
+}
+
+inline void PageRef::MarkDirty() noexcept {
+    if (store_ != nullptr) store_->MarkFrameDirty(page_id_);
 }
 
 }  // namespace kds::storage

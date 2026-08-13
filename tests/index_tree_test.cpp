@@ -72,7 +72,7 @@ struct Fixture {
         auto created = store.CreateNew();
         EXPECT_TRUE(created.ok()) << created.status().message();
         root = created.value().first;
-        Status s = FormatRoot(created.value().second, layout, /*owner_oid=*/0);
+        Status s = FormatRoot(created.value().second.bytes(), layout, /*owner_oid=*/0);
         EXPECT_TRUE(s.ok()) << s.message();
     }
 
@@ -359,7 +359,7 @@ TEST(IndexTreeTest, ACorruptedLeafIsRejectedRatherThanDescended) {
     auto page = f.store.Get(f.root);
     ASSERT_TRUE(page.ok());
     const std::uint16_t absurd = 60000;
-    std::memcpy(page.value().data() + kIndexHeaderOffset + kIndexLeafNrEntriesOffset, &absurd,
+    std::memcpy(page.value().bytes().data() + kIndexHeaderOffset + kIndexLeafNrEntriesOffset, &absurd,
                 sizeof(absurd));
 
     std::vector<std::byte> probe(f.layout.sort_key_width(), std::byte{0});
@@ -374,7 +374,7 @@ TEST(IndexTreeTest, TheClusteredTreesPagesAreNotThisTrees) {
     Fixture f;
     auto page = f.store.Get(f.root);
     ASSERT_TRUE(page.ok());
-    storage::FormatPage(page.value(), PageType::kBtreeLeaf);
+    storage::FormatPage(page.value().bytes(), PageType::kBtreeLeaf);
 
     std::vector<std::byte> probe(f.layout.sort_key_width(), std::byte{0});
     auto seek = IndexSeekLeaf(f.store, f.root, f.layout, probe);

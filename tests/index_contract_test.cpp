@@ -403,7 +403,7 @@ TEST(IndexContractTest, ACorruptedIndexPageFailsRatherThanReturningWrongRows) {
     auto page = db.store().Get(row.value().root_page_id);
     ASSERT_TRUE(page.ok());
     const std::uint16_t absurd = 60000;
-    std::memcpy(page.value().data() + index::kIndexHeaderOffset +
+    std::memcpy(page.value().bytes().data() + index::kIndexHeaderOffset +
                     index::kIndexLeafNrEntriesOffset,
                 &absurd, sizeof(absurd));
 
@@ -423,7 +423,7 @@ TEST(IndexContractTest, AnIndexWhoseWidthsDisagreeWithItsCatalogRowIsCorruption)
     auto page = db.store().Get(row.value().root_page_id);
     ASSERT_TRUE(page.ok());
     const std::uint16_t wrong = 3;
-    std::memcpy(page.value().data() + index::kIndexHeaderOffset +
+    std::memcpy(page.value().bytes().data() + index::kIndexHeaderOffset +
                     index::kIndexLeafKeyWidthOffset,
                 &wrong, sizeof(wrong));
 

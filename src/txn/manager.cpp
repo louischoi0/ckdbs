@@ -233,7 +233,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     {
         auto probe = store_.Get(page_id);
         if (!probe.ok()) return probe.status();
-        heap::PageView view(probe.value());
+        heap::PageView view(probe.value().bytes());
         bool matches = false;
         if (auto payload = view.PayloadAt(slot, view.slot_count()); payload.ok()) {
             if (auto id = KeystoneIdOfPayload(payload.value()); id.ok()) {
@@ -261,7 +261,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
 
     auto bytes = store_.Get(page_id);
     if (!bytes.ok()) return bytes.status();
-    heap::PageView page(bytes.value());
+    heap::PageView page(bytes.value().bytes());
 
     switch (entry.action) {
         case TrailAction::kInsert: {

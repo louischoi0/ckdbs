@@ -616,11 +616,11 @@ Relation MakeRelation(Clustered clustered) {
     if (clustered == Clustered::kBtree) {
         // owner 0: these relations exist outside any catalog, so there is
         // no oid to stamp (page.md §2a's "unattributed").
-        if (kds::Status s = kds::btree::FormatRoot(created.value().second, 0); !s.ok()) {
+        if (kds::Status s = kds::btree::FormatRoot(created.value().second.bytes(), 0); !s.ok()) {
             Fatal(s, "formatting a btree root");
         }
     } else {
-        auto view = kds::heap::PageView::CreateEmpty(created.value().second, 0);
+        auto view = kds::heap::PageView::CreateEmpty(created.value().second.bytes(), 0);
         if (!view.ok()) {
             Fatal(view.status(), "formatting a heap root");
         }

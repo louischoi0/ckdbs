@@ -449,17 +449,24 @@ There is no purge pass, and readers are deliberately unregistered
 - Cross-core writes are refused retryably (CC3): a transaction's writes
   bind to one home core. 2PC is an open decision, to be designed from the
   refusal counters.
-- **Buffer-pool eviction is built but disarmed**: nothing calls the sweep,
-  because `Get()` hands out raw spans safe only while nothing evicts — the
-  `PageRef` migration is a hard prerequisite, and **now has a workplan**
-  (`docs/workplan-pageref.md`, MG01-MG06, 2026-08-13; nothing built).
-  Recounted there with the command that produced the number: **~148 engine
-  sites** (`Get` 74 + `GetForRead` 47 + `CreateAt`/`CreateNew` 27 in
-  `src/`+`include/`) plus ~245 in tests — this entry's earlier "~257" was a
-  tree-wide count, right order, wrong denominator for planning. A circulating
-  estimate of 72 counted `Get` alone and understates the engine set by half:
-  `GetForRead` returns the same mutable span with the same lifetime
-  (`docs/spec-eviction.md`, `docs/page.md` §3).
+- ~~**Buffer-pool eviction is built but disarmed**: nothing calls the sweep,
+  because `Get()` hands out raw spans safe only while nothing evicts~~ —
+  **closed 2026-08-13**: the `PageRef` migration is built (MG01-MG06,
+  `docs/workplan-pageref.md`), every `PageStore` accessor returns a pinned
+  handle, the base class keeps the raw seam `protected`, and the CLOCK sweep
+  is armed on the fault path whenever a frame budget is set
+  (`buffer_pool_frames` config key; 0 = unbounded, the default). The gate
+  that proved it: the full suite green under `KDS_TEST_FRAME_BUDGET=8` with
+  reclaimed frames poisoned 0xEF, and an ASan simulator clean in clean and
+  crash modes under the same pressure. That gate caught two real bugs before
+  they shipped — the first arming protected the just-faulted frame by one
+  usage point, which one multi-lap sweep call could walk down and reclaim,
+  and `varheap::Fetch` returned a span whose pin dropped at return, so a row
+  with two spilled cells could evict the first value's page while fetching
+  the second. **What stays open**: the budget defaults to unbounded until a
+  sizing decision picks a number (`docs/spec-eviction.md` EV8's "pool
+  undersized" telemetry is the input), and `MaintainFreeReserve`'s
+  background trigger still waits on EVT02's bounded pool.
 
 ## Storage and key modes
 

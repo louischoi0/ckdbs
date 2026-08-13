@@ -159,7 +159,7 @@ Status SimInstance::PersistSuperBlock() {
     // then sync the store so the raised ceiling is really on the platter.
     auto page = store_->Get(server::kSuperBlockPageId);
     if (!page.ok()) return page.status();
-    boot_->superblock.Encode(page.value());
+    boot_->superblock.Encode(page.value().bytes());
     return store_->Sync();
 }
 

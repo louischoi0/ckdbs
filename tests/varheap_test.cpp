@@ -163,7 +163,8 @@ TEST_F(VarHeapChainTest, AppendAndFetchRoundTrip) {
     auto ptr = ChainAppend(store_, root.value(), Bytes("a spilled value"), /*owner_oid=*/0);
     ASSERT_TRUE(ptr.ok()) << ptr.status().message();
 
-    auto fetched = Fetch(store_, ptr.value().ptr);
+    storage::PageRef fetch_pin;
+    auto fetched = Fetch(store_, ptr.value().ptr, fetch_pin);
     ASSERT_TRUE(fetched.ok()) << fetched.status().message();
     EXPECT_EQ(TextOf(fetched.value()), "a spilled value");
 
@@ -203,7 +204,7 @@ TEST_F(VarHeapChainTest, GrowthReportsThePageItCreatedAndTheTailItLinked) {
         // PAGE_INIT and the full page image are logged for.
         EXPECT_EQ(appended.value().created_page_id, appended.value().ptr.page_id);
         EXPECT_EQ(appended.value().linked_page_id, last_tail);
-        EXPECT_EQ(PageNextPageId(store_.GetForRead(last_tail).value()),
+        EXPECT_EQ(PageNextPageId(store_.GetForRead(last_tail).value().bytes()),
                   appended.value().created_page_id)
             << "the reported link is not the link the page carries";
         last_tail = appended.value().created_page_id;
@@ -232,7 +233,8 @@ TEST_F(VarHeapChainTest, GrowsByTailAppendAndKeepsEveryEarlierPointerValid) {
     // Every pointer taken along the way still resolves, and to the same
     // bytes. Nothing was moved to make room - that is the design.
     for (std::size_t i = 0; i < pointers.size(); ++i) {
-        auto fetched = Fetch(store_, pointers[i]);
+        storage::PageRef fetch_pin;
+        auto fetched = Fetch(store_, pointers[i], fetch_pin);
         ASSERT_TRUE(fetched.ok()) << "pointer " << i << ": " << fetched.status().message();
         EXPECT_EQ(TextOf(fetched.value()), values[i]) << "pointer " << i;
     }
@@ -255,7 +257,7 @@ TEST_F(VarHeapChainTest, TheRootNeverMovesWhenTheChainGrows) {
     // Still a var-heap page, still the head of the chain.
     auto page = store_.GetForRead(root.value());
     ASSERT_TRUE(page.ok());
-    EXPECT_TRUE(storage::ValidatePageHeader(page.value(), PageType::kVarHeap).ok());
+    EXPECT_TRUE(storage::ValidatePageHeader(page.value().bytes(), PageType::kVarHeap).ok());
 }
 
 TEST_F(VarHeapChainTest, FetchingThroughAPointerAtANonVarHeapPageIsRefused) {
@@ -264,9 +266,10 @@ TEST_F(VarHeapChainTest, FetchingThroughAPointerAtANonVarHeapPageIsRefused) {
     // failure.
     auto created = store_.CreateNew();
     ASSERT_TRUE(created.ok());
-    storage::FormatPage(created.value().second, PageType::kHeap);
+    storage::FormatPage(created.value().second.bytes(), PageType::kHeap);
 
-    auto fetched = Fetch(store_, VarHeapPtr{created.value().first, 0});
+    storage::PageRef fetch_pin;
+    auto fetched = Fetch(store_, VarHeapPtr{created.value().first, 0}, fetch_pin);
     ASSERT_FALSE(fetched.ok());
     EXPECT_EQ(fetched.status().code(), StatusCode::kCorruption);
 }

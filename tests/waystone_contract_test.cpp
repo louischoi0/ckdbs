@@ -225,7 +225,7 @@ std::size_t BumpEveryUserPage(Instance& db) {
     for (PageId id = kFirstUserPageId; id < end; ++id) {
         auto page = db.store().Get(id);
         if (!page.ok()) continue;
-        storage::BumpRelayoutEpoch(page.value());
+        storage::BumpRelayoutEpoch(page.value().bytes());
         ++bumped;
     }
     return bumped;
@@ -276,7 +276,7 @@ TEST(WaystoneContractTest, DeletingEveryWaystoneMidRunChangesNoReply) {
         // enough: every walk from it now reads kEmptyDirSlot and misses.
         auto page = db.store().Get(row.waystone_root);
         ASSERT_TRUE(page.ok());
-        std::fill(page.value().begin(), page.value().end(), std::byte{0xFF});
+        std::fill(page.value().bytes().begin(), page.value().bytes().end(), std::byte{0xFF});
     }
 
     const std::vector<std::string> after = RunAll(db, 2);

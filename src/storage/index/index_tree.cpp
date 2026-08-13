@@ -37,7 +37,9 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
 struct Descent {
     std::array<PageId, storage::kMaxBtreeDepth> path{};
     std::uint16_t depth = 0;
-    std::span<std::byte> leaf{};
+    // The leaf, held: the pin rides in the struct (btree.cpp's Descent
+    // says why; the same Shape C lived here). Peak pins (MG03): 1.
+    storage::PageRef leaf;
 };
 
 // Follows child pointers for `sort_key` from `root`, recording the path and
@@ -64,27 +66,27 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
 
-        if (IsLeafPage(bytes.value())) {
-            if (Status s = IndexLeafView(AsPage(bytes.value())).CheckAgainst(layout, current);
+        if (IsLeafPage(bytes.value().bytes())) {
+            if (Status s = IndexLeafView(AsPage(bytes.value().bytes())).CheckAgainst(layout, current);
                 !s.ok()) {
                 return s;
             }
             if (!leaf_for_write) {
-                d.leaf = bytes.value();
+                d.leaf = std::move(bytes.value());
                 return d;
             }
             // Re-fetch for write: the frame is already resident, so this is
             // a hash lookup that flips the dirty flag.
             auto writable = store.Get(current);
             if (!writable.ok()) return writable.status();
-            d.leaf = writable.value();
+            d.leaf = std::move(writable.value());
             return d;
         }
 
-        if (Status s = RequireType(bytes.value(), current, PageType::kIndexInternal); !s.ok()) {
+        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexInternal); !s.ok()) {
             return s;
         }
-        IndexInternalView node(AsPage(bytes.value()));
+        IndexInternalView node(AsPage(bytes.value().bytes()));
         if (Status s = node.CheckAgainst(layout, current); !s.ok()) return s;
 
         current = node.ChildFor(sort_key);
@@ -105,17 +107,17 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const Inde
         }
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        if (IsLeafPage(bytes.value())) {
-            if (Status s = IndexLeafView(AsPage(bytes.value())).CheckAgainst(layout, current);
+        if (IsLeafPage(bytes.value().bytes())) {
+            if (Status s = IndexLeafView(AsPage(bytes.value().bytes())).CheckAgainst(layout, current);
                 !s.ok()) {
                 return s;
             }
             return current;
         }
-        if (Status s = RequireType(bytes.value(), current, PageType::kIndexInternal); !s.ok()) {
+        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexInternal); !s.ok()) {
             return s;
         }
-        IndexInternalView node(AsPage(bytes.value()));
+        IndexInternalView node(AsPage(bytes.value().bytes()));
         if (Status s = node.CheckAgainst(layout, current); !s.ok()) return s;
         current = node.leftmost_child();
     }
@@ -181,7 +183,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                              /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
-    IndexLeafView leaf(AsPage(descent.value().leaf));
+    IndexLeafView leaf(descent.value().leaf.bytes());
 
     IndexInsertResult out;
 
@@ -213,7 +215,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // heap pages.
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [new_leaf_id, new_leaf_bytes] = created.value();
+    auto& [new_leaf_id, new_leaf_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> new_leaf_bytes = new_leaf_bytes_ref.bytes();
 
     auto new_leaf = IndexLeafView::CreateEmpty(new_leaf_bytes, layout, owner_oid);
     if (!new_leaf.ok()) return new_leaf.status();
@@ -223,7 +226,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     // with eviction will).
     auto leaf_again = store.Get(leaf_id);
     if (!leaf_again.ok()) return leaf_again.status();
-    IndexLeafView left(AsPage(leaf_again.value()));
+    IndexLeafView left(AsPage(leaf_again.value().bytes()));
 
     if (Status s = left.SplitInto(new_leaf.value()); !s.ok()) return s;
 
@@ -261,7 +264,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
         const PageId parent_id = descent.value().path[static_cast<std::uint16_t>(d)];
         auto parent_bytes = store.Get(parent_id);
         if (!parent_bytes.ok()) return parent_bytes.status();
-        IndexInternalView parent(AsPage(parent_bytes.value()));
+        IndexInternalView parent(AsPage(parent_bytes.value().bytes()));
         old_root_level = parent.level();
 
         if (!parent.IsFull(layout)) {
@@ -282,7 +285,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
         auto created_node = store.CreateNew();
         if (!created_node.ok()) return created_node.status();
-        auto [new_node_id, new_node_bytes] = created_node.value();
+        auto& [new_node_id, new_node_bytes_ref] = created_node.value();
+        const std::span<std::byte, kPageSize> new_node_bytes = new_node_bytes_ref.bytes();
 
         auto new_node = IndexInternalView::CreateEmpty(new_node_bytes, layout, level,
                                                         /*leftmost_child=*/kInvalidPageId,
@@ -291,7 +295,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
         auto parent_again = store.Get(parent_id);
         if (!parent_again.ok()) return parent_again.status();
-        IndexInternalView left_node(AsPage(parent_again.value()));
+        IndexInternalView left_node(AsPage(parent_again.value().bytes()));
 
         std::array<std::byte, kMaxIndexEntryWidth> up_buf{};
         std::span<std::byte> pushed(up_buf.data(), sort_key_len);
@@ -314,7 +318,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     const PageId old_root = descent.value().path[0];
     auto created_root = store.CreateNew();
     if (!created_root.ok()) return created_root.status();
-    auto [new_root_id, new_root_bytes] = created_root.value();
+    auto& [new_root_id, new_root_bytes_ref] = created_root.value();
+    const std::span<std::byte, kPageSize> new_root_bytes = new_root_bytes_ref.bytes();
 
     auto new_root = IndexInternalView::CreateEmpty(
         new_root_bytes, layout, static_cast<std::uint16_t>(old_root_level + 1), old_root,
@@ -361,10 +366,10 @@ Status IndexVisitFrom(
         auto bytes = access == storage::PageAccess::kWrite ? store.Get(current)
                                                            : store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        if (Status s = RequireType(bytes.value(), current, PageType::kIndexLeaf); !s.ok()) {
+        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexLeaf); !s.ok()) {
             return s;
         }
-        IndexLeafView leaf(AsPage(bytes.value()));
+        IndexLeafView leaf(AsPage(bytes.value().bytes()));
         if (Status s = leaf.CheckAgainst(layout, current); !s.ok()) return s;
 
         const std::uint16_t n = leaf.entry_count();
@@ -394,10 +399,10 @@ StatusOr<std::uint16_t> IndexHeight(storage::PageStore& store, PageId root,
                                     const IndexLayout& layout) {
     auto bytes = store.GetForRead(root);
     if (!bytes.ok()) return bytes.status();
-    if (IsLeafPage(bytes.value())) return std::uint16_t{1};
-    if (Status s = RequireType(bytes.value(), root, PageType::kIndexInternal); !s.ok()) return s;
+    if (IsLeafPage(bytes.value().bytes())) return std::uint16_t{1};
+    if (Status s = RequireType(bytes.value().bytes(), root, PageType::kIndexInternal); !s.ok()) return s;
 
-    IndexInternalView node(AsPage(bytes.value()));
+    IndexInternalView node(AsPage(bytes.value().bytes()));
     if (Status s = node.CheckAgainst(layout, root); !s.ok()) return s;
     return static_cast<std::uint16_t>(node.level() + 1);
 }
@@ -419,7 +424,7 @@ StatusOr<std::uint32_t> IndexLeafCount(storage::PageStore& store, PageId root,
         if (!bytes.ok()) return bytes.status();
         ++leaves;
 
-        const PageId next = IndexLeafView(AsPage(bytes.value())).right_sibling();
+        const PageId next = IndexLeafView(AsPage(bytes.value().bytes())).right_sibling();
         if (next == kInvalidPageId) return leaves;
         current = next;
     }

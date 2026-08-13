@@ -305,10 +305,10 @@ protected:
     void SetUp() override {
         auto live_page = live_store_.CreateAt(kEntryPage);
         ASSERT_TRUE(live_page.ok());
-        ASSERT_TRUE(BoundCabinPage::Format(live_page.value()).ok());
+        ASSERT_TRUE(BoundCabinPage::Format(live_page.value().bytes()).ok());
         auto replay_page = replay_store_.CreateAt(kEntryPage);
         ASSERT_TRUE(replay_page.ok());
-        ASSERT_TRUE(BoundCabinPage::Format(replay_page.value()).ok());
+        ASSERT_TRUE(BoundCabinPage::Format(replay_page.value().bytes()).ok());
         context_.Adopt(kAssertionId, &rebuilt_);
     }
 
@@ -326,7 +326,7 @@ protected:
 
         auto page = live_store_.Get(kEntryPage);
         EXPECT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         EXPECT_TRUE(view.ok());
         auto index = view.value().Append(entry);
         EXPECT_TRUE(index.ok());
@@ -340,7 +340,7 @@ protected:
     void LiveCommit(std::uint64_t txn_id, std::span<const std::uint16_t> indexes) {
         auto page = live_store_.Get(kEntryPage);
         ASSERT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         ASSERT_TRUE(view.ok());
         for (const std::uint16_t index : indexes) {
             ASSERT_TRUE(view.value().ClearReserved(index).ok());
@@ -358,7 +358,7 @@ protected:
         // (`AssertionEnforcer::AbortTxn`, `docs/feat-assertion.md` §7).
         auto page = live_store_.Get(kEntryPage);
         ASSERT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         ASSERT_TRUE(view.ok());
         ASSERT_TRUE(view.value().MarkOrphaned(index).ok());
         log_.push_back(RollbackRecord(txn_id, delta, index, key));
@@ -395,7 +395,7 @@ TEST_F(AssertionReplayTest, TheFoldRestoresThePageAndTheDirectoryExactly) {
     auto replay_page = replay_store_.Get(kEntryPage);
     ASSERT_TRUE(live_page.ok());
     ASSERT_TRUE(replay_page.ok());
-    EXPECT_EQ(std::memcmp(live_page.value().data(), replay_page.value().data(), kPageSize), 0);
+    EXPECT_EQ(std::memcmp(live_page.value().bytes().data(), replay_page.value().bytes().data(), kPageSize), 0);
 
     // The directory, header by header.
     for (const std::int64_t group : {std::int64_t{7}, std::int64_t{8}}) {
@@ -415,7 +415,7 @@ TEST_F(AssertionReplayTest, TheFoldRestoresThePageAndTheDirectoryExactly) {
         -> StatusOr<BoundCabinEntry> {
         auto page = replay_store_.Get(page_id);
         if (!page.ok()) return page.status();
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status();
         return view.value().Read(index);
     };
@@ -451,7 +451,7 @@ TEST_F(AssertionReplayTest, ADepartureFoldsWithItsSignAndItsRollbackRestoresIt) 
     leaving.group_id = departing_from->group_id;
     auto page = live_store_.Get(kEntryPage);
     ASSERT_TRUE(page.ok());
-    auto view = BoundCabinPage::Open(page.value());
+    auto view = BoundCabinPage::Open(page.value().bytes());
     ASSERT_TRUE(view.ok());
     auto index = view.value().Append(leaving);
     ASSERT_TRUE(index.ok());
@@ -490,7 +490,7 @@ TEST_F(AssertionReplayTest, AnUnknownAssertionIsSkippedWholePageHalfIncluded) {
 
     auto page = replay_store_.Get(kEntryPage);
     ASSERT_TRUE(page.ok());
-    auto view = BoundCabinPage::Open(page.value());
+    auto view = BoundCabinPage::Open(page.value().bytes());
     ASSERT_TRUE(view.ok());
     EXPECT_EQ(view.value().entry_count(), 0) << "the page half must be skipped too";
 }

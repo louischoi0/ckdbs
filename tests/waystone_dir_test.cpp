@@ -49,7 +49,7 @@ PageId ChildOf(storage::PageStore& store, PageId dir_page, std::size_t index) {
     auto bytes = store.Get(dir_page);
     EXPECT_TRUE(bytes.ok()) << bytes.status().message();
     PageId child = kEmptyDirSlot;
-    std::memcpy(&child, bytes.value().data() + index * sizeof(PageId), sizeof(PageId));
+    std::memcpy(&child, bytes.value().bytes().data() + index * sizeof(PageId), sizeof(PageId));
     return child;
 }
 
@@ -58,13 +58,13 @@ PageId ChildOf(storage::PageStore& store, PageId dir_page, std::size_t index) {
 void FormatAs(storage::PageStore& store, PageId page_id, std::uint64_t arg_hash) {
     auto bytes = store.Get(page_id);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    FormatWaystonePage(bytes.value(), {kPatternId, arg_hash}, /*recorded_ts=*/7);
+    FormatWaystonePage(bytes.value().bytes(), {kPatternId, arg_hash}, /*recorded_ts=*/7);
 }
 
 bool PageHolds(storage::PageStore& store, PageId page_id, std::uint64_t arg_hash) {
     auto bytes = store.Get(page_id);
     EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-    return WaystonePageHolds(bytes.value(), {kPatternId, arg_hash});
+    return WaystonePageHolds(bytes.value().bytes(), {kPatternId, arg_hash});
 }
 
 // ---- Derived constants ----------------------------------------------------
@@ -268,7 +268,7 @@ TEST_F(WaystoneDirTest, APatternIdMismatchIsAMissToo) {
 
     auto bytes = store_.Get(created.value());
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    EXPECT_FALSE(WaystonePageHolds(bytes.value(), {kPatternId + 1, kArgHash}));
+    EXPECT_FALSE(WaystonePageHolds(bytes.value().bytes(), {kPatternId + 1, kArgHash}));
 }
 
 // ---- Growth ---------------------------------------------------------------
@@ -376,7 +376,7 @@ TEST_F(WaystoneDirTest, ADanglingChildIdIsReportedRatherThanFollowed) {
     auto bytes = store_.Get(root);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
     const PageId bogus = 9999;
-    std::memcpy(bytes.value().data() + DirIndexAt(7, 2, 0) * sizeof(PageId), &bogus,
+    std::memcpy(bytes.value().bytes().data() + DirIndexAt(7, 2, 0) * sizeof(PageId), &bogus,
                 sizeof(PageId));
 
     auto found = LookupWaystonePage(store_, root, 2, Key(7));

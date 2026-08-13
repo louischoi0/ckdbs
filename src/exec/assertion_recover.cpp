@@ -27,6 +27,8 @@ using storage::cabin::BoundCabinPage;
 // after the checkpoint, and the fold that follows is what creates that group.
 // Attaching it then is not this walk's job, because the fold re-appends the
 // linkage itself when it applies the record.
+// Peak pins (MG03): 1 - the chain walk holds each page only while reading
+// its entries, and the ref is reassigned on the next hop.
 StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId root,
                                                BoundCabin& cabin) {
     // Collected first, attached in one batch: resolving each entry's group id
@@ -55,7 +57,7 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
         // the read-only promise is by contract, not by type (page_store.hpp) -
         // so the span goes straight in. This walk calls only entry_count(),
         // Read() and next_page_id(), none of which write.
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) {
             return view.status().WithContext("assertion recovery: cabin page " +
                                              std::to_string(page_id));

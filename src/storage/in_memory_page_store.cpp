@@ -7,7 +7,7 @@ namespace kds::storage {
 InMemoryPageStore::InMemoryPageStore(PageId first_new_page_id) noexcept
     : next_new_page_id_(first_new_page_id) {}
 
-StatusOr<std::span<std::byte, kPageSize>> InMemoryPageStore::CreateAt(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> InMemoryPageStore::CreateAtUnpinned(PageId page_id) {
     if (pages_.contains(page_id)) {
         return Status::AlreadyExists("page id already in use");
     }
@@ -19,7 +19,7 @@ StatusOr<std::span<std::byte, kPageSize>> InMemoryPageStore::CreateAt(PageId pag
     return view;
 }
 
-StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> InMemoryPageStore::CreateNew() {
+StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> InMemoryPageStore::CreateNewUnpinned() {
     // Skip ids `CreateAt` already placed. The cursor is where to *start*
     // looking, not a claim that everything from it upward is free, and
     // nothing advances it when a page is placed by id.
@@ -40,7 +40,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> InMemoryPageStore::
         return created.status();
     }
     ++next_new_page_id_;
-    return std::make_pair(id, created.value());
+    return std::make_pair(id, created.value().bytes());
 }
 
 Status InMemoryPageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
@@ -50,7 +50,7 @@ Status InMemoryPageStore::RaiseAllocationFloor(PageId first_allocatable_page_id)
     return Status::OK();
 }
 
-StatusOr<std::span<std::byte, kPageSize>> InMemoryPageStore::Get(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> InMemoryPageStore::GetUnpinned(PageId page_id) {
     auto it = pages_.find(page_id);
     if (it == pages_.end()) {
         return Status::NotFound("page id not found");
