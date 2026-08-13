@@ -212,6 +212,9 @@ StatusOr<PageId> CreateChain(storage::PageStore& store) {
     return page_id;
 }
 
+// Peak pins (MG03): 2 - the walk holds one page at a time (the GetForRead
+// ref is reassigned per hop), and growth holds the old tail and the new
+// page together for the link write.
 StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
                                         std::span<const std::byte> value) {
     if (root == kInvalidPageId) {
@@ -286,7 +289,8 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     return ChainAppendResult{VarHeapPtr{new_id, new_slot.value()}, new_id, tail_id};
 }
 
-StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr ptr) {
+StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr ptr,
+                                           storage::PageRef& pin) {
     if (ptr.page_id == kInvalidPageId) {
         return Status::Corruption("var-heap pointer names the invalid page id");
     }
@@ -299,7 +303,14 @@ StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr
     if (Status s = storage::ValidatePageHeader(bytes.value().bytes(), PageType::kVarHeap); !s.ok()) {
         return s;
     }
-    return PageRead(bytes.value().bytes(), ptr.slot);
+    // The returned span points into the frame, so the caller owns the pin
+    // for as long as it reads (MG03's Shape C: this function returned a
+    // span into an unpinned frame, and a second Fetch in the same loop
+    // could evict the first one's page - the MG05 ASan run caught exactly
+    // that in ResolveSpills' two-spill row).
+    std::span<std::byte, kPageSize> page = bytes.value().bytes();
+    pin = std::move(bytes.value());
+    return PageRead(page, ptr.slot);
 }
 
 StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId root) {

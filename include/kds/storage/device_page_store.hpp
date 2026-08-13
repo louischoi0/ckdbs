@@ -443,6 +443,28 @@ public:
     // by class and are allocated above the system range.
     void SetResidentLimit(PageId first_evictable_page_id) noexcept;
 
+    // ---- The frame budget: what arms the sweep (MG06) -------------------
+    //
+    // How many frames may stay resident. 0 - the default - means unbounded,
+    // which is exactly the pre-eviction behaviour; a nonzero budget makes
+    // every fault that pushes residency past it run the CLOCK sweep for the
+    // excess, inline, on the faulting path (EV5's on-demand trigger). The
+    // page just faulted is never its own victim: its usage counter was just
+    // bumped, and the sweep decrements before it reclaims.
+    //
+    // In debug builds `KDS_TEST_FRAME_BUDGET` in the environment overrides
+    // an unset budget at Open() - which is how MG05 runs the entire suite
+    // under brutal eviction pressure without threading a knob through every
+    // fixture.
+    void SetFrameBudget(std::size_t frames) noexcept { frame_budget_ = frames; }
+    std::size_t frame_budget() const noexcept { return frame_budget_; }
+
+    // Pin accounting (MG04). Live pins across all frames, and the highest
+    // that count has ever been - the number the per-operation ceiling
+    // decision needs measured rather than assumed.
+    std::size_t live_pins() const noexcept { return live_pins_; }
+    std::size_t pin_high_water() const noexcept { return pin_high_water_; }
+
     // One clock pass, reclaiming at most `budget` frames. Returns how many
     // it actually reclaimed - so a caller can tell "nothing to do" from
     // "nothing allowed", which are very different states under pressure.
@@ -484,6 +506,18 @@ public:
     // observability: an unbalanced pin shows up here as a number that never
     // returns to its floor.
     std::size_t pinned_frames() const noexcept;
+
+    // The per-operation pin ceiling (MG04, `docs/workplan-pageref.md` §7's
+    // open decision, given a first value here). Derivation, from the MG03
+    // audit rather than from air: a btree grow path holds at most 4
+    // (SplitLeafAndInsert's leaf + created leaf, stacked under
+    // PromoteSeparator's parent + created node per level), an outer chain
+    // walk adds 1, and index maintenance stacked under a statement adds 2
+    // more of its own split path. 8 bounds that with one frame of slack;
+    // the debug assert in PinFrame() is what turns the estimate into a
+    // measurement, because a workload that exceeds it aborts naming the
+    // count rather than quietly holding more of the pool than EV8 assumes.
+    static constexpr std::size_t kPinCeiling = 8;
 
     std::uint32_t allocated_pages() const noexcept;
     bool IsAllocated(PageId page_id) const noexcept;
@@ -557,7 +591,7 @@ private:
     void UnpinFrame(PageId page_id) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
     std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes,
-                                                bool dirty);
+                                                bool dirty, bool warm = true);
     Status EnsureAddressable(PageId page_id);
 
     std::span<const std::byte, kPageSize> free_map_bytes() const noexcept {
@@ -615,6 +649,9 @@ private:
     // O(n log n) per pass over an unordered_map and is why the frame table
     // becomes open-addressed at EV05 (page.md §16-7).
     PageId clock_hand_ = 0;
+    std::size_t frame_budget_ = 0;  // 0 = unbounded (pre-eviction behaviour)
+    std::size_t live_pins_ = 0;
+    std::size_t pin_high_water_ = 0;
 
     std::unordered_map<PageId, Frame> frames_;
 };

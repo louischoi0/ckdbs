@@ -1,6 +1,8 @@
 #include "kds/storage/device_page_store.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -63,8 +65,20 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
         }
     }
 
-    return std::unique_ptr<DevicePageStore>(
+    auto store = std::unique_ptr<DevicePageStore>(
         new DevicePageStore(device, first_new_page_id, free_map, headerless_map, fresh));
+#ifndef NDEBUG
+    // MG05: `KDS_TEST_FRAME_BUDGET=<n>` puts every debug-build store under
+    // eviction pressure without threading a knob through each fixture. Env
+    // rather than config on purpose: it exists to run the *whole* suite
+    // against a brutal budget, and a config key would have to be planted in
+    // hundreds of tests to reach the stores they construct.
+    if (const char* budget = std::getenv("KDS_TEST_FRAME_BUDGET"); budget != nullptr) {
+        const long parsed = std::strtol(budget, nullptr, 10);
+        if (parsed > 0) store->SetFrameBudget(static_cast<std::size_t>(parsed));
+    }
+#endif
+    return store;
 }
 
 bool DevicePageStore::IsHeaderless(PageId page_id) const noexcept {
@@ -160,9 +174,17 @@ Status DevicePageStore::EnsureAddressable(PageId page_id) {
 
 std::span<std::byte, kPageSize> DevicePageStore::InsertFrame(PageId page_id,
                                                              std::unique_ptr<Page> bytes,
-                                                             bool dirty) {
+                                                             bool dirty, bool warm) {
     std::span<std::byte, kPageSize> view(*bytes);
-    frames_.insert_or_assign(page_id, Frame{std::move(bytes), dirty});
+    Frame frame{std::move(bytes), dirty};
+    // An ordinary miss starts warm (usage 1), not cold: the inline sweep
+    // MG06 wires onto the fault path must never reclaim the page whose
+    // fault triggered it, and one usage point is exactly one sweep rotation
+    // of protection - the same grace a hit's bump buys. A *ring* fetch
+    // starts cold, because a scan's touch is not heat (§5) and the ring's
+    // own slot release depends on usage staying zero.
+    frame.usage = warm ? std::uint8_t{1} : std::uint8_t{0};
+    frames_.insert_or_assign(page_id, std::move(frame));
     return view;
 }
 
@@ -235,7 +257,24 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("pagestore", "read page=" + std::to_string(page_id) + " from device");
     }
-    return InsertFrame(page_id, std::move(bytes), mark_dirty);
+    auto view = InsertFrame(page_id, std::move(bytes), mark_dirty, bump_usage);
+    // MG06: the on-demand trigger (EV5). Faulting past the budget sweeps
+    // the excess inline - under a **temporary pin on the frame just
+    // inserted**, because usage alone does not protect it: EvictColdFrames
+    // makes up to kClockUsageCap+1 laps in one call, so it can decrement a
+    // fresh frame's single usage point on one lap and reclaim it on the
+    // next, freeing the exact bytes this function is about to return. (The
+    // first version of this block claimed one usage point was enough; the
+    // MG05 poisoner run found the freed frame within ten thousand ops.)
+    // The pin is safe to take by hand here: pinned frames are never erased,
+    // so the iterator stays valid across the sweep.
+    if (frame_budget_ != 0 && frames_.size() > frame_budget_) {
+        auto guard = frames_.find(page_id);
+        ++guard->second.pins;
+        EvictColdFrames(frames_.size() - frame_budget_);
+        --guard->second.pins;
+    }
+    return view;
 }
 
 void DevicePageStore::ReleaseScanSlot(PageId page_id) noexcept {
@@ -744,7 +783,22 @@ void DevicePageStore::PinFrame(PageId page_id) noexcept {
     // evictable while a handle lives) is the one the poisoner (MG05)
     // detects deterministically.
     auto it = frames_.find(page_id);
-    if (it != frames_.end()) ++it->second.pins;
+    if (it == frames_.end()) return;
+    ++it->second.pins;
+    ++live_pins_;
+    if (live_pins_ > pin_high_water_) pin_high_water_ = live_pins_;
+#ifndef NDEBUG
+    // MG04's ceiling, asserted rather than logged: a workload that holds
+    // more pins than the audit derived is either a new Shape-B site missing
+    // its bound or a leak, and both should fail the test that reaches them.
+    if (live_pins_ > kPinCeiling) {
+        std::fprintf(stderr,
+                     "DevicePageStore: %zu live pins exceeds kPinCeiling %zu "
+                     "(docs/workplan-pageref.md MG04)\n",
+                     live_pins_, kPinCeiling);
+        std::abort();
+    }
+#endif
 }
 
 void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
@@ -755,7 +809,10 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
     // symmetric: a floor leaves a frame resident forever (a leak, visible in
     // pinned_frames()), where an underflow makes it evictable while somebody
     // still holds it.
-    if (it->second.pins != 0) --it->second.pins;
+    if (it->second.pins != 0) {
+        --it->second.pins;
+        if (live_pins_ != 0) --live_pins_;
+    }
 }
 
 void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
@@ -868,6 +925,13 @@ std::size_t DevicePageStore::EvictColdFrames(std::size_t budget) {
             continue;
         }
 
+#ifndef NDEBUG
+        // MG05's poisoner: a caller that kept a raw span into this frame
+        // reads 0xEF, deterministically, instead of whatever the allocator
+        // does next. ASan turns the same mistake into a hard stop; this
+        // makes it visible in a plain Debug build too.
+        std::memset(frame.bytes->data(), 0xEF, kPageSize);
+#endif
         frames_.erase(it);
         ++reclaimed;
         clock_hand_ = id + 1;

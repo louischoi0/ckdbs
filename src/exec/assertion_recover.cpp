@@ -27,6 +27,8 @@ using storage::cabin::BoundCabinPage;
 // after the checkpoint, and the fold that follows is what creates that group.
 // Attaching it then is not this walk's job, because the fold re-appends the
 // linkage itself when it applies the record.
+// Peak pins (MG03): 1 - the chain walk holds each page only while reading
+// its entries, and the ref is reassigned on the next hop.
 StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId root,
                                                BoundCabin& cabin) {
     // Collected first, attached in one batch: resolving each entry's group id

@@ -435,7 +435,8 @@ private:
                         ": spilled cell points outside the relation's own chain");
                 continue;
             }
-            auto bytes = varheap::Fetch(store_, ptr);
+            storage::PageRef value_pin;
+            auto bytes = varheap::Fetch(store_, ptr, value_pin);
             if (!bytes.ok()) {
                 Add(CheckKind::kVarHeap, ptr.page_id,
                     "relation '" + name + "' id " + std::to_string(spill.keystone_id) +

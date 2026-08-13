@@ -966,7 +966,8 @@ Status ResolveSpills(storage::PageStore& store, const std::vector<PendingSpill>&
                                        std::to_string(spill.column) + " of a row with " +
                                        std::to_string(out.size()) + " column(s)");
         }
-        auto bytes = varheap::Fetch(store, spill.ptr);
+        storage::PageRef pin;
+        auto bytes = varheap::Fetch(store, spill.ptr, pin);
         if (!bytes.ok()) return bytes.status();
 
         // The cell's own length and the var-heap slot's must agree. Two

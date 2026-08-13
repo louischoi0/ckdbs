@@ -163,7 +163,8 @@ TEST_F(VarHeapChainTest, AppendAndFetchRoundTrip) {
     auto ptr = ChainAppend(store_, root.value(), Bytes("a spilled value"));
     ASSERT_TRUE(ptr.ok()) << ptr.status().message();
 
-    auto fetched = Fetch(store_, ptr.value().ptr);
+    storage::PageRef fetch_pin;
+    auto fetched = Fetch(store_, ptr.value().ptr, fetch_pin);
     ASSERT_TRUE(fetched.ok()) << fetched.status().message();
     EXPECT_EQ(TextOf(fetched.value()), "a spilled value");
 
@@ -232,7 +233,8 @@ TEST_F(VarHeapChainTest, GrowsByTailAppendAndKeepsEveryEarlierPointerValid) {
     // Every pointer taken along the way still resolves, and to the same
     // bytes. Nothing was moved to make room - that is the design.
     for (std::size_t i = 0; i < pointers.size(); ++i) {
-        auto fetched = Fetch(store_, pointers[i]);
+        storage::PageRef fetch_pin;
+        auto fetched = Fetch(store_, pointers[i], fetch_pin);
         ASSERT_TRUE(fetched.ok()) << "pointer " << i << ": " << fetched.status().message();
         EXPECT_EQ(TextOf(fetched.value()), values[i]) << "pointer " << i;
     }
@@ -266,7 +268,8 @@ TEST_F(VarHeapChainTest, FetchingThroughAPointerAtANonVarHeapPageIsRefused) {
     ASSERT_TRUE(created.ok());
     storage::FormatPage(created.value().second.bytes(), PageType::kHeap);
 
-    auto fetched = Fetch(store_, VarHeapPtr{created.value().first, 0});
+    storage::PageRef fetch_pin;
+    auto fetched = Fetch(store_, VarHeapPtr{created.value().first, 0}, fetch_pin);
     ASSERT_FALSE(fetched.ok());
     EXPECT_EQ(fetched.status().code(), StatusCode::kCorruption);
 }
