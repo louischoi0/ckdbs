@@ -569,9 +569,16 @@ private:
         recording.rel_slot = static_cast<std::uint16_t>(index);
         recording.col_pos = step.cabin->col_pos;
         recording.value = &step.cabin->value;
+        // **Saved and restored, never cleared.** The walk below descends into
+        // the next step, which may be a cabin step recording a walk of its
+        // own - and clearing to null on its way out would cancel *this*
+        // recording from the second row onwards. The set would then be
+        // committed as observed while missing qualifying pks, which is the
+        // C1 break the completed-walk check below exists to prevent.
+        Recording* outer_recording = recording_;
         recording_ = &recording;
         Status walked = co_await RunWalkStep(steps, index, step, access);
-        recording_ = nullptr;
+        recording_ = outer_recording;
 
         if (!walked.ok()) co_return walked;
         // **Only a completed walk may be committed.** A walk that a sink
@@ -725,10 +732,27 @@ private:
         // descent per element of it.
         std::sort(index_scratch_.begin(), index_scratch_.end());
 
+        // **Moved out of the member for phase 2, and that is a correctness
+        // property.** The descent below re-enters `RunStep` for the *next*
+        // step, which may itself be an index step on this same runner - and
+        // phase 1 above starts by clearing this vector. A chain with two
+        // index steps (`... FROM b AS a JOIN b AS c ON a.qty = c.qty WHERE
+        // a.owner = 1 AND c.owner = 2`) therefore had the inner step clear
+        // and refill the very buffer the outer loop was walking, so the
+        // outer step resolved the *inner* step's pks and the reply silently
+        // lost rows - an accelerator changing a query result, which
+        // feat-index.md §1 forbids outright.
+        //
+        // The buffer is handed back after the loop, so the single-index-step
+        // chain - the common one - still reuses one allocation across rows,
+        // which is why the scratch lives on the runner at all.
+        std::vector<std::uint64_t> pks;
+        pks.swap(index_scratch_);
+
         // Phase 2. Every pk resolves through the clustered tree - the index
         // is refused on a heap relation precisely so this descent exists
         // (spec IX3).
-        for (const std::uint64_t pk : index_scratch_) {
+        for (const std::uint64_t pk : pks) {
             if (stopped_) break;
             NoteFetch();
             ++step_stats.pages_fetched;
@@ -758,6 +782,8 @@ private:
                 co_return s;
             }
         }
+        pks.clear();
+        pks.swap(index_scratch_);
         co_return Status::OK();
     }
 
@@ -890,11 +916,19 @@ private:
             serve_scratch_.push_back(Located{entry.page_id, entry.slot});
         }
 
+        // Moved out of the member for phase 2, for the reason spelled out in
+        // RunIndexStep: the descent below may reach another cabin step on
+        // this same runner, whose phase 1 clears this vector - and it would
+        // be clearing the one this loop is walking. Handed back after the
+        // loop so a single cabin step still reuses one allocation.
+        std::vector<Located> located;
+        located.swap(serve_scratch_);
+
         // Phase 2. The page is fetched per entry rather than carried out of
         // phase 1: `AcceptTupleAt` descends into the next step, and anything
         // below it may fetch, so a page view held across entries is exactly
         // the span R1 forbids.
-        for (const Located& at : serve_scratch_) {
+        for (const Located& at : located) {
             if (stopped_) break;
             NoteFetch();
             ++step_stats.pages_fetched;
@@ -914,7 +948,9 @@ private:
                 co_return s;
             }
         }
-        step_stats.cabin_entries_served += serve_scratch_.size();
+        step_stats.cabin_entries_served += located.size();
+        located.clear();
+        located.swap(serve_scratch_);
         co_return Status::OK();
     }
 
@@ -934,9 +970,11 @@ private:
         recording.rel_slot = static_cast<std::uint16_t>(index);
         recording.col_pos = step.cabin->col_pos;
         recording.value = &step.cabin->value;
+        // Saved and restored rather than cleared, for RunCabinStep's reason.
+        Recording* outer_recording = recording_;
         recording_ = &recording;
         Status walked = co_await RunWalkStep(steps, index, step, access);
-        recording_ = nullptr;
+        recording_ = outer_recording;
 
         if (!walked.ok()) co_return walked;
         if (stopped_) co_return Status::OK();  // a partial walk records nothing

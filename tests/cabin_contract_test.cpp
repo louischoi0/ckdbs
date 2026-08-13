@@ -665,5 +665,55 @@ TEST(CabinContractTest, ADeclaredCabinObservesOnFirstSelection) {
     EXPECT_NE(second.find("cabin_hits=1"), std::string::npos) << second;
 }
 
+TEST(CabinContractTest, TwoCabinStepsInOneChainNeitherShareBuffersNorCancelEachOther) {
+    // **The nested case**, which the shared query set cannot reach because
+    // every statement in it opens one relation. A join whose both sides are
+    // cabined puts two cabin steps in one chain, and the inner one runs
+    // inside the outer one's recording walk and inside its serve loop. Two
+    // pieces of runner state were live on two frames at once:
+    //
+    //   - `recording_`, cleared to null on the inner walk's way out, which
+    //     cancelled the outer recording from its second row - committing a
+    //     set as observed while missing qualifying pks, exactly the C1
+    //     break the completed-walk check exists to prevent;
+    //   - the phase-2 location buffer, cleared and refilled by the inner
+    //     serve while the outer serve was walking it.
+    //
+    // Either one alone loses rows, and a Cabin that loses rows is being
+    // treated as authoritative while disagreeing with storage.
+    Instance on(/*cabins=*/true);
+    Instance off(/*cabins=*/false);
+    const char* kDecl = " (id int64, sym varchar, qty int64) BTREE";
+    for (Instance* db : {&on, &off}) {
+        ASSERT_EQ(db->Run(std::string("CREATE TABLE p") + kDecl).substr(0, 7), "CREATED");
+        ASSERT_EQ(db->Run(std::string("CREATE TABLE q") + kDecl).substr(0, 7), "CREATED");
+        // Deliberately different set sizes and different pks: two relations
+        // whose sets happen to agree would hide a buffer served from the
+        // wrong step.
+        for (int i = 1; i <= 4; ++i) {
+            const std::string qty = std::to_string(i);
+            ASSERT_EQ(db->Run("INSERT INTO p VALUES ('x', " + qty + ")").substr(0, 8), "INSERTED");
+        }
+        for (int i = 1; i <= 6; ++i) {
+            const std::string qty = std::to_string(i);
+            ASSERT_EQ(db->Run("INSERT INTO q VALUES ('z', " + qty + ")").substr(0, 8), "INSERTED");
+        }
+        ASSERT_EQ(db->Run("INSERT INTO q VALUES ('y', 3)").substr(0, 8), "INSERTED");
+        ASSERT_EQ(db->Run("CREATE CABIN ON p(sym)").substr(0, 7), "CREATED");
+        ASSERT_EQ(db->Run("CREATE CABIN ON q(sym)").substr(0, 7), "CREATED");
+    }
+
+    const std::string sql =
+        "SELECT a.id, c.id FROM p AS a JOIN q AS c ON a.qty = c.qty "
+        "WHERE a.sym = 'x' AND c.sym = 'y'";
+    // Warmed past the n=2 threshold so the *serve* path runs, not only the
+    // recording walk - the two defects live one on each side of it.
+    for (int i = 0; i < 4; ++i) {
+        on.Run(sql);
+        off.Run(sql);
+    }
+    EXPECT_EQ(on.Run(sql), off.Run(sql));
+}
+
 }  // namespace
 }  // namespace kds::server

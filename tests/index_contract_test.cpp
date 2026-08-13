@@ -431,5 +431,25 @@ TEST(IndexContractTest, AnIndexWhoseWidthsDisagreeWithItsCatalogRowIsCorruption)
     EXPECT_EQ(out.rfind("ERR", 0), 0u) << out;
 }
 
+TEST(IndexContractTest, TwoIndexStepsInOneChainDoNotShareOnePhaseTwoBuffer) {
+    // **The nested case the shared query set cannot express**, because every
+    // statement in it opens one relation. A join whose *both* sides are
+    // served by an index puts two index steps in one chain, and the inner
+    // one runs inside the outer one's phase-2 loop - so the runner-held
+    // scratch that carries phase 1's pks to phase 2 is live on two frames at
+    // once. Sharing it made the outer step resolve the inner step's pks and
+    // drop eleven of thirteen rows: the index changed the reply, which is
+    // the one thing §1 does not allow it to do.
+    Instance on(/*indexes=*/true);
+    Instance off(/*indexes=*/false);
+    LoadMaintained(on);
+    LoadMaintained(off);
+
+    const std::string sql =
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON a.qty = c.qty "
+        "WHERE a.owner = 1 AND c.owner = 2";
+    EXPECT_EQ(on.Run(sql), off.Run(sql));
+}
+
 }  // namespace
 }  // namespace kds::server
