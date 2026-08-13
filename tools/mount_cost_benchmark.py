@@ -190,6 +190,20 @@ def main():
                    help="value length of the loaded rows; over 61 spills to the var-heap")
     p.add_argument("--crash", action="store_true",
                    help="SIGKILL the loader, so the first mount has work to replay")
+    p.add_argument("--assertion", action="store_true",
+                   help="declare a group ceiling over the loaded relation, so the "
+                        "load leaves one Bound Cabin entry per row and every "
+                        "measured mount runs RC07's assertion revival and "
+                        "AttachEntriesFromPages over those entries. Without it "
+                        "no assertion exists and that walk does nothing")
+    p.add_argument("--assert-groups", type=int, default=64,
+                   help="distinct GROUP BY values under --assertion; the entry "
+                        "count is --rows regardless, this only sets how many "
+                        "group headers the walk attributes them to")
+    p.add_argument("--assert-rollback-every", type=int, default=0,
+                   help="under --assertion, every Nth row is inserted in its own "
+                        "transaction and rolled back, so its entry is left "
+                        "orphaned on the page. 0 rolls back nothing")
     p.add_argument("--durability", default="relaxed", choices=("strict", "group", "relaxed"))
     p.add_argument("--port", type=int, default=15481)
     p.add_argument("--scratch", default=str(Path.home() / "mount-bench"))
@@ -235,17 +249,42 @@ def main():
     create_s = loader.start()
     if args.rows:
         conn = loader.connect(timeout=120.0)
+        # Under --assertion the relation carries the grouped column the
+        # ceiling is declared over; without it the shape is unchanged, so a
+        # run with no assertion measures exactly what it measured before.
+        columns = ("id int64, grp int64, payload varchar" if args.assertion
+                   else "id int64, payload varchar")
         reply = format_reply(conn.send_command(
-            f"CREATE TABLE {table} (id int64, payload varchar) BTREE"))
+            f"CREATE TABLE {table} ({columns}) BTREE"))
         if reply.startswith("ERR"):
             abort(f"CREATE TABLE failed: {reply}")
+        if args.assertion:
+            # Declared before the load, so the load's inserts go through the
+            # reserve path and every row leaves its own entry - the walk at
+            # mount then has --rows entries to attribute. A ceiling of 2x the
+            # loosest bound can never trip.
+            reply = format_reply(conn.send_command(
+                f"CREATE ASSERTION {table}_lim ON {table} GROUP BY (grp) "
+                f"CHECK COUNT(*) <= {2 * args.rows}"))
+            if reply.startswith("ERR"):
+                abort(f"CREATE ASSERTION failed: {reply}")
         for i in range(args.rows):
             text = "".join(rng.choices(ALPHABET, k=args.value_bytes))
             # One value, not two: the pk is ASSIGNED, so a row supplies the
             # columns after it (`docs/heap-and-tuple.md` §4.1).
-            r = conn.send_command(f"INSERT INTO {table} VALUES ('{text}')")
+            values = (f"{i % args.assert_groups}, '{text}'" if args.assertion
+                      else f"'{text}'")
+            rolled = (args.assertion and args.assert_rollback_every
+                      and i % args.assert_rollback_every == 0)
+            if rolled:
+                conn.send_command("BEGIN")
+            r = conn.send_command(f"INSERT INTO {table} VALUES ({values})")
             if r.startswith("ERR"):
                 abort(f"INSERT {i} failed: {r}")
+            if rolled:
+                r = conn.send_command("ROLLBACK")
+                if r.startswith("ERR"):
+                    abort(f"ROLLBACK {i} failed: {r}")
         if not args.crash:
             conn.send_command("SYNC")
         conn.close()
