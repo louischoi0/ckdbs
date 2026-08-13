@@ -224,10 +224,30 @@ public:
     // that reads only these pages agree with it.
     Status Write(std::uint16_t index, const BoundCabinEntry& entry);
 
+    // The two flag moves the format allows, named. Commit clears
+    // `kEntryReserved` (§6.2 step 4); abort sets `kEntryOrphaned` (AS6b).
+    //
+    // **Here rather than at the call sites**, because "a live page and a
+    // replayed page hold the same bytes after the same flag move" is a property
+    // of one function, not of four copies of read-tweak-write staying in step by
+    // eye. Both the live path (`exec/assertion_check.cpp`) and replay
+    // (`exec/assertion_replay.cpp`) go through these, which is what makes
+    // `AssertionReplayTest.TheFoldRestoresThePageAndTheDirectoryExactly`'s
+    // byte-for-byte comparison a check on the callers rather than on the
+    // mutation.
+    //
+    // Both are idempotent - one clears a bit, one sets it - which is what
+    // repeated replay of the same record needs.
+    Status ClearReserved(std::uint16_t index);
+    Status MarkOrphaned(std::uint16_t index);
+
 private:
     explicit BoundCabinPage(std::span<std::byte, kPageSize> page) noexcept : page_(page) {}
 
     void SetEntryCount(std::uint16_t count) noexcept;
+
+    // The shared half of the two flag moves above.
+    Status SetFlags(std::uint16_t index, std::uint8_t set, std::uint8_t clear);
 
     std::span<std::byte, kPageSize> page_;
 };

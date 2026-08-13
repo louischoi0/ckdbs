@@ -184,4 +184,22 @@ Status BoundCabinPage::Write(std::uint16_t index, const BoundCabinEntry& entry) 
     return EncodeEntry(entry, page_.subspan(at).first<kEntryBytes>());
 }
 
+// Both flag moves share this: read the entry, move one bit, write it back.
+// `Read` is what bounds-checks, so neither needs its own check.
+Status BoundCabinPage::SetFlags(std::uint16_t index, std::uint8_t set, std::uint8_t clear) {
+    auto entry = Read(index);
+    if (!entry.ok()) return entry.status();
+    BoundCabinEntry moved = entry.value();
+    moved.flags = static_cast<std::uint8_t>((moved.flags | set) & ~clear);
+    return Write(index, moved);
+}
+
+Status BoundCabinPage::ClearReserved(std::uint16_t index) {
+    return SetFlags(index, /*set=*/0, /*clear=*/kEntryReserved);
+}
+
+Status BoundCabinPage::MarkOrphaned(std::uint16_t index) {
+    return SetFlags(index, /*set=*/kEntryOrphaned, /*clear=*/0);
+}
+
 }  // namespace kds::storage::cabin

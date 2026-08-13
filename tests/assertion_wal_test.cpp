@@ -39,7 +39,6 @@ using storage::InMemoryPageStore;
 using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
-using storage::cabin::kEntryOrphaned;
 using storage::cabin::kEntryReserved;
 
 constexpr std::uint64_t kAssertionId = 42;
@@ -344,11 +343,7 @@ protected:
         auto view = BoundCabinPage::Open(page.value());
         ASSERT_TRUE(view.ok());
         for (const std::uint16_t index : indexes) {
-            auto entry = view.value().Read(index);
-            ASSERT_TRUE(entry.ok());
-            BoundCabinEntry cleared = entry.value();
-            cleared.flags = static_cast<std::uint8_t>(cleared.flags & ~kEntryReserved);
-            ASSERT_TRUE(view.value().Write(index, cleared).ok());
+            ASSERT_TRUE(view.value().ClearReserved(index).ok());
         }
         log_.push_back(CommitRecord(txn_id, indexes));
     }
@@ -365,11 +360,7 @@ protected:
         ASSERT_TRUE(page.ok());
         auto view = BoundCabinPage::Open(page.value());
         ASSERT_TRUE(view.ok());
-        auto entry = view.value().Read(index);
-        ASSERT_TRUE(entry.ok());
-        BoundCabinEntry orphaned = entry.value();
-        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
-        ASSERT_TRUE(view.value().Write(index, orphaned).ok());
+        ASSERT_TRUE(view.value().MarkOrphaned(index).ok());
         log_.push_back(RollbackRecord(txn_id, delta, index, key));
     }
 

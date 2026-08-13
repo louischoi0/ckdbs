@@ -16,7 +16,6 @@ using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryDeparture;
 using storage::cabin::kEntryHintValid;
-using storage::cabin::kEntryOrphaned;
 using storage::cabin::kEntryReserved;
 
 // Schema position -> the caller's value. INSERT statements carry columns
@@ -309,11 +308,9 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
         }
 
         for (const std::uint16_t index : indexes) {
-            auto entry = view.value().Read(index);
-            if (!entry.ok()) return entry.status();
-            BoundCabinEntry cleared = entry.value();
-            cleared.flags = static_cast<std::uint8_t>(cleared.flags & ~kEntryReserved);
-            if (Status s = view.value().Write(index, cleared); !s.ok()) return s;
+            if (Status s = view.value().ClearReserved(index); !s.ok()) {
+                return s.WithContext("assert commit: clearing the reserved flag");
+            }
         }
 
         if (stamp != wal::kNoLsn) {
@@ -383,11 +380,7 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         if (!page.ok()) return page.status().WithContext("assert abort: fetching the entry page");
         auto view = BoundCabinPage::Open(page.value());
         if (!view.ok()) return view.status().WithContext("assert abort: opening the entry page");
-        auto entry = view.value().Read(it->index);
-        if (!entry.ok()) return entry.status().WithContext("assert abort: reading the entry");
-        BoundCabinEntry orphaned = entry.value();
-        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
-        if (Status s = view.value().Write(it->index, orphaned); !s.ok()) {
+        if (Status s = view.value().MarkOrphaned(it->index); !s.ok()) {
             return s.WithContext("assert abort: marking the entry orphaned");
         }
 

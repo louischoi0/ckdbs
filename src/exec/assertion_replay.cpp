@@ -15,8 +15,6 @@ namespace {
 using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
-using storage::cabin::kEntryOrphaned;
-using storage::cabin::kEntryReserved;
 
 std::string KeyOf(std::span<const std::byte> bytes) {
     std::string key;
@@ -118,12 +116,7 @@ Status ReplayCommit(const wal::DecodedRecord& record, storage::PageStore& store,
     BoundCabinPage& view = opened.value();
 
     for (std::uint16_t i = 0; i < d.fields.count; ++i) {
-        const std::uint16_t index = d.index_at(i);
-        auto entry = view.Read(index);
-        if (!entry.ok()) return entry.status().WithContext("assert replay: reading at commit");
-        BoundCabinEntry cleared = entry.value();
-        cleared.flags = static_cast<std::uint8_t>(cleared.flags & ~kEntryReserved);
-        if (Status s = view.Write(index, cleared); !s.ok()) {
+        if (Status s = view.ClearReserved(d.index_at(i)); !s.ok()) {
             return s.WithContext("assert replay: clearing the reserved flag");
         }
     }
@@ -156,11 +149,7 @@ Status ReplayRollback(const wal::DecodedRecord& record, storage::PageStore& stor
     if (!page.ok()) return page.status().WithContext("assert replay: fetching the entry page");
     auto opened = BoundCabinPage::Open(page.value());
     if (!opened.ok()) return opened.status().WithContext("assert replay: opening the entry page");
-    auto entry = opened.value().Read(d.fields.index);
-    if (!entry.ok()) return entry.status().WithContext("assert replay: reading at rollback");
-    BoundCabinEntry orphaned = entry.value();
-    orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
-    if (Status s = opened.value().Write(d.fields.index, orphaned); !s.ok()) {
+    if (Status s = opened.value().MarkOrphaned(d.fields.index); !s.ok()) {
         return s.WithContext("assert replay: marking the entry orphaned");
     }
 

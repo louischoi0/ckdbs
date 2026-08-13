@@ -48,7 +48,6 @@ using storage::cabin::BoundCabinEntry;
 using storage::cabin::BoundCabinPage;
 using storage::cabin::kEntryBytes;
 using storage::cabin::kEntryHintValid;
-using storage::cabin::kEntryOrphaned;
 
 constexpr std::uint64_t kSegmentSize = 64 * 1024;
 constexpr std::uint64_t kAssertionId = 77;
@@ -98,6 +97,17 @@ protected:
         EXPECT_TRUE(index.ok()) << index.status().message();
         EXPECT_TRUE(live.Apply(key, value, kCabinPage, index.value()).ok());
         return index.value();
+    }
+
+    // The live abort's page half: the directory drops the linkage (the caller's
+    // own `Unapply`) and the page keeps the bytes with `kEntryOrphaned` set,
+    // exactly as `AssertionEnforcer::AbortTxn` does it.
+    void MarkOrphaned(std::uint16_t index) {
+        auto page = store_.Get(kCabinPage);
+        ASSERT_TRUE(page.ok());
+        auto view = BoundCabinPage::Open(page.value());
+        ASSERT_TRUE(view.ok());
+        ASSERT_TRUE(view.value().MarkOrphaned(index).ok());
     }
 
     // ASSERT_BUILD for an entry already on the page, so the fold has a record to
@@ -463,17 +473,7 @@ TEST_F(AssertionRecoverTest, AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkTo
     // (`AssertionEnforcer::AbortTxn`).
     const std::uint16_t rolled_back = Write(live, Key("x"), 7, /*pk=*/2);
     ASSERT_TRUE(live.Unapply(Key("x"), 7, kCabinPage, rolled_back).ok());
-    {
-        auto page = store_.Get(kCabinPage);
-        ASSERT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
-        ASSERT_TRUE(view.ok());
-        auto entry = view.value().Read(rolled_back);
-        ASSERT_TRUE(entry.ok());
-        BoundCabinEntry orphaned = entry.value();
-        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
-        ASSERT_TRUE(view.value().Write(rolled_back, orphaned).ok());
-    }
+    MarkOrphaned(rolled_back);
 
     const wal::Lsn checkpoint_lsn = Checkpoint(live);
 
@@ -530,17 +530,7 @@ TEST_F(AssertionRecoverTest, AnAbortAfterTheCheckpointStillCompensatesWithTheMar
     // directory drops the linkage, the page takes the mark, the record is
     // appended.
     ASSERT_TRUE(live.Unapply(Key("x"), 7, kCabinPage, rolled_back).ok());
-    {
-        auto page = store_.Get(kCabinPage);
-        ASSERT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
-        ASSERT_TRUE(view.ok());
-        auto entry = view.value().Read(rolled_back);
-        ASSERT_TRUE(entry.ok());
-        BoundCabinEntry orphaned = entry.value();
-        orphaned.flags = static_cast<std::uint8_t>(orphaned.flags | kEntryOrphaned);
-        ASSERT_TRUE(view.value().Write(rolled_back, orphaned).ok());
-    }
+    MarkOrphaned(rolled_back);
     LogRollback(rolled_back, Key("x"), /*delta=*/7);
 
     BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
