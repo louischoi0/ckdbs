@@ -1058,7 +1058,7 @@ TEST(BtreeTest, AnIdBelowItsLeafsMinKeyIsRefused) {
     auto root_created = store.CreateNew();
     ASSERT_TRUE(root_created.ok()) << root_created.status().message();
     auto [root_id, root_bytes] = root_created.value();
-    auto root = InternalView::CreateEmpty(root_bytes, /*level=*/1, /*leftmost_child=*/leaf_id);
+    auto root = InternalView::CreateEmpty(root_bytes, /*level=*/1, /*leftmost_child=*/leaf_id, /*owner_oid=*/0);
     ASSERT_TRUE(root.ok()) << root.status().message();
 
     auto r = BtreeInsert(store, root_id, /*id=*/150, MakeTuple(150, kSmallFiller), /*trx_id=*/1, /*owner_oid=*/0);
@@ -1098,7 +1098,7 @@ TEST(BtreeTest, ACyclicChildPointerIsReportedRatherThanDescendedForever) {
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
     auto [node_id, node_bytes] = created.value();
-    auto node = InternalView::CreateEmpty(node_bytes, /*level=*/1, /*leftmost_child=*/node_id);
+    auto node = InternalView::CreateEmpty(node_bytes, /*level=*/1, /*leftmost_child=*/node_id, /*owner_oid=*/0);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     auto loc = BtreeLookup(store, node_id, 1);
@@ -1138,7 +1138,7 @@ TEST(InternalViewTest, ALevelZeroNodeIsRefusedBecauseThatIsALeaf) {
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
 
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/0, /*leftmost=*/1);
+    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/0, /*leftmost=*/1, /*owner_oid=*/0);
     EXPECT_FALSE(node.ok());
     EXPECT_EQ(node.status().code(), StatusCode::kInvalidArgument);
 }
@@ -1147,7 +1147,7 @@ TEST(InternalViewTest, RoutingSendsKeysBelowTheFirstSeparatorToTheLeftmostChild)
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10, /*owner_oid=*/0);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     // A node with no separators routes everything to the leftmost child -
@@ -1172,7 +1172,7 @@ TEST(InternalViewTest, EntriesAreKeptSortedRegardlessOfInsertionOrder) {
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10, /*owner_oid=*/0);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     // Inserts arrive in ascending order in every tree this engine builds,
@@ -1195,7 +1195,7 @@ TEST(InternalViewTest, ARepeatedSeparatorIsRefusedBecauseTwoSubtreesCannotShareA
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10, /*owner_oid=*/0);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     ASSERT_TRUE(node.value().InsertEntry(100, 11).ok());
@@ -1208,7 +1208,7 @@ TEST(InternalViewTest, ASeparatorOutsideThe40BitIdRangeIsRefused) {
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10, /*owner_oid=*/0);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     // Invariant 6: an id stored outside the tuple header is a zero-extended
@@ -1223,7 +1223,7 @@ TEST(InternalViewTest, AFullNodeRefusesAnotherEntryRatherThanOverrunningThePage)
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10, /*owner_oid=*/0);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     for (std::uint16_t i = 0; i < kInternalMaxEntries; ++i) {

@@ -72,7 +72,7 @@ protected:
 
         std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
         const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap),
-                                     {0, 0, 0}};
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
         ASSERT_TRUE(EncodePageInit(init, fields).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, txn_id, kPage}, init).ok());
 

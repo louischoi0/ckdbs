@@ -134,7 +134,7 @@ public:
     // which this file does not own).
     static StatusOr<InternalView> CreateEmpty(std::span<std::byte, kPageSize> page,
                                                std::uint16_t level, PageId leftmost_child,
-                                               std::uint64_t owner_oid = 0);
+                                               std::uint64_t owner_oid);
 
     std::uint16_t level() const;
     std::uint16_t entry_count() const;

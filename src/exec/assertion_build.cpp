@@ -125,9 +125,16 @@ Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* w
         // Deliberately unstamped, LogInsert's rule for a new tuple page:
         // the first entry record into it stamps it, and an empty root that
         // never receives one carries page_lsn 0, "never logged".
+        // owner_oid 0, spelled rather than defaulted: a Bound Cabin page is
+        // the assertion registry's, not a relation's, and page.md §2a leaves
+        // that class unattributed - so 0 here is what BoundCabinPage::Format()
+        // stamps on the live path, and redo must not diverge from it.
         std::array<std::byte, wal::kPageInitPayloadSize> init{};
-        const wal::PageInitPayload fields{
-            0, static_cast<std::uint8_t>(PageType::kCabinBound), {0, 0, 0}};
+        const wal::PageInitPayload fields{0,
+                                          static_cast<std::uint8_t>(PageType::kCabinBound),
+                                          {0, 0, 0},
+                                          /*reserved2=*/0,
+                                          /*owner_oid=*/0};
         if (auto n = wal::EncodePageInit(init, fields); !n.ok()) return n.status();
         if (auto rec = wal->Append(
                 wal::RecordSpec{wal::RecordType::kPageInit, wal::kNoTxnId, pid}, init);

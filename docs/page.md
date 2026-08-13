@@ -94,9 +94,15 @@ is a new proposal, not this one.
 - **WAL:** redo must reproduce the stamp, so `PAGE_INIT`'s payload gains
   `owner_oid` (12 → 24 bytes: `owner_oid` at offset 16, four reserved
   bytes at 12 keeping the codec's mirror struct naturally aligned per
-  rules.md §2, the 12-byte prefix unchanged). The decoder accepts both lengths, the
-  12-byte legacy form decoding as owner 0 — the same compatible-zero rule
-  as the on-page arrival. The payload change and its versioning mechanics
+  rules.md §2, the 12-byte prefix unchanged). The decoder accepts both forms,
+  the 12-byte legacy one decoding as owner 0 — the same compatible-zero rule
+  as the on-page arrival. **Discriminated by a length *floor*, never by
+  equality** (corrected by review, same day): `DecodeRecord` hands a payload
+  codec the record's 8-byte-aligned tail rather than the exact payload, so a
+  12-byte payload arrives as 16 bytes of payload-plus-zero-padding and a
+  24-byte one as exactly 24 — an equality test would refuse every legacy
+  record read through the envelope, which is the sole case the compatibility
+  exists for. The payload change and its versioning mechanics
   are recorded in `docs/wal.md` §5.2 (amended at confirmation).
 
 What it answers, and at what cost:
@@ -150,15 +156,15 @@ ownership check), `docs/known-gaps.md` (RV3's uncountable half).
 `CreateEmpty`s, `index::FormatRoot`/`IndexInsert` — the entry points
 non-defaulted so no caller can silently skip stamping); rebuilds
 (`SplitLeafAndInsert`, `DivideInternalNode`) re-read the page's own stamp;
-`PAGE_INIT` is 24 bytes with both-length decode and redo re-stamps from
-it; `CREATE TABLE` and `CREATE INDEX` issue the oid *before* the first
-page so roots and backfill-split pages stamp from birth (the index oid is
-pre-issued via `IndexDef::index_oid`); FPI-created pages carry the stamp
-inside the image for free. Catalog-core fixed pages and their overflow
-stay 0 (the catalog class); `sys.pattern_defs`/`sys.assertions` chains
-stamp their well-known oids because `ChainInsert` grows them. Tests:
-header round-trip and stamp, payload owner/legacy/neither-length, redo
-stamp, chain-growth stamp, split stamp.
+`PAGE_INIT` is 24 bytes, decoded against a length floor (above), and redo
+re-stamps from it; `CREATE TABLE` and `CREATE INDEX` issue the oid *before*
+the first page so roots and backfill-split pages stamp from birth (the
+index oid is pre-issued via `IndexDef::index_oid`); FPI-created pages carry
+the stamp inside the image for free. Catalog-core fixed pages and their
+overflow stay 0 (the catalog class); `sys.pattern_defs`/`sys.assertions`
+chains stamp their well-known oids because `ChainInsert` grows them. Tests:
+header round-trip and stamp, payload owner / legacy-through-the-envelope /
+shorter-than-legacy, redo stamp, chain-growth stamp, split stamp.
 
 **Not built, deliberately**: every *consumer* — the RV3 census scan, the
 gate-3 orphan test and reclamation — and any backfill (pre-§2a pages stay

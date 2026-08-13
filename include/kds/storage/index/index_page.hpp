@@ -248,7 +248,7 @@ public:
     // (page.md §2a) is the owning *index*'s oid — the immediate-owner rule.
     static StatusOr<IndexLeafView> CreateEmpty(std::span<std::byte, kPageSize> page,
                                                 const IndexLayout& layout,
-                                                std::uint64_t owner_oid = 0);
+                                                std::uint64_t owner_oid);
 
     std::uint16_t entry_count() const;
     std::uint16_t key_width() const;
@@ -301,7 +301,7 @@ public:
     static StatusOr<IndexInternalView> CreateEmpty(std::span<std::byte, kPageSize> page,
                                                     const IndexLayout& layout,
                                                     std::uint16_t level, PageId leftmost_child,
-                                                    std::uint64_t owner_oid = 0);
+                                                    std::uint64_t owner_oid);
 
     std::uint16_t entry_count() const;
     std::uint16_t key_width() const;

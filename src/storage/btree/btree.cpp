@@ -291,9 +291,11 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageStore& store, PageId 
     // Re-fetched because CreateNew() above may have handed out a new frame.
     auto again = store.Get(node_id);
     if (!again.ok()) return again.status();
-    // The rebuild keeps the page's own stamp (page.md §2a): re-initializing
-    // in place is the one legal re-write of owner_oid, and the owner cannot
-    // have changed — pages never move between relations.
+    // The rebuild keeps the page's *own* stamp, not the caller's: a
+    // pre-§2a page carries 0, and §2a's no-backfill rule requires it to
+    // stay 0 — upgrading it here would quietly make an unreclaimable page
+    // reclaimable. On a stamped page the two are equal, so this costs
+    // nothing.
     const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(again.value()));
     auto rebuilt = InternalView::CreateEmpty(AsPage(again.value()), level, leftmost, old_owner);
     if (!rebuilt.ok()) return rebuilt.status();
@@ -521,8 +523,8 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     // a division is legal at all: the low bound a reader may have pruned by
     // without a latch does not move. Everything staying is at or above it
     // already, so invariant 3 holds on both sides.
-    // Rebuild keeps the page's own stamp, the same rule as the internal
-    // node's rebuild above.
+    // The page's *own* stamp, not the caller's — a pre-§2a page must keep
+    // its 0; the internal-node rebuild above states the full argument.
     const std::uint64_t old_owner = storage::GetOwnerOid(AsPage(old_bytes.value()));
     auto rebuilt = heap::PageView::CreateEmptyAs(AsPage(old_bytes.value()), old_min_key,
                                                   PageType::kBtreeLeaf, old_owner);

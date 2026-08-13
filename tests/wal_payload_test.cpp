@@ -126,12 +126,36 @@ TEST(WalPayloadTest, PageInitLegacyTwelveByteFormDecodesAsUnattributed) {
     EXPECT_EQ(decoded.value().owner_oid, 0u);
 }
 
-TEST(WalPayloadTest, PageInitRejectsALengthThatIsNeitherForm) {
-    // CRC-vouched bytes at a length no build ever wrote: intact and wrong,
-    // the same hard error an unknown record type is.
-    std::array<std::byte, 16> neither{};
-    neither[kPageInitPageTypeOffset] = static_cast<std::byte>(PageType::kHeap);
-    EXPECT_EQ(DecodePageInit(neither).status().code(), StatusCode::kCorruption);
+TEST(WalPayloadTest, PageInitLegacyFormSurvivesTheEnvelopesPadding) {
+    // The case the both-lengths decode exists for, and the one an equality
+    // test silently refuses: DecodeRecord returns the record's 8-byte-aligned
+    // tail rather than the exact payload, so a pre-section-2a 12-byte payload
+    // arrives here as 16 bytes - twelve written and four of the encoder's
+    // zeroed padding. A replayed pre-owner WAL comes through this path.
+    const auto record =
+        ThroughEnvelope(RecordType::kPageInit,
+                        [](std::span<std::byte> out) -> StatusOr<std::size_t> {
+                            const std::uint64_t min_key = 77;
+                            std::memcpy(out.data() + kPageInitMinKeyOffset, &min_key,
+                                        sizeof(min_key));
+                            out[kPageInitPageTypeOffset] =
+                                static_cast<std::byte>(PageType::kVarHeap);
+                            return kPageInitPayloadSizeLegacy;
+                        });
+    const auto payload = PayloadOf(record);
+    ASSERT_EQ(payload.size(), 16u);  // never 12: the alignment is the point
+
+    auto decoded = DecodePageInit(payload);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().min_key, 77u);
+    EXPECT_EQ(decoded.value().owner_oid, 0u);
+}
+
+TEST(WalPayloadTest, PageInitRejectsAPayloadShorterThanTheLegacyForm) {
+    // Below the pre-section-2a floor there is no min_key to read at all:
+    // CRC-vouched bytes that are intact and wrong.
+    std::array<std::byte, 8> stub{};
+    EXPECT_EQ(DecodePageInit(stub).status().code(), StatusCode::kCorruption);
 }
 
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------

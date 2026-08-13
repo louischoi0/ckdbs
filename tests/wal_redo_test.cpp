@@ -56,7 +56,7 @@ protected:
 
         std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
         const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeap),
-                                     {0, 0, 0}};
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
         ASSERT_TRUE(EncodePageInit(init, fields).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
 
@@ -235,7 +235,8 @@ TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {
         auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
         std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
-        const PageInitPayload f{0, static_cast<std::uint8_t>(PageType::kUndo), {0, 0, 0}};
+        const PageInitPayload f{0, static_cast<std::uint8_t>(PageType::kUndo), {0, 0, 0},
+                                /*reserved2=*/0, /*owner_oid=*/0};
         ASSERT_TRUE(EncodePageInit(init, f).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
 

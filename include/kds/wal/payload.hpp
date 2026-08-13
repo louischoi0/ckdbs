@@ -64,8 +64,10 @@ inline constexpr std::size_t kPageInitReservedOffset = 9;
 inline constexpr std::size_t kPageInitReserved2Offset = 12;
 inline constexpr std::size_t kPageInitOwnerOidOffset = 16;
 // 8+1+3+4+8 = 24 bytes on disk. Before §2a (2026-08-13) the payload was
-// the first 12 bytes; DecodePageInit still accepts that length, reading
-// owner 0 — the same compatible-zero rule as the header field's arrival.
+// the first 12 bytes; DecodePageInit still accepts a payload that short,
+// reading owner 0 — the same compatible-zero rule as the header field's
+// arrival. It is a *floor*, not an exact length: DecodeRecord returns the
+// record's 8-byte-aligned tail, so a 12-byte payload comes back as 16.
 inline constexpr std::size_t kPageInitPayloadSize = 24;
 inline constexpr std::size_t kPageInitPayloadSizeLegacy = 12;
 
