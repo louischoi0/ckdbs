@@ -224,8 +224,7 @@ public:
 
     void await_suspend(std::coroutine_handle<Coro::promise_type> parent) noexcept {
         parent_ = parent;
-        parent.promise().active_child =
-            std::coroutine_handle<Coro::promise_type>::from_address(child_.Handle().address());
+        parent.promise().active_child = child_.Handle();
     }
 
     Status await_resume() noexcept {
@@ -236,7 +235,6 @@ public:
     }
 
 private:
-    friend class CoroTask;
     Coro child_;
     std::coroutine_handle<Coro::promise_type> parent_{};
 };

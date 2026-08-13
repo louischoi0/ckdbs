@@ -2,8 +2,6 @@
 
 #include "kds/sched/coro.hpp"
 
-#include "kds/sched/coro.hpp"
-
 #include <algorithm>
 #include <cstring>
 #include <unordered_set>
@@ -353,17 +351,26 @@ private:
     // Emits, or descends. The recursion is over *steps*, not over rows:
     // one frame holds every bound relation, so reaching the end means one
     // complete output row is sitting in it.
+    // The terminal emit, shared by RunStep's index==size edge and by
+    // AcceptTupleAt's inlined terminal descent - the split that keeps a
+    // coroutine frame off the per-tuple path (coro.hpp's rule; measured at
+    // ~55 ns/row before this, bench/results-p4d-executor.md). A row only
+    // ever awaits at a step boundary above, never per emit.
+    Status EmitRow() {
+        auto outcome = sink_(frame_);
+        if (!outcome.ok()) return outcome.status();
+        if (!outcome.has_value()) {
+            return Status::InvalidArgument("a row sink returned an ok Status with no "
+                                           "VisitControl");
+        }
+        if (outcome.value() == storage::VisitControl::kStop) stopped_ = true;
+        return Status::OK();
+    }
+
     sched::Coro RunStep(const std::vector<Step>& steps, std::size_t index) {
         if (stopped_) co_return Status::OK();
         if (index == steps.size()) {
-            auto outcome = sink_(frame_);
-            if (!outcome.ok()) co_return outcome.status();
-            if (!outcome.has_value()) {
-                co_return Status::InvalidArgument("a row sink returned an ok Status with no "
-                                               "VisitControl");
-            }
-            if (outcome.value() == storage::VisitControl::kStop) stopped_ = true;
-            co_return Status::OK();
+            co_return EmitRow();
         }
 
         const Step& step = steps[index];
@@ -414,7 +421,7 @@ private:
                 auto bytes = store_.GetForRead(memo_page_);
                 if (bytes.ok()) {
                     heap::PageView page(bytes.value().bytes());
-                    co_return co_await AcceptTupleAt(steps, index, step, access, memo_page_, page,
+                    co_return AcceptTupleAt(steps, index, step, access, memo_page_, page,
                                          memo_slot_);
                 }
                 // The page went away. Fall through to the descent rather
@@ -443,7 +450,7 @@ private:
                 auto leaf_page = store_.GetForRead(found.value().page_id);
                 if (!leaf_page.ok()) co_return leaf_page.status();
                 heap::PageView leaf(leaf_page.value().bytes());
-                co_return co_await AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
+                co_return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                      found.value().slot);
             }
             if (found.status().code() == StatusCode::kNotFound) co_return Status::OK();
@@ -516,7 +523,7 @@ private:
         // inherited.
         ++step_stats.trail_replays;
         replayed_ = true;
-        co_return co_await AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
+        co_return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
     }
 
     // ---- Cabin (docs/feat-cabin.md §4) -----------------------------------
@@ -776,7 +783,7 @@ private:
             auto bytes = store_.GetForRead(found.value().page_id);
             if (!bytes.ok()) co_return bytes.status();
             heap::PageView page(bytes.value().bytes());
-            if (Status s = co_await AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
+            if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
                                          found.value().slot);
                 !s.ok()) {
                 co_return s;
@@ -943,7 +950,7 @@ private:
                 continue;
             }
             heap::PageView page(bytes.value().bytes());
-            if (Status s = co_await AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
+            if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
                 !s.ok()) {
                 co_return s;
             }
@@ -1077,8 +1084,8 @@ private:
                 // unmarked would be re-emitted from its next slot.
                 ordered_page = page_id;
                 for (const auto& [key, ordered_slot] : by_key) {
-                    auto ok = RunToCompletionAtWalkBoundary(
-                        AcceptTupleAt(steps, index, step, access, page_id, page, ordered_slot));
+                    auto ok = AcceptTupleAt(steps, index, step, access, page_id, page,
+                                            ordered_slot);
                     if (!ok.ok()) {
                         inner = ok;
                         return ok;
@@ -1088,8 +1095,7 @@ private:
                 return storage::VisitControl::kContinue;
             }
 
-            auto accepted = RunToCompletionAtWalkBoundary(
-                AcceptTupleAt(steps, index, step, access, page_id, page, slot));
+            auto accepted = AcceptTupleAt(steps, index, step, access, page_id, page, slot);
             if (!accepted.ok()) {
                 inner = accepted;
                 return accepted;
@@ -1141,7 +1147,7 @@ private:
     // **This is where R1 lives.** The span handed in by the walk is
     // registered, used for exactly one decode, and released before
     // anything else can fetch a page.
-    sched::Coro AcceptTupleAt(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    Status AcceptTupleAt(const std::vector<Step>& steps, std::size_t index, const Step& step,
                          const catalog::TableAccess& access, PageId page_id,
                          heap::PageView& page, std::uint16_t slot) {
         bool decoded = false;
@@ -1187,7 +1193,7 @@ private:
                         // Not an error and not a row: the statement simply
                         // does not see it.
                         span.Release();
-                        co_return Status::OK();
+                        return Status::OK();
                     case txn::Visibility::kNeedsUndoWalk:
                         // R1's copy. Fixed-size, because invariant 13 makes
                         // a row's size a schema constant - the same
@@ -1224,13 +1230,13 @@ private:
                 // A view that needs the chain with no log to walk. Reported
                 // rather than guessed at: guessing either way invents a row
                 // or hides one.
-                co_return Status::InvalidArgument(
+                return Status::InvalidArgument(
                     "a read view that cannot see a tuple's writer was given no undo log");
             }
             auto verdict = txn::ResolveThroughUndo(snapshot_.view, *snapshot_.undo, walk_trx_id,
                                                     walk_deleted, walk_undo_ptr, version_);
-            if (!verdict.ok()) co_return verdict.status();
-            if (verdict.value() == txn::Visibility::kNoVersion) co_return Status::OK();
+            if (!verdict.ok()) return verdict.status();
+            if (verdict.value() == txn::Visibility::kNoVersion) return Status::OK();
 
             // The reconstructed version's bytes are already in `version_`,
             // which is where the decode below reads from - the same buffer
@@ -1240,7 +1246,7 @@ private:
             decoded = true;
         }
 
-        if (!decoded) co_return Status::OK();  // dead or out-of-range slot
+        if (!decoded) return Status::OK();  // dead or out-of-range slot
 
         // ---- Decode what the filter reads, and only that ----------------
         //
@@ -1269,18 +1275,18 @@ private:
             if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
                                              step.filter_columns, &spills_);
                 !s.ok()) {
-                co_return s;
+                return s;
             }
         } else if (Status s = DecodeRowInto(access.schema, access.layout, version_, slots,
                                             &spills_);
                    !s.ok()) {
-            co_return s;
+            return s;
         }
 
         // Now that nothing is live, the spilled values can be resolved.
         if (!spills_.empty()) {
             stats_.For(step.step_id).spill_fetches += spills_.size();
-            if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) co_return s;
+            if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
         }
 
         StepStats& step_stats = stats_.For(step.step_id);
@@ -1288,7 +1294,7 @@ private:
         // Charged where the tuple was actually decoded, which is the unit
         // that tracks work: a page fetch amortizes over its tuples, but
         // every tuple is decoded and filtered on its own.
-        if (Status s = budget_.ChargeRow(); !s.ok()) co_return s;
+        if (Status s = budget_.ChargeRow(); !s.ok()) return s;
 
         // ---- Cabin recording (docs/feat-cabin.md §4's miss path) ---------
         //
@@ -1327,8 +1333,8 @@ private:
         }
 
         auto matched = EvaluateAll(schemas_, step.residual, frame_);
-        if (!matched.ok()) co_return matched.status();
-        if (!matched.value()) co_return Status::OK();
+        if (!matched.ok()) return matched.status();
+        if (!matched.value()) return Status::OK();
 
         // ---- The row survived: build the rest of what is read ------------
         //
@@ -1355,11 +1361,11 @@ private:
             if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
                                              rest, &spills_);
                 !s.ok()) {
-                co_return s;
+                return s;
             }
             if (!spills_.empty()) {
                 stats_.For(step.step_id).spill_fetches += spills_.size();
-                if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) co_return s;
+                if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
             }
         }
 
@@ -1375,8 +1381,8 @@ private:
         // already rejected the row should never pay for it.
         for (const SubChain& sub : step.sub_chains) {
             auto value = EvaluateSubChain(sub, frame_);
-            if (!value.ok()) co_return value.status();
-            if (!Collapse(value.value())) co_return Status::OK();
+            if (!value.ok()) return value.status();
+            if (!Collapse(value.value())) return Status::OK();
         }
 
         // ---- The trail (workplan P09) ------------------------------------
@@ -1408,7 +1414,17 @@ private:
             trail_->Add(touched);
         }
 
-        co_return co_await RunStep(steps, index + 1);
+        if (index + 1 == steps.size()) {
+            // Terminal: the emit is a plain call, so a single-step scan
+            // allocates zero frames per row. This is where P4d-4's remote
+            // forward will buffer the row instead; the await it needs
+            // happens at the page boundary above (workplan §3), never here.
+            return EmitRow();
+        }
+        // A deeper local step: driven synchronously until P4d-4 batches
+        // rows across this edge. One frame per row on multi-step chains
+        // only - the shape the pipeline rebuilds anyway.
+        return RunToCompletionAtWalkBoundary(RunStep(steps, index + 1));
     }
 
     catalog::Catalog& catalog_;
