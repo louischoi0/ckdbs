@@ -133,6 +133,24 @@ add_library(kds
 )
 target_include_directories(kds PUBLIC include)
 
+# The TLS wire channel (docs/protocol.md §1, direct TLS decided
+# 2026-08-13). OpenSSL is the engine's first external dependency, so it
+# stays behind an option: OFF builds every subsystem except
+# src/server/tls_channel.cpp, and a config with `tls = on` is then
+# refused at startup naming this flag. ON (the default) requires the
+# OpenSSL headers and fails the *configure* loudly rather than the first
+# TLS connection quietly.
+option(KDS_WITH_TLS "Build the TLS wire channel (requires OpenSSL >= 3)" ON)
+if(KDS_WITH_TLS)
+    find_package(OpenSSL 3.0 REQUIRED)
+    target_sources(kds PRIVATE src/server/tls_channel.cpp)
+    target_link_libraries(kds PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(kds PUBLIC KDS_WITH_TLS=1)
+else()
+    message(STATUS
+        "KDS_WITH_TLS=OFF: the TLS channel and its tests are excluded; `tls = on` will be refused at startup")
+endif()
+
 add_executable(kds_server src/server/main.cpp)
 target_link_libraries(kds_server PRIVATE kds)
 

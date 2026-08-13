@@ -199,6 +199,33 @@ TEST(ExpeditorConfigTest, ZeroCheckpointIntervalKeepsItsDisabledMeaning) {
     EXPECT_EQ(config.checkpoint_interval_ns, 0u);
 }
 
+// ---- TLS (docs/protocol.md §1, direct TLS decided 2026-08-13) ---------
+
+TEST(ExpeditorConfigTest, TlsKeysParseAndDefaultOff) {
+    Expeditor::Config config;
+    EXPECT_FALSE(config.tls) << "TLS is opt-in";
+    ASSERT_TRUE(config
+                    .ApplyFile(ParseOk("tls = on\n"
+                                       "tls_cert_file = /etc/kds/server.crt\n"
+                                       "tls_key_file = /etc/kds/server.key\n"))
+                    .ok());
+    EXPECT_TRUE(config.tls);
+    EXPECT_EQ(config.tls_cert_file, "/etc/kds/server.crt");
+    EXPECT_EQ(config.tls_key_file, "/etc/kds/server.key");
+}
+
+TEST(ExpeditorConfigTest, TlsOnWithoutBothFilesIsRejected) {
+    // A tls = on that could never handshake refuses at load - the same
+    // moment a typo'd key does - not at the first connection.
+    Expeditor::Config config;
+    Status s = config.ApplyFile(ParseOk("tls = on\ntls_cert_file = /x.crt\n"));
+    EXPECT_FALSE(s.ok());
+    EXPECT_NE(s.message().find("tls_key_file"), std::string::npos) << s.message();
+
+    Expeditor::Config bare;
+    EXPECT_FALSE(bare.ApplyFile(ParseOk("tls = on\n")).ok());
+}
+
 TEST(ExpeditorConfigTest, KnownKeysCoverEveryKeyTheOverlayReads) {
     // Guards the pairing the header comment promises: a new field with a
     // new key must appear in KnownConfigKeys() or it is rejected as

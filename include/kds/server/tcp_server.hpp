@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -8,6 +10,7 @@
 #include "kds/base/status.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/wire_channel.hpp"
 
 // The client-facing accept/read/dispatch/write loop - the actual
 // "platform layer" doing real socket syscalls (rules.md #4: engine logic
@@ -64,6 +67,17 @@ public:
     // clients. Idempotent; called by the destructor.
     void Detach() noexcept;
 
+    // Installs the wire-byte transform every *subsequently accepted*
+    // connection runs through (wire_channel.hpp) - in practice the TLS
+    // channel, installed by the Expeditor when `tls = on`. Set it before
+    // Attach(): connections accepted earlier keep the identity path.
+    // Unset (the default) means plaintext, byte for byte the pre-seam
+    // behaviour.
+    using ChannelFactory = std::function<std::unique_ptr<WireChannel>()>;
+    void set_channel_factory(ChannelFactory factory) noexcept {
+        channel_factory_ = std::move(factory);
+    }
+
     // Live client connections, for tests and for the shutdown path.
     std::size_t open_connections() const noexcept { return clients_.size(); }
 
@@ -77,9 +91,18 @@ private:
     // write() serve a whole batch of pipelined commands - see
     // DrainCommands.
     struct Connection {
+        // `inbox` holds *application* bytes (command lines); `outbox`
+        // holds *wire* bytes, ready for send(). With no channel the two
+        // vocabularies coincide; with one, the channel is the only code
+        // that converts between them.
         std::string inbox;
         std::string outbox;
         bool want_writable = false;
+
+        // The wire transform (TLS), or null for plaintext. Owned by the
+        // connection: the TLS handshake and record state are exactly as
+        // per-connection as the inbox tail is.
+        std::unique_ptr<WireChannel> channel;
 
         // ---- One statement at a time (the async dispatch seam) ----------
         //
@@ -159,6 +182,7 @@ private:
     sched::Scheduler* scheduler_ = nullptr;
     CommandDispatcher* dispatcher_ = nullptr;
     Logger* log_ = nullptr;
+    ChannelFactory channel_factory_;
     std::unordered_map<int, Connection> clients_;
 };
 

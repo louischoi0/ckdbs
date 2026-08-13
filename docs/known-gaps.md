@@ -446,8 +446,20 @@ There is no purge pass, and readers are deliberately unregistered
   it currently reports "expected a subquery".
 - **Per-transaction durability class** is a KWP/1 protocol field; the text
   protocol offers only the instance-wide `durability` config key.
-- **No auth, no TLS, loopback only** — by design until KWP/1's handshake
-  and auth stages exist.
+- ~~**No auth, no TLS, loopback only**~~ — **TLS half closed 2026-08-13**:
+  direct TLS 1.3 at the transport seam (`docs/protocol.md` §1), `tls`
+  config key, off by default. What remains true: **no auth** (SCRAM is
+  reserved in the KWP handshake and unbuilt; parameters `[OPEN]`), and
+  the port stays **loopback only** — TLS is the precondition for opening
+  it, not the opening itself, and the authorization model is still an
+  open decision.
+- **`TcpServer::Detach()` leaks the fd of a connection whose statement is
+  in flight** (found 2026-08-13 in review): `CloseClient` only *marks*
+  such a connection (`closing`), then `Detach` clears the map without
+  `::close` or epoll unregistration — an fd leak and a stale registration
+  on the shutdown path, TLS or not. Whether Detach may force-close a
+  connection the dispatcher still holds a session pointer into is the
+  open question; it needs a decision, not just a fix.
 - **`float`** stays refused at `CREATE TABLE`: nothing settled its
   encoding (`docs/rule-fixed-length-tuple.md`).
 

@@ -80,6 +80,24 @@ placement = creating
 # TCP port, loopback only. 1..65535.
 port = 15432
 
+# Direct TLS on the port above (docs/protocol.md §1, decided 2026-08-13).
+# With `tls = on` every connection must open with a TLS 1.3 handshake -
+# there is no plaintext fallback on the same port and no STARTTLS-style
+# upgrade, so a plaintext client is refused at its first byte. Off by
+# default because the port is loopback-only today; turning TLS on is the
+# precondition for that ever changing, not a decoration on loopback.
+#
+# When on, both files are required (the server refuses to start
+# otherwise, naming the missing key): PEM, the certificate first with any
+# chain appended, the key unencrypted. They are read once at startup - a
+# rotated certificate takes effect at the next start.
+#
+# A server built without TLS (cmake -DKDS_WITH_TLS=OFF) refuses
+# `tls = on` at startup naming the build flag.
+tls = off
+# tls_cert_file = /etc/kds/server.crt
+# tls_key_file  = /etc/kds/server.key
+
 # ---- Durability ------------------------------------------------------------
 
 # How often the system-group checkpoint task flushes dirty pages
