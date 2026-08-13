@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -21,6 +22,11 @@
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+
+#if KDS_WITH_TLS
+#include "kds/server/auth.hpp"
+#include "kds/server/scram.hpp"
+#endif
 
 // Real loopback-socket integration test: starts a TcpServer on a
 // background thread and talks to it as an actual client would, over a
@@ -360,6 +366,106 @@ TEST_F(TcpServerTest, ChannelFatalErrorClosesOnlyThatConnection) {
     ::close(next);
     server_thread.join();
 }
+
+// ---- The authentication gate ------------------------------------------
+//
+// The gate's own logic is covered socket-free in scram_test.cpp; what
+// these pin is the *routing*: an unauthenticated line never reaches the
+// dispatcher, a refused connection closes without taking the server
+// down, and a completed exchange hands the connection to the dispatcher
+// it was kept from.
+
+#if KDS_WITH_TLS
+TEST_F(TcpServerTest, AuthGateRefusesThenAdmitsOverRealSocket) {
+    constexpr std::uint16_t kPort = 25419;
+    auto verifier = scram::DeriveVerifier("pencil", "0123456789abcdef", 4096);
+    ASSERT_TRUE(verifier.ok());
+    auto store = FileCredentialStore::Parse("user " + verifier.value().Serialize() + "\n",
+                                            "users.probe");
+    ASSERT_TRUE(store.ok()) << store.status().message();
+
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    listener.value().set_auth_gate_factory(
+        [s = &store.value()] { return std::make_unique<ScramAuthGate>(s); });
+
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    // An anonymous statement - STOP, of all things - is refused and the
+    // connection closed; the server must survive it. Sent as *one*
+    // pipelined write with a second statement behind it, because a batch
+    // is the way a line would slip past a gate that drained before it
+    // checked: exactly one ERR comes back, the socket reaches EOF, and
+    // the PING never runs (the server is still up two blocks below).
+    int anon = ConnectToLoopback(kPort);
+    ASSERT_GE(anon, 0);
+    const std::string refused = SendAndReceiveLine(anon, "STOP\nPING");
+    EXPECT_EQ(refused.rfind("ERR ", 0), 0u) << refused;
+    EXPECT_EQ(refused.find('\n'), std::string::npos)
+        << "only the gate may answer an unauthenticated batch: " << refused;
+    char probe = 0;
+    // Anything but EOF here is the second line having been served.
+    EXPECT_EQ(::read(anon, &probe, 1), 0) << "the refused connection must reach EOF";
+    ::close(anon);
+
+    // The real exchange, then the dispatcher path as usual.
+    int fd = ConnectToLoopback(kPort);
+    ASSERT_GE(fd, 0);
+    scram::Client client("user", "pencil");
+    std::string server_first = SendAndReceiveLine(fd, "AUTH SCRAM-SHA-256 " + client.First());
+    ASSERT_EQ(server_first.rfind("AUTH+ ", 0), 0u) << server_first;
+    auto client_final = client.OnServerFirst(server_first.substr(6));
+    ASSERT_TRUE(client_final.ok()) << client_final.status().message();
+    std::string server_final = SendAndReceiveLine(fd, "AUTH " + client_final.value());
+    ASSERT_EQ(server_final.rfind("AUTH+ ", 0), 0u) << server_final;
+    EXPECT_TRUE(client.OnServerFinal(server_final.substr(6)).ok());
+
+    EXPECT_EQ(SendAndReceiveLine(fd, "PING"), "PONG");
+    EXPECT_EQ(SendAndReceiveLine(fd, "STOP"), "OK bye");
+    ::close(fd);
+    server_thread.join();
+}
+
+TEST_F(TcpServerTest, WrongPasswordOverSocketClosesAndServerSurvives) {
+    constexpr std::uint16_t kPort = 25420;
+    auto verifier = scram::DeriveVerifier("pencil", "0123456789abcdef", 4096);
+    ASSERT_TRUE(verifier.ok());
+    auto store = FileCredentialStore::Parse("user " + verifier.value().Serialize() + "\n",
+                                            "users.probe");
+    ASSERT_TRUE(store.ok());
+
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    listener.value().set_auth_gate_factory(
+        [s = &store.value()] { return std::make_unique<ScramAuthGate>(s); });
+
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int fd = ConnectToLoopback(kPort);
+    ASSERT_GE(fd, 0);
+    scram::Client client("user", "wrong");
+    std::string server_first = SendAndReceiveLine(fd, "AUTH SCRAM-SHA-256 " + client.First());
+    ASSERT_EQ(server_first.rfind("AUTH+ ", 0), 0u);
+    auto client_final = client.OnServerFirst(server_first.substr(6));
+    ASSERT_TRUE(client_final.ok());
+    EXPECT_EQ(SendAndReceiveLine(fd, "AUTH " + client_final.value()).rfind("ERR ", 0), 0u);
+    char probe = 0;
+    EXPECT_EQ(::read(fd, &probe, 1), 0);
+    ::close(fd);
+
+    // An authorized client still gets in and can stop the server.
+    int fd2 = ConnectToLoopback(kPort);
+    ASSERT_GE(fd2, 0);
+    scram::Client good("user", "pencil");
+    std::string sf = SendAndReceiveLine(fd2, "AUTH SCRAM-SHA-256 " + good.First());
+    auto cf = good.OnServerFirst(sf.substr(6));
+    ASSERT_TRUE(cf.ok());
+    ASSERT_EQ(SendAndReceiveLine(fd2, "AUTH " + cf.value()).rfind("AUTH+ ", 0), 0u);
+    EXPECT_EQ(SendAndReceiveLine(fd2, "STOP"), "OK bye");
+    ::close(fd2);
+    server_thread.join();
+}
+#endif  // KDS_WITH_TLS
 
 TEST_F(TcpServerTest, ADisconnectMidBatchDoesNotTakeTheServerDown) {
     // The path Connection::closing exists for: the client goes away while

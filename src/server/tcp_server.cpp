@@ -71,12 +71,14 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       dispatcher_(other.dispatcher_),
       log_(other.log_),
       channel_factory_(std::move(other.channel_factory_)),
+      auth_gate_factory_(std::move(other.auth_gate_factory_)),
       clients_(std::move(other.clients_)) {
     other.listen_fd_ = -1;
     other.scheduler_ = nullptr;
     other.dispatcher_ = nullptr;
     other.log_ = nullptr;
     other.channel_factory_ = nullptr;
+    other.auth_gate_factory_ = nullptr;
     other.clients_.clear();
 }
 
@@ -89,12 +91,14 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         dispatcher_ = other.dispatcher_;
         log_ = other.log_;
         channel_factory_ = std::move(other.channel_factory_);
+        auth_gate_factory_ = std::move(other.auth_gate_factory_);
         clients_ = std::move(other.clients_);
         other.listen_fd_ = -1;
         other.scheduler_ = nullptr;
         other.dispatcher_ = nullptr;
         other.log_ = nullptr;
         other.channel_factory_ = nullptr;
+        other.auth_gate_factory_ = nullptr;
         other.clients_.clear();
     }
     return *this;
@@ -186,6 +190,15 @@ void TcpServer::OnListenerReadable() {
             return;
         }
     }
+    if (auth_gate_factory_) {
+        fresh.auth_gate = auth_gate_factory_();
+        // The same fail-closed rule: no gate on a port that promised
+        // one means no connection, never an unauthenticated one.
+        if (fresh.auth_gate == nullptr) {
+            ::close(client_fd);
+            return;
+        }
+    }
     clients_.emplace(client_fd, std::move(fresh));
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "accepted fd=" + std::to_string(client_fd) +
@@ -230,6 +243,21 @@ void TcpServer::OnClientReadable(int client_fd) {
     }
 
     Connection& conn = it->second;
+    // Pre-auth, the inbox is capped: an anonymous peer that streams bytes
+    // without ever completing a line - or an exchange - must not grow
+    // server memory at will. SCRAM lines are a few hundred bytes; 4 KiB
+    // is generous, and an authenticated connection is uncapped as before.
+    // (A pre-auth *deadline* needs a timer and is future hardening.)
+    constexpr std::size_t kPreAuthInboxCap = 4096;
+    if (conn.auth_gate != nullptr &&
+        conn.inbox.size() + static_cast<std::size_t>(n) > kPreAuthInboxCap) {
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("client", "fd=" + std::to_string(client_fd) +
+                                     " overflowed the pre-auth budget; closing");
+        }
+        CloseClient(client_fd);
+        return;
+    }
     if (conn.channel != nullptr) {
         // Wire bytes go through the channel: decrypted command bytes land
         // in the inbox, and whatever the channel must say back (handshake
@@ -311,38 +339,76 @@ void TcpServer::SyncWriteInterest(int client_fd, Connection& conn) {
 }
 
 bool TcpServer::DrainCommands(int client_fd, Connection& conn) {
+    // A loop, and the only thing that goes round it is the gate below: a
+    // statement returns after starting one, so the iteration count is a
+    // *pre-auth* peer's to choose. Tail recursion here would let one
+    // 4 KiB read of newlines from an anonymous client cost 4096 stack
+    // frames, which is a stack overflow that has not authenticated.
+    //
     // One at a time (tcp_server.hpp's Connection::in_flight): the session is
     // stateful and the protocol has no request ids, so a second statement
     // must not start until this one's reply has been appended.
-    if (conn.in_flight || conn.closing) return true;
+    while (!conn.in_flight && !conn.closing) {
+        const std::size_t nl = conn.inbox.find('\n');
+        if (nl == std::string::npos) return true;  // no complete command yet
 
-    const std::size_t nl = conn.inbox.find('\n');
-    if (nl == std::string::npos) return true;  // no complete command yet
+        conn.current_line.assign(conn.inbox, 0, nl);
+        if (!conn.current_line.empty() && conn.current_line.back() == '\r') {
+            conn.current_line.pop_back();  // tolerate CRLF clients
+        }
+        // Erased now, not on completion: the statement runs against
+        // `current_line`, and leaving its bytes in the inbox would mean the
+        // next read had to reason about which prefix was already taken.
+        conn.inbox.erase(0, nl + 1);
 
-    conn.current_line.assign(conn.inbox, 0, nl);
-    if (!conn.current_line.empty() && conn.current_line.back() == '\r') {
-        conn.current_line.pop_back();  // tolerate CRLF clients
+        // The request as the client sent it, before anything interprets it.
+        // Trace, because it is one line per command and it echoes whatever the
+        // client typed - including anything they should not have typed. The
+        // exception is a pre-auth line: it carries the SCRAM exchange (a
+        // claimed username, a proof), which no log level is entitled to.
+        if (logging(LogLevel::kTrace)) {
+            log_->Trace("client", "fd=" + std::to_string(client_fd) + " request \"" +
+                                      (conn.auth_gate != nullptr
+                                           ? std::string("<pre-auth line, redacted>")
+                                           : conn.current_line) +
+                                      "\"");
+        }
+
+        // The authentication gate: an unauthenticated connection's lines go
+        // to the gate, never the dispatcher - STOP included, because an
+        // admin command an anonymous peer can run is not an admin command.
+        // Handled synchronously (SCRAM is a few HMACs, no I/O) and drained
+        // on, so pipelined AUTH lines behave like pipelined statements.
+        if (conn.auth_gate != nullptr) {
+            AuthGate::Result result = conn.auth_gate->OnLine(conn.current_line);
+            if (!AppendReplyLine(client_fd, conn, std::move(result.reply))) return false;
+            if (result.authenticated) {
+                conn.auth_gate.reset();  // authenticated = the gate's absence
+                if (logging(LogLevel::kDebug)) {
+                    log_->Debug("client", "fd=" + std::to_string(client_fd) + " authenticated");
+                }
+            }
+            if (result.close) {
+                if (logging(LogLevel::kInfo)) {
+                    log_->Info("client", "fd=" + std::to_string(client_fd) +
+                                             " failed authentication; closing");
+                }
+                (void)FlushOutbox(client_fd, conn);
+                CloseClient(client_fd);
+                return false;
+            }
+            continue;  // the next pipelined line
+        }
+
+        if (dispatcher_ == nullptr || scheduler_ == nullptr) return true;
+
+        conn.in_flight = true;
+        scheduler_->Submit(sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground,
+            dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
+            [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
+        return true;
     }
-    // Erased now, not on completion: the statement runs against
-    // `current_line`, and leaving its bytes in the inbox would mean the next
-    // read had to reason about which prefix was already taken.
-    conn.inbox.erase(0, nl + 1);
-
-    // The request as the client sent it, before anything interprets it.
-    // Trace, because it is one line per command and it echoes whatever the
-    // client typed - including anything they should not have typed.
-    if (logging(LogLevel::kTrace)) {
-        log_->Trace("client", "fd=" + std::to_string(client_fd) + " request \"" +
-                                  conn.current_line + "\"");
-    }
-
-    if (dispatcher_ == nullptr || scheduler_ == nullptr) return true;
-
-    conn.in_flight = true;
-    scheduler_->Submit(sched::MakeCoroTask(
-        sched::SchedulingGroup::kForeground,
-        dispatcher_->DispatchAsync(conn.current_line, &conn.session, &conn.pending),
-        [this, client_fd](const Status&) { OnStatementComplete(client_fd); }));
     return true;
 }
 
@@ -364,21 +430,11 @@ void TcpServer::OnStatementComplete(int client_fd) {
     // Appended, not written: one readable event can carry a whole batch of
     // pipelined commands, and a write() per command is a syscall per command
     // plus a separate small segment per command on the wire. The batch leaves
-    // in one write() below. The newline goes onto the reply first so a
-    // channel seals one record per reply, not a one-byte second record.
-    conn.pending.response.push_back('\n');
-    if (conn.channel != nullptr) {
-        Status s = conn.channel->Send(conn.pending.response, conn.outbox);
-        if (!s.ok()) {
-            (void)FlushOutbox(client_fd, conn);
-            CloseClient(client_fd);
-            return;
-        }
-    } else {
-        conn.outbox.append(conn.pending.response);
-    }
+    // in one write() below.
     const bool stop = conn.pending.should_stop;
+    std::string response = std::move(conn.pending.response);
     conn.pending = DispatchOutcome{};
+    if (!AppendReplyLine(client_fd, conn, std::move(response))) return;
 
     if (stop) {
         // Best effort, exactly as the per-command write() it replaces was:
@@ -403,6 +459,23 @@ void TcpServer::OnStatementComplete(int client_fd) {
     if (!DrainCommands(client_fd, conn)) return;
     if (!FlushOutbox(client_fd, conn)) return;
     SyncWriteInterest(client_fd, conn);
+}
+
+bool TcpServer::AppendReplyLine(int client_fd, Connection& conn, std::string reply) {
+    // The newline goes onto the reply first so a wire channel seals one
+    // record per reply, not a one-byte second record.
+    reply.push_back('\n');
+    if (conn.channel != nullptr) {
+        Status s = conn.channel->Send(reply, conn.outbox);
+        if (!s.ok()) {
+            (void)FlushOutbox(client_fd, conn);
+            CloseClient(client_fd);
+            return false;
+        }
+    } else {
+        conn.outbox.append(reply);
+    }
+    return true;
 }
 
 void TcpServer::CloseClient(int client_fd) {

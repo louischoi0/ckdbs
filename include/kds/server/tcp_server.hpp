@@ -9,6 +9,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/sched/scheduler.hpp"
+#include "kds/server/auth.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/wire_channel.hpp"
 
@@ -78,6 +79,16 @@ public:
         channel_factory_ = std::move(factory);
     }
 
+    // Installs the authentication gate every subsequently accepted
+    // connection must pass (auth.hpp) - in practice the SCRAM gate,
+    // installed by the Expeditor when `auth = scram`. Set before
+    // Attach(). Unset (the default) means every connection starts
+    // authenticated, the pre-auth behaviour.
+    using AuthGateFactory = std::function<std::unique_ptr<AuthGate>()>;
+    void set_auth_gate_factory(AuthGateFactory factory) noexcept {
+        auth_gate_factory_ = std::move(factory);
+    }
+
     // Live client connections, for tests and for the shutdown path.
     std::size_t open_connections() const noexcept { return clients_.size(); }
 
@@ -103,6 +114,12 @@ private:
         // connection: the TLS handshake and record state are exactly as
         // per-connection as the inbox tail is.
         std::unique_ptr<WireChannel> channel;
+
+        // The authentication gate, or null once passed (or never
+        // required). Non-null means every line routes to the gate and
+        // none reaches the dispatcher - "authenticated" is the gate's
+        // absence, so there is no flag to disagree with it.
+        std::unique_ptr<AuthGate> auth_gate;
 
         // ---- One statement at a time (the async dispatch seam) ----------
         //
@@ -166,6 +183,10 @@ private:
     // The other half: a statement finished, so append its reply, honour
     // STOP, and continue draining.
     void OnStatementComplete(int client_fd);
+    // Appends one reply line to the outbox, through the wire channel if
+    // one is installed. Returns false if the connection was closed (a
+    // channel Send failure).
+    bool AppendReplyLine(int client_fd, Connection& conn, std::string reply);
     // Writes as much of conn.outbox as the socket will take and drops what
     // went out. Returns false if the connection was closed (write error).
     bool FlushOutbox(int client_fd, Connection& conn);
@@ -183,6 +204,7 @@ private:
     CommandDispatcher* dispatcher_ = nullptr;
     Logger* log_ = nullptr;
     ChannelFactory channel_factory_;
+    AuthGateFactory auth_gate_factory_;
     std::unordered_map<int, Connection> clients_;
 };
 

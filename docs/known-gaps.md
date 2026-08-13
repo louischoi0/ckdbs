@@ -509,13 +509,15 @@ There is no purge pass, and readers are deliberately unregistered
   it currently reports "expected a subquery".
 - **Per-transaction durability class** is a KWP/1 protocol field; the text
   protocol offers only the instance-wide `durability` config key.
-- ~~**No auth, no TLS, loopback only**~~ — **TLS half closed 2026-08-13**:
-  direct TLS 1.3 at the transport seam (`docs/protocol.md` §1), `tls`
-  config key, off by default. What remains true: **no auth** (SCRAM is
-  reserved in the KWP handshake and unbuilt; parameters `[OPEN]`), and
-  the port stays **loopback only** — TLS is the precondition for opening
-  it, not the opening itself, and the authorization model is still an
-  open decision.
+- ~~**No auth, no TLS, loopback only**~~ — **TLS and authentication both
+  closed 2026-08-13**: direct TLS 1.3 at the transport seam
+  (`docs/protocol.md` §1, `tls` key) and SCRAM-SHA-256 connection auth
+  (`auth = scram` + `users_file`, provisioned with `--add-user`), both
+  off by default. What remains true: the port stays **loopback only**,
+  and **authorization does not exist** — an authenticated user may run
+  every statement, STOP included; who may do what is the Open Decision
+  `docs/protocol.md` §14 still holds. Deferred SCRAM hardening is listed
+  there (channel binding, SASLprep, mock-salt consistency).
 - **`TcpServer::Detach()` leaks the fd of a connection whose statement is
   in flight** (found 2026-08-13 in review): `CloseClient` only *marks*
   such a connection (`closing`), then `Detach` clears the map without

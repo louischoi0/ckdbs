@@ -145,11 +145,11 @@ add_executable(kds_tests
 )
 target_link_libraries(kds_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main Threads::Threads)
 
-# The TLS channel's contract suite exists exactly when the channel does.
-# The test generates its own throwaway certificate, so it needs the
-# OpenSSL API directly, not just the channel's public surface.
+# The TLS and SCRAM contract suites exist exactly when their code does
+# (both ride KDS_WITH_TLS's OpenSSL; the TLS test also uses the OpenSSL
+# API directly to generate its throwaway certificate).
 if(KDS_WITH_TLS)
-    target_sources(kds_tests PRIVATE tls_channel_test.cpp)
+    target_sources(kds_tests PRIVATE tls_channel_test.cpp scram_test.cpp)
 endif()
 
 # The V01 golden corpus is data, not source: the test reads it at run time

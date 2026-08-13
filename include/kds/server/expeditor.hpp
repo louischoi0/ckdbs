@@ -120,6 +120,26 @@ public:
         std::string tls_cert_file;
         std::string tls_key_file;
 
+        // Connection authentication (docs/protocol.md D8's auth stage,
+        // on the text protocol until KWP P07). `auth = off` (default)
+        // admits every connection, today's behaviour; `auth = scram`
+        // requires every connection to complete a SCRAM-SHA-256
+        // exchange before its first statement - STOP included.
+        //
+        // `users_file` is required when auth is on: the flat verifier
+        // store (auth.hpp), loaded whole at startup, provisioned with
+        // `kds_server --add-user`. Same build story as TLS: a server
+        // built with KDS_WITH_TLS=OFF refuses `auth = scram` at startup
+        // naming the flag.
+        //
+        // Independent of `tls` on purpose - SCRAM never puts the
+        // password on the wire, so auth-without-TLS is coherent on
+        // loopback - but a non-loopback future requires both, and the
+        // authorization model (who may do what once in) remains an Open
+        // Decision this key does not touch.
+        bool auth_scram = false;
+        std::string users_file;
+
         // Directory the per-core WAL segment files live in. Defaults to
         // `<data_file>.wal` when left empty.
         std::string wal_dir;

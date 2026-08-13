@@ -34,6 +34,25 @@ TLS-enabled server interactively:
 openssl s_client -connect 127.0.0.1:15432 -CAfile server.crt -quiet
 ```
 
+With `auth = scram` (off by default) every connection must complete a
+**SCRAM-SHA-256** exchange (RFC 5802/7677) before its first statement —
+any other line, `STOP` included, is refused and the connection closed.
+One SCRAM message per line:
+
+```
+C: AUTH SCRAM-SHA-256 <client-first-message>
+S: AUTH+ <server-first-message>
+C: AUTH <client-final-message>
+S: AUTH+ <server-final-message>        ← connection is now open
+```
+
+The password never crosses the wire (proofs do), and the server's final
+message proves *it* holds the verifier — check it. Provision users with
+`kds_server --add-user <name> --users-file <path>` (prompts for the
+password; the server does not start). There are no roles or permissions
+yet: an authenticated user may run every statement
+(`docs/protocol.md` §14's open authorization model).
+
 Start the server:
 
 ```sh
@@ -57,6 +76,8 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `tls` | — | `off` | Direct TLS 1.3 on the port above (`docs/protocol.md` §1): every connection opens with a handshake, no plaintext fallback, no STARTTLS-style upgrade. Requires both file keys below; a server built with `-DKDS_WITH_TLS=OFF` refuses `on` naming the flag. |
 | `tls_cert_file` | — | — | PEM certificate presented to every client, leaf first with any chain appended. Read once at startup. |
 | `tls_key_file` | — | — | PEM private key for the certificate, unencrypted. Read once at startup. |
+| `auth` | — | `off` | `off` or `scram`. `scram` gates every connection behind a SCRAM-SHA-256 exchange (see "Connecting"); named values only, so a future method is a new word rather than a reinterpreted boolean. |
+| `users_file` | `--users-file` | — | The verifier store: one `<username> <verifier>` per line, `#` comments. Required (and non-empty) when `auth = scram`; a malformed line refuses startup naming the line. Written by `--add-user`, never by the running server. |
 | `wal_dir` | — | `<data_file>.wal` | Per-core WAL segment directory. |
 | `isolation` | — | `read committed` | The level a connection starts at, and so the level an autocommit statement runs at (`docs/txn.md` §1). `read committed` takes a read view per **statement**; `repeatable read` takes one per **transaction**. READ COMMITTED is the default for a reason specific to this engine rather than convention: under first-updater-wins with no waiting, holding one view for a whole transaction turns more concurrent writes into retryable aborts. `serializable` is refused with its reason. This is the server rung of a three-level chain — a connection overrides it with `SET ISOLATION LEVEL`, one transaction with `BEGIN ISOLATION LEVEL`. Names are case-insensitive and accept `-`/`_`. |
 | `checkpoint_interval_ms` | — | `5000` | How often dirty pages are flushed (`docs/wal.md` §11). `0` disables the cadence, leaving `SYNC`/shutdown as the only durability points. |
