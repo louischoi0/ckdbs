@@ -272,6 +272,22 @@ the core serve a message instead.
        unchanged), forwarding after. What made the 2026-08-05 seam
        verifiable — "when a reply is produced has not moved" — is reused at
        the executor scale.
+    2a. **P4d-2's staging, decided 2026-08-13 from the survey.** `exec::
+       Execute` has exactly four call sites (dispatcher ×3,
+       remote_step_service ×1). The conversion keeps the synchronous
+       signature as a wrapper that drives the coroutine to completion
+       inline — legal precisely while nothing suspends, so all four sites
+       and every test stay untouched and bit-identical — and adds
+       `ExecuteAsync` returning `sched::Coro` as the seam the dispatcher
+       awaits when suspension arrives. The spine (`Execute`, `RunStep`,
+       `RunPointStep`, the index paths, `AcceptTupleAt`) becomes
+       `sched::Coro`-returning with `co_await` at the recursion edges. At
+       the two places `AcceptTupleAt` is reached from *inside a walk
+       visitor callback* — which cannot await — the child coroutine is
+       driven by a named inline helper (`RunToCompletionAtWalkBoundary`),
+       correct while nothing suspends beneath it and grep-checkable as
+       exactly the seam P4d-3 dissolves when awaits move to the page
+       boundary.
     3. **Walk callbacks cannot await, and the answer is the page boundary.**
        The chain walks are visitor-style; a callback cannot `co_await`.
        Awaits therefore happen *between* pages at the `RunWalkStep` level —
