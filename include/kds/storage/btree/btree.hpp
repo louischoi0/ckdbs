@@ -89,16 +89,15 @@ namespace kds::btree {
 struct Location {
     PageId page_id = kInvalidPageId;
     std::uint16_t slot = 0;
-    // The leaf's bytes, still resident from the descent that found the
-    // tuple - so the caller reads it without asking the store for a page
-    // the lookup just had in hand. Empty when the Location did not come
-    // from a descent; a caller that cannot assume otherwise checks
-    // `.empty()` and falls back to fetching page_id itself.
-    //
-    // Dynamic extent, not std::span<std::byte, kPageSize>: a fixed-extent
-    // span is not default-constructible, and this field has to have an
-    // "unset" state. It is always either empty or exactly kPageSize long.
-    std::span<std::byte> leaf{};
+    // There is deliberately no bytes field. One rode here until 2026-08-13
+    // - "the leaf's bytes, still resident from the descent" - and under the
+    // pin model (workplan-pageref.md) that sentence stopped being true the
+    // moment the descent returned: the span outlived its pin, which is a
+    // use-after-free the day anything faults in between. Its one
+    // production consumer already re-fetched by page_id (a hash hit on a
+    // resident frame, and the fetch is what marks the write path dirty),
+    // so the field's saving was zero and its hazard was real. A caller
+    // reads the tuple by fetching page_id, holding the ref it gets back.
 };
 
 // Formats `page` as a brand-new relation's root: an empty leaf with

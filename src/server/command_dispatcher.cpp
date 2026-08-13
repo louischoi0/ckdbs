@@ -3252,7 +3252,7 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
             // the store for a page the descent just held.
             return PkLookup{
                 PkLookup::Kind::kAt,
-                TupleLocation{found.value().page_id, found.value().slot, found.value().leaf}};
+                TupleLocation{found.value().page_id, found.value().slot}};
         }
         if (found.status().code() == StatusCode::kNotFound) {
             return PkLookup{PkLookup::Kind::kAbsent, {}};

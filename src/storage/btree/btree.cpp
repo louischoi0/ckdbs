@@ -46,13 +46,14 @@ bool IsLeafPage(std::span<const std::byte, kPageSize> page) {
 struct Descent {
     std::array<PageId, storage::kMaxBtreeDepth> path{};
     std::uint16_t depth = 0;  // index of the leaf within `path`
-    // The leaf's bytes, already fetched. Carried out so callers do not
-    // re-Get a page the descent just held - a lookup used to fetch its
-    // leaf three times over (here, again in BtreeLookup, and a third time
-    // in the statement layer to read the located tuple). Dynamic extent
-    // for the same reason Location::leaf is - a fixed-extent span cannot
-    // be default-constructed.
-    std::span<std::byte> leaf{};
+    // The leaf, **held**: the descent's pin rides in the struct, so the
+    // bytes stay valid for exactly as long as the Descent does. This used
+    // to be a bare span with the pin dropped at DescendTo's return - the
+    // one Shape C the stopped review never reached, found by finishing its
+    // checklist: any fault between the descent and the caller's read (a
+    // split's CreateNew is the everyday case) could walk the leaf's usage
+    // down and reclaim it mid-operation. Peak pins (MG03): 1, this ref.
+    storage::PageRef leaf;
 };
 
 // A descent's leaf bytes back at their true fixed extent. The span is
@@ -85,7 +86,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
         if (!bytes.ok()) return bytes.status();
         if (IsLeafPage(bytes.value().bytes())) {
             if (!leaf_for_write) {
-                d.leaf = bytes.value().bytes();
+                d.leaf = std::move(bytes.value());
                 return d;
             }
             // Re-fetch for write: the frame is already resident, so this
@@ -93,7 +94,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
             // only on the insert path where a WAL append dwarfs it.
             auto writable = store.Get(current);
             if (!writable.ok()) return writable.status();
-            d.leaf = writable.value().bytes();
+            d.leaf = std::move(writable.value());
             return d;
         }
 
@@ -447,7 +448,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageStore& store,
     std::uint64_t old_epoch = 0;
 
     {
-        heap::PageView leaf(AsPage(descent.leaf));
+        heap::PageView leaf(descent.leaf.bytes());
         old_min_key = leaf.min_key();
         old_next = leaf.next_page_id();
         old_epoch = leaf.RelayoutEpoch();
@@ -611,7 +612,7 @@ StatusOr<storage::InsertPlacement> BtreeInsert(storage::PageStore& store, PageId
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
-    heap::PageView leaf(AsPage(descent.value().leaf));
+    heap::PageView leaf(descent.value().leaf.bytes());
 
     // Invariant 3, enforced at the one door tuples come through - and the
     // descent already guarantees no other leaf may hold this id, so being
@@ -734,10 +735,10 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
     auto descent = DescendTo(store, root, id, /*leaf_for_write=*/false);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
-    heap::PageView leaf(AsPage(descent.value().leaf));
+    heap::PageView leaf(descent.value().leaf.bytes());
 
     auto slot = FindSlotForId(leaf, id, leaf.slot_count());
-    if (slot.ok()) return Location{leaf_id, slot.value(), descent.value().leaf};
+    if (slot.ok()) return Location{leaf_id, slot.value()};
     if (slot.status().code() != StatusCode::kNotFound) return slot.status();
     return Status::NotFound("no tuple with primary key " + std::to_string(id) + " in leaf " +
                             std::to_string(leaf_id));

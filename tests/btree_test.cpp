@@ -403,25 +403,24 @@ TEST(BtreeTest, EveryInsertedIdIsFoundWhereTheInsertSaidItLanded) {
     }
 }
 
-TEST(BtreeTest, ALookupHandsBackTheLeafBytesTheDescentAlreadyHeld) {
+TEST(BtreeTest, ALocationIsAnAddressAndTheTupleIsReadThroughAFreshRef) {
+    // Location used to carry the leaf's bytes out of the descent; under the
+    // pin model that span outlived its pin (workplan-pageref.md Shape C),
+    // so the field is gone and the contract this test pins is the new one:
+    // a lookup answers *where* - page_id and slot - and the reader fetches
+    // that page itself, holding the ref for exactly as long as it reads.
     storage::InMemoryPageStore store(128);
     Tree tree(store);
-    tree.Fill(40, kOnePerLeafFiller);
+    for (std::uint64_t id = 1; id <= 40; ++id) {
+        ASSERT_TRUE(tree.Insert(id, kOnePerLeafFiller).ok());
+    }
 
-    // Location::leaf exists so the caller reads the tuple out of the page
-    // the descent just had in hand instead of re-fetching it. It is only
-    // worth carrying if it is actually that page: a stale or wrong-sized
-    // span here would be read as tuple bytes.
     auto loc = BtreeLookup(store, tree.root, 17);
     ASSERT_TRUE(loc.ok()) << loc.status().message();
-    ASSERT_EQ(loc.value().leaf.size(), kPageSize) << "either empty or exactly one page";
 
-    auto fetched = store.Get(loc.value().page_id);
+    auto fetched = store.GetForRead(loc.value().page_id);
     ASSERT_TRUE(fetched.ok()) << fetched.status().message();
-    EXPECT_EQ(loc.value().leaf.data(), fetched.value().bytes().data())
-        << "the carried span must be the located leaf, not a copy of something else";
-
-    heap::PageView leaf(std::span<std::byte, kPageSize>(loc.value().leaf.data(), kPageSize));
+    heap::PageView leaf(fetched.value().bytes());
     auto tuple = leaf.ReadTuple(loc.value().slot);
     ASSERT_TRUE(tuple.ok()) << tuple.status().message();
     EXPECT_EQ(IdOf(tuple.value().payload), 17u);

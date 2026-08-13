@@ -37,7 +37,9 @@ std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
 struct Descent {
     std::array<PageId, storage::kMaxBtreeDepth> path{};
     std::uint16_t depth = 0;
-    std::span<std::byte> leaf{};
+    // The leaf, held: the pin rides in the struct (btree.cpp's Descent
+    // says why; the same Shape C lived here). Peak pins (MG03): 1.
+    storage::PageRef leaf;
 };
 
 // Follows child pointers for `sort_key` from `root`, recording the path and
@@ -70,14 +72,14 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
                 return s;
             }
             if (!leaf_for_write) {
-                d.leaf = bytes.value().bytes();
+                d.leaf = std::move(bytes.value());
                 return d;
             }
             // Re-fetch for write: the frame is already resident, so this is
             // a hash lookup that flips the dirty flag.
             auto writable = store.Get(current);
             if (!writable.ok()) return writable.status();
-            d.leaf = writable.value().bytes();
+            d.leaf = std::move(writable.value());
             return d;
         }
 
@@ -179,7 +181,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                              /*leaf_for_write=*/true);
     if (!descent.ok()) return descent.status();
     const PageId leaf_id = descent.value().path[descent.value().depth];
-    IndexLeafView leaf(AsPage(descent.value().leaf));
+    IndexLeafView leaf(descent.value().leaf.bytes());
 
     IndexInsertResult out;
 
