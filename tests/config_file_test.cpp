@@ -226,6 +226,46 @@ TEST(ExpeditorConfigTest, TlsOnWithoutBothFilesIsRejected) {
     EXPECT_FALSE(bare.ApplyFile(ParseOk("tls = on\n")).ok());
 }
 
+TEST(ExpeditorConfigTest, AuthKeysParseAndDefaultOff) {
+    Expeditor::Config config;
+    EXPECT_FALSE(config.auth_scram) << "auth is opt-in";
+    ASSERT_TRUE(config
+                    .ApplyFile(ParseOk("auth = scram\n"
+                                       "users_file = /etc/kds/users\n"))
+                    .ok());
+    EXPECT_TRUE(config.auth_scram);
+    EXPECT_EQ(config.users_file, "/etc/kds/users");
+
+    Expeditor::Config off;
+    ASSERT_TRUE(off.ApplyFile(ParseOk("auth = off\n")).ok());
+    EXPECT_FALSE(off.auth_scram);
+}
+
+TEST(ExpeditorConfigTest, AuthRefusesBooleansAndMissingUsersFile) {
+    // Named methods only: "on" would leave *which* method unstated.
+    Expeditor::Config config;
+    Status s = config.ApplyFile(ParseOk("auth = on\n"));
+    EXPECT_FALSE(s.ok());
+    EXPECT_NE(s.message().find("'off' or 'scram'"), std::string::npos) << s.message();
+
+    Expeditor::Config bare;
+    Status s2 = bare.ApplyFile(ParseOk("auth = scram\n"));
+    EXPECT_FALSE(s2.ok());
+    EXPECT_NE(s2.message().find("users_file"), std::string::npos) << s2.message();
+}
+
+TEST(ExpeditorConfigTest, AuthRefusesAnOpenKwpPort) {
+    // The KWP load endpoint has no auth stage: with auth = scram it
+    // would be an ungated door on a guarded server, so the combination
+    // refuses at load until KWP P07 exists.
+    Expeditor::Config config;
+    Status s = config.ApplyFile(ParseOk("auth = scram\n"
+                                        "users_file = /etc/kds/users\n"
+                                        "kwp_port = 15433\n"));
+    EXPECT_FALSE(s.ok());
+    EXPECT_NE(s.message().find("kwp_port"), std::string::npos) << s.message();
+}
+
 TEST(ExpeditorConfigTest, KnownKeysCoverEveryKeyTheOverlayReads) {
     // Guards the pairing the header comment promises: a new field with a
     // new key must appear in KnownConfigKeys() or it is rejected as

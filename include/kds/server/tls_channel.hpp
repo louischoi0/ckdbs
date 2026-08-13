@@ -24,10 +24,9 @@
 // connection on one reactor thread, like the connection buffers it
 // feeds (docs/rules.md §3).
 //
-// OpenSSL stays behind this header: the .cpp is the only file in the
-// tree that includes <openssl/*>, and the build compiles it only under
-// KDS_WITH_TLS (CMakeLists.txt), which is what keeps a no-OpenSSL build
-// possible.
+// OpenSSL stays behind this header: no <openssl/*> include appears
+// outside the KDS_WITH_TLS translation units (CMakeLists.txt), which is
+// what keeps a no-OpenSSL build possible.
 
 namespace kds::server {
 

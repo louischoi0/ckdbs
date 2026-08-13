@@ -19,6 +19,7 @@
 #include "kds/storage/file_page_device.hpp"
 
 #if KDS_WITH_TLS
+#include "kds/server/auth.hpp"
 #include "kds/server/tls_channel.hpp"
 #endif
 
@@ -52,6 +53,7 @@ std::string Expeditor::Config::LogPath() const {
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
             "tls",        "tls_cert_file",        "tls_key_file",
+            "auth",       "users_file",
             "isolation",             "default_key_mode",
             "wal_drain_interval_us", "relaxed_flush_interval_us",
             "log_dir",  "log_file",               "log_level",
@@ -157,6 +159,30 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         return Status::InvalidArgument(file.origin() +
                                         ": tls = on requires both tls_cert_file and "
                                         "tls_key_file");
+    }
+    if (file.Has("auth")) {
+        auto v = file.GetString("auth");
+        if (!v.ok()) return v.status();
+        if (v.value() == "off") {
+            auth_scram = false;
+        } else if (v.value() == "scram") {
+            auth_scram = true;
+        } else {
+            // Named values, not a boolean: a future method (mTLS-only,
+            // say) must be a new word, and "on" would leave which method
+            // unstated - exactly the kind of silence that lies later.
+            return Status::InvalidArgument(file.origin() + ": auth must be 'off' or 'scram', got '" +
+                                            v.value() + "'");
+        }
+    }
+    if (file.Has("users_file")) {
+        auto v = file.GetString("users_file");
+        if (!v.ok()) return v.status();
+        users_file = std::move(v.value());
+    }
+    if (auth_scram && users_file.empty()) {
+        return Status::InvalidArgument(file.origin() +
+                                        ": auth = scram requires users_file");
     }
     if (file.Has("waystone_recording")) {
         auto v = file.GetBool("waystone_recording");
@@ -488,6 +514,21 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         if (!level.ok()) return Status::InvalidArgument(file.origin() + ": " +
                                                         level.status().message());
         log_level = level.value();
+    }
+
+    // Cross-key validation, after every key has been read - a rule that
+    // ran mid-overlay would judge keys the file had not yet spoken.
+    // The KWP load endpoint has no auth stage, so opening it beside an
+    // authenticated text port would put an ungated door on a guarded
+    // server - every INSERT the gate protects, reachable without a
+    // password. Refused, not warned (review 2026-08-13); the combination
+    // becomes legal when KWP P07's handshake carries the same SCRAM
+    // exchange.
+    if (auth_scram && kwp_port != 0) {
+        return Status::InvalidArgument(file.origin() +
+                                        ": auth = scram cannot serve kwp_port yet - the KWP "
+                                        "load endpoint has no auth stage until protocol-wp "
+                                        "P07; set kwp_port = 0");
     }
     return Status::OK();
 }
@@ -940,12 +981,46 @@ Status Expeditor::Serve() {
 #endif
     }
 
+    // The credential store, same lifetime story as the TLS context: built
+    // before the port binds so a bad users file refuses to serve, alive
+    // until every connection's gate is gone.
+#if KDS_WITH_TLS
+    std::optional<FileCredentialStore> credentials;
+#endif
+    if (config_.auth_scram) {
+#if KDS_WITH_TLS
+        auto store = FileCredentialStore::Load(config_.users_file);
+        if (!store.ok()) return store.status();
+        if (store.value().size() == 0) {
+            // An empty users file with auth on is a server nobody can
+            // reach - almost certainly a provisioning step that never
+            // ran, so it refuses loudly rather than starting uselessly.
+            return Status::InvalidArgument("auth = scram, but users file '" +
+                                           config_.users_file +
+                                           "' holds no users; provision one with --add-user");
+        }
+        credentials.emplace(std::move(store.value()));
+        logger_->Info("server", "auth on: SCRAM-SHA-256, " +
+                                    std::to_string(credentials->size()) + " user(s) from " +
+                                    config_.users_file);
+#else
+        return Status::Unsupported(
+            "auth = scram, but this server was built without KDS_WITH_TLS; "
+            "rebuild with OpenSSL or turn the key off");
+#endif
+    }
+
     auto listener = TcpServer::Listen(config_.port);
     if (!listener.ok()) return listener.status();
 #if KDS_WITH_TLS
     if (tls_context.has_value()) {
         listener.value().set_channel_factory(
             [ctx = &*tls_context] { return ctx->NewChannel(); });
+    }
+    if (credentials.has_value()) {
+        listener.value().set_auth_gate_factory([store = &*credentials] {
+            return std::make_unique<ScramAuthGate>(store);
+        });
     }
 #endif
 

@@ -12,8 +12,9 @@
 #include <utility>
 #include <vector>
 
-// The only translation unit in the tree that includes <openssl/*>
-// (tls_channel.hpp's contract). Compiled only under KDS_WITH_TLS.
+// One of the KDS_WITH_TLS translation units - the only places
+// <openssl/*> appears (this file, scram.cpp, their tests, and main.cpp's
+// provisioning mode). Compiled only under that option.
 //
 // Like tcp_server.cpp with its syscalls, this file is a platform
 // boundary: the handshake's randomness comes from OpenSSL's own RNG, not

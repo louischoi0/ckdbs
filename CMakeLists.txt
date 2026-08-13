@@ -143,7 +143,10 @@ target_include_directories(kds PUBLIC include)
 option(KDS_WITH_TLS "Build the TLS wire channel (requires OpenSSL >= 3)" ON)
 if(KDS_WITH_TLS)
     find_package(OpenSSL 3.0 REQUIRED)
-    target_sources(kds PRIVATE src/server/tls_channel.cpp)
+    # scram.cpp and auth.cpp ride the same dependency: SCRAM's PBKDF2 and
+    # HMAC come from the OpenSSL this option already requires.
+    target_sources(kds PRIVATE src/server/tls_channel.cpp src/server/scram.cpp
+                               src/server/auth.cpp)
     target_link_libraries(kds PUBLIC OpenSSL::SSL OpenSSL::Crypto)
     target_compile_definitions(kds PUBLIC KDS_WITH_TLS=1)
 else()

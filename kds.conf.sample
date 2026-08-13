@@ -98,6 +98,28 @@ tls = off
 # tls_cert_file = /etc/kds/server.crt
 # tls_key_file  = /etc/kds/server.key
 
+# Connection authentication (docs/protocol.md D8). `off` (default) admits
+# every connection; `scram` requires every connection to complete a
+# SCRAM-SHA-256 exchange before its first statement - STOP included. The
+# password never crosses the wire and the file below stores salted
+# verifiers, not passwords; still, pair it with `tls = on` anywhere the
+# traffic itself matters.
+#
+# `users_file` is required when auth = scram, and must hold at least one
+# user (an empty file refuses to start - a server nobody can reach is a
+# provisioning mistake, not a configuration). Provision users with:
+#
+#   kds_server --add-user alice --users-file /etc/kds/users
+#
+# Authorization does not exist yet: an authenticated user may run every
+# statement. That model is an open decision (docs/protocol.md §14).
+#
+# Incompatible with `kwp_port` for now: the KWP load endpoint has no
+# auth stage, so `auth = scram` refuses to start while kwp_port is set -
+# an ungated second door on a guarded server is not a configuration.
+auth = off
+# users_file = /etc/kds/users
+
 # ---- Durability ------------------------------------------------------------
 
 # How often the system-group checkpoint task flushes dirty pages
