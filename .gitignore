@@ -16,3 +16,6 @@ kds.conf
 *.sw[po]
 __pycache__/
 kds_server
+
+# Drafts for outside audiences (posts, talks) - working notes, not a spec.
+.article/
