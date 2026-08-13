@@ -74,7 +74,7 @@ TEST_F(BufferPoolTest, LookupOrLoadFailsIfBackingNeverCreatedThePage) {
 
 TEST_F(BufferPoolTest, LookupOrLoadLoadsFromBackingOnMiss) {
     ASSERT_TRUE(backing_.CreateAt(7).ok());
-    std::memset(backing_.Get(7).value().data(), 0x11, 4);
+    std::memset(backing_.Get(7).value().bytes().data(), 0x11, 4);
 
     BufferPool pool(backing_, 4);
     auto frame = pool.LookupOrLoad(7);
@@ -133,11 +133,11 @@ TEST_F(BufferPoolTest, PageStoreInterfaceRoundTripsAndDoesNotLeakPins) {
 
     auto created = as_store.CreateAt(50);
     ASSERT_TRUE(created.ok());
-    std::memset(created.value().data(), 0x99, 2);
+    std::memset(created.value().bytes().data(), 0x99, 2);
 
     auto fetched = as_store.Get(50);
     ASSERT_TRUE(fetched.ok());
-    EXPECT_EQ(fetched.value()[0], std::byte{0x99});
+    EXPECT_EQ(fetched.value().bytes()[0], std::byte{0x99});
 
     // Neither PageStore-interface call should have left a dangling pin.
     auto frame = pool.Lookup(50);

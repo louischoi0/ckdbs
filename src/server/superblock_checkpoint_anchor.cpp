@@ -20,7 +20,7 @@ Status SuperBlockCheckpointAnchor::Publish(const wal::CheckpointAnchorRecord& an
         }
         return page.status();
     }
-    superblock_.Encode(page.value());
+    superblock_.Encode(page.value().bytes());
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         // The superblock is the one page whose every rewrite matters -
         // it is what a restart reads first.

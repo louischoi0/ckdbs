@@ -75,7 +75,7 @@ protected:
         // The cabin's one page, formatted the way its birth would.
         auto page = store_.CreateAt(kCabinPage);
         ASSERT_TRUE(page.ok()) << page.status().message();
-        ASSERT_TRUE(BoundCabinPage::Format(page.value()).ok());
+        ASSERT_TRUE(BoundCabinPage::Format(page.value().bytes()).ok());
     }
 
     // Writes one entry into the cabin page and applies it to `live`, exactly as
@@ -91,7 +91,7 @@ protected:
 
         auto page = store_.Get(kCabinPage);
         EXPECT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         EXPECT_TRUE(view.ok());
         auto index = view.value().Append(entry);
         EXPECT_TRUE(index.ok()) << index.status().message();
@@ -105,7 +105,7 @@ protected:
     void MarkOrphaned(std::uint16_t index) {
         auto page = store_.Get(kCabinPage);
         ASSERT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         ASSERT_TRUE(view.ok());
         ASSERT_TRUE(view.value().MarkOrphaned(index).ok());
     }
@@ -115,7 +115,7 @@ protected:
     void LogEntry(std::uint16_t index, const std::string& key, std::uint32_t group_id) {
         auto page = store_.Get(kCabinPage);
         ASSERT_TRUE(page.ok());
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         ASSERT_TRUE(view.ok());
         auto entry = view.value().Read(index);
         ASSERT_TRUE(entry.ok());
@@ -291,7 +291,7 @@ TEST_F(AssertionRecoverTest, TheLinkageComesBackFromTheCabinsOwnPages) {
     auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
         auto page = store_.Get(page_id);
         if (!page.ok()) return page.status();
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status();
         return view.value().Read(index);
     };
@@ -448,7 +448,7 @@ TEST_F(AssertionRecoverTest, LinkageTheWalkAndTheFoldBothAttachedIsReconciled) {
     auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
         auto page = store_.Get(page_id);
         if (!page.ok()) return page.status();
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status();
         return view.value().Read(index);
     };
@@ -492,14 +492,14 @@ TEST_F(AssertionRecoverTest, AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkTo
     // stays the recorded leak that rides on purge. Only the linkage is gone.
     auto page = store_.Get(kCabinPage);
     ASSERT_TRUE(page.ok());
-    auto view = BoundCabinPage::Open(page.value());
+    auto view = BoundCabinPage::Open(page.value().bytes());
     ASSERT_TRUE(view.ok());
     EXPECT_EQ(view.value().entry_count(), 2);
 
     auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
         auto p = store_.Get(page_id);
         if (!p.ok()) return p.status();
-        auto v = BoundCabinPage::Open(p.value());
+        auto v = BoundCabinPage::Open(p.value().bytes());
         if (!v.ok()) return v.status();
         return v.value().Read(index);
     };
@@ -547,7 +547,7 @@ TEST_F(AssertionRecoverTest, AnAbortAfterTheCheckpointStillCompensatesWithTheMar
     auto read = [this](PageId page_id, std::uint16_t index) -> StatusOr<BoundCabinEntry> {
         auto p = store_.Get(page_id);
         if (!p.ok()) return p.status();
-        auto v = BoundCabinPage::Open(p.value());
+        auto v = BoundCabinPage::Open(p.value().bytes());
         if (!v.ok()) return v.status();
         return v.value().Read(index);
     };

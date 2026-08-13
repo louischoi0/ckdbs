@@ -85,7 +85,8 @@ struct Tree {
     explicit Tree(storage::PageStore& store_in) : store(store_in) {
         auto created = store.CreateNew();
         EXPECT_TRUE(created.ok()) << created.status().message();
-        auto [page_id, bytes] = created.value();
+        auto& [page_id, bytes_ref] = created.value();
+        const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
         Status s = FormatRoot(bytes);
         EXPECT_TRUE(s.ok()) << s.message();
         root = page_id;
@@ -134,7 +135,7 @@ std::vector<ScannedRow> ScanAll(storage::PageStore& store, PageId root) {
 std::uint64_t MinKeyOf(storage::PageStore& store, PageId page_id) {
     auto bytes = store.Get(page_id);
     EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-    return heap::PageView(bytes.value()).min_key();
+    return heap::PageView(bytes.value().bytes()).min_key();
 }
 
 // ---- Shape of a fresh tree ---------------------------------------------
@@ -145,10 +146,10 @@ TEST(BtreeTest, AFreshRootIsASingleEmptyLeaf) {
 
     auto bytes = store.Get(tree.root);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    EXPECT_EQ(storage::RawPageType(bytes.value()),
+    EXPECT_EQ(storage::RawPageType(bytes.value().bytes()),
               static_cast<std::uint8_t>(PageType::kBtreeLeaf));
 
-    heap::PageView leaf(bytes.value());
+    heap::PageView leaf(bytes.value().bytes());
     EXPECT_EQ(leaf.min_key(), 0u) << "a relation's first leaf must accept every id";
     EXPECT_EQ(leaf.slot_count(), 0u);
     EXPECT_EQ(leaf.next_page_id(), kInvalidPageId);
@@ -216,10 +217,10 @@ TEST(BtreeTest, AFullLeafSplitsRightAndTheNewLeafsMinKeyIsTheIdThatCausedIt) {
     // The sibling link is what makes the new leaf reachable to a scan.
     auto old_bytes = store.Get(first_leaf);
     ASSERT_TRUE(old_bytes.ok()) << old_bytes.status().message();
-    EXPECT_EQ(heap::PageView(old_bytes.value()).next_page_id(), new_leaf);
+    EXPECT_EQ(heap::PageView(old_bytes.value().bytes()).next_page_id(), new_leaf);
 
     // Nothing moved: the old leaf still holds exactly the tuple it held.
-    EXPECT_EQ(heap::PageView(old_bytes.value()).slot_count(), 1u);
+    EXPECT_EQ(heap::PageView(old_bytes.value().bytes()).slot_count(), 1u);
 }
 
 TEST(BtreeTest, ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo) {
@@ -271,10 +272,10 @@ TEST(BtreeTest, TheFirstSplitGrowsTheTreeToTwoLevelsAndMovesTheRoot) {
 
     auto root_bytes = store.Get(tree.root);
     ASSERT_TRUE(root_bytes.ok()) << root_bytes.status().message();
-    EXPECT_EQ(storage::RawPageType(root_bytes.value()),
+    EXPECT_EQ(storage::RawPageType(root_bytes.value().bytes()),
               static_cast<std::uint8_t>(PageType::kBtreeInternal));
 
-    InternalView root(root_bytes.value());
+    InternalView root(root_bytes.value().bytes());
     EXPECT_EQ(root.level(), 1u) << "one level above the leaves";
     EXPECT_EQ(root.leftmost_child(), old_root) << "the old root keeps its keys";
     ASSERT_EQ(root.entry_count(), 1u);
@@ -296,7 +297,7 @@ TEST(BtreeTest, EverySeparatorIsExactlyItsChildLeafsMinKey) {
 
     auto root_bytes = store.Get(tree.root);
     ASSERT_TRUE(root_bytes.ok()) << root_bytes.status().message();
-    InternalView root(root_bytes.value());
+    InternalView root(root_bytes.value().bytes());
     ASSERT_GT(root.entry_count(), 1u) << "test needs a branching root to mean anything";
 
     // The routing rule: a separator is the low key of the subtree it points
@@ -364,7 +365,7 @@ TEST(BtreeTest, AFullRootInternalNodeSplitsAndGrowsAThirdLevel) {
 
     auto root_bytes = store.Get(tree.root);
     ASSERT_TRUE(root_bytes.ok()) << root_bytes.status().message();
-    InternalView root(root_bytes.value());
+    InternalView root(root_bytes.value().bytes());
     EXPECT_EQ(root.level(), 2u);
     EXPECT_EQ(root.entry_count(), 1u) << "a right-split promotes exactly one separator";
 
@@ -417,7 +418,7 @@ TEST(BtreeTest, ALookupHandsBackTheLeafBytesTheDescentAlreadyHeld) {
 
     auto fetched = store.Get(loc.value().page_id);
     ASSERT_TRUE(fetched.ok()) << fetched.status().message();
-    EXPECT_EQ(loc.value().leaf.data(), fetched.value().data())
+    EXPECT_EQ(loc.value().leaf.data(), fetched.value().bytes().data())
         << "the carried span must be the located leaf, not a copy of something else";
 
     heap::PageView leaf(std::span<std::byte, kPageSize>(loc.value().leaf.data(), kPageSize));
@@ -449,7 +450,7 @@ TEST(BtreeTest, ALookupFindsALiveIdAmongRetiredSlots) {
 
     auto bytes = store.Get(tree.root);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    heap::PageView leaf(bytes.value());
+    heap::PageView leaf(bytes.value().bytes());
     ASSERT_EQ(leaf.slot_count(), 7u);
 
     // Retire slots 1, 2 and 5 (ids 2, 3 and 6). A retired slot carries no
@@ -489,7 +490,8 @@ TEST(BtreeTest, ALookupFindsAnIdInALeafWhoseSlotsAreOutOfOrder) {
     // fallback is not silently dead code that has already rotted.
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto [root_id, root_bytes] = created.value();
+    auto& [root_id, root_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
     auto leaf = heap::PageView::CreateEmptyAs(root_bytes, /*min_key=*/0, PageType::kBtreeLeaf);
     ASSERT_TRUE(leaf.ok()) << leaf.status().message();
 
@@ -521,7 +523,7 @@ TEST(BtreeTest, ADeleteMarkedTupleIsStillFoundBecauseVisibilityIsNotThisLayersJo
 
     auto bytes = store.Get(tree.root);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    heap::PageView leaf(bytes.value());
+    heap::PageView leaf(bytes.value().bytes());
     Status s = leaf.DeleteMark(/*slot=*/2, /*trx_id=*/7);
     ASSERT_TRUE(s.ok()) << s.message();
 
@@ -532,7 +534,7 @@ TEST(BtreeTest, ADeleteMarkedTupleIsStillFoundBecauseVisibilityIsNotThisLayersJo
     auto loc = BtreeLookup(store, tree.root, 3);
     ASSERT_TRUE(loc.ok()) << loc.status().message();
 
-    auto tuple = heap::PageView(bytes.value()).ReadTuple(loc.value().slot);
+    auto tuple = heap::PageView(bytes.value().bytes()).ReadTuple(loc.value().slot);
     ASSERT_TRUE(tuple.ok()) << tuple.status().message();
     EXPECT_TRUE(tuple.value().deleted);
     EXPECT_EQ(tuple.value().trx_id, 7u) << "trx_id is the deleter";
@@ -798,7 +800,7 @@ TEST(BtreeTest, ADivisionBumpsTheRelayoutEpochOfThePageItRebuilt) {
 
     auto before = store.Get(original_leaf);
     ASSERT_TRUE(before.ok());
-    const std::uint64_t epoch_before = heap::PageView(before.value()).RelayoutEpoch();
+    const std::uint64_t epoch_before = heap::PageView(before.value().bytes()).RelayoutEpoch();
 
     ASSERT_TRUE(tree.Insert(placed.front() + 5, kSmallFiller).ok());
 
@@ -808,7 +810,7 @@ TEST(BtreeTest, ADivisionBumpsTheRelayoutEpochOfThePageItRebuilt) {
     // which is a relayout in everything but name (§3.1a). Without the bump a
     // Waystone trail entry or Cabin hint recorded before the division would
     // still compare equal and send a reader to a slot holding another row.
-    EXPECT_EQ(heap::PageView(after.value()).RelayoutEpoch(), epoch_before + 1)
+    EXPECT_EQ(heap::PageView(after.value().bytes()).RelayoutEpoch(), epoch_before + 1)
         << "the rebuild must carry the epoch forward, not restart it at 1";
 }
 
@@ -826,7 +828,7 @@ TEST(BtreeTest, ADividedLeafKeepsADeleteMarkOnTheVersionItMoved) {
         ASSERT_TRUE(found.ok()) << found.status().message();
         auto bytes = store.Get(found.value().page_id);
         ASSERT_TRUE(bytes.ok());
-        ASSERT_TRUE(heap::PageView(bytes.value()).DeleteMark(found.value().slot, 99).ok());
+        ASSERT_TRUE(heap::PageView(bytes.value().bytes()).DeleteMark(found.value().slot, 99).ok());
     }
 
     ASSERT_TRUE(tree.Insert(placed.front() + 5, kSmallFiller).ok());
@@ -835,7 +837,7 @@ TEST(BtreeTest, ADividedLeafKeepsADeleteMarkOnTheVersionItMoved) {
     ASSERT_TRUE(moved.ok()) << moved.status().message();
     auto bytes = store.Get(moved.value().page_id);
     ASSERT_TRUE(bytes.ok());
-    auto tuple = heap::PageView(bytes.value()).ReadTuple(moved.value().slot);
+    auto tuple = heap::PageView(bytes.value().bytes()).ReadTuple(moved.value().slot);
     ASSERT_TRUE(tuple.ok()) << tuple.status().message();
     // Re-inserting the payload alone would resurrect a row that a snapshot
     // has already been told is gone.
@@ -1017,13 +1019,15 @@ TEST(BtreeTest, AnIdBelowItsLeafsMinKeyIsRefused) {
     // silently breaks invariant 3 and the pruning that rests on it.
     auto leaf_created = store.CreateNew();
     ASSERT_TRUE(leaf_created.ok()) << leaf_created.status().message();
-    auto [leaf_id, leaf_bytes] = leaf_created.value();
+    auto& [leaf_id, leaf_bytes_ref] = leaf_created.value();
+    const std::span<std::byte, kPageSize> leaf_bytes = leaf_bytes_ref.bytes();
     auto leaf = heap::PageView::CreateEmptyAs(leaf_bytes, /*min_key=*/200, PageType::kBtreeLeaf);
     ASSERT_TRUE(leaf.ok()) << leaf.status().message();
 
     auto root_created = store.CreateNew();
     ASSERT_TRUE(root_created.ok()) << root_created.status().message();
-    auto [root_id, root_bytes] = root_created.value();
+    auto& [root_id, root_bytes_ref] = root_created.value();
+    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
     auto root = InternalView::CreateEmpty(root_bytes, /*level=*/1, /*leftmost_child=*/leaf_id);
     ASSERT_TRUE(root.ok()) << root.status().message();
 
@@ -1043,7 +1047,8 @@ TEST(BtreeTest, AHeapRootReachedThroughTheTreeIsReportedRatherThanParsed) {
     // tell them apart.
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto [page_id, bytes] = created.value();
+    auto& [page_id, bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
     auto page = heap::PageView::CreateEmpty(bytes, 0);
     ASSERT_TRUE(page.ok()) << page.status().message();
 
@@ -1063,7 +1068,8 @@ TEST(BtreeTest, ACyclicChildPointerIsReportedRatherThanDescendedForever) {
     // an infinite loop inside a request, which is a hung server.
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto [node_id, node_bytes] = created.value();
+    auto& [node_id, node_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> node_bytes = node_bytes_ref.bytes();
     auto node = InternalView::CreateEmpty(node_bytes, /*level=*/1, /*leftmost_child=*/node_id);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
@@ -1082,11 +1088,11 @@ TEST(BtreeTest, ANonLeafReachedThroughASiblingLinkIsReported) {
     // trusted the link would read an entry array as a slot directory.
     auto root_internal = store.Get(tree.root);
     ASSERT_TRUE(root_internal.ok()) << root_internal.status().message();
-    const PageId first_leaf = InternalView(root_internal.value()).leftmost_child();
+    const PageId first_leaf = InternalView(root_internal.value().bytes()).leftmost_child();
 
     auto leaf_bytes = store.Get(first_leaf);
     ASSERT_TRUE(leaf_bytes.ok()) << leaf_bytes.status().message();
-    heap::PageView(leaf_bytes.value()).set_next_page_id(tree.root);
+    heap::PageView(leaf_bytes.value().bytes()).set_next_page_id(tree.root);
 
     Status s = BtreeVisit(
         store, tree.root, storage::PageAccess::kRead,
@@ -1104,7 +1110,7 @@ TEST(InternalViewTest, ALevelZeroNodeIsRefusedBecauseThatIsALeaf) {
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
 
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/0, /*leftmost=*/1);
+    auto node = InternalView::CreateEmpty(created.value().second.bytes(), /*level=*/0, /*leftmost=*/1);
     EXPECT_FALSE(node.ok());
     EXPECT_EQ(node.status().code(), StatusCode::kInvalidArgument);
 }
@@ -1113,7 +1119,7 @@ TEST(InternalViewTest, RoutingSendsKeysBelowTheFirstSeparatorToTheLeftmostChild)
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second.bytes(), /*level=*/1, /*leftmost=*/10);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     // A node with no separators routes everything to the leftmost child -
@@ -1138,7 +1144,7 @@ TEST(InternalViewTest, EntriesAreKeptSortedRegardlessOfInsertionOrder) {
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second.bytes(), /*level=*/1, /*leftmost=*/10);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     // Inserts arrive in ascending order in every tree this engine builds,
@@ -1161,7 +1167,7 @@ TEST(InternalViewTest, ARepeatedSeparatorIsRefusedBecauseTwoSubtreesCannotShareA
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second.bytes(), /*level=*/1, /*leftmost=*/10);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     ASSERT_TRUE(node.value().InsertEntry(100, 11).ok());
@@ -1174,7 +1180,7 @@ TEST(InternalViewTest, ASeparatorOutsideThe40BitIdRangeIsRefused) {
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second.bytes(), /*level=*/1, /*leftmost=*/10);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     // Invariant 6: an id stored outside the tuple header is a zero-extended
@@ -1189,7 +1195,7 @@ TEST(InternalViewTest, AFullNodeRefusesAnotherEntryRatherThanOverrunningThePage)
     storage::InMemoryPageStore store(128);
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok()) << created.status().message();
-    auto node = InternalView::CreateEmpty(created.value().second, /*level=*/1, /*leftmost=*/10);
+    auto node = InternalView::CreateEmpty(created.value().second.bytes(), /*level=*/1, /*leftmost=*/10);
     ASSERT_TRUE(node.ok()) << node.status().message();
 
     for (std::uint16_t i = 0; i < kInternalMaxEntries; ++i) {

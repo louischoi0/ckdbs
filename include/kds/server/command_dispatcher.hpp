@@ -1013,7 +1013,6 @@ private:
     // when TupleLocation::page is populated: the span is the same frame
     // either way, but only Get() marks it dirty, and a write to a frame
     // nothing will write back is a write that never happened.
-    StatusOr<std::span<std::byte, kPageSize>> PageForRead(const TupleLocation& at);
 
     // The pk value a WHERE clause is a *bare* equality against, or nullopt
     // if it is anything else - no WHERE, more than one condition, a non-pk

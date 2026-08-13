@@ -614,11 +614,11 @@ Relation MakeRelation(Clustered clustered) {
     // Exactly what Catalog::CreateTable() does for each clustered type:
     // one page either way, and a tree that is still a bare leaf.
     if (clustered == Clustered::kBtree) {
-        if (kds::Status s = kds::btree::FormatRoot(created.value().second); !s.ok()) {
+        if (kds::Status s = kds::btree::FormatRoot(created.value().second.bytes()); !s.ok()) {
             Fatal(s, "formatting a btree root");
         }
     } else {
-        auto view = kds::heap::PageView::CreateEmpty(created.value().second, 0);
+        auto view = kds::heap::PageView::CreateEmpty(created.value().second.bytes(), 0);
         if (!view.ok()) {
             Fatal(view.status(), "formatting a heap root");
         }

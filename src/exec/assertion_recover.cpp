@@ -55,7 +55,7 @@ StatusOr<std::uint64_t> AttachEntriesFromPages(storage::PageStore& store, PageId
         // the read-only promise is by contract, not by type (page_store.hpp) -
         // so the span goes straight in. This walk calls only entry_count(),
         // Read() and next_page_id(), none of which write.
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) {
             return view.status().WithContext("assertion recovery: cabin page " +
                                              std::to_string(page_id));

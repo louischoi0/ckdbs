@@ -762,7 +762,7 @@ protected:
     void WriteRawPatternRow(std::uint64_t pattern_id, std::uint32_t version) {
         auto bytes = store_.Get(kCatalogPagePatterns);
         ASSERT_TRUE(bytes.ok());
-        kds::heap::PageView page(bytes.value());
+        kds::heap::PageView page(bytes.value().bytes());
 
         SysPatternRow row{};
         row.oid = 900000 + pattern_id;
@@ -1234,7 +1234,7 @@ TEST(CatalogChain, TheChainIsALinkedListOfPagesInTheReservedRange) {
         }
         auto bytes = store.GetForRead(at);
         ASSERT_TRUE(bytes.ok());
-        at = heap::PageView(bytes.value()).next_page_id();
+        at = heap::PageView(bytes.value().bytes()).next_page_id();
         ASSERT_LE(pages, 64) << "the chain does not terminate";
     }
     EXPECT_GT(pages, 1) << "240 column rows should not fit on one page";

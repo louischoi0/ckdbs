@@ -214,7 +214,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
 
                 auto bytes = store.GetForRead(at_page);
                 if (!bytes.ok()) return bytes.status();
-                heap::PageView page(bytes.value());
+                heap::PageView page(bytes.value().bytes());
                 // The hint's epoch tracks the page it names. A no-op for a
                 // verified entry (equality was just checked); the real
                 // stamp for a healed one.

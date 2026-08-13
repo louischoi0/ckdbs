@@ -115,7 +115,7 @@ TEST(HighWaterTest, ARecoveredStoreDoesNotHandOutAPageTheLogNamed) {
             auto created = store->CreateNew();
             ASSERT_TRUE(created.ok()) << created.status().message();
             ASSERT_EQ(created.value().first, kFirstUser + i);
-            Fill(created.value().second, static_cast<std::uint8_t>(0x40 + i));
+            Fill(created.value().second.bytes(), static_cast<std::uint8_t>(0x40 + i));
         }
         ASSERT_TRUE(store->Sync().ok());
     }
@@ -196,7 +196,7 @@ TEST(HighWaterTest, ARecoveredStoreDoesNotHandOutAPageTheLogNamed) {
         ASSERT_TRUE(created.ok()) << created.status().message();
         EXPECT_GT(created.value().first, analysis.value().max_page_id)
             << "allocation " << i << " handed out a page the log names";
-        storage::FormatPage(created.value().second, PageType::kHeap);
+        storage::FormatPage(created.value().second.bytes(), PageType::kHeap);
     }
     ASSERT_TRUE(store->Sync().ok());
 
@@ -270,13 +270,13 @@ TEST(HighWaterTest, AStoreThatCannotRaiseItsFloorRefusesTheMount) {
     // that could not close the hazard must not serve the database.
     class FloorlessStore final : public storage::PageStore {
     public:
-        StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId) override {
+        StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId) override {
             return Status::Unsupported("test");
         }
-        StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override {
+        StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
             return Status::Unsupported("test");
         }
-        StatusOr<std::span<std::byte, kPageSize>> Get(PageId) override {
+        StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId) override {
             return Status::NotFound("test");
         }
     };

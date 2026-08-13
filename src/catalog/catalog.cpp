@@ -95,7 +95,7 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn) {
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
 
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         const std::uint16_t n = page.slot_count();
         for (std::uint16_t slot = 0; slot < n; ++slot) {
             auto tuple = page.ReadTuple(slot);
@@ -131,7 +131,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> AllocateCatalogPage
     storage::PageStore& store) {
     for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) {
         auto created = store.CreateAt(id);
-        if (created.ok()) return std::make_pair(id, created.value());
+        if (created.ok()) return std::make_pair(id, created.value().bytes());
         if (created.status().code() != StatusCode::kAlreadyExists) return created.status();
     }
     return Status::OutOfSpace(
@@ -160,7 +160,7 @@ Status InsertRow(storage::PageStore& store, PageId root, const RowT& row,
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
 
-        heap::PageView page(bytes.value());
+        heap::PageView page(bytes.value().bytes());
         auto slot = page.InsertTuple(encoded, trx_id);
         if (slot.ok()) return Status::OK();
         if (slot.status().code() != StatusCode::kOutOfSpace) return slot.status();
@@ -197,7 +197,7 @@ Status InsertRow(storage::PageStore& store, PageId root, const RowT& row,
         // only thing protecting a concurrent reader on this core.
         auto tail_again = store.Get(current);
         if (!tail_again.ok()) return tail_again.status();
-        heap::PageView(tail_again.value()).set_next_page_id(new_id);
+        heap::PageView(tail_again.value().bytes()).set_next_page_id(new_id);
         return Status::OK();
     }
     return Status::Corruption("catalog: chain from page " + std::to_string(root) +
@@ -310,7 +310,7 @@ Status Catalog::Bootstrap() {
             }
             return created.status();
         }
-        auto page = heap::PageView::CreateEmpty(created.value(), 0);
+        auto page = heap::PageView::CreateEmpty(created.value().bytes(), 0);
         if (!page.ok()) return page.status();
     }
 
@@ -467,7 +467,7 @@ Status Catalog::BootstrapPatternDefs() {
     if (!created.ok()) return created.status();
     // min_key 0: like the other catalog pages, this relation is scanned in
     // full - by name or by pattern_id, never by key range.
-    auto root = heap::PageView::CreateEmpty(created.value(), 0);
+    auto root = heap::PageView::CreateEmpty(created.value().bytes(), 0);
     if (!root.ok()) return root.status();
 
     auto varheap_root = varheap::CreateChain(store_);
@@ -568,7 +568,7 @@ Status Catalog::BootstrapAssertions() {
     if (!created.ok()) return created.status();
     // min_key 0: scanned in full, by name or by target_oid, never by key
     // range - like every other catalog page.
-    auto root = heap::PageView::CreateEmpty(created.value(), 0);
+    auto root = heap::PageView::CreateEmpty(created.value().bytes(), 0);
     if (!root.ok()) return root.status();
 
     auto varheap_root = varheap::CreateChain(store_);
@@ -777,7 +777,8 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
 
     auto created = store_.CreateNew();
     if (!created.ok()) return created.status();
-    auto [root_id, root_bytes] = created.value();
+    auto& [root_id, root_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
 
     // Both clustered types root at `desc_page_id` and both start as one
     // page - a heap page for kHeap, a B+ tree leaf for kBtree (btree.hpp).

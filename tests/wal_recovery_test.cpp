@@ -121,7 +121,7 @@ TEST_F(RecoveryTest, AWinnerRecoversWithNoUndoPhaseAtAll) {
 
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    heap::PageView view(page.value());
+    heap::PageView view(page.value().bytes());
     EXPECT_EQ(view.slot_count(), 1u);
 }
 
@@ -221,7 +221,7 @@ TEST_F(RecoveryTest, RunningTwiceIsANoOp) {
     ASSERT_TRUE(first.ok()) << first.status().message();
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    const std::vector<std::byte> after_first(page.value().begin(), page.value().end());
+    const std::vector<std::byte> after_first(page.value().bytes().begin(), page.value().bytes().end());
 
     auto second = RecoverCore((*device_), 0, store_, AnalysisStart{}, /*undo=*/nullptr);
     ASSERT_TRUE(second.ok()) << second.status().message();
@@ -230,7 +230,7 @@ TEST_F(RecoveryTest, RunningTwiceIsANoOp) {
 
     auto again = store_.Get(kPage);
     ASSERT_TRUE(again.ok());
-    EXPECT_EQ(std::vector<std::byte>(again.value().begin(), again.value().end()), after_first);
+    EXPECT_EQ(std::vector<std::byte>(again.value().bytes().begin(), again.value().bytes().end()), after_first);
 }
 
 // ---- An anchor that outruns its stream still refuses ---------------------

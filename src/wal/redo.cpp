@@ -247,7 +247,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         std::span<std::byte> page_bytes;
         auto got = store.Get(page_id);
         if (got.ok()) {
-            page_bytes = got.value();
+            page_bytes = got.value().bytes();
         } else if (got.status().code() == StatusCode::kCorruption) {
             // Checksum failure. Held, not failed: an FPI later in the
             // stream is exactly what heals this (page.md §10).
@@ -259,7 +259,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page_bytes = created.value();
+            page_bytes = created.value().bytes();
             if (poisoned.erase(page_id) != 0) {
                 ++stats.pages_healed;
             }
@@ -268,7 +268,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             if (!created.ok()) {
                 return created.status();
             }
-            page_bytes = created.value();
+            page_bytes = created.value().bytes();
             ++stats.pages_created;
         } else {
             // Named, because "page id not found" alone says nothing about

@@ -26,7 +26,8 @@ namespace {
 PageId MakeHead(storage::PageStore& store) {
     auto created = store.CreateNew();
     EXPECT_TRUE(created.ok()) << created.status().message();
-    auto [page_id, bytes] = created.value();
+    auto& [page_id, bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
     auto page = PageView::CreateEmpty(bytes, 0);
     EXPECT_TRUE(page.ok()) << page.status().message();
     return page_id;
@@ -203,7 +204,7 @@ TEST(HeapChainTest, ANewPagesMinKeyIsTheIdThatCausedTheGrowth) {
 
     auto bytes = store.Get(growth.page_id);
     ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-    EXPECT_EQ(PageView(bytes.value()).min_key(), id);
+    EXPECT_EQ(PageView(bytes.value().bytes()).min_key(), id);
 }
 
 TEST(HeapChainTest, TheOldTailIsLinkedToTheNewOneAndKeepsItsMinKey) {
@@ -214,7 +215,7 @@ TEST(HeapChainTest, TheOldTailIsLinkedToTheNewOneAndKeepsItsMinKey) {
 
     auto head_bytes = store.Get(head);
     ASSERT_TRUE(head_bytes.ok()) << head_bytes.status().message();
-    PageView head_page(head_bytes.value());
+    PageView head_page(head_bytes.value().bytes());
 
     EXPECT_NE(head_page.next_page_id(), kInvalidPageId) << "head must link on";
     // Invariant 2: growth never rewrites an existing page's min_key.
@@ -245,7 +246,7 @@ TEST(HeapChainTest, AnIdBelowTheTailsMinKeyIsRefused) {
     ASSERT_TRUE(tail.ok()) << tail.status().message();
     auto tail_bytes = store.Get(tail.value());
     ASSERT_TRUE(tail_bytes.ok()) << tail_bytes.status().message();
-    const std::uint64_t tail_min_key = PageView(tail_bytes.value()).min_key();
+    const std::uint64_t tail_min_key = PageView(tail_bytes.value().bytes()).min_key();
     ASSERT_GT(tail_min_key, 1u) << "test needs a grown chain";
 
     // A sequence that went backwards. Writing this tuple would either
@@ -273,13 +274,14 @@ TEST(HeapChainTest, ACyclicChainIsReportedRatherThanLoopedOn) {
     // returns, which inside a request is a hung server.
     auto second = store.CreateNew();
     ASSERT_TRUE(second.ok()) << second.status().message();
-    auto [second_id, second_bytes] = second.value();
+    auto& [second_id, second_bytes_ref] = second.value();
+    const std::span<std::byte, kPageSize> second_bytes = second_bytes_ref.bytes();
     auto second_page = PageView::CreateEmpty(second_bytes, 0);
     ASSERT_TRUE(second_page.ok()) << second_page.status().message();
 
     auto head_bytes = store.Get(head);
     ASSERT_TRUE(head_bytes.ok()) << head_bytes.status().message();
-    PageView(head_bytes.value()).set_next_page_id(second_id);
+    PageView(head_bytes.value().bytes()).set_next_page_id(second_id);
     second_page.value().set_next_page_id(head);
 
     auto tail = ChainTail(store, head);
@@ -528,7 +530,7 @@ TEST(HeapChainTest, ABatchFillEqualsTheSequentialChainByteForByte) {
         auto b = seq_store.Get(page.page_id);
         ASSERT_TRUE(a.ok());
         ASSERT_TRUE(b.ok());
-        EXPECT_TRUE(std::equal(a.value().begin(), a.value().end(), b.value().begin()))
+        EXPECT_TRUE(std::equal(a.value().bytes().begin(), a.value().bytes().end(), b.value().bytes().begin()))
             << "page " << page.page_id << " diverged";
     }
 }

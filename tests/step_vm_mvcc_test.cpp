@@ -112,7 +112,7 @@ protected:
 
         auto page_bytes = store_.Get(at.page_id);
         ASSERT_TRUE(page_bytes.ok());
-        heap::PageView page(page_bytes.value());
+        heap::PageView page(page_bytes.value().bytes());
         auto tuple = page.ReadTuple(at.slot);
         ASSERT_TRUE(tuple.ok());
 
@@ -133,7 +133,7 @@ protected:
 
         auto again = store_.Get(at.page_id);
         ASSERT_TRUE(again.ok());
-        heap::PageView fresh(again.value());
+        heap::PageView fresh(again.value().bytes());
         ASSERT_TRUE(fresh.OverwriteTuple(at.slot, encoded.value(), writer, ptr.value()).ok());
     }
 
@@ -141,7 +141,7 @@ protected:
     void DeleteMarkWith(const Placed& at, std::uint64_t deleter) {
         auto page_bytes = store_.Get(at.page_id);
         ASSERT_TRUE(page_bytes.ok());
-        heap::PageView page(page_bytes.value());
+        heap::PageView page(page_bytes.value().bytes());
         auto tuple = page.ReadTuple(at.slot);
         ASSERT_TRUE(tuple.ok());
 
@@ -156,7 +156,7 @@ protected:
 
         auto again = store_.Get(at.page_id);
         ASSERT_TRUE(again.ok());
-        heap::PageView fresh(again.value());
+        heap::PageView fresh(again.value().bytes());
         // The mark and the link are two writes: OverwriteTuple carries the
         // new header, DeleteMark sets the slot flag and re-stamps the
         // deleter. Same order the DELETE handler will use.
@@ -274,7 +274,7 @@ TEST_F(StepVmMvccTest, AnInsertByAnInvisibleWriterIsNotAVersionAtAll) {
     // 3.6) - and that alone means "no visible version".
     auto page = store_.Get(newer.page_id);
     ASSERT_TRUE(page.ok());
-    heap::PageView view(page.value());
+    heap::PageView view(page.value().bytes());
     auto tuple = view.ReadTuple(newer.slot);
     ASSERT_TRUE(tuple.ok());
     const std::vector<std::byte> same(tuple.value().payload.begin(), tuple.value().payload.end());

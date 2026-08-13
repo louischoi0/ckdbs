@@ -102,7 +102,7 @@ private:
     Status ReserveChunk() {
         auto bytes = store_.Get(kds::catalog::kCatalogPageTables);
         if (!bytes.ok()) return bytes.status();
-        kds::heap::PageView page(bytes.value());
+        kds::heap::PageView page(bytes.value().bytes());
         for (std::uint16_t i = 0; i < page.slot_count(); ++i) {
             auto tuple = page.ReadTuple(i);
             if (!tuple.ok()) continue;

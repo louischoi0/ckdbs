@@ -126,9 +126,9 @@ public:
     static StatusOr<std::unique_ptr<DevicePageStore>> Open(PageDevice& device,
                                                            PageId first_new_page_id = 1);
 
-    StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override;
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override;
-    StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override;
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override;
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override;
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override;
 
     // ---- Recovery's high-water repair (RV4, workplan RC04) --------------
     //
@@ -156,12 +156,12 @@ public:
     // Get() that leaves the frame clean (page_store.hpp). Without it a
     // read-only statement dirties every page it touches and the next
     // checkpoint writes the whole working set back with nothing changed.
-    StatusOr<std::span<std::byte, kPageSize>> GetForRead(PageId page_id) override;
+    StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override;
 
     // CreateNew() for a page that will carry no common header - see the
     // note above. The whole 8 KiB is the caller's, and this store will
     // neither stamp nor verify a checksum on it, now or after a reopen.
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderless() override;
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewHeaderlessUnpinned() override;
 
     // Whether `page_id` was created headerless. False for an id that does
     // not exist, which is the safe answer: an unknown page is treated as
@@ -396,53 +396,16 @@ public:
     // not a thing any caller needs, and making it expressible would make
     // "who unpins" a question. Move leaves the source empty, which is what
     // lets a handle be returned from a factory without a double unpin.
-    class PageRef {
-    public:
-        PageRef() noexcept = default;
-        PageRef(const PageRef&) = delete;
-        PageRef& operator=(const PageRef&) = delete;
-        PageRef(PageRef&& other) noexcept { *this = std::move(other); }
-        PageRef& operator=(PageRef&& other) noexcept;
-        ~PageRef();
+    // The engine-wide pinned handle (page_store.hpp, MG01). This used to be
+    // a nested class with exactly the same shape; the base one replaced it
+    // when the pin hooks became PageStore virtuals, and the alias keeps the
+    // existing spelling `DevicePageStore::PageRef` meaning the same thing.
+    using PageRef = storage::PageRef;
 
-        bool valid() const noexcept { return store_ != nullptr; }
-        PageId page_id() const noexcept { return page_id_; }
-
-        // Valid exactly as long as this handle is. Taking a copy of the
-        // span and dropping the handle is the use-after-free eviction
-        // introduces - see EV03's note on why no implicit conversion to a
-        // span exists.
-        std::span<std::byte, kPageSize> bytes() const noexcept {
-            return std::span<std::byte, kPageSize>(data_, kPageSize);
-        }
-
-        // Marks the frame dirty after the fact, for a handle taken through
-        // `PinnedGetForRead` that turned out to write. Cheaper than a
-        // second fetch and honest about which frames are written back.
-        void MarkDirty() noexcept;
-
-        // Drops the pin early. Idempotent; the destructor calls it.
-        void Release() noexcept;
-
-    private:
-        friend class DevicePageStore;
-        PageRef(DevicePageStore* store, PageId page_id,
-                std::span<std::byte, kPageSize> bytes) noexcept
-            : store_(store), page_id_(page_id), data_(bytes.data()) {}
-
-        DevicePageStore* store_ = nullptr;
-        PageId page_id_ = kInvalidPageId;
-        // A pointer rather than a span, because `std::span<T, N>` with a
-        // fixed extent has no empty state - and a moved-from or released
-        // handle needs one.
-        std::byte* data_ = nullptr;
-    };
-
-    // `Get()` / `GetForRead()` returning a pinned handle. Same fetch, same
-    // faulting, same dirty semantics - the only difference is that the
-    // frame cannot be reclaimed while the handle lives.
-    StatusOr<PageRef> PinnedGet(PageId page_id);
-    StatusOr<PageRef> PinnedGetForRead(PageId page_id);
+    // The pre-MG01 spellings of the pinned accessors, kept for their
+    // existing callers until MG06 folds them into plain Get()/GetForRead().
+    StatusOr<PageRef> PinnedGet(PageId page_id) { return Get(page_id); }
+    StatusOr<PageRef> PinnedGetForRead(PageId page_id) { return GetForRead(page_id); }
 
     // Whether `page_id` belongs to a **pinned class**
     // (`docs/spec-eviction.md` EV3): never a sweep candidate at any
@@ -585,11 +548,14 @@ private:
 
     class ScanRing;  // the ScanFetcher over this store; defined in the .cpp
 
-    // PageRef's two callbacks. Private because a pin is only ever taken and
-    // dropped by a handle - a caller that could unpin by hand could unpin
-    // someone else's frame.
-    void UnpinFrame(PageId page_id) noexcept;
-    void MarkFrameDirty(PageId page_id) noexcept;
+    // PageRef's callbacks, overriding the base no-ops onto Frame metadata
+    // (MG01). Private on purpose - overriding with narrower access is legal,
+    // and a pin is only ever taken and dropped by a handle through the base
+    // interface: a caller that could unpin by hand could unpin someone
+    // else's frame.
+    void PinFrame(PageId page_id) noexcept override;
+    void UnpinFrame(PageId page_id) noexcept override;
+    void MarkFrameDirty(PageId page_id) noexcept override;
     std::span<std::byte, kPageSize> InsertFrame(PageId page_id, std::unique_ptr<Page> bytes,
                                                 bool dirty);
     Status EnsureAddressable(PageId page_id);

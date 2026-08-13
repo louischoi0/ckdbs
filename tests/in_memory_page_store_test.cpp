@@ -12,13 +12,13 @@ TEST(InMemoryPageStoreTest, CreateAtThenGetSeesWrittenBytes) {
 
     auto created = store.CreateAt(42);
     ASSERT_TRUE(created.ok());
-    std::memset(created.value().data(), 0xAB, 4);
+    std::memset(created.value().bytes().data(), 0xAB, 4);
 
     auto fetched = store.Get(42);
     ASSERT_TRUE(fetched.ok());
-    EXPECT_EQ(fetched.value()[0], std::byte{0xAB});
-    EXPECT_EQ(fetched.value()[3], std::byte{0xAB});
-    EXPECT_EQ(fetched.value()[4], std::byte{0});  // rest stays zero-initialized
+    EXPECT_EQ(fetched.value().bytes()[0], std::byte{0xAB});
+    EXPECT_EQ(fetched.value().bytes()[3], std::byte{0xAB});
+    EXPECT_EQ(fetched.value().bytes()[4], std::byte{0});  // rest stays zero-initialized
 }
 
 TEST(InMemoryPageStoreTest, CreateAtRejectsDuplicateId) {

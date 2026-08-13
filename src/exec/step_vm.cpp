@@ -402,7 +402,7 @@ private:
                 ++stats_.For(step.step_id).pages_fetched;
                 auto bytes = store_.GetForRead(memo_page_);
                 if (bytes.ok()) {
-                    heap::PageView page(bytes.value());
+                    heap::PageView page(bytes.value().bytes());
                     return AcceptTupleAt(steps, index, step, access, memo_page_, page,
                                          memo_slot_);
                 }
@@ -742,7 +742,7 @@ private:
 
             auto bytes = store_.GetForRead(found.value().page_id);
             if (!bytes.ok()) return bytes.status();
-            heap::PageView page(bytes.value());
+            heap::PageView page(bytes.value().bytes());
             if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
                                          found.value().slot);
                 !s.ok()) {
@@ -899,7 +899,7 @@ private:
                 ++step_stats.cabin_hint_misses;
                 continue;
             }
-            heap::PageView page(bytes.value());
+            heap::PageView page(bytes.value().bytes());
             if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
                 !s.ok()) {
                 return s;

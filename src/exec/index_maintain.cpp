@@ -164,7 +164,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         // cannot disagree about what was written.
         auto page = store.GetForRead(placed.value().page_id);
         if (!page.ok()) return page.status();
-        index::IndexLeafView leaf(std::span<std::byte, kPageSize>(page.value().data(), kPageSize));
+        index::IndexLeafView leaf(std::span<std::byte, kPageSize>(page.value().bytes().data(), kPageSize));
         auto stored = leaf.Entry(placed.value().slot);
         if (!stored.ok()) return stored.status();
         write.entry.assign(stored.value().begin(), stored.value().end());

@@ -61,18 +61,18 @@ protected:
     std::span<std::byte, kPageSize> Heap() {
         auto p = store_.Get(kHeapPage);
         EXPECT_TRUE(p.ok()) << p.status().message();
-        return p.value();
+        return p.value().bytes();
     }
 
     void SetUp() override {
         auto heap = store_.CreateAt(kHeapPage);
         ASSERT_TRUE(heap.ok()) << heap.status().message();
-        auto view = heap::PageView::CreateEmpty(heap.value(), /*min_key=*/1);
+        auto view = heap::PageView::CreateEmpty(heap.value().bytes(), /*min_key=*/1);
         ASSERT_TRUE(view.ok()) << view.status().message();
 
         auto undo_page = store_.CreateAt(kUndoPage);
         ASSERT_TRUE(undo_page.ok()) << undo_page.status().message();
-        ASSERT_TRUE(FormatUndoPage(undo_page.value(), kLoser, kInvalidPageId).ok());
+        ASSERT_TRUE(FormatUndoPage(undo_page.value().bytes(), kLoser, kInvalidPageId).ok());
     }
 
     // Appends one undo record for `kLoser`, linking it to `prev`, and
@@ -194,13 +194,13 @@ TEST_F(RecoveryUndoTest, RunningTwiceIsAByteForByteNoOp) {
     ASSERT_TRUE(first.RollBack(store_, Losing(prev)).ok());
     auto page = store_.Get(kHeapPage);
     ASSERT_TRUE(page.ok());
-    const std::vector<std::byte> after_first(page.value().begin(), page.value().end());
+    const std::vector<std::byte> after_first(page.value().bytes().begin(), page.value().bytes().end());
 
     RecoveryUndo second(undo_);
     ASSERT_TRUE(second.RollBack(store_, Losing(prev)).ok()) << "a re-run must not fail";
     auto again = store_.Get(kHeapPage);
     ASSERT_TRUE(again.ok());
-    EXPECT_EQ(std::vector<std::byte>(again.value().begin(), again.value().end()), after_first);
+    EXPECT_EQ(std::vector<std::byte>(again.value().bytes().begin(), again.value().bytes().end()), after_first);
 
     // And it recognised the retired slot rather than reading it as a
     // missing row - the difference between resuming and refusing.
@@ -286,7 +286,7 @@ TEST_F(RecoveryUndoTest, AChainThatDoesNotTerminateIsCorruptionRatherThanAHang) 
     rec.txn_prev_undo_ptr = ptr.value();
     auto landed = store_.Get(UndoPtrPageId(ptr.value()));
     ASSERT_TRUE(landed.ok()) << landed.status().message();
-    ASSERT_TRUE(UndoPageWriteAt(landed.value(), UndoPtrOffset(ptr.value()), rec, {}).ok());
+    ASSERT_TRUE(UndoPageWriteAt(landed.value().bytes(), UndoPtrOffset(ptr.value()), rec, {}).ok());
 
     RecoveryUndo undo(undo_);
     auto s = undo.RollBack(store_, Losing(ptr.value()));

@@ -48,14 +48,14 @@ class CountingStore final : public PageStore {
 public:
     explicit CountingStore(PageStore& inner) : inner_(inner) {}
 
-    StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override {
-        return inner_.CreateAt(page_id);
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
     }
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override {
-        return inner_.CreateNew();
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        return inner_.CreateNewUnpinned();
     }
-    StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override {
-        return inner_.Get(page_id);
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        return inner_.GetUnpinned(page_id);
     }
     Status Sync() override {
         ++syncs_;

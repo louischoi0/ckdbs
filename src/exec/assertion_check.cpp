@@ -299,7 +299,7 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
     for (const auto& [group, indexes] : by_page) {
         auto page = store.Get(group.second);
         if (!page.ok()) return page.status();
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status();
         // Log, then clear, then stamp - the order `AbortTxn` documents below,
         // and the same window it closes: between a flag move and its
@@ -395,7 +395,7 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
         // a page the next scan misreads.
         auto page = store.Get(it->page);
         if (!page.ok()) return page.status().WithContext("assert abort: fetching the entry page");
-        auto view = BoundCabinPage::Open(page.value());
+        auto view = BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status().WithContext("assert abort: opening the entry page");
         if (Status s = view.value().MarkOrphaned(it->index); !s.ok()) {
             return s.WithContext("assert abort: marking the entry orphaned");

@@ -130,13 +130,13 @@ TEST_F(UndoLogTest, UndoPagesAreHeaderedAndStamped) {
 
     auto page = store_->Get(UndoPtrPageId(ptr.value()));
     ASSERT_TRUE(page.ok());
-    EXPECT_TRUE(storage::ValidatePageHeader(std::span<const std::byte, kPageSize>(page.value()),
+    EXPECT_TRUE(storage::ValidatePageHeader(std::span<const std::byte, kPageSize>(page.value().bytes()),
                                             PageType::kUndo)
                     .ok());
-    EXPECT_NE(storage::GetPageLsn(page.value()), storage::kNoPageLsn);
+    EXPECT_NE(storage::GetPageLsn(page.value().bytes()), storage::kNoPageLsn);
 
     const UndoPageHeaderFields h =
-        ReadUndoPageHeader(std::span<const std::byte, kPageSize>(page.value()));
+        ReadUndoPageHeader(std::span<const std::byte, kPageSize>(page.value().bytes()));
     // The creating transaction, recorded as a diagnostic - it owns nothing.
     EXPECT_EQ(h.first_trx_id, 50u);
     EXPECT_EQ(h.prev_page_id, kInvalidPageId);
@@ -168,7 +168,7 @@ TEST_F(UndoLogTest, AppendsShareAPageUntilItFills) {
     // a *reclamation* chain: nothing reads a version through it.
     auto tail = store_->Get(pages[4]);
     ASSERT_TRUE(tail.ok());
-    EXPECT_EQ(ReadUndoPageHeader(std::span<const std::byte, kPageSize>(tail.value())).prev_page_id,
+    EXPECT_EQ(ReadUndoPageHeader(std::span<const std::byte, kPageSize>(tail.value().bytes())).prev_page_id,
               pages[0]);
 }
 
@@ -254,7 +254,7 @@ TEST_F(UndoLogTest, ASelfReferentialLinkIsCorruptionNotAHang) {
     auto page = store_->Get(UndoPtrPageId(ptr.value()));
     ASSERT_TRUE(page.ok());
     const std::uint64_t self = ptr.value();
-    std::memcpy(page.value().data() + UndoPtrOffset(ptr.value()) + kUndoRecPriorUndoPtrOffset,
+    std::memcpy(page.value().bytes().data() + UndoPtrOffset(ptr.value()) + kUndoRecPriorUndoPtrOffset,
                 &self, sizeof(self));
 
     Status walked = log_->Walk(ptr.value(), [](const UndoVersion&) { return true; });
@@ -395,14 +395,14 @@ TEST_F(UndoLogTest, APageRebuiltFromItsRecordsAloneMatchesTheLivePage) {
     // page_lsn and the checksum are properties of the log, not of the
     // records - a rebuilt page has never been written to.
     EXPECT_EQ(std::memcmp(rebuilt.data() + storage::kPageBodyOffset,
-                          live.value().data() + storage::kPageBodyOffset,
+                          live.value().bytes().data() + storage::kPageBodyOffset,
                           kPageSize - storage::kPageBodyOffset),
               0);
 
     const UndoPageHeaderFields rh =
         ReadUndoPageHeader(std::span<const std::byte, kPageSize>(rebuilt));
     const UndoPageHeaderFields lh =
-        ReadUndoPageHeader(std::span<const std::byte, kPageSize>(live.value()));
+        ReadUndoPageHeader(std::span<const std::byte, kPageSize>(live.value().bytes()));
     EXPECT_EQ(rh.lower, lh.lower);
     EXPECT_EQ(rh.nr_records, lh.nr_records);
 }

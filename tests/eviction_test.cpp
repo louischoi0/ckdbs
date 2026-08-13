@@ -55,8 +55,8 @@ protected:
         auto created = store_->CreateNew();
         EXPECT_TRUE(created.ok()) << created.status().message();
         const PageId id = created.value().first;
-        FormatPage(created.value().second, PageType::kHeap);
-        created.value().second[kPageBodyOffset] = fill;
+        FormatPage(created.value().second.bytes(), PageType::kHeap);
+        created.value().second.bytes()[kPageBodyOffset] = fill;
         EXPECT_TRUE(store_->Sync().ok());
         // Sync writes back but leaves the frame resident and clean.
         return id;
@@ -131,7 +131,7 @@ TEST_F(EvictionTest, AHandleSeesAndCanDirtyItsOwnBytes) {
     ASSERT_TRUE(store_->Sync().ok());
     auto reread = store_->GetForRead(id);
     ASSERT_TRUE(reread.ok());
-    EXPECT_EQ(reread.value()[kPageBodyOffset], std::byte{9});
+    EXPECT_EQ(reread.value().bytes()[kPageBodyOffset], std::byte{9});
 }
 
 // ---- EV02: the sweep ----------------------------------------------------
@@ -149,7 +149,7 @@ TEST_F(EvictionTest, TheSweepReclaimsAColdCleanFrameAndTheBytesComeBack) {
     // the bytes are the ones that were written.
     auto back = store_->GetForRead(id);
     ASSERT_TRUE(back.ok()) << back.status().message();
-    EXPECT_EQ(back.value()[kPageBodyOffset], std::byte{42});
+    EXPECT_EQ(back.value().bytes()[kPageBodyOffset], std::byte{42});
 }
 
 // EV1's actual claim, and the reason it is a *counter* and not a reference
@@ -190,7 +190,12 @@ TEST_F(EvictionTest, ADirtyFrameIsSkippedRatherThanDropped) {
     auto created = store_->CreateNew();
     ASSERT_TRUE(created.ok());
     const PageId dirty = created.value().first;
-    created.value().second[kPageBodyOffset] = std::byte{7};
+    created.value().second.bytes()[kPageBodyOffset] = std::byte{7};
+    // Setup done: the pin drops, so the sweep sees a cold dirty frame
+    // rather than a pinned one - the lifetime discipline every caller now
+    // follows (MG01). Without this the sweep's pin refusal fires first and
+    // the dirty branch under test is never reached.
+    created.value().second.Release();
 
     EXPECT_EQ(store_->EvictColdFrames(8), 0u);
     EXPECT_EQ(store_->EvictColdFrames(8), 0u) << "still refused on the second lap";
@@ -208,7 +213,7 @@ TEST_F(EvictionTest, ADirtyFrameIsSkippedRatherThanDropped) {
     ASSERT_TRUE(store_->Sync().ok());
     auto back = store_->GetForRead(dirty);
     ASSERT_TRUE(back.ok());
-    EXPECT_EQ(back.value()[kPageBodyOffset], std::byte{7});
+    EXPECT_EQ(back.value().bytes()[kPageBodyOffset], std::byte{7});
 }
 
 // ---- The guarantee AST04 rests on ---------------------------------------
@@ -268,7 +273,7 @@ TEST_F(EvictionTest, APinnedClassFrameIsNeverReclaimedAndNeedsNoPin) {
     // Still resident, and still the bytes it had.
     auto still = store_->GetForRead(resident);
     ASSERT_TRUE(still.ok());
-    EXPECT_EQ(still.value()[kPageBodyOffset], std::byte{1});
+    EXPECT_EQ(still.value().bytes()[kPageBodyOffset], std::byte{1});
 }
 
 TEST_F(EvictionTest, ThePinnedClassRangeOnlyEverGrows) {
@@ -377,8 +382,8 @@ TEST_F(EvictionTest, TheDrainWritesQueuedDirtCleanAndTheNextSweepReclaims) {
     for (int i = 0; i < 3; ++i) {
         auto created = store_->CreateNew();
         ASSERT_TRUE(created.ok());
-        FormatPage(created.value().second, PageType::kHeap);
-        created.value().second[kPageBodyOffset] = std::byte{static_cast<unsigned char>(10 + i)};
+        FormatPage(created.value().second.bytes(), PageType::kHeap);
+        created.value().second.bytes()[kPageBodyOffset] = std::byte{static_cast<unsigned char>(10 + i)};
         ids.push_back(created.value().first);
     }
     EXPECT_EQ(store_->EvictColdFrames(8), 0u);
@@ -398,7 +403,7 @@ TEST_F(EvictionTest, TheDrainWritesQueuedDirtCleanAndTheNextSweepReclaims) {
     for (std::size_t i = 0; i < ids.size(); ++i) {
         auto back = store_->GetForRead(ids[i]);
         ASSERT_TRUE(back.ok()) << back.status().message();
-        EXPECT_EQ(back.value()[kPageBodyOffset],
+        EXPECT_EQ(back.value().bytes()[kPageBodyOffset],
                   std::byte{static_cast<unsigned char>(10 + i)});
     }
 
@@ -420,8 +425,9 @@ TEST(EvictionWritebackTest, NoPageWritePrecedesItsWalDurabilityPoint) {
 
     auto created = store.CreateNew();
     ASSERT_TRUE(created.ok());
-    FormatPage(created.value().second, PageType::kHeap);
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
     ASSERT_TRUE(store.StampPageLsn(created.value().first, /*lsn=*/77).ok());
+    created.value().second.Release();  // setup done - the sweep must see it cold
 
     EXPECT_EQ(store.EvictColdFrames(8), 0u);  // dirty at zero: queued
     auto drained = store.DrainDirtyEvictionQueue();
@@ -446,8 +452,8 @@ TEST(EvictionWritebackTest, ContiguousRunsCoalesceIntoOneDeviceCall) {
     for (int i = 0; i < 4; ++i) {
         auto created = store.CreateNew();
         ASSERT_TRUE(created.ok());
-        FormatPage(created.value().second, PageType::kHeap);
-        created.value().second[kPageBodyOffset] = std::byte{static_cast<unsigned char>(i)};
+        FormatPage(created.value().second.bytes(), PageType::kHeap);
+        created.value().second.bytes()[kPageBodyOffset] = std::byte{static_cast<unsigned char>(i)};
         ids.push_back(created.value().first);
     }
     ASSERT_EQ(ids[3], ids[0] + 3) << "the run premise does not hold";
@@ -463,7 +469,7 @@ TEST(EvictionWritebackTest, ContiguousRunsCoalesceIntoOneDeviceCall) {
     for (int i = 0; i < 4; ++i) {
         auto back = store.GetForRead(ids[i]);
         ASSERT_TRUE(back.ok());
-        EXPECT_EQ(back.value()[kPageBodyOffset], std::byte{static_cast<unsigned char>(i)});
+        EXPECT_EQ(back.value().bytes()[kPageBodyOffset], std::byte{static_cast<unsigned char>(i)});
     }
 }
 
@@ -473,8 +479,8 @@ TEST_F(EvictionTest, MaintainFreeReserveRestoresTheWatermarkThroughDirt) {
     for (int i = 0; i < 4; ++i) {
         auto created = store_->CreateNew();
         ASSERT_TRUE(created.ok());
-        FormatPage(created.value().second, PageType::kHeap);
-        created.value().second[kPageBodyOffset] = std::byte{static_cast<unsigned char>(20 + i)};
+        FormatPage(created.value().second.bytes(), PageType::kHeap);
+        created.value().second.bytes()[kPageBodyOffset] = std::byte{static_cast<unsigned char>(20 + i)};
         ids.push_back(created.value().first);
     }
     const std::size_t resident = store_->resident_pages();
@@ -490,7 +496,7 @@ TEST_F(EvictionTest, MaintainFreeReserveRestoresTheWatermarkThroughDirt) {
     for (std::size_t i = 0; i < ids.size(); ++i) {
         auto back = store_->GetForRead(ids[i]);
         ASSERT_TRUE(back.ok());
-        EXPECT_EQ(back.value()[kPageBodyOffset],
+        EXPECT_EQ(back.value().bytes()[kPageBodyOffset],
                   std::byte{static_cast<unsigned char>(20 + i)});
     }
 
@@ -606,8 +612,8 @@ TEST_F(EvictionTest, TheRingNeverDropsADirtyFrameOrAResidentClassPage) {
     auto created = store_->CreateNew();
     ASSERT_TRUE(created.ok());
     const PageId dirty = created.value().first;
-    FormatPage(created.value().second, PageType::kHeap);
-    created.value().second[kPageBodyOffset] = std::byte{77};
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.bytes()[kPageBodyOffset] = std::byte{77};
 
     auto ring = store_->OpenScanRing(/*frames=*/1);
     ASSERT_TRUE(ring->Fetch(dirty).ok());  // in place: already resident
@@ -621,7 +627,7 @@ TEST_F(EvictionTest, TheRingNeverDropsADirtyFrameOrAResidentClassPage) {
     ASSERT_TRUE(store_->Sync().ok());
     auto back = store_->GetForRead(dirty);
     ASSERT_TRUE(back.ok());
-    EXPECT_EQ(back.value()[kPageBodyOffset], std::byte{77});
+    EXPECT_EQ(back.value().bytes()[kPageBodyOffset], std::byte{77});
 }
 
 }  // namespace

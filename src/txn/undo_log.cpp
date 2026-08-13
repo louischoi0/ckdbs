@@ -75,7 +75,7 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
     if (tail_ != kInvalidPageId) {
         auto bytes = store_.Get(tail_);
         if (!bytes.ok()) return bytes.status();
-        if (UndoPageFreeSpace(std::span<const std::byte, kPageSize>(bytes.value())) >= need) {
+        if (UndoPageFreeSpace(std::span<const std::byte, kPageSize>(bytes.value().bytes())) >= need) {
             return tail_;
         }
     }
@@ -85,7 +85,7 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
     if (!created.ok()) return created.status();
     const PageId page_id = created.value().first;
 
-    if (Status s = FormatUndoPage(created.value().second, trx_id, tail_); !s.ok()) return s;
+    if (Status s = FormatUndoPage(created.value().second.bytes(), trx_id, tail_); !s.ok()) return s;
     if (Status s = LogPageInit(trx_id, page_id); !s.ok()) return s;
 
     // Published only once the page is formatted and its PAGE_INIT is
@@ -112,7 +112,7 @@ StatusOr<std::uint64_t> UndoLog::Append(std::uint64_t trx_id, const UndoRecordFi
     auto bytes = store_.Get(page_id.value());
     if (!bytes.ok()) return bytes.status();
 
-    auto offset = UndoPageAppend(bytes.value(), fields, image);
+    auto offset = UndoPageAppend(bytes.value().bytes(), fields, image);
     if (!offset.ok()) return offset.status();
 
     if (Status s = LogUndoWrite(trx_id, page_id.value(), offset.value(), fields, image);
@@ -128,7 +128,7 @@ StatusOr<UndoVersion> UndoLog::Read(std::uint64_t ptr) {
     auto bytes = store_.GetForRead(UndoPtrPageId(ptr));
     if (!bytes.ok()) return bytes.status();
 
-    auto rec = UndoPageRead(std::span<const std::byte, kPageSize>(bytes.value()),
+    auto rec = UndoPageRead(std::span<const std::byte, kPageSize>(bytes.value().bytes()),
                             UndoPtrOffset(ptr));
     if (!rec.ok()) return rec.status();
 
@@ -170,7 +170,7 @@ StatusOr<std::uint32_t> UndoLog::PageCount() {
         }
         auto bytes = store_.GetForRead(page_id);
         if (!bytes.ok()) return bytes.status();
-        page_id = ReadUndoPageHeader(std::span<const std::byte, kPageSize>(bytes.value()))
+        page_id = ReadUndoPageHeader(std::span<const std::byte, kPageSize>(bytes.value().bytes()))
                       .prev_page_id;
     }
     return count;

@@ -133,7 +133,7 @@ protected:
     std::uint64_t PageLsnOf(PageId page_id) {
         auto page = store_->Get(page_id);
         EXPECT_TRUE(page.ok()) << page.status().message();
-        return storage::GetPageLsn(page.value());
+        return storage::GetPageLsn(page.value().bytes());
     }
 
     sched::ManualClock clock_;
@@ -186,7 +186,7 @@ TEST_F(InsertWalTest, TheLoggedTupleIsByteIdenticalToTheOneInThePage) {
     // The record's page/slot must resolve to the same bytes in the heap.
     auto page = store_->Get(insert->header.page_id);
     ASSERT_TRUE(page.ok()) << page.status().message();
-    heap::PageView view(page.value());
+    heap::PageView view(page.value().bytes());
     auto tuple = view.ReadTuple(decoded.value().fields.slot);
     ASSERT_TRUE(tuple.ok()) << tuple.status().message();
 
@@ -338,7 +338,7 @@ TEST_F(InsertWalTest, ThePageInitRecordCarriesTheNewPagesMinKey) {
     // match what the page itself ended up holding (invariant 2).
     auto page = store_->Get(init->header.page_id);
     ASSERT_TRUE(page.ok()) << page.status().message();
-    EXPECT_EQ(decoded.value().min_key, heap::PageView(page.value()).min_key());
+    EXPECT_EQ(decoded.value().min_key, heap::PageView(page.value().bytes()).min_key());
 }
 
 // ---- A spilled value is logged, and logged first -------------------------
@@ -436,7 +436,7 @@ TEST_F(InsertWalTest, GrowingTheVarHeapChainLogsTheNewPageAndTheLinkThatReachesI
     while (true) {
         auto page = store_->GetForRead(page_id);
         ASSERT_TRUE(page.ok()) << page.status().message();
-        const PageId next = varheap::PageNextPageId(page.value());
+        const PageId next = varheap::PageNextPageId(page.value().bytes());
         if (next == kInvalidPageId) break;
         ++links;
         EXPECT_NE(std::find(imaged.begin(), imaged.end(), page_id), imaged.end())
@@ -514,7 +514,7 @@ TEST_F(InsertWalTest, TheLoggedVarHeapValueIsByteIdenticalToTheStoredOne) {
     // worse than no log at all.
     auto page = store_->Get(found->header.page_id);
     ASSERT_TRUE(page.ok()) << page.status().message();
-    auto stored = varheap::PageRead(page.value(), decoded.value().fields.slot);
+    auto stored = varheap::PageRead(page.value().bytes(), decoded.value().fields.slot);
     ASSERT_TRUE(stored.ok()) << stored.status().message();
     EXPECT_TRUE(std::equal(stored.value().begin(), stored.value().end(),
                            decoded.value().value.begin()));
@@ -739,7 +739,7 @@ TEST_F(InsertWalTest, AnIndexEntrysRecordCarriesTheBytesThatLandedOnThePage) {
         // with nothing else in hand.
         auto page = store_->Get(record.header.page_id);
         ASSERT_TRUE(page.ok());
-        index::IndexLeafView leaf(page.value());
+        index::IndexLeafView leaf(page.value().bytes());
         auto stored = leaf.Entry(decoded.value().fields.slot);
         ASSERT_TRUE(stored.ok()) << stored.status().message();
         ASSERT_EQ(stored.value().size(), decoded.value().entry.size());

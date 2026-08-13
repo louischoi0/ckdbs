@@ -119,7 +119,7 @@ StatusOr<Frame*> BufferPool::LookupOrLoad(PageId page_id) {
         return bytes.status();
     }
 
-    Frame& f = RegisterFrame(slot.value(), page_id, bytes.value(), /*initial_dirty=*/false);
+    Frame& f = RegisterFrame(slot.value(), page_id, bytes.value().bytes(), /*initial_dirty=*/false);
     Pin(f);
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("buffer", "load page=" + std::to_string(page_id) + " slot=" +
@@ -150,7 +150,7 @@ StatusOr<Frame*> BufferPool::AllocNew(PageId page_id) {
     // to reach persistence even if the caller never touches it again
     // before eviction - which holds even though there is no real disk to
     // flush to yet (see the file-level comment).
-    Frame& f = RegisterFrame(slot.value(), page_id, created.value(), /*initial_dirty=*/true);
+    Frame& f = RegisterFrame(slot.value(), page_id, created.value().bytes(), /*initial_dirty=*/true);
     Pin(f);
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
         log_->Trace("buffer", "alloc page=" + std::to_string(page_id) + " slot=" +
@@ -341,7 +341,7 @@ BufferPool::Stats BufferPool::stats() const noexcept {
     return s;
 }
 
-StatusOr<std::span<std::byte, kPageSize>> BufferPool::CreateAt(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> BufferPool::CreateAtUnpinned(PageId page_id) {
     auto frame = AllocNew(page_id);
     if (!frame.ok()) return frame.status();
     auto bytes = frame.value()->bytes();
@@ -349,7 +349,7 @@ StatusOr<std::span<std::byte, kPageSize>> BufferPool::CreateAt(PageId page_id) {
     return bytes;
 }
 
-StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> BufferPool::CreateNew() {
+StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> BufferPool::CreateNewUnpinned() {
     auto slot = TakeFreeFrameSlot();
     if (!slot.ok()) return slot.status();
 
@@ -358,7 +358,8 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> BufferPool::CreateN
         free_slots_.push_back(slot.value());
         return created.status();
     }
-    auto [new_id, bytes] = created.value();
+    auto& [new_id, bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
 
     RegisterFrame(slot.value(), new_id, bytes, /*initial_dirty=*/true);
     if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
@@ -368,7 +369,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> BufferPool::CreateN
     return std::make_pair(new_id, bytes);
 }
 
-StatusOr<std::span<std::byte, kPageSize>> BufferPool::Get(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> BufferPool::GetUnpinned(PageId page_id) {
     auto frame = LookupOrLoad(page_id);
     if (!frame.ok()) return frame.status();
     auto bytes = frame.value()->bytes();

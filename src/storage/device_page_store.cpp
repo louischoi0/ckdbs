@@ -81,8 +81,10 @@ void DevicePageStore::StampIfHeadered(PageId page_id,
 }
 
 StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>>
-DevicePageStore::CreateNewHeaderless() {
-    auto created = CreateNew();
+DevicePageStore::CreateNewHeaderlessUnpinned() {
+    // The raw sibling, not the pinned base accessor: this *is* the raw
+    // seam, and pinning here would leak a pin no handle ever drops.
+    auto created = CreateNewUnpinned();
     if (!created.ok()) return created.status();
 
     // Marked after the allocation succeeds and before the caller writes a
@@ -328,7 +330,7 @@ bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
     return lease_->Owns(page_id);
 }
 
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAt(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(PageId page_id) {
     if (lease_ != nullptr) {
         // Placing a page at a *chosen* id is a claim on the free map, and
         // this store does not own it (see SetCoreOwnership). Every caller of
@@ -363,7 +365,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAt(PageId page_
     return InsertFrame(page_id, std::move(bytes), /*dirty=*/true);
 }
 
-StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::CreateNew() {
+StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::CreateNewUnpinned() {
     if (lease_ != nullptr) {
         // A leased core takes its id from the run core 0 already reserved
         // for it, and touches no shared state to do it. The free-map bits
@@ -396,7 +398,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     if (!created.ok()) return created.status();
 
     next_new_page_id_ = page_id + 1;
-    return std::make_pair(page_id, created.value());
+    return std::make_pair(page_id, created.value().bytes());
 }
 
 Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
@@ -426,14 +428,14 @@ Status DevicePageStore::RaiseAllocationFloor(PageId first_allocatable_page_id) {
     return Status::OK();
 }
 
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Get(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetUnpinned(PageId page_id) {
     if (!IsAllocated(page_id)) {
         return Status::NotFound("page id not found");
     }
     return ResidentBytes(page_id, /*mark_dirty=*/true);
 }
 
-StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForRead(PageId page_id) {
+StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::GetForReadUnpinned(PageId page_id) {
     if (!IsAllocated(page_id)) {
         return Status::NotFound("page id not found");
     }
@@ -734,33 +736,15 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 
 // ---- Frame reclamation (docs/workplan-eviction.md EV01-EV02) -------------
 
-DevicePageStore::PageRef& DevicePageStore::PageRef::operator=(PageRef&& other) noexcept {
-    if (this != &other) {
-        Release();
-        store_ = other.store_;
-        page_id_ = other.page_id_;
-        data_ = other.data_;
-        // Emptied, not just copied from: the pin transfers, so the source
-        // must not drop it on destruction.
-        other.store_ = nullptr;
-        other.page_id_ = kInvalidPageId;
-        other.data_ = nullptr;
-    }
-    return *this;
-}
-
-DevicePageStore::PageRef::~PageRef() { Release(); }
-
-void DevicePageStore::PageRef::Release() noexcept {
-    if (store_ == nullptr) return;
-    store_->UnpinFrame(page_id_);
-    store_ = nullptr;
-    page_id_ = kInvalidPageId;
-    data_ = nullptr;
-}
-
-void DevicePageStore::PageRef::MarkDirty() noexcept {
-    if (store_ != nullptr) store_->MarkFrameDirty(page_id_);
+void DevicePageStore::PinFrame(PageId page_id) noexcept {
+    // Called by the base pinned accessors immediately after the raw fetch
+    // made the frame resident, on the same single-threaded core - so the
+    // find can only miss if something is deeply wrong, and a miss is left
+    // as a no-op pin rather than an abort: the failure it produces (a frame
+    // evictable while a handle lives) is the one the poisoner (MG05)
+    // detects deterministically.
+    auto it = frames_.find(page_id);
+    if (it != frames_.end()) ++it->second.pins;
 }
 
 void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
@@ -777,22 +761,6 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
 void DevicePageStore::MarkFrameDirty(PageId page_id) noexcept {
     auto it = frames_.find(page_id);
     if (it != frames_.end()) it->second.dirty = true;
-}
-
-StatusOr<DevicePageStore::PageRef> DevicePageStore::PinnedGet(PageId page_id) {
-    auto bytes = ResidentBytes(page_id, /*mark_dirty=*/true);
-    if (!bytes.ok()) return bytes.status();
-    // The frame is resident because ResidentBytes just made it so, and the
-    // pin is taken before anything can run between the two.
-    ++frames_.find(page_id)->second.pins;
-    return PageRef(this, page_id, bytes.value());
-}
-
-StatusOr<DevicePageStore::PageRef> DevicePageStore::PinnedGetForRead(PageId page_id) {
-    auto bytes = ResidentBytes(page_id, /*mark_dirty=*/false);
-    if (!bytes.ok()) return bytes.status();
-    ++frames_.find(page_id)->second.pins;
-    return PageRef(this, page_id, bytes.value());
 }
 
 bool DevicePageStore::IsPinnedClass(PageId page_id) const noexcept {

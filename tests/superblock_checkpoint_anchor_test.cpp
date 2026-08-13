@@ -39,14 +39,14 @@ public:
 // path and not a comment.
 class UnsyncablePageStore final : public storage::PageStore {
 public:
-    StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override {
-        return inner_.CreateAt(page_id);
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
     }
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override {
-        return inner_.CreateNew();
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        return inner_.CreateNewUnpinned();
     }
-    StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override {
-        return inner_.Get(page_id);
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        return inner_.GetUnpinned(page_id);
     }
     Status Sync() override {
         return fail_ ? Status::IoError("scripted sync failure") : Status::OK();
@@ -70,7 +70,7 @@ protected:
         ASSERT_TRUE(wal.ok()) << wal.status().message();
         wal_ = std::move(wal.value());
 
-        auto page = store_.CreateAt(kSuperBlockPageId);
+        auto page = store_.CreateAtUnpinned(kSuperBlockPageId);
         ASSERT_TRUE(page.ok());
         superblock_ = SuperBlock::CreateFresh(1000);
         superblock_.Encode(page.value());
@@ -78,7 +78,7 @@ protected:
 
     // What a restart sees: the bytes on the store, decoded from scratch.
     StatusOr<SuperBlock> Reload() {
-        auto page = store_.Get(kSuperBlockPageId);
+        auto page = store_.GetUnpinned(kSuperBlockPageId);
         if (!page.ok()) return page.status();
         return SuperBlock::Decode(std::span<const std::byte, kPageSize>(page.value()));
     }
@@ -179,7 +179,7 @@ TEST_F(SuperBlockAnchorTest, AFailedSyncIsReportedAndLeavesTheOldAnchorOnDisk) {
     auto page = store.CreateAt(kSuperBlockPageId);
     ASSERT_TRUE(page.ok());
     SuperBlock sb = SuperBlock::CreateFresh(1000);
-    sb.Encode(page.value());
+    sb.Encode(page.value().bytes());
 
     SuperBlockCheckpointAnchor anchor(sb, store);
     ASSERT_TRUE(anchor.Publish({0, 100, 200, 300, 0}).ok());
@@ -195,7 +195,7 @@ TEST_F(SuperBlockAnchorTest, AFailedSyncIsReportedAndLeavesTheOldAnchorOnDisk) {
     // retry rather than something the caller must repair.
     auto reloaded = store.Get(kSuperBlockPageId);
     ASSERT_TRUE(reloaded.ok());
-    auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(reloaded.value()));
+    auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(reloaded.value().bytes()));
     ASSERT_TRUE(decoded.ok());
     EXPECT_LE(decoded.value().wal_anchor(0).redo_start_lsn, 500u);
 }
@@ -248,7 +248,7 @@ TEST_F(SuperBlockAnchorTest, AnAnchorSentFromAPeerLandsInThatPeersSlot) {
 
     // In slot 2, not slot 0: the anchor names a WAL stream, and the sender
     // says which - the transport's src_core is a different fact.
-    auto reloaded = store_.Get(kSuperBlockPageId);
+    auto reloaded = store_.GetUnpinned(kSuperBlockPageId);
     ASSERT_TRUE(reloaded.ok());
     auto decoded = SuperBlock::Decode(std::span<const std::byte, kPageSize>(reloaded.value()));
     ASSERT_TRUE(decoded.ok());

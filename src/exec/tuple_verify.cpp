@@ -14,7 +14,7 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
         return out;
     }
 
-    heap::PageView page(bytes.value());
+    heap::PageView page(bytes.value().bytes());
 
     // Rule 2, before the slot is read: a bumped epoch means tuples on this
     // page have moved, so nothing recorded against it may be trusted -
@@ -51,7 +51,7 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
 std::uint32_t CurrentRelayoutEpoch(storage::PageStore& store, PageId page_id) {
     auto bytes = store.GetForRead(page_id);
     if (!bytes.ok()) return 0;
-    return static_cast<std::uint32_t>(storage::GetRelayoutEpoch(bytes.value()));
+    return static_cast<std::uint32_t>(storage::GetRelayoutEpoch(bytes.value().bytes()));
 }
 
 }  // namespace kds::exec

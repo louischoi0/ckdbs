@@ -127,7 +127,7 @@ TEST_F(MountRecoveryTest, AZeroedAnchorScansFromTheHeadOfTheStream) {
     EXPECT_EQ(r.value().losers, 0u);
     EXPECT_GT(r.value().redo_applied, 0u);
 
-    auto page = store_.Get(kPage);
+    auto page = store_.GetUnpinned(kPage);
     ASSERT_TRUE(page.ok()) << page.status().message();
     heap::PageView view(page.value());
     EXPECT_EQ(view.slot_count(), 1u);
@@ -391,7 +391,7 @@ TEST_F(MountRecoveryTest, RecoveringTwiceIsANoOp) {
     WriteStream(/*txn_id=*/7, wal::RecordType::kTxnCommit);
 
     ASSERT_TRUE(Recover(WalAnchorFields{}).ok());
-    auto page = store_.Get(kPage);
+    auto page = store_.GetUnpinned(kPage);
     ASSERT_TRUE(page.ok());
     const std::vector<std::byte> after_first(page.value().begin(), page.value().end());
 
@@ -400,7 +400,7 @@ TEST_F(MountRecoveryTest, RecoveringTwiceIsANoOp) {
     EXPECT_EQ(second.value().redo_applied, 0u);
     EXPECT_EQ(second.value().redo_skipped_by_lsn, 2u);
 
-    auto again = store_.Get(kPage);
+    auto again = store_.GetUnpinned(kPage);
     ASSERT_TRUE(again.ok());
     EXPECT_EQ(std::vector<std::byte>(again.value().begin(), again.value().end()), after_first);
 }
@@ -418,19 +418,19 @@ public:
 
     void ArmFault() noexcept { armed_ = true; }
 
-    StatusOr<std::span<std::byte, kPageSize>> CreateAt(PageId page_id) override {
-        return inner_.CreateAt(page_id);
+    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
+        return inner_.CreateAtUnpinned(page_id);
     }
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNew() override {
-        return inner_.CreateNew();
+    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
+        return inner_.CreateNewUnpinned();
     }
-    StatusOr<std::span<std::byte, kPageSize>> Get(PageId page_id) override {
+    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
         if (Failing(page_id)) return Status::NotFound("page id not found");
-        return inner_.Get(page_id);
+        return inner_.GetUnpinned(page_id);
     }
-    StatusOr<std::span<std::byte, kPageSize>> GetForRead(PageId page_id) override {
+    StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override {
         if (Failing(page_id)) return Status::NotFound("page id not found");
-        return inner_.GetForRead(page_id);
+        return inner_.GetForReadUnpinned(page_id);
     }
 
 private:

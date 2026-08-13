@@ -40,7 +40,8 @@ StatusOr<PageId> CreateDirPage(storage::PageStore& store) {
     // would overwrite child 1.
     auto created = store.CreateNewHeaderless();
     if (!created.ok()) return created.status();
-    auto [page_id, bytes] = created.value();
+    auto& [page_id, bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
     FormatDirPage(bytes);
     return page_id;
 }
@@ -57,7 +58,7 @@ StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int 
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
 
-        const PageId child = LoadChild(bytes.value(), DirIndexAt(key.arg_hash, depth, level));
+        const PageId child = LoadChild(bytes.value().bytes(), DirIndexAt(key.arg_hash, depth, level));
         if (child == kEmptyDirSlot) {
             // Never populated. The ordinary answer on the replay path, not
             // an error: most instances of a pattern have no trail.
@@ -78,7 +79,7 @@ StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId ro
 
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
-        const PageId child = LoadChild(bytes.value(), index);
+        const PageId child = LoadChild(bytes.value().bytes(), index);
         if (child != kEmptyDirSlot) {
             current = child;
             continue;
@@ -110,7 +111,7 @@ StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId ro
         // only once what it points at is whole.
         auto parent = store.Get(current);
         if (!parent.ok()) return parent.status();
-        StoreChild(parent.value(), index, fresh);
+        StoreChild(parent.value().bytes(), index, fresh);
         current = fresh;
     }
     return current;
@@ -129,7 +130,7 @@ StatusOr<PageId> GrowPatternDirectory(storage::PageStore& store, PageId root, in
 
     auto bytes = store.Get(created.value());
     if (!bytes.ok()) return bytes.status();
-    StoreChild(bytes.value(), 0, root);
+    StoreChild(bytes.value().bytes(), 0, root);
     return created.value();
 }
 

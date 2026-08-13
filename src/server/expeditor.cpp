@@ -849,7 +849,7 @@ Status Expeditor::OpenLog() {
 Status Expeditor::PersistSuperBlock() {
     auto page = store_->Get(kSuperBlockPageId);
     if (!page.ok()) return page.status();
-    database_->superblock.Encode(page.value());
+    database_->superblock.Encode(page.value().bytes());
     return Sync();
 }
 

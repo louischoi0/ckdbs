@@ -261,11 +261,11 @@ protected:
     std::byte* TupleBase(const InsertedAt& at) {
         auto page = instance_->store().Get(at.page);
         EXPECT_TRUE(page.ok());
-        heap::PageView view(page.value());
+        heap::PageView view(page.value().bytes());
         auto tuple = view.ReadTuple(at.slot);
         EXPECT_TRUE(tuple.ok());
         const std::byte* payload = tuple.value().payload.data();
-        return page.value().data() + (payload - page.value().data()) -
+        return page.value().bytes().data() + (payload - page.value().bytes().data()) -
                heap::kTupleHeaderOnDiskSize;
     }
 

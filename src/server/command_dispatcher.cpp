@@ -818,9 +818,9 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     // is the tool someone reaches for when a descent went somewhere
     // unexpected, and it is useless if it cannot show the separators that
     // sent it there.
-    if (storage::RawPageType(page.value()) ==
+    if (storage::RawPageType(page.value().bytes()) ==
         static_cast<std::uint8_t>(PageType::kBtreeInternal)) {
-        btree::InternalView node(page.value());
+        btree::InternalView node(page.value().bytes());
         std::ostringstream os;
         os << "page_id=" << page_id << "\\n"
            << "page_type=BTREE_INTERNAL\\n"
@@ -838,8 +838,8 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
         return {os.str(), false};
     }
 
-    heap::PageView view(page.value());
-    const bool is_leaf = storage::RawPageType(page.value()) ==
+    heap::PageView view(page.value().bytes());
+    const bool is_leaf = storage::RawPageType(page.value().bytes()) ==
                          static_cast<std::uint8_t>(PageType::kBtreeLeaf);
 
     // The wire protocol allows exactly one response line per command (see
@@ -2224,7 +2224,7 @@ Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id)
 
     std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
     if (auto n = wal::EncodeFullPageImage(image,
-                                          std::span<const std::byte, kPageSize>(bytes.value()));
+                                          std::span<const std::byte, kPageSize>(bytes.value().bytes()));
         !n.ok()) {
         return n.status();
     }
@@ -3275,13 +3275,6 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
     return PkLookup{PkLookup::Kind::kScan, {}};
 }
 
-StatusOr<std::span<std::byte, kPageSize>> CommandDispatcher::PageForRead(
-    const TupleLocation& at) {
-    if (!at.page.empty()) {
-        return std::span<std::byte, kPageSize>(at.page.data(), kPageSize);
-    }
-    return page_store_.GetForRead(at.page_id);
-}
 
 DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt) {
     // **AG12.** A catalog view's rows come from the catalog's typed readers,
@@ -4410,7 +4403,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // built from it would restore the *new* values.
             auto live = page_store_.GetForRead(page_id);
             if (!live.ok()) return live.status();
-            heap::PageView before_page(live.value());
+            heap::PageView before_page(live.value().bytes());
             auto before = before_page.ReadTuple(slot);
             if (!before.ok()) return before.status();
             const std::vector<std::byte> image(before.value().payload.begin(),
@@ -4437,7 +4430,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
 
         auto page_again = page_store_.Get(page_id);
         if (!page_again.ok()) return page_again.status();
-        heap::PageView fresh(page_again.value());
+        heap::PageView fresh(page_again.value().bytes());
         if (Status s = fresh.OverwriteTuple(slot, encoded.value(), new_trx_id, new_undo_ptr);
             !s.ok()) {
             return s;
@@ -4525,7 +4518,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // written back. Same frame, one hash lookup, dirty flag set.
             auto bytes = page_store_.Get(found.at.page_id);
             if (bytes.ok()) {
-                heap::PageView page(bytes.value());
+                heap::PageView page(bytes.value().bytes());
                 if (Status s = apply(found.at.page_id, page, found.at.slot); !s.ok()) {
                     return {ErrorReply(s), false};
                 }
@@ -4945,7 +4938,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
 
         auto again = page_store_.Get(page_id);
         if (!again.ok()) return again.status();
-        heap::PageView fresh(again.value());
+        heap::PageView fresh(again.value().bytes());
 
         // Two writes, and both are needed: the header carries the link back
         // to the version this supersedes, and the slot flag is what makes
@@ -4996,7 +4989,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         if (found.kind == PkLookup::Kind::kAt) {
             auto bytes = page_store_.Get(found.at.page_id);
             if (bytes.ok()) {
-                heap::PageView page(bytes.value());
+                heap::PageView page(bytes.value().bytes());
                 if (Status s = mark(found.at.page_id, page, found.at.slot); !s.ok()) {
                     return {ErrorReply(s), false};
                 }

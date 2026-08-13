@@ -71,7 +71,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
     // produce one, since RegisterPattern() stamps the current version.
     auto bytes = store_.Get(catalog::kCatalogPagePatterns);
     ASSERT_TRUE(bytes.ok());
-    heap::PageView page(bytes.value());
+    heap::PageView page(bytes.value().bytes());
     catalog::SysPatternRow row{};
     row.oid = 999;
     row.pattern_id = 0x5151;
@@ -268,7 +268,7 @@ TEST_F(CommandDispatcherTest, ShowPageReportsHeaderAndSlots) {
     constexpr PageId kPageId = 500;
     auto page = store_.CreateAt(kPageId);
     ASSERT_TRUE(page.ok());
-    auto view = heap::PageView::CreateEmpty(page.value(), 42);
+    auto view = heap::PageView::CreateEmpty(page.value().bytes(), 42);
     ASSERT_TRUE(view.ok());
 
     std::string payload = "hello";
@@ -314,7 +314,7 @@ TEST_F(CommandDispatcherTest, ShowPageValuesIncludesLiveTuplePayloadHexEncoded) 
     constexpr PageId kPageId = 501;
     auto page = store_.CreateAt(kPageId);
     ASSERT_TRUE(page.ok());
-    auto view = heap::PageView::CreateEmpty(page.value(), 0);
+    auto view = heap::PageView::CreateEmpty(page.value().bytes(), 0);
     ASSERT_TRUE(view.ok());
 
     std::string payload = "hello";  // hex: 68656c6c6f
@@ -344,7 +344,7 @@ TEST_F(CommandDispatcherTest, ShowPageWithoutValuesOmitsPayload) {
     constexpr PageId kPageId = 502;
     auto page = store_.CreateAt(kPageId);
     ASSERT_TRUE(page.ok());
-    auto view = heap::PageView::CreateEmpty(page.value(), 0);
+    auto view = heap::PageView::CreateEmpty(page.value().bytes(), 0);
     ASSERT_TRUE(view.ok());
 
     std::string payload = "hello";

@@ -218,7 +218,7 @@ TEST(SubsystemLoggingTest, PageStoreLogsAllocationAndWriteBack) {
 
     auto page = store.value()->CreateAt(4);
     ASSERT_TRUE(page.ok()) << page.status().message();
-    storage::FormatPage(page.value(), PageType::kHeap);
+    storage::FormatPage(page.value().bytes(), PageType::kHeap);
     ASSERT_TRUE(store.value()->Sync().ok());
 
     EXPECT_TRUE(log.Has("pagestore", {"alloc", "page=4"}));
@@ -236,7 +236,7 @@ TEST(SubsystemLoggingTest, ChecksumFailureIsLoggedAsCorruption) {
         ASSERT_TRUE(store.ok()) << store.status().message();
         auto page = store.value()->CreateAt(4);
         ASSERT_TRUE(page.ok()) << page.status().message();
-        storage::FormatPage(page.value(), PageType::kHeap);
+        storage::FormatPage(page.value().bytes(), PageType::kHeap);
         ASSERT_TRUE(store.value()->Sync().ok());
     }
 

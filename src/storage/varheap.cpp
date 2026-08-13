@@ -205,7 +205,8 @@ StatusOr<std::span<const std::byte>> PageRead(std::span<const std::byte, kPageSi
 StatusOr<PageId> CreateChain(storage::PageStore& store) {
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [page_id, bytes] = created.value();
+    auto& [page_id, bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> bytes = bytes_ref.bytes();
 
     if (Status s = FormatPage(bytes); !s.ok()) return s;
     return page_id;
@@ -235,7 +236,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
         }
         auto bytes = store.GetForRead(tail_id);
         if (!bytes.ok()) return bytes.status();
-        const PageId next = PageNextPageId(bytes.value());
+        const PageId next = PageNextPageId(bytes.value().bytes());
         if (next == kInvalidPageId) break;
         tail_id = next;
     }
@@ -243,7 +244,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     auto tail = store.Get(tail_id);
     if (!tail.ok()) return tail.status();
 
-    auto slot = PageAppend(Fixed(tail.value()), value);
+    auto slot = PageAppend(Fixed(tail.value().bytes()), value);
     if (slot.ok()) {
         // The common case, and the one that needs no structural record: an
         // existing page took the value, and the append record describes it
@@ -260,7 +261,8 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     // the whole point of this class.
     auto created = store.CreateNew();
     if (!created.ok()) return created.status();
-    auto [new_id, new_bytes] = created.value();
+    auto& [new_id, new_bytes_ref] = created.value();
+    const std::span<std::byte, kPageSize> new_bytes = new_bytes_ref.bytes();
     if (Status s = FormatPage(new_bytes); !s.ok()) return s;
 
     auto new_slot = PageAppend(Fixed(new_bytes), value);
@@ -277,7 +279,7 @@ StatusOr<ChainAppendResult> ChainAppend(storage::PageStore& store, PageId root,
     // handed out a new frame.
     auto tail_again = store.Get(tail_id);
     if (!tail_again.ok()) return tail_again.status();
-    std::memcpy(tail_again.value().data() + kNextPageIdOffset, &new_id, sizeof(new_id));
+    std::memcpy(tail_again.value().bytes().data() + kNextPageIdOffset, &new_id, sizeof(new_id));
 
     // Both halves of the growth reported, because neither is described by the
     // append record the caller is about to write (ChainAppendResult).
@@ -294,10 +296,10 @@ StatusOr<std::span<const std::byte>> Fetch(storage::PageStore& store, VarHeapPtr
     // The page class is checked rather than assumed: a pointer is only as
     // good as the tuple it came out of, and reading a heap page's bytes as
     // values would silently return garbage where this returns Corruption.
-    if (Status s = storage::ValidatePageHeader(bytes.value(), PageType::kVarHeap); !s.ok()) {
+    if (Status s = storage::ValidatePageHeader(bytes.value().bytes(), PageType::kVarHeap); !s.ok()) {
         return s;
     }
-    return PageRead(bytes.value(), ptr.slot);
+    return PageRead(bytes.value().bytes(), ptr.slot);
 }
 
 StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId root) {
@@ -312,7 +314,7 @@ StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId root) {
         }
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        const PageId next = PageNextPageId(bytes.value());
+        const PageId next = PageNextPageId(bytes.value().bytes());
         if (next == kInvalidPageId) return pages + 1;
         current = next;
     }

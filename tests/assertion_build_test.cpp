@@ -292,7 +292,7 @@ TEST_F(AssertionBuildWalTest, TheEmittedRecordsRebuildTheDirectoryTheBuildProduc
                 }
                 auto page = replayed.CreateAt(record->header.page_id);
                 ASSERT_TRUE(page.ok());
-                ASSERT_TRUE(storage::cabin::BoundCabinPage::Format(page.value()).ok());
+                ASSERT_TRUE(storage::cabin::BoundCabinPage::Format(page.value().bytes()).ok());
                 continue;
             }
             if (!exec::IsAssertionRecord(record->type())) continue;
@@ -330,7 +330,7 @@ TEST_F(AssertionBuildWalTest, TheEmittedRecordsRebuildTheDirectoryTheBuildProduc
                     std::uint16_t index) -> StatusOr<storage::cabin::BoundCabinEntry> {
         auto page = replayed.Get(page_id);
         if (!page.ok()) return page.status();
-        auto view = storage::cabin::BoundCabinPage::Open(page.value());
+        auto view = storage::cabin::BoundCabinPage::Open(page.value().bytes());
         if (!view.ok()) return view.status();
         return view.value().Read(index);
     };
