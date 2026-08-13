@@ -276,10 +276,22 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
     auto pending = pending_.find(txn_id);
     if (pending == pending_.end()) return Status::OK();
 
+    // **Taken out of the map before anything can fail**, so a transaction's
+    // reservations are settled exactly once whatever happens below. Every exit
+    // from here is an error return, and leaving the list behind on one means the
+    // *next* transaction under this id settles them a second time - reachable,
+    // because `CommandDispatcher::EndWrite` uses `catalog::kBootstrapXid` for
+    // every statement when there is no transaction manager, so the id is not
+    // unique per transaction there. Double-settling silently moves an aggregate
+    // twice; dropping the remainder of a failed settle leaves it wrong in a way
+    // the returned error already reports. The second is the failure to prefer.
+    const std::vector<Reservation> reservations = std::move(pending->second);
+    pending_.erase(pending);
+
     // Batched per (assertion, page), the physiological unit ASSERT_COMMIT
     // describes.
     std::map<std::pair<std::uint64_t, PageId>, std::vector<std::uint16_t>> by_page;
-    for (const Reservation& r : pending->second) {
+    for (const Reservation& r : reservations) {
         if (!Holds(r.assertion_id)) continue;  // dropped mid-transaction
         by_page[{r.assertion_id, r.page}].push_back(r.index);
     }
@@ -317,7 +329,6 @@ Status AssertionEnforcer::CommitTxn(storage::PageStore& store, wal::WalManager* 
             if (Status s = store.StampPageLsn(group.second, stamp); !s.ok()) return s;
         }
     }
-    pending_.erase(pending);
     return Status::OK();
 }
 
@@ -326,10 +337,16 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
     auto pending = pending_.find(txn_id);
     if (pending == pending_.end()) return Status::OK();
 
+    // Taken out of the map first, for the reason `CommitTxn` states: every exit
+    // below is an error return, and a reservation left pending is one the next
+    // transaction under this id would settle a second time.
+    const std::vector<Reservation> reservations = std::move(pending->second);
+    pending_.erase(pending);
+
     // Reverse order, the undo trail's own convention - not load-bearing for
     // these (removal is by name), but it keeps the compensation stream
     // reading as an unwind.
-    for (auto it = pending->second.rbegin(); it != pending->second.rend(); ++it) {
+    for (auto it = reservations.rbegin(); it != reservations.rend(); ++it) {
         auto held = live_.find(it->assertion_id);
         if (held == live_.end()) continue;  // dropped mid-transaction
         LiveAssertion& a = held->second;
@@ -388,7 +405,6 @@ Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* w
             if (Status s = store.StampPageLsn(it->page, stamp); !s.ok()) return s;
         }
     }
-    pending_.erase(pending);
     return Status::OK();
 }
 
