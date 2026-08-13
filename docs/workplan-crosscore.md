@@ -256,6 +256,31 @@ the core serve a message instead.
   - **P4d — multi-step pipelines and the executor conversion**: step k→k+1
     wiring, join-key forwarding, and the viral `ChainRunner` coroutine
     conversion under the suspend-audit rule - the largest piece, last.
+    **Started 2026-08-13**, with the survey's three facts recorded here so
+    the next session does not re-derive them:
+    1. **No nested-coro awaiter exists yet, and it is the enabling
+       primitive.** `CoroTask::Poll` drives exactly one handle and `WaitFor`
+       parks on flags; the executor's spine is *mutually recursive*
+       (`Execute → RunStep → RunPoint/RunWalk → AcceptTupleAt →
+       RunStep(k+1)`), so `co_await child_coro` must work first — parent
+       promise records the active child, Poll resumes the deepest pending
+       handle, the child's Status returns through await_resume. Built and
+       tested scheduler-free before any executor line changes, per this
+       workplan's own seam-first method.
+    2. **The conversion order is DispatchAsync's**: spine to coroutines with
+       zero suspension points first (bit-identical behavior, suite green
+       unchanged), forwarding after. What made the 2026-08-05 seam
+       verifiable — "when a reply is produced has not moved" — is reused at
+       the executor scale.
+    3. **Walk callbacks cannot await, and the answer is the page boundary.**
+       The chain walks are visitor-style; a callback cannot `co_await`.
+       Awaits therefore happen *between* pages at the `RunWalkStep` level —
+       finish the page, drop its pin, await, continue — never inside a
+       visitor. This is also what makes the suspend audit's rule
+       enforceable at last: with the PageRef migration landed
+       (2026-08-13), "suspending while holding a page span" is mechanically
+       `DevicePageStore::live_pins() != 0`, and the audit should assert
+       exactly that.
   - **P4e — equivalence + the benchmark**: pipeline replies byte-identical
     to local execution over the contract shapes; the multicore isolation
     benchmark re-run against `bench/results-multicore.md`'s baseline.
