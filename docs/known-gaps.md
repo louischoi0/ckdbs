@@ -470,8 +470,17 @@ There is no purge pass, and readers are deliberately unregistered
 
 ## SQL surface and protocol
 
-- **No NULL storage**: `NULL` parses as a literal; rows holding one are
-  not storable today (`docs/client-manual.md`).
+- **No NULL storage**: `NULL` parses as a literal and `exec::EncodeRow()`
+  refuses it, so rows holding one are not storable today
+  (`docs/client-manual.md`). **Now owned by `docs/spec-null.md`** (proposal,
+  2026-08-13): a fixed null bitmap at the tuple tail, sized to the relation's
+  *nullable* columns. Two facts from writing it are worth having here even if
+  the proposal is amended — `SysColumnRow::notnull` already exists and is
+  hardcoded `true` on every creation path, so every relation today has a
+  zero-byte bitmap and the change costs no format break and no migration; and
+  Oracle's representation cannot be adopted, because omitting trailing NULLs
+  makes the row variable-length and retracts invariant 13, on which stable
+  `(page_id, slot)` addressing and therefore every trail and hint depends.
 - ~~**Pagination is LIMIT/OFFSET only**~~ — **closed 2026-08-11** by the
   output sort (`docs/workplan-order-by.md`). `ORDER BY` now takes any
   column or columns, pk or not, of any relation in a non-aggregated

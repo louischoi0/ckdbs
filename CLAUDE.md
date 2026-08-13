@@ -40,6 +40,7 @@ statements, not style.
 | Aggregation (GROUP BY, COUNT/SUM/MIN/MAX/AVG) | Built (AG01-AG10) | `docs/feat-aggregate.md`, `docs/workplan-aggregate.md` |
 | Aggregate performance | AP01-AP03 built, AP05 next | `docs/workplan-aggregate-perf.md` (start at "Where to pick this up") |
 | Types: DATE, TIMESTAMP, DECIMAL, DECIMAL128 | Built (TY01-TY11); `float` stays refused | `docs/spec-types.md`, `docs/workplan-types.md` |
+| NULL storage and semantics | **Proposal only, nothing built** (2026-08-13). A tail null bitmap sized to *nullable* columns, so every relation today keeps a byte-identical `row_size`. Oracle's variable-length row is refused by name — it retracts invariant 13. Nullability default, index treatment and `ORDER BY` position are all `[OPEN]` | `docs/spec-null.md` |
 | Waystone (pattern-keyed access trails) | Recording + replay built (P01-P13); retention/decay/epoch bumps not (P15-P17) | `docs/waystone-concpets.md`, `docs/waystone-workplan.md` |
 | CREATE PATTERN | Built through spec §8 step 4 | `docs/spec-create-pattern-user-defined-patterns-v1.md` |
 | Cabin (value-observed authoritative store) | v1 built (CB01-CB11); entry sets memory-resident | `docs/feat-cabin.md`, `docs/cabin-workplan.md` |
