@@ -20,10 +20,19 @@ documents the *client-facing* surface only - for server internals see
 
 ## 1. Connecting
 
-`kds_server` listens on a plain TCP socket, loopback only, port `15432` by
-default (see `kDefaultPort` in `src/server/main.cpp`). There is no TLS, no
+`kds_server` listens on a TCP socket, loopback only, port `15432` by
+default (see `kDefaultPort` in `src/server/main.cpp`). There is no
 authentication, and no wire framing beyond newlines - this is an internal
 development/inspection protocol, not a client-facing production API.
+
+With `tls = on` (off by default; `docs/protocol.md` §1) the same port
+speaks **direct TLS 1.3**: every connection must open with a handshake,
+and a plaintext client is refused at its first byte. To talk to a
+TLS-enabled server interactively:
+
+```sh
+openssl s_client -connect 127.0.0.1:15432 -CAfile server.crt -quiet
+```
 
 Start the server:
 
@@ -45,6 +54,9 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 |---|---|---|---|
 | `data_file` | positional arg | `kds.db` | Data file path; created if absent. |
 | `port` | `--port` | `15432` | TCP port, loopback only. |
+| `tls` | — | `off` | Direct TLS 1.3 on the port above (`docs/protocol.md` §1): every connection opens with a handshake, no plaintext fallback, no STARTTLS-style upgrade. Requires both file keys below; a server built with `-DKDS_WITH_TLS=OFF` refuses `on` naming the flag. |
+| `tls_cert_file` | — | — | PEM certificate presented to every client, leaf first with any chain appended. Read once at startup. |
+| `tls_key_file` | — | — | PEM private key for the certificate, unencrypted. Read once at startup. |
 | `wal_dir` | — | `<data_file>.wal` | Per-core WAL segment directory. |
 | `isolation` | — | `read committed` | The level a connection starts at, and so the level an autocommit statement runs at (`docs/txn.md` §1). `read committed` takes a read view per **statement**; `repeatable read` takes one per **transaction**. READ COMMITTED is the default for a reason specific to this engine rather than convention: under first-updater-wins with no waiting, holding one view for a whole transaction turns more concurrent writes into retryable aborts. `serializable` is refused with its reason. This is the server rung of a three-level chain — a connection overrides it with `SET ISOLATION LEVEL`, one transaction with `BEGIN ISOLATION LEVEL`. Names are case-insensitive and accept `-`/`_`. |
 | `checkpoint_interval_ms` | — | `5000` | How often dirty pages are flushed (`docs/wal.md` §11). `0` disables the cadence, leaving `SYNC`/shutdown as the only durability points. |

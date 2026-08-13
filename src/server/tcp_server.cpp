@@ -69,10 +69,14 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
     : listen_fd_(other.listen_fd_),
       scheduler_(other.scheduler_),
       dispatcher_(other.dispatcher_),
+      log_(other.log_),
+      channel_factory_(std::move(other.channel_factory_)),
       clients_(std::move(other.clients_)) {
     other.listen_fd_ = -1;
     other.scheduler_ = nullptr;
     other.dispatcher_ = nullptr;
+    other.log_ = nullptr;
+    other.channel_factory_ = nullptr;
     other.clients_.clear();
 }
 
@@ -83,10 +87,14 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         listen_fd_ = other.listen_fd_;
         scheduler_ = other.scheduler_;
         dispatcher_ = other.dispatcher_;
+        log_ = other.log_;
+        channel_factory_ = std::move(other.channel_factory_);
         clients_ = std::move(other.clients_);
         other.listen_fd_ = -1;
         other.scheduler_ = nullptr;
         other.dispatcher_ = nullptr;
+        other.log_ = nullptr;
+        other.channel_factory_ = nullptr;
         other.clients_.clear();
     }
     return *this;
@@ -168,6 +176,16 @@ void TcpServer::OnListenerReadable() {
     // the compiled-in default.
     Connection fresh;
     if (dispatcher_ != nullptr) fresh.session = Session(dispatcher_->default_isolation());
+    if (channel_factory_) {
+        fresh.channel = channel_factory_();
+        // Fail closed: a factory that could not produce a channel must
+        // not produce a *plaintext* connection on a port that promised a
+        // transform. No channel, no connection.
+        if (fresh.channel == nullptr) {
+            ::close(client_fd);
+            return;
+        }
+    }
     clients_.emplace(client_fd, std::move(fresh));
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "accepted fd=" + std::to_string(client_fd) +
@@ -211,10 +229,39 @@ void TcpServer::OnClientReadable(int client_fd) {
         return;
     }
 
-    it->second.inbox.append(chunk, static_cast<std::size_t>(n));
-    if (!DrainCommands(client_fd, it->second)) return;  // closed or server stopping
-    if (!FlushOutbox(client_fd, it->second)) return;
-    SyncWriteInterest(client_fd, it->second);
+    Connection& conn = it->second;
+    if (conn.channel != nullptr) {
+        // Wire bytes go through the channel: decrypted command bytes land
+        // in the inbox, and whatever the channel must say back (handshake
+        // replies, alerts) lands in the outbox ahead of any statement
+        // reply. A failed transform is fatal to the connection - flush
+        // what the channel managed to append (typically its alert),
+        // best effort, and close.
+        //
+        // Fatal *once*. When that close could not happen there and then
+        // because a statement was still running, CloseClient only marked
+        // the connection (conn.closing) and the fd stays readable until
+        // the statement finishes - so a peer that keeps sending would
+        // re-enter a channel that has already reported a fatal error,
+        // which its contract does not survive. Drop those bytes instead.
+        if (conn.closing) return;
+        Status s = conn.channel->OnWireData(std::string_view(chunk, static_cast<std::size_t>(n)),
+                                            conn.inbox, conn.outbox);
+        if (!s.ok()) {
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("client", "fd=" + std::to_string(client_fd) +
+                                         " TLS failure: " + s.message());
+            }
+            (void)FlushOutbox(client_fd, conn);
+            CloseClient(client_fd);
+            return;
+        }
+    } else {
+        conn.inbox.append(chunk, static_cast<std::size_t>(n));
+    }
+    if (!DrainCommands(client_fd, conn)) return;  // closed or server stopping
+    if (!FlushOutbox(client_fd, conn)) return;
+    SyncWriteInterest(client_fd, conn);
 }
 
 bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
@@ -317,9 +364,19 @@ void TcpServer::OnStatementComplete(int client_fd) {
     // Appended, not written: one readable event can carry a whole batch of
     // pipelined commands, and a write() per command is a syscall per command
     // plus a separate small segment per command on the wire. The batch leaves
-    // in one write() below.
-    conn.outbox.append(conn.pending.response);
-    conn.outbox.push_back('\n');
+    // in one write() below. The newline goes onto the reply first so a
+    // channel seals one record per reply, not a one-byte second record.
+    conn.pending.response.push_back('\n');
+    if (conn.channel != nullptr) {
+        Status s = conn.channel->Send(conn.pending.response, conn.outbox);
+        if (!s.ok()) {
+            (void)FlushOutbox(client_fd, conn);
+            CloseClient(client_fd);
+            return;
+        }
+    } else {
+        conn.outbox.append(conn.pending.response);
+    }
     const bool stop = conn.pending.should_stop;
     conn.pending = DispatchOutcome{};
 
@@ -349,37 +406,56 @@ void TcpServer::OnStatementComplete(int client_fd) {
 }
 
 void TcpServer::CloseClient(int client_fd) {
-    if (auto it = clients_.find(client_fd); it != clients_.end()) {
-        // **Deferred while a statement is running.** The coroutine holds a
-        // pointer to this connection's session and writes its reply into
-        // this connection's buffer, so destroying it now would pull both out
-        // from under a task that is still on a ready queue.
-        //
-        // Marked instead, and torn down by OnStatementComplete. Cancelling
-        // the statement would be better and needs cancellation the engine
-        // does not have; waiting for it is bounded by the statement's own
-        // row-touch budget (exec/budget.hpp), which is what stops a hung
-        // client from pinning a connection forever.
-        if (it->second.in_flight) {
-            it->second.closing = true;
-            return;
-        }
+    // One lookup for the whole teardown; a re-entrant call (FlushOutbox's
+    // error path arrives here from inside this function's own send) finds
+    // the entry already erased and stops at the door.
+    auto it = clients_.find(client_fd);
+    if (it == clients_.end()) return;
+    Connection& conn = it->second;
+
+    // **Deferred while a statement is running.** The coroutine holds a
+    // pointer to this connection's session and writes its reply into
+    // this connection's buffer, so destroying it now would pull both out
+    // from under a task that is still on a ready queue.
+    //
+    // Marked instead, and torn down by OnStatementComplete. Cancelling
+    // the statement would be better and needs cancellation the engine
+    // does not have; waiting for it is bounded by the statement's own
+    // row-touch budget (exec/budget.hpp), which is what stops a hung
+    // client from pinning a connection forever.
+    if (conn.in_flight) {
+        conn.closing = true;
+        return;
     }
 
     // **A connection that goes away rolls back** (docs/txn.md section
     // 10-8). Anything else would leave an open transaction holding its
     // writes and its place in every other session's in-flight set, with
-    // nobody left to end it.
-    if (auto it = clients_.find(client_fd); it != clients_.end()) {
-        if (dispatcher_ != nullptr && it->second.session.in_explicit_txn()) {
-            if (logging(LogLevel::kInfo)) {
-                log_->Info("client", "fd=" + std::to_string(client_fd) +
-                                         " closed with a transaction open; rolling it back");
-            }
-            (void)dispatcher_->Dispatch("ROLLBACK", &it->second.session);
+    // nobody left to end it. The dispatcher cannot reach clients_, so
+    // `it` survives the call.
+    if (dispatcher_ != nullptr && conn.session.in_explicit_txn()) {
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("client", "fd=" + std::to_string(client_fd) +
+                                     " closed with a transaction open; rolling it back");
+        }
+        (void)dispatcher_->Dispatch("ROLLBACK", &conn.session);
+    }
+
+    // The orderly TLS goodbye (close_notify), appended to the outbox and
+    // sent behind whatever is still queued there. Order is the point: the
+    // outbox holds wire bytes the socket has not taken yet, quite possibly
+    // the tail of a half-sent record, and splicing close_notify in front
+    // of them hands the peer a corrupt record instead of a clean goodbye.
+    // One best-effort send, directly rather than through FlushOutbox -
+    // this is teardown, and FlushOutbox's error path calls back into
+    // CloseClient.
+    if (conn.channel != nullptr) {
+        conn.channel->Close(conn.outbox);
+        if (!conn.outbox.empty()) {
+            (void)::send(client_fd, conn.outbox.data(), conn.outbox.size(), MSG_NOSIGNAL);
         }
     }
-    if (clients_.erase(client_fd) == 0) return;
+    clients_.erase(it);
     if (logging(LogLevel::kDebug)) {
         log_->Debug("client", "closed fd=" + std::to_string(client_fd) +
                                   " open_connections=" + std::to_string(clients_.size()));

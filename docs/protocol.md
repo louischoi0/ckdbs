@@ -22,7 +22,7 @@ The protocol KDS speaks: length-prefixed binary frames, a version and capability
 ## 1. Transport & Connection
 
 - TCP; one KWP session per connection. Default port 15432 (unchanged).
-- TLS `[OPEN: activation phase]`: the handshake carries a `TLS_REQUIRED` capability bit so TLS can be introduced (direct-TLS or STARTTLS-style upgrade — pick when activated) without a protocol version bump.
+- TLS — **decided 2026-08-13 and built: direct TLS.** A TLS-enabled port speaks TLS 1.3 from its first byte; there is no STARTTLS-style upgrade and no plaintext fallback on the same port, so a plaintext client is refused at its first record rather than served accidentally. Implemented *below* the protocol, at the transport seam (`include/kds/server/wire_channel.hpp`, the OpenSSL channel in `src/server/tls_channel.cpp`, config keys `tls` / `tls_cert_file` / `tls_key_file`), so it wraps whichever protocol the port speaks — the newline text protocol today, KWP unchanged when P13 lands. The `TLS_REQUIRED` capability bit keeps its purpose: a KWP client's way to demand the transport it is on. SCRAM parameters stay `[OPEN]` (§14).
 - The newline text protocol remains available only on a loopback debug port behind a server flag (§12); it is not part of KWP.
 
 ## 2. Framing
@@ -129,7 +129,7 @@ PG-shaped phases, KDS semantics:
 
 ## 14. Open Decisions — do not assume
 
-- TLS activation phase and mode (direct vs upgrade); SCRAM parameters.
+- ~~TLS activation phase and mode (direct vs upgrade)~~ — **decided 2026-08-13**: direct TLS at the transport seam, active now under the `tls` config key; see §1. SCRAM parameters remain open.
 - `kMaxFrame`, default batch size target, session/portal timeout defaults.
 - ~~`DECIMAL` wire encoding (with the engine type system)~~ — **decided 2026-08-07** with the type system built, exactly as this line required; see §6. Additional types stay open.
 - Compression capability; credit-based flow control capability; topology/smart-routing extension.

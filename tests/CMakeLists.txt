@@ -145,6 +145,13 @@ add_executable(kds_tests
 )
 target_link_libraries(kds_tests PRIVATE kds kds_sim GTest::gtest GTest::gtest_main Threads::Threads)
 
+# The TLS channel's contract suite exists exactly when the channel does.
+# The test generates its own throwaway certificate, so it needs the
+# OpenSSL API directly, not just the channel's public surface.
+if(KDS_WITH_TLS)
+    target_sources(kds_tests PRIVATE tls_channel_test.cpp)
+endif()
+
 # The V01 golden corpus is data, not source: the test reads it at run time
 # so a corpus edit does not force a rebuild. The path is baked in rather
 # than resolved relative to the working directory, because ctest and a

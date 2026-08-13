@@ -103,6 +103,23 @@ public:
         std::string data_file = "kds.db";
         std::uint16_t port = 15432;
 
+        // Direct TLS on the text port (docs/protocol.md §1, decided
+        // 2026-08-13): with `tls = on` the first byte every client sends
+        // is a ClientHello, and there is no plaintext fallback and no
+        // STARTTLS-style upgrade on the same port. Off by default because
+        // the port is loopback-only today; TLS is the precondition for
+        // that ever changing, not a decoration on loopback.
+        //
+        // Both paths must be set when `tls` is (ApplyFile refuses
+        // otherwise), must be PEM, and are read once at Serve(). On a
+        // server built without TLS (KDS_WITH_TLS=OFF), `tls = on` is
+        // refused with Unsupported naming the build flag - a config
+        // written for a capability this binary does not have fails
+        // loudly, the physical_optimizer = on precedent.
+        bool tls = false;
+        std::string tls_cert_file;
+        std::string tls_key_file;
+
         // Directory the per-core WAL segment files live in. Defaults to
         // `<data_file>.wal` when left empty.
         std::string wal_dir;

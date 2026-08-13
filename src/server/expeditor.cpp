@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <fstream>
 #include <limits>
+#include <sstream>
 #include <thread>
 #include <utility>
 
@@ -16,7 +18,29 @@
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/file_page_device.hpp"
 
+#if KDS_WITH_TLS
+#include "kds/server/tls_channel.hpp"
+#endif
+
 namespace kds::server {
+
+namespace {
+
+// PEM files are read whole at startup and never again: the TLS context
+// keeps its own copy of what it parsed, and a cert rotated on disk takes
+// effect at the next start, stated rather than discovered.
+StatusOr<std::string> ReadWholeFile(const std::string& path, const char* what) {
+    std::ifstream in(path);
+    if (!in) {
+        return Status::NotFound(std::string(what) + " '" + path +
+                                "' cannot be opened: " + std::strerror(errno));
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
+}
+
+}  // namespace
 
 std::string Expeditor::Config::LogPath() const {
     if (log_file.empty()) return {};                 // logging to a file disabled
@@ -27,6 +51,7 @@ std::string Expeditor::Config::LogPath() const {
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
+            "tls",        "tls_cert_file",        "tls_key_file",
             "isolation",             "default_key_mode",
             "wal_drain_interval_us", "relaxed_flush_interval_us",
             "log_dir",  "log_file",               "log_level",
@@ -108,6 +133,30 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(file.origin() + ": " + parsed.status().message());
         }
         durability = parsed.value();
+    }
+    if (file.Has("tls")) {
+        auto v = file.GetBool("tls");
+        if (!v.ok()) return v.status();
+        tls = v.value();
+    }
+    if (file.Has("tls_cert_file")) {
+        auto v = file.GetString("tls_cert_file");
+        if (!v.ok()) return v.status();
+        tls_cert_file = std::move(v.value());
+    }
+    if (file.Has("tls_key_file")) {
+        auto v = file.GetString("tls_key_file");
+        if (!v.ok()) return v.status();
+        tls_key_file = std::move(v.value());
+    }
+    // Checked here rather than at Serve(): a config that can never serve
+    // should refuse at the same moment a typo'd key does. The *contents*
+    // of the files are checked where they are read (Serve), which is as
+    // early as an unreadable certificate can be detected.
+    if (tls && (tls_cert_file.empty() || tls_key_file.empty())) {
+        return Status::InvalidArgument(file.origin() +
+                                        ": tls = on requires both tls_cert_file and "
+                                        "tls_key_file");
     }
     if (file.Has("waystone_recording")) {
         auto v = file.GetBool("waystone_recording");
@@ -863,8 +912,42 @@ Status Expeditor::Serve() {
     auto io_backend = sched::EpollIoBackend::Create();
     if (!io_backend.ok()) return io_backend.status();
 
+    // The TLS context, built before the port binds so a bad certificate
+    // refuses to serve rather than serving briefly and failing per
+    // connection. Declared before the listener - stricter than the
+    // channel requires (a channel keeps its OpenSSL state alive on its
+    // own, tls_channel.hpp), but keeping the context up for the server's
+    // whole life makes the ownership story one sentence.
+#if KDS_WITH_TLS
+    std::optional<TlsContext> tls_context;
+#endif
+    if (config_.tls) {
+#if KDS_WITH_TLS
+        auto cert_pem = ReadWholeFile(config_.tls_cert_file, "tls_cert_file");
+        if (!cert_pem.ok()) return cert_pem.status();
+        auto key_pem = ReadWholeFile(config_.tls_key_file, "tls_key_file");
+        if (!key_pem.ok()) return key_pem.status();
+        auto ctx = TlsContext::NewServer(cert_pem.value(), key_pem.value());
+        if (!ctx.ok()) return ctx.status();
+        tls_context.emplace(std::move(ctx.value()));
+        logger_->Info("server", "TLS on: every connection on port " +
+                                    std::to_string(config_.port) +
+                                    " must open with a TLS 1.3 handshake");
+#else
+        return Status::Unsupported(
+            "tls = on, but this server was built without TLS (KDS_WITH_TLS=OFF); "
+            "rebuild with OpenSSL or turn the key off");
+#endif
+    }
+
     auto listener = TcpServer::Listen(config_.port);
     if (!listener.ok()) return listener.status();
+#if KDS_WITH_TLS
+    if (tls_context.has_value()) {
+        listener.value().set_channel_factory(
+            [ctx = &*tls_context] { return ctx->NewChannel(); });
+    }
+#endif
 
     // KWP v0's load endpoint (docs/workplan-kwp-load.md KW1): a second
     // listener, existing only when asked for - kwp_port 0 means no socket

@@ -235,6 +235,132 @@ TEST_F(TcpServerTest, EachStatementSeesWhatTheOneBeforeItDid) {
     server_thread.join();
 }
 
+// ---- The wire-channel seam --------------------------------------------
+//
+// The channel path (tcp_server.hpp's ChannelFactory) tested with a
+// transform simple enough to invert by hand: every wire byte is the
+// application byte XOR 0x5A. No OpenSSL, no handshake - what these pin
+// is the *seam*: no plaintext byte reaches the wire, a fatal transform
+// error closes only that connection, and the goodbye byte leaves behind
+// the last reply, never in front of it.
+
+class XorChannel final : public WireChannel {
+public:
+    static constexpr unsigned char kMask = 0x5A;
+    static constexpr char kPoison = '\xFF';  // wire byte that kills the transform
+    static constexpr char kBye = '#';        // stands in for TLS close_notify
+
+    Status OnWireData(std::string_view wire_in, std::string& plain,
+                      std::string& wire_out) override {
+        for (char c : wire_in) {
+            if (c == kPoison) {
+                wire_out.push_back('!');  // the "alert" flushed before closing
+                return Status::IoError("poison wire byte");
+            }
+            plain.push_back(static_cast<char>(static_cast<unsigned char>(c) ^ kMask));
+        }
+        return Status::OK();
+    }
+    Status Send(std::string_view plain, std::string& wire_out) override {
+        for (char c : plain) {
+            wire_out.push_back(static_cast<char>(static_cast<unsigned char>(c) ^ kMask));
+        }
+        return Status::OK();
+    }
+    void Close(std::string& wire_out) override { wire_out.push_back(kBye); }
+};
+
+std::string XorMask(std::string_view s) {
+    std::string out;
+    for (char c : s) out.push_back(static_cast<char>(static_cast<unsigned char>(c) ^ XorChannel::kMask));
+    return out;
+}
+
+TEST_F(TcpServerTest, ChannelTransformsBothDirections) {
+    constexpr std::uint16_t kPort = 25417;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    listener.value().set_channel_factory([] { return std::make_unique<XorChannel>(); });
+
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int fd = ConnectToLoopback(kPort);
+    ASSERT_GE(fd, 0);
+
+    // The command goes out in wire form; the reply must come back in wire
+    // form - a raw "PONG" on the socket would be plaintext escaping the
+    // channel.
+    const std::string wire_cmd = XorMask("PING\n");
+    ASSERT_EQ(::write(fd, wire_cmd.data(), wire_cmd.size()),
+              static_cast<ssize_t>(wire_cmd.size()));
+    const std::string want = XorMask("PONG\n");
+    std::string got;
+    char buf[64];
+    while (got.size() < want.size()) {
+        ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        got.append(buf, static_cast<std::size_t>(n));
+    }
+    EXPECT_EQ(got, want);
+
+    // STOP: the encoded goodbye reply, then the channel's close byte
+    // *behind* it - the ordering CloseClient's outbox path guarantees.
+    const std::string wire_stop = XorMask("STOP\n");
+    ASSERT_EQ(::write(fd, wire_stop.data(), wire_stop.size()),
+              static_cast<ssize_t>(wire_stop.size()));
+    std::string tail;
+    while (true) {
+        ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n <= 0) break;  // server closed after STOP
+        tail.append(buf, static_cast<std::size_t>(n));
+    }
+    EXPECT_EQ(tail, XorMask("OK bye\n") + XorChannel::kBye);
+
+    ::close(fd);
+    server_thread.join();
+}
+
+TEST_F(TcpServerTest, ChannelFatalErrorClosesOnlyThatConnection) {
+    constexpr std::uint16_t kPort = 25418;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok()) << listener.status().message();
+    listener.value().set_channel_factory([] { return std::make_unique<XorChannel>(); });
+
+    std::thread server_thread([&] { RunReactor(listener.value()); });
+
+    int doomed = ConnectToLoopback(kPort);
+    ASSERT_GE(doomed, 0);
+    const char poison = XorChannel::kPoison;
+    ASSERT_EQ(::write(doomed, &poison, 1), 1);
+    // The server flushes the channel's alert and goodbye, then closes: the
+    // socket must reach EOF, and the last byte before it is the goodbye.
+    std::string dying;
+    char buf[16];
+    while (true) {
+        ssize_t n = ::read(doomed, buf, sizeof(buf));
+        if (n <= 0) break;
+        dying.append(buf, static_cast<std::size_t>(n));
+    }
+    EXPECT_EQ(dying, std::string("!") + XorChannel::kBye);
+    ::close(doomed);
+
+    // The listener survived and serves the next channelled client.
+    int next = ConnectToLoopback(kPort);
+    ASSERT_GE(next, 0);
+    const std::string wire_stop = XorMask("STOP\n");
+    ASSERT_EQ(::write(next, wire_stop.data(), wire_stop.size()),
+              static_cast<ssize_t>(wire_stop.size()));
+    std::string tail;
+    while (true) {
+        ssize_t n = ::read(next, buf, sizeof(buf));
+        if (n <= 0) break;
+        tail.append(buf, static_cast<std::size_t>(n));
+    }
+    EXPECT_EQ(tail, XorMask("OK bye\n") + XorChannel::kBye);
+    ::close(next);
+    server_thread.join();
+}
+
 TEST_F(TcpServerTest, ADisconnectMidBatchDoesNotTakeTheServerDown) {
     // The path Connection::closing exists for: the client goes away while
     // the server still has work queued for it. Nothing may dangle, and the
