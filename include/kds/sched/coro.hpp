@@ -157,6 +157,21 @@ public:
         if (handle_ != nullptr && !handle_.done()) handle_.resume();
     }
 
+    // Resumes the deepest pending coroutine in this chain - the same walk
+    // CoroTask::Poll makes, exposed for the synchronous boundary drivers
+    // (P4d-2's RunToCompletionAtWalkBoundary). Resume() alone re-enters a
+    // parent suspended on `co_await child` before the child ever ran,
+    // which is exactly the bug the first conversion shipped for one build.
+    void ResumeDeepest() {
+        if (handle_ == nullptr || handle_.done()) return;
+        auto active = handle_;
+        while (active.promise().active_child != nullptr &&
+               !active.promise().active_child.done()) {
+            active = active.promise().active_child;
+        }
+        active.resume();
+    }
+
     // Hands the frame to a new owner - CoroTask, in every intended use.
     std::coroutine_handle<promise_type> Release() noexcept {
         return std::exchange(handle_, {});

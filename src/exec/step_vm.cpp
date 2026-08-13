@@ -2,6 +2,8 @@
 
 #include "kds/sched/coro.hpp"
 
+#include "kds/sched/coro.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <unordered_set>
@@ -147,6 +149,15 @@ const txn::Snapshot kSeesEverything{};
 
 // One chain's execution state. Recreated per sub-chain, which is what
 // makes the frame stack a stack.
+// Drives a spine coroutine to completion synchronously - the two walk
+// visitor call sites and the sync Execute() wrapper use it. Correct
+// precisely while nothing suspends beneath (P4d-2's contract); P4d-3
+// dissolves the visitor uses when awaits move to the page boundary.
+Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
+    while (!coro.done()) coro.ResumeDeepest();
+    return coro.result();
+}
+
 class ChainRunner {
 public:
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
@@ -157,15 +168,15 @@ public:
           stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins),
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes) {}
 
-    Status Run(const std::vector<Step>& steps) {
+    sched::Coro Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
-            return Status::Unsupported("chain nesting deeper than " +
+            co_return Status::Unsupported("chain nesting deeper than " +
                                         std::to_string(kMaxExecDepth) + " at execute");
         }
-        if (Status s = Bind(steps); !s.ok()) return s;
+        if (Status s = Bind(steps); !s.ok()) co_return s;
         frame_.Open(schemas_, parent_);
         stopped_ = false;
-        return RunStep(steps, 0);
+        co_return co_await RunStep(steps, 0);
     }
 
 private:
@@ -288,7 +299,7 @@ public:
         // step would make one statement see two databases.
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
                           trail_, replay_, cabins_, &snapshot_, indexes_);
-        Status ran = inner.Run(sub.steps);
+        Status ran = RunToCompletionAtWalkBoundary(inner.Run(sub.steps));
         if (!ran.ok()) return ran;
 
         switch (sub.kind) {
@@ -342,17 +353,17 @@ private:
     // Emits, or descends. The recursion is over *steps*, not over rows:
     // one frame holds every bound relation, so reaching the end means one
     // complete output row is sitting in it.
-    Status RunStep(const std::vector<Step>& steps, std::size_t index) {
-        if (stopped_) return Status::OK();
+    sched::Coro RunStep(const std::vector<Step>& steps, std::size_t index) {
+        if (stopped_) co_return Status::OK();
         if (index == steps.size()) {
             auto outcome = sink_(frame_);
-            if (!outcome.ok()) return outcome.status();
+            if (!outcome.ok()) co_return outcome.status();
             if (!outcome.has_value()) {
-                return Status::InvalidArgument("a row sink returned an ok Status with no "
+                co_return Status::InvalidArgument("a row sink returned an ok Status with no "
                                                "VisitControl");
             }
             if (outcome.value() == storage::VisitControl::kStop) stopped_ = true;
-            return Status::OK();
+            co_return Status::OK();
         }
 
         const Step& step = steps[index];
@@ -360,19 +371,19 @@ private:
 
         ++stats_.For(step.step_id).relation_opens;
         if (step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe) {
-            return RunPointStep(steps, index, step, access);
+            co_return co_await RunPointStep(steps, index, step, access);
         }
         if (step.kind == AccessKind::kCabinProbe) {
-            return RunCabinStep(steps, index, step, access);
+            co_return co_await RunCabinStep(steps, index, step, access);
         }
         if (step.kind == AccessKind::kIndexProbe || step.kind == AccessKind::kIndexRange) {
-            return RunIndexStep(steps, index, step, access);
+            co_return co_await RunIndexStep(steps, index, step, access);
         }
         // A kFilterScan walks exactly as a kScan does - the kind is a
         // statistics distinction, not an execution one, and there is
         // deliberately no branch for it here. If one ever appears, the
         // "same rows either way" tests are what should stop it.
-        return RunWalkStep(steps, index, step, access);
+        co_return co_await RunWalkStep(steps, index, step, access);
     }
 
     // A pk descent. Its answer is authoritative on a btree relation - a
@@ -381,13 +392,13 @@ private:
     // the key kept as a residual. That fall-through is safe *because* the
     // compiler also left the key in `residual`: filtering on the residual
     // list alone gives the same rows.
-    Status RunPointStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    sched::Coro RunPointStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         auto key = KeyFromOperand(*step.key, frame_);
         if (!key.ok()) {
             // A key that cannot match: no row, and not an error.
-            if (key.status().code() == StatusCode::kNotFound) return Status::OK();
-            return key.status();
+            if (key.status().code() == StatusCode::kNotFound) co_return Status::OK();
+            co_return key.status();
         }
 
         if (access.clustered_type == catalog::ClusteredType::kBtree) {
@@ -403,7 +414,7 @@ private:
                 auto bytes = store_.GetForRead(memo_page_);
                 if (bytes.ok()) {
                     heap::PageView page(bytes.value().bytes());
-                    return AcceptTupleAt(steps, index, step, access, memo_page_, page,
+                    co_return co_await AcceptTupleAt(steps, index, step, access, memo_page_, page,
                                          memo_slot_);
                 }
                 // The page went away. Fall through to the descent rather
@@ -411,10 +422,10 @@ private:
                 memo_valid_ = false;
             }
 
-            if (Status s = TryReplay(steps, index, step, access, key.value()); !s.ok()) {
-                return s;
+            if (Status s = co_await TryReplay(steps, index, step, access, key.value()); !s.ok()) {
+                co_return s;
             }
-            if (replayed_) return Status::OK();
+            if (replayed_) co_return Status::OK();
 
             NoteFetch();
             ++stats_.For(step.step_id).pages_fetched;
@@ -430,13 +441,13 @@ private:
                 // pin (workplan-pageref.md Shape C). A hash hit on a
                 // still-resident frame, held for the read below.
                 auto leaf_page = store_.GetForRead(found.value().page_id);
-                if (!leaf_page.ok()) return leaf_page.status();
+                if (!leaf_page.ok()) co_return leaf_page.status();
                 heap::PageView leaf(leaf_page.value().bytes());
-                return AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
+                co_return co_await AcceptTupleAt(steps, index, step, access, found.value().page_id, leaf,
                                      found.value().slot);
             }
-            if (found.status().code() == StatusCode::kNotFound) return Status::OK();
-            return found.status();
+            if (found.status().code() == StatusCode::kNotFound) co_return Status::OK();
+            co_return found.status();
         }
 
         // Heap: no index to descend. The walk below is the authoritative
@@ -445,10 +456,10 @@ private:
         // **This is the case spec section 7 calls large**: a trail turns a
         // full chain scan into one read, because a heap relation has no pk
         // index for a descent to use in the first place.
-        if (Status s = TryReplay(steps, index, step, access, key.value()); !s.ok()) return s;
-        if (replayed_) return Status::OK();
+        if (Status s = co_await TryReplay(steps, index, step, access, key.value()); !s.ok()) co_return s;
+        if (replayed_) co_return Status::OK();
 
-        return RunWalkStep(steps, index, step, access);
+        co_return co_await RunWalkStep(steps, index, step, access);
     }
 
     // ---- Replay (workplan P11/P13) ---------------------------------------
@@ -469,17 +480,17 @@ private:
     // answer here - the caller descends - which is deliberate: a caller that
     // could tell them apart would be tempted to treat one of them as
     // authoritative.
-    Status TryReplay(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    sched::Coro TryReplay(const std::vector<Step>& steps, std::size_t index, const Step& step,
                      const catalog::TableAccess& access, std::uint64_t key) {
         replayed_ = false;
-        if (replay_ == nullptr) return Status::OK();
+        if (replay_ == nullptr) co_return Status::OK();
 
         // Rule 0 is **this lookup**. The index is keyed on (step_id, pk) and
         // `key` was just re-derived from the current outer row, so an entry
         // is only found by matching it. There is no separate check to
         // forget, which is what the P13 amendment asks for.
         const TrailLocation* at = replay_->Find(step.step_id, key);
-        if (at == nullptr) return Status::OK();
+        if (at == nullptr) co_return Status::OK();
 
         StepStats& step_stats = stats_.For(step.step_id);
 
@@ -495,7 +506,7 @@ private:
             VerifyTupleAt(store_, at->page_id, at->slot, key, at->page_epoch);
         if (!verified.ok()) {
             ++step_stats.trail_misses;
-            return Status::OK();
+            co_return Status::OK();
         }
 
         // Validated. From here it is the authoritative path's own code on
@@ -505,7 +516,7 @@ private:
         // inherited.
         ++step_stats.trail_replays;
         replayed_ = true;
-        return AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
+        co_return co_await AcceptTupleAt(steps, index, step, access, at->page_id, *verified.page, at->slot);
     }
 
     // ---- Cabin (docs/feat-cabin.md §4) -----------------------------------
@@ -526,7 +537,7 @@ private:
     // Everything else about the step is unchanged: the value is a compile-
     // time literal, the residual is the whole predicate, and downgrading
     // this step to a plain kScan returns the same rows in the same order.
-    Status RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         // Nothing configured, or a value that must never be observed (NULL,
         // an unbound `$param`). Both take the walk, which is what the step
@@ -535,12 +546,12 @@ private:
         if (cabins_ != nullptr && step.cabin.has_value()) {
             key = stats::MakeCabinKey(step.cabin->cabin_id, step.cabin->value);
         }
-        if (!key.has_value()) return RunWalkStep(steps, index, step, access);
+        if (!key.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
 
         if (std::vector<stats::CabinEntry>* entries = cabins_->Find(*key); entries != nullptr) {
             cabins_->NoteHit(step.cabin->cabin_id);
             ++stats_.For(step.step_id).cabin_hits;
-            return ServeFromCabin(steps, index, step, access, *key, *entries);
+            co_return co_await ServeFromCabin(steps, index, step, access, *key, *entries);
         }
 
         cabins_->NoteMiss(step.cabin->cabin_id);
@@ -551,7 +562,7 @@ private:
         // effect of the walk (§4). `n = 2` - the first miss only counts.
         const bool record =
             cabins_->WouldRecord(cabins_->Observe(*key), step.cabin->declared);
-        if (!record) return RunWalkStep(steps, index, step, access);
+        if (!record) co_return co_await RunWalkStep(steps, index, step, access);
 
         Recording recording;
         recording.step_id = step.step_id;
@@ -559,17 +570,17 @@ private:
         recording.col_pos = step.cabin->col_pos;
         recording.value = &step.cabin->value;
         recording_ = &recording;
-        Status walked = RunWalkStep(steps, index, step, access);
+        Status walked = co_await RunWalkStep(steps, index, step, access);
         recording_ = nullptr;
 
-        if (!walked.ok()) return walked;
+        if (!walked.ok()) co_return walked;
         // **Only a completed walk may be committed.** A walk that a sink
         // stopped, or that the budget ended, collected the rows it reached
         // and not the rows it did not - and a set marked observed while
         // missing qualifying pks is precisely the break C1 forbids. This is
         // the one place that check can be made, because it is the only place
         // that knows whether the walk finished.
-        if (stopped_) return Status::OK();
+        if (stopped_) co_return Status::OK();
 
         // Sorted here, once, rather than on every hit: entries served in
         // page order batch same-page tuples into one fetch (§3), and a set
@@ -583,7 +594,7 @@ private:
         if (cabins_->Commit(*key, std::move(recording.entries))) {
             ++stats_.For(step.step_id).cabin_recordings;
         }
-        return Status::OK();
+        co_return Status::OK();
     }
 
     // A secondary-index probe or range (docs/feat-index.md §§1, 7).
@@ -605,7 +616,7 @@ private:
     //     witness outside the tuple (spec §7), so covered columns are a
     //     **filter** and never a projection source - they let a row that
     //     will be dropped avoid its base descent, and nothing more.
-    Status RunIndexStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    sched::Coro RunIndexStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         // Any reason to decline takes the walk, which is what the step would
         // have compiled to had the index not existed - and returns the
@@ -615,7 +626,7 @@ private:
         // kIndexProbe and ANALYZE still says so - which is what keeps the
         // plan `f(shape, catalog)` and makes the A/B comparison compare
         // execution rather than compilation.
-        if (!indexes_ || !step.index.has_value()) return RunWalkStep(steps, index, step, access);
+        if (!indexes_ || !step.index.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
         const IndexProbe& probe = *step.index;
 
         // The **live** root, not the one compiled in: a split republishes it
@@ -628,7 +639,7 @@ private:
         }
         // Dropped between compile and execution. The chain is stale, not
         // wrong: walking answers it.
-        if (ix == nullptr) return RunWalkStep(steps, index, step, access);
+        if (ix == nullptr) co_return co_await RunWalkStep(steps, index, step, access);
 
         index::IndexLayout layout;
         layout.key_width = ix->key_width;
@@ -638,7 +649,7 @@ private:
         if (probe.low.size() != sort_key_width || probe.high.size() != sort_key_width) {
             // The index was redefined under a compiled chain. Same answer as
             // a dropped one.
-            return RunWalkStep(steps, index, step, access);
+            co_return co_await RunWalkStep(steps, index, step, access);
         }
 
         StepStats& step_stats = stats_.For(step.step_id);
@@ -646,7 +657,7 @@ private:
         seen_pks_.clear();
 
         auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, probe.low);
-        if (!first.ok()) return first.status();
+        if (!first.ok()) co_return first.status();
         NoteFetch();
         ++step_stats.pages_fetched;
 
@@ -697,7 +708,7 @@ private:
                 index_scratch_.push_back(pk);
                 return storage::VisitControl::kContinue;
             });
-        if (!walked.ok()) return walked;
+        if (!walked.ok()) co_return walked;
 
         // **Sorted, and this is a correctness property rather than a
         // locality one.** The walk collects pks in *index key* order; a scan
@@ -735,19 +746,19 @@ private:
                     // is dead forever - a skip, never an error.
                     continue;
                 }
-                return found.status();
+                co_return found.status();
             }
 
             auto bytes = store_.GetForRead(found.value().page_id);
-            if (!bytes.ok()) return bytes.status();
+            if (!bytes.ok()) co_return bytes.status();
             heap::PageView page(bytes.value().bytes());
-            if (Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
+            if (Status s = co_await AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
                                          found.value().slot);
                 !s.ok()) {
-                return s;
+                co_return s;
             }
         }
-        return Status::OK();
+        co_return Status::OK();
     }
 
     // Whether an entry's covered columns already disqualify its row.
@@ -810,7 +821,7 @@ private:
     // only do that if it has not already emitted rows the walk would emit
     // again. Resolving first means the abandon decision is always taken
     // before the first row goes out.
-    Status ServeFromCabin(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    sched::Coro ServeFromCabin(const std::vector<Step>& steps, std::size_t index, const Step& step,
                           const catalog::TableAccess& access, const stats::CabinKey& key,
                           std::vector<stats::CabinEntry>& entries) {
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
@@ -849,7 +860,7 @@ private:
                 // the value's set from it - one bulk heal rather than a
                 // chain scan per entry. Nothing has been emitted yet, so
                 // this cannot duplicate a row.
-                return FallBackAndReRecord(steps, index, step, access, key);
+                co_return co_await FallBackAndReRecord(steps, index, step, access, key);
             }
 
             NoteFetch();
@@ -862,7 +873,7 @@ private:
                     // dead forever - a **skip**, never an error (§5).
                     continue;
                 }
-                return found.status();
+                co_return found.status();
             }
 
             // Healed in place. The hint was wrong and the pk was right,
@@ -898,13 +909,13 @@ private:
                 continue;
             }
             heap::PageView page(bytes.value().bytes());
-            if (Status s = AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
+            if (Status s = co_await AcceptTupleAt(steps, index, step, access, at.page_id, page, at.slot);
                 !s.ok()) {
-                return s;
+                co_return s;
             }
         }
         step_stats.cabin_entries_served += serve_scratch_.size();
-        return Status::OK();
+        co_return Status::OK();
     }
 
     // The heap hint-failure path: un-observe, walk, and re-record.
@@ -913,7 +924,7 @@ private:
     // authoritative path, so the rows are right either way - but the set
     // that produced a bad hint has just been shown to disagree with storage,
     // and §1's corollary makes dropping it always legal.
-    Status FallBackAndReRecord(const std::vector<Step>& steps, std::size_t index,
+    sched::Coro FallBackAndReRecord(const std::vector<Step>& steps, std::size_t index,
                                const Step& step, const catalog::TableAccess& access,
                                const stats::CabinKey& key) {
         cabins_->Unobserve(key);
@@ -924,11 +935,11 @@ private:
         recording.col_pos = step.cabin->col_pos;
         recording.value = &step.cabin->value;
         recording_ = &recording;
-        Status walked = RunWalkStep(steps, index, step, access);
+        Status walked = co_await RunWalkStep(steps, index, step, access);
         recording_ = nullptr;
 
-        if (!walked.ok()) return walked;
-        if (stopped_) return Status::OK();  // a partial walk records nothing
+        if (!walked.ok()) co_return walked;
+        if (stopped_) co_return Status::OK();  // a partial walk records nothing
 
         std::sort(recording.entries.begin(), recording.entries.end(),
                   [](const stats::CabinEntry& a, const stats::CabinEntry& b) {
@@ -937,10 +948,10 @@ private:
         if (cabins_->Commit(key, std::move(recording.entries))) {
             ++stats_.For(step.step_id).cabin_recordings;
         }
-        return Status::OK();
+        co_return Status::OK();
     }
 
-    Status RunWalkStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    sched::Coro RunWalkStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                        const catalog::TableAccess& access) {
         Status inner = Status::OK();
 
@@ -1028,8 +1039,8 @@ private:
                 // unmarked would be re-emitted from its next slot.
                 ordered_page = page_id;
                 for (const auto& [key, ordered_slot] : by_key) {
-                    auto ok = AcceptTupleAt(steps, index, step, access, page_id, page,
-                                            ordered_slot);
+                    auto ok = RunToCompletionAtWalkBoundary(
+                        AcceptTupleAt(steps, index, step, access, page_id, page, ordered_slot));
                     if (!ok.ok()) {
                         inner = ok;
                         return ok;
@@ -1039,7 +1050,8 @@ private:
                 return storage::VisitControl::kContinue;
             }
 
-            auto accepted = AcceptTupleAt(steps, index, step, access, page_id, page, slot);
+            auto accepted = RunToCompletionAtWalkBoundary(
+                AcceptTupleAt(steps, index, step, access, page_id, page, slot));
             if (!accepted.ok()) {
                 inner = accepted;
                 return accepted;
@@ -1069,8 +1081,8 @@ private:
                 Status seeked =
                     btree::BtreeVisitFrom(store_, first.value(), storage::PageAccess::kRead,
                                           visitor);
-                if (!inner.ok()) return inner;
-                return seeked;
+                if (!inner.ok()) co_return inner;
+                co_return seeked;
             }
             // A descent that failed is a reason to walk, not to fail: the
             // walk is the authoritative path and reaches the same rows.
@@ -1081,8 +1093,8 @@ private:
                                                 storage::PageAccess::kRead, visitor)
                             : heap::ChainVisit(store_, access.desc_page_id,
                                                storage::PageAccess::kRead, visitor);
-        if (!inner.ok()) return inner;
-        return walked;
+        if (!inner.ok()) co_return inner;
+        co_return walked;
     }
 
     // Decodes one tuple into this step's frame slots, evaluates the
@@ -1091,7 +1103,7 @@ private:
     // **This is where R1 lives.** The span handed in by the walk is
     // registered, used for exactly one decode, and released before
     // anything else can fetch a page.
-    Status AcceptTupleAt(const std::vector<Step>& steps, std::size_t index, const Step& step,
+    sched::Coro AcceptTupleAt(const std::vector<Step>& steps, std::size_t index, const Step& step,
                          const catalog::TableAccess& access, PageId page_id,
                          heap::PageView& page, std::uint16_t slot) {
         bool decoded = false;
@@ -1137,7 +1149,7 @@ private:
                         // Not an error and not a row: the statement simply
                         // does not see it.
                         span.Release();
-                        return Status::OK();
+                        co_return Status::OK();
                     case txn::Visibility::kNeedsUndoWalk:
                         // R1's copy. Fixed-size, because invariant 13 makes
                         // a row's size a schema constant - the same
@@ -1174,13 +1186,13 @@ private:
                 // A view that needs the chain with no log to walk. Reported
                 // rather than guessed at: guessing either way invents a row
                 // or hides one.
-                return Status::InvalidArgument(
+                co_return Status::InvalidArgument(
                     "a read view that cannot see a tuple's writer was given no undo log");
             }
             auto verdict = txn::ResolveThroughUndo(snapshot_.view, *snapshot_.undo, walk_trx_id,
                                                     walk_deleted, walk_undo_ptr, version_);
-            if (!verdict.ok()) return verdict.status();
-            if (verdict.value() == txn::Visibility::kNoVersion) return Status::OK();
+            if (!verdict.ok()) co_return verdict.status();
+            if (verdict.value() == txn::Visibility::kNoVersion) co_return Status::OK();
 
             // The reconstructed version's bytes are already in `version_`,
             // which is where the decode below reads from - the same buffer
@@ -1190,7 +1202,7 @@ private:
             decoded = true;
         }
 
-        if (!decoded) return Status::OK();  // dead or out-of-range slot
+        if (!decoded) co_return Status::OK();  // dead or out-of-range slot
 
         // ---- Decode what the filter reads, and only that ----------------
         //
@@ -1219,18 +1231,18 @@ private:
             if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
                                              step.filter_columns, &spills_);
                 !s.ok()) {
-                return s;
+                co_return s;
             }
         } else if (Status s = DecodeRowInto(access.schema, access.layout, version_, slots,
                                             &spills_);
                    !s.ok()) {
-            return s;
+            co_return s;
         }
 
         // Now that nothing is live, the spilled values can be resolved.
         if (!spills_.empty()) {
             stats_.For(step.step_id).spill_fetches += spills_.size();
-            if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
+            if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) co_return s;
         }
 
         StepStats& step_stats = stats_.For(step.step_id);
@@ -1238,7 +1250,7 @@ private:
         // Charged where the tuple was actually decoded, which is the unit
         // that tracks work: a page fetch amortizes over its tuples, but
         // every tuple is decoded and filtered on its own.
-        if (Status s = budget_.ChargeRow(); !s.ok()) return s;
+        if (Status s = budget_.ChargeRow(); !s.ok()) co_return s;
 
         // ---- Cabin recording (docs/feat-cabin.md §4's miss path) ---------
         //
@@ -1277,8 +1289,8 @@ private:
         }
 
         auto matched = EvaluateAll(schemas_, step.residual, frame_);
-        if (!matched.ok()) return matched.status();
-        if (!matched.value()) return Status::OK();
+        if (!matched.ok()) co_return matched.status();
+        if (!matched.value()) co_return Status::OK();
 
         // ---- The row survived: build the rest of what is read ------------
         //
@@ -1305,11 +1317,11 @@ private:
             if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
                                              rest, &spills_);
                 !s.ok()) {
-                return s;
+                co_return s;
             }
             if (!spills_.empty()) {
                 stats_.For(step.step_id).spill_fetches += spills_.size();
-                if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) return s;
+                if (Status s = ResolveSpills(store_, spills_, slots); !s.ok()) co_return s;
             }
         }
 
@@ -1325,8 +1337,8 @@ private:
         // already rejected the row should never pay for it.
         for (const SubChain& sub : step.sub_chains) {
             auto value = EvaluateSubChain(sub, frame_);
-            if (!value.ok()) return value.status();
-            if (!Collapse(value.value())) return Status::OK();
+            if (!value.ok()) co_return value.status();
+            if (!Collapse(value.value())) co_return Status::OK();
         }
 
         // ---- The trail (workplan P09) ------------------------------------
@@ -1358,7 +1370,7 @@ private:
             trail_->Add(touched);
         }
 
-        return RunStep(steps, index + 1);
+        co_return co_await RunStep(steps, index + 1);
     }
 
     catalog::Catalog& catalog_;
@@ -1659,7 +1671,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
         }
     }
 
-    return runner.Run(chain.steps);
+    return RunToCompletionAtWalkBoundary(runner.Run(chain.steps));
 }
 
 }  // namespace kds::exec
