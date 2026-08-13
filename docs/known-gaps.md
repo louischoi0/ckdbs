@@ -90,10 +90,53 @@ the owner's workplan.
   the mount would fail — and narrowing §5.2 to live cabins only gives up the
   proof at the one moment it earns its keep. The cost taken instead: abort
   becomes a page write (one read-modify-write plus a `StampPageLsn` per aborted
-  reservation), which is what commit was already paying to clear
-  `kEntryReserved`.
+  reservation).
   `AssertionRecoverTest.AnAbortBeforeTheCheckpointLeavesNoEntryForTheWalkToRelink`
   pins it and was verified to fail without the skip.
+
+  **This entry first said that page write "is what commit was already paying to
+  clear `kEntryReserved`". Measurement 2026-08-13 says otherwise**
+  (`bench/results-assertion-abort.md` at `2199780`): `CommitTxn` batches by
+  `(assertion, page)` and `AbortTxn` does not, so abort's per-reservation cost
+  is flat where commit's falls as 1/K — 5.6 µs against 1.7 µs to settle 16
+  reservations. The asymmetry **predates** this change and was widened by it,
+  not created; AS6b's own share is 0.056 µs per reservation, below the noise
+  floor until K=8. See the open item below.
+
+- **Aborting a transaction's assertion reservations costs per reservation where
+  committing them costs per page** — measured 2026-08-13,
+  `bench/results-assertion-abort.md`. `CommitTxn` groups its pending
+  reservations by `(assertion, page)` and pays one page fetch, one `Open`, one
+  WAL record and one `StampPageLsn` per group; `AbortTxn` walks reservations one
+  at a time and pays all four per reservation. `BoundCabinChainWriter::Append`
+  always appends at the tail, so a transaction's K entries share one page
+  whatever their `GROUP BY` values — the batching premise is exact, not
+  incidental. Per-reservation protocol cost is flat for abort (0.200 µs at K=1,
+  0.350 at K=16) and a 1/K curve for commit (0.500 at K=1, 0.106 at K=16), so
+  settling 16 reservations costs 5.6 µs to abort against 1.7 µs to commit, and
+  15.2 against 4.6 at K=32.
+
+  Pre-existing — the base binary already paid an `Unapply` and a WAL `Append`
+  per reservation — and AS6b's page write widened it by 0.056 µs per
+  reservation, which does not clear the noise floor until K=8.
+
+  **The blocker is a record format, and it is cheap exactly now.** The page
+  write is already one named method (`BoundCabinPage::MarkOrphaned`); what
+  cannot be batched is `ASSERT_ROLLBACK`, which carries one group key per record
+  where `ASSERT_COMMIT` takes a repeated-index list. Batching abort means moving
+  that payload — a `docs/wal.md` §4.1 decision, and one that would ride the
+  segment-format bump to 2 for free rather than costing a version event of its
+  own later. Owned by `docs/feat-assertion.md` §7.
+
+- **`SHOW META` under-reports an assertion-carrying mount by up to 29 ms**,
+  because `exec::RecoverAssertions`' `ScanLog` is timed into no phase counter
+  and lands entirely in the residual — measured 2026-08-13,
+  `bench/results-assertion-abort.md`. Declaring an assertion adds a cost that
+  *falls* as entries rise and tracks `recovery_analysis_us` within 11% across a
+  2.3× range (+30.3 ms against 29.7 at 200 rows, +13.8 against 12.9 at 10k),
+  which is the signature of a fourth full segment scan rather than of work
+  proportional to the entries. It also means the scan-narrowing item below is
+  worth about a third more than it is credited with there.
 
 - **Assertion recovery is a third full `ScanLog` per mount whenever the anchor is
   zero** — noted by review 2026-08-12. `exec::RecoverAssertions` scans from the

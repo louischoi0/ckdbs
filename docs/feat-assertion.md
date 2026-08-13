@@ -440,11 +440,32 @@ by this protocol.
   > `AssertionRecoverTest.AnAbortAfterTheCheckpointStillCompensatesWithTheMarkOnDisk`
   > pins it and was verified to fail without the restore.
   >
-  > **What it costs.** Abort becomes a page write where it was a memory-only
-  > operation: one read-modify-write and one `StampPageLsn` per aborted
-  > reservation, on the path a transaction takes when it is already rolling
-  > back. Commit was already paying exactly this to clear `kEntryReserved`
-  > (§6.2 step 4), so the two halves of the protocol now cost the same.
+  > **What it costs — measured 2026-08-13, and the first version of this
+  > paragraph was wrong.** It claimed commit "was already paying exactly this
+  > to clear `kEntryReserved` (§6.2 step 4), so the two halves of the protocol
+  > now cost the same". They do not, and the reason is a batching asymmetry
+  > that has nothing to do with the flag: `CommitTxn` groups its pending
+  > reservations by `(assertion, page)` and pays one page fetch, one `Open`,
+  > one WAL record and one `StampPageLsn` per *group*, while `AbortTxn` walks
+  > reservations one at a time and pays all four per *reservation*. Since
+  > `BoundCabinChainWriter::Append` always appends at the tail, a transaction's
+  > K entries share a page whatever their `GROUP BY` values — so the two costs
+  > coincide only at K=1, and diverge as 1/K thereafter.
+  >
+  > `bench/results-assertion-abort.md` at `2199780`: per-reservation protocol
+  > cost is flat for abort and a 1/K curve for commit (K=1, 0.200 µs against
+  > 0.500; K=16, 0.350 against 0.106), so aborting a 16-reservation transaction
+  > costs 5.6 µs against commit's 1.7. **The asymmetry predates AS6b** — the
+  > base binary already paid an `Unapply` and a WAL `Append` per reservation —
+  > and this flag widened it rather than created it. AS6b's own increment is
+  > **0.056 µs per reservation**, first clearing the noise floor at K=8 and
+  > honestly indistinguishable from zero below that.
+  >
+  > Closing the gap is **not** blocked by the page write, which is already one
+  > named method: it is blocked by `ASSERT_ROLLBACK` carrying one group key per
+  > record where `ASSERT_COMMIT` takes a repeated-index list. Batching abort
+  > therefore means moving a WAL payload — a `docs/wal.md` §4.1 decision, and
+  > cheapest taken while the segment format version has just moved to 2.
 
 - Verification: an offline/maintenance check may re-sum entries against group
   headers (hooks into the integrity sweep of the testing harness, S-1).
