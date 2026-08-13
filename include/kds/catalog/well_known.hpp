@@ -31,14 +31,6 @@ inline constexpr Oid kTypeColumn = 19;
 inline constexpr Oid kTypePage = 20;
 inline constexpr Oid kTypeTable = 21;
 
-// A dropped relation's sys.objects row is *retyped* to this, never
-// retired (docs/spec-drop-table.md DT2): GenerateUserOid() recovers its
-// floor from the highest oid on the catalog pages - the rows are the
-// counter - so the row must stay to keep the dead oid from being
-// reissued, while every name lookup filters on kTypeTable and so frees
-// the name immediately. A value, not a format change: type_oid was
-// always data.
-inline constexpr Oid kTypeDroppedTable = 22;
 inline constexpr Oid kTypeOperator = 22;
 inline constexpr Oid kTypeIndex = 23;
 inline constexpr Oid kTypeChar = 24;
@@ -62,6 +54,30 @@ inline constexpr Oid kTypeTimestamp = 32;
 // costs a "?type_val=13" rendering for a column such a file cannot
 // contain anyway - the same purely-additive stance TY9 took.
 inline constexpr Oid kTypeDecimalWide = 33;
+
+// A dropped relation's sys.objects row is *retyped* to this, never
+// retired (docs/spec-drop-table.md DT2): GenerateUserOid() recovers its
+// floor from the highest oid on the catalog pages - the rows are the
+// counter - so the row must stay to keep the dead oid from being
+// reissued, while every name lookup filters on kTypeTable and so frees
+// the name immediately. A value, not a format change: type_oid was
+// always data.
+//
+// **Was 22 from DT2 (2026-08-10) until 2026-08-13, which is the oid
+// `kTypeOperator` already had.** DT2 inserted it into the contiguous run
+// (21 table, 22 operator, 23 index) instead of appending, so a dropped
+// relation's row named the registered "type_operator" object. Nothing
+// rendered a wrong word - `sys.objects` prints `type_oid` as a number -
+// but the two concepts shared one identity, and any site that came to
+// compare against `kTypeOperator` would have matched dropped tables too.
+// Moved here, to the end, which is what the TY1 note above already said
+// to do.
+//
+// **No migration, and none is needed.** A file written before this carries
+// dropped-table rows at 22; that value still is not `kTypeTable`, so the
+// name stays freed and the oid stays counted by the floor recovery. The row
+// goes on doing its whole job under the old number.
+inline constexpr Oid kTypeDroppedTable = 34;
 
 inline constexpr Oid kSysTypesTable = 100;
 inline constexpr Oid kSysObjectsTable = 110;
@@ -177,6 +193,58 @@ inline constexpr Oid kSysFkeysTable = 132;
 // The number itself may not move: it is the boundary below which every oid
 // is a bootstrap oid, and lowering it would collide with them.
 inline constexpr Oid kUserOidStart = 4000;
+
+// ---- Every well-known oid, once, so a duplicate cannot compile ----------
+//
+// `kTypeDroppedTable` and `kTypeOperator` both read 22 from DT2 (2026-08-10)
+// to 2026-08-13, and nothing caught it for three days of commits. Not because
+// anyone was careless: each declaration was correct where it stood, the file
+// is long, and **no site had ever put the two numbers side by side**. A list
+// is what puts them side by side, and a `static_assert` is what makes the
+// compiler read it.
+//
+// Namespaces, types and relations share one oid space - `register_namespace`
+// and `register_type` both write into `sys.objects` - so they are checked
+// together rather than per group. The two `*ColumnOidBase` values name the
+// start of a small run (four columns from 120, six from 140); the bases are
+// listed and the runs are clear of every other value here.
+//
+// **`kTypeInt64` is deliberately absent**: it is an alias for `kTypeInt`, not
+// a distinct oid, so listing it would fail this check on a fact that is
+// intended. An alias belongs beside the thing it aliases, never here.
+inline constexpr Oid kAllWellKnownOids[] = {
+    kNamespaceSys,        kNamespacePublic,      kTypeInt,
+    kTypeVarchar,         kTypeSchema,           kTypeBool,
+    kTypeBytes,           kTypeNamespace,        kTypeAttribute,
+    kTypeColumn,          kTypePage,             kTypeTable,
+    kTypeOperator,        kTypeIndex,            kTypeChar,
+    kTypeInt8,            kTypeInt16,            kTypeInt32,
+    kTypeFloat,           kTypeDecimal,          kTypeUint64,
+    kTypeDate,            kTypeTimestamp,        kTypeDecimalWide,
+    kTypeDroppedTable,    kSysTypesTable,        kSysObjectsTable,
+    kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
+    kSysPatternsTable,    kSysPatternDefsTable,  kSysAssertionsTable,
+    kSysPatternDefsColumnOidBase,                kSysAccessStatsTable,
+    kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
+    kUserOidStart,
+};
+
+// O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
+// faster and would need a mutable copy to be constexpr in, which is more
+// machinery than the saving is worth at this size.
+constexpr bool WellKnownOidsAreDistinct() {
+    for (std::size_t i = 0; i < std::size(kAllWellKnownOids); ++i) {
+        for (std::size_t j = i + 1; j < std::size(kAllWellKnownOids); ++j) {
+            if (kAllWellKnownOids[i] == kAllWellKnownOids[j]) return false;
+        }
+    }
+    return true;
+}
+
+static_assert(WellKnownOidsAreDistinct(),
+              "two well-known oids share a value; an oid names exactly one object for the "
+              "life of a database, so add the new one past the highest rather than into a "
+              "gap, and list it above");
 
 // Fixed page ids for the bootstrap catalog heap pages. Reserved: a
 // PageStore's CreateAt is called with these exact values during

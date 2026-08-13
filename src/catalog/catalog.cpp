@@ -242,6 +242,12 @@ void Catalog::InitWellKnownObjects() {
     register_type(kTypeTable, "type_table");
     register_type(kTypeOperator, "type_operator");
     register_type(kTypeIndex, "type_index");
+    // A dropped relation's row is retyped to this (DT2), so it names an
+    // object like every other `type_oid` a sys.objects row can carry. It
+    // was reaching a registered object only by sharing kTypeOperator's 22
+    // until 2026-08-13; once the oid moved off 22 it would otherwise name
+    // nothing at all.
+    register_type(kTypeDroppedTable, "type_dropped_table");
 
     register_type(kTypeInt8, "type_int8");
     register_type(kTypeInt16, "type_int16");
