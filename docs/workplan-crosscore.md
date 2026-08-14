@@ -391,10 +391,58 @@ the core serve a message instead.
     frame re-open is legal precisely because the gated shape is
     single-step - no outer row is live at a boundary - and **P4d-4c
     inherits that caveat by name** when deeper steps learn to await.
-    **Remaining in P4d: P4d-4b** — step k→k+1 wiring and join-key
-    forwarding — **and P4d-4c** — per-page batching through the walk
-    boundary (which dissolves the helper's multi-step per-row frames)
-    plus the sub-chain await decision.
+    **P4d-4b staged 2026-08-14, the survey's four facts recorded here so
+    no session re-derives them:**
+    1. **Open ordering is lossy today, and the answer is chained opens.**
+       §3's teardown rule silently discards a batch whose tag matches no
+       live pipeline, so a session opening step k and step k+1 on
+       different cores races k's first batch against k+1's `STEP_OPEN` -
+       a lost-rows race, not an error. Decided: **opens propagate
+       upstream through the pipeline itself.** The session opens only the
+       *final* stage's core; each stage's open handler, finding an
+       upstream edge described in its envelope, forwards the upstream
+       stage's open once its own state exists. Readiness ordering holds
+       by construction, no new message kind exists, and the credit
+       protocol is untouched (where the initial credit lives stays §9's
+       open knob). Errors route to the session by tag exactly as today;
+       CANCEL still goes point-to-point from the session, which knows
+       every stage's core from its own plan.
+    2. **The wire grows two fields, both in the envelope, neither in the
+       step descriptor.** `StepOpenHead` gains the downstream *step id*
+       (it has only the core) and the envelope gains the **forwarded-row
+       layout** of the upstream edge: the ordered (col_pos, type) list of
+       upstream columns each batch row carries. The step descriptor codec
+       and its version are untouched - it already ships the full compiled
+       step, key operand and column refs included.
+    3. **The forwarded set is already computed.** Step k forwards the
+       join key step k+1 consumes plus what the projection and later
+       residuals need of k's relation (crosscore.md §2) - which is the
+       compiler's `read_columns` of step k minus k's own filter-only
+       columns; the session derives it at plan time and both edge ends
+       receive the same list, the upstream to encode, the downstream to
+       decode.
+    4. **The mid-chain stage runs on the executor's own parent-frame
+       machinery, not a second evaluator.** The consuming stage opens an
+       outer `ChainFrame` over the forwarded layout's pseudo-schema,
+       fills slot 0 per upstream row through `SlotsFor(0)`, rewrites the
+       shipped step's upstream references from (up=0, slot=k) to
+       (up=1, slot=0) - the same re-slotting P4b already does for its
+       one-slot chain - and runs the step as a one-step chain whose
+       parent link is that outer frame, exactly `EvaluateSubChain`'s
+       shape. One row in, a probe or filtered walk against local state,
+       forwarded columns out.
+    Staging: **4b-1** the envelope v2 + chained opens (single-step
+    behavior unchanged - the session still opens the only stage
+    directly); **4b-2** the consuming stage (upstream-edge pipelines,
+    per-row execution, forwarding); **4b-3** the session side (plan-time
+    edge computation, the multi-step eligible class in the dispatcher,
+    typed projection over the final edge's batches - the piece P4c's
+    star-only refusal deferred). The narrow class first: a two-step
+    join, scan feeding probe, both relations remote-or-local by owner.
+    **P4d-4c after**: per-page batching through the walk boundary
+    (dissolving the helper's multi-step per-row frames), the sub-chain
+    await decision, and the frame re-open caveat 4b inherits from the
+    re-Bind fix.
   - **P4e — equivalence + the benchmark**: pipeline replies byte-identical
     to local execution over the contract shapes; the multicore isolation
     benchmark re-run against `bench/results-multicore.md`'s baseline.

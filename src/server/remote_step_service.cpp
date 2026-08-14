@@ -10,12 +10,96 @@
 
 namespace kds::server {
 
+namespace {
+
+// Little-endian u32 append/read for the envelope's variable section. The
+// head and the column rows are memcpy'd PODs under ring_message.hpp's
+// in-process exception; these frame the variable-length parts between.
+void PutU32(std::vector<std::byte>& out, std::uint32_t v) {
+    for (int i = 0; i < 4; ++i) out.push_back(std::byte((v >> (8 * i)) & 0xFF));
+}
+
+StatusOr<std::uint32_t> TakeU32(std::span<const std::byte>& rest) {
+    if (rest.size() < 4) {
+        return Status::InvalidArgument("STEP_OPEN envelope truncated in its upstream section");
+    }
+    std::uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) v |= std::uint32_t(rest[static_cast<std::size_t>(i)]) << (8 * i);
+    rest = rest.subspan(4);
+    return v;
+}
+
+}  // namespace
+
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
-                                      std::span<const std::byte> descriptor) {
-    std::vector<std::byte> out(sizeof(head) + descriptor.size());
+                                      std::span<const std::byte> descriptor,
+                                      const StepOpenUpstream* upstream) {
+    std::vector<std::byte> out;
+    out.resize(sizeof(head));
     std::memcpy(out.data(), &head, sizeof(head));
-    std::memcpy(out.data() + sizeof(head), descriptor.data(), descriptor.size());
+
+    out.push_back(std::byte{upstream != nullptr ? std::uint8_t{1} : std::uint8_t{0}});
+    if (upstream != nullptr) {
+        PutU32(out, upstream->upstream_core);
+        PutU32(out, static_cast<std::uint32_t>(upstream->forwarded.size()));
+        for (const catalog::SysColumnRow& col : upstream->forwarded) {
+            const auto* bytes = reinterpret_cast<const std::byte*>(&col);
+            out.insert(out.end(), bytes, bytes + sizeof(col));
+        }
+        PutU32(out, static_cast<std::uint32_t>(upstream->enclosed_open.size()));
+        out.insert(out.end(), upstream->enclosed_open.begin(), upstream->enclosed_open.end());
+    }
+
+    out.insert(out.end(), descriptor.begin(), descriptor.end());
     return out;
+}
+
+StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payload) {
+    if (payload.size() < sizeof(StepOpenHead) + 1) {
+        return Status::InvalidArgument("STEP_OPEN of " + std::to_string(payload.size()) +
+                                       " bytes has no head");
+    }
+    StepOpenParts parts;
+    std::memcpy(&parts.head, payload.data(), sizeof(parts.head));
+    std::span<const std::byte> rest = payload.subspan(sizeof(parts.head));
+
+    const std::uint8_t has_upstream = std::uint8_t(rest.front());
+    rest = rest.subspan(1);
+    if (has_upstream > 1) {
+        return Status::InvalidArgument("STEP_OPEN envelope carries upstream flag " +
+                                       std::to_string(has_upstream) +
+                                       ", which no encoder writes");
+    }
+    if (has_upstream == 1) {
+        StepOpenUpstream up;
+        auto core = TakeU32(rest);
+        if (!core.ok()) return core.status();
+        up.upstream_core = core.value();
+
+        auto count = TakeU32(rest);
+        if (!count.ok()) return count.status();
+        if (rest.size() < count.value() * sizeof(catalog::SysColumnRow)) {
+            return Status::InvalidArgument(
+                "STEP_OPEN envelope truncated inside its forwarded layout");
+        }
+        up.forwarded.resize(count.value());
+        std::memcpy(up.forwarded.data(), rest.data(),
+                    count.value() * sizeof(catalog::SysColumnRow));
+        rest = rest.subspan(count.value() * sizeof(catalog::SysColumnRow));
+
+        auto enclosed = TakeU32(rest);
+        if (!enclosed.ok()) return enclosed.status();
+        if (rest.size() < enclosed.value()) {
+            return Status::InvalidArgument(
+                "STEP_OPEN envelope truncated inside its enclosed open");
+        }
+        up.enclosed_open.assign(rest.begin(), rest.begin() + enclosed.value());
+        rest = rest.subspan(enclosed.value());
+        parts.upstream = std::move(up);
+    }
+
+    parts.descriptor = rest;
+    return parts;
 }
 
 RemoteStepServer::Pipeline* RemoteStepServer::Find(const PipelineTag& tag) {
@@ -46,19 +130,27 @@ void RemoteStepServer::SendError(const PipelineTag& tag, std::uint32_t session_c
 
 void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
                                   std::span<const std::byte> payload) {
-    if (payload.size() < sizeof(StepOpenHead)) {
-        // No tag to reply under; log is all there is.
+    auto parts = DecodeStepOpenEnvelope(payload);
+    if (!parts.ok()) {
+        // Possibly no decodable tag to reply under; log is all there is.
         if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("pipeline", "STEP_OPEN of " + std::to_string(payload.size()) +
-                                        " bytes has no head");
+            log_->Error("pipeline", "STEP_OPEN refused: " + parts.status().message());
         }
         return;
     }
-    StepOpenHead head{};
-    std::memcpy(&head, payload.data(), sizeof(head));
+    const StepOpenHead head = parts.value().head;
     const std::uint32_t session = header.src_core;
 
-    auto step = DecodeStepDescriptor(payload.subspan(sizeof(head)));
+    if (parts.value().upstream.has_value()) {
+        // The envelope can say it (P4d-4b fact 2); the consuming stage
+        // that acts on it is 4b-2. Refused, never half-run.
+        SendError(head.tag, session,
+                  Status::Unsupported("a consuming stage (an open with an upstream edge) is "
+                                      "P4d-4b-2; this core can serve leaf stages only"));
+        return;
+    }
+
+    auto step = DecodeStepDescriptor(parts.value().descriptor);
     if (!step.ok()) {
         SendError(head.tag, session, step.status());
         return;

@@ -223,6 +223,73 @@ TEST_F(RemoteStepServiceTest, AFilteredScanAppliesTheResidualRemotely) {
     EXPECT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
 }
 
+// ---- The STEP_OPEN envelope (workplan P4d-4b-1) --------------------------
+
+TEST_F(RemoteStepServiceTest, AnEnvelopeWithoutAnUpstreamEdgeRoundTrips) {
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+
+    StepOpenHead head{};
+    head.tag = PipelineTag{9, 0, 3};
+    head.downstream_core = 2;
+    head.downstream_step = 4;
+
+    auto parts = DecodeStepOpenEnvelope(EncodeStepOpen(head, descriptor.value()));
+    ASSERT_TRUE(parts.ok()) << parts.status().message();
+    EXPECT_EQ(parts.value().head.tag, head.tag);
+    EXPECT_EQ(parts.value().head.downstream_core, 2u);
+    EXPECT_EQ(parts.value().head.downstream_step, 4u);
+    EXPECT_FALSE(parts.value().upstream.has_value());
+    EXPECT_TRUE(std::equal(parts.value().descriptor.begin(), parts.value().descriptor.end(),
+                           descriptor.value().begin(), descriptor.value().end()));
+}
+
+TEST_F(RemoteStepServiceTest, AnEnvelopeWithAnUpstreamEdgeRoundTrips) {
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+
+    StepOpenHead head{};
+    head.tag = PipelineTag{9, 0, 1};
+
+    StepOpenUpstream up;
+    up.upstream_core = 3;
+    catalog::SysColumnRow col{};
+    col.pos = 1;
+    col.type_val = 20;  // arbitrary; the codec must not interpret it
+    catalog::SetName(col.name, "qty");
+    up.forwarded.push_back(col);
+    up.enclosed_open = {std::byte{0xAB}, std::byte{0xCD}};
+
+    auto parts = DecodeStepOpenEnvelope(EncodeStepOpen(head, descriptor.value(), &up));
+    ASSERT_TRUE(parts.ok()) << parts.status().message();
+    ASSERT_TRUE(parts.value().upstream.has_value());
+    EXPECT_EQ(parts.value().upstream->upstream_core, 3u);
+    ASSERT_EQ(parts.value().upstream->forwarded.size(), 1u);
+    EXPECT_EQ(parts.value().upstream->forwarded[0].pos, 1u);
+    EXPECT_EQ(parts.value().upstream->forwarded[0].type_val, 20u);
+    EXPECT_EQ(parts.value().upstream->enclosed_open,
+              (std::vector<std::byte>{std::byte{0xAB}, std::byte{0xCD}}));
+    EXPECT_TRUE(std::equal(parts.value().descriptor.begin(), parts.value().descriptor.end(),
+                           descriptor.value().begin(), descriptor.value().end()));
+}
+
+TEST_F(RemoteStepServiceTest, AConsumingStageOpenIsRefusedUntil4b2) {
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+    StepOpenHead head{};
+    head.tag = PipelineTag{7, 0, 1};
+    StepOpenUpstream up;
+    up.upstream_core = 0;
+
+    server_->OnStepOpen(HeaderFromSession(), EncodeStepOpen(head, descriptor.value(), &up));
+    ASSERT_EQ(sent_.size(), 1u);
+    EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+}
+
 TEST_F(RemoteStepServiceTest, AnUnknownRelationAnswersStepError) {
     exec::Step step = ScanStep();
     step.rel_oid = 999999;

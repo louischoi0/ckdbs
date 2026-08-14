@@ -4,6 +4,8 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <span>
 #include <vector>
 
 #include "kds/base/log.hpp"
@@ -48,17 +50,50 @@
 
 namespace kds::server {
 
-// The STEP_OPEN envelope: the tag, where the output goes, then the step
-// descriptor (step_descriptor.hpp) as the remainder of the payload.
+// The STEP_OPEN envelope: the head, an optional upstream-edge section
+// (P4d-4b), then the step descriptor (step_descriptor.hpp) as the
+// remainder of the payload.
 struct StepOpenHead {
     PipelineTag tag{};
     std::uint32_t downstream_core = 0;
-    std::uint32_t reserved = 0;  // keeps the head padding-free at 24 bytes
+    // The step id whose pipeline consumes this stage's batches at the
+    // downstream core (workplan P4d-4b fact 2). Zero for the session's
+    // own read - the session client matches by its opened tag and never
+    // reads this - so every pre-4b encoder's zero already meant what it
+    // now says. Keeps the head padding-free at 24 bytes.
+    std::uint32_t downstream_step = 0;
 };
 static_assert(sizeof(StepOpenHead) == 24);
 
+// The upstream edge of a chained open (workplan P4d-4b fact 1): a
+// consuming stage learns what its input batches carry and receives the
+// *enclosed* open it must forward to the upstream core once its own
+// state exists - which is what makes "no batch before its consumer" hold
+// by construction rather than by racing two opens.
+struct StepOpenUpstream {
+    std::uint32_t upstream_core = 0;
+    // The batch row layout, in order: the upstream relation's column
+    // rows for exactly the forwarded columns (fact 3). Full catalog rows
+    // rather than (pos, type) pairs because decode and re-encode both
+    // need the width/scale semantics only SysColumnRow carries.
+    std::vector<catalog::SysColumnRow> forwarded;
+    // The upstream stage's complete STEP_OPEN payload, forwarded verbatim.
+    std::vector<std::byte> enclosed_open;
+};
+
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
-                                      std::span<const std::byte> descriptor);
+                                      std::span<const std::byte> descriptor,
+                                      const StepOpenUpstream* upstream = nullptr);
+
+// Splits an envelope into its three parts. `descriptor` is a view into
+// `payload` - the caller keeps the payload alive across the decode of
+// what it points at, which every message handler already does.
+struct StepOpenParts {
+    StepOpenHead head{};
+    std::optional<StepOpenUpstream> upstream;
+    std::span<const std::byte> descriptor;
+};
+StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payload);
 
 class RemoteStepServer {
 public:
