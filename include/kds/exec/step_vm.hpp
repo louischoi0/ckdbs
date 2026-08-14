@@ -11,6 +11,7 @@
 #include "kds/exec/step_chain.hpp"
 #include "kds/exec/trail_collector.hpp"
 #include "kds/exec/trail_replay.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/stats/cabin_store.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/visit.hpp"
@@ -266,6 +267,31 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
                const txn::Snapshot* snapshot = nullptr, bool indexes = true);
+
+// The suspendable form (workplan-crosscore.md P4d-4a): identical
+// semantics and identical arguments, returned as a `sched::Coro` the
+// caller submits or polls. Execute() is this with no gate, driven to
+// completion inline.
+//
+// `resume_gate`, when given, is consulted at every page boundary of the
+// outermost walk - the one place a statement holds no pin and no span
+// (P4d-3) - and the statement parks there until it answers true
+// (WaitUntil semantics: one predicate call per poll, no resume while
+// false). This is how a streaming producer applies backpressure: the
+// gate answers false while a sealed batch waits for credit. The pointer
+// must outlive the coroutine, which in practice means it lives in the
+// same per-request state the batches do.
+//
+// Everything both entries share - sub-chains, nested steps - still runs
+// through the synchronous gated driver: a wait beneath a walk visitor is
+// a hard error, not a park, until P4d-4c moves that descent to the page
+// boundary.
+sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
+                         const StepChain& chain, const RowSink& sink, ExecStats* stats = nullptr,
+                         const Budget& budget = Budget(), TrailCollector* trail = nullptr,
+                         const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
+                         const txn::Snapshot* snapshot = nullptr, bool indexes = true,
+                         const std::function<bool()>* resume_gate = nullptr);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

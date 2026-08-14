@@ -8,6 +8,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/exec/step_vm.hpp"
 #include "kds/server/step_descriptor.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
@@ -115,6 +116,57 @@ protected:
         return step;
     }
 
+    // Grows the relation by `n` rows through the same path SetUp used.
+    // The streaming tests need a multi-page chain: the producer parks at
+    // page boundaries, and a one-page relation never reaches one.
+    void InsertRows(int n) {
+        auto access = boot_->catalog.InitTableAccess(oid_);
+        ASSERT_TRUE(access.ok());
+        for (int i = 0; i < n; ++i) {
+            auto id = boot_->catalog.AllocateRowId(oid_);
+            ASSERT_TRUE(id.ok());
+            parser::AstValue qty;
+            qty.type = parser::ValueType::kInt;
+            qty.int_val = i;
+            qty.raw_int_text = std::to_string(i);
+            auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
+                                           id.value(), {qty});
+            ASSERT_TRUE(payload.ok());
+            auto placed = heap::ChainInsert(*store_, access.value()->desc_page_id, id.value(),
+                                            payload.value(), /*trx_id=*/1, access.value()->oid);
+            ASSERT_TRUE(placed.ok()) << placed.status().message();
+        }
+    }
+
+    // Rebuilds the server in streaming shape: producer tasks land in
+    // tasks_ instead of a reactor, and Pump() is one reactor pass.
+    void UseStreamingServer() {
+        server_.emplace(
+            boot_->catalog, *store_, /*core_id=*/1,
+            [this](std::uint32_t dst, sched::RingMessageKind kind,
+                   std::vector<std::byte> payload) {
+                sent_.push_back(Sent{dst, kind, std::move(payload)});
+                return Status::OK();
+            },
+            nullptr, /*batch_target_bytes=*/1,
+            [this](std::unique_ptr<sched::Task> task) { tasks_.push_back(std::move(task)); });
+    }
+
+    // One reactor pass: every live task polled once, finished ones dropped.
+    void Pump() {
+        for (auto& task : tasks_) {
+            if (task != nullptr && task->Poll() == sched::PollResult::kDone) task.reset();
+        }
+        std::erase(tasks_, nullptr);
+    }
+
+    void GrantCredits(std::uint32_t n, std::uint64_t request_id = 7) {
+        StepCreditPayload credit{PipelineTag{request_id, 0, 0}, n};
+        std::vector<std::byte> bytes;
+        EncodePipelinePayload(credit, bytes);
+        server_->OnStepCredit(bytes);
+    }
+
     static inline int counter_ = 0;
     std::unique_ptr<storage::MemoryPageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> store_;
@@ -122,6 +174,7 @@ protected:
     catalog::Oid oid_ = 0;
     std::optional<RemoteStepServer> server_;
     std::vector<Sent> sent_;
+    std::vector<std::unique_ptr<sched::Task>> tasks_;
 };
 
 TEST_F(RemoteStepServiceTest, AScanStreamsBatchesUnderCreditAndEofLast) {
@@ -215,6 +268,119 @@ TEST_F(RemoteStepServiceTest, ACancelTearsDownAndLateCreditsAreDiscarded) {
     EncodePipelinePayload(credit, bytes);
     server_->OnStepCredit(bytes);
     EXPECT_EQ(sent_.size(), before);
+}
+
+// ---- The streaming producer (workplan P4d-4a) ---------------------------
+
+TEST_F(RemoteStepServiceTest, AStreamingProducerParksOnCreditAndItsBufferingIsBounded) {
+    InsertRows(392);  // 400 rows across several pages
+    UseStreamingServer();
+
+    // The audit is armed with the real store for the whole test: this is
+    // the executor's first genuine suspension, and the claim under test
+    // is that it holds nothing - no span, no pin - when it parks.
+    exec::InstallSuspendAudit(store_.get());
+    sched::ResetSuspendAudit();
+
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    EXPECT_TRUE(sent_.empty()) << "nothing runs until the reactor polls the producer";
+    ASSERT_EQ(tasks_.size(), 1u);
+
+    // One pass: the walk fills the first page, ships the 4 credits'
+    // batches, and parks at the page boundary with the page's remaining
+    // seals queued - not the relation's.
+    Pump();
+    ASSERT_EQ(tasks_.size(), 1u) << "the producer must park, not finish";
+    EXPECT_EQ(sent_.size(), kInitialCreditsPerEdge);
+    EXPECT_EQ(server_->open_pipelines(), 1u);
+    const std::size_t parked_queue = server_->unsent_batches();
+    EXPECT_GT(parked_queue, 0u);
+    EXPECT_LT(parked_queue, 250u) << "the queue must hold about one page's seals, "
+                                     "not the 400-row relation";
+    EXPECT_FALSE(sched::SuspendAuditTripped()) << sched::SuspendAuditReason();
+
+    // Idle polls while parked cost nothing and send nothing.
+    const std::size_t at_park = sent_.size();
+    Pump();
+    Pump();
+    EXPECT_EQ(sent_.size(), at_park);
+
+    // Grants drain and the gate reopens the walk; enough rounds finish
+    // the relation, EOF last, teardown complete.
+    for (int round = 0; round < 500 && server_->open_pipelines() > 0; ++round) {
+        GrantCredits(4);
+        Pump();
+    }
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+    EXPECT_FALSE(sched::SuspendAuditTripped()) << sched::SuspendAuditReason();
+    exec::UninstallSuspendAudit();
+
+    ASSERT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
+    std::size_t rows_total = 0;
+    for (const Sent& s : sent_) {
+        if (s.kind != sched::RingMessageKind::kStepBatch) continue;
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(s.payload, rows);
+        ASSERT_TRUE(header.ok());
+        rows_total += header.value().row_count;
+    }
+    EXPECT_EQ(rows_total, 400u);
+}
+
+TEST_F(RemoteStepServiceTest, StreamingAndCollectThenStreamShipIdenticalBytes) {
+    InsertRows(392);
+
+    // The legacy shape first, its traffic kept aside.
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    while (server_->open_pipelines() > 0) GrantCredits(4);
+    std::vector<Sent> legacy;
+    legacy.swap(sent_);
+
+    // The streaming shape against the same store, same tag, same target.
+    UseStreamingServer();
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    for (int round = 0; round < 500 && (server_->open_pipelines() > 0 || !tasks_.empty());
+         ++round) {
+        Pump();
+        GrantCredits(4);
+    }
+    ASSERT_EQ(server_->open_pipelines(), 0u);
+
+    // Byte-identical traffic: same batches in the same order under the
+    // same credit protocol, EOF last - the internal buffering is the only
+    // thing the producer changed.
+    ASSERT_EQ(sent_.size(), legacy.size());
+    for (std::size_t i = 0; i < sent_.size(); ++i) {
+        EXPECT_EQ(sent_[i].kind, legacy[i].kind) << "message " << i;
+        EXPECT_EQ(sent_[i].payload, legacy[i].payload) << "message " << i;
+    }
+}
+
+TEST_F(RemoteStepServiceTest, ACancelReachesAParkedProducerAndNoEofFollows) {
+    InsertRows(392);
+    UseStreamingServer();
+
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    Pump();
+    ASSERT_EQ(server_->open_pipelines(), 1u);
+    ASSERT_EQ(tasks_.size(), 1u);
+
+    // The handler cannot erase under a parked walk; it marks, and the
+    // producer tears itself down on its next resume.
+    StepEofPayload cancel{PipelineTag{7, 0, 0}};
+    std::vector<std::byte> bytes;
+    EncodePipelinePayload(cancel, bytes);
+    server_->OnStepCancel(bytes);
+    EXPECT_EQ(server_->open_pipelines(), 1u) << "marked, not yet erased";
+
+    Pump();
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+    for (const Sent& s : sent_) {
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
+            << "a cancelled pipeline must never claim a clean end";
+    }
 }
 
 }  // namespace

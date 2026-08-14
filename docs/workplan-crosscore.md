@@ -343,10 +343,33 @@ the core serve a message instead.
     parent's pin - so its page boundary cannot await until P4d-4c moves
     the descent outside the visitor, and the audit is what proves that
     ordering rather than trusting it.
-    **Remaining in P4d: P4d-4** — step k→k+1 wiring, join-key forwarding,
-    per-page batching through the walk boundary (which dissolves the
-    helper's multi-step per-row frames), the `ExecuteAsync` seam with its
-    first awaiting consumer, and the sub-chain await decision.
+    **P4d-4a built 2026-08-14** — the engine's first genuine suspension.
+    `exec::ExecuteAsync` exists with its first awaiting consumer: the
+    remote step server streams under credit instead of collecting the
+    relation. A `resume_gate` predicate on the runner is consulted at the
+    outermost walk's page boundary (`WaitUntil` semantics - no coroutine
+    frame per page, one predicate call per poll), and the producer
+    coroutine parks there while sealed batches wait on credit, so
+    buffering is bounded by the credit ceiling plus one page's seals.
+    CANCEL reaches a parked producer by mark-and-self-teardown (the
+    handler must not erase state a parked walk re-finds). Proven by
+    `remote_step_service_test.cpp`'s streaming trio: the park is real
+    (task suspends, idle polls send nothing), the suspend audit stays
+    quiet with the real store armed - no pin, no span, at the first real
+    park - traffic is byte-identical to collect-then-stream, and a cancel
+    never EOFs. The reactorless collect-then-stream shape survives as the
+    no-`SubmitFn` fallback the older tests still pin.
+    **Open hazard, recorded with P4d-4b**: a producer parked mid-walk
+    borrows its `TableAccess` across wall time exactly as the executor's
+    `Bind` does; DDL against that relation between resumes would
+    invalidate both borrows. Unreachable from a client today (affinity
+    refuses cross-core DDL shapes), but the pipeline milestone must
+    answer it - refuse DDL on pipeline-referenced oids, or version the
+    access.
+    **Remaining in P4d: P4d-4b** — step k→k+1 wiring and join-key
+    forwarding — **and P4d-4c** — per-page batching through the walk
+    boundary (which dissolves the helper's multi-step per-row frames)
+    plus the sub-chain await decision.
   - **P4e — equivalence + the benchmark**: pipeline replies byte-identical
     to local execution over the contract shapes; the multicore isolation
     benchmark re-run against `bench/results-multicore.md`'s baseline.

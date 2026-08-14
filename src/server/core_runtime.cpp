@@ -221,10 +221,12 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         }
     }
 
-    // The remote step server (workplan P4b): this core executes STEP_OPENs
-    // against relations it owns and streams the batches back under credit.
-    // The sender submits through the retry task - a full ring yields and
-    // retries, never drops (M7).
+    // The remote step server (workplan P4b, streaming since P4d-4a): this
+    // core executes STEP_OPENs against relations it owns and streams the
+    // batches back under credit, the producer parking at page boundaries
+    // when credit runs dry. The sender submits through the retry task - a
+    // full ring yields and retries, never drops (M7) - and the producer
+    // itself is a coroutine task on this same reactor.
     remote_steps_.emplace(
         *catalog_, *store_, config_.core_id,
         [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> payload) {
@@ -237,7 +239,8 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             scheduler_->Submit(sched::MakeSendRetryTask(*transport_, out, payload));
             return Status::OK();
         },
-        log_);
+        log_, kStepBatchTargetBytes,
+        [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); });
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kStepOpen,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

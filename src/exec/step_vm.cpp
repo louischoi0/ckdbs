@@ -172,10 +172,12 @@ public:
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-                const txn::Snapshot* snapshot, bool indexes)
+                const txn::Snapshot* snapshot, bool indexes,
+                const std::function<bool()>* resume_gate = nullptr)
         : catalog_(catalog), store_(store), sink_(sink), depth_(depth), parent_(parent),
           stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins),
-          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes) {}
+          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes),
+          resume_gate_(resume_gate) {}
 
     sched::Coro Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
@@ -1188,6 +1190,18 @@ private:
             if (!next.ok()) co_return next.status();
             if (next.value() == kInvalidPageId) co_return Status::OK();
             cur = next.value();
+
+            // ---- The page boundary: no pin, no span (P4d-3) --------------
+            //
+            // The one place a statement may park (P4d-4a): the pipeline's
+            // producer waits here for batch credit, and a cancel is seen
+            // here at the latest. Outermost walk only - a deeper step runs
+            // beneath a visitor through the gated synchronous driver until
+            // P4d-4c moves that descent, and consulting the gate there
+            // would turn a wait into the driver's hard error.
+            if (resume_gate_ != nullptr && index == 0) {
+                co_await sched::WaitUntil{resume_gate_};
+            }
         }
     }
 
@@ -1606,6 +1620,14 @@ private:
     ChainFrame frame_;
     bool stopped_ = false;
     bool indexes_ = true;
+
+    // The page-boundary resume gate (workplan-crosscore.md P4d-4a). Null
+    // for every local statement. When set, the outermost walk consults it
+    // at each page boundary and parks - holding no pin and no span, which
+    // P4d-3 made structural - until it answers true. It is a pointer to a
+    // caller-owned predicate for WaitFor's lifetime reason: the poller
+    // re-reads it while this runner sits suspended in its frame.
+    const std::function<bool()>* resume_gate_ = nullptr;
 };
 
 // The highest step_id anywhere under `step`/`chain`, sub-chains included.
@@ -1748,14 +1770,18 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     return true;
 }
 
-Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
-               const RowSink& sink, ExecStats* stats, const Budget& budget,
-               TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot, bool indexes) {
+sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
+                         const StepChain& chain, const RowSink& sink, ExecStats* stats,
+                         const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
+                         stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
+                         const std::function<bool()>* resume_gate) {
     if (chain.steps.empty()) {
-        return Status::InvalidArgument("a step chain with no steps reads nothing");
+        co_return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
 
+    // Locals live in this coroutine's frame, which outlives every
+    // suspension beneath - the same lifetime Execute's stack gave them
+    // while nothing suspended.
     ExecStats local;
     ExecStats& counters = stats != nullptr ? *stats : local;
 
@@ -1774,7 +1800,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     Budget spend(budget.limit());
 
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay, cabins, snapshot, indexes);
+                       trail, replay, cabins, snapshot, indexes, resume_gate);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by
@@ -1784,6 +1810,10 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     // the whole statement here, and the outer relation is never opened at
     // all. That is a real saving on a large relation, and it is only
     // available because hoisting is decided structurally at compile.
+    //
+    // They run synchronously even here: whether a sub-chain may ever
+    // await is P4d-4's open decision, and until it is taken they stay on
+    // the gated driver exactly as a nested step does.
     if (!chain.hoisted.empty()) {
         // An empty frame with no parent: a hoisted sub-chain refers to
         // nothing outside itself, which is what "uncorrelated" means.
@@ -1791,12 +1821,26 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
         empty.Open({}, /*parent=*/nullptr);
         for (const SubChain& sub : chain.hoisted) {
             auto value = runner.EvaluateSubChain(sub, empty);
-            if (!value.ok()) return value.status();
-            if (!Collapse(value.value())) return Status::OK();  // no rows, nothing opened
+            if (!value.ok()) co_return value.status();
+            if (!Collapse(value.value())) co_return Status::OK();  // no rows, nothing opened
         }
     }
 
-    return RunToCompletionAtWalkBoundary(runner.Run(chain.steps));
+    co_return co_await runner.Run(chain.steps);
+}
+
+Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
+               const RowSink& sink, ExecStats* stats, const Budget& budget,
+               TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
+               const txn::Snapshot* snapshot, bool indexes) {
+    // The synchronous wrapper (P4d-2's staging): with no resume gate
+    // nothing beneath can park, so the gated driver completes the
+    // coroutine inline and this is bit-identical to the pre-coroutine
+    // executor. A caller that wants the walk to actually wait passes a
+    // gate to ExecuteAsync and polls the Coro instead.
+    return RunToCompletionAtWalkBoundary(ExecuteAsync(catalog, store, chain, sink, stats, budget,
+                                                      trail, replay, cabins, snapshot, indexes,
+                                                      /*resume_gate=*/nullptr));
 }
 
 }  // namespace kds::exec
