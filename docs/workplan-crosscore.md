@@ -410,10 +410,14 @@ the core serve a message instead.
     2. **The wire grows two fields, both in the envelope, neither in the
        step descriptor.** `StepOpenHead` gains the downstream *step id*
        (it has only the core) and the envelope gains the **forwarded-row
-       layout** of the upstream edge: the ordered (col_pos, type) list of
-       upstream columns each batch row carries. The step descriptor codec
-       and its version are untouched - it already ships the full compiled
-       step, key operand and column refs included.
+       layout** of the upstream edge: the ordered upstream columns each
+       batch row carries, shipped as full `SysColumnRow`s - KWP fields
+       are views, not self-describing, and decode and re-encode both
+       need the width/scale semantics only the catalog row carries (the
+       survey first said "(col_pos, type) pairs"; the built form is the
+       rows, per 4b-1). The step descriptor codec and its version are
+       untouched - it already ships the full compiled step, key operand
+       and column refs included.
     3. **The forwarded set is already computed.** Step k forwards the
        join key step k+1 consumes plus what the projection and later
        residuals need of k's relation (crosscore.md §2) - which is the

@@ -235,7 +235,11 @@ TEST_F(RemoteStepServiceTest, AnEnvelopeWithoutAnUpstreamEdgeRoundTrips) {
     head.downstream_core = 2;
     head.downstream_step = 4;
 
-    auto parts = DecodeStepOpenEnvelope(EncodeStepOpen(head, descriptor.value()));
+    // Named, not a temporary: `descriptor` is a view into the envelope
+    // (the decoder's documented aliasing), so the buffer has to outlive
+    // every assertion below.
+    const std::vector<std::byte> envelope = EncodeStepOpen(head, descriptor.value());
+    auto parts = DecodeStepOpenEnvelope(envelope);
     ASSERT_TRUE(parts.ok()) << parts.status().message();
     EXPECT_EQ(parts.value().head.tag, head.tag);
     EXPECT_EQ(parts.value().head.downstream_core, 2u);
@@ -262,7 +266,8 @@ TEST_F(RemoteStepServiceTest, AnEnvelopeWithAnUpstreamEdgeRoundTrips) {
     up.forwarded.push_back(col);
     up.enclosed_open = {std::byte{0xAB}, std::byte{0xCD}};
 
-    auto parts = DecodeStepOpenEnvelope(EncodeStepOpen(head, descriptor.value(), &up));
+    const std::vector<std::byte> envelope = EncodeStepOpen(head, descriptor.value(), &up);
+    auto parts = DecodeStepOpenEnvelope(envelope);
     ASSERT_TRUE(parts.ok()) << parts.status().message();
     ASSERT_TRUE(parts.value().upstream.has_value());
     EXPECT_EQ(parts.value().upstream->upstream_core, 3u);
@@ -273,6 +278,27 @@ TEST_F(RemoteStepServiceTest, AnEnvelopeWithAnUpstreamEdgeRoundTrips) {
               (std::vector<std::byte>{std::byte{0xAB}, std::byte{0xCD}}));
     EXPECT_TRUE(std::equal(parts.value().descriptor.begin(), parts.value().descriptor.end(),
                            descriptor.value().begin(), descriptor.value().end()));
+}
+
+TEST_F(RemoteStepServiceTest, ATruncatedEnvelopeWithAWholeHeadAnswersStepError) {
+    // The envelope contract: a failure at any point answers STEP_ERROR
+    // and opens nothing. With the head intact the tag is real, and a
+    // session that opened this stage would otherwise wait on a read
+    // nobody will ever finish.
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+    StepOpenHead head{};
+    head.tag = PipelineTag{7, 0, 0};
+    StepOpenUpstream up;
+    up.upstream_core = 0;
+    auto envelope = EncodeStepOpen(head, descriptor.value(), &up);
+    envelope.resize(sizeof(StepOpenHead) + 3);  // head + flag + 2 of the core's 4 bytes
+
+    server_->OnStepOpen(HeaderFromSession(), envelope);
+    ASSERT_EQ(sent_.size(), 1u);
+    EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
+    EXPECT_EQ(server_->open_pipelines(), 0u);
 }
 
 TEST_F(RemoteStepServiceTest, AConsumingStageOpenIsRefusedUntil4b2) {

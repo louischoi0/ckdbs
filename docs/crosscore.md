@@ -38,12 +38,20 @@ M1). Two paths:
   core. Execution is exactly today's single-core code — the cross-core layer
   must add zero work here. This is an invariant, not an optimization note:
   the single-core path must not regress in instructions or allocations.
-- **Pipeline path.** At least one step's relation lives on another core. The
-  session core sends each remote step a `STEP_OPEN` describing the step
-  (relation, predicate bindings, projection column set, downstream target),
-  wiring step k's output to step k+1's core. The last step's downstream is
-  the session core, which frames rows to the client (KWP, protocol D6
-  chunked streaming).
+- **Pipeline path.** At least one step's relation lives on another core.
+  Each remote step receives a `STEP_OPEN` describing it (relation,
+  predicate bindings, projection column set, downstream target), wiring
+  step k's output to step k+1's core. **Amended 2026-08-14 (P4d-4b fact
+  1): the opens are chained, not fanned out.** The session core opens
+  only the *final* stage; every stage's envelope encloses its upstream
+  stage's complete open, which the receiving core forwards once its own
+  pipeline state exists. That ordering is what makes "no batch before
+  its consumer" structural - §3's teardown rule silently discards an
+  unmatched batch, so two independently raced opens would lose rows, not
+  fail. The last step's downstream is the session core, which frames
+  rows to the client (KWP, protocol D6 chunked streaming); CANCEL stays
+  point-to-point from the session, which knows every stage's core from
+  its own plan.
 
 What flows between steps is not whole rows: step k forwards, per row, the
 join key consumed by step k+1 plus only the columns the final projection
@@ -61,7 +69,7 @@ Message kinds:
 
 | Kind | Direction | Payload |
 |------|-----------|---------|
-| `STEP_OPEN` | session → step core | step descriptor: relation oid, bindings, projection set, downstream core+step, isolation note (§5) |
+| `STEP_OPEN` | downstream stage → its upstream's core (the session opens the final stage; amended 2026-08-14, §2) | step descriptor: relation oid, bindings, projection set, downstream core+step; optional upstream section (forwarded-row layout, enclosed upstream open) |
 | `STEP_BATCH` | step k → step k+1 (or session) | chunk of KWP-encoded rows (§4) |
 | `STEP_EOF` | upstream → downstream | no more batches for this step |
 | `STEP_CREDIT` | downstream → upstream | grants N batch credits (§4) |

@@ -58,9 +58,11 @@ struct StepOpenHead {
     std::uint32_t downstream_core = 0;
     // The step id whose pipeline consumes this stage's batches at the
     // downstream core (workplan P4d-4b fact 2). Zero for the session's
-    // own read - the session client matches by its opened tag and never
-    // reads this - so every pre-4b encoder's zero already meant what it
-    // now says. Keeps the head padding-free at 24 bytes.
+    // own read - unambiguous because step ids are assigned in compile
+    // order from zero, so a step that consumes an upstream edge always
+    // has a producer numbered below it and can never itself be step 0.
+    // Every pre-4b encoder's zero therefore already meant what it now
+    // says. Keeps the head padding-free at 24 bytes.
     std::uint32_t downstream_step = 0;
 };
 static_assert(sizeof(StepOpenHead) == 24);

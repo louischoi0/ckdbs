@@ -65,7 +65,7 @@ std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
 StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payload) {
     if (payload.size() < sizeof(StepOpenHead) + 1) {
         return Status::InvalidArgument("STEP_OPEN of " + std::to_string(payload.size()) +
-                                       " bytes has no head");
+                                       " bytes cannot hold a head and its upstream flag");
     }
     StepOpenParts parts;
     std::memcpy(&parts.head, payload.data(), sizeof(parts.head));
@@ -86,14 +86,23 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
 
         auto count = TakeU32(rest);
         if (!count.ok()) return count.status();
-        if (rest.size() < count.value() * sizeof(catalog::SysColumnRow)) {
+        // Widened before the multiply: a u32 count times a 96-byte row
+        // cannot overflow a 64-bit size_t, and the bound is checked
+        // before the resize so a bogus count allocates nothing.
+        const std::size_t layout_bytes =
+            static_cast<std::size_t>(count.value()) * sizeof(catalog::SysColumnRow);
+        if (rest.size() < layout_bytes) {
             return Status::InvalidArgument(
                 "STEP_OPEN envelope truncated inside its forwarded layout");
         }
         up.forwarded.resize(count.value());
-        std::memcpy(up.forwarded.data(), rest.data(),
-                    count.value() * sizeof(catalog::SysColumnRow));
-        rest = rest.subspan(count.value() * sizeof(catalog::SysColumnRow));
+        // An edge may forward no columns, and an empty vector's data() is
+        // null - memcpy with a null argument is undefined even for zero
+        // bytes (UBSan flags it on the refusal test's empty layout).
+        if (layout_bytes > 0) {
+            std::memcpy(up.forwarded.data(), rest.data(), layout_bytes);
+        }
+        rest = rest.subspan(layout_bytes);
 
         auto enclosed = TakeU32(rest);
         if (!enclosed.ok()) return enclosed.status();
@@ -140,16 +149,24 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
                                   std::span<const std::byte> payload) {
     auto parts = DecodeStepOpenEnvelope(payload);
     if (!parts.ok()) {
-        // Possibly no decodable tag to reply under; log is all there is.
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        // With a whole head present the tag is real even when the rest
+        // is not: answer the session so its read completes instead of
+        // waiting on a stage that silently never opened. With less than
+        // a head there is nobody to address - log is all there is.
+        if (payload.size() >= sizeof(StepOpenHead)) {
+            StepOpenHead head{};
+            std::memcpy(&head, payload.data(), sizeof(head));
+            SendError(head.tag, header.src_core, parts.status());
+        } else if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
             log_->Error("pipeline", "STEP_OPEN refused: " + parts.status().message());
         }
         return;
     }
-    const StepOpenHead head = parts.value().head;
+    const StepOpenParts& env = parts.value();
+    const StepOpenHead head = env.head;
     const std::uint32_t session = header.src_core;
 
-    if (parts.value().upstream.has_value()) {
+    if (env.upstream.has_value()) {
         // The envelope can say it (P4d-4b fact 2); the consuming stage
         // that acts on it is 4b-2. Refused, never half-run.
         SendError(head.tag, session,
@@ -158,7 +175,7 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
         return;
     }
 
-    auto step = DecodeStepDescriptor(parts.value().descriptor);
+    auto step = DecodeStepDescriptor(env.descriptor);
     if (!step.ok()) {
         SendError(head.tag, session, step.status());
         return;
