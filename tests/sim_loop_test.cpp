@@ -341,8 +341,15 @@ TEST_F(SimIntegrityCorruption, ASpilledCellPointingOffChainIsAVarHeapFinding) {
     MakeTables();
     const InsertedAt at = Insert("h", 7, std::string(200, 'y'));  // spills
 
+    // Named, not iterated straight off the call: `StatusOr::value()` returns
+    // a reference, so binding a range-for to it leaves the temporary
+    // StatusOr - and the vector inside it - dead before the first
+    // iteration (ASan: stack-use-after-scope). C++23 extends the
+    // temporary's life here; C++20 does not.
+    auto tables = instance_->catalog().ListTables();
+    ASSERT_TRUE(tables.ok());
     catalog::Oid h_oid = 0;
-    for (const auto& row : instance_->catalog().ListTables().value()) {
+    for (const auto& row : tables.value()) {
         if (catalog::NameView(row.name) == "h") h_oid = row.oid;
     }
     ASSERT_NE(h_oid, 0u);

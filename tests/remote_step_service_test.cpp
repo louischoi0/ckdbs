@@ -626,15 +626,7 @@ protected:
             Status s = writer.AppendRow(input_schema, std::vector<parser::AstValue>{v});
             EXPECT_TRUE(s.ok()) << s.message();
         }
-        StepBatchHeader batch{};
-        batch.tag = PipelineTag{request_id, 0, 0};
-        batch.seq = seq;
-        batch.row_count = writer.row_count();
-        std::vector<std::byte> rows_bytes = writer.Finish();
-        std::vector<std::byte> out(sizeof(batch) + rows_bytes.size());
-        std::memcpy(out.data(), &batch, sizeof(batch));
-        std::memcpy(out.data() + sizeof(batch), rows_bytes.data(), rows_bytes.size());
-        return out;
+        return EncodeStepBatch(PipelineTag{request_id, 0, 0}, seq, writer);
     }
 
     void SendInputEof(std::uint64_t request_id = 7) {
@@ -705,7 +697,7 @@ TEST_F(ConsumingStageTest, AConsumingStageForwardsItsUpstreamOpenThenJoinsPerInp
     ASSERT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
 }
 
-TEST_F(ConsumingStageTest, ACancelReachesAConsumerParkedOnItsInput) {
+TEST_F(ConsumingStageTest, ACancelReachesAParkedConsumerAndItsUpstreamHearsIt) {
     UseStreamingServer();
     OpenConsuming();
     Pump();
@@ -718,10 +710,52 @@ TEST_F(ConsumingStageTest, ACancelReachesAConsumerParkedOnItsInput) {
     Pump();
     EXPECT_EQ(server_->open_pipelines(), 0u);
     EXPECT_TRUE(tasks_.empty());
+
+    // §7's upstream half: the stage that stopped told its producer to
+    // stop too - without this the leaf parks on its credit gate forever.
+    bool upstream_cancelled = false;
     for (const Sent& s : sent_) {
         EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
             << "a cancelled stage must never claim a clean end";
+        if (s.kind != sched::RingMessageKind::kStepCancel) continue;
+        auto tag = DecodePipelinePayload<StepEofPayload>(s.payload);
+        ASSERT_TRUE(tag.ok());
+        if (tag.value().tag == (PipelineTag{7, 0, 0})) upstream_cancelled = true;
     }
+    EXPECT_TRUE(upstream_cancelled);
+}
+
+TEST_F(ConsumingStageTest, AMalformedInputBatchAnswersErrorAndCancelsItsUpstream) {
+    UseStreamingServer();
+    OpenConsuming();
+    Pump();
+
+    // A batch whose declared rows cannot decode under the forwarded
+    // layout: the header survives, the payload is garbage.
+    catalog::Schema input_schema;
+    input_schema.columns.push_back(KeyColumn());
+    wire::RowBatchWriter writer;
+    parser::AstValue v;
+    v.type = parser::ValueType::kInt;
+    v.int_val = 1;
+    ASSERT_TRUE(writer.AppendRow(input_schema, std::vector<parser::AstValue>{v}).ok());
+    std::vector<std::byte> batch = EncodeStepBatch(PipelineTag{7, 0, 0}, 0, writer);
+    batch.resize(sizeof(StepBatchHeader) + 2);  // truncate the row bytes
+
+    server_->OnStepBatch(batch);
+    Pump();
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+
+    bool errored = false;
+    bool upstream_cancelled = false;
+    for (const Sent& s : sent_) {
+        if (s.kind == sched::RingMessageKind::kStepError) errored = true;
+        if (s.kind == sched::RingMessageKind::kStepCancel) upstream_cancelled = true;
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof);
+    }
+    EXPECT_TRUE(errored);
+    EXPECT_TRUE(upstream_cancelled);
 }
 
 TEST_F(ConsumingStageTest, AnOutputSpecThatForwardsNothingIsRefused) {

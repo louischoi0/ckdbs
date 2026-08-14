@@ -20,6 +20,12 @@ void PutU32(std::vector<std::byte>& out, std::uint32_t v) {
     for (int i = 0; i < 4; ++i) out.push_back(std::byte((v >> (8 * i)) & 0xFF));
 }
 
+// One output-spec entry on the wire: the source flag plus the index.
+// Named because the encoder's reserve arithmetic and the decoder's
+// truncation bound are the same fact, and a literal 5 in two files is how
+// they drift.
+constexpr std::size_t kOutputColumnBytes = 1 + 4;
+
 StatusOr<std::uint32_t> TakeU32(std::span<const std::byte>& rest) {
     if (rest.size() < 4) {
         return Status::InvalidArgument("STEP_OPEN envelope truncated in its upstream section");
@@ -41,7 +47,7 @@ std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
     std::size_t total = sizeof(head) + 1 + descriptor.size();
     if (upstream != nullptr) {
         total += 4 + 4 + upstream->forwarded.size() * sizeof(catalog::SysColumnRow) + 4 +
-                 upstream->output.size() * 5 + 4 + upstream->enclosed_open.size();
+                 upstream->output.size() * kOutputColumnBytes + 4 + upstream->enclosed_open.size();
     }
     out.reserve(total);
     out.resize(sizeof(head));
@@ -112,12 +118,16 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
 
         auto out_count = TakeU32(rest);
         if (!out_count.ok()) return out_count.status();
+        // Bounded before the reserve, exactly as the layout above is bounded
+        // before its resize: `out_count` is a wire u32, and reserving on it
+        // first would let four bytes ask for gigabytes.
+        const std::size_t output_bytes =
+            static_cast<std::size_t>(out_count.value()) * kOutputColumnBytes;
+        if (rest.size() < output_bytes) {
+            return Status::InvalidArgument("STEP_OPEN envelope truncated inside its output spec");
+        }
         up.output.reserve(out_count.value());
         for (std::uint32_t i = 0; i < out_count.value(); ++i) {
-            if (rest.empty()) {
-                return Status::InvalidArgument(
-                    "STEP_OPEN envelope truncated inside its output spec");
-            }
             StepOutputColumn col;
             const std::uint8_t from = std::uint8_t(rest.front());
             rest = rest.subspan(1);
@@ -179,18 +189,26 @@ void RemoteStepServer::SendError(const PipelineTag& tag, std::uint32_t session_c
     }
 }
 
-void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
+// The message header is unused as of P4d-4b-2: every error this handler
+// can raise is addressed by the tag's session_core, because a chained
+// open's sender is a stage rather than the session. Kept in the signature
+// only because the runtime binds it as a MessageHandler.
+void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
                                   std::span<const std::byte> payload) {
     auto parts = DecodeStepOpenEnvelope(payload);
     if (!parts.ok()) {
         // With a whole head present the tag is real even when the rest
         // is not: answer the session so its read completes instead of
-        // waiting on a stage that silently never opened. With less than
-        // a head there is nobody to address - log is all there is.
+        // waiting on a stage that silently never opened. Addressed by the
+        // tag's own session_core rather than the sender: a chained open's
+        // sender is the *downstream stage*, which registers no kStepError
+        // handler at all, so routing there would drop the refusal and hang
+        // the session on a stage that never opened. With less than a head
+        // there is nobody to address - log is all there is.
         if (payload.size() >= sizeof(StepOpenHead)) {
             StepOpenHead head{};
             std::memcpy(&head, payload.data(), sizeof(head));
-            SendError(head.tag, header.src_core, parts.status());
+            SendError(head.tag, head.tag.session_core, parts.status());
         } else if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
             log_->Error("pipeline", "STEP_OPEN refused: " + parts.status().message());
         }
@@ -333,26 +351,34 @@ void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head, const StepOp
     // 4b-3): its own columns at (up=0, slot=0), the upstream row's at
     // (up=1, slot=0) with col_pos into the *forwarded* layout. Anything
     // else is a malformed plan - refused, never guessed at.
-    auto ref_ok = [&](const exec::ColumnRef& ref, bool is_lhs) {
-        if (ref.up == 0) return ref.rel_slot == 0 && ref.col_pos < schema.columns.size();
-        if (is_lhs) return false;  // a residual's lhs is always this relation's
+    auto own = [&](const exec::ColumnRef& ref) {
+        return ref.up == 0 && ref.rel_slot == 0 && ref.col_pos < schema.columns.size();
+    };
+    auto upstream = [&](const exec::ColumnRef& ref) {
         return ref.up == 1 && ref.rel_slot == 0 && ref.col_pos < up.forwarded.size();
     };
     bool refs_ok = true;
     if (step.key.has_value() && step.key->kind == exec::OperandKind::kColumn) {
-        refs_ok = ref_ok(step.key->column, /*is_lhs=*/false);
+        // **The key comes from the upstream row and nowhere else.** A key
+        // naming this stage's own slot would be read out of a frame this
+        // step has not decoded yet: the first input row probes a kNull
+        // (a miss) and every later one probes the *previous* row's column -
+        // plausible rows for a fabricated id, which is the one failure
+        // class that leaves no trace.
+        refs_ok = upstream(step.key->column);
     }
     for (const exec::StepPredicate& pred : step.residual) {
-        refs_ok = refs_ok && ref_ok(pred.lhs, /*is_lhs=*/true);
+        refs_ok = refs_ok && own(pred.lhs);  // a residual's lhs is always this relation's
         if (pred.rhs.kind == exec::OperandKind::kColumn) {
-            refs_ok = refs_ok && ref_ok(pred.rhs.column, /*is_lhs=*/false);
+            refs_ok = refs_ok && (own(pred.rhs.column) || upstream(pred.rhs.column));
         }
     }
     if (!refs_ok) {
         SendError(head.tag, session,
                   Status::InvalidArgument(
                       "a consuming stage's references must name its own slot or, at up=1, "
-                      "the forwarded layout; the plan was not normalized"));
+                      "the forwarded layout (and its key the forwarded layout only); the "
+                      "plan was not normalized"));
         return;
     }
 
@@ -413,13 +439,6 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> out_row(output_schema.columns.size());
 
-    auto seal = [&]() {
-        Pipeline* pipe = Find(tag);
-        if (pipe == nullptr || pipe->cancelled) return;
-        Seal(*pipe, writer);
-        Drain(*pipe);
-    };
-
     // Parks between input batches; anything that ends the wait for good
     // (teardown, cancel, the upstream's EOF) opens it too.
     const std::function<bool()> actionable = [this, tag] {
@@ -427,13 +446,20 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
         return pipe == nullptr || pipe->cancelled || !pipe->consumer.has_value() ||
                !pipe->consumer->input.empty() || pipe->consumer->input_eof;
     };
-    // Backpressure between input batches: the output queue drains before
-    // the next input is taken, which is what bounds this stage's
-    // buffering at one input batch's seals plus the credit ceiling.
-    const std::function<bool()> output_ok = [this, tag] {
-        Pipeline* pipe = Find(tag);
-        return pipe == nullptr || pipe->cancelled || pipe->batches.empty() ||
-               pipe->credit.can_send();
+    // The shared credit gate, parked on after every joined row: buffering
+    // stays bounded at the credit ceiling plus one *row's* seals for the
+    // probe/lookup shapes. A filter-scan inner can still seal every match
+    // of ONE input row inside one synchronous Execute - the gated inner
+    // walk that bounds that is P4d-4c's, named in the workplan.
+    const std::function<bool()> output_ok = CreditGate(tag);
+
+    // Every stopping exit owes the upstream a cancel (§7): without one
+    // the producer parks on its credit gate for the process's life.
+    auto fail = [&](const PipelineTag& input_tag, std::uint32_t upstream_core,
+                    const Status& status) {
+        SendError(tag, tag.session_core, status);
+        CancelUpstream(input_tag, upstream_core);
+        Erase(tag);
     };
 
     for (;;) {
@@ -441,90 +467,108 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
         Pipeline* pipe = Find(tag);
         if (pipe == nullptr) co_return Status::OK();  // torn down; nothing to say
         if (pipe->cancelled || !pipe->consumer.has_value()) {
+            if (pipe->consumer.has_value()) {
+                CancelUpstream(pipe->consumer->input_tag, pipe->consumer->upstream_core);
+            }
             Erase(tag);
             co_return Status::OK();
         }
 
-        if (!pipe->consumer->input.empty()) {
-            const std::vector<std::byte> batch = std::move(pipe->consumer->input.front());
-            pipe->consumer->input.pop_front();
-            const PipelineTag input_tag = pipe->consumer->input_tag;
-            const std::uint32_t upstream_core = pipe->consumer->upstream_core;
-
-            std::span<const std::byte> rows_bytes;
-            auto batch_header = DecodeStepBatchHeader(batch, rows_bytes);
-            Status failed = batch_header.ok() ? Status::OK() : batch_header.status();
-            if (failed.ok()) {
-                auto rows = wire::DecodeRowBatch(rows_bytes, input_schema.columns.size());
-                if (!rows.ok()) failed = rows.status();
-                if (failed.ok()) {
-                    for (const auto& in_row : rows.value()) {
-                        auto slots = outer.SlotsFor(0);
-                        for (std::size_t i = 0; i < input_schema.columns.size(); ++i) {
-                            slots[i] = wire::FieldToValue(input_schema.columns[i], in_row[i]);
-                        }
-                        failed = exec::Execute(
-                            catalog_, store_, chain,
-                            [&](const exec::ChainFrame& frame)
-                                -> StatusOr<storage::VisitControl> {
-                                Pipeline* q = Find(tag);
-                                if (q == nullptr || q->cancelled) {
-                                    return storage::VisitControl::kStop;
-                                }
-                                for (std::size_t o = 0; o < output.size(); ++o) {
-                                    out_row[o] = frame.Get(exec::ColumnRef{
-                                        static_cast<std::uint16_t>(
-                                            output[o].from_upstream != 0 ? 1 : 0),
-                                        0, output[o].index});
-                                }
-                                if (Status s = writer.AppendRow(output_schema, out_row);
-                                    !s.ok()) {
-                                    return s;
-                                }
-                                if (writer.size_bytes() >= batch_target_ || writer.full()) {
-                                    seal();
-                                }
-                                return storage::VisitControl::kContinue;
-                            },
-                            /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr,
-                            /*replay=*/nullptr, /*cabins=*/nullptr, /*snapshot=*/nullptr,
-                            /*indexes=*/true, /*parent=*/&outer);
-                        if (!failed.ok()) break;
-                        if (Pipeline* q = Find(tag); q == nullptr || q->cancelled) break;
-                    }
+        if (pipe->consumer->input.empty()) {
+            // Input EOF with the queue empty: this stage's own end - the
+            // upstream already finished, so there is nothing left to
+            // cancel. The final seal, then EOF downstream rides the
+            // producing=false drain.
+            if (writer.row_count() > 0) SealAndDrain(tag, writer);
+            if (Pipeline* done = Find(tag); done != nullptr) {
+                if (done->cancelled) {
+                    Erase(tag);
+                    co_return Status::OK();
                 }
+                done->producing = false;
+                Drain(*done);
             }
-            if (!failed.ok()) {
-                SendError(tag, tag.session_core, failed);
-                Erase(tag);
-                co_return failed;
-            }
-            // Grant-on-drain: this batch is consumed, the upstream may
-            // replace it.
-            StepCreditPayload credit{input_tag, 1};
-            std::vector<std::byte> bytes;
-            EncodePipelinePayload(credit, bytes);
-            if (Status s = send_(upstream_core, sched::RingMessageKind::kStepCredit,
-                                 std::move(bytes));
-                !s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
-                log_->Error("pipeline", "input credit could not be sent: " + s.message());
-            }
-            co_await sched::WaitUntil{&output_ok};
-            continue;
+            co_return Status::OK();
         }
 
-        // Input EOF with the queue empty: this stage's own end. The final
-        // seal, then EOF downstream rides the producing=false drain.
-        if (writer.row_count() > 0) seal();
-        if (Pipeline* done = Find(tag); done != nullptr) {
-            if (done->cancelled) {
-                Erase(tag);
-                co_return Status::OK();
-            }
-            done->producing = false;
-            Drain(*done);
+        const std::vector<std::byte> batch = std::move(pipe->consumer->input.front());
+        pipe->consumer->input.pop_front();
+        const PipelineTag input_tag = pipe->consumer->input_tag;
+        const std::uint32_t upstream_core = pipe->consumer->upstream_core;
+
+        std::span<const std::byte> rows_bytes;
+        auto batch_header = DecodeStepBatchHeader(batch, rows_bytes);
+        if (!batch_header.ok()) {
+            fail(input_tag, upstream_core, batch_header.status());
+            co_return batch_header.status();
         }
-        co_return Status::OK();
+        auto rows = wire::DecodeRowBatch(rows_bytes, input_schema.columns.size());
+        if (!rows.ok()) {
+            fail(input_tag, upstream_core, rows.status());
+            co_return rows.status();
+        }
+        // Two independently-encoded counts of one thing, never compared
+        // until now: a skew means this stage decodes with a layout the
+        // producer did not encode with, and a silently wrong join is
+        // invariant 13's forbidden shape one level up.
+        if (rows.value().size() != batch_header.value().row_count) {
+            const Status skew = Status::Corruption(
+                "input batch declares " + std::to_string(batch_header.value().row_count) +
+                " rows but decodes to " + std::to_string(rows.value().size()) +
+                " under the forwarded layout; the edge's two ends disagree");
+            fail(input_tag, upstream_core, skew);
+            co_return skew;
+        }
+
+        bool stopped = false;
+        for (const auto& in_row : rows.value()) {
+            auto slots = outer.SlotsFor(0);
+            for (std::size_t i = 0; i < input_schema.columns.size(); ++i) {
+                slots[i] = wire::FieldToValue(input_schema.columns[i], in_row[i]);
+            }
+            Status ran = exec::Execute(
+                catalog_, store_, chain,
+                [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+                    Pipeline* q = Find(tag);
+                    if (q == nullptr || q->cancelled) return storage::VisitControl::kStop;
+                    for (std::size_t o = 0; o < output.size(); ++o) {
+                        out_row[o] = frame.Get(exec::ColumnRef{
+                            static_cast<std::uint16_t>(output[o].from_upstream != 0 ? 1 : 0),
+                            0, output[o].index});
+                    }
+                    if (Status s = writer.AppendRow(output_schema, out_row); !s.ok()) return s;
+                    if (writer.size_bytes() >= batch_target_ || writer.full()) {
+                        SealAndDrain(tag, writer);
+                    }
+                    return storage::VisitControl::kContinue;
+                },
+                /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
+                /*cabins=*/nullptr, /*snapshot=*/nullptr, /*indexes=*/true,
+                /*parent=*/&outer);
+            if (!ran.ok()) {
+                fail(input_tag, upstream_core, ran);
+                co_return ran;
+            }
+            if (Pipeline* q = Find(tag); q == nullptr || q->cancelled) {
+                stopped = true;
+                break;
+            }
+            // Backpressure per row: sealed output must be shippable before
+            // the next row joins.
+            co_await sched::WaitUntil{&output_ok};
+        }
+        if (stopped) continue;  // the loop head routes teardown and cancel
+
+        // Grant-on-drain: this batch is consumed, the upstream may
+        // replace it.
+        StepCreditPayload credit{input_tag, 1};
+        std::vector<std::byte> bytes;
+        EncodePipelinePayload(credit, bytes);
+        if (Status s =
+                send_(upstream_core, sched::RingMessageKind::kStepCredit, std::move(bytes));
+            !s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("pipeline", "input credit could not be sent: " + s.message());
+        }
     }
 }
 
@@ -553,18 +597,47 @@ void RemoteStepServer::OnStepEof(std::span<const std::byte> payload) {
     }
 }
 
-// One batch encoder for both execution shapes: the equivalence test pins
-// the two byte-identical, and an encoder existing twice is exactly what
-// would let them drift.
-void RemoteStepServer::Seal(Pipeline& pipe, wire::RowBatchWriter& writer) {
+std::vector<std::byte> EncodeStepBatch(const PipelineTag& tag, std::uint32_t seq,
+                                       wire::RowBatchWriter& writer) {
     StepBatchHeader batch{};
-    batch.tag = pipe.tag;
-    batch.seq = pipe.seq++;
+    batch.tag = tag;
+    batch.seq = seq;
     batch.row_count = writer.row_count();
     std::vector<std::byte> rows_bytes = writer.Finish();
     std::vector<std::byte> out(sizeof(batch) + rows_bytes.size());
     std::memcpy(out.data(), &batch, sizeof(batch));
     std::memcpy(out.data() + sizeof(batch), rows_bytes.data(), rows_bytes.size());
+    return out;
+}
+
+std::function<bool()> RemoteStepServer::CreditGate(const PipelineTag& tag) {
+    return [this, tag] {
+        Pipeline* pipe = Find(tag);
+        return pipe == nullptr || pipe->cancelled || pipe->batches.empty() ||
+               pipe->credit.can_send();
+    };
+}
+
+void RemoteStepServer::SealAndDrain(const PipelineTag& tag, wire::RowBatchWriter& writer) {
+    Pipeline* pipe = Find(tag);
+    if (pipe == nullptr || pipe->cancelled) return;
+    Seal(*pipe, writer);
+    Drain(*pipe);
+}
+
+void RemoteStepServer::CancelUpstream(const PipelineTag& input_tag,
+                                      std::uint32_t upstream_core) {
+    StepEofPayload cancel{input_tag};
+    std::vector<std::byte> bytes;
+    EncodePipelinePayload(cancel, bytes);
+    (void)send_(upstream_core, sched::RingMessageKind::kStepCancel, std::move(bytes));
+}
+
+// One batch encoder for both execution shapes: the equivalence test pins
+// the two byte-identical, and an encoder existing twice is exactly what
+// would let them drift.
+void RemoteStepServer::Seal(Pipeline& pipe, wire::RowBatchWriter& writer) {
+    std::vector<std::byte> out = EncodeStepBatch(pipe.tag, pipe.seq++, writer);
     pipe.batches.push_back(std::move(out));
 }
 
@@ -593,25 +666,12 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> row(schema.columns.size());
 
-    // Seals and ships as far as credit allows - synchronously, so a
-    // credit already in hand costs no park at all.
-    auto seal = [&]() {
-        Pipeline* pipe = Find(tag);
-        if (pipe == nullptr || pipe->cancelled) return;
-        Seal(*pipe, writer);
-        Drain(*pipe);
-    };
-
     // The walk parks at a page boundary while a sealed batch waits on
     // credit; anything that ends the wait for good (teardown, cancel)
     // opens the gate so the sink can stop the walk. The predicate lives
     // in this frame, which outlives every poll that reads it (WaitUntil's
     // lifetime rule).
-    const std::function<bool()> gate = [this, tag] {
-        Pipeline* pipe = Find(tag);
-        return pipe == nullptr || pipe->cancelled || pipe->batches.empty() ||
-               pipe->credit.can_send();
-    };
+    const std::function<bool()> gate = CreditGate(tag);
 
     Status ran = co_await exec::ExecuteAsync(
         catalog_, store_, chain,
@@ -622,7 +682,9 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
                 row[pos] = frame.Get(exec::ColumnRef{0, 0, pos});
             }
             if (Status s = writer.AppendRow(schema, row); !s.ok()) return s;
-            if (writer.size_bytes() >= batch_target_ || writer.full()) seal();
+            if (writer.size_bytes() >= batch_target_ || writer.full()) {
+                SealAndDrain(tag, writer);
+            }
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
@@ -639,7 +701,7 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
         Erase(tag);
         co_return ran;
     }
-    if (writer.row_count() > 0) seal();
+    if (writer.row_count() > 0) SealAndDrain(tag, writer);
 
     // Production is over; what remains is the queue. Drain EOFs and
     // erases if everything has shipped, and otherwise the next credit's

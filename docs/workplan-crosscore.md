@@ -483,6 +483,19 @@ the core serve a message instead.
     the eligible class in the dispatcher - two steps, no
     aggregate/sort/limit/offset/hoisted/sub-chains/emit_in_key_order,
     inner kind probe/lookup/filter-scan, every stage's core serving.
+    Three debts the 4b-2 review priced, carried by name: **the
+    per-input-row runner cost** (each input row pays an ExecuteAsync
+    frame, a Bind and a frame Open before touching a tuple - the shape
+    95946c4 removed locally, reintroduced one level up; measure at
+    P4e's benchmark before building the per-batch runner handle, and
+    note the current shape is why RunConsumer needs no schema-copy
+    ceremony: no borrow survives a park). **FieldToValue's silent
+    zero-pad of a short field** (the row_count cross-check catches
+    whole-layout skew; a per-field width refusal belongs with 4b-3's
+    typed session decode, per invariant 13's rule). **`downstream_step`
+    is written and never read** - 4b-3 must either read it or delete
+    the field with a §3 amendment; routing today is entirely by the
+    upstream's tag.
     **4b-3** the session side (plan-time edge computation and ref
     normalization - upstream refs become (up=1, slot=0) with col_pos
     into the *forwarded* layout before encoding, so no stage guesses

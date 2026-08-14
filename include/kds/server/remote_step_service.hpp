@@ -100,6 +100,12 @@ std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
                                       std::span<const std::byte> descriptor,
                                       const StepOpenUpstream* upstream = nullptr);
 
+// One STEP_BATCH framing for every producer of one - the server's Seal,
+// the tests' hand-built inputs, and the session side to come. Leaves the
+// writer empty and reusable, as RowBatchWriter::Finish promises.
+std::vector<std::byte> EncodeStepBatch(const PipelineTag& tag, std::uint32_t seq,
+                                       wire::RowBatchWriter& writer);
+
 // Splits an envelope into its three parts. `descriptor` is a view into
 // `payload` - the caller keeps the payload alive across the decode of
 // what it points at, which every message handler already does.
@@ -145,9 +151,16 @@ public:
 
     // The input-edge handlers (P4d-4b-2): a batch or EOF whose tag names
     // a consuming pipeline's upstream edge queues there; anything else is
-    // §3's silent discard. Registered by the runtime beside the session
-    // client's handlers - both discard unmatched tags, so fanning one
-    // message to both consumers is safe by construction.
+    // §3's silent discard.
+    //
+    // **A scheduler holds exactly one handler per message kind** - the
+    // registration map assigns, it does not append - so these are safe to
+    // register only because `SessionStepClient`'s same-kind handlers live
+    // on a *different* scheduler: the session's is core 0's (expeditor.cpp)
+    // and this one's is a peer `CoreRuntime`'s. The day core 0 hosts a
+    // stage, or a peer hosts a session, the second registration wins and
+    // the first silently stops receiving - which is why that day needs a
+    // demultiplexer here, not a second RegisterMessageHandler call.
     void OnStepBatch(std::span<const std::byte> payload);
     void OnStepEof(std::span<const std::byte> payload);
 
@@ -212,6 +225,18 @@ private:
     void Drain(Pipeline& pipe);
     void Seal(Pipeline& pipe, wire::RowBatchWriter& writer);
     void SendError(const PipelineTag& tag, std::uint32_t session_core, const Status& status);
+
+    // The one credit gate and the one seal-then-ship, shared by producer
+    // and consumer: when a batch may ship is a protocol rule, and a rule
+    // with two spellings is a correctness bug with two homes.
+    std::function<bool()> CreditGate(const PipelineTag& tag);
+    void SealAndDrain(const PipelineTag& tag, wire::RowBatchWriter& writer);
+
+    // crosscore.md §7's upstream half: a stage that stops consuming -
+    // error or cancel - tells its producer to stop too, or that producer
+    // parks on its credit gate for the process's life. A duplicate cancel
+    // from the session later is harmless under §3's teardown rule.
+    void CancelUpstream(const PipelineTag& input_tag, std::uint32_t upstream_core);
 
     // OnStepOpen's consuming branch (P4d-4b-2): validates the edge and
     // the normalized references, builds the input/output schemas, opens

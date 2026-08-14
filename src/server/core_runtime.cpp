@@ -266,9 +266,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         return s;
     }
     // The input edges of consuming stages (P4d-4b-2): a peer had no
-    // kStepBatch/kStepEof consumer until pipelines grew middles - a peer
-    // session cannot open remote reads, so nothing else claims these
-    // kinds here.
+    // kStepBatch/kStepEof consumer until pipelines grew middles. Safe
+    // because these are a *peer's* scheduler and `SessionStepClient`'s
+    // same-kind handlers are core 0's - the map holds one handler per
+    // kind and assigns, so two claimants on one scheduler would be a
+    // silent drop, not a fan-out (remote_step_service.hpp).
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kStepBatch,
             [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
