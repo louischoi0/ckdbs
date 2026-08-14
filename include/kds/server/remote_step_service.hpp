@@ -67,6 +67,16 @@ struct StepOpenHead {
 };
 static_assert(sizeof(StepOpenHead) == 24);
 
+// One column of a consuming stage's output row (P4d-4b-2): either a
+// pass-through of an input-layout column or a column of the stage's own
+// relation, in output order. What a stage forwards is decided by the
+// session at plan time (fact 3) and told to the stage here - a stage
+// never guesses what its downstream needs.
+struct StepOutputColumn {
+    std::uint8_t from_upstream = 0;  // 1: `index` into the forwarded layout
+    std::uint16_t index = 0;         // 0: `index` into the local relation's schema
+};
+
 // The upstream edge of a chained open (workplan P4d-4b fact 1): a
 // consuming stage learns what its input batches carry and receives the
 // *enclosed* open it must forward to the upstream core once its own
@@ -79,6 +89,9 @@ struct StepOpenUpstream {
     // rather than (pos, type) pairs because decode and re-encode both
     // need the width/scale semantics only SysColumnRow carries.
     std::vector<catalog::SysColumnRow> forwarded;
+    // The output row this stage seals downstream: input pass-throughs
+    // and local columns, mixed in the order the downstream decodes.
+    std::vector<StepOutputColumn> output;
     // The upstream stage's complete STEP_OPEN payload, forwarded verbatim.
     std::vector<std::byte> enclosed_open;
 };
@@ -130,6 +143,14 @@ public:
     // rule, correctness rather than an error.
     void OnStepCredit(std::span<const std::byte> payload);
 
+    // The input-edge handlers (P4d-4b-2): a batch or EOF whose tag names
+    // a consuming pipeline's upstream edge queues there; anything else is
+    // §3's silent discard. Registered by the runtime beside the session
+    // client's handlers - both discard unmatched tags, so fanning one
+    // message to both consumers is safe by construction.
+    void OnStepBatch(std::span<const std::byte> payload);
+    void OnStepEof(std::span<const std::byte> payload);
+
     // The kStepCancel handler: drops the pipeline whole, sends nothing.
     void OnStepCancel(std::span<const std::byte> payload);
 
@@ -171,6 +192,19 @@ private:
         // loop's reference. While set, a re-entered Drain returns and the
         // outer frame's loop condition picks the new credit up itself.
         bool draining = false;
+
+        // The input edge, present only on a consuming stage (P4d-4b-2):
+        // where its rows come from, keyed by the *upstream* stage's tag.
+        // Batches queue here raw; the consumer coroutine decodes them,
+        // which keeps the message handler allocation-light and the
+        // decode where the input schema lives.
+        struct InputEdge {
+            PipelineTag input_tag{};
+            std::uint32_t upstream_core = 0;
+            std::deque<std::vector<std::byte>> input;
+            bool input_eof = false;
+        };
+        std::optional<InputEdge> consumer;
     };
 
     Pipeline* Find(const PipelineTag& tag);
@@ -179,12 +213,30 @@ private:
     void Seal(Pipeline& pipe, wire::RowBatchWriter& writer);
     void SendError(const PipelineTag& tag, std::uint32_t session_core, const Status& status);
 
+    // OnStepOpen's consuming branch (P4d-4b-2): validates the edge and
+    // the normalized references, builds the input/output schemas, opens
+    // the pipeline, submits RunConsumer, and forwards the enclosed open
+    // upstream - in exactly that order, because the chained-open contract
+    // is "state first, upstream last".
+    void OpenConsumingStage(const StepOpenHead& head, const StepOpenUpstream& up, exec::Step step,
+                            const catalog::Schema& schema);
+
     // The streaming producer (P4d-4a): one coroutine per open pipeline,
     // owning the writer and the executor run. It re-finds its Pipeline by
     // tag at every touch - the vector reallocates and CANCEL erases, so a
     // held pointer would be the dangling-reference bug the dispatcher's
     // remote read already solved the same way.
     sched::Coro RunProducer(PipelineTag tag, exec::StepChain chain);
+
+    // The consuming stage (P4d-4b-2): parks until input arrives, decodes
+    // each upstream row into a one-slot outer frame, runs the local step
+    // against it through the executor's parent-frame machinery (fact 4),
+    // seals the mixed output row downstream under the same credit
+    // machinery the producer uses, and grants the upstream one credit
+    // per consumed batch. Same re-find-by-tag discipline as RunProducer.
+    sched::Coro RunConsumer(PipelineTag tag, exec::StepChain chain,
+                            catalog::Schema input_schema, std::vector<StepOutputColumn> output,
+                            catalog::Schema output_schema);
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;

@@ -301,7 +301,9 @@ TEST_F(RemoteStepServiceTest, ATruncatedEnvelopeWithAWholeHeadAnswersStepError) 
     EXPECT_EQ(server_->open_pipelines(), 0u);
 }
 
-TEST_F(RemoteStepServiceTest, AConsumingStageOpenIsRefusedUntil4b2) {
+TEST_F(RemoteStepServiceTest, AConsumingStageOnAReactorlessServerIsRefused) {
+    // The fixture's default server has no SubmitFn, and a consuming stage
+    // parks between batches - there is nothing to park on.
     exec::Step step = ScanStep();
     auto descriptor = EncodeStepDescriptor(step);
     ASSERT_TRUE(descriptor.ok());
@@ -549,6 +551,196 @@ TEST_F(RemoteStepServiceTest, ARelationDroppedAcrossAParkAnswersAStepErrorNotAFr
             << "a walk that could not finish must not claim a clean end";
     }
     EXPECT_TRUE(errored);
+}
+
+// ---- The consuming stage (workplan P4d-4b-2) -----------------------------
+
+class ConsumingStageTest : public RemoteStepServiceTest {
+protected:
+    // A one-column input layout: the join key an upstream scan forwards.
+    catalog::SysColumnRow KeyColumn() {
+        auto type_row = boot_->catalog.ResolveTypeByName("int64");
+        EXPECT_TRUE(type_row.ok());
+        catalog::SysColumnRow col{};
+        col.pos = 0;
+        catalog::SetName(col.name, "t_id");
+        col.type_val = type_row.value().type_val;
+        col.len = type_row.value().len;
+        col.notnull = true;
+        return col;
+    }
+
+    // The local step: keep rows of `t` whose id equals the upstream key -
+    // a filtered walk, so the frame path is exercised without leaning on
+    // probe-on-heap semantics. References arrive normalized (fact 4).
+    exec::Step JoinStep() {
+        exec::Step step;
+        step.step_id = 1;
+        step.rel_oid = oid_;
+        step.kind = exec::AccessKind::kFilterScan;
+        exec::StepPredicate pred;
+        pred.lhs = exec::ColumnRef{0, 0, 0};  // t.id
+        pred.op = parser::CompareOp::kEq;
+        pred.rhs.kind = exec::OperandKind::kColumn;
+        pred.rhs.column = exec::ColumnRef{1, 0, 0};  // the forwarded key
+        step.residual.push_back(pred);
+        return step;
+    }
+
+    // Opens the consuming stage: output = (upstream key, local qty).
+    void OpenConsuming(std::uint64_t request_id = 7) {
+        auto descriptor = EncodeStepDescriptor(JoinStep());
+        ASSERT_TRUE(descriptor.ok()) << descriptor.status().message();
+
+        StepOpenHead upstream_head{};
+        upstream_head.tag = PipelineTag{request_id, /*session_core=*/0, /*step_id=*/0};
+        upstream_head.downstream_core = 1;
+        upstream_head.downstream_step = 1;
+        exec::Step upstream_step = ScanStep();
+        auto upstream_descriptor = EncodeStepDescriptor(upstream_step);
+        ASSERT_TRUE(upstream_descriptor.ok());
+
+        StepOpenUpstream up;
+        up.upstream_core = 0;
+        up.forwarded.push_back(KeyColumn());
+        up.output.push_back(StepOutputColumn{/*from_upstream=*/1, /*index=*/0});
+        up.output.push_back(StepOutputColumn{/*from_upstream=*/0, /*index=*/1});  // qty
+        up.enclosed_open = EncodeStepOpen(upstream_head, upstream_descriptor.value());
+
+        StepOpenHead head{};
+        head.tag = PipelineTag{request_id, /*session_core=*/0, /*step_id=*/1};
+        head.downstream_core = 0;
+        server_->OnStepOpen(HeaderFromSession(), EncodeStepOpen(head, descriptor.value(), &up));
+    }
+
+    // One input batch carrying the given keys, under the upstream's tag.
+    std::vector<std::byte> InputBatch(std::vector<std::int64_t> keys, std::uint32_t seq,
+                                      std::uint64_t request_id = 7) {
+        catalog::Schema input_schema;
+        input_schema.columns.push_back(KeyColumn());
+        wire::RowBatchWriter writer;
+        for (std::int64_t key : keys) {
+            parser::AstValue v;
+            v.type = parser::ValueType::kInt;
+            v.int_val = key;
+            Status s = writer.AppendRow(input_schema, std::vector<parser::AstValue>{v});
+            EXPECT_TRUE(s.ok()) << s.message();
+        }
+        StepBatchHeader batch{};
+        batch.tag = PipelineTag{request_id, 0, 0};
+        batch.seq = seq;
+        batch.row_count = writer.row_count();
+        std::vector<std::byte> rows_bytes = writer.Finish();
+        std::vector<std::byte> out(sizeof(batch) + rows_bytes.size());
+        std::memcpy(out.data(), &batch, sizeof(batch));
+        std::memcpy(out.data() + sizeof(batch), rows_bytes.data(), rows_bytes.size());
+        return out;
+    }
+
+    void SendInputEof(std::uint64_t request_id = 7) {
+        StepEofPayload eof{PipelineTag{request_id, 0, 0}};
+        std::vector<std::byte> bytes;
+        EncodePipelinePayload(eof, bytes);
+        server_->OnStepEof(bytes);
+    }
+};
+
+TEST_F(ConsumingStageTest, AConsumingStageForwardsItsUpstreamOpenThenJoinsPerInputRow) {
+    UseStreamingServer();
+    OpenConsuming();
+
+    // The chained open: exactly one message so far, the enclosed upstream
+    // open forwarded to its core - after the pipeline state exists, which
+    // open_pipelines() witnesses.
+    ASSERT_EQ(sent_.size(), 1u);
+    EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepOpen);
+    EXPECT_EQ(sent_.front().dst, 0u);
+    EXPECT_EQ(server_->open_pipelines(), 1u);
+    auto forwarded = DecodeStepOpenEnvelope(sent_.front().payload);
+    ASSERT_TRUE(forwarded.ok());
+    EXPECT_EQ(forwarded.value().head.tag, (PipelineTag{7, 0, 0}));
+    EXPECT_EQ(forwarded.value().head.downstream_step, 1u);
+
+    // Nothing to do until input arrives: the consumer parks.
+    Pump();
+    ASSERT_EQ(tasks_.size(), 1u);
+    EXPECT_EQ(sent_.size(), 1u);
+
+    // Three keys in, three joined rows out (id, qty of t): the sink read
+    // the upstream value through up=1 and the local row through slot 0.
+    server_->OnStepBatch(InputBatch({2, 5, 7}, /*seq=*/0));
+    Pump();
+
+    std::vector<std::pair<std::int64_t, std::int64_t>> rows_out;
+    bool credited_upstream = false;
+    for (std::size_t i = 1; i < sent_.size(); ++i) {
+        if (sent_[i].kind == sched::RingMessageKind::kStepCredit) {
+            credited_upstream = true;
+            continue;
+        }
+        ASSERT_EQ(sent_[i].kind, sched::RingMessageKind::kStepBatch);
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(sent_[i].payload, rows);
+        ASSERT_TRUE(header.ok());
+        auto decoded = wire::DecodeRowBatch(rows, /*field_count=*/2);
+        ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+        for (const auto& row : decoded.value()) {
+            auto key = wire::DecodeInt(row[0].bytes);
+            auto qty = wire::DecodeInt(row[1].bytes);
+            ASSERT_TRUE(key.ok());
+            ASSERT_TRUE(qty.ok());
+            rows_out.emplace_back(key.value(), qty.value());
+        }
+    }
+    EXPECT_TRUE(credited_upstream) << "grant-on-drain: one credit per consumed input batch";
+    EXPECT_EQ(rows_out, (std::vector<std::pair<std::int64_t, std::int64_t>>{
+                            {2, 10}, {5, 40}, {7, 60}}));
+
+    // The upstream's EOF ends the stage: final drain, EOF downstream,
+    // teardown complete.
+    SendInputEof();
+    Pump();
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+    ASSERT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
+}
+
+TEST_F(ConsumingStageTest, ACancelReachesAConsumerParkedOnItsInput) {
+    UseStreamingServer();
+    OpenConsuming();
+    Pump();
+    ASSERT_EQ(server_->open_pipelines(), 1u);
+
+    StepEofPayload cancel{PipelineTag{7, 0, 1}};
+    std::vector<std::byte> bytes;
+    EncodePipelinePayload(cancel, bytes);
+    server_->OnStepCancel(bytes);
+    Pump();
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+    for (const Sent& s : sent_) {
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
+            << "a cancelled stage must never claim a clean end";
+    }
+}
+
+TEST_F(ConsumingStageTest, AnOutputSpecThatForwardsNothingIsRefused) {
+    UseStreamingServer();
+    exec::Step step = JoinStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+    StepOpenHead head{};
+    head.tag = PipelineTag{7, 0, 1};
+    StepOpenUpstream up;
+    up.upstream_core = 0;
+    up.forwarded.push_back(KeyColumn());
+    up.enclosed_open.resize(sizeof(StepOpenHead) + 1);  // decodable head, no output spec
+
+    server_->OnStepOpen(HeaderFromSession(), EncodeStepOpen(head, descriptor.value(), &up));
+    ASSERT_EQ(sent_.size(), 1u);
+    EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
 }
 
 }  // namespace

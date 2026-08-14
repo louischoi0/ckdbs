@@ -216,4 +216,12 @@ std::string_view DecodeText(std::span<const std::byte> bytes);
 // 8-byte decimal.
 StatusOr<Int128> DecodeDecimalWide(std::span<const std::byte> bytes);
 
+// A KWP-decoded field back into a value, by the schema column's type: the
+// inverse of RowBatchWriter's per-type encoding, read back through the
+// same width and scale facts the encoder used. Two consumers - the
+// session rendering a remote reply (workplan P4c) and a consuming
+// pipeline stage filling its upstream frame slot (P4d-4b) - and one
+// inverse, for the reason this file holds one encoder.
+parser::AstValue FieldToValue(const catalog::SysColumnRow& col, const DecodedField& field);
+
 }  // namespace kds::wire

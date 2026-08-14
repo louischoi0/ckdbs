@@ -1,6 +1,7 @@
 #include "kds/server/remote_step_service.hpp"
 
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -40,7 +41,7 @@ std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
     std::size_t total = sizeof(head) + 1 + descriptor.size();
     if (upstream != nullptr) {
         total += 4 + 4 + upstream->forwarded.size() * sizeof(catalog::SysColumnRow) + 4 +
-                 upstream->enclosed_open.size();
+                 upstream->output.size() * 5 + 4 + upstream->enclosed_open.size();
     }
     out.reserve(total);
     out.resize(sizeof(head));
@@ -53,6 +54,11 @@ std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
         for (const catalog::SysColumnRow& col : upstream->forwarded) {
             const auto* bytes = reinterpret_cast<const std::byte*>(&col);
             out.insert(out.end(), bytes, bytes + sizeof(col));
+        }
+        PutU32(out, static_cast<std::uint32_t>(upstream->output.size()));
+        for (const StepOutputColumn& col : upstream->output) {
+            out.push_back(std::byte{col.from_upstream});
+            PutU32(out, col.index);
         }
         PutU32(out, static_cast<std::uint32_t>(upstream->enclosed_open.size()));
         out.insert(out.end(), upstream->enclosed_open.begin(), upstream->enclosed_open.end());
@@ -103,6 +109,34 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
             std::memcpy(up.forwarded.data(), rest.data(), layout_bytes);
         }
         rest = rest.subspan(layout_bytes);
+
+        auto out_count = TakeU32(rest);
+        if (!out_count.ok()) return out_count.status();
+        up.output.reserve(out_count.value());
+        for (std::uint32_t i = 0; i < out_count.value(); ++i) {
+            if (rest.empty()) {
+                return Status::InvalidArgument(
+                    "STEP_OPEN envelope truncated inside its output spec");
+            }
+            StepOutputColumn col;
+            const std::uint8_t from = std::uint8_t(rest.front());
+            rest = rest.subspan(1);
+            if (from > 1) {
+                return Status::InvalidArgument("STEP_OPEN output column carries source flag " +
+                                               std::to_string(from) +
+                                               ", which no encoder writes");
+            }
+            col.from_upstream = from;
+            auto idx = TakeU32(rest);
+            if (!idx.ok()) return idx.status();
+            if (idx.value() > std::numeric_limits<std::uint16_t>::max()) {
+                return Status::InvalidArgument("STEP_OPEN output column index " +
+                                               std::to_string(idx.value()) +
+                                               " does not fit a column position");
+            }
+            col.index = static_cast<std::uint16_t>(idx.value());
+            up.output.push_back(col);
+        }
 
         auto enclosed = TakeU32(rest);
         if (!enclosed.ok()) return enclosed.status();
@@ -164,41 +198,15 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
     }
     const StepOpenParts& env = parts.value();
     const StepOpenHead head = env.head;
-    const std::uint32_t session = header.src_core;
-
-    if (env.upstream.has_value()) {
-        // The envelope can say it (P4d-4b fact 2); the consuming stage
-        // that acts on it is 4b-2. Refused, never half-run.
-        SendError(head.tag, session,
-                  Status::Unsupported("a consuming stage (an open with an upstream edge) is "
-                                      "P4d-4b-2; this core can serve leaf stages only"));
-        return;
-    }
+    // The session's core comes off the tag, not the message header: since
+    // the chained-open amendment (crosscore.md §2) an open's sender may be
+    // the downstream *stage*, and an error must still reach the session.
+    const std::uint32_t session = head.tag.session_core;
 
     auto step = DecodeStepDescriptor(env.descriptor);
     if (!step.ok()) {
         SendError(head.tag, session, step.status());
         return;
-    }
-
-    // The single-step class: every reference resolves inside this step,
-    // and a key is a literal - "produced by an earlier step" has no
-    // earlier step here. Multi-step wiring is P4d's.
-    if (step.value().key.has_value() &&
-        step.value().key->kind == exec::OperandKind::kColumn) {
-        SendError(head.tag, session,
-                  Status::Unsupported("a probe keyed by another step's column cannot run as a "
-                                      "single remote step; multi-step wiring is P4d"));
-        return;
-    }
-    for (const exec::StepPredicate& pred : step.value().residual) {
-        if (pred.lhs.up != 0 || (pred.rhs.kind == exec::OperandKind::kColumn &&
-                                 pred.rhs.column.up != 0)) {
-            SendError(head.tag, session,
-                      Status::Unsupported("a residual referencing an enclosing chain cannot "
-                                          "run as a single remote step"));
-            return;
-        }
     }
 
     auto access = catalog_.InitTableAccess(step.value().rel_oid);
@@ -207,6 +215,32 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
         return;
     }
     const catalog::Schema& schema = access.value()->schema;
+
+    if (env.upstream.has_value()) {
+        OpenConsumingStage(head, *env.upstream, std::move(step.value()), schema);
+        return;
+    }
+
+    // The leaf class: every reference resolves inside this step, and a
+    // key is a literal - "produced by an earlier step" has no earlier
+    // step on a leaf. A consuming stage's upstream references took the
+    // branch above.
+    if (step.value().key.has_value() &&
+        step.value().key->kind == exec::OperandKind::kColumn) {
+        SendError(head.tag, session,
+                  Status::Unsupported("a probe keyed by another step's column cannot run as a "
+                                      "leaf stage; it needs an upstream edge (P4d-4b)"));
+        return;
+    }
+    for (const exec::StepPredicate& pred : step.value().residual) {
+        if (pred.lhs.up != 0 || (pred.rhs.kind == exec::OperandKind::kColumn &&
+                                 pred.rhs.column.up != 0)) {
+            SendError(head.tag, session,
+                      Status::Unsupported("a residual referencing an enclosing chain cannot "
+                                          "run as a leaf stage"));
+            return;
+        }
+    }
 
     // A chain of one: the shipped step becomes slot 0, so its compiled
     // references - written against its slot in the session's chain - are
@@ -260,6 +294,263 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
 
     pipelines_.push_back(std::move(pipe));
     Drain(pipelines_.back());
+}
+
+void RemoteStepServer::OpenConsumingStage(const StepOpenHead& head, const StepOpenUpstream& up,
+                                          exec::Step step, const catalog::Schema& schema) {
+    const std::uint32_t session = head.tag.session_core;
+    if (!submit_) {
+        SendError(head.tag, session,
+                  Status::Unsupported("a consuming stage parks between batches and needs a "
+                                      "reactor; this server is reactorless"));
+        return;
+    }
+    if (up.enclosed_open.size() < sizeof(StepOpenHead) + 1) {
+        SendError(head.tag, session,
+                  Status::InvalidArgument(
+                      "a consuming stage's enclosed upstream open has no head"));
+        return;
+    }
+    if (up.output.empty()) {
+        SendError(head.tag, session,
+                  Status::InvalidArgument(
+                      "a consuming stage that forwards nothing serves nobody"));
+        return;
+    }
+    for (const StepOutputColumn& col : up.output) {
+        const std::size_t bound =
+            col.from_upstream != 0 ? up.forwarded.size() : schema.columns.size();
+        if (col.index >= bound) {
+            SendError(head.tag, session,
+                      Status::InvalidArgument(
+                          "a consuming stage's output column indexes past its " +
+                          std::string(col.from_upstream != 0 ? "input layout" : "relation")));
+            return;
+        }
+    }
+
+    // The stage's references arrive normalized by the session (fact 4 /
+    // 4b-3): its own columns at (up=0, slot=0), the upstream row's at
+    // (up=1, slot=0) with col_pos into the *forwarded* layout. Anything
+    // else is a malformed plan - refused, never guessed at.
+    auto ref_ok = [&](const exec::ColumnRef& ref, bool is_lhs) {
+        if (ref.up == 0) return ref.rel_slot == 0 && ref.col_pos < schema.columns.size();
+        if (is_lhs) return false;  // a residual's lhs is always this relation's
+        return ref.up == 1 && ref.rel_slot == 0 && ref.col_pos < up.forwarded.size();
+    };
+    bool refs_ok = true;
+    if (step.key.has_value() && step.key->kind == exec::OperandKind::kColumn) {
+        refs_ok = ref_ok(step.key->column, /*is_lhs=*/false);
+    }
+    for (const exec::StepPredicate& pred : step.residual) {
+        refs_ok = refs_ok && ref_ok(pred.lhs, /*is_lhs=*/true);
+        if (pred.rhs.kind == exec::OperandKind::kColumn) {
+            refs_ok = refs_ok && ref_ok(pred.rhs.column, /*is_lhs=*/false);
+        }
+    }
+    if (!refs_ok) {
+        SendError(head.tag, session,
+                  Status::InvalidArgument(
+                      "a consuming stage's references must name its own slot or, at up=1, "
+                      "the forwarded layout; the plan was not normalized"));
+        return;
+    }
+
+    exec::StepChain chain;
+    chain.steps.push_back(std::move(step));
+
+    catalog::Schema input_schema;
+    input_schema.columns = up.forwarded;
+    catalog::Schema output_schema;
+    output_schema.columns.reserve(up.output.size());
+    for (const StepOutputColumn& col : up.output) {
+        output_schema.columns.push_back(col.from_upstream != 0 ? up.forwarded[col.index]
+                                                               : schema.columns[col.index]);
+    }
+
+    StepOpenHead upstream_head{};
+    std::memcpy(&upstream_head, up.enclosed_open.data(), sizeof(upstream_head));
+
+    Pipeline pipe;
+    pipe.tag = head.tag;
+    pipe.downstream = head.downstream_core;
+    pipe.producing = true;
+    Pipeline::InputEdge edge;
+    edge.input_tag = upstream_head.tag;
+    edge.upstream_core = up.upstream_core;
+    pipe.consumer.emplace(std::move(edge));
+    pipelines_.push_back(std::move(pipe));
+
+    submit_(sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        RunConsumer(head.tag, std::move(chain), std::move(input_schema), up.output,
+                    std::move(output_schema))));
+
+    // The chained open, last (fact 1): this stage's state exists, so the
+    // upstream may start the moment it opens. A forward that cannot be
+    // sent kills the stage now rather than hanging the session on
+    // silence.
+    std::vector<std::byte> enclosed = up.enclosed_open;
+    if (Status s =
+            send_(up.upstream_core, sched::RingMessageKind::kStepOpen, std::move(enclosed));
+        !s.ok()) {
+        SendError(head.tag, session, s);
+        if (Pipeline* p = Find(head.tag); p != nullptr) p->cancelled = true;
+    }
+}
+
+sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain,
+                                          catalog::Schema input_schema,
+                                          std::vector<StepOutputColumn> output,
+                                          catalog::Schema output_schema) {
+    // The outer frame (fact 4): one slot, the upstream row, refreshed per
+    // input row. The inner chain's (up=1) references read through it
+    // exactly as a correlated sub-chain reads its outer row.
+    exec::ChainFrame outer;
+    const std::vector<const catalog::Schema*> outer_schemas{&input_schema};
+    outer.Open(outer_schemas, nullptr);
+
+    wire::RowBatchWriter writer;
+    std::vector<parser::AstValue> out_row(output_schema.columns.size());
+
+    auto seal = [&]() {
+        Pipeline* pipe = Find(tag);
+        if (pipe == nullptr || pipe->cancelled) return;
+        Seal(*pipe, writer);
+        Drain(*pipe);
+    };
+
+    // Parks between input batches; anything that ends the wait for good
+    // (teardown, cancel, the upstream's EOF) opens it too.
+    const std::function<bool()> actionable = [this, tag] {
+        Pipeline* pipe = Find(tag);
+        return pipe == nullptr || pipe->cancelled || !pipe->consumer.has_value() ||
+               !pipe->consumer->input.empty() || pipe->consumer->input_eof;
+    };
+    // Backpressure between input batches: the output queue drains before
+    // the next input is taken, which is what bounds this stage's
+    // buffering at one input batch's seals plus the credit ceiling.
+    const std::function<bool()> output_ok = [this, tag] {
+        Pipeline* pipe = Find(tag);
+        return pipe == nullptr || pipe->cancelled || pipe->batches.empty() ||
+               pipe->credit.can_send();
+    };
+
+    for (;;) {
+        co_await sched::WaitUntil{&actionable};
+        Pipeline* pipe = Find(tag);
+        if (pipe == nullptr) co_return Status::OK();  // torn down; nothing to say
+        if (pipe->cancelled || !pipe->consumer.has_value()) {
+            Erase(tag);
+            co_return Status::OK();
+        }
+
+        if (!pipe->consumer->input.empty()) {
+            const std::vector<std::byte> batch = std::move(pipe->consumer->input.front());
+            pipe->consumer->input.pop_front();
+            const PipelineTag input_tag = pipe->consumer->input_tag;
+            const std::uint32_t upstream_core = pipe->consumer->upstream_core;
+
+            std::span<const std::byte> rows_bytes;
+            auto batch_header = DecodeStepBatchHeader(batch, rows_bytes);
+            Status failed = batch_header.ok() ? Status::OK() : batch_header.status();
+            if (failed.ok()) {
+                auto rows = wire::DecodeRowBatch(rows_bytes, input_schema.columns.size());
+                if (!rows.ok()) failed = rows.status();
+                if (failed.ok()) {
+                    for (const auto& in_row : rows.value()) {
+                        auto slots = outer.SlotsFor(0);
+                        for (std::size_t i = 0; i < input_schema.columns.size(); ++i) {
+                            slots[i] = wire::FieldToValue(input_schema.columns[i], in_row[i]);
+                        }
+                        failed = exec::Execute(
+                            catalog_, store_, chain,
+                            [&](const exec::ChainFrame& frame)
+                                -> StatusOr<storage::VisitControl> {
+                                Pipeline* q = Find(tag);
+                                if (q == nullptr || q->cancelled) {
+                                    return storage::VisitControl::kStop;
+                                }
+                                for (std::size_t o = 0; o < output.size(); ++o) {
+                                    out_row[o] = frame.Get(exec::ColumnRef{
+                                        static_cast<std::uint16_t>(
+                                            output[o].from_upstream != 0 ? 1 : 0),
+                                        0, output[o].index});
+                                }
+                                if (Status s = writer.AppendRow(output_schema, out_row);
+                                    !s.ok()) {
+                                    return s;
+                                }
+                                if (writer.size_bytes() >= batch_target_ || writer.full()) {
+                                    seal();
+                                }
+                                return storage::VisitControl::kContinue;
+                            },
+                            /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr,
+                            /*replay=*/nullptr, /*cabins=*/nullptr, /*snapshot=*/nullptr,
+                            /*indexes=*/true, /*parent=*/&outer);
+                        if (!failed.ok()) break;
+                        if (Pipeline* q = Find(tag); q == nullptr || q->cancelled) break;
+                    }
+                }
+            }
+            if (!failed.ok()) {
+                SendError(tag, tag.session_core, failed);
+                Erase(tag);
+                co_return failed;
+            }
+            // Grant-on-drain: this batch is consumed, the upstream may
+            // replace it.
+            StepCreditPayload credit{input_tag, 1};
+            std::vector<std::byte> bytes;
+            EncodePipelinePayload(credit, bytes);
+            if (Status s = send_(upstream_core, sched::RingMessageKind::kStepCredit,
+                                 std::move(bytes));
+                !s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pipeline", "input credit could not be sent: " + s.message());
+            }
+            co_await sched::WaitUntil{&output_ok};
+            continue;
+        }
+
+        // Input EOF with the queue empty: this stage's own end. The final
+        // seal, then EOF downstream rides the producing=false drain.
+        if (writer.row_count() > 0) seal();
+        if (Pipeline* done = Find(tag); done != nullptr) {
+            if (done->cancelled) {
+                Erase(tag);
+                co_return Status::OK();
+            }
+            done->producing = false;
+            Drain(*done);
+        }
+        co_return Status::OK();
+    }
+}
+
+void RemoteStepServer::OnStepBatch(std::span<const std::byte> payload) {
+    std::span<const std::byte> rows;
+    auto batch_header = DecodeStepBatchHeader(payload, rows);
+    if (!batch_header.ok()) return;  // malformed: dropped, as the session client drops
+    for (Pipeline& pipe : pipelines_) {
+        if (pipe.consumer.has_value() &&
+            pipe.consumer->input_tag == batch_header.value().tag) {
+            pipe.consumer->input.emplace_back(payload.begin(), payload.end());
+            return;
+        }
+    }
+    // No consuming pipeline wants it: §3's silent discard.
+}
+
+void RemoteStepServer::OnStepEof(std::span<const std::byte> payload) {
+    auto eof = DecodePipelinePayload<StepEofPayload>(payload);
+    if (!eof.ok()) return;
+    for (Pipeline& pipe : pipelines_) {
+        if (pipe.consumer.has_value() && pipe.consumer->input_tag == eof.value().tag) {
+            pipe.consumer->input_eof = true;
+            return;
+        }
+    }
 }
 
 // One batch encoder for both execution shapes: the equivalence test pins

@@ -266,7 +266,8 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
-               const txn::Snapshot* snapshot = nullptr, bool indexes = true);
+               const txn::Snapshot* snapshot = nullptr, bool indexes = true,
+               const ChainFrame* parent = nullptr);
 
 // The suspendable form (workplan-crosscore.md P4d-4a): identical
 // semantics and identical arguments, returned as a `sched::Coro` the
@@ -286,12 +287,20 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
 // through the synchronous gated driver: a wait beneath a walk visitor is
 // a hard error, not a park, until P4d-4c moves that descent to the page
 // boundary.
+// `parent`, on either entry, is an outer frame the chain's references may
+// reach through `up` links - the consuming pipeline stage's shape
+// (workplan-crosscore.md P4d-4b fact 4): the caller fills a one-slot
+// frame from an upstream batch row and runs a local step against it,
+// exactly as a correlated sub-chain reads its outer row. The frame must
+// outlive the execution; the chain runs at nesting depth 1, so the
+// sub-chain depth guard still counts honestly.
 sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats = nullptr,
                          const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                          const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
                          const txn::Snapshot* snapshot = nullptr, bool indexes = true,
-                         const std::function<bool()>* resume_gate = nullptr);
+                         const std::function<bool()>* resume_gate = nullptr,
+                         const ChainFrame* parent = nullptr);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row.

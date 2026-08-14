@@ -1797,7 +1797,7 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         const std::function<bool()>* resume_gate) {
+                         const std::function<bool()>* resume_gate, const ChainFrame* parent) {
     if (chain.steps.empty()) {
         co_return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -1822,8 +1822,8 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
     // having to remember to reset it.
     Budget spend(budget.limit());
 
-    ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
-                       trail, replay, cabins, snapshot, indexes, resume_gate);
+    ChainRunner runner(catalog, store, sink, /*depth=*/parent != nullptr ? 1u : 0u, parent,
+                       counters, spend, trail, replay, cabins, snapshot, indexes, resume_gate);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by
@@ -1855,7 +1855,7 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot, bool indexes) {
+               const txn::Snapshot* snapshot, bool indexes, const ChainFrame* parent) {
     // The synchronous wrapper (P4d-2's staging): with no resume gate
     // nothing beneath can park, so the gated driver completes the
     // coroutine inline and this is bit-identical to the pre-coroutine
@@ -1863,7 +1863,7 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
     // gate to ExecuteAsync and polls the Coro instead.
     return RunToCompletionAtWalkBoundary(ExecuteAsync(catalog, store, chain, sink, stats, budget,
                                                       trail, replay, cabins, snapshot, indexes,
-                                                      /*resume_gate=*/nullptr));
+                                                      /*resume_gate=*/nullptr, parent));
 }
 
 }  // namespace kds::exec

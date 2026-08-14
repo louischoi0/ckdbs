@@ -439,10 +439,33 @@ the core serve a message instead.
     the head (zero, the historical value, still means the session's own
     read), the optional upstream section - core, forwarded layout as
     full `SysColumnRow`s (KWP fields are views, not self-describing),
-    the enclosed open - and `DecodeStepOpenEnvelope`; an open carrying
-    an upstream edge is refused by name until 4b-2. **4b-2** the
-    consuming stage (upstream-edge pipelines, per-row execution through
-    the parent frame, forwarding, grant-on-drain to the upstream);
+    the enclosed open - and `DecodeStepOpenEnvelope`.
+    **4b-2 built 2026-08-14** - the consuming stage. The envelope's
+    upstream section gained the **output spec** (`StepOutputColumn`: a
+    pass-through of an input-layout column or a local column, in the
+    order the downstream decodes - a stage never guesses what its
+    downstream needs). `OpenConsumingStage` validates the normalized
+    references (own columns at up=0/slot=0, upstream at up=1/slot=0
+    with col_pos into the forwarded layout), opens the pipeline,
+    submits `RunConsumer`, and forwards the enclosed open **last** -
+    state first, upstream last, the chained-open contract in code.
+    `RunConsumer` parks between input batches, fills a one-slot outer
+    `ChainFrame` per upstream row, runs the local step through the
+    executor's new `parent` frame parameter (fact 4 exactly; both
+    entries grew it, nesting depth 1), seals mixed output rows through
+    the same Seal/Drain machinery the producer uses, and grants the
+    upstream one credit per consumed batch - buffering bounded by one
+    input batch's seals plus the credit ceiling. `wire::FieldToValue`
+    (hoisted from the dispatcher: one inverse beside the one encoder)
+    turns input fields into frame values; peers register
+    kStepBatch/kStepEof to the step server; errors route to
+    `tag.session_core`, never the message source, because a chained
+    open's sender is a stage and errors belong to the session. Proven
+    by `ConsumingStageTest`: the chained forward precedes any batch, a
+    parked consumer, a three-key join emitting (key, qty) rows
+    byte-decodable downstream, grant-on-drain, EOF riding the
+    producing=false drain, cancel reaching the park, and the
+    forwards-nothing refusal - ASan-clean beside the sim suites.
     **4b-3** the session side (plan-time edge computation and ref
     normalization - upstream refs become (up=1, slot=0) with col_pos
     into the *forwarded* layout before encoding, so no stage guesses

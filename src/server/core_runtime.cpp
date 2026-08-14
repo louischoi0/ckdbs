@@ -265,6 +265,26 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         !s.ok()) {
         return s;
     }
+    // The input edges of consuming stages (P4d-4b-2): a peer had no
+    // kStepBatch/kStepEof consumer until pipelines grew middles - a peer
+    // session cannot open remote reads, so nothing else claims these
+    // kinds here.
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kStepBatch,
+            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                remote_steps_->OnStepBatch(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kStepEof,
+            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                remote_steps_->OnStepEof(payload);
+            });
+        !s.ok()) {
+        return s;
+    }
 
     // The grant side of the page-id lease (workplan P5). Registered here
     // rather than in Run() because a grant can arrive before this core has
