@@ -466,6 +466,23 @@ the core serve a message instead.
     byte-decodable downstream, grant-on-drain, EOF riding the
     producing=false drain, cancel reaching the park, and the
     forwards-nothing refusal - ASan-clean beside the sim suites.
+    **4b-3's recipe, surveyed 2026-08-14** - everything falls out of
+    `StepChain`'s existing fields: the forwarded layout of edge 0→1 is
+    the unique step-0 columns among step 1's key/residual references and
+    the projection's rel_slot==0 refs; stage 1's output spec is the
+    projection in order (rel_slot==0 → from_upstream at the forwarded
+    index, rel_slot==1 → local col_pos); stage 0's output spec is the
+    forwarded layout as local entries - which requires the **leaf** to
+    honor an output spec too, so the envelope's output section moves out
+    of the upstream half to stand alone (absent = whole row, the P4c
+    shape, so nothing existing changes); the session's reply decode uses
+    the planned output rows plus `column_names`/`projection_types` for
+    rendering. Also in 4b-3: the expeditor grows its own
+    RemoteStepServer (core 0 serves stages like any core; its existing
+    session-client handlers fan batches to both consumers by tag), and
+    the eligible class in the dispatcher - two steps, no
+    aggregate/sort/limit/offset/hoisted/sub-chains/emit_in_key_order,
+    inner kind probe/lookup/filter-scan, every stage's core serving.
     **4b-3** the session side (plan-time edge computation and ref
     normalization - upstream refs become (up=1, slot=0) with col_pos
     into the *forwarded* layout before encoding, so no stage guesses
