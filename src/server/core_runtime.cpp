@@ -356,6 +356,10 @@ void CoreRuntime::Run() {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor running");
     }
     scheduler_->Run();
+    // The audit's store pointer must not outlive the store: this thread
+    // may outlive the runtime, and a coroutine polled on it afterwards
+    // would hand the (debug-only) audit a freed store.
+    exec::UninstallSuspendAudit();
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) + " reactor stopped");
     }

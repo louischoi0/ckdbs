@@ -74,10 +74,11 @@
 namespace kds::heap {
 
 // Bound on how many pages a walk will follow before declaring the chain
-// corrupt. A cycle in the links would otherwise be an infinite loop inside
-// a request. 2^20 pages is 8 GiB of heap for one relation - far past
-// anything this engine handles today, and cheap to check once per hop.
-inline constexpr std::uint32_t kMaxChainPages = 1u << 20;
+// corrupt. The rule and the guard live in storage/visit.hpp
+// (kMaxPageWalkLength / CheckPageWalkBudget) - the heap chain named it
+// first, but every next-page walk owes the same check. The alias keeps
+// this header's public spelling.
+inline constexpr std::uint32_t kMaxChainPages = storage::kMaxPageWalkLength;
 
 struct ChainInsertResult {
     PageId page_id;          // where the tuple actually landed
@@ -216,9 +217,12 @@ Status ChainVisit(
 // workplan-crosscore.md P4d-3): the page's pin is held only inside this
 // call, so the gap between two calls - no pin, no span - is a legal
 // suspension point, which a whole-chain walk driving a visitor can never
-// offer. The caller owns the cycle guard the loop here applied
-// (kMaxChainPages); ChainVisit remains the whole-chain form and applies
-// its own.
+// offer. **That promise holds for the no-fetcher forms only**: a
+// ScanFetcher's frame lives until its next Fetch (page_store.hpp), so
+// with one the suspension point is the fetcher's, not this call's - a
+// caller that suspends between pages must not pass one. The caller owns
+// the cycle guard the loop here applied (storage::CheckPageWalkBudget);
+// ChainVisit remains the whole-chain form and applies its own.
 StatusOr<PageId> ChainVisitOnePage(
     storage::PageStore& store, PageId page_id, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, PageView&, std::uint16_t)>& fn,

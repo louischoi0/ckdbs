@@ -1415,6 +1415,9 @@ Status Expeditor::Serve() {
 
     logger_->Info("expeditor", "listening on 127.0.0.1:" + std::to_string(config_.port));
     scheduler.Run();
+    // Same teardown rule as CoreRuntime::Run: the audit reads store_, and
+    // the pointer must go before the store does.
+    exec::UninstallSuspendAudit();
     logger_->Info("expeditor", "stopping");
 
     // Every peer is told to stop, then joined. The message is how a core is

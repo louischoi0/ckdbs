@@ -28,21 +28,12 @@ StatusOr<std::uint64_t> PayloadKeystoneId(std::span<const std::byte> payload) {
     return Keystone::Decode(LoadLe64(payload.data())).id;
 }
 
-// One hop of a chain walk, with the cycle guard applied. `steps` is the
-// number of hops already taken.
-Status CheckHopBudget(std::uint32_t steps, PageId head) {
-    if (steps < kMaxChainPages) return Status::OK();
-    return Status::Corruption("heap chain from page " + std::to_string(head) + " exceeds " +
-                              std::to_string(kMaxChainPages) +
-                              " pages; the next_page_id links are cyclic or corrupt");
-}
-
 }  // namespace
 
 StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
-        if (Status s = CheckHopBudget(steps, head); !s.ok()) return s;
+        if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
 
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
@@ -56,7 +47,7 @@ StatusOr<PageId> ChainTail(storage::PageStore& store, PageId head) {
 StatusOr<std::uint32_t> ChainLength(storage::PageStore& store, PageId head) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
-        if (Status s = CheckHopBudget(steps, head); !s.ok()) return s;
+        if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
 
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
@@ -275,7 +266,7 @@ Status ChainVisit(
     storage::ScanFetcher* fetcher) {
     PageId current = head;
     for (std::uint32_t steps = 0;; ++steps) {
-        if (Status s = CheckHopBudget(steps, head); !s.ok()) return s;
+        if (Status s = storage::CheckPageWalkBudget(steps, head, "heap chain"); !s.ok()) return s;
         // A bad `current` (an invalid head included) fails inside the
         // fetch, exactly as the inlined loop did.
         auto next = ChainVisitOnePage(store, current, access, fn, fetcher);

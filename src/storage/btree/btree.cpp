@@ -106,25 +106,6 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
     }
 }
 
-// Leftmost leaf, for an ordered scan's starting point.
-StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root) {
-    PageId current = root;
-    for (std::uint16_t level = 0;; ++level) {
-        if (level >= storage::kMaxBtreeDepth) {
-            return Status::Corruption("btree from page " + std::to_string(root) + " exceeded " +
-                                      std::to_string(storage::kMaxBtreeDepth) + " levels");
-        }
-        auto bytes = store.GetForRead(current);
-        if (!bytes.ok()) return bytes.status();
-        if (IsLeafPage(bytes.value().bytes())) return current;
-
-        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal); !s.ok()) {
-            return s;
-        }
-        current = InternalView(bytes.value().bytes()).leftmost_child();
-    }
-}
-
 // Highest live Keystone id in a leaf, or 0 if it holds none. Used to
 // establish that a splitting insert appends rather than divides.
 StatusOr<std::uint64_t> MaxLiveId(heap::PageView& leaf) {
@@ -766,11 +747,31 @@ StatusOr<PageId> BtreeSeekLeaf(storage::PageStore& store, PageId root, std::uint
     return descent.value().path[descent.value().depth];
 }
 
+// Leftmost leaf, for an ordered scan's starting point. Public (btree.hpp)
+// since P4d-3, for callers that own the page loop themselves.
+StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root) {
+    PageId current = root;
+    for (std::uint16_t level = 0;; ++level) {
+        if (level >= storage::kMaxBtreeDepth) {
+            return Status::Corruption("btree from page " + std::to_string(root) + " exceeded " +
+                                      std::to_string(storage::kMaxBtreeDepth) + " levels");
+        }
+        auto bytes = store.GetForRead(current);
+        if (!bytes.ok()) return bytes.status();
+        if (IsLeafPage(bytes.value().bytes())) return current;
+
+        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal); !s.ok()) {
+            return s;
+        }
+        current = InternalView(bytes.value().bytes()).leftmost_child();
+    }
+}
+
 Status BtreeVisit(
     storage::PageStore& store, PageId root, storage::PageAccess access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn) {
-    auto first = LeftmostLeaf(store, root);
+    auto first = BtreeLeftmostLeaf(store, root);
     if (!first.ok()) return first.status();
     return BtreeVisitFrom(store, first.value(), access, fn);
 }
@@ -781,26 +782,17 @@ Status BtreeVisitFrom(
         fn) {
     PageId current = first_leaf;
     for (std::uint32_t steps = 0;; ++steps) {
-        // Same cycle guard the heap chain applies to next_page_id, for the
-        // same reason: a cyclic sibling link would otherwise be an infinite
-        // loop inside a request.
-        if (steps >= heap::kMaxChainPages) {
-            return Status::Corruption("btree leaf chain from page " +
-                                      std::to_string(first_leaf) + " exceeds " +
-                                      std::to_string(heap::kMaxChainPages) +
-                                      " pages; the sibling links are cyclic or corrupt");
+        if (Status s = storage::CheckPageWalkBudget(steps, first_leaf, "btree leaf chain");
+            !s.ok()) {
+            return s;
         }
         // A bad `current` (an invalid first_leaf included) fails inside
-        // the fetch, exactly as the inlined loop did.
+        // the fetch - the same shape as ChainVisit, comment included.
         auto next = BtreeVisitLeafPage(store, current, access, fn);
         if (!next.ok()) return next.status();
         if (next.value() == kInvalidPageId) return Status::OK();
         current = next.value();
     }
-}
-
-StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root) {
-    return LeftmostLeaf(store, root);
 }
 
 StatusOr<PageId> BtreeVisitLeafPage(
@@ -845,7 +837,7 @@ StatusOr<std::uint16_t> BtreeHeight(storage::PageStore& store, PageId root) {
 
 StatusOr<std::uint32_t> BtreeLeafCount(storage::PageStore& store, PageId root) {
     std::uint32_t leaves = 0;
-    auto first = LeftmostLeaf(store, root);
+    auto first = BtreeLeftmostLeaf(store, root);
     if (!first.ok()) return first.status();
 
     PageId current = first.value();

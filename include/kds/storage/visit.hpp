@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
+#include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 
 // What a relation walk's visitor tells the walk to do next
@@ -53,6 +55,25 @@ inline StatusOr<VisitControl> ResolveVisit(StatusOr<VisitControl> outcome, const
                                        "return VisitControl::kContinue, not Status::OK()");
     }
     return outcome;
+}
+
+// The most hops any next-page walk may take from one origin. Far above any
+// real relation (2^20 pages = 8 GiB at 8 KiB each); what it bounds is a
+// cyclic or corrupt link, which without it is an infinite loop inside a
+// statement. heap::kMaxChainPages aliases this - the heap chain named the
+// rule first, but it was never heap-specific.
+inline constexpr std::uint32_t kMaxPageWalkLength = 1u << 20;
+
+// The guard itself, shared for ResolveVisit's reason: every loop that
+// follows next-page links (the heap chain, the btree leaf siblings, and
+// each caller that steps pages itself) owes the same check, and copies
+// drift. Call with the count of pages already visited, before visiting the
+// next; `what` names the walk for the message.
+inline Status CheckPageWalkBudget(std::uint32_t pages_visited, PageId origin, const char* what) {
+    if (pages_visited < kMaxPageWalkLength) return Status::OK();
+    return Status::Corruption(std::string(what) + " from page " + std::to_string(origin) +
+                              " exceeds " + std::to_string(kMaxPageWalkLength) +
+                              " pages; the page links are cyclic or corrupt");
 }
 
 }  // namespace kds::storage

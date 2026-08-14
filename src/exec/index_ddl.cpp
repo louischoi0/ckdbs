@@ -93,14 +93,15 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
     // pointer against pages and carry no allocation state.
     txn::UndoLog undo(store);
 
-    auto first = btree::BtreeSeekLeaf(store, access.desc_page_id, 0);
+    auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
     if (!first.ok()) return first.status();
 
     PageId leaf = first.value();
+    const PageId walk_origin = leaf;
     for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (leaves >= heap::kMaxChainPages) {
-            return Status::Corruption("relation leaf chain exceeds " +
-                                      std::to_string(heap::kMaxChainPages) + " pages");
+        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation leaf chain");
+            !s.ok()) {
+            return s;
         }
 
         // ---- Phase 1: copy out, with no page fetch under the span -------

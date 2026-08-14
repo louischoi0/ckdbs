@@ -1166,27 +1166,29 @@ private:
         // pipeline's awaits (credit, cancellation) land exactly there
         // (P4d-4). Nothing suspends yet, which is what keeps this
         // bit-identical to the whole-chain walk it replaces.
+        //
+        // The first page is visited unconditionally, exactly as the
+        // whole-chain forms do: a bad head fails inside the fetch, where
+        // testing it here would answer a corrupt catalog row with an empty
+        // result instead of an error.
         const PageId walk_origin = cur;
-        for (std::uint32_t pages = 0; cur != kInvalidPageId; ++pages) {
-            // The cycle guard the whole-chain walks apply, owed equally
-            // here: a cyclic page link must not become an infinite loop
-            // inside a statement.
-            if (pages >= heap::kMaxChainPages) {
-                co_return Status::Corruption(
-                    "walk from page " + std::to_string(walk_origin) + " exceeds " +
-                    std::to_string(heap::kMaxChainPages) +
-                    " pages; the page links are cyclic or corrupt");
+        for (std::uint32_t pages = 0;; ++pages) {
+            if (Status s = storage::CheckPageWalkBudget(pages, walk_origin, "relation walk");
+                !s.ok()) {
+                co_return s;
             }
+            // Per page, not once per walk: the VM makes these fetches
+            // itself now, so R1's guard gets to see each one.
+            NoteFetch();
             auto next = is_btree ? btree::BtreeVisitLeafPage(store_, cur,
                                                              storage::PageAccess::kRead, visit_fn)
                                  : heap::ChainVisitOnePage(store_, cur,
                                                            storage::PageAccess::kRead, visit_fn);
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
+            if (next.value() == kInvalidPageId) co_return Status::OK();
             cur = next.value();
-            // ---- page boundary: the pin is dropped, every span is dead.
         }
-        co_return Status::OK();
     }
 
     // Decodes one tuple into this step's frame slots, evaluates the
@@ -1708,6 +1710,11 @@ void InstallSuspendAudit(const storage::PageStore* store) noexcept {
         }
         return {};
     });
+}
+
+void UninstallSuspendAudit() noexcept {
+    g_audit_store = nullptr;
+    sched::SetSuspendAudit(nullptr);
 }
 
 StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& store,

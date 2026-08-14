@@ -466,10 +466,9 @@ TEST(ExecSuspendAuditTest, TheExecutorReportsALivePinAsUnsafeToSuspendUnder) {
     EXPECT_EQ(store.value()->live_pins(), 0u);
     EXPECT_TRUE(sched::suspend_audit()().empty());
 
-    // Uninstall the store before it dies: the audit's pointer is
+    // Uninstall before the store dies: the audit's pointer is
     // thread-local and would otherwise dangle into the next test.
-    exec::InstallSuspendAudit();
-    sched::SetSuspendAudit(nullptr);
+    exec::UninstallSuspendAudit();
 }
 
 }  // namespace kds::exec

@@ -48,11 +48,11 @@ Status BoundCabinChainWriter::AdoptChain(storage::PageStore& store, PageId root)
     }
 
     PageId page_id = root;
-    std::size_t pages = 0;
+    std::uint32_t pages = 0;
     while (true) {
-        if (++pages > heap::kMaxChainPages) {
-            return Status::Corruption("bound cabin chain from page " + std::to_string(root) +
-                                      " exceeds the maximum length; the links may form a cycle");
+        if (Status s = storage::CheckPageWalkBudget(pages++, root, "bound cabin chain");
+            !s.ok()) {
+            return s;
         }
         auto page = store.Get(page_id);
         if (!page.ok()) return page.status();
@@ -189,16 +189,17 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
     // clustered forms - only the first leaf differs.
     PageId leaf = access.desc_page_id;
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
-        auto first = btree::BtreeSeekLeaf(store, access.desc_page_id, 0);
+        auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);
         if (!first.ok()) return first.status();
         leaf = first.value();
     }
 
     std::vector<parser::AstValue> group_values(group_cols.size());
+    const PageId walk_origin = leaf;
     for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (leaves >= heap::kMaxChainPages) {
-            return Status::Corruption("relation leaf chain exceeds " +
-                                      std::to_string(heap::kMaxChainPages) + " pages");
+        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation leaf chain");
+            !s.ok()) {
+            return s;
         }
 
         // ---- Phase 1: copy out, with no page fetch under the span --------

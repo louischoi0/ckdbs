@@ -174,24 +174,32 @@ public:
         return active;
     }
 
+    // The wait check, shared by CoroTask::Poll and TryResumeDeepest for
+    // DeepestPending's reason - a copy of six lines is a place for the
+    // two to drift apart. True when the coroutine may be entered; a
+    // satisfied wait is consumed on the way (each cleared as it passes,
+    // so a later re-park never reads a stale one), an unsatisfied one
+    // is left in place and answers false.
+    static bool ConsumeWaitIfSatisfied(std::coroutine_handle<promise_type> h) {
+        auto& p = h.promise();
+        if (p.wait_flag != nullptr && !*p.wait_flag) return false;
+        p.wait_flag = nullptr;
+        if (p.wait_pred != nullptr && !(*p.wait_pred)()) return false;
+        p.wait_pred = nullptr;
+        return true;
+    }
+
     // Resumes the deepest pending coroutine - unless it is parked on a
     // wait that does not currently hold, in which case nothing is resumed
     // and `false` comes back. The synchronous boundary drivers (P4d-2's
     // RunToCompletionAtWalkBoundary) run on this instead of a bare resume:
     // a synchronous caller cannot deliver what a wait waits for, and
     // resuming past an unsatisfied `WaitFor` acts as though the reply had
-    // arrived (the 5ec61da review finding). A satisfied wait is consumed
-    // exactly as CoroTask::Poll consumes one, stale-flag discipline
-    // included.
+    // arrived (the 5ec61da review finding).
     bool TryResumeDeepest() {
         if (handle_ == nullptr || handle_.done()) return true;
         auto active = DeepestPending(handle_);
-        const bool* flag = active.promise().wait_flag;
-        if (flag != nullptr && !*flag) return false;
-        const std::function<bool()>* pred = active.promise().wait_pred;
-        if (pred != nullptr && !(*pred)()) return false;
-        active.promise().wait_flag = nullptr;
-        active.promise().wait_pred = nullptr;
+        if (!ConsumeWaitIfSatisfied(active)) return false;
         active.resume();
         return true;
     }
@@ -337,13 +345,7 @@ public:
             // The wait check, before the resume: a coroutine parked on a
             // condition that still does not hold costs one predicate call
             // this iteration and is not entered at all.
-            const bool* flag = active.promise().wait_flag;
-            if (flag != nullptr && !*flag) return PollResult::kSuspended;
-            active.promise().wait_flag = nullptr;
-
-            const std::function<bool()>* pred = active.promise().wait_pred;
-            if (pred != nullptr && !(*pred)()) return PollResult::kSuspended;
-            active.promise().wait_pred = nullptr;
+            if (!Coro::ConsumeWaitIfSatisfied(active)) return PollResult::kSuspended;
 
             ++resumes_;
             active.resume();

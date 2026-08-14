@@ -326,3 +326,23 @@ Raw artifacts: `/home/cdkbs/bench-p4d-fix/mix-1000.json`,
 `/home/cdkbs/bench-p4d-fix/scan-10000.out`. The superseded run's
 artifacts remain at `/home/cdkbs/bench-p4d-exec/` for provenance; its
 prose and tables are replaced by this file per the re-run rule.
+
+## 8. P4d-3 (`ea30544`): the executor-owned page loop prices at null
+
+Measured 2026-08-14 00:09–00:10 UTC, `ea30544` ("awaits live at the page
+boundary", branch `worktree-feat-coroutine-2`) against its parent
+`9e3ca8f`, same drivers, flags and method as §1 (Release, pristine
+detached scratch worktrees, fresh server + fresh ext4 data dir per side
+under `/home/cdkbs/bench-p4d3/`, `cores = 1`, `durability = relaxed`,
+verify passed on both drivers; 2334/2334 Release tests at `ea30544`).
+The per-page work `RunWalkStep`'s new loop adds — one call through the
+hoisted `std::function`, a `StatusOr<PageId>` return, the cycle-guard
+compare — is **not resolvable**: `an-plain` (10,000 rows, 145 pages)
+moved **−1.9/−2.2 µs at p50** across the two passes against a ~2 µs
+cross-pass repeat floor, bounding the loop at **≤ ~15 ns/page** and the
+per-row cost at zero; `pk-point` and `plain-lim` sat within ±0.4 µs, the
+sixteen mix cells' p0 deltas were sign-mixed in −1.4 to +0.6 µs (no
+signature), the rendered 10k arms' scatter (−47 to +88 µs at p50,
+`nonpk-str` head-faster) stayed inside §2's render floor, and the
+`/proc` CPU meter was sign-mixed within its 25 µs quantum on every arm.
+Raw artifacts: `/home/cdkbs/bench-p4d3/`.

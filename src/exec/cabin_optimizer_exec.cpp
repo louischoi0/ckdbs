@@ -89,7 +89,7 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
     // - only the first leaf differs (the assertion builder's shape).
     PageId leaf = access.desc_page_id;
     if (access.clustered_type == catalog::ClusteredType::kBtree) {
-        auto first = btree::BtreeSeekLeaf(store_, access.desc_page_id, 0);
+        auto first = btree::BtreeLeftmostLeaf(store_, access.desc_page_id);
         if (!first.ok()) return first.status();
         leaf = first.value();
     }
@@ -100,10 +100,11 @@ StatusOr<std::size_t> CabinOptimizerExecutor::BuildSeededSets(
         std::vector<std::byte> payload;
     };
 
+    const PageId walk_origin = leaf;
     for (std::uint32_t leaves = 0; leaf != kInvalidPageId; ++leaves) {
-        if (leaves >= heap::kMaxChainPages) {
-            return Status::Corruption("relation chain exceeds " +
-                                      std::to_string(heap::kMaxChainPages) + " pages");
+        if (Status s = storage::CheckPageWalkBudget(leaves, walk_origin, "relation chain");
+            !s.ok()) {
+            return s;
         }
         // PO8, between pages: an OFF mid-build discards cleanly, because
         // nothing commits until the walk completes.

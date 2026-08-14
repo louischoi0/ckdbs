@@ -337,6 +337,12 @@ the core serve a message instead.
     fabricated resume (the `5ec61da` review's loudest flag); (iii) the
     suspend audit takes the installing core's store and asserts
     `live_pins() == 0` at every suspension, the pin half of R1's rule.
+    One scope note the review insisted on: **only the outermost walk's
+    boundary is awaitable today.** A step below the first is reached from
+    inside the parent's visitor through the gated driver, under the
+    parent's pin - so its page boundary cannot await until P4d-4c moves
+    the descent outside the visitor, and the audit is what proves that
+    ordering rather than trusting it.
     **Remaining in P4d: P4d-4** — step k→k+1 wiring, join-key forwarding,
     per-page batching through the walk boundary (which dissolves the
     helper's multi-step per-row frames), the `ExecuteAsync` seam with its

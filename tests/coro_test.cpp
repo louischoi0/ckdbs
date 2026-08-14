@@ -506,5 +506,33 @@ TEST(CoroNestedTest, TryResumeDeepestRefusesAnUnsatisfiedWait) {
     EXPECT_TRUE(coro.result().ok());
 }
 
+TEST(CoroNestedTest, TryResumeDeepestRefusesAnUnsatisfiedPredicateToo) {
+    // The WaitUntil half of the same contract - it shares
+    // ConsumeWaitIfSatisfied with Poll, and this is the test that keeps
+    // the predicate form from drifting out of that sharing.
+    bool durable = false;
+    const std::function<bool()> pred = [&] { return durable; };
+    int entries = 0;
+
+    auto leaf = [&]() -> Coro {
+        ++entries;
+        co_await WaitUntil{&pred};
+        ++entries;
+        co_return Status::OK();
+    };
+    Coro coro = leaf();
+    EXPECT_TRUE(coro.TryResumeDeepest());  // runs to the wait
+    EXPECT_FALSE(coro.TryResumeDeepest());
+    EXPECT_FALSE(coro.TryResumeDeepest());
+    EXPECT_EQ(entries, 1);
+
+    durable = true;
+    while (!coro.done()) {
+        EXPECT_TRUE(coro.TryResumeDeepest());
+    }
+    EXPECT_EQ(entries, 2);
+    EXPECT_TRUE(coro.result().ok());
+}
+
 }  // namespace
 }  // namespace kds::sched

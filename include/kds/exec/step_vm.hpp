@@ -310,4 +310,11 @@ int LivePageSpans() noexcept;
 // and the store pointer it reads.
 void InstallSuspendAudit(const storage::PageStore* store = nullptr) noexcept;
 
+// Clears the audit and its store pointer. Owed at core teardown: the
+// audit is thread-local but the store it reads is not immortal, and a
+// coroutine polled on this thread after the runtime died would otherwise
+// dereference a freed store (debug builds only, but a crash in the
+// detector is still a crash).
+void UninstallSuspendAudit() noexcept;
+
 }  // namespace kds::exec
