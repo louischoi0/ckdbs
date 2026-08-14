@@ -35,6 +35,14 @@ std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
                                       std::span<const std::byte> descriptor,
                                       const StepOpenUpstream* upstream) {
     std::vector<std::byte> out;
+    // One allocation, as the pre-4b encoder had: the envelope's size is
+    // fully known up front.
+    std::size_t total = sizeof(head) + 1 + descriptor.size();
+    if (upstream != nullptr) {
+        total += 4 + 4 + upstream->forwarded.size() * sizeof(catalog::SysColumnRow) + 4 +
+                 upstream->enclosed_open.size();
+    }
+    out.reserve(total);
     out.resize(sizeof(head));
     std::memcpy(out.data(), &head, sizeof(head));
 

@@ -431,14 +431,33 @@ the core serve a message instead.
        parent link is that outer frame, exactly `EvaluateSubChain`'s
        shape. One row in, a probe or filtered walk against local state,
        forwarded columns out.
-    Staging: **4b-1** the envelope v2 + chained opens (single-step
-    behavior unchanged - the session still opens the only stage
-    directly); **4b-2** the consuming stage (upstream-edge pipelines,
-    per-row execution, forwarding); **4b-3** the session side (plan-time
-    edge computation, the multi-step eligible class in the dispatcher,
+    Staging: **4b-1 built 2026-08-14** (`e354c4d`): `downstream_step` in
+    the head (zero, the historical value, still means the session's own
+    read), the optional upstream section - core, forwarded layout as
+    full `SysColumnRow`s (KWP fields are views, not self-describing),
+    the enclosed open - and `DecodeStepOpenEnvelope`; an open carrying
+    an upstream edge is refused by name until 4b-2. **4b-2** the
+    consuming stage (upstream-edge pipelines, per-row execution through
+    the parent frame, forwarding, grant-on-drain to the upstream);
+    **4b-3** the session side (plan-time edge computation and ref
+    normalization - upstream refs become (up=1, slot=0) with col_pos
+    into the *forwarded* layout before encoding, so no stage guesses
+    another's slots; the multi-step eligible class in the dispatcher;
     typed projection over the final edge's batches - the piece P4c's
     star-only refusal deferred). The narrow class first: a two-step
-    join, scan feeding probe, both relations remote-or-local by owner.
+    join, scan feeding probe (an inner probe emits at most one row per
+    input row, which is what keeps the consumer's buffering bounded by
+    one input batch; inner scans stay refused by name until they can
+    park mid-walk).
+    Two wiring facts for 4b-2, surveyed 2026-08-14: **peer cores
+    register no kStepBatch/kStepEof handlers today** (a peer session
+    cannot open remote reads, so nothing consumed them) - the consuming
+    stage brings the first, routed to the step server; and **core 0 has
+    no RemoteStepServer at all** (only peers serve STEP_OPENs), so
+    until 4b-2/3 give the expeditor one, a consuming stage can only be
+    placed on a peer-owned inner relation - and once core 0 serves, its
+    existing session-client handlers must fan batches to both consumers
+    by tag, which is safe because both discard unmatched tags silently.
     **P4d-4c after**: per-page batching through the walk boundary
     (dissolving the helper's multi-step per-row frames), the sub-chain
     await decision, and the frame re-open caveat 4b inherits from the
