@@ -117,24 +117,13 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
         pipe.producing = true;
         pipelines_.push_back(std::move(pipe));
         submit_(sched::MakeCoroTask(sched::SchedulingGroup::kForeground,
-                                    RunProducer(head, std::move(chain))));
+                                    RunProducer(head.tag, std::move(chain))));
         return;
     }
 
     // Collect-then-stream, the reactorless fallback (see the header).
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> row(schema.columns.size());
-    auto flush = [&] {
-        StepBatchHeader batch{};
-        batch.tag = head.tag;
-        batch.seq = pipe.seq++;
-        batch.row_count = writer.row_count();
-        std::vector<std::byte> rows_bytes = writer.Finish();
-        std::vector<std::byte> out(sizeof(batch) + rows_bytes.size());
-        std::memcpy(out.data(), &batch, sizeof(batch));
-        std::memcpy(out.data() + sizeof(batch), rows_bytes.data(), rows_bytes.size());
-        pipe.batches.push_back(std::move(out));
-    };
 
     Status ran = exec::Execute(
         catalog_, store_, chain,
@@ -143,54 +132,65 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader& header,
                 row[pos] = frame.Get(exec::ColumnRef{0, 0, pos});
             }
             if (Status s = writer.AppendRow(schema, row); !s.ok()) return s;
-            if (writer.size_bytes() >= batch_target_ || writer.full()) flush();
+            if (writer.size_bytes() >= batch_target_ || writer.full()) Seal(pipe, writer);
             return storage::VisitControl::kContinue;
         });
     if (!ran.ok()) {
         SendError(head.tag, session, ran);
         return;
     }
-    if (writer.row_count() > 0) flush();
+    if (writer.row_count() > 0) Seal(pipe, writer);
 
     pipelines_.push_back(std::move(pipe));
     Drain(pipelines_.back());
 }
 
-sched::Coro RemoteStepServer::RunProducer(StepOpenHead head, exec::StepChain chain) {
-    const PipelineTag tag = head.tag;
+// One batch encoder for both execution shapes: the equivalence test pins
+// the two byte-identical, and an encoder existing twice is exactly what
+// would let them drift.
+void RemoteStepServer::Seal(Pipeline& pipe, wire::RowBatchWriter& writer) {
+    StepBatchHeader batch{};
+    batch.tag = pipe.tag;
+    batch.seq = pipe.seq++;
+    batch.row_count = writer.row_count();
+    std::vector<std::byte> rows_bytes = writer.Finish();
+    std::vector<std::byte> out(sizeof(batch) + rows_bytes.size());
+    std::memcpy(out.data(), &batch, sizeof(batch));
+    std::memcpy(out.data() + sizeof(batch), rows_bytes.data(), rows_bytes.size());
+    pipe.batches.push_back(std::move(out));
+}
 
-    // Borrowed for the statement, exactly as the executor's own Bind
-    // borrows it - which means the same exposure across suspensions: DDL
-    // against this relation while a producer is parked would invalidate
-    // both borrows alike. Recorded as an open hazard with P4d-4b in the
-    // workplan; the affinity rules make it unreachable from a client
-    // today.
-    auto access = catalog_.InitTableAccess(chain.steps[0].rel_oid);
-    if (!access.ok()) {
-        SendError(tag, tag.session_core, access.status());
-        Erase(tag);
-        co_return access.status();
+sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain) {
+
+    // Copied into this frame, not borrowed: a park can cross a catalog
+    // invalidation (`kCatalogInvalidate` is broadcast by *any* DDL and its
+    // handler clears the whole TableAccess cache), which frees a borrowed
+    // Schema under a parked coroutine. The executor's own borrows get the
+    // same treatment one layer down - RunWalkStep re-Binds after every
+    // real park - and the copy is priced per statement, not per row. The
+    // copy also fixes what the batch *means*: §5 says a remote step
+    // trusts the descriptor and does not re-resolve, and a copy is
+    // exactly a view that cannot re-resolve.
+    catalog::Schema schema;
+    {
+        auto access = catalog_.InitTableAccess(chain.steps[0].rel_oid);
+        if (!access.ok()) {
+            SendError(tag, tag.session_core, access.status());
+            Erase(tag);
+            co_return access.status();
+        }
+        schema = access.value()->schema;  // the borrow dies with this scope
     }
-    const catalog::Schema& schema = access.value()->schema;
 
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> row(schema.columns.size());
 
-    // Seals the writer's rows into a batch, queues it, and ships as far
-    // as credit allows - synchronously, so a credit already in hand costs
-    // no park at all.
+    // Seals and ships as far as credit allows - synchronously, so a
+    // credit already in hand costs no park at all.
     auto seal = [&]() {
         Pipeline* pipe = Find(tag);
         if (pipe == nullptr || pipe->cancelled) return;
-        StepBatchHeader batch{};
-        batch.tag = tag;
-        batch.seq = pipe->seq++;
-        batch.row_count = writer.row_count();
-        std::vector<std::byte> rows_bytes = writer.Finish();
-        std::vector<std::byte> out(sizeof(batch) + rows_bytes.size());
-        std::memcpy(out.data(), &batch, sizeof(batch));
-        std::memcpy(out.data() + sizeof(batch), rows_bytes.data(), rows_bytes.size());
-        pipe->batches.push_back(std::move(out));
+        Seal(*pipe, writer);
         Drain(*pipe);
     };
 
@@ -201,7 +201,7 @@ sched::Coro RemoteStepServer::RunProducer(StepOpenHead head, exec::StepChain cha
     // lifetime rule).
     const std::function<bool()> gate = [this, tag] {
         Pipeline* pipe = Find(tag);
-        return pipe == nullptr || pipe->cancelled || pipe->next == pipe->batches.size() ||
+        return pipe == nullptr || pipe->cancelled || pipe->batches.empty() ||
                pipe->credit.can_send();
     };
 
@@ -245,29 +245,58 @@ sched::Coro RemoteStepServer::RunProducer(StepOpenHead head, exec::StepChain cha
 }
 
 void RemoteStepServer::Drain(Pipeline& pipe) {
+    // **A cancelled pipeline ships nothing more.** Its entry outlives the
+    // CANCEL only so the parked producer can erase it, and a credit
+    // arriving in that window must not turn the grace into a licence to
+    // send: the pre-streaming shape erased in the handler and could not
+    // ship past a cancel, so neither may this one.
+    if (pipe.cancelled) return;
+
+    // **One drain frame per pipeline.** send_ may deliver synchronously
+    // (the loopback tests do), and the receiver's grant-on-receive credit
+    // then re-enters here from inside the send - which, unlatched, popped
+    // the queue and erased the pipeline under this frame's reference
+    // (ASan-caught in the loopback sim while P4d-4a's review landed). The
+    // outer loop re-tests can_send() per iteration, so a credit granted
+    // mid-send is spent by the frame that already owns the loop.
+    if (pipe.draining) return;
+    pipe.draining = true;
+
     // By value before anything mutates the vector: `pipe` is a reference
     // into `pipelines_`, and the erase below would leave it dangling while
     // its tag was still being read.
     const PipelineTag tag = pipe.tag;
     const std::uint32_t downstream = pipe.downstream;
 
-    while (pipe.next < pipe.batches.size() && pipe.credit.can_send()) {
+    while (!pipe.batches.empty() && !pipe.cancelled && pipe.credit.can_send()) {
         if (Status s = pipe.credit.ConsumeOnSend(); !s.ok()) break;  // unreachable; belt
         if (Status s = send_(downstream, sched::RingMessageKind::kStepBatch,
-                             std::move(pipe.batches[pipe.next]));
+                             std::move(pipe.batches.front()));
             !s.ok()) {
             SendError(tag, tag.session_core, s);
             break;
         }
-        ++pipe.next;
+        pipe.batches.pop_front();
+    }
+    pipe.draining = false;
+
+    // A cancel that landed inside a send: the loop stopped on it, and
+    // teardown belongs to the producer if one is live, to us otherwise.
+    if (pipe.cancelled) {
+        if (!pipe.producing) Erase(tag);
+        return;
     }
     // Still filling (the producer's walk is parked mid-relation, not
     // finished) or still waiting on credit: the edge stays open either
     // way, and the next seal or grant re-enters here.
-    if (pipe.producing || pipe.next < pipe.batches.size()) return;
+    if (pipe.producing || !pipe.batches.empty()) return;
 
     // Everything sent: EOF closes the edge. Control, not data - it needs
-    // no credit, exactly as CREDIT itself needs none coming back.
+    // no credit, exactly as CREDIT itself needs none coming back. The
+    // erase comes *first*: a synchronous EOF send can carry back one more
+    // inline message for this tag, and a torn-down tag is discarded by
+    // §3's rule where a live one would be served twice.
+    Erase(tag);
     StepEofPayload eof{tag};
     std::vector<std::byte> bytes;
     EncodePipelinePayload(eof, bytes);
@@ -276,7 +305,6 @@ void RemoteStepServer::Drain(Pipeline& pipe) {
         log_->Error("pipeline", "EOF for step " + std::to_string(tag.step_id) +
                                     " could not be sent: " + s.message());
     }
-    Erase(tag);
 }
 
 void RemoteStepServer::Erase(const PipelineTag& tag) {
@@ -309,10 +337,12 @@ void RemoteStepServer::OnStepCancel(std::span<const std::byte> payload) {
     if (!eof.ok()) return;
     Pipeline* pipe = Find(eof.value().tag);
     if (pipe == nullptr) return;  // teardown rule: silently discarded
-    if (pipe->producing) {
-        // A live producer owns its own teardown: the handler cannot erase
-        // state the parked walk will re-find, so it marks, and the
-        // producer stops at its next row or page boundary and erases.
+    if (pipe->producing || pipe->draining) {
+        // A live producer owns its own teardown, and so does a drain
+        // frame currently on the stack (a synchronous send can route a
+        // cancel here from inside Drain's loop): the handler cannot erase
+        // state either will touch again, so it marks, and the owner
+        // tears down on its way out.
         pipe->cancelled = true;
         return;
     }

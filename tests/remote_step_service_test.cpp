@@ -65,31 +65,11 @@ protected:
         ASSERT_TRUE(created.ok());
         oid_ = created.value();
 
-        auto access = boot_->catalog.InitTableAccess(oid_);
-        ASSERT_TRUE(access.ok());
-        for (int i = 0; i < 8; ++i) {
-            auto id = boot_->catalog.AllocateRowId(oid_);
-            ASSERT_TRUE(id.ok());
-            parser::AstValue qty;
-            qty.type = parser::ValueType::kInt;
-            qty.int_val = i * 10;
-            qty.raw_int_text = std::to_string(i * 10);
-            auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
-                                           id.value(), {qty});
-            ASSERT_TRUE(payload.ok());
-            auto placed = heap::ChainInsert(*store_, access.value()->desc_page_id, id.value(),
-                                            payload.value(), /*trx_id=*/1, access.value()->oid);
-            ASSERT_TRUE(placed.ok());
-        }
-
-        server_.emplace(
-            boot_->catalog, *store_, /*core_id=*/1,
-            [this](std::uint32_t dst, sched::RingMessageKind kind,
-                   std::vector<std::byte> payload) {
-                sent_.push_back(Sent{dst, kind, std::move(payload)});
-                return Status::OK();
-            },
-            nullptr, /*batch_target_bytes=*/1);  // one row per batch: 8 rows > 4 credits, deterministically
+        // qty = i*10 so the residual test's `qty > 50` keeps exactly 2 of
+        // the 8; one row per batch (target 1) makes 8 rows > 4 credits,
+        // deterministically.
+        InsertRows(8, /*qty_step=*/10);
+        MakeServer(/*submit=*/{});
     }
 
     std::vector<std::byte> OpenFor(const exec::Step& step, std::uint64_t request_id = 7) {
@@ -116,10 +96,11 @@ protected:
         return step;
     }
 
-    // Grows the relation by `n` rows through the same path SetUp used.
-    // The streaming tests need a multi-page chain: the producer parks at
-    // page boundaries, and a one-page relation never reaches one.
-    void InsertRows(int n) {
+    // Grows the relation by `n` rows, qty = i * qty_step, through the same
+    // encode path a real INSERT uses. The streaming tests need a
+    // multi-page chain: the producer parks at page boundaries, and a
+    // one-page relation never reaches one.
+    void InsertRows(int n, int qty_step = 1) {
         auto access = boot_->catalog.InitTableAccess(oid_);
         ASSERT_TRUE(access.ok());
         for (int i = 0; i < n; ++i) {
@@ -127,8 +108,8 @@ protected:
             ASSERT_TRUE(id.ok());
             parser::AstValue qty;
             qty.type = parser::ValueType::kInt;
-            qty.int_val = i;
-            qty.raw_int_text = std::to_string(i);
+            qty.int_val = i * qty_step;
+            qty.raw_int_text = std::to_string(i * qty_step);
             auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
                                            id.value(), {qty});
             ASSERT_TRUE(payload.ok());
@@ -138,9 +119,10 @@ protected:
         }
     }
 
-    // Rebuilds the server in streaming shape: producer tasks land in
-    // tasks_ instead of a reactor, and Pump() is one reactor pass.
-    void UseStreamingServer() {
+    // One server for both shapes: an empty submit is the reactorless
+    // fallback, a real one lands producer tasks in tasks_ so Pump() can be
+    // one reactor pass.
+    void MakeServer(RemoteStepServer::SubmitFn submit) {
         server_.emplace(
             boot_->catalog, *store_, /*core_id=*/1,
             [this](std::uint32_t dst, sched::RingMessageKind kind,
@@ -148,8 +130,11 @@ protected:
                 sent_.push_back(Sent{dst, kind, std::move(payload)});
                 return Status::OK();
             },
-            nullptr, /*batch_target_bytes=*/1,
-            [this](std::unique_ptr<sched::Task> task) { tasks_.push_back(std::move(task)); });
+            nullptr, /*batch_target_bytes=*/1, std::move(submit));
+    }
+
+    void UseStreamingServer() {
+        MakeServer([this](std::unique_ptr<sched::Task> task) { tasks_.push_back(std::move(task)); });
     }
 
     // One reactor pass: every live task polled once, finished ones dropped.
@@ -167,7 +152,6 @@ protected:
         server_->OnStepCredit(bytes);
     }
 
-    static inline int counter_ = 0;
     std::unique_ptr<storage::MemoryPageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;
@@ -381,6 +365,97 @@ TEST_F(RemoteStepServiceTest, ACancelReachesAParkedProducerAndNoEofFollows) {
         EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
             << "a cancelled pipeline must never claim a clean end";
     }
+}
+
+// A cancelled producer's entry outlives its CANCEL - the parked walk has to
+// be the one to erase it - and the window between the mark and the
+// producer's next resume is where a credit can still arrive. Nothing may
+// ship in it: the pre-streaming shape erased in the handler, so a late
+// credit found no pipeline at all, and the streaming shape must be no
+// louder on the wire than the shape it replaced.
+TEST_F(RemoteStepServiceTest, ACreditArrivingAfterACancelShipsNothing) {
+    InsertRows(392);
+    UseStreamingServer();
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    Pump();
+    ASSERT_EQ(server_->open_pipelines(), 1u);
+    ASSERT_GT(server_->unsent_batches(), 0u) << "the park must leave a queue to be tempted by";
+
+    StepEofPayload cancel{PipelineTag{7, 0, 0}};
+    std::vector<std::byte> bytes;
+    EncodePipelinePayload(cancel, bytes);
+    server_->OnStepCancel(bytes);
+
+    const std::size_t before = sent_.size();
+    GrantCredits(4);
+    EXPECT_EQ(sent_.size(), before) << "a cancelled pipeline must ship nothing more";
+
+    // And the producer still tears itself down on its next resume.
+    Pump();
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+}
+
+// A park can cross a catalog invalidation - any DDL anywhere broadcasts
+// one, and its handler clears the whole TableAccess cache. The review of
+// 31319c8 reproduced a use-after-free here under ASan: the executor's
+// bound_ and the producer's schema both died with the cache. The fix is
+// re-Bind at every real park plus a producer-owned Schema copy; this
+// test is that reproduction, kept as the regression's pin.
+TEST_F(RemoteStepServiceTest, ACatalogInvalidationAcrossAParkNeitherCrashesNorChangesTheRows) {
+    InsertRows(392);
+    UseStreamingServer();
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    Pump();
+    ASSERT_EQ(server_->open_pipelines(), 1u) << "the producer must be parked mid-walk";
+
+    // Verbatim what CoreRuntime's kCatalogInvalidate handler runs.
+    boot_->catalog.InvalidateFromPeer();
+
+    for (int round = 0; round < 500 && server_->open_pipelines() > 0; ++round) {
+        GrantCredits(4);
+        Pump();
+    }
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    ASSERT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
+
+    std::size_t rows_total = 0;
+    for (const Sent& s : sent_) {
+        if (s.kind != sched::RingMessageKind::kStepBatch) continue;
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(s.payload, rows);
+        ASSERT_TRUE(header.ok());
+        rows_total += header.value().row_count;
+    }
+    EXPECT_EQ(rows_total, 400u) << "an invalidation must not drop or duplicate rows";
+}
+
+TEST_F(RemoteStepServiceTest, ARelationDroppedAcrossAParkAnswersAStepErrorNotAFreedRead) {
+    InsertRows(392);
+    UseStreamingServer();
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    Pump();
+    ASSERT_EQ(server_->open_pipelines(), 1u) << "the producer must be parked mid-walk";
+
+    // The strongest form of the invalidation: the relation itself is gone
+    // when the walk resumes. The re-Bind fails cleanly and the session
+    // hears STEP_ERROR - the semantic a stale plan is promised (§5).
+    std::vector<std::uint64_t> dropped_cabins;
+    ASSERT_TRUE(boot_->catalog.DropTable(oid_, dropped_cabins).ok());
+
+    for (int round = 0; round < 500 && server_->open_pipelines() > 0; ++round) {
+        GrantCredits(4);
+        Pump();
+    }
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+    bool errored = false;
+    for (const Sent& s : sent_) {
+        if (s.kind == sched::RingMessageKind::kStepError) errored = true;
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
+            << "a walk that could not finish must not claim a clean end";
+    }
+    EXPECT_TRUE(errored);
 }
 
 }  // namespace

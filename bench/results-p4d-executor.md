@@ -346,3 +346,42 @@ signature), the rendered 10k arms' scatter (−47 to +88 µs at p50,
 `nonpk-str` head-faster) stayed inside §2's render floor, and the
 `/proc` CPU meter was sign-mixed within its 25 µs quantum on every arm.
 Raw artifacts: `/home/cdkbs/bench-p4d3/`.
+
+## 9. P4d-4a (`31319c8`): the local path does not pay for the first genuine suspension
+
+Measured 2026-08-14 00:50–00:51 UTC, `31319c8` ("feat: the first genuine
+suspension - the remote step producer streams under credit", branch
+`worktree-feat-coroutine-2`) against its parent `18db442`, same drivers,
+flags and method as §1/§8 (Release, pristine detached scratch worktrees,
+binaries built 00:35/00:40 UTC — both newer than their commits — fresh
+server + fresh ext4 data dir per side under `/home/cdkbs/bench-p4d4a/`,
+`cores = 1`, `durability = relaxed`; the quiet gate opened at 1-min load
+0.62, verify passed on both drivers, 2338/2338 Release tests at
+`31319c8`). What the commit adds to a **local** statement — `Execute` is
+now a wrapper that allocates one `ExecuteAsync` coroutine frame per
+statement and drives it inline, one extra `co_await` level at completion,
+and a `resume_gate_ != nullptr` compare per page on the outermost walk
+(null for every local statement; the streaming producer the gate exists
+for has no benchmark and is not priced here) — is **not resolvable on any
+arm**. Fixed per statement: the sixteen ordinary arm×relation p0 deltas
+span −0.8 to +0.3 µs, fifteen at or below zero — the opposite of the
+16-for-16 positive signature this instrument resolved at `0fd7fc3` — and
+`pk-point` moved +1.0/+0.3 µs at p50 across the two passes, inside the
+~2.6 µs the same arm drifts between passes on one binary (the wrapper
+frame at §6's ~28 ns budget is two orders below that floor). Per page:
+`an-plain` (10,000 rows, 145 pages) read **head-faster** by 17.9/21.3 µs
+at p50 in the two passes against a 0.5–2.9 µs cross-pass repeat floor,
+`an-nonpk` −17.6 beside it and `an-nonpk-lim` flat at +0.1 — a
+consistent-signed −1.7% that cannot be the mechanism, since the diff only
+*adds* instructions to that loop, and is read as binary layout; what it
+certifies is that the null-gate compare and the extra await level price
+at ≤ ~0 ns/page as measured. The rendered 10k arms scattered −6.7 to
++33.1 µs at p50 (−0.5% to +0.8%), inside this run's own render floor
+(same-binary `plain` vs `plain-again` gaps of 28.0 and 22.7 µs), the
+`/proc` CPU meter was sign-mixed from −100 to +175 µs/op with no wall
+correlate (`nonpk-desc` and `nonpk-str` read opposite signs on adjacent
+shapes), and the three `ac-delete` p50 cells at +3.6 to +4.4 µs sit on
+p0 deltas of −0.2 to −0.8 and mirror §3's `ac-update` artifact with the
+sign reversed — distribution body, not an effect. Sizes present as §7
+(1,000-row mix; 10,000-row scans; the 1- and 20-row short arms). Raw
+artifacts: `/home/cdkbs/bench-p4d4a/`.

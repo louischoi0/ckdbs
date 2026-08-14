@@ -359,13 +359,38 @@ the core serve a message instead.
     park - traffic is byte-identical to collect-then-stream, and a cancel
     never EOFs. The reactorless collect-then-stream shape survives as the
     no-`SubmitFn` fallback the older tests still pin.
-    **Open hazard, recorded with P4d-4b**: a producer parked mid-walk
-    borrows its `TableAccess` across wall time exactly as the executor's
-    `Bind` does; DDL against that relation between resumes would
-    invalidate both borrows. Unreachable from a client today (affinity
-    refuses cross-core DDL shapes), but the pipeline milestone must
-    answer it - refuse DDL on pipeline-referenced oids, or version the
-    access.
+    **Open hazard, and it is live, not theoretical**: a producer parked
+    mid-walk borrows its `TableAccess` across wall time exactly as the
+    executor's `Bind` does, and **any** DDL anywhere in the system
+    invalidates it. `Catalog::BumpVersion` broadcasts `kCatalogInvalidate`
+    to every core, whose handler runs `CatalogCache::Invalidate()` -
+    `table_access_.clear()`, which *destroys* every entry, not just the
+    DDL'd relation's. So it takes no cross-core DDL shape and no DDL on
+    the pipelined relation: one `CREATE TABLE` on any core while a
+    producer is parked is enough. Reproduced under ASan at
+    `31319c8`+review: `InvalidateFromPeer()` between two `Pump()`s of a
+    parked producer gives `heap-use-after-free` in
+    `CheckKeystoneColumn` ← `DecodeRowInto` ← `AcceptTupleAt`
+    (`step_vm.cpp:1345`) on the next resume - so it is the *executor's*
+    `bound_` borrow that dies first, and copying the producer's own
+    `Schema` alone would not fix it.
+    **Answered 2026-08-14, the re-Bind option, both halves**: `RunWalkStep`
+    re-runs `Bind` (and re-opens the frame) after every *actual* park -
+    the only points another task can interleave - so a cleared cache is
+    re-filled from catalog storage before any borrow is read, and a
+    relation dropped across the park surfaces as the clean retryable
+    error §5 promises a stale plan, never a freed read; the producer's
+    `Schema` is a frame-owned **copy**, which also makes "trusts the
+    descriptor, does not re-resolve" structural. Refuse-DDL and
+    defer-invalidate were rejected: the first refuses unrelated DDL for a
+    window sized by someone else's scan, the second serves dropped tables
+    from a stale cache on the DDL's own core - a wrong answer where
+    re-Bind gives the right one. Pinned by the two regression tests in
+    `remote_step_service_test.cpp` (invalidation across a park changes
+    nothing; DROP across a park answers STEP_ERROR and never EOF). The
+    frame re-open is legal precisely because the gated shape is
+    single-step - no outer row is live at a boundary - and **P4d-4c
+    inherits that caveat by name** when deeper steps learn to await.
     **Remaining in P4d: P4d-4b** — step k→k+1 wiring and join-key
     forwarding — **and P4d-4c** — per-page batching through the walk
     boundary (which dissolves the helper's multi-step per-row frames)

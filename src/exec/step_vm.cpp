@@ -1046,6 +1046,12 @@ private:
         PageId ordered_page = kInvalidPageId;
         std::vector<std::pair<std::uint64_t, std::uint16_t>> by_key;
 
+        // The access the visitor reads, through a pointer rather than the
+        // parameter: a park at the page boundary can cross a catalog
+        // invalidation, after which the re-Bind below points this at the
+        // refilled entry while the parameter's referent is freed memory.
+        const catalog::TableAccess* live_access = &access;
+
         auto visitor = [&](PageId page_id, heap::PageView& page,
                            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (stopped_) return storage::VisitControl::kStop;
@@ -1097,7 +1103,7 @@ private:
                 // unmarked would be re-emitted from its next slot.
                 ordered_page = page_id;
                 for (const auto& [key, ordered_slot] : by_key) {
-                    auto ok = AcceptTupleAt(steps, index, step, access, page_id, page,
+                    auto ok = AcceptTupleAt(steps, index, step, *live_access, page_id, page,
                                             ordered_slot);
                     if (!ok.ok()) {
                         inner = ok;
@@ -1108,7 +1114,7 @@ private:
                 return storage::VisitControl::kContinue;
             }
 
-            auto accepted = AcceptTupleAt(steps, index, step, access, page_id, page, slot);
+            auto accepted = AcceptTupleAt(steps, index, step, *live_access, page_id, page, slot);
             if (!accepted.ok()) {
                 inner = accepted;
                 return accepted;
@@ -1199,8 +1205,25 @@ private:
             // beneath a visitor through the gated synchronous driver until
             // P4d-4c moves that descent, and consulting the gate there
             // would turn a wait into the driver's hard error.
-            if (resume_gate_ != nullptr && index == 0) {
+            if (resume_gate_ != nullptr && index == 0 && !(*resume_gate_)()) {
                 co_await sched::WaitUntil{resume_gate_};
+
+                // The park ran other tasks on this core, and any DDL
+                // anywhere broadcasts kCatalogInvalidate, whose handler
+                // clears the whole TableAccess cache - killing every
+                // borrow this runner holds (bound_, schemas_, the frame's
+                // schema pointers, the visitor's access). Re-take them: a
+                // refill from catalog storage restores the same physical
+                // values for a live relation (no DDL can change a live
+                // relation's shape), and a relation dropped while we were
+                // parked surfaces here as a clean error instead of a read
+                // through freed memory. The frame re-opens too - legal at
+                // a boundary because the gated shape is single-step, so
+                // no outer row is live in it; P4d-4c owns the multi-step
+                // form of this seam.
+                if (Status s = Bind(steps); !s.ok()) co_return s;
+                frame_.Open(schemas_, parent_);
+                live_access = bound_[index].access;
             }
         }
     }

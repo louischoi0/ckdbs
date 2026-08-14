@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -103,7 +104,7 @@ public:
     // collect-then-stream held the relation.
     std::size_t unsent_batches() const noexcept {
         std::size_t n = 0;
-        for (const Pipeline& pipe : pipelines_) n += pipe.batches.size() - pipe.next;
+        for (const Pipeline& pipe : pipelines_) n += pipe.batches.size();
         return n;
     }
 
@@ -112,8 +113,10 @@ private:
         PipelineTag tag{};
         std::uint32_t downstream = 0;
         EdgeCredit credit;
-        std::vector<std::vector<std::byte>> batches;
-        std::size_t next = 0;      // first unsent batch
+        // Sealed, unsent batches: sent ones are popped, so the deque IS
+        // the backlog - a streaming pipeline must not accumulate husks of
+        // what it already shipped.
+        std::deque<std::vector<std::byte>> batches;
         std::uint32_t seq = 0;     // next batch's per-edge sequence number
         // Streaming state (P4d-4a). While `producing`, Drain must not EOF
         // however empty the queue looks - the walk is parked mid-relation,
@@ -123,11 +126,20 @@ private:
         // sink call or page boundary.
         bool producing = false;
         bool cancelled = false;
+        // Drain's reentrancy latch. A synchronous SendFn (the loopback
+        // tests deliver inline) can carry a batch out, bring the
+        // grant-on-receive credit back, and re-enter Drain for this same
+        // pipeline all inside one send_ call - the ASan-caught shape that
+        // double-popped the queue and erased the pipeline under the outer
+        // loop's reference. While set, a re-entered Drain returns and the
+        // outer frame's loop condition picks the new credit up itself.
+        bool draining = false;
     };
 
     Pipeline* Find(const PipelineTag& tag);
     void Erase(const PipelineTag& tag);
     void Drain(Pipeline& pipe);
+    void Seal(Pipeline& pipe, wire::RowBatchWriter& writer);
     void SendError(const PipelineTag& tag, std::uint32_t session_core, const Status& status);
 
     // The streaming producer (P4d-4a): one coroutine per open pipeline,
@@ -135,7 +147,7 @@ private:
     // tag at every touch - the vector reallocates and CANCEL erases, so a
     // held pointer would be the dangling-reference bug the dispatcher's
     // remote read already solved the same way.
-    sched::Coro RunProducer(StepOpenHead head, exec::StepChain chain);
+    sched::Coro RunProducer(PipelineTag tag, exec::StepChain chain);
 
     catalog::Catalog& catalog_;
     storage::PageStore& store_;
