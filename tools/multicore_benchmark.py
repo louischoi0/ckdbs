@@ -68,13 +68,14 @@ def wait_for_port(port, deadline_s=15):
     raise TimeoutError(f"server did not listen on {port}")
 
 
-def start_server(binary, workdir, tag, cores, port):
+def start_server(binary, workdir, tag, cores, port, placement="creating"):
     """Fresh data file + config, returns the process. `cores` is pinned into
     the superblock at bootstrap, so each configuration needs its own file."""
     conf = os.path.join(workdir, f"{tag}.conf")
     data = os.path.join(workdir, f"{tag}.db")
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {cores}\n"
+                f"placement = {placement}\n"
                 f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
     proc = subprocess.Popen([binary, "--config", conf],
                             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -121,8 +122,8 @@ def worker(port, table, rows, phases, barrier):
         conn.close()
 
 
-def run_config(binary, workdir, tag, cores, port, tables, rows):
-    proc = start_server(binary, workdir, tag, cores, port)
+def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creating"):
+    proc = start_server(binary, workdir, tag, cores, port, placement)
     try:
         setup = Conn(port)
         names = [f"bench{i}" for i in range(tables)]
@@ -134,6 +135,20 @@ def run_config(binary, workdir, tag, cores, port, tables, rows):
             d = setup.cmd(f"DESCRIBE {name}")
             owner = [tok for tok in d.split() if tok.startswith("owner_core=")]
             owner_cores[name] = owner[0] if owner else "owner_core=?"
+
+        # **Can this configuration run the workload at all?** With
+        # `placement = rotate` the relations land on peer cores, and a
+        # write to a peer-owned relation is refused: cross-core writes are
+        # a retryable refusal (crosscore.md CC3), DML statement shipping is
+        # unbuilt, and only core 0 carries a listener - so there is no
+        # connection from which those rows could be inserted. Probed with
+        # one statement and reported as a finding, because an error storm
+        # from 4 threads x N rows says the same thing far less clearly.
+        probe = setup.cmd(f"INSERT INTO {names[0]} VALUES ('probe', 1)")
+        if probe.startswith("ERR"):
+            setup.cmd("STOP")   # owed even on the early out, or the wait below hangs
+            setup.close()
+            return None, probe, owner_cores
         setup.close()
 
         # One Phase set per table so per-relation latencies stay separable,
@@ -191,6 +206,12 @@ def main():
     ap.add_argument("--rows", type=int, default=2000)
     ap.add_argument("--port", type=int, default=15460)
     ap.add_argument("--workdir", default="/tmp/mcbench")
+    ap.add_argument("--placement", choices=("creating", "rotate"), default="creating",
+                    help="relation placement policy (docs/crosscore.md P6c). "
+                         "`rotate` puts relations on peer cores, which is what a "
+                         "cross-core statement needs - and which no connection can "
+                         "currently populate; the driver probes and reports that "
+                         "rather than producing an error storm.")
     args = ap.parse_args()
 
     shutil.rmtree(args.workdir, ignore_errors=True)
@@ -201,16 +222,37 @@ def main():
     for tag, cores, port in (("single-core", 1, args.port),
                              (f"multi-core", args.cores, args.port + 1)):
         wall, phases, owners = run_config(binary, args.workdir, tag, cores, port,
-                                          args.tables, args.rows)
+                                          args.tables, args.rows, args.placement)
+        if wall is None:
+            # The write-capability probe refused: this configuration cannot
+            # run the workload, and saying so is the result.
+            print(f"\n== {tag}: cores={cores}, placement={args.placement} ==")
+            print("   placement: " + "  ".join(f"{n} {c}" for n, c in owners.items()))
+            print(f"   NOT RUN - the relations cannot be written from this connection:")
+            print(f"     {phases}")
+            print("   A peer-owned relation has no writer today: cross-core writes are\n"
+                  "   refused (crosscore.md CC3), DML statement shipping is unbuilt, and\n"
+                  "   core 0 alone carries a listener. So `placement = rotate` cannot be\n"
+                  "   populated over the wire, and this driver cannot show the pipeline\n"
+                  "   scaling until one of those lands. The pipeline's CPU cost is\n"
+                  "   measured instead by bench/crosscore_pipeline_bench.cpp, which builds\n"
+                  "   its rows in-process (workplan P4e).")
+            results[tag] = None
+            continue
         results[tag] = summarize(tag, cores, wall, phases, owners,
                                  args.tables, args.rows)
 
     single, multi = results["single-core"], results["multi-core"]
+    if single is None or multi is None:
+        print("\n== comparison ==\n   not computed: a configuration could not run "
+              "(see above)")
+        return
     print(f"\n== comparison ==\n   multi-core / single-core throughput: "
           f"{multi / single:.3f}x")
-    print("   (expected ~1.0x until the cross-core pipeline lands: core 0\n"
-          "    serves every statement and relations are placed on the\n"
-          "    creating core - docs/crosscore.md P4/P6)")
+    if args.placement == "creating":
+        print("   (expected ~1.0x at placement=creating whatever the pipeline can do:\n"
+              "    every relation is on core 0, so no statement ships - "
+              "docs/crosscore.md P6)")
 
 
 if __name__ == "__main__":

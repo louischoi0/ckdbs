@@ -74,9 +74,50 @@ Per-phase latency, aggregated across the four relations:
   driver re-run is the demonstration: same tables, same isolation, and
   `owner_core` will say `0,1,0,1` instead of `0,0,0,0`.
 
+## The re-run, 2026-08-15 (workplan P4e) — and why it still cannot move
+
+The pipeline landed (P4d complete, `docs/workplan-crosscore.md`): a
+two-step join executes across cores. The re-run this file asked for was
+attempted at commit `3854242` with the driver extended as promised —
+`tools/multicore_benchmark.py` now takes `--placement`, so the "`owner_core`
+will say `0,1,0,1`" prediction above is testable rather than asserted.
+
+**It says `0,1,0,1`. The workload still cannot run, and the reason is not
+the pipeline.**
+
+```
+== multi-core: cores=2, placement=rotate ==
+   placement: bench0 owner_core=1  bench1 owner_core=1
+   NOT RUN - the relations cannot be written from this connection:
+     ERR this transaction's writes are bound to core 0 and relation 'bench0'
+     is owned by core 1; a transaction may write on one core only until
+     two-phase commit exists
+```
+
+**A peer-owned relation has no writer.** Cross-core writes are refused
+(crosscore.md CC3), DML statement shipping is unbuilt, and core 0 alone
+carries a listener — so no sequence of client statements can populate the
+relations this benchmark would then read across cores. The driver probes
+with one INSERT and reports this rather than producing an error storm
+from four threads; that probe is the deliverable, because it turns a
+claim about the engine into something reproducible in 10 seconds.
+
+So the prediction in "What would make this benchmark move" was
+incomplete. It named the pipeline and placement; it did not name **a
+writer for peer-owned relations**, which is the binding constraint now
+that the other two exist. The ratio above stays this file's baseline, and
+`placement = creating` remains the only configuration this driver can
+run — at which every relation is on core 0 and parity is the correct
+answer whatever the pipeline can do.
+
+**The pipeline was measured instead where it can be reached**, in
+process, against local execution over the same rows:
+`bench/results-crosscore-pipeline.md`. Headline: a shipped statement
+costs 2.52 µs plus **0.626 µs per forwarded row**, against 0.417 µs per
+row for the same join run locally.
+
 ## Deviations from the house results format
 
 No PostgreSQL comparison and no p0/p25/wait breakdown: the comparison
 this file exists for is KDS against its own future, and the per-phase
-p50/p99 above is what the driver records today. Extend
-`tools/multicore_benchmark.py` when the pipeline lands.
+p50/p99 above is what the driver records today.

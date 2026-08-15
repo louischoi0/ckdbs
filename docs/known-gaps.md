@@ -441,9 +441,27 @@ There is no purge pass, and readers are deliberately unregistered
   refuses what the pipeline cannot run, retryably — three or more steps,
   aggregates, sorts, quotas, sub-chains, `emit_in_key_order`, and an
   inner walk that does not reference the outer row (a cross product).
-  What remains is **P4e's benchmark re-run**; until it runs,
-  `bench/results-multicore.md`'s 1.05× is a *parity baseline*, not a
-  measurement of the pipeline.
+  **P4e closed 2026-08-15.** `bench/results-multicore.md`'s 1.05× stays
+  a *parity baseline* and cannot yet become anything else — see the
+  writer gap below. The pipeline's own cost is now measured
+  (`bench/results-crosscore-pipeline.md`): **2.52 µs per shipped
+  statement plus 0.626 µs per forwarded row**, against 0.417 µs per row
+  for the same join run locally — so a shipped join runs at 2.50× local
+  and 60% of a shipped row's cost is pipeline overhead. That is the
+  justification for P4d-4c's per-batch runner handle, which is the main
+  remaining piece of the feature.
+- **A peer-owned relation has no writer, so cross-core *scaling* cannot
+  be demonstrated at all** (named 2026-08-15 while closing P4e). Writes
+  to a relation another core owns are refused (CC3), DML statement
+  shipping is unbuilt, and core 0 alone carries a listener — so
+  `placement = rotate` produces relations that no connection can
+  populate. The pipeline reads them correctly once they contain rows,
+  which is why every cross-core test and benchmark builds its rows
+  in-process. Reproduce in ten seconds with
+  `tools/multicore_benchmark.py --placement rotate`, which probes and
+  reports rather than erroring per row. Until one of the three lands,
+  every cross-core number in `bench/` is a *cost* measured with the
+  parallelism removed, never a speedup.
 - Relation ownership is decided **and built** (CC7 + P6b handoff + P6c
   `placement` key, 2026-08-10): a rotated relation's pages are grantable
   and readable by its owner. `placement` still defaults to `creating`.

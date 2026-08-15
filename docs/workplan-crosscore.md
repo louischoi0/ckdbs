@@ -617,10 +617,13 @@ the core serve a message instead.
     and the local two-step projected join, which no documented driver can
     A/B inside one run.
     **What remains of 4c**: per-page batching through the walk boundary
-    (dissolving the helper's multi-step per-row frames), which the
-    workplan gates on P4e's measurement of the per-input-row runner
-    cost; the sub-chain await decision; and the frame re-open caveat 4b
-    inherits from the re-Bind fix.
+    (dissolving the helper's multi-step per-row frames), which was gated
+    on P4e's measurement and is now **unblocked and justified** - the
+    number came back at 0.626 µs per forwarded row, 1.5x the entire
+    local per-row cost of the same join, so the per-batch runner handle
+    is worth building (`bench/results-crosscore-pipeline.md`); the
+    sub-chain await decision; and the frame re-open caveat 4b inherits
+    from the re-Bind fix.
   - **P4e — equivalence + the benchmark**. **The equivalence half landed
     2026-08-15**: `CoreRuntimeTest.
     EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers` proves
@@ -638,10 +641,38 @@ the core serve a message instead.
     locally and the other ship. A counter of stages actually opened on
     the far core is asserted to rise per statement - without it the
     test could degrade into comparing two local runs and still pass,
-    which is the one way an equivalence test lies. **What remains of
-    P4e**: the multicore isolation benchmark re-run against
-    `bench/results-multicore.md`'s baseline, which is also where the
-    per-input-row runner cost gets its number.
+    which is the one way an equivalence test lies.
+    **The benchmark half landed 2026-08-15, and P4e is complete.** Two
+    results, because the obvious driver could not reach the code.
+    *First*, the isolation re-run this workplan asked for was attempted
+    with `tools/multicore_benchmark.py` extended to take `--placement`,
+    and it **cannot run**: rotation does place the relations on core 1,
+    and then nothing can write them - cross-core writes are refused
+    (CC3), DML shipping is unbuilt, and core 0 alone listens, so **a
+    peer-owned relation has no writer**. The driver now probes with one
+    INSERT and reports that, which turns the constraint into something
+    reproducible in ten seconds (`bench/results-multicore.md`). The old
+    prediction there named the pipeline and placement but not a writer,
+    which is the binding constraint now that the other two exist.
+    *Second*, the pipeline was therefore priced where it **can** be
+    reached - in process, one dataset through two dispatchers differing
+    only in `core_id` (`bench/crosscore_pipeline_bench.cpp`,
+    `bench/results-crosscore-pipeline.md`, Release, 400 interleaved reps
+    per size, five sizes, both paths gated on byte-identical replies):
+
+        shipped - local  =  2.52 us  +  0.626 us per forwarded row
+
+    **That is the carried per-input-row runner cost, and it settles 4c's
+    open question: the per-batch runner handle is worth building.** The
+    slope is flat from 128 rows up (0.652 / 0.623 / 0.628 across a 16x
+    span), so it is a genuine per-row charge and not an amortized fixed
+    cost; and at 0.626 µs it exceeds the entire local per-row cost of the
+    same join (0.417 µs), leaving the shipped path at **2.50x local**
+    with 60% of a shipped row's cost being pipeline overhead rather than
+    join work. Not measured, by construction: the ring, the socket, and
+    the *benefit* side - a loopback harness on a 2-vCPU box prices the
+    cost of shipping with the parallelism removed, and the benefit needs
+    the writer named above.
 - Statement planner on the session core resolves owner cores from the
   catalog cache and picks fast path vs pipeline (crosscore.md §2).
 - DML statement shipping: route a write statement whole to the owner core;

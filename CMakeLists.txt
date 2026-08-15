@@ -183,6 +183,15 @@ if(KDS_BUILD_BENCH)
     # tools/stress_business.py measures TPS for, and prices each layer.
     add_executable(kds_txn_bench bench/txn_layers_bench.cpp)
     target_link_libraries(kds_txn_bench PRIVATE kds)
+
+    # A fourth, and the only benchmark in this tree that cannot be a server
+    # driver: the cross-core pipeline runs only against a peer-owned
+    # relation, and a peer-owned relation cannot be populated over the wire
+    # (cross-core writes are refused, DML shipping is unbuilt, core 0 alone
+    # listens). It builds its rows in-process and runs one dataset through
+    # two dispatchers differing only in core_id - see the file header.
+    add_executable(kds_crosscore_bench bench/crosscore_pipeline_bench.cpp)
+    target_link_libraries(kds_crosscore_bench PRIVATE kds)
 endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the
