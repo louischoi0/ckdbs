@@ -7,6 +7,7 @@
 
 #include "kds/exec/step_vm.hpp"
 #include "kds/server/step_descriptor.hpp"
+#include "kds/txn/manager.hpp"
 #include "kds/wire/row_codec.hpp"
 
 namespace kds::server {
@@ -209,6 +210,16 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
     return parts;
 }
 
+StatusOr<txn::Snapshot> RemoteStepServer::MintSnapshot() {
+    if (txns_ == nullptr) return txn::Snapshot{};  // sees everything, as before
+    auto view = txns_->MintReadView(txn::kNoTrxId);
+    if (!view.ok()) return view.status();
+    txn::Snapshot snap;
+    snap.view = view.value();
+    snap.undo = &txns_->undo();
+    return snap;
+}
+
 RemoteStepServer::Pipeline* RemoteStepServer::Find(const PipelineTag& tag) {
     for (Pipeline& pipe : pipelines_) {
         if (pipe.tag == tag) return &pipe;
@@ -357,6 +368,11 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
         return;
     }
     const catalog::Schema out_schema = std::move(narrowed.value());
+    auto snapshot = MintSnapshot();
+    if (!snapshot.ok()) {
+        SendError(head.tag, session, snapshot.status());
+        return;
+    }
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> row(out_cols.size());
 
@@ -369,7 +385,9 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
             if (Status s = writer.AppendRow(out_schema, row); !s.ok()) return s;
             if (writer.size_bytes() >= batch_target_ || writer.full()) Seal(pipe, writer);
             return storage::VisitControl::kContinue;
-        });
+        },
+        /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
+        /*cabins=*/nullptr, &snapshot.value());
     if (!ran.ok()) {
         SendError(head.tag, session, ran);
         return;
@@ -525,6 +543,24 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
     const std::vector<const catalog::Schema*> outer_schemas{&input_schema};
     outer.Open(outer_schemas, nullptr);
 
+    // One view for every input row this stage ever joins against (see
+    // MintSnapshot): a consuming stage is one statement's middle, and a
+    // view re-minted per row would let the same statement's later rows
+    // see writes its earlier rows could not.
+    auto snapshot = MintSnapshot();
+    if (!snapshot.ok()) {
+        // §7's upstream half applies to this exit too: by the time this
+        // coroutine first runs, OpenConsumingStage has already forwarded
+        // the enclosed open, so a producer may be live and would park on
+        // a credit gate nobody will open again.
+        SendError(tag, tag.session_core, snapshot.status());
+        if (Pipeline* pipe = Find(tag); pipe != nullptr && pipe->consumer.has_value()) {
+            CancelUpstream(pipe->consumer->input_tag, pipe->consumer->upstream_core);
+        }
+        Erase(tag);
+        co_return snapshot.status();
+    }
+
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> out_row(output_schema.columns.size());
 
@@ -647,7 +683,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                     return storage::VisitControl::kContinue;
                 },
                 /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
-                /*cabins=*/nullptr, /*snapshot=*/nullptr, /*indexes=*/true,
+                /*cabins=*/nullptr, &snapshot.value(), /*indexes=*/true,
                 /*parent=*/&outer);
             if (!ran.ok()) {
                 fail(input_tag, upstream_core, ran);
@@ -775,6 +811,18 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
     }
     const catalog::Schema out_schema = std::move(narrowed.value());
 
+    // Minted once, before the first row, and held **by value** in this
+    // frame: a ReadView is a POD and the undo pointer outlives the
+    // reactor, so the view survives every page-boundary park unchanged -
+    // which is what makes the whole stream one statement's answer rather
+    // than a series of re-reads.
+    auto snapshot = MintSnapshot();
+    if (!snapshot.ok()) {
+        SendError(tag, tag.session_core, snapshot.status());
+        Erase(tag);
+        co_return snapshot.status();
+    }
+
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> row(output.size());
 
@@ -800,7 +848,7 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
             return storage::VisitControl::kContinue;
         },
         /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
-        /*cabins=*/nullptr, /*snapshot=*/nullptr, /*indexes=*/true, &gate);
+        /*cabins=*/nullptr, &snapshot.value(), /*indexes=*/true, &gate);
 
     Pipeline* pipe = Find(tag);
     if (pipe == nullptr) co_return Status::OK();  // torn down mid-run; nothing to say

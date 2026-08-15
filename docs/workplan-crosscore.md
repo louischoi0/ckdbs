@@ -530,11 +530,17 @@ the core serve a message instead.
     already is, `EvaluateAll` stops asking `SchemaFor`, and the refusal
     is deleted - it also closes the same accepted hole
     `chain_frame.cpp` documents for correlated sub-chains. Second:
-    **every shipped stage reads with every writer visible**
+    **every shipped stage read with every writer visible**
     (`snapshot=nullptr` → `kSeesEverything`) - pre-existing from
-    P4b/P4c, doubled by 4b-3, recorded in `docs/known-gaps.md`, and
-    **must land before P4e** or the equivalence pass pins the wrong
-    behaviour. Third, applied with the review: the session's two
+    P4b/P4c, doubled by 4b-3, and **closed the same day**: the server
+    takes its host's `TransactionManager` and mints the
+    autocommit-shaped view itself, once per stage, held by value across
+    every park (a `ReadView` is a POD; the undo pointer outlives the
+    reactor). CC4's "the owning core's latest committed snapshot" is
+    now literal - no view crosses a core, each stage mints its own on
+    the core owning the relation, which is the per-core RR weakening
+    `docs/known-gaps.md` records. P4e's equivalence pass can now pin
+    the right behaviour. Third, applied with the review: the session's two
     rendering loops folded into one (which put the width-checked decode
     on the P4c edge too - the third of three edge decodes, previously
     bare), one send lambda for core 0's two pipeline endpoints,

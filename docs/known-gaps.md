@@ -446,17 +446,22 @@ There is no purge pass, and readers are deliberately unregistered
   Row-id leasing for peer INSERT is also built (P5-shape, 2026-08-10).
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
-- **A shipped stage reads with *every writer visible*, not latest
-  committed** (found at the P4d-4b-3 review, 2026-08-15): `RunProducer`
-  and `RunConsumer` pass `snapshot=nullptr`, which the executor reads as
-  `kSeesEverything` — a concurrent *uncommitted* INSERT on the owning
-  core is returned, and since 4b-3 joined across two stages. The local
-  path mints `SnapshotFor(session)`; CC4 promises "the owning core's
-  latest committed snapshot" and §5 an empty live-set view. The fix
-  needs no cross-core protocol — the owning core mints its own read
-  view locally — but `RemoteStepServer` holds no `TransactionManager`,
-  so it is a wiring step. **It must land before P4e**, whose
-  equivalence pass would otherwise pin the wrong behaviour.
+- ~~**A shipped stage reads with *every writer visible*, not latest
+  committed**~~ — found at the P4d-4b-3 review and **closed the same
+  day (2026-08-15)**. Every shipped stage used to execute with
+  `snapshot=nullptr`, which the executor reads as `kSeesEverything`, so
+  a concurrent *uncommitted* INSERT on the owning core was streamed to
+  the session — and since 4b-3, joined across two stages.
+  `RemoteStepServer` now takes its host's `TransactionManager` and
+  mints the autocommit-shaped view itself, once per stage, held by
+  value in the coroutine frame so it survives every page-boundary park
+  (a `ReadView` is a POD; the undo pointer outlives the reactor). CC4's
+  "the owning core's latest committed snapshot" is therefore literal:
+  **no view crosses a core**, each stage takes its own, which is the
+  same per-core weakening of REPEATABLE READ the entry above records.
+  Pinned by `RemoteStepServiceTest.
+  AStageReadsAtLatestCommittedAndNotAnInFlightWriter`, verified to fail
+  without the wiring (the in-flight row appears).
 - Cross-core writes are refused retryably (CC3): a transaction's writes
   bind to one home core. 2PC is an open decision, to be designed from the
   refusal counters.

@@ -16,6 +16,11 @@
 #include "kds/sched/ring_message.hpp"
 #include "kds/server/step_pipeline.hpp"
 #include "kds/storage/page_store.hpp"
+#include "kds/txn/visibility.hpp"
+
+namespace kds::txn {
+class TransactionManager;
+}
 
 // The remote step server (docs/crosscore.md §2-§4, workplan P4b): an owning
 // core takes a STEP_OPEN, executes the described step against its **local**
@@ -138,14 +143,15 @@ public:
     RemoteStepServer(catalog::Catalog& catalog, storage::PageStore& store, std::uint32_t core_id,
                      SendFn send, Logger* log = nullptr,
                      std::size_t batch_target_bytes = kStepBatchTargetBytes,
-                     SubmitFn submit = {}) noexcept
+                     SubmitFn submit = {}, txn::TransactionManager* txns = nullptr) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
           send_(std::move(send)),
           log_(log),
           batch_target_(batch_target_bytes),
-          submit_(std::move(submit)) {}
+          submit_(std::move(submit)),
+          txns_(txns) {}
 
     // The kStepOpen handler: decode, validate the single-step class,
     // execute, queue, drain. A failure at any point answers STEP_ERROR to
@@ -242,6 +248,18 @@ private:
     std::function<bool()> CreditGate(const PipelineTag& tag);
     void SealAndDrain(const PipelineTag& tag, wire::RowBatchWriter& writer);
 
+    // The read view a stage executes under (crosscore.md CC4): the
+    // **owning core's** latest committed state, minted here, locally,
+    // once per stage - the shape `CommandDispatcher::SnapshotFor` mints
+    // for an autocommit statement. No view crosses a core: CC4 says the
+    // owning core's snapshot, and each stage of a pipeline therefore
+    // takes its own, which is the same per-core weakening of REPEATABLE
+    // READ that `docs/known-gaps.md` already records for cross-core
+    // reads. Without a manager (the reactorless protocol tests) it is
+    // the default snapshot - every writer visible, the pre-MVCC
+    // behaviour, and no reply changes.
+    StatusOr<txn::Snapshot> MintSnapshot();
+
     // crosscore.md §7's upstream half: a stage that stops consuming -
     // error or cancel - tells its producer to stop too, or that producer
     // parks on its credit gate for the process's life. A duplicate cancel
@@ -284,6 +302,7 @@ private:
     Logger* log_;
     std::size_t batch_target_;
     SubmitFn submit_;
+    txn::TransactionManager* txns_;
     std::vector<Pipeline> pipelines_;
 };
 

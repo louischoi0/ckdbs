@@ -1209,7 +1209,10 @@ Status Expeditor::Serve() {
             kStepBatchTargetBytes,
             [&scheduler](std::unique_ptr<sched::Task> task) {
                 scheduler.Submit(std::move(task));
-            });
+            },
+            // Core 0's own manager: a stage reads at this core's latest
+            // committed state (CC4), minted locally per stage.
+            txn_manager_.has_value() ? &*txn_manager_ : nullptr);
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kStepOpen,
                 [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

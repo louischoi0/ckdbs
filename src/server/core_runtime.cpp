@@ -240,7 +240,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
             return Status::OK();
         },
         log_, kStepBatchTargetBytes,
-        [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); });
+        [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); },
+        // This core's own transaction manager: a stage reads at *this*
+        // core's latest committed state (CC4), minted locally per stage.
+        &*txn_manager_);
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kStepOpen,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

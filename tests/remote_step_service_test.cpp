@@ -13,6 +13,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/txn/manager.hpp"
 #include "kds/wire/row_codec.hpp"
 
 // The remote step server (workplan P4b), driven without a reactor: the
@@ -659,6 +660,68 @@ TEST_F(RemoteStepServiceTest, ARelationDroppedAcrossAParkAnswersAStepErrorNotAFr
             << "a walk that could not finish must not claim a clean end";
     }
     EXPECT_TRUE(errored);
+}
+
+// ---- The stage's read view (crosscore.md CC4) ----------------------------
+
+TEST_F(RemoteStepServiceTest, AStageReadsAtLatestCommittedAndNotAnInFlightWriter) {
+    // The gap the 4b-3 review priced, closed: a stage used to execute with
+    // `snapshot=nullptr`, which the executor reads as "every writer
+    // visible" - so a concurrent *uncommitted* INSERT on the owning core
+    // was streamed to the session. CC4 says the owning core's latest
+    // committed snapshot, and the owning core mints it locally.
+    txn::TrxIdSequence ids(boot_->superblock);
+    txn::UndoLog undo(*store_, /*wal=*/nullptr);
+    txn::TransactionManager mgr(ids, undo, *store_, /*wal=*/nullptr);
+
+    // A live transaction, and a row written under its id but never
+    // committed - exactly what a peer's concurrent INSERT looks like to a
+    // stage opening a moment later.
+    auto writer = mgr.Begin(txn::IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(writer.ok()) << writer.status().message();
+    auto access = boot_->catalog.InitTableAccess(oid_);
+    ASSERT_TRUE(access.ok());
+    auto id = boot_->catalog.AllocateRowId(oid_);
+    ASSERT_TRUE(id.ok());
+    parser::AstValue qty;
+    qty.type = parser::ValueType::kInt;
+    qty.int_val = 999;
+    qty.raw_int_text = "999";
+    auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout, id.value(),
+                                   {qty});
+    ASSERT_TRUE(payload.ok());
+    auto placed = heap::ChainInsert(*store_, access.value()->desc_page_id, id.value(),
+                                    payload.value(), writer.value()->id(), access.value()->oid);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+
+    // A server wired to that manager mints its view when the stage opens.
+    server_.emplace(
+        boot_->catalog, *store_, /*core_id=*/1,
+        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> p) {
+            sent_.push_back(Sent{dst, kind, std::move(p)});
+            return Status::OK();
+        },
+        nullptr, /*batch_target_bytes=*/1, RemoteStepServer::SubmitFn{}, &mgr);
+    server_->OnStepOpen(HeaderFromSession(), OpenFor(ScanStep()));
+    GrantCredits(4);
+    GrantCredits(4);
+
+    std::vector<std::int64_t> qty_out;
+    for (const Sent& s : sent_) {
+        if (s.kind != sched::RingMessageKind::kStepBatch) continue;
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(s.payload, rows);
+        ASSERT_TRUE(header.ok());
+        auto decoded = wire::DecodeRowBatch(rows, /*field_count=*/2);
+        ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+        for (const auto& row : decoded.value()) {
+            auto v = wire::DecodeInt(row[1].bytes);
+            ASSERT_TRUE(v.ok());
+            qty_out.push_back(v.value());
+        }
+    }
+    // The eight committed rows, and not the in-flight writer's 999.
+    EXPECT_EQ(qty_out, (std::vector<std::int64_t>{0, 10, 20, 30, 40, 50, 60, 70}));
 }
 
 // ---- The consuming stage (workplan P4d-4b-2) -----------------------------
