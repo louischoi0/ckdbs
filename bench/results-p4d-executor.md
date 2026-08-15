@@ -714,7 +714,7 @@ engine that could carry it and no instrument here that resolves it.
   the two catalog lookups before any shape test, where `f2f101d` reached
   them only for a probe-inner projected join. That widens the one
   unpriced local shape rather than narrowing it.
-  **Closed at `1e0e1c9`, on this finding.** The eligible class split into
+  **Closed at `51418a8`, on this finding.** The eligible class split into
   a chain-only `TwoStepPipelineEligible` — no catalog lookup, so the
   dispatcher asks it *before* resolving any schema — with
   `BuildTwoStepPipeline` calling it too, so the rule keeps one home. The
