@@ -767,6 +767,189 @@ TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) 
     EXPECT_TRUE(tasks.empty());
 }
 
+// ---- P4e: the pipeline's reply is the local reply, byte for byte --------
+
+TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers) {
+    // The equivalence pass (workplan P4e). **One dataset, two
+    // dispatchers differing only in `core_id`**: the relations are owned
+    // by core 1, so a dispatcher that calls itself core 1 runs every
+    // statement locally, and one that calls itself core 0 ships it. Both
+    // read the same pages through the same catalog, so any difference
+    // between the two replies is the pipeline's doing and nothing else.
+    // That is a stronger claim than an expected-string test, which can
+    // only be as right as the string somebody typed.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+
+    auto make_schema = [&](const char* second) {
+        catalog::Schema schema;
+        catalog::SysColumnRow id{};
+        id.pos = 0;
+        catalog::SetName(id.name, "id");
+        id.type_val = catalog::kTypeValInt64;
+        id.len = 8;
+        id.notnull = true;
+        catalog::SysColumnRow other{};
+        other.pos = 1;
+        catalog::SetName(other.name, second);
+        other.type_val = catalog::kTypeValInt64;
+        other.len = 8;
+        other.notnull = true;
+        schema.columns = {id, other};
+        return schema;
+    };
+    auto outer_oid = catalog2.CreateTable(catalog::kNamespacePublic, "ta", make_schema("b_id"),
+                                          catalog::ClusteredType::kHeap,
+                                          catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(outer_oid.ok()) << outer_oid.status().message();
+    auto inner_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tb", make_schema("qty"),
+                                          catalog::ClusteredType::kHeap,
+                                          catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(inner_oid.ok()) << inner_oid.status().message();
+
+    auto insert = [&](catalog::Oid oid, std::int64_t second) {
+        auto access = catalog2.InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        auto id = catalog2.AllocateRowId(oid);
+        ASSERT_TRUE(id.ok());
+        parser::AstValue v;
+        v.type = parser::ValueType::kInt;
+        v.int_val = second;
+        v.raw_int_text = std::to_string(second);
+        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
+                                       id.value(), {v});
+        ASSERT_TRUE(payload.ok());
+        auto placed = heap::ChainInsert(*core0_store_, access.value()->desc_page_id,
+                                        id.value(), payload.value(), 1, access.value()->oid);
+        ASSERT_TRUE(placed.ok()) << placed.status().message();
+    };
+    // Deliberately includes a key that matches nothing (b_id=9) and a
+    // duplicated key (two outer rows probing tb 1), so the comparison
+    // covers a miss and a fan-in rather than only clean one-to-one rows.
+    for (std::int64_t b_id : {2, 1, 9, 3, 1}) insert(outer_oid.value(), b_id);
+    for (std::int64_t qty : {100, 200, 300}) insert(inner_oid.value(), qty);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    ASSERT_EQ(catalog2.GetSysTableRow(outer_oid.value()).value().owner_core, 1u);
+    ASSERT_EQ(catalog2.GetSysTableRow(inner_oid.value()).value().owner_core, 1u);
+
+    // The local side: core 1 owns both relations, so this dispatcher's
+    // affinity check passes and nothing is shipped.
+    CommandDispatcher local(core0_->superblock, catalog2, *core0_store_, /*log=*/nullptr,
+                            /*clock=*/nullptr, /*wal=*/nullptr,
+                            wal::DurabilityClass::kGroup, exec::Budget(),
+                            /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            /*access_statistics=*/false, /*cabins=*/nullptr, /*txn=*/nullptr,
+                            txn::IsolationLevel::kReadCommitted, /*core_id=*/1);
+
+    // The pipeline side: core 0 owns nothing here, so every eligible
+    // shape ships to the loopback server standing in for core 1.
+    CommandDispatcher session(core0_->superblock, catalog2, *core0_store_, /*log=*/nullptr,
+                              /*clock=*/nullptr, /*wal=*/nullptr,
+                              wal::DurabilityClass::kGroup, exec::Budget(),
+                              /*recorder=*/nullptr, /*replay_enabled=*/false,
+                              /*access_statistics=*/false, /*cabins=*/nullptr, /*txn=*/nullptr,
+                              txn::IsolationLevel::kReadCommitted, /*core_id=*/0);
+
+    std::optional<RemoteStepServer> server;
+    std::optional<SessionStepClient> client;
+    std::vector<std::unique_ptr<sched::Task>> tasks;
+    // Counts the stages actually opened on the far core. Without it this
+    // test could degrade into comparing two local runs and still pass -
+    // the one way an equivalence test lies.
+    int stages_opened = 0;
+    auto deliver = [&](std::uint32_t dst, sched::RingMessageKind kind,
+                       std::vector<std::byte> payload) {
+        if (dst == 1) {
+            sched::MessageHeader h{};
+            h.src_core = 1;
+            h.dst_core = 1;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen:
+                    ++stages_opened;
+                    server->OnStepOpen(h, payload);
+                    break;
+                case sched::RingMessageKind::kStepCredit: server->OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepBatch: server->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: server->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepCancel: server->OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected kind to core 1";
+            }
+            return Status::OK();
+        }
+        switch (kind) {
+            case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+            case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+            case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+            default: ADD_FAILURE() << "unexpected kind to core 0";
+        }
+        return Status::OK();
+    };
+    server.emplace(catalog2, *core0_store_, /*core_id=*/1, deliver, nullptr,
+                   /*batch_target_bytes=*/1,
+                   [&](std::unique_ptr<sched::Task> task) { tasks.push_back(std::move(task)); });
+    client.emplace(/*core_id=*/0, deliver);
+    session.SetRemoteReads(&*client);
+
+    // Runs one statement through the pipeline, pumping the reactor the
+    // stages park on. A tiny batch target (1 row) means every shape
+    // crosses the credit gate several times, so the comparison exercises
+    // the parked path rather than a single flush.
+    auto shipped = [&](const std::string& sql) {
+        DispatchOutcome out;
+        const int opened_before = stages_opened;
+        auto statement = sched::MakeCoroTask(
+            sched::SchedulingGroup::kForeground,
+            session.DispatchAsync(sql, nullptr, &out));
+        int rounds = 0;
+        while (statement->Poll() != sched::PollResult::kDone) {
+            for (auto& task : tasks) {
+                if (task != nullptr && task->Poll() == sched::PollResult::kDone) task.reset();
+            }
+            std::erase(tasks, nullptr);
+            EXPECT_LT(++rounds, 256) << "the pipeline did not converge: " << sql;
+            if (rounds >= 256) break;
+        }
+        EXPECT_GT(stages_opened, opened_before)
+            << "nothing was shipped, so this compared two local runs: " << sql;
+        EXPECT_EQ(client->open_reads(), 0u) << sql;
+        EXPECT_EQ(server->open_pipelines(), 0u) << sql;
+        EXPECT_TRUE(tasks.empty()) << sql;
+        return out.response;
+    };
+
+    for (const std::string& sql : {
+             // The P4c shape: a single-step star read.
+             std::string("SELECT * FROM ta"),
+             std::string("SELECT * FROM tb"),
+             // The 4b-3 shape: scan feeding probe, projected.
+             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id"),
+             // Projection order reversed, and the inner column alone -
+             // the output spec is what carries this, so it is exactly
+             // what a wrong spec would scramble.
+             std::string("SELECT b.qty, a.id FROM ta AS a JOIN tb AS b ON b.id = a.b_id"),
+             std::string("SELECT b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id"),
+             // A residual on the leaf (outer relation) ...
+             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
+                         "WHERE a.b_id > 1"),
+             // ... and one on the consuming stage (inner relation).
+             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
+                         "WHERE b.qty > 150"),
+             // Both at once, and an empty answer.
+             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
+                         "WHERE a.b_id > 1 AND b.qty > 150"),
+             std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
+                         "WHERE b.qty > 100000"),
+         }) {
+        const std::string local_reply = local.Dispatch(sql).response;
+        ASSERT_EQ(local_reply.rfind("ERR ", 0), std::string::npos)
+            << "the local side refused, so the comparison would prove nothing: " << sql
+            << " -> " << local_reply;
+        EXPECT_EQ(shipped(sql), local_reply) << sql;
+    }
+}
+
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     // P6's deliberate cost, pinned so it stays a decision rather than
     // becoming a surprise: sys.patterns and sys.access_stats are catalog

@@ -551,9 +551,27 @@ the core serve a message instead.
     (dissolving the helper's multi-step per-row frames), the sub-chain
     await decision, and the frame re-open caveat 4b inherits from the
     re-Bind fix.
-  - **P4e — equivalence + the benchmark**: pipeline replies byte-identical
-    to local execution over the contract shapes; the multicore isolation
-    benchmark re-run against `bench/results-multicore.md`'s baseline.
+  - **P4e — equivalence + the benchmark**. **The equivalence half landed
+    2026-08-15**: `CoreRuntimeTest.
+    EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers` proves
+    the pipeline's reply is the local reply byte for byte, over nine
+    shapes - the P4c star read of each relation, the 4b-3 join, that
+    join with its projection reversed and with the inner column alone
+    (the output spec is what carries order, so a wrong spec scrambles
+    exactly these), a residual on the leaf, a residual on the consuming
+    stage, both at once, and an empty answer - against data holding a
+    key that matches nothing and a key two outer rows share, so a miss
+    and a fan-in are both covered. The design is what makes it a proof
+    rather than a typed-string check: **one dataset, two dispatchers
+    differing only in `core_id`**, both over the same catalog and the
+    same pages, so the relations' `owner_core=1` makes one side run
+    locally and the other ship. A counter of stages actually opened on
+    the far core is asserted to rise per statement - without it the
+    test could degrade into comparing two local runs and still pass,
+    which is the one way an equivalence test lies. **What remains of
+    P4e**: the multicore isolation benchmark re-run against
+    `bench/results-multicore.md`'s baseline, which is also where the
+    per-input-row runner cost gets its number.
 - Statement planner on the session core resolves owner cores from the
   catalog cache and picks fast path vs pipeline (crosscore.md §2).
 - DML statement shipping: route a write statement whole to the owner core;
