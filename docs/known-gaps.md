@@ -425,24 +425,33 @@ There is no purge pass, and readers are deliberately unregistered
 
 ## Concurrency and multicore
 
-- **Cross-core execution has started, and is exactly one shape wide.**
-  P4a-P4c are built (2026-08-10, `docs/workplan-crosscore.md`): a
-  single-relation remote read — a star `SELECT` against an `owner_core=1`
-  relation — is opened as a step on its owning core, streamed back under
-  credit, and framed by the session core, with the reply byte-identical to
-  the local path. **Every other statement is still served by core 0**:
-  `CheckReadAffinity` now refuses the shapes the pipeline cannot yet run,
-  retryably, rather than all of them. What remains is **P4d** — multi-step
-  wiring, join-key forwarding, and the viral `ChainRunner` coroutine
-  conversion, the workplan's largest single change — and **P4e**, the
-  equivalence pass plus the benchmark re-run. Until P4e runs,
+- **Cross-core execution is two shapes wide, and the second is a join.**
+  P4a-P4c (2026-08-10) built the single-relation remote read; **P4d
+  completed 2026-08-15** (`docs/workplan-crosscore.md`) and with it a
+  **two-step join executes across cores**: the session computes the edge
+  at plan time, opens the final stage, and each stage forwards its
+  upstream's enclosed open; the leaf streams the forwarded columns under
+  credit, the consuming stage joins per input row against its own local
+  relation, and the session renders a typed projected reply. Both a
+  probe inner (a pk join) and a **walked** inner (a join on a non-pk
+  column, bounded by 4c's gated inner walk) ship. Proven equivalent to
+  local execution byte for byte over twelve shapes, with the shipping
+  itself asserted so the test cannot compare two local runs.
+  **Everything else is still served by core 0**: `CheckReadAffinity`
+  refuses what the pipeline cannot run, retryably — three or more steps,
+  aggregates, sorts, quotas, sub-chains, `emit_in_key_order`, and an
+  inner walk that does not reference the outer row (a cross product).
+  What remains is **P4e's benchmark re-run**; until it runs,
   `bench/results-multicore.md`'s 1.05× is a *parity baseline*, not a
   measurement of the pipeline.
 - Relation ownership is decided **and built** (CC7 + P6b handoff + P6c
   `placement` key, 2026-08-10): a rotated relation's pages are grantable
-  and readable by its owner. `placement` still defaults to `creating` —
-  `rotate` places relations on cores that can serve one statement shape and
-  must refuse the rest, so it stays an exercise mode until P4d lands.
+  and readable by its owner. `placement` still defaults to `creating`.
+  P4d landing (2026-08-15) widened what a rotated relation can serve from
+  one shape to two — a star read and a two-step join — but `rotate` still
+  places relations on cores that must refuse everything else, so it stays
+  an exercise mode until the refused list is short enough to be a
+  performance choice rather than a correctness cliff.
   Row-id leasing for peer INSERT is also built (P5-shape, 2026-08-10).
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
