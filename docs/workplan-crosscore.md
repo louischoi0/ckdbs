@@ -547,10 +547,30 @@ the core serve a message instead.
     `NarrowTo` as the one home for "empty spec = whole row" plus its
     re-fetch bound, `Open` as a one-stage `OpenPipeline`, and the
     shared input-edge lookup.
-    **P4d-4c after**: per-page batching through the walk boundary
-    (dissolving the helper's multi-step per-row frames), the sub-chain
-    await decision, and the frame re-open caveat 4b inherits from the
-    re-Bind fix.
+    **P4d-4c, the gated inner walk: built 2026-08-15.** The consuming
+    stage's per-row run became `co_await ExecuteAsync(..., &output_ok,
+    &outer)` - awaited and gated instead of synchronous - so a **walked**
+    inner parks at its own page boundaries whenever the sealed output
+    cannot ship. That is the bound the dispatcher was waiting on, and
+    the eligible class widened with it: an inner `kScan`/`kFilterScan`
+    **with at least one residual reaching the outer row** now ships,
+    which is what a join on a *non-pk* column compiles to. Two facts
+    the survey corrected: the compiler reserves `kFilterScan` for an
+    unindexed equality against a **literal**, so a join predicate leaves
+    the kind `kScan` - admitting only `kFilterScan` would have shipped
+    nothing new; and the "reaches the outer row" half is load-bearing,
+    because without it the class admits a walk that ignores its input -
+    a cross product, correct but quadratic. Safe across the park
+    because `ChainFrame::Open` touches only its own frame's storage, so
+    the inner re-open after a park cannot disturb the parent frame
+    holding the input row. Proven by three non-pk join shapes in P4e's
+    equivalence test, over data where one outer row hits two inner
+    rows, two outer rows hit the same inner row, and two hit none.
+    **What remains of 4c**: per-page batching through the walk boundary
+    (dissolving the helper's multi-step per-row frames), which the
+    workplan gates on P4e's measurement of the per-input-row runner
+    cost; the sub-chain await decision; and the frame re-open caveat 4b
+    inherits from the re-Bind fix.
   - **P4e — equivalence + the benchmark**. **The equivalence half landed
     2026-08-15**: `CoreRuntimeTest.
     EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers` proves

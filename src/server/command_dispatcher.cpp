@@ -3723,11 +3723,48 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         chain.value().offset == 0) {
         const exec::Step& outer = chain.value().steps[0];
         const exec::Step& inner = chain.value().steps[1];
+        // The inner step's kind decides how much the consuming stage can
+        // buffer, which is why it is a named allow-list rather than a
+        // catch-all.
+        //
+        // **kProbe** descends on a key taken from the outer row and emits
+        // at most one row per input row.
+        //
+        // **kScan / kFilterScan that joins** - a walk with at least one
+        // residual reaching the outer row, which is what a join on a
+        // *non-pk* column compiles to (the compiler reserves kFilterScan
+        // for an unindexed equality against a **literal**, so a join
+        // predicate leaves the kind kScan). Such a walk would once have
+        // sealed every match of one input row inside one synchronous
+        // call; since P4d-4c's gated inner walk it parks at its own page
+        // boundaries under the downstream credit and buffers a page's
+        // matches instead.
+        //
+        // The "reaches the outer row" half is not decoration: without it
+        // this admits a walk that ignores its input entirely - a cross
+        // product, correct but quadratic, and never what anybody asked a
+        // join to be. Every other kind stays refused by name, an index or
+        // Cabin probe because it carries core-local structure state the
+        // descriptor cannot ship at all.
+        const bool joins_the_outer_row = [&] {
+            for (const exec::StepPredicate& pred : inner.residual) {
+                if (pred.lhs.up == 0 && pred.lhs.rel_slot == 0) return true;
+                if (pred.rhs.kind == exec::OperandKind::kColumn && pred.rhs.column.up == 0 &&
+                    pred.rhs.column.rel_slot == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }();
+        const bool inner_kind_ok =
+            (inner.kind == exec::AccessKind::kProbe && inner.key.has_value() &&
+             inner.key->kind == exec::OperandKind::kColumn) ||
+            ((inner.kind == exec::AccessKind::kScan ||
+              inner.kind == exec::AccessKind::kFilterScan) &&
+             joins_the_outer_row);
         const bool shapes_ok = outer.sub_chains.empty() && inner.sub_chains.empty() &&
                                !outer.emit_in_key_order && !inner.emit_in_key_order &&
-                               inner.kind == exec::AccessKind::kProbe &&
-                               inner.key.has_value() &&
-                               inner.key->kind == exec::OperandKind::kColumn;
+                               inner_kind_ok;
         if (shapes_ok) {
             auto outer_access = catalog_.InitTableAccess(outer.rel_oid);
             auto inner_access = catalog_.InitTableAccess(inner.rel_oid);

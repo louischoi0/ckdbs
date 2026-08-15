@@ -807,6 +807,13 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
                                           catalog::ClusteredType::kHeap,
                                           catalog::KeyMode::kAssigned);
     ASSERT_TRUE(inner_oid.ok()) << inner_oid.status().message();
+    // A third relation whose *non-pk* column overlaps `ta.b_id`, so a join
+    // on it matches real rows. Without the overlap the non-pk cases below
+    // would compare two empty answers and prove nothing.
+    auto tag_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tc", make_schema("tag"),
+                                        catalog::ClusteredType::kHeap,
+                                        catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(tag_oid.ok()) << tag_oid.status().message();
 
     auto insert = [&](catalog::Oid oid, std::int64_t second) {
         auto access = catalog2.InitTableAccess(oid);
@@ -829,10 +836,14 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
     // covers a miss and a fan-in rather than only clean one-to-one rows.
     for (std::int64_t b_id : {2, 1, 9, 3, 1}) insert(outer_oid.value(), b_id);
     for (std::int64_t qty : {100, 200, 300}) insert(inner_oid.value(), qty);
+    // tc.tag: 2 matches two outer rows, 1 matches two, 5 matches none -
+    // so the non-pk join covers fan-out on both sides and a dead value.
+    for (std::int64_t tag : {2, 1, 5, 2}) insert(tag_oid.value(), tag);
     ASSERT_TRUE(core0_store_->Sync().ok());
 
     ASSERT_EQ(catalog2.GetSysTableRow(outer_oid.value()).value().owner_core, 1u);
     ASSERT_EQ(catalog2.GetSysTableRow(inner_oid.value()).value().owner_core, 1u);
+    ASSERT_EQ(catalog2.GetSysTableRow(tag_oid.value()).value().owner_core, 1u);
 
     // The local side: core 1 owns both relations, so this dispatcher's
     // affinity check passes and nothing is shipped.
@@ -941,6 +952,15 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
                          "WHERE a.b_id > 1 AND b.qty > 150"),
              std::string("SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id "
                          "WHERE b.qty > 100000"),
+             // A join on a **non-pk** column: no descent is possible, so
+             // the inner step stays a walk filtered by the join residual -
+             // the shape P4d-4c's gated inner walk exists to bound, and
+             // the shape refused outright until it did.
+             std::string("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id"),
+             std::string("SELECT c.id, a.b_id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
+                         "WHERE a.b_id > 1"),
+             std::string("SELECT a.id, c.tag FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
+                         "WHERE c.tag > 1"),
          }) {
         const std::string local_reply = local.Dispatch(sql).response;
         ASSERT_EQ(local_reply.rfind("ERR ", 0), std::string::npos)
@@ -948,6 +968,15 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
             << " -> " << local_reply;
         EXPECT_EQ(shipped(sql), local_reply) << sql;
     }
+
+    // And the non-pk join is not vacuous: `tc.tag` {2,1,5,2} against
+    // `ta.b_id` {2,1,9,3,1} matches four pairs - one outer row hitting two
+    // inner rows, two outer rows hitting the same inner row, and two outer
+    // rows hitting none. Spelled out because "the two sides agree" is only
+    // worth having if they agreed about something.
+    EXPECT_EQ(local.Dispatch("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id")
+                  .response,
+              "a.id,c.id\\n1,1\\n1,4\\n2,2\\n5,2");
 }
 
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {

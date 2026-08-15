@@ -666,7 +666,19 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                 fail(input_tag, upstream_core, filled);
                 co_return filled;
             }
-            Status ran = exec::Execute(
+            // **Awaited and gated** (P4d-4c's gated inner walk): the inner
+            // run parks at its own page boundaries whenever the sealed
+            // output cannot ship, so an inner *walk* - a join on a
+            // non-pk column, which is a filter-scan, not a probe - buffers
+            // one page's matches rather than every match of one input
+            // row. That bound is what lets the dispatcher ship the shape
+            // at all; a synchronous Execute here could only run the walk
+            // to its end, however much it sealed.
+            //
+            // A probe inner never reaches the gate (it descends rather
+            // than walking), which is why the per-row park below stays:
+            // it is the only backpressure a probe has.
+            Status ran = co_await exec::ExecuteAsync(
                 catalog_, store_, chain,
                 [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
                     Pipeline* q = Find(tag);
@@ -683,7 +695,7 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                     return storage::VisitControl::kContinue;
                 },
                 /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
-                /*cabins=*/nullptr, &snapshot.value(), /*indexes=*/true,
+                /*cabins=*/nullptr, &snapshot.value(), /*indexes=*/true, &output_ok,
                 /*parent=*/&outer);
             if (!ran.ok()) {
                 fail(input_tag, upstream_core, ran);
