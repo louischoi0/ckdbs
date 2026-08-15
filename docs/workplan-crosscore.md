@@ -597,6 +597,25 @@ the core serve a message instead.
     across `send_`, which a synchronous send reaching `OnStepOpen` would
     invalidate - unreachable today, and the one place in that file not
     following its own re-find-by-tag discipline.
+    **Measured 2026-08-15** (`bench/results-p4d-executor.md` §10, 38
+    runs, `f2f101d` vs `53fd2ce`, Release, 2 vCPU, interleaved): **null**
+    - the local statement's added cost is ≤ ~0.3 µs and measured
+    negative, indistinguishable from control arms that cannot reach the
+    code. Two things the run established beyond the null. First, a
+    **same-binary control** is now part of this series: it showed the
+    harness manufacturing +55 µs of apparent p50 delta on the 10k arms
+    with one build on both servers, which retires those arms as evidence
+    below ~50 µs and puts §9's unattributed −17.9/−21.3 µs inside the
+    floor. Second, the review's own simplification had **widened** the
+    local two-step path - folding the shape rules into the planner made
+    every two-step chain pay two `InitTableAccess` lookups before any
+    shape test - closed on that finding by splitting the chain-only
+    `TwoStepPipelineEligible` out, so the cheap question is asked first
+    and the rule still has one home. **Not measured, by construction**:
+    the pipeline itself (no statement shipped - every relation sat on the
+    session's core), so the per-input-row runner cost is still P4e's;
+    and the local two-step projected join, which no documented driver can
+    A/B inside one run.
     **What remains of 4c**: per-page batching through the walk boundary
     (dissolving the helper's multi-step per-row frames), which the
     workplan gates on P4e's measurement of the per-input-row runner

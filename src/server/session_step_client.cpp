@@ -172,10 +172,7 @@ void SessionStepClient::Close(const PipelineTag& tag) {
     }
 }
 
-StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
-    const exec::StepChain& chain, const catalog::Schema& outer_schema,
-    const catalog::Schema& inner_schema, std::uint32_t outer_core, std::uint32_t inner_core,
-    std::uint32_t session_core, std::uint64_t request_id) {
+Status TwoStepPipelineEligible(const exec::StepChain& chain) {
     if (chain.steps.size() != 2) {
         return Status::InvalidArgument("a two-step pipeline plans exactly two steps");
     }
@@ -184,12 +181,18 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
 
     // ---- What may ship at all --------------------------------------------
     //
-    // **The eligible class lives here and nowhere else.** It used to be
-    // stated once in the dispatcher and once again, implicitly, in the
-    // refusals below - and a rule with two spellings is a correctness bug
-    // with two homes (the argument this file's CreditGate/SealAndDrain
-    // already make). The dispatcher now asks only what this cannot know:
-    // whether it may ship at all, and whether anything is remote.
+    // **The eligible class lives here and nowhere else** - stated once,
+    // and read both by the dispatcher (before it pays for anything) and
+    // by the planner below, because a rule with two spellings is a
+    // correctness bug with two homes (the argument this file's
+    // CreditGate/SealAndDrain already make).
+    //
+    // **Chain-only, and that is load-bearing**: every question here is
+    // answered from the compiled chain, with no catalog lookup, so the
+    // dispatcher can ask it *before* resolving two relations' schemas.
+    // Folding these rules into the planner instead cost every local
+    // two-step statement two `InitTableAccess` calls it never used to
+    // make - measured and named in `bench/results-p4d-executor.md` §10.8.
     //
     // Every exclusion is a correctness statement, not a shortcut. An
     // aggregate would fold on the wrong core's sink. A quota (LIMIT /
@@ -267,6 +270,20 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
             "the inner step is neither a probe keyed by the outer row nor a walk that "
             "references it, so it is not a join this pipeline can bound");
     }
+    return Status::OK();
+}
+
+StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
+    const exec::StepChain& chain, const catalog::Schema& outer_schema,
+    const catalog::Schema& inner_schema, std::uint32_t outer_core, std::uint32_t inner_core,
+    std::uint32_t session_core, std::uint64_t request_id) {
+    // The same rule the dispatcher already asked, asked again rather than
+    // assumed: this function is callable on its own, and a planner that
+    // trusted its caller to have checked would be one edit away from
+    // planning a shape it cannot plan.
+    if (Status s = TwoStepPipelineEligible(chain); !s.ok()) return s;
+    const exec::Step& outer = chain.steps[0];
+    const exec::Step& inner = chain.steps[1];
 
     // ---- The forwarded layout of edge 0->1 (fact 3) ---------------------
     //

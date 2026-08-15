@@ -119,6 +119,14 @@ private:
     std::vector<RemoteRead> reads_;
 };
 
+// Whether a compiled chain is a shape the two-step pipeline may ship -
+// **the eligible class, stated once** (workplan P4d-4b-3, widened by
+// 4c). Answered from the chain alone, with no catalog lookup, so a
+// caller can ask before it pays to resolve any schema; `Unsupported`
+// names which rule declined. `BuildTwoStepPipeline` asks it too, so the
+// planner is safe to call on its own.
+Status TwoStepPipelineEligible(const exec::StepChain& chain);
+
 // Derives the pipeline plan for an eligible two-step chain - scan feeding
 // probe (workplan P4d-4b-3). Everything falls out of the chain's own
 // fields: the forwarded layout of edge 0->1 is the unique step-0 columns

@@ -3705,15 +3705,22 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     }
 
     // The two-step pipeline (P4d-4b-3, widened by 4c's gated inner walk).
-    // **What may ship is decided in `BuildTwoStepPipeline` and nowhere
-    // else** - every shape rule, and the reason each one is a correctness
-    // statement rather than a shortcut, lives beside the plan it governs.
-    // What is left here is the two questions the planner cannot answer:
-    // whether this dispatcher can ship at all, and whether anything is
-    // actually on another core. A plan or an open the machinery refuses
-    // falls through to the honest affinity refusal below, never a worse
-    // error.
-    if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 2) {
+    // **What may ship is stated once, in `TwoStepPipelineEligible`** -
+    // every shape rule, and the reason each is a correctness statement
+    // rather than a shortcut, lives beside the plan it governs. What is
+    // left here is the two questions it cannot answer: whether this
+    // dispatcher can ship at all, and whether anything is actually on
+    // another core.
+    //
+    // **Order matters, and it is measured.** The eligibility test is
+    // chain-only and free; the two `InitTableAccess` calls below are not.
+    // Asking the cheap question first is what keeps a local two-step
+    // statement - one that will never ship - from paying two catalog
+    // lookups to be told so (`bench/results-p4d-executor.md` §10.8 named
+    // this after a revision that had it the other way round). A plan or
+    // an open the machinery refuses falls through to the honest affinity
+    // refusal below, never a worse error.
+    if (remote_reads_ != nullptr && !analyze && TwoStepPipelineEligible(chain.value()).ok()) {
         auto outer_access = catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
         auto inner_access = catalog_.InitTableAccess(chain.value().steps[1].rel_oid);
         if (outer_access.ok() && inner_access.ok() &&
