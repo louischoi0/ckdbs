@@ -446,6 +446,17 @@ There is no purge pass, and readers are deliberately unregistered
   Row-id leasing for peer INSERT is also built (P5-shape, 2026-08-10).
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
+- **A shipped stage reads with *every writer visible*, not latest
+  committed** (found at the P4d-4b-3 review, 2026-08-15): `RunProducer`
+  and `RunConsumer` pass `snapshot=nullptr`, which the executor reads as
+  `kSeesEverything` — a concurrent *uncommitted* INSERT on the owning
+  core is returned, and since 4b-3 joined across two stages. The local
+  path mints `SnapshotFor(session)`; CC4 promises "the owning core's
+  latest committed snapshot" and §5 an empty live-set view. The fix
+  needs no cross-core protocol — the owning core mints its own read
+  view locally — but `RemoteStepServer` holds no `TransactionManager`,
+  so it is a wiring step. **It must land before P4e**, whose
+  equivalence pass would otherwise pin the wrong behaviour.
 - Cross-core writes are refused retryably (CC3): a transaction's writes
   bind to one home core. 2PC is an open decision, to be designed from the
   refusal counters.

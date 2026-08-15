@@ -19,44 +19,32 @@ StatusOr<PipelineTag> SessionStepClient::Open(const exec::Step& step, std::uint3
     head.tag = PipelineTag{request_id, core_id_, step.step_id};
     head.downstream_core = core_id_;
 
-    // The read registers **before** the open is sent: replies are matched
-    // by tag and an unmatched tag is silently discarded (§3's teardown
-    // rule), so state that arrives after the message that generates
-    // replies is state that never hears them. The in-process loopback
-    // test is what catches this ordering - a real ring cannot reply
-    // within the send call, which is exactly why the rule must not lean
-    // on that timing.
-    RemoteRead read;
-    read.tag = head.tag;
-    read.owner_core = owner_core;
-    read.rel_oid = step.rel_oid;
-    read.stages.push_back(StageAddress{head.tag, owner_core});
-    reads_.push_back(std::move(read));
-
-    if (Status s = send_(owner_core, sched::RingMessageKind::kStepOpen,
-                         EncodeStepOpen(head, descriptor.value()));
-        !s.ok()) {
-        // By tag, not pop_back: a send that partially processed before
-        // failing may have already grown or completed other state.
-        Close(head.tag);
-        return s;
-    }
-    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-        log_->Debug("pipeline", "core " + std::to_string(core_id_) + " opened step " +
-                                    std::to_string(step.step_id) + " on core " +
-                                    std::to_string(owner_core));
-    }
-    return head.tag;
+    // A single-step read is a pipeline of one - the whole-row P4c shape
+    // (no output spec, no upstream) - so registration, the send, and the
+    // failure path all live in the one open below.
+    PipelinePlan plan;
+    plan.final_open = EncodeStepOpen(head, descriptor.value());
+    plan.final_core = owner_core;
+    plan.final_tag = head.tag;
+    plan.final_rel_oid = step.rel_oid;
+    plan.stages.push_back(StageAddress{head.tag, owner_core});
+    return OpenPipeline(std::move(plan));
 }
 
 StatusOr<PipelineTag> SessionStepClient::OpenPipeline(PipelinePlan plan) {
     const PipelineTag tag = plan.final_tag;
     const std::uint32_t final_core = plan.final_core;
 
-    // Registered before the send, exactly as Open() registers - and the
-    // reason is one message stronger here: the chained open fans out into
-    // stage-to-stage traffic the session never sees, so the first reply
-    // can be arbitrarily removed from the send that caused it.
+    // The read registers **before** the open is sent: replies are matched
+    // by tag and an unmatched tag is silently discarded (§3's teardown
+    // rule), so state that arrives after the message that generates
+    // replies is state that never hears them. The in-process loopback
+    // test is what catches this ordering - a real ring cannot reply
+    // within the send call, which is exactly why the rule must not lean
+    // on that timing - and a chained open makes it one message stronger:
+    // the open fans out into stage-to-stage traffic the session never
+    // sees, so the first reply can be arbitrarily removed from the send
+    // that caused it.
     RemoteRead read;
     read.tag = tag;
     read.owner_core = final_core;
@@ -203,10 +191,13 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
     std::vector<std::uint16_t> fwd;
     Status noted = Status::OK();
     auto note = [&](const exec::ColumnRef& ref) {
-        if (ref.up != 0) {
-            // Nothing at a statement's top level references outward; a
-            // ref that does is a compiler defect, not a plannable shape.
-            noted = Status::InvalidArgument("a top-level chain reference cannot point outward");
+        if (ref.up != 0 || ref.rel_slot > 1) {
+            // Nothing at a statement's top level references outward, and a
+            // two-step chain has two slots; either violation is a compiler
+            // defect, not a plannable shape - refused here so the
+            // projection loop below may treat "not slot 0" as the inner
+            // relation without a third case.
+            noted = Status::InvalidArgument("a reference outside the two-step chain");
             return;
         }
         if (ref.rel_slot == 0) fwd.push_back(ref.col_pos);
@@ -261,6 +252,28 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
         if (Status s = normalize(shipped.key->column); !s.ok()) return s;
     }
     for (exec::StepPredicate& pred : shipped.residual) {
+        // **A conjunct's lhs decides the comparison's type**, and only the
+        // lhs: `EvaluateAll` (exec/chain_frame.cpp) looks the type up in
+        // the schema list of the frame the ref names, and a ref that
+        // normalizes to the *upstream* row names a frame the consuming
+        // stage's chain-of-one does not carry schemas for - so that
+        // conjunct falls through to the untyped comparison. For every type
+        // but one that is the same answer (`CompareValues` reads
+        // `type_val` in exactly one arm); for `uint64` it is not, because
+        // a value above INT64_MAX rides in `int_val` as a negative and
+        // orders below every small one. The same statement run locally
+        // resolves the schema and compares unsigned, so shipping this
+        // shape would answer a join differently on two cores. Refused at
+        // plan - the caller falls through to the affinity refusal - rather
+        // than shipped as a wrong answer. `col_pos` is already known
+        // in-bounds: every slot-0 ref was noted into `fwd` and bounded
+        // above.
+        if (pred.lhs.up == 0 && pred.lhs.rel_slot == 0 &&
+            outer_schema.columns[pred.lhs.col_pos].type_val == catalog::kTypeValUint64) {
+            return Status::Unsupported(
+                "a conjunct with the upstream relation's uint64 column on the left cannot "
+                "ship: the consuming stage would compare it without its column type");
+        }
         if (Status s = normalize(pred.lhs); !s.ok()) return s;
         if (pred.rhs.kind == exec::OperandKind::kColumn) {
             if (Status s = normalize(pred.rhs.column); !s.ok()) return s;

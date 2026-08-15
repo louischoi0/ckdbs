@@ -227,10 +227,9 @@ parser::AstValue FieldToValue(const catalog::SysColumnRow& col, const DecodedFie
 // FieldToValue behind invariant 13's rule: a non-NULL fixed-width field
 // whose byte length disagrees with the column's wire width is Corruption,
 // never interpreted - the bare form zero-extends a short field, which
-// reads a truncated stream as a smaller number. Both cross-core edge
-// decodes go through this (workplan P4d-4b-3); the bare form remains for
-// callers whose lengths were already proven by DecodeRowBatch's bounds
-// against a trusted producer.
+// reads a truncated stream as a smaller number. Every cross-core edge
+// decode goes through this (workplan P4d-4b-3): the consuming stage's
+// input fill and both of the session's reply shapes.
 StatusOr<parser::AstValue> FieldToValueChecked(const catalog::SysColumnRow& col,
                                                const DecodedField& field);
 

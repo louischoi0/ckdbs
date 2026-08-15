@@ -2440,69 +2440,42 @@ DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
         return {ErrorReply(error), false};
     }
 
-    // The projected form (P4d-4b-3): the batches carry the *planned*
-    // output layout - the rows the session itself computed at plan time
-    // and told every stage - so the decode uses that plan, and rendering
-    // uses the chain's own headings and projection types, both stashed in
-    // the read because the compiled chain died with the statement frame.
-    // The typed decode is checked per field (invariant 13 one level up):
-    // a width the layout disagrees with is Corruption, never interpreted.
-    if (!read->output_layout.empty()) {
-        std::ostringstream os;
-        bool first_col = true;
-        for (const std::string& name : read->column_names) {
-            if (!first_col) os << ',';
-            os << name;
-            first_col = false;
+    // One renderer for both read shapes (P4d-4b-3): what varies is only
+    // where the layout, the headings and the types come from - planned by
+    // the session (the projected pipeline) or the relation's schema (the
+    // P4c star read, whose layout the read leaves empty). Resolved once,
+    // then one loop - a second formatter is exactly how the local
+    // renderer's own warning says `projection_types` gets forgotten. The
+    // decode is checked per field on both shapes (invariant 13 one level
+    // up): the P4c edge is the same wire from the same peer, and a width
+    // the layout disagrees with is Corruption, never interpreted.
+    std::vector<catalog::SysColumnRow> layout = std::move(read->output_layout);
+    std::vector<std::string> names = std::move(read->column_names);
+    std::vector<std::uint32_t> types = std::move(read->projection_types);
+    if (layout.empty()) {
+        auto access = catalog_.InitTableAccess(read->rel_oid);
+        if (!access.ok()) {
+            remote_reads_->Close(tag);
+            return {ErrorReply(access.status()), false};
         }
-        for (const auto& batch : read->batches) {
-            std::span<const std::byte> rows;
-            auto header = DecodeStepBatchHeader(batch, rows);
-            if (!header.ok()) {
-                remote_reads_->Close(tag);
-                return {ErrorReply(header.status()), false};
-            }
-            auto decoded = wire::DecodeRowBatch(rows, read->output_layout.size());
-            if (!decoded.ok()) {
-                remote_reads_->Close(tag);
-                return {ErrorReply(decoded.status()), false};
-            }
-            for (const auto& row : decoded.value()) {
-                os << "\\n";
-                bool first_val = true;
-                for (std::size_t i = 0; i < read->output_layout.size(); ++i) {
-                    if (!first_val) os << ',';
-                    auto value = wire::FieldToValueChecked(read->output_layout[i], row[i]);
-                    if (!value.ok()) {
-                        remote_reads_->Close(tag);
-                        return {ErrorReply(value.status()), false};
-                    }
-                    os << exec::FormatValue(read->projection_types[i], value.value());
-                    first_val = false;
-                }
-            }
+        layout = access.value()->schema.columns;
+        names.reserve(layout.size());
+        types.reserve(layout.size());
+        for (const auto& col : layout) {
+            names.emplace_back(catalog::NameView(col.name));
+            types.push_back(col.type_val);
         }
-        remote_reads_->Close(tag);
-        return {os.str(), false};
     }
 
-    auto access = catalog_.InitTableAccess(read->rel_oid);
-    if (!access.ok()) {
-        remote_reads_->Close(tag);
-        return {ErrorReply(access.status()), false};
-    }
-    const catalog::Schema& schema = access.value()->schema;
-
-    // Byte-identical to the local star reply: the header of column names,
-    // then one "\n"-escaped comma row per match, FormatValue's rendering.
+    // Byte-identical to the local reply: the header of column names, then
+    // one "\n"-escaped comma row per match, FormatValue's rendering.
     std::ostringstream os;
     bool first_col = true;
-    for (const auto& col : schema.columns) {
+    for (const std::string& name : names) {
         if (!first_col) os << ',';
-        os << catalog::NameView(col.name);
+        os << name;
         first_col = false;
     }
-
     for (const auto& batch : read->batches) {
         std::span<const std::byte> rows;
         auto header = DecodeStepBatchHeader(batch, rows);
@@ -2510,7 +2483,7 @@ DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
             remote_reads_->Close(tag);
             return {ErrorReply(header.status()), false};
         }
-        auto decoded = wire::DecodeRowBatch(rows, schema.columns.size());
+        auto decoded = wire::DecodeRowBatch(rows, layout.size());
         if (!decoded.ok()) {
             remote_reads_->Close(tag);
             return {ErrorReply(decoded.status()), false};
@@ -2518,10 +2491,14 @@ DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
         for (const auto& row : decoded.value()) {
             os << "\\n";
             bool first_val = true;
-            for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+            for (std::size_t i = 0; i < layout.size(); ++i) {
                 if (!first_val) os << ',';
-                os << exec::FormatValue(schema.columns[i].type_val,
-                                        wire::FieldToValue(schema.columns[i], row[i]));
+                auto value = wire::FieldToValueChecked(layout[i], row[i]);
+                if (!value.ok()) {
+                    remote_reads_->Close(tag);
+                    return {ErrorReply(value.status()), false};
+                }
+                os << exec::FormatValue(types[i], value.value());
                 first_val = false;
             }
         }

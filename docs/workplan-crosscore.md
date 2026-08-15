@@ -516,6 +516,31 @@ the core serve a message instead.
     up; measure at P4e's benchmark before building the per-batch runner
     handle, and note the current shape is why RunConsumer needs no
     schema-copy ceremony: no borrow survives a park).
+    **The 4b-3 review gate (2026-08-15)** found one CRITICAL and priced
+    two more: **a shipped conjunct with the upstream relation's `uint64`
+    column on the left answered orderings differently across cores** -
+    the comparison's type comes from the lhs alone, `SchemaFor` answers
+    nullptr for any `up != 0` ref, and `CompareValues` reads `type_val`
+    in exactly its `kTypeValUint64` arm, so `a.u > b.u` with `a.u`
+    above `INT64_MAX` compared signed remotely and unsigned locally.
+    Refused at plan (`BuildTwoStepPipeline`; equality stays shippable,
+    the int64 bit patterns are order-isomorphic under `=`). The real
+    fix, a decision not an edit: **`StepPredicate` carries the lhs
+    `type_val`, resolved at compile** exactly as `projection_types`
+    already is, `EvaluateAll` stops asking `SchemaFor`, and the refusal
+    is deleted - it also closes the same accepted hole
+    `chain_frame.cpp` documents for correlated sub-chains. Second:
+    **every shipped stage reads with every writer visible**
+    (`snapshot=nullptr` → `kSeesEverything`) - pre-existing from
+    P4b/P4c, doubled by 4b-3, recorded in `docs/known-gaps.md`, and
+    **must land before P4e** or the equivalence pass pins the wrong
+    behaviour. Third, applied with the review: the session's two
+    rendering loops folded into one (which put the width-checked decode
+    on the P4c edge too - the third of three edge decodes, previously
+    bare), one send lambda for core 0's two pipeline endpoints,
+    `NarrowTo` as the one home for "empty spec = whole row" plus its
+    re-fetch bound, `Open` as a one-stage `OpenPipeline`, and the
+    shared input-edge lookup.
     **P4d-4c after**: per-page batching through the walk boundary
     (dissolving the helper's multi-step per-row frames), the sub-chain
     await decision, and the frame re-open caveat 4b inherits from the

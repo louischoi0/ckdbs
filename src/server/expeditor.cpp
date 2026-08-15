@@ -1185,41 +1185,28 @@ Status Expeditor::Serve() {
         // eligible single-step read to the owning core and awaits its
         // batches. Registered before the dispatcher learns about it so a
         // reply can never beat its handlers.
-        remote_reads_.emplace(
-            /*core_id=*/0,
-            [this, &scheduler](std::uint32_t dst, sched::RingMessageKind kind,
-                               std::vector<std::byte> payload) {
-                sched::MessageHeader out{};
-                out.src_core = 0;
-                out.dst_core = dst;
-                out.session_core = 0;
-                out.kind = static_cast<std::uint16_t>(kind);
-                out.sched_group =
-                    static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
-                scheduler.Submit(sched::MakeSendRetryTask(*transport_, out, payload));
-                return Status::OK();
-            },
-            &*logger_);
+        // One send for both pipeline endpoints on this core - the client
+        // below and the step server after it. Written once so the two
+        // cannot drift on src_core or scheduling group.
+        auto step_send = [this, &scheduler](std::uint32_t dst, sched::RingMessageKind kind,
+                                            std::vector<std::byte> payload) {
+            sched::MessageHeader out{};
+            out.src_core = 0;
+            out.dst_core = dst;
+            out.session_core = 0;
+            out.kind = static_cast<std::uint16_t>(kind);
+            out.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+            scheduler.Submit(sched::MakeSendRetryTask(*transport_, out, payload));
+            return Status::OK();
+        };
+        remote_reads_.emplace(/*core_id=*/0, step_send, &*logger_);
         // Core 0's own step server (workplan P4d-4b-3): a stage placed on
         // a relation core 0 owns is served here, like any peer serves its
         // own - the missing half that made "every stage's core serving"
-        // true. Same send shape as the client above; producers and
-        // consumers land on core 0's one reactor.
+        // true. Producers and consumers land on core 0's one reactor.
         remote_steps_.emplace(
-            database_->catalog, *store_, /*core_id=*/0,
-            [this, &scheduler](std::uint32_t dst, sched::RingMessageKind kind,
-                               std::vector<std::byte> payload) {
-                sched::MessageHeader out{};
-                out.src_core = 0;
-                out.dst_core = dst;
-                out.session_core = 0;
-                out.kind = static_cast<std::uint16_t>(kind);
-                out.sched_group =
-                    static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
-                scheduler.Submit(sched::MakeSendRetryTask(*transport_, out, payload));
-                return Status::OK();
-            },
-            &*logger_, kStepBatchTargetBytes,
+            database_->catalog, *store_, /*core_id=*/0, step_send, &*logger_,
+            kStepBatchTargetBytes,
             [&scheduler](std::unique_ptr<sched::Task> task) {
                 scheduler.Submit(std::move(task));
             });

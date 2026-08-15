@@ -28,12 +28,37 @@ constexpr std::size_t kOutputColumnBytes = 1 + 4;
 
 StatusOr<std::uint32_t> TakeU32(std::span<const std::byte>& rest) {
     if (rest.size() < 4) {
-        return Status::InvalidArgument("STEP_OPEN envelope truncated in its upstream section");
+        return Status::InvalidArgument(
+            "STEP_OPEN envelope truncated inside a variable section");
     }
     std::uint32_t v = 0;
     for (int i = 0; i < 4; ++i) v |= std::uint32_t(rest[static_cast<std::size_t>(i)]) << (8 * i);
     rest = rest.subspan(4);
     return v;
+}
+
+// The one home for "an empty output spec means the whole row in schema
+// order" (the P4c shape) - and for its bound: `cols` was validated against
+// the schema at open, but a producer re-fetches its schema after the
+// submit, so the position is re-checked against what was actually fetched.
+// Unreachable today (nothing data-moving alters a relation), and one
+// refusal is cheaper than the day it stops being unreachable.
+StatusOr<catalog::Schema> NarrowTo(const catalog::Schema& schema,
+                                   std::vector<std::uint16_t>& cols) {
+    if (cols.empty()) {
+        cols.resize(schema.columns.size());
+        for (std::size_t i = 0; i < cols.size(); ++i) cols[i] = static_cast<std::uint16_t>(i);
+    }
+    catalog::Schema out;
+    out.columns.reserve(cols.size());
+    for (std::uint16_t pos : cols) {
+        if (pos >= schema.columns.size()) {
+            return Status::InvalidArgument(
+                "an output column sits past the relation's schema");
+        }
+        out.columns.push_back(schema.columns[pos]);
+    }
+    return out;
 }
 
 }  // namespace
@@ -326,18 +351,12 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
     }
 
     // Collect-then-stream, the reactorless fallback (see the header).
-    // An empty spec seals the whole row in schema order (the P4c shape).
-    catalog::Schema out_schema;
-    if (out_cols.empty()) {
-        out_schema = schema;
-        out_cols.resize(schema.columns.size());
-        for (std::size_t i = 0; i < out_cols.size(); ++i) {
-            out_cols[i] = static_cast<std::uint16_t>(i);
-        }
-    } else {
-        out_schema.columns.reserve(out_cols.size());
-        for (std::uint16_t pos : out_cols) out_schema.columns.push_back(schema.columns[pos]);
+    auto narrowed = NarrowTo(schema, out_cols);
+    if (!narrowed.ok()) {
+        SendError(head.tag, session, narrowed.status());
+        return;
     }
+    const catalog::Schema out_schema = std::move(narrowed.value());
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> row(out_cols.size());
 
@@ -657,28 +676,27 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
     }
 }
 
+RemoteStepServer::Pipeline* RemoteStepServer::FindByInputTag(const PipelineTag& input_tag) {
+    for (Pipeline& pipe : pipelines_) {
+        if (pipe.consumer.has_value() && pipe.consumer->input_tag == input_tag) return &pipe;
+    }
+    return nullptr;  // no consuming pipeline wants it: §3's silent discard
+}
+
 void RemoteStepServer::OnStepBatch(std::span<const std::byte> payload) {
     std::span<const std::byte> rows;
     auto batch_header = DecodeStepBatchHeader(payload, rows);
     if (!batch_header.ok()) return;  // malformed: dropped, as the session client drops
-    for (Pipeline& pipe : pipelines_) {
-        if (pipe.consumer.has_value() &&
-            pipe.consumer->input_tag == batch_header.value().tag) {
-            pipe.consumer->input.emplace_back(payload.begin(), payload.end());
-            return;
-        }
+    if (Pipeline* pipe = FindByInputTag(batch_header.value().tag); pipe != nullptr) {
+        pipe->consumer->input.emplace_back(payload.begin(), payload.end());
     }
-    // No consuming pipeline wants it: §3's silent discard.
 }
 
 void RemoteStepServer::OnStepEof(std::span<const std::byte> payload) {
     auto eof = DecodePipelinePayload<StepEofPayload>(payload);
     if (!eof.ok()) return;
-    for (Pipeline& pipe : pipelines_) {
-        if (pipe.consumer.has_value() && pipe.consumer->input_tag == eof.value().tag) {
-            pipe.consumer->input_eof = true;
-            return;
-        }
+    if (Pipeline* pipe = FindByInputTag(eof.value().tag); pipe != nullptr) {
+        pipe->consumer->input_eof = true;
     }
 }
 
@@ -749,17 +767,13 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
         schema = access.value()->schema;  // the borrow dies with this scope
     }
 
-    // An empty spec seals the whole row in schema order - the P4c shape;
-    // the caller validated a non-empty one against the schema at open.
-    if (output.empty()) {
-        output.resize(schema.columns.size());
-        for (std::size_t i = 0; i < output.size(); ++i) {
-            output[i] = static_cast<std::uint16_t>(i);
-        }
+    auto narrowed = NarrowTo(schema, output);
+    if (!narrowed.ok()) {
+        SendError(tag, tag.session_core, narrowed.status());
+        Erase(tag);
+        co_return narrowed.status();
     }
-    catalog::Schema out_schema;
-    out_schema.columns.reserve(output.size());
-    for (std::uint16_t pos : output) out_schema.columns.push_back(schema.columns[pos]);
+    const catalog::Schema out_schema = std::move(narrowed.value());
 
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> row(output.size());

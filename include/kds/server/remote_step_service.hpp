@@ -228,6 +228,9 @@ private:
     };
 
     Pipeline* Find(const PipelineTag& tag);
+    // The consuming pipeline whose input edge `input_tag` feeds, or null -
+    // the one match OnStepBatch and OnStepEof share.
+    Pipeline* FindByInputTag(const PipelineTag& input_tag);
     void Erase(const PipelineTag& tag);
     void Drain(Pipeline& pipe);
     void Seal(Pipeline& pipe, wire::RowBatchWriter& writer);
