@@ -356,9 +356,19 @@ the owner's workplan.
   which is how the durability assertion is proved able to fail
   (`tests/sim_loop_test.cpp`). `docs/txn.md` §8 needs amending at the source
   (RC10).
-- **DDL and catalog writes are unlogged**, and DDL is not transactional
-  (`docs/txn.md` §7): `CREATE TABLE` inside a transaction is not rolled
-  back.
+- **DDL and catalog writes are unlogged** (`docs/txn.md` §7), so a
+  committed `CREATE TABLE` survives a crash only if its page reached the
+  device — the catalog is not recovered (RV3). **Still true and not
+  scheduled.**
+  The *other* half of that old entry — "DDL is not transactional,
+  `CREATE TABLE` inside a transaction is not rolled back" — is being
+  built as of 2026-08-15 (`docs/spec-ddl-transactional.md`,
+  `docs/workplan-ddl-transactional.md`): catalog rows take the real
+  transaction id and catalog reads filter through the visibility
+  predicate, so rollback needs no undo record. **Atomicity and isolation
+  only; durability is the sentence above.** Do not quote "transactional
+  DDL" without that distinction — a reader will assume crash-durability
+  and be wrong.
 - **Keystone K1 does not hold across a crash**
   (`docs/keystoneid-k0-findings.md`): the durable log names ids the
   unlogged `sys.tables.next_id` has forgotten. K-M2a/K-M2 own it.

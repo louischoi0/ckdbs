@@ -462,6 +462,18 @@ Nothing in `src/catalog/` participates in transactions:
   an explicit transaction is not rolled back by `ROLLBACK`.** A known limitation,
   consistent with the catalog's existing instance-scoped coherency caveat.
 
+**Amended 2026-08-15: the second half of that is being built.** Atomicity,
+isolation and consistency for DDL are specified in
+`docs/spec-ddl-transactional.md` and built per
+`docs/workplan-ddl-transactional.md` — by stamping catalog rows with the
+real transaction id and filtering catalog reads through the same
+visibility predicate user reads use, which is why rollback needs no undo
+record. **Durability is not part of that** and this paragraph stays true
+of it: catalog writes remain unlogged and unrecovered (RV3). Until the
+spec's §7 lands, a committed `CREATE TABLE` is exactly as durable as any
+catalog write, which is to say it depends on the page reaching the
+device. Read the spec's §1 table before quoting either half.
+
 ## 8. MVCC ships before recovery — a known correctness gap
 
 An explicit transaction spans reactor iterations, so a `system`-group checkpoint
@@ -501,8 +513,16 @@ that keeps each one viable:
   split policy it interacts with is open.
 
 Explicitly **not** open, and out of scope: `SERIALIZABLE` (§1), savepoints and
-statement-level rollback (§6), transactional DDL (§7), lock-based blocking (§5),
-recovery (§8).
+statement-level rollback (§6), lock-based blocking (§5).
+
+**Two items left this list rather than staying on it, which is worth
+noting about the list itself — it records priorities, not
+impossibilities.** *Recovery* (§8) was built (RC01-RC11,
+`docs/workplan-wal-recovery.md`). *Transactional DDL* (§7) was reopened
+by direction 2026-08-15 and is specified in
+`docs/spec-ddl-transactional.md`; its atomicity/isolation half is being
+built, its durability half is not (that is RV3, and §7's paragraph
+still holds for it).
 
 ## 10. Testing Requirements
 
