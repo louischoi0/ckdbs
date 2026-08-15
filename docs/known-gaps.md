@@ -462,6 +462,20 @@ There is no purge pass, and readers are deliberately unregistered
   reports rather than erroring per row. Until one of the three lands,
   every cross-core number in `bench/` is a *cost* measured with the
   parallelism removed, never a speedup.
+- **`Catalog::catalog_version()` is not a sound guard for a cached
+  `TableAccess`** (named 2026-08-15 while designing P4d-4c's per-batch
+  runner handle). `InvalidateFromPeer()` — the `kCatalogInvalidate`
+  handler, and the *only* invalidation a peer ever receives — clears
+  every cached fact **without bumping the version**, deliberately, since
+  that counter is per-instance and means nothing across cores. So
+  anything that caches a catalog borrow across a suspension and
+  re-validates it with the version counter would be correct on core 0
+  and wrong on every peer, with a freed schema as the failure — the
+  exact use-after-free P4d-4a fixed by re-Binding unconditionally.
+  **Nothing does this today**; it is recorded because the obvious
+  optimization of the pipeline's per-row cost wants precisely that
+  guard, and its prerequisite is a cache-generation counter every
+  invalidation path bumps, `InvalidateFromPeer` included.
 - Relation ownership is decided **and built** (CC7 + P6b handoff + P6c
   `placement` key, 2026-08-10): a rotated relation's pages are grantable
   and readable by its owner. `placement` still defaults to `creating`.

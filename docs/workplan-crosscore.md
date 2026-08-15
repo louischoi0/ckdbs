@@ -616,14 +616,42 @@ the core serve a message instead.
     session's core), so the per-input-row runner cost is still P4e's;
     and the local two-step projected join, which no documented driver can
     A/B inside one run.
-    **What remains of 4c**: per-page batching through the walk boundary
-    (dissolving the helper's multi-step per-row frames), which was gated
-    on P4e's measurement and is now **unblocked and justified** - the
-    number came back at 0.626 µs per forwarded row, 1.5x the entire
-    local per-row cost of the same join, so the per-batch runner handle
-    is worth building (`bench/results-crosscore-pipeline.md`); the
-    sub-chain await decision; and the frame re-open caveat 4b inherits
-    from the re-Bind fix.
+    **What remains of 4c**: the per-batch runner handle, the sub-chain
+    await decision, and the frame re-open caveat 4b inherits from the
+    re-Bind fix.
+
+    **The per-batch runner handle: justified, designed, and blocked on a
+    catalog change - surveyed 2026-08-15.** P4e priced it at 0.626 µs
+    per forwarded row, 1.5x the whole local per-row cost of the same
+    join, so it is worth building. What each input row pays today, from
+    `ExecuteAsync` down: a coroutine frame for `ExecuteAsync`, a second
+    for `ChainRunner::Run`, a `Budget` copy, a `ChainRunner`
+    construction (four vectors - `bound_`, `schemas_`, and the frame's
+    `bases_`/`values_`), a `Bind` that calls `InitTableAccess` per step,
+    and a `frame_.Open`. The shape: hold one runner per stage in
+    `RunConsumer` and re-enter it per row, so `Bind` and `Open` happen
+    once per *batch* rather than once per row.
+    **What blocks it, and it is not effort.** A held runner caches
+    `TableAccess*` borrows, which is exactly the use-after-free P4d-4a
+    fixed by re-Binding after every park - so re-entry must re-Bind
+    whenever the catalog cache turned over. The obvious guard is
+    `Catalog::catalog_version()`, and it **does not work here**:
+    `InvalidateFromPeer()` - the `kCatalogInvalidate` handler, which is
+    the *only* invalidation a peer ever sees, and peers are where stages
+    run - deliberately clears every cached fact **without bumping the
+    version**, because that counter is per-instance and means nothing
+    across cores (catalog.hpp says so at its declaration). An epoch
+    check on it would therefore miss precisely the invalidation that
+    matters and hand a stage a freed schema.
+    So the prerequisite is a **cache-generation counter that every
+    invalidation path bumps, `InvalidateFromPeer` included** - a change
+    to the catalog's documented invalidation contract, in a subsystem
+    this milestone does not own. Left as a stated prerequisite rather
+    than taken: it is a correctness contract, and the failure mode if it
+    is wrong is the silent one 4a already caught once. Target for the
+    work when it happens: beat 0.626 µs/row
+    (`bench/results-crosscore-pipeline.md` is the measurement, and
+    `bench/crosscore_pipeline_bench.cpp` re-runs in seconds).
   - **P4e — equivalence + the benchmark**. **The equivalence half landed
     2026-08-15**: `CoreRuntimeTest.
     EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers` proves
