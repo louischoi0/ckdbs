@@ -27,8 +27,13 @@
 //     relation is one page at creation - a heap page or a B+ tree leaf -
 //     rooted at `desc_page_id`; what differs is what grows out of it
 //     (heap_chain.hpp vs btree.hpp).
-//   - No transaction manager exists yet, so every row written here is
-//     stamped kBootstrapXid, which is visible to every read view.
+//   - Rows written here are stamped kBootstrapXid **unless a caller
+//     supplies a transaction id** (workplan-ddl-transactional.md DT2).
+//     kBootstrapXid is visible to every read view, permanently, which is
+//     what bootstrap rows require and what every caller still gets by
+//     default. A real id only means anything once catalog *reads* filter
+//     by visibility (DT3); until then this parameter is a seam and
+//     nothing passes a real id.
 //   - Object oids (GenerateUserOid()) are unique for the life of the
 //     database. The counter is recovered from the catalog's own rows on
 //     first use rather than persisted; see that function and
@@ -182,8 +187,20 @@ public:
     // one silently created kExplicit refuses every INSERT that omits the pk.
     // Making the caller name it means the choice is visible at the DDL site,
     // which is the only place it is ever made.
+    // `trx_id` stamps the `sys.objects` / `sys.tables` / `sys.columns`
+    // rows this writes (workplan-ddl-transactional.md DT2). Defaulting to
+    // `kBootstrapXid` is what keeps every existing caller - bootstrap,
+    // tests, recovery - byte-identical, and it is the *correct* value for
+    // them: those rows must be visible to a read view minted before any
+    // transaction existed (spec-ddl-transactional.md §3).
+    //
+    // **Passing a real id is only correct once catalog reads filter by
+    // visibility** (DT3). Until then a real id would make the rows
+    // invisible to nobody and visible to everybody, which is what they
+    // already are - so DT2 changes no behaviour anywhere, deliberately.
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                               ClusteredType clustered_type, KeyMode key_mode);
+                               ClusteredType clustered_type, KeyMode key_mode,
+                               std::uint64_t trx_id = kBootstrapXid);
 
     StatusOr<SysTableRow> GetSysTableRow(Oid table_oid);
 
@@ -614,7 +631,12 @@ public:
     // instead of calling this per row (catalog_cache.hpp's absence rule).
     StatusOr<SysFkeyRow> FindForeignKeyOnColumn(Oid child_rel_oid, std::uint16_t child_column_no);
 
-    Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name);
+    // The `trx_id` on these three is the row's MVCC stamp (DT2). It
+    // defaults to `kBootstrapXid` because every caller that does not pass
+    // one is bootstrap, and a bootstrap row must be visible to every read
+    // view forever (spec-ddl-transactional.md §3).
+    Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name,
+                            std::uint64_t trx_id = kBootstrapXid);
     // `owner_core` defaults to kSystemCore because every caller but
     // CreateTable() is bootstrap writing a system relation, and M5 puts
     // those on core 0 by definition - it owns the catalog pages they live
@@ -626,7 +648,8 @@ public:
                               PageId desc_page_id, ClusteredType clustered_type,
                               PageId varheap_page_id,
                               std::uint32_t owner_core = kSystemCore,
-                              KeyMode key_mode = KeyMode::kAssigned);
+                              KeyMode key_mode = KeyMode::kAssigned,
+                              std::uint64_t trx_id = kBootstrapXid);
 
     // ---- Secondary indexes (docs/feat-index.md §12) --------------------
 
@@ -748,7 +771,8 @@ private:
     // which is exactly what happened before it was threaded through here.
     Status InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
                             std::uint32_t type_val, std::uint32_t len, bool notnull,
-                            std::uint8_t cabin_policy = kCabinPolicyUnset);
+                            std::uint8_t cabin_policy = kCabinPolicyUnset,
+                            std::uint64_t trx_id = kBootstrapXid);
     Status InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type_val,
                           std::uint32_t len);
 

@@ -9,8 +9,8 @@ exists in `docs/workplan-drop-table.md`.
 
 ## Where to pick this up
 
-**DT1 done (2026-08-15): the spec and this file.** DT2 is next and is
-the smallest change that proves the mechanism.
+**DT1 and DT2 done (2026-08-15).** DT3 is next, and it is the phase
+where behaviour actually changes.
 
 ## The phases
 
@@ -19,10 +19,14 @@ the smallest change that proves the mechanism.
 `docs/spec-ddl-transactional.md`, plus amendments to `docs/txn.md` §7 and
 §9 so the docs stop saying "out of scope" while the code does it. No code.
 
-### DT2 — a catalog row can carry a real transaction id
+### DT2 — a catalog row can carry a real transaction id ✅ 2026-08-15
 
-`InsertRow()` takes the id from its caller rather than hard-coding
-`kBootstrapXid`, and every DDL path passes one. Bootstrap paths keep
+`InsertRow()` already took an id; what hard-coded `kBootstrapXid` were
+its callers. `CreateTable` now takes a `trx_id` (defaulted) and threads
+it to all three of a relation's rows - `sys.objects`, `sys.tables`,
+`sys.columns` - deliberately the *same* id for all three, because a
+reader that could see the table row but not its columns would see a
+relation with no schema, which is worse than not seeing it at all. Bootstrap paths keep
 `kBootstrapXid` explicitly (spec §3 — the well-known rows must stay
 visible to a view minted before any transaction existed).
 
@@ -33,8 +37,11 @@ would be visible to everyone including its own aborted transaction).
 DT2 is the seam, and it is separated from DT3 precisely so the
 behavioural change lands in one reviewable step.
 
-Gate: the suite is byte-identical. This step is provable by "nothing
-moved".
+Gate: **met** - 2,363/2,363 unchanged, plus two new seam tests
+(2,365 total). One asserts a supplied id reaches all three pages and was
+verified to fail when the id is dropped on any one of them; the other
+asserts every row still carries `kBootstrapXid` when no id is passed,
+which is the half that would have broken quietly.
 
 ### DT3 — catalog reads apply the visibility predicate
 

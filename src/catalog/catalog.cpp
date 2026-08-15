@@ -678,14 +678,14 @@ void Catalog::InvalidateFromPeer() {
 }
 
 Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
-                                 std::string_view name) {
+                                 std::string_view name, std::uint64_t trx_id) {
     SysObjectRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
     row.type_oid = type_oid;
     row.rel_id = 0;
     SetName(row.name, name);
-    Status s = InsertRow(store_, kCatalogPageObjects, row, kBootstrapXid);
+    Status s = InsertRow(store_, kCatalogPageObjects, row, trx_id);
     // A new sys.objects row changes what FindTableOidByName and ListTables
     // would answer, so it stales cached name lookups.
     if (s.ok()) BumpVersion("sys.objects insert");
@@ -695,7 +695,7 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                                    PageId desc_page_id, ClusteredType clustered_type,
                                    PageId varheap_page_id, std::uint32_t owner_core,
-                                   KeyMode key_mode) {
+                                   KeyMode key_mode, std::uint64_t trx_id) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -706,14 +706,14 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.varheap_page_id = varheap_page_id;
     row.owner_core = owner_core;
     row.key_mode = key_mode;
-    Status s = InsertRow(store_, kCatalogPageTables, row, kBootstrapXid);
+    Status s = InsertRow(store_, kCatalogPageTables, row, trx_id);
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
 }
 
 Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
                                  std::uint32_t type_val, std::uint32_t len, bool notnull,
-                                 std::uint8_t cabin_policy) {
+                                 std::uint8_t cabin_policy, std::uint64_t trx_id) {
     SysColumnRow row{};
     row.oid = oid;
     row.rel_id = rel_id;
@@ -723,7 +723,7 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.len = len;
     row.notnull = notnull;
     row.cabin_policy = cabin_policy;
-    Status s = InsertRow(store_, kCatalogPageColumns, row, kBootstrapXid);
+    Status s = InsertRow(store_, kCatalogPageColumns, row, trx_id);
     // A new column row changes the schema half of a cached TableAccess.
     if (s.ok()) BumpVersion("sys.columns insert");
     return s;
@@ -746,7 +746,8 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 }
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                                    ClusteredType clustered_type, KeyMode key_mode) {
+                                    ClusteredType clustered_type, KeyMode key_mode,
+                                    std::uint64_t trx_id) {
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
@@ -842,11 +843,15 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     const std::uint32_t owner_core = AssignOwnerCore(placement_, kSystemCore, core_count_,
                                                      existing_relations.value().size());
 
-    if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name); !s.ok()) {
+    // All three rows of a relation carry the *same* stamp: a reader that
+    // could see the sys.tables row but not its sys.columns rows would see
+    // a relation with no schema, which is worse than not seeing it at all.
+    // One id, one visibility answer for the whole relation.
+    if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name, trx_id); !s.ok()) {
         return s;
     }
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
-                                      varheap_root, owner_core, key_mode);
+                                      varheap_root, owner_core, key_mode, trx_id);
         !s.ok()) {
         return s;
     }
@@ -855,7 +860,8 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         auto col_oid = GenerateUserOid();
         if (!col_oid.ok()) return col_oid.status();
         Status s = InsertColumnRow(col_oid.value(), new_oid, col.pos, NameView(col.name),
-                                    col.type_val, col.len, col.notnull, col.cabin_policy);
+                                    col.type_val, col.len, col.notnull, col.cabin_policy,
+                                    trx_id);
         if (!s.ok()) return s;
     }
 

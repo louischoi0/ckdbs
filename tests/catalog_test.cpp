@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <vector>
@@ -9,6 +10,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -1296,6 +1298,64 @@ TEST(CatalogChain, NameLookupFindsARelationOnALaterPage) {
         if (NameView(obj.name) == "t59") found_last = true;
     }
     EXPECT_TRUE(found_last) << "the relation furthest into the chain is missing from the list";
+}
+
+// ---- Transactional DDL, DT2: the stamp reaches the rows -----------------
+
+// Reads every live tuple's trx_id off one catalog page chain.
+std::vector<std::uint64_t> StampsOn(storage::PageStore& store, PageId root) {
+    std::vector<std::uint64_t> stamps;
+    (void)heap::ChainVisit(
+        store, root, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (tuple.ok()) stamps.push_back(tuple.value().trx_id);
+            return storage::VisitControl::kContinue;
+        });
+    return stamps;
+}
+
+TEST_F(CatalogTest, CreateTableStampsItsRowsWithTheTransactionIdItWasGiven) {
+    // DT2's whole content: the id a caller supplies reaches the rows.
+    // Nothing *reads* it yet - catalog scans do not filter by visibility
+    // until DT3 - so this is a seam test, and the suite passing unchanged
+    // beside it is the other half of the claim.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    constexpr std::uint64_t kDdlTrx = 4242;
+    auto oid = catalog_.CreateTable(kNamespacePublic, "stamped", MinimalPkSchema(),
+                                    ClusteredType::kHeap, KeyMode::kAssigned, kDdlTrx);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // All three of a relation's rows carry the same stamp: a reader that
+    // could see the table row but not its columns would see a relation
+    // with no schema.
+    for (PageId page : {kCatalogPageObjects, kCatalogPageTables, kCatalogPageColumns}) {
+        const auto stamps = StampsOn(store_, page);
+        EXPECT_NE(std::find(stamps.begin(), stamps.end(), kDdlTrx), stamps.end())
+            << "no row on catalog page " << page << " carries the supplied id";
+    }
+}
+
+TEST_F(CatalogTest, ADefaultedCreateTableStillStampsBootstrapAndBootstrapRowsAlwaysDo) {
+    // The other half of DT2, and the one that would break quietly: every
+    // caller that does not pass an id - bootstrap, recovery, every test -
+    // must still get kBootstrapXid, because those rows have to stay
+    // visible to a read view minted before any transaction existed
+    // (spec-ddl-transactional.md §3).
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    auto oid = catalog_.CreateTable(kNamespacePublic, "unstamped", MinimalPkSchema(),
+                                    ClusteredType::kHeap, KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    for (PageId page : {kCatalogPageObjects, kCatalogPageTables, kCatalogPageColumns}) {
+        const auto stamps = StampsOn(store_, page);
+        ASSERT_FALSE(stamps.empty());
+        for (std::uint64_t stamp : stamps) {
+            EXPECT_EQ(stamp, kBootstrapXid)
+                << "a row on catalog page " << page << " left the bootstrap stamp";
+        }
+    }
 }
 
 }  // namespace
