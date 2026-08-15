@@ -1358,5 +1358,76 @@ TEST_F(CatalogTest, ADefaultedCreateTableStillStampsBootstrapAndBootstrapRowsAlw
     }
 }
 
+// ---- DT3: a catalog read answers what the reader's view can see --------
+
+TEST_F(CatalogTest, ARelationCreatedByAnUnseenTransactionDoesNotExistForThatReader) {
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    constexpr std::uint64_t kCreator = 500;
+    auto oid = catalog_.CreateTable(kNamespacePublic, "pending", MinimalPkSchema(),
+                                    ClusteredType::kHeap, KeyMode::kAssigned, kCreator);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+
+    // A concurrent reader: the creating transaction is live, so it is in
+    // this view's in-flight set and everything it wrote is invisible.
+    txn::ReadView other;
+    other.up_to_trx_id = 1000;
+    ASSERT_TRUE(other.AddInFlight(kCreator).ok());
+
+    EXPECT_EQ(catalog_.FindTableOidByName("pending", &other).status().code(),
+              StatusCode::kNotFound)
+        << "a reader saw a relation whose creating transaction it cannot see";
+
+    auto listed = catalog_.ListTables(&other);
+    ASSERT_TRUE(listed.ok());
+    for (const SysObjectRow& row : listed.value()) {
+        EXPECT_NE(NameView(row.name), "pending") << "the invisible relation was listed";
+    }
+    // ...and the bootstrap relations are still there, because kBootstrapXid
+    // is visible to every view forever (spec-ddl-transactional.md §3). A
+    // filter that hid those would pass the assertion above and be useless.
+    EXPECT_FALSE(listed.value().empty()) << "the filter hid the bootstrap catalog too";
+
+    // The creating transaction itself sees its own work, uncommitted.
+    txn::ReadView own;
+    own.up_to_trx_id = 1000;
+    own.own_trx_id = kCreator;
+    ASSERT_TRUE(own.AddInFlight(kCreator).ok());
+    auto mine = catalog_.FindTableOidByName("pending", &own);
+    ASSERT_TRUE(mine.ok()) << "a transaction cannot see its own CREATE TABLE";
+    EXPECT_EQ(mine.value(), oid.value());
+
+    // And an internal read - bootstrap, recovery, anything with no reader -
+    // still sees everything, which is every pre-DT3 caller.
+    auto unfiltered = catalog_.FindTableOidByName("pending");
+    ASSERT_TRUE(unfiltered.ok());
+    EXPECT_EQ(unfiltered.value(), oid.value());
+}
+
+TEST_F(CatalogTest, ATransactionalLookupNeitherReadsNorFillsTheSharedCache) {
+    // The half that would break quietly: the cache is one map for the whole
+    // instance and knows nothing about who is asking, so a filtered lookup
+    // that filled it would publish an uncommitted relation to every later
+    // reader - and one that read it would be served that publication.
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    constexpr std::uint64_t kCreator = 700;
+    ASSERT_TRUE(catalog_.CreateTable(kNamespacePublic, "half_open", MinimalPkSchema(),
+                                     ClusteredType::kHeap, KeyMode::kAssigned, kCreator)
+                    .ok());
+
+    txn::ReadView own;
+    own.up_to_trx_id = 1000;
+    own.own_trx_id = kCreator;
+    ASSERT_TRUE(own.AddInFlight(kCreator).ok());
+    ASSERT_TRUE(catalog_.FindTableOidByName("half_open", &own).ok());  // creator sees it
+
+    // Nothing about that lookup may have leaked into the shared cache.
+    txn::ReadView other;
+    other.up_to_trx_id = 1000;
+    ASSERT_TRUE(other.AddInFlight(kCreator).ok());
+    EXPECT_EQ(catalog_.FindTableOidByName("half_open", &other).status().code(),
+              StatusCode::kNotFound)
+        << "the creator's lookup published its uncommitted relation through the cache";
+}
+
 }  // namespace
 }  // namespace kds::catalog

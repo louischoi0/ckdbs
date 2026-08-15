@@ -16,6 +16,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/storage/tagged_cell.hpp"
+#include "kds/txn/read_view.hpp"
 
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
@@ -207,14 +208,27 @@ public:
     // Scans sys.objects (disk, not the in-memory well-known registry -
     // CreateTable() only writes the disk row) for a row named `name`
     // with type_oid == kTypeTable.
-    StatusOr<Oid> FindTableOidByName(std::string_view name);
+    //
+    // `view` is the reader's visibility (workplan-ddl-transactional.md
+    // DT3). With one, a relation whose creating transaction this view
+    // cannot see **does not exist** for this caller, and the lookup
+    // neither reads nor fills the shared cache - see the definition for
+    // why that bypass is the whole of the isolation. Null (the default)
+    // is every pre-DT3 caller and behaves exactly as it always did.
+    //
+    // **This is the gate.** SQL reaches a relation by name and never by
+    // oid, so a name that does not resolve is a relation that cannot be
+    // touched - which is why DT3 filters here and leaves `InitTableAccess`
+    // on the cache.
+    StatusOr<Oid> FindTableOidByName(std::string_view name,
+                                      const txn::ReadView* view = nullptr);
 
     // Lists every table registered in sys.objects (type_oid == kTypeTable),
     // including the catalog's own bootstrap tables - not just user-created
     // ones. Added for the
     // server's command dispatcher (src/server), which needs "what tables
     // exist" without the caller already knowing a name to look up.
-    StatusOr<std::vector<SysObjectRow>> ListTables();
+    StatusOr<std::vector<SysObjectRow>> ListTables(const txn::ReadView* view = nullptr);
 
     // ALTER TABLE's two catalog writes (docs/spec-alter.md AL2, AL5,
     // workplan ALT02): rewrite one fixed-width Name field in place - same

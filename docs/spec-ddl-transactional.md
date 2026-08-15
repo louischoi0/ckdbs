@@ -56,16 +56,35 @@ Three facts about the code make this tractable:
    because `PageView::ReadTuple` reports `NotFound`, and that is the only
    filtering there is.
 
-So the change is: **stamp the real transaction id, and filter catalog
-reads through the same `txn::Classify` predicate user reads already
-use.** Atomicity then falls out for free — an aborted transaction's id
-never commits, so no view ever sees its rows, which is precisely how an
-aborted `INSERT` already behaves. **No undo record is required for
-rollback**, and none is written.
+So **isolation** is: stamp the real transaction id, and filter catalog
+reads by the reader's view. While the creating transaction is live its id
+sits in every other view's in-flight set, so its rows are invisible to
+them and visible to itself. That is the whole of property B.
 
-The row an aborted DDL leaves behind is garbage that nothing reclaims.
-That is consistent with the engine's existing posture (nothing purges
-anywhere — `known-gaps.md`), and it is stated rather than hidden.
+### Atomicity is not free, and an earlier draft of this spec said it was
+
+This section claimed atomicity fell out of visibility — that an aborted
+transaction's rows are never seen because its id never commits.
+**That is wrong, and the correction is load-bearing.**
+`txn::ReadView::Visible` answers *"below the high-water mark and not
+in-flight"* → **visible**. It has no notion of "aborted". Once the
+aborting transaction is out of the live set, a view minted afterwards
+reads its id as committed — the same mechanism `txn.md` §8 already
+describes for the crash case.
+
+The engine does not hide aborted work by visibility. It hides it by
+**compensation**: `TransactionManager::Abort` walks the transaction's
+trail in reverse and physically undoes each mutation, and for an insert
+that is `PageView::RetireSlot`.
+
+So DDL must do what every other write does — **register its catalog row
+insert on the transaction's trail** (`NoteInsert`), so `Abort`
+compensates it. That is not a new mechanism; it is the existing one,
+applied to a page the catalog happens to own. What it needs is the
+`(page_id, slot)` of the row, which `InsertRow` currently discards.
+
+The consequence for planning: **isolation and atomicity are separate
+phases**, and only the first is delivered by the read filter.
 
 ## 3. Invariants this must not break
 

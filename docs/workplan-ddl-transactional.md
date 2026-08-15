@@ -9,8 +9,9 @@ exists in `docs/workplan-drop-table.md`.
 
 ## Where to pick this up
 
-**DT1 and DT2 done (2026-08-15).** DT3 is next, and it is the phase
-where behaviour actually changes.
+**DT1, DT2 and DT3 done (2026-08-15).** DT3a is next — and it exists
+because DT3 found the spec wrong about how rollback works. Read spec §2's
+"Atomicity is not free" before starting it.
 
 ## The phases
 
@@ -43,22 +44,55 @@ verified to fail when the id is dropped on any one of them; the other
 asserts every row still carries `kBootstrapXid` when no id is passed,
 which is the half that would have broken quietly.
 
-### DT3 — catalog reads apply the visibility predicate
+### DT3 — catalog reads apply the visibility predicate ✅ 2026-08-15
 
-The walks (`ScanAll` and its single-row sibling) take a
-`const txn::Snapshot*` and skip rows the reader cannot see, through the
-same `txn::Classify` user reads use. Null means "see everything", which
-is what bootstrap, recovery and every internal read take — so the diff is
-confined to callers that genuinely have a reader.
+`ScanAll` takes an optional `const txn::ReadView*` and skips rows the
+reader cannot see; null means "see everything" and reproduces every
+pre-DT3 caller byte for byte. `FindTableOidByName` and `ListTables` take
+one and pass it down.
 
-This is the phase with real surface: ~16 walk sites inside
-`src/catalog/catalog.cpp` and ~31 public read methods, called from ~19
-files. Expect the signature churn to dominate the diff and the *decisions*
-to be few.
+**Scoped to the name lookup, deliberately.** SQL reaches a relation by
+name and never by oid, so a name that does not resolve is a relation that
+cannot be touched — which is why `InitTableAccess` stays cache-served and
+unfiltered. It is reachable only with an oid the caller could only have
+got from a lookup that already applied the filter.
 
-Gate: a test proving one session cannot see another's uncommitted
-`CREATE TABLE`, and that `ROLLBACK` leaves no relation — which is
-atomicity falling out of isolation, per spec §2.
+**A transactional lookup neither reads nor fills the shared cache**
+(spec §4's option (a), scoped tighter than proposed: keyed on "a view was
+passed", not on "this session did DDL"). The cache is one map per
+instance and knows nothing about who is asking, so filling it from a
+filtered read would publish an uncommitted relation to everybody. Both
+halves are tested; the cache half is the one that would have broken
+quietly.
+
+Gate: **met for isolation** — a reader whose view cannot see the creating
+transaction gets `NotFound` and an unlisted relation, while the creator
+sees its own work and an internal (null-view) read still sees everything.
+**Not met for atomicity, and it cannot be** — see below.
+
+### DT3a — rollback actually removes the relation
+
+**DT3 discovered that spec §2 was wrong**: `ReadView::Visible` has no
+notion of "aborted", so once the aborting transaction leaves the live
+set, a later view reads its id as committed. Visibility delivers
+isolation and nothing else.
+
+The engine hides aborted work by **compensation**, not visibility:
+`TransactionManager::Abort` walks the trail in reverse and
+`RetireSlot`s each insert. So DDL must register its catalog row on the
+trail via `NoteInsert`, which needs the `(page_id, slot)` that
+`InsertRow` currently discards — that return value is the whole of the
+code change.
+
+Care needed at `Compensate`'s identity check: it re-reads the row and
+compares `entry.pk` before retiring, which is a *user row's* Keystone id.
+A catalog row has no such id, so either the check has to admit catalog
+rows explicitly or the entry has to carry something that identifies them.
+Decide it there rather than here.
+
+Gate: `BEGIN; CREATE TABLE t ...; ROLLBACK;` leaves no relation, proven
+against a view minted *after* the rollback — the view that would wrongly
+have seen it.
 
 ### DT4 — the cache honours it
 

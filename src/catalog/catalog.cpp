@@ -38,8 +38,20 @@ namespace {
 // pages and may never write one (workplan-crosscore.md P6), so a read that
 // dirties is a read a peer cannot do at all. Which is the ownership check
 // doing exactly its job - the bug predates it by a long way.
+//
+// **`view`, when given, is the reader's visibility** (DT3): a catalog row
+// stamped by a transaction that this view cannot see is not there for this
+// reader, exactly as an uncommitted user row is not. Null means "see
+// everything", which is what bootstrap, recovery and every internal read
+// pass - and what every caller passed before DT3 existed, so a null view
+// reproduces the old behaviour byte for byte.
+//
+// Only the `trx_id` is consulted, not the undo chain: a catalog row's
+// `undo_ptr` is always 0 (txn.md §7), so there is no older version to step
+// back to. A delete-marked catalog row is DT5's business, not this one's.
 template <typename RowT>
-StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root) {
+StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
+                                    const txn::ReadView* view = nullptr) {
     std::vector<RowT> rows;
     Status inner = Status::OK();
     Status walked = heap::ChainVisit(
@@ -53,6 +65,9 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root) {
                 }
                 inner = tuple.status();
                 return tuple.status();
+            }
+            if (view != nullptr && !view->Visible(tuple.value().trx_id)) {
+                return storage::VisitControl::kContinue;  // not there, for this reader
             }
             auto row = RowT::Decode(tuple.value().payload);
             if (!row.ok()) {
@@ -896,17 +911,26 @@ StatusOr<SysTableRow> Catalog::GetSysTableRow(Oid table_oid) {
     return Status::NotFound("no sys.tables row for this oid");
 }
 
-StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name) {
-    if (const Oid* cached = cache_.FindOidByName(name); cached != nullptr) {
-        return *cached;
+StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::ReadView* view) {
+    // **A transactional lookup neither reads nor fills the cache** (DT3;
+    // spec-ddl-transactional.md §4's option (a)). The cache is one map for
+    // the whole instance and answers "does this name exist" with no idea
+    // whose transaction is asking - so serving one session from it would
+    // hand it another session's uncommitted relation, and filling it from
+    // one would publish that relation to everybody. Scoped to callers that
+    // pass a view: with none, this is the path that always existed.
+    if (view == nullptr) {
+        if (const Oid* cached = cache_.FindOidByName(name); cached != nullptr) {
+            return *cached;
+        }
     }
 
-    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects);
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view);
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
         if (row.type_oid == kTypeTable && NameView(row.name) == name) {
-            cache_.PutOidByName(name, row.oid);
+            if (view == nullptr) cache_.PutOidByName(name, row.oid);
             return row.oid;
         }
     }
@@ -1111,18 +1135,24 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     return Status::OK();
 }
 
-StatusOr<std::vector<SysObjectRow>> Catalog::ListTables() {
-    if (const std::vector<SysObjectRow>* cached = cache_.FindTableList(); cached != nullptr) {
-        return *cached;
+StatusOr<std::vector<SysObjectRow>> Catalog::ListTables(const txn::ReadView* view) {
+    if (view == nullptr) {
+        if (const std::vector<SysObjectRow>* cached = cache_.FindTableList();
+            cached != nullptr) {
+            return *cached;
+        }
     }
 
-    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects);
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view);
     if (!rows.ok()) return rows.status();
 
     std::vector<SysObjectRow> tables;
     for (auto& row : rows.value()) {
         if (row.type_oid == kTypeTable) tables.push_back(row);
     }
+    // The same rule as the name lookup: a transactional list is this
+    // reader's list and is not published to the instance.
+    if (view != nullptr) return tables;
     return *cache_.PutTableList(std::move(tables));
 }
 
