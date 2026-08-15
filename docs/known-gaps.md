@@ -455,6 +455,40 @@ There is no purge pass, and readers are deliberately unregistered
   Row-id leasing for peer INSERT is also built (P5-shape, 2026-08-10).
 - **REPEATABLE READ is knowingly weakened across cores** (CC4): no
   cross-core ReadView; RR holds per core. Client-facing docs must say so.
+- **A comparison whose left side is an *outer* row's column loses its
+  type, and one join orientation is refused rather than answered**
+  (found at the P4d-4b-3 review, 2026-08-15). `EvaluateAll` takes the
+  comparison's `type_val` from the lhs column's schema, and
+  `chain_frame.cpp`'s `SchemaFor` answers null for any `up != 0`
+  reference — so an outward lhs falls back to `type_val = 0`.
+  `CompareValues` reads `type_val` in exactly one arm, `kTypeValUint64`,
+  where values above `INT64_MAX` must compare unsigned because
+  `int_val` holds them as negatives. So `WHERE a.u > b.u` over a
+  `uint64` column answers one way locally and the other way through a
+  shipped stage. **Today it is refused, not mis-answered**:
+  `BuildTwoStepPipeline` declines a residual whose lhs is the upstream
+  row and whose column is `uint64`, and the statement falls through to
+  the affinity refusal. The same hole is *accepted* rather than refused
+  for correlated sub-chains, where `chain_frame.cpp` documents it in
+  place.
+  **The real fix, which needs a decision because it reshapes the
+  compiled plan**: `StepPredicate` carries its lhs `type_val`, resolved
+  at compile exactly as `projection_types` and `SortKey::type_val`
+  already are, and `EvaluateAll` stops asking `SchemaFor` at all. That
+  closes the sub-chain case too and lets the cross-core refusal be
+  deleted. Cost: every site building a `StepPredicate` in
+  `step_compiler.cpp` (including the synthesized range bounds), the
+  evaluator, and a **`kStepDescriptorVersion` bump** — a versioned wire
+  format, so it is not a change to make in passing.
+- **`Drain` holds a `Pipeline&` across `send_`** — latent, pre-existing,
+  and the one place in `remote_step_service.cpp` that does not follow
+  its own re-find-by-tag discipline. A synchronous `send_` that reached
+  `OnStepOpen` would `push_back` onto `pipelines_` and invalidate the
+  reference under the loop. Unreachable today: `Drain` sends only
+  batches and EOF, and neither receiver opens a stage. Left alone
+  deliberately — `Drain` carries the reentrancy latch and the
+  erase-before-EOF ordering that two ASan-caught bugs produced, and
+  refactoring it to chase an unreachable case risks more than it buys.
 - ~~**A shipped stage reads with *every writer visible*, not latest
   committed**~~ — found at the P4d-4b-3 review and **closed the same
   day (2026-08-15)**. Every shipped stage used to execute with
