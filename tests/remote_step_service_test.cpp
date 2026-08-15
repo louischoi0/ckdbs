@@ -71,6 +71,30 @@ protected:
         // deterministically.
         InsertRows(8, /*qty_step=*/10);
         MakeServer(/*submit=*/{});
+
+        // **The suspension audit, over the pipeline's own park points.**
+        // It is what turns "a coroutine never suspends holding a page"
+        // from prose into a detected violation (P4d-3c), and it was wired
+        // only into `CoreRuntime::Run` and `Expeditor::Serve` - neither of
+        // which these tests call, so every park this file exercises went
+        // unaudited, including the one P4d-4c added *inside* a consuming
+        // stage's input row. Installed against this fixture's own store,
+        // because pins are per-store.
+        sched::ResetSuspendAudit();  // thread-local: another test may have tripped it
+        exec::InstallSuspendAudit(store_.get());
+    }
+
+    void TearDown() override {
+        // **The audit records, it does not abort** - so installing it
+        // proves nothing without reading it back. Every test in this
+        // fixture is checked here, which is what makes the parked-walk
+        // tests an actual audit of the park rather than of the answer.
+        EXPECT_FALSE(sched::SuspendAuditTripped())
+            << "a coroutine suspended holding a page: " << sched::SuspendAuditReason();
+        sched::ResetSuspendAudit();
+        // Owed at teardown: the audit is thread-local and the store it
+        // reads is not immortal.
+        exec::UninstallSuspendAudit();
     }
 
     std::vector<std::byte> OpenFor(const exec::Step& step, std::uint64_t request_id = 7) {
