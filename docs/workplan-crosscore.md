@@ -466,55 +466,56 @@ the core serve a message instead.
     byte-decodable downstream, grant-on-drain, EOF riding the
     producing=false drain, cancel reaching the park, and the
     forwards-nothing refusal - ASan-clean beside the sim suites.
-    **4b-3's recipe, surveyed 2026-08-14** - everything falls out of
-    `StepChain`'s existing fields: the forwarded layout of edge 0→1 is
-    the unique step-0 columns among step 1's key/residual references and
-    the projection's rel_slot==0 refs; stage 1's output spec is the
-    projection in order (rel_slot==0 → from_upstream at the forwarded
-    index, rel_slot==1 → local col_pos); stage 0's output spec is the
-    forwarded layout as local entries - which requires the **leaf** to
-    honor an output spec too, so the envelope's output section moves out
-    of the upstream half to stand alone (absent = whole row, the P4c
-    shape, so nothing existing changes); the session's reply decode uses
-    the planned output rows plus `column_names`/`projection_types` for
-    rendering. Also in 4b-3: the expeditor grows its own
-    RemoteStepServer (core 0 serves stages like any core; its existing
-    session-client handlers fan batches to both consumers by tag), and
-    the eligible class in the dispatcher - two steps, no
-    aggregate/sort/limit/offset/hoisted/sub-chains/emit_in_key_order,
-    inner kind probe/lookup/filter-scan, every stage's core serving.
-    Three debts the 4b-2 review priced, carried by name: **the
-    per-input-row runner cost** (each input row pays an ExecuteAsync
-    frame, a Bind and a frame Open before touching a tuple - the shape
-    95946c4 removed locally, reintroduced one level up; measure at
-    P4e's benchmark before building the per-batch runner handle, and
-    note the current shape is why RunConsumer needs no schema-copy
-    ceremony: no borrow survives a park). **FieldToValue's silent
-    zero-pad of a short field** (the row_count cross-check catches
-    whole-layout skew; a per-field width refusal belongs with 4b-3's
-    typed session decode, per invariant 13's rule). **`downstream_step`
-    is written and never read** - 4b-3 must either read it or delete
-    the field with a §3 amendment; routing today is entirely by the
-    upstream's tag.
-    **4b-3** the session side (plan-time edge computation and ref
-    normalization - upstream refs become (up=1, slot=0) with col_pos
-    into the *forwarded* layout before encoding, so no stage guesses
-    another's slots; the multi-step eligible class in the dispatcher;
-    typed projection over the final edge's batches - the piece P4c's
-    star-only refusal deferred). The narrow class first: a two-step
-    join, scan feeding probe (an inner probe emits at most one row per
-    input row, which is what keeps the consumer's buffering bounded by
-    one input batch; inner scans stay refused by name until they can
-    park mid-walk).
-    Two wiring facts for 4b-2, surveyed 2026-08-14: **peer cores
-    register no kStepBatch/kStepEof handlers today** (a peer session
-    cannot open remote reads, so nothing consumed them) - the consuming
-    stage brings the first, routed to the step server; and **core 0 has
-    no RemoteStepServer at all** (only peers serve STEP_OPENs), so
-    until 4b-2/3 give the expeditor one, a consuming stage can only be
-    placed on a peer-owned inner relation - and once core 0 serves, its
-    existing session-client handlers must fan batches to both consumers
-    by tag, which is safe because both discard unmatched tags silently.
+    **4b-3 built 2026-08-15** - the session side, and with it **the
+    engine's first multi-step cross-core statement executes**: a
+    two-step join, scan feeding probe, planned by the session and served
+    as a chained pipeline (`CoreRuntimeTest.
+    ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline`, both stages
+    on one peer - self-sends are the transport's degenerate case). What
+    landed, exactly the surveyed recipe: the envelope's **output section
+    stands alone** beside the upstream half (absent = whole row, so
+    every pre-4b-3 envelope means what it meant) and the **leaf honors
+    it** - both producer shapes seal the spec'd columns; the forwarded
+    layout of edge 0→1 is the unique step-0 columns among step 1's
+    key/residual refs and the projection's slot-0 refs, ascending;
+    `BuildTwoStepPipeline` (session_step_client.cpp) computes it,
+    normalizes the shipped step's refs (own → (0,0), upstream → (1,0)
+    at the forwarded index - the residual's *lhs* may be upstream too,
+    an ON clause is written in either orientation, so the stage-side
+    validation admits both sides either way), builds both output specs
+    and both opens, and hands `OpenPipeline` the stage list plus the
+    decode/render facts (`output_layout`, `column_names`,
+    `projection_types` - stashed in the read because the chain dies
+    with the statement frame); the dispatcher's eligible class is two
+    steps, no aggregate/sort/limit/offset/hoisted/sub-chains/
+    emit_in_key_order, **inner kind kProbe only** (at most one row per
+    input row keeps the consumer's buffering bounded; an inner scan
+    stays refused by name until it can park mid-walk, P4d-4c), at
+    least one owner remote, refusals falling through to the affinity
+    refusal; the typed session decode renders the projected reply.
+    The expeditor grew its own RemoteStepServer (core 0 serves stages
+    like any core) with **one fan-by-tag lambda per shared kind** -
+    a scheduler holds one handler per kind, and both consumers discard
+    unmatched tags silently, so the tag is the demultiplexer.
+    Teardown grew the multi-stage halves: `OnStepError` matches **by
+    statement** (request_id + session_core - a failing stage answers
+    under its own tag while the read is registered under the final
+    stage's), and `Close` cancels **every stage** unless a clean EOF
+    ended the read - a leaf's failure leaves its consumer parked on
+    input forever, and only the session holds the whole stage list.
+    Two of the three carried debts closed with it: the per-field width
+    refusal is `wire::FieldToValueChecked` (invariant 13 one level up),
+    applied at both edge decodes - the consumer's input fill and the
+    session's typed decode; and **`downstream_step` is now read**: the
+    consuming stage refuses an enclosed open whose downstream core/step
+    do not address the stage forwarding it - a plan wired to the wrong
+    consumer would stream rows to a tag that never opened. Still
+    carried, by name: **the per-input-row runner cost** (each input row
+    pays an ExecuteAsync frame, a Bind and a frame Open before touching
+    a tuple - the shape 95946c4 removed locally, reintroduced one level
+    up; measure at P4e's benchmark before building the per-batch runner
+    handle, and note the current shape is why RunConsumer needs no
+    schema-copy ceremony: no borrow survives a park).
     **P4d-4c after**: per-page batching through the walk boundary
     (dissolving the helper's multi-step per-row frames), the sub-chain
     await decision, and the frame re-open caveat 4b inherits from the

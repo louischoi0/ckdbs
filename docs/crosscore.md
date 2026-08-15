@@ -69,7 +69,7 @@ Message kinds:
 
 | Kind | Direction | Payload |
 |------|-----------|---------|
-| `STEP_OPEN` | downstream stage → its upstream's core (the session opens the final stage; amended 2026-08-14, §2) | step descriptor: relation oid, bindings, projection set, downstream core+step; optional upstream section (forwarded-row layout, enclosed upstream open) |
+| `STEP_OPEN` | downstream stage → its upstream's core (the session opens the final stage; amended 2026-08-14, §2) | step descriptor: relation oid, bindings, projection set, downstream core+step; optional upstream section (forwarded-row layout, enclosed upstream open); optional output spec — **standalone, beside the upstream section, since 2026-08-15 (P4d-4b-3)**, because a *leaf* seals its consumer's input layout too; absent = whole row. The head's `downstream_step` is read at the consuming stage: the enclosed open must address the stage that forwards it, or the open is refused |
 | `STEP_BATCH` | step k → step k+1 (or session) | chunk of KWP-encoded rows (§4) |
 | `STEP_EOF` | upstream → downstream | no more batches for this step |
 | `STEP_CREDIT` | downstream → upstream | grants N batch credits (§4) |

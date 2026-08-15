@@ -1200,10 +1200,63 @@ Status Expeditor::Serve() {
                 return Status::OK();
             },
             &*logger_);
+        // Core 0's own step server (workplan P4d-4b-3): a stage placed on
+        // a relation core 0 owns is served here, like any peer serves its
+        // own - the missing half that made "every stage's core serving"
+        // true. Same send shape as the client above; producers and
+        // consumers land on core 0's one reactor.
+        remote_steps_.emplace(
+            database_->catalog, *store_, /*core_id=*/0,
+            [this, &scheduler](std::uint32_t dst, sched::RingMessageKind kind,
+                               std::vector<std::byte> payload) {
+                sched::MessageHeader out{};
+                out.src_core = 0;
+                out.dst_core = dst;
+                out.session_core = 0;
+                out.kind = static_cast<std::uint16_t>(kind);
+                out.sched_group =
+                    static_cast<std::uint16_t>(sched::SchedulingGroup::kForeground);
+                scheduler.Submit(sched::MakeSendRetryTask(*transport_, out, payload));
+                return Status::OK();
+            },
+            &*logger_, kStepBatchTargetBytes,
+            [&scheduler](std::unique_ptr<sched::Task> task) {
+                scheduler.Submit(std::move(task));
+            });
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kStepOpen,
+                [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {
+                    remote_steps_->OnStepOpen(header, payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kStepCredit,
+                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                    remote_steps_->OnStepCredit(payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kStepCancel,
+                [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                    remote_steps_->OnStepCancel(payload);
+                });
+            !s.ok()) {
+            return s;
+        }
+        // The two kinds both consumers hear: a scheduler holds exactly one
+        // handler per kind (the map assigns), so core 0 - the one core
+        // hosting a session client *and* a step server - fans each payload
+        // to both. Safe because the tag is the demultiplexer: each
+        // consumer discards a tag it does not hold, silently (§3).
         if (Status s = scheduler.RegisterMessageHandler(
                 sched::RingMessageKind::kStepBatch,
                 [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
                     remote_reads_->OnStepBatch(payload);
+                    remote_steps_->OnStepBatch(payload);
                 });
             !s.ok()) {
             return s;
@@ -1212,6 +1265,7 @@ Status Expeditor::Serve() {
                 sched::RingMessageKind::kStepEof,
                 [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
                     remote_reads_->OnStepEof(payload);
+                    remote_steps_->OnStepEof(payload);
                 });
             !s.ok()) {
             return s;

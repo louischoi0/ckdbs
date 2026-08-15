@@ -20,6 +20,7 @@
 #include "kds/sched/clock.hpp"
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/send_retry.hpp"
+#include "kds/sched/task.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/extent_lease.hpp"
 #include "kds/storage/memory_page_device.hpp"
@@ -614,6 +615,156 @@ TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {
     // shipped in P4c and answers the affinity refusal, never wrong rows.
     auto refused = runtime.value()->dispatcher().Dispatch("SELECT v FROM rotated");
     EXPECT_EQ(refused.response.rfind("ERR ", 0), 0u);
+}
+
+// ---- P4d-4b-3: a two-step join executes as a cross-core pipeline ---------
+
+TEST_F(CoreRuntimeTest, ATwoStepJoinAgainstRotatedRelationsIsServedAsAPipeline) {
+    // The engine's first multi-step cross-core statement, end to end in
+    // loopback: the dispatcher compiles a scan-feeding-probe join, plans
+    // the edge, ships the chained open; the "remote" core opens the
+    // consuming stage, forwards the enclosed leaf open to itself
+    // (self-sends are the same protocol), streams the join under credit;
+    // the session's typed decode renders the projected reply.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+
+    auto make_schema = [&](const char* second) {
+        catalog::Schema schema;
+        catalog::SysColumnRow id{};
+        id.pos = 0;
+        catalog::SetName(id.name, "id");
+        id.type_val = catalog::kTypeValInt64;
+        id.len = 8;
+        id.notnull = true;
+        catalog::SysColumnRow other{};
+        other.pos = 1;
+        catalog::SetName(other.name, second);
+        other.type_val = catalog::kTypeValInt64;
+        other.len = 8;
+        other.notnull = true;
+        schema.columns = {id, other};
+        return schema;
+    };
+    auto outer_oid = catalog2.CreateTable(catalog::kNamespacePublic, "ta", make_schema("b_id"),
+                                          catalog::ClusteredType::kHeap,
+                                          catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(outer_oid.ok()) << outer_oid.status().message();
+    auto inner_oid = catalog2.CreateTable(catalog::kNamespacePublic, "tb", make_schema("qty"),
+                                          catalog::ClusteredType::kHeap,
+                                          catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(inner_oid.ok()) << inner_oid.status().message();
+
+    auto insert = [&](catalog::Oid oid, std::int64_t second) {
+        auto access = catalog2.InitTableAccess(oid);
+        ASSERT_TRUE(access.ok());
+        auto id = catalog2.AllocateRowId(oid);
+        ASSERT_TRUE(id.ok());
+        parser::AstValue v;
+        v.type = parser::ValueType::kInt;
+        v.int_val = second;
+        v.raw_int_text = std::to_string(second);
+        auto payload = exec::EncodeRow(access.value()->schema, access.value()->layout,
+                                       id.value(), {v});
+        ASSERT_TRUE(payload.ok());
+        auto placed = heap::ChainInsert(*core0_store_, access.value()->desc_page_id,
+                                        id.value(), payload.value(), 1, access.value()->oid);
+        ASSERT_TRUE(placed.ok()) << placed.status().message();
+    };
+    // ta: (1, b_id=2) (2, b_id=1) (3, b_id=9 -> miss) (4, b_id=3);
+    // tb: (1, 100) (2, 200) (3, 300).
+    insert(outer_oid.value(), 2);
+    insert(outer_oid.value(), 1);
+    insert(outer_oid.value(), 9);
+    insert(outer_oid.value(), 3);
+    insert(inner_oid.value(), 100);
+    insert(inner_oid.value(), 200);
+    insert(inner_oid.value(), 300);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    // Rotation at core_count=2 places every relation on core 1: both
+    // stages of the pipeline live on one peer, which is exactly the
+    // stage-to-stage self-send shape.
+    auto outer_row = catalog2.GetSysTableRow(outer_oid.value());
+    auto inner_row = catalog2.GetSysTableRow(inner_oid.value());
+    ASSERT_TRUE(outer_row.ok());
+    ASSERT_TRUE(inner_row.ok());
+    ASSERT_EQ(outer_row.value().owner_core, 1u);
+    ASSERT_EQ(inner_row.value().owner_core, 1u);
+
+    auto runtime = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(runtime.ok()) << runtime.status().message();
+    runtime.value()->GrantRelationFault(
+        RelationFaultExtentOf(outer_row.value(), storage::kDefaultExtentPages));
+    runtime.value()->GrantRelationFault(
+        RelationFaultExtentOf(inner_row.value(), storage::kDefaultExtentPages));
+
+    // The loopback pair, streaming this time: a consuming stage needs a
+    // reactor, so the server's tasks land in `tasks` and Pump() is one
+    // reactor pass. Sends route by destination core - core 1's traffic
+    // (the chained forward, the leaf's batches to its consumer, credits
+    // and cancels between the stages) re-enters the server itself.
+    std::optional<RemoteStepServer> server;
+    std::optional<SessionStepClient> client;
+    std::vector<std::unique_ptr<sched::Task>> tasks;
+    auto pump = [&] {
+        for (auto& task : tasks) {
+            if (task != nullptr && task->Poll() == sched::PollResult::kDone) task.reset();
+        }
+        std::erase(tasks, nullptr);
+    };
+    auto deliver = [&](std::uint32_t dst, sched::RingMessageKind kind,
+                       std::vector<std::byte> payload) {
+        if (dst == 1) {
+            sched::MessageHeader h{};
+            h.src_core = 1;
+            h.dst_core = 1;
+            switch (kind) {
+                case sched::RingMessageKind::kStepOpen: server->OnStepOpen(h, payload); break;
+                case sched::RingMessageKind::kStepCredit: server->OnStepCredit(payload); break;
+                case sched::RingMessageKind::kStepBatch: server->OnStepBatch(payload); break;
+                case sched::RingMessageKind::kStepEof: server->OnStepEof(payload); break;
+                case sched::RingMessageKind::kStepCancel: server->OnStepCancel(payload); break;
+                default: ADD_FAILURE() << "unexpected kind to core 1";
+            }
+            return Status::OK();
+        }
+        switch (kind) {
+            case sched::RingMessageKind::kStepBatch: client->OnStepBatch(payload); break;
+            case sched::RingMessageKind::kStepEof: client->OnStepEof(payload); break;
+            case sched::RingMessageKind::kStepError: client->OnStepError(payload); break;
+            default: ADD_FAILURE() << "unexpected kind to core 0";
+        }
+        return Status::OK();
+    };
+    server.emplace(catalog2, *core0_store_, /*core_id=*/1, deliver, nullptr,
+                   /*batch_target_bytes=*/1,
+                   [&](std::unique_ptr<sched::Task> task) { tasks.push_back(std::move(task)); });
+    client.emplace(/*core_id=*/0, deliver);
+    runtime.value()->dispatcher().SetRemoteReads(&*client);
+
+    // The statement path itself parks on the read, so it runs as the
+    // coroutine the reactor would poll, interleaved with the server's
+    // producer and consumer tasks.
+    DispatchOutcome out;
+    auto statement = sched::MakeCoroTask(
+        sched::SchedulingGroup::kForeground,
+        runtime.value()->dispatcher().DispatchAsync(
+            "SELECT a.id, b.qty FROM ta AS a JOIN tb AS b ON b.id = a.b_id", nullptr, &out));
+    int rounds = 0;
+    while (statement->Poll() != sched::PollResult::kDone) {
+        pump();
+        ASSERT_LT(++rounds, 64) << "the pipeline did not converge";
+    }
+
+    // The joined rows, typed-decoded and rendered by the session: outer
+    // walk order, the miss dropped, headings the chain's own - the
+    // qualified spelling a local join answers with.
+    EXPECT_EQ(out.response, "a.id,b.qty\\n1,200\\n2,100\\n4,300");
+    EXPECT_EQ(client->open_reads(), 0u);
+    EXPECT_EQ(server->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks.empty());
 }
 
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {

@@ -2440,6 +2440,52 @@ DispatchOutcome CommandDispatcher::FinishRemoteRead(const PipelineTag& tag) {
         return {ErrorReply(error), false};
     }
 
+    // The projected form (P4d-4b-3): the batches carry the *planned*
+    // output layout - the rows the session itself computed at plan time
+    // and told every stage - so the decode uses that plan, and rendering
+    // uses the chain's own headings and projection types, both stashed in
+    // the read because the compiled chain died with the statement frame.
+    // The typed decode is checked per field (invariant 13 one level up):
+    // a width the layout disagrees with is Corruption, never interpreted.
+    if (!read->output_layout.empty()) {
+        std::ostringstream os;
+        bool first_col = true;
+        for (const std::string& name : read->column_names) {
+            if (!first_col) os << ',';
+            os << name;
+            first_col = false;
+        }
+        for (const auto& batch : read->batches) {
+            std::span<const std::byte> rows;
+            auto header = DecodeStepBatchHeader(batch, rows);
+            if (!header.ok()) {
+                remote_reads_->Close(tag);
+                return {ErrorReply(header.status()), false};
+            }
+            auto decoded = wire::DecodeRowBatch(rows, read->output_layout.size());
+            if (!decoded.ok()) {
+                remote_reads_->Close(tag);
+                return {ErrorReply(decoded.status()), false};
+            }
+            for (const auto& row : decoded.value()) {
+                os << "\\n";
+                bool first_val = true;
+                for (std::size_t i = 0; i < read->output_layout.size(); ++i) {
+                    if (!first_val) os << ',';
+                    auto value = wire::FieldToValueChecked(read->output_layout[i], row[i]);
+                    if (!value.ok()) {
+                        remote_reads_->Close(tag);
+                        return {ErrorReply(value.status()), false};
+                    }
+                    os << exec::FormatValue(read->projection_types[i], value.value());
+                    first_val = false;
+                }
+            }
+        }
+        remote_reads_->Close(tag);
+        return {os.str(), false};
+    }
+
     auto access = catalog_.InitTableAccess(read->rel_oid);
     if (!access.ok()) {
         remote_reads_->Close(tag);
@@ -3678,6 +3724,54 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
             }
             // A step the descriptor refuses (an index probe, say) falls
             // through to the honest refusal rather than a worse error.
+        }
+    }
+
+    // The two-step pipeline class (P4d-4b-3): a join, scan feeding probe,
+    // with at least one relation another core owns. The exclusions above
+    // hold verbatim (aggregate/sort/quota/ANALYZE fold or apply at
+    // emission, which the pipeline's final edge is not), plus the class's
+    // own: sub-chains cannot ship, `emit_in_key_order` does not travel in
+    // the descriptor, and the inner step must be a **probe keyed by the
+    // outer row** - an inner probe emits at most one row per input row,
+    // which is what keeps the consuming stage's buffering bounded by one
+    // input batch; an inner scan stays refused by name until it can park
+    // mid-walk (P4d-4c's gated inner walk). A projected form is required
+    // rather than excluded: the batches carry exactly the planned output
+    // layout, typed by the plan the session kept.
+    if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 2 &&
+        chain.value().hoisted.empty() && !chain.value().star() &&
+        !chain.value().projection.empty() && !chain.value().aggregated() &&
+        !chain.value().sorted() && !chain.value().limit.has_value() &&
+        chain.value().offset == 0) {
+        const exec::Step& outer = chain.value().steps[0];
+        const exec::Step& inner = chain.value().steps[1];
+        const bool shapes_ok = outer.sub_chains.empty() && inner.sub_chains.empty() &&
+                               !outer.emit_in_key_order && !inner.emit_in_key_order &&
+                               inner.kind == exec::AccessKind::kProbe &&
+                               inner.key.has_value() &&
+                               inner.key->kind == exec::OperandKind::kColumn;
+        if (shapes_ok) {
+            auto outer_access = catalog_.InitTableAccess(outer.rel_oid);
+            auto inner_access = catalog_.InitTableAccess(inner.rel_oid);
+            if (outer_access.ok() && inner_access.ok() &&
+                (outer_access.value()->owner_core != core_id_ ||
+                 inner_access.value()->owner_core != core_id_)) {
+                auto plan = BuildTwoStepPipeline(
+                    chain.value(), outer_access.value()->schema, inner_access.value()->schema,
+                    outer_access.value()->owner_core, inner_access.value()->owner_core,
+                    core_id_, next_remote_request_++);
+                if (plan.ok()) {
+                    auto tag = remote_reads_->OpenPipeline(std::move(plan.value()));
+                    if (tag.ok()) {
+                        DispatchOutcome pending;
+                        pending.pending_remote = tag.value();
+                        return pending;
+                    }
+                }
+                // A plan or an open the machinery refuses falls through to
+                // the honest affinity refusal, never a worse error.
+            }
         }
     }
     if (Status affinity = CheckReadAffinity(chain.value()); !affinity.ok()) {

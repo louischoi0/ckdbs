@@ -6,6 +6,7 @@
 
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
+#include "kds/catalog/schema.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/sched/ring_message.hpp"
 #include "kds/server/step_pipeline.hpp"
@@ -36,6 +37,13 @@ public:
     SessionStepClient(std::uint32_t core_id, SendFn send, Logger* log = nullptr) noexcept
         : core_id_(core_id), send_(std::move(send)), log_(log) {}
 
+    // One stage of the statement's pipeline: where a CANCEL must go when
+    // the read tears down other than by a clean EOF.
+    struct StageAddress {
+        PipelineTag tag{};
+        std::uint32_t core = 0;
+    };
+
     // One remote read's state. `done` is the WaitFor flag; `batches` holds
     // the raw STEP_BATCH payloads (header included) so the decoded views
     // a reader takes stay backed for as long as the read is open.
@@ -47,6 +55,34 @@ public:
         Status error = Status::OK();
         std::vector<std::vector<std::byte>> batches;
         std::uint64_t rows = 0;
+        // Every stage of the statement, upstream first (P4d-4b-3). One
+        // entry for a single-step read. The session is the only holder of
+        // the whole list, which is why teardown-by-error cancels from
+        // here: an error names only the stage that failed, and its peers
+        // may be parked anywhere in the chain.
+        std::vector<StageAddress> stages;
+        // The final edge's row layout, for the typed decode; empty means
+        // whole rows of `rel_oid` in schema order (the P4c shape).
+        std::vector<catalog::SysColumnRow> output_layout;
+        // Rendering facts for the projected form, carried here because
+        // the compiled chain dies with the statement frame while the
+        // read completes on the reactor.
+        std::vector<std::string> column_names;
+        std::vector<std::uint32_t> projection_types;
+    };
+
+    // A computed two-step pipeline, ready to open (P4d-4b-3): the chained
+    // final-stage envelope, where it goes, every stage's address, and the
+    // decode/render facts for the final edge.
+    struct PipelinePlan {
+        std::vector<std::byte> final_open;
+        std::uint32_t final_core = 0;
+        PipelineTag final_tag{};
+        catalog::Oid final_rel_oid = 0;
+        std::vector<StageAddress> stages;
+        std::vector<catalog::SysColumnRow> output_layout;
+        std::vector<std::string> column_names;
+        std::vector<std::uint32_t> projection_types;
     };
 
     // Ships `step` to its owner and registers the read. `request_id` is
@@ -54,6 +90,12 @@ public:
     // pointer-derived). Refuses what the descriptor codec refuses.
     StatusOr<PipelineTag> Open(const exec::Step& step, std::uint32_t owner_core,
                                std::uint64_t request_id);
+
+    // Registers the pipeline's read and sends the chained open to the
+    // final stage's core - which forwards its enclosed upstream open
+    // itself (crosscore.md §2's chained-open rule), so this is the one
+    // message the session sends to start the whole chain.
+    StatusOr<PipelineTag> OpenPipeline(PipelinePlan plan);
 
     // Handlers for the three inbound kinds. A tag matching no open read is
     // discarded silently (§3's teardown rule).
@@ -76,5 +118,21 @@ private:
     Logger* log_;
     std::vector<RemoteRead> reads_;
 };
+
+// Derives the pipeline plan for an eligible two-step chain - scan feeding
+// probe (workplan P4d-4b-3). Everything falls out of the chain's own
+// fields: the forwarded layout of edge 0->1 is the unique step-0 columns
+// among step 1's key and residual references and the projection's
+// slot-0 references; stage 0's output spec is that layout as local
+// entries; stage 1's is the projection in order; and step 1's references
+// are normalized before encoding - its own columns to (up=0, slot=0),
+// step 0's to (up=1, slot=0) with col_pos into the *forwarded* layout -
+// so no stage guesses another's slots. Refuses (for the caller to fall
+// through to the affinity refusal) anything the descriptor codec
+// refuses, and any reference shape outside the eligible class.
+StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
+    const exec::StepChain& chain, const catalog::Schema& outer_schema,
+    const catalog::Schema& inner_schema, std::uint32_t outer_core, std::uint32_t inner_core,
+    std::uint32_t session_core, std::uint64_t request_id);
 
 }  // namespace kds::server

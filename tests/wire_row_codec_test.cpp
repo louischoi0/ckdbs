@@ -472,5 +472,28 @@ TEST(WireRowBatchTest, TheByteLayoutIsWhatTheSpecSays) {
     }
 }
 
+TEST(WireFieldToValueTest, TheCheckedFormRefusesAWidthTheColumnDisagreesWith) {
+    // Invariant 13's rule one level up (workplan P4d-4b-3): the bare form
+    // zero-extends a short field into a smaller number that joins
+    // plausibly; the checked form calls it Corruption.
+    const auto col = Column(0, "id", catalog::kTypeValInt64);
+
+    const std::vector<std::byte> full(8, std::byte{0x01});
+    DecodedField good{std::span<const std::byte>(full), false};
+    auto value = FieldToValueChecked(col, good);
+    ASSERT_TRUE(value.ok()) << value.status().message();
+    EXPECT_EQ(value.value().int_val, 0x0101010101010101);
+
+    const std::vector<std::byte> short_bytes(4, std::byte{0x01});
+    DecodedField truncated{std::span<const std::byte>(short_bytes), false};
+    auto refused = FieldToValueChecked(col, truncated);
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kCorruption);
+
+    // NULL carries no bytes and no width to disagree with.
+    DecodedField null_field{std::span<const std::byte>(), true};
+    EXPECT_TRUE(FieldToValueChecked(col, null_field).ok());
+}
+
 }  // namespace
 }  // namespace kds::wire

@@ -280,6 +280,114 @@ TEST_F(RemoteStepServiceTest, AnEnvelopeWithAnUpstreamEdgeRoundTrips) {
                            descriptor.value().begin(), descriptor.value().end()));
 }
 
+TEST_F(RemoteStepServiceTest, AStandaloneOutputSpecRoundTripsWithAndWithoutAnUpstream) {
+    // P4d-4b-3: the output section stands beside the upstream half, so a
+    // *leaf* can carry one - the shape the forwarded layout rides on.
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+    StepOpenHead head{};
+    head.tag = PipelineTag{9, 0, 0};
+    const std::vector<StepOutputColumn> output{StepOutputColumn{0, 1}, StepOutputColumn{0, 0}};
+
+    const std::vector<std::byte> leaf =
+        EncodeStepOpen(head, descriptor.value(), nullptr, output);
+    auto leaf_parts = DecodeStepOpenEnvelope(leaf);
+    ASSERT_TRUE(leaf_parts.ok()) << leaf_parts.status().message();
+    EXPECT_FALSE(leaf_parts.value().upstream.has_value());
+    ASSERT_EQ(leaf_parts.value().output.size(), 2u);
+    EXPECT_EQ(leaf_parts.value().output[0].from_upstream, 0);
+    EXPECT_EQ(leaf_parts.value().output[0].index, 1u);
+    EXPECT_EQ(leaf_parts.value().output[1].index, 0u);
+    EXPECT_TRUE(std::equal(leaf_parts.value().descriptor.begin(),
+                           leaf_parts.value().descriptor.end(), descriptor.value().begin(),
+                           descriptor.value().end()));
+
+    StepOpenUpstream up;
+    up.upstream_core = 3;
+    up.forwarded.push_back(catalog::SysColumnRow{});
+    up.enclosed_open = {std::byte{0x01}};
+    const std::vector<StepOutputColumn> mixed{StepOutputColumn{1, 0}, StepOutputColumn{0, 1}};
+    const std::vector<std::byte> chained =
+        EncodeStepOpen(head, descriptor.value(), &up, mixed);
+    auto chained_parts = DecodeStepOpenEnvelope(chained);
+    ASSERT_TRUE(chained_parts.ok()) << chained_parts.status().message();
+    ASSERT_TRUE(chained_parts.value().upstream.has_value());
+    ASSERT_EQ(chained_parts.value().output.size(), 2u);
+    EXPECT_EQ(chained_parts.value().output[0].from_upstream, 1);
+    EXPECT_TRUE(std::equal(chained_parts.value().descriptor.begin(),
+                           chained_parts.value().descriptor.end(), descriptor.value().begin(),
+                           descriptor.value().end()));
+}
+
+TEST_F(RemoteStepServiceTest, ALeafHonorsItsOutputSpec) {
+    // The stage seals exactly the spec'd columns, in spec order - what
+    // lets the session plan a forwarded layout narrower than the row.
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+    StepOpenHead head{};
+    head.tag = PipelineTag{7, 0, 0};
+    head.downstream_core = 0;
+    const std::vector<StepOutputColumn> output{StepOutputColumn{0, 1}};  // qty only
+
+    server_->OnStepOpen(HeaderFromSession(),
+                        EncodeStepOpen(head, descriptor.value(), nullptr, output));
+    // One row per batch (target 1): 8 batches need two full grants under
+    // the 4-credit ceiling.
+    GrantCredits(4);
+    GrantCredits(4);
+
+    std::vector<std::int64_t> qty_out;
+    for (const Sent& s : sent_) {
+        if (s.kind != sched::RingMessageKind::kStepBatch) continue;
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(s.payload, rows);
+        ASSERT_TRUE(header.ok());
+        auto decoded = wire::DecodeRowBatch(rows, /*field_count=*/1);
+        ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+        for (const auto& row : decoded.value()) {
+            auto qty = wire::DecodeInt(row[0].bytes);
+            ASSERT_TRUE(qty.ok());
+            qty_out.push_back(qty.value());
+        }
+    }
+    EXPECT_EQ(qty_out, (std::vector<std::int64_t>{0, 10, 20, 30, 40, 50, 60, 70}));
+    EXPECT_EQ(sent_.back().kind, sched::RingMessageKind::kStepEof);
+}
+
+TEST_F(RemoteStepServiceTest, ALeafOutputSpecNamingAnUpstreamIsRefused) {
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+    StepOpenHead head{};
+    head.tag = PipelineTag{7, 0, 0};
+    const std::vector<StepOutputColumn> output{StepOutputColumn{1, 0}};  // no upstream exists
+
+    server_->OnStepOpen(HeaderFromSession(),
+                        EncodeStepOpen(head, descriptor.value(), nullptr, output));
+    ASSERT_EQ(sent_.size(), 1u);
+    EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+}
+
+TEST_F(RemoteStepServiceTest, AnEnvelopeTruncatedInsideItsOutputSpecAnswersStepError) {
+    exec::Step step = ScanStep();
+    auto descriptor = EncodeStepDescriptor(step);
+    ASSERT_TRUE(descriptor.ok());
+    StepOpenHead head{};
+    head.tag = PipelineTag{7, 0, 0};
+    const std::vector<StepOutputColumn> output{StepOutputColumn{0, 1}};
+    auto envelope = EncodeStepOpen(head, descriptor.value(), nullptr, output);
+    // head + upstream flag + output flag + count + 2 of the entry's 5.
+    envelope.resize(sizeof(StepOpenHead) + 1 + 1 + 4 + 2);
+
+    server_->OnStepOpen(HeaderFromSession(), envelope);
+    ASSERT_EQ(sent_.size(), 1u);
+    EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+}
+
 TEST_F(RemoteStepServiceTest, ATruncatedEnvelopeWithAWholeHeadAnswersStepError) {
     // The envelope contract: a failure at any point answers STEP_ERROR
     // and opens nothing. With the head intact the tag is real, and a
@@ -603,14 +711,19 @@ protected:
         StepOpenUpstream up;
         up.upstream_core = 0;
         up.forwarded.push_back(KeyColumn());
-        up.output.push_back(StepOutputColumn{/*from_upstream=*/1, /*index=*/0});
-        up.output.push_back(StepOutputColumn{/*from_upstream=*/0, /*index=*/1});  // qty
         up.enclosed_open = EncodeStepOpen(upstream_head, upstream_descriptor.value());
+
+        // The output spec stands beside the upstream section (P4d-4b-3):
+        // (upstream key, local qty), in the order the downstream decodes.
+        const std::vector<StepOutputColumn> output{
+            StepOutputColumn{/*from_upstream=*/1, /*index=*/0},
+            StepOutputColumn{/*from_upstream=*/0, /*index=*/1}};
 
         StepOpenHead head{};
         head.tag = PipelineTag{request_id, /*session_core=*/0, /*step_id=*/1};
         head.downstream_core = 0;
-        server_->OnStepOpen(HeaderFromSession(), EncodeStepOpen(head, descriptor.value(), &up));
+        server_->OnStepOpen(HeaderFromSession(),
+                            EncodeStepOpen(head, descriptor.value(), &up, output));
     }
 
     // One input batch carrying the given keys, under the upstream's tag.
@@ -768,9 +881,41 @@ TEST_F(ConsumingStageTest, AnOutputSpecThatForwardsNothingIsRefused) {
     StepOpenUpstream up;
     up.upstream_core = 0;
     up.forwarded.push_back(KeyColumn());
-    up.enclosed_open.resize(sizeof(StepOpenHead) + 1);  // decodable head, no output spec
+    up.enclosed_open.resize(sizeof(StepOpenHead) + 2);  // decodable head, no output spec
 
     server_->OnStepOpen(HeaderFromSession(), EncodeStepOpen(head, descriptor.value(), &up));
+    ASSERT_EQ(sent_.size(), 1u);
+    EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+}
+
+TEST_F(ConsumingStageTest, AnEnclosedOpenAddressingAnotherStageIsRefused) {
+    // The downstream fields of the enclosed head must name *this* stage -
+    // a plan wired to the wrong consumer would stream rows to a tag that
+    // never opened (P4d-4b-3's read of `downstream_step`).
+    UseStreamingServer();
+    auto descriptor = EncodeStepDescriptor(JoinStep());
+    ASSERT_TRUE(descriptor.ok());
+
+    StepOpenHead upstream_head{};
+    upstream_head.tag = PipelineTag{7, 0, 0};
+    upstream_head.downstream_core = 1;
+    upstream_head.downstream_step = 2;  // not this stage's step id (1)
+    auto upstream_descriptor = EncodeStepDescriptor(ScanStep());
+    ASSERT_TRUE(upstream_descriptor.ok());
+
+    StepOpenUpstream up;
+    up.upstream_core = 0;
+    up.forwarded.push_back(KeyColumn());
+    up.enclosed_open = EncodeStepOpen(upstream_head, upstream_descriptor.value());
+    const std::vector<StepOutputColumn> output{StepOutputColumn{1, 0}};
+
+    StepOpenHead head{};
+    head.tag = PipelineTag{7, 0, 1};
+    head.downstream_core = 0;
+    server_->OnStepOpen(HeaderFromSession(),
+                        EncodeStepOpen(head, descriptor.value(), &up, output));
     ASSERT_EQ(sent_.size(), 1u);
     EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
     EXPECT_EQ(server_->open_pipelines(), 0u);

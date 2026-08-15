@@ -224,4 +224,14 @@ StatusOr<Int128> DecodeDecimalWide(std::span<const std::byte> bytes);
 // inverse, for the reason this file holds one encoder.
 parser::AstValue FieldToValue(const catalog::SysColumnRow& col, const DecodedField& field);
 
+// FieldToValue behind invariant 13's rule: a non-NULL fixed-width field
+// whose byte length disagrees with the column's wire width is Corruption,
+// never interpreted - the bare form zero-extends a short field, which
+// reads a truncated stream as a smaller number. Both cross-core edge
+// decodes go through this (workplan P4d-4b-3); the bare form remains for
+// callers whose lengths were already proven by DecodeRowBatch's bounds
+// against a trusted producer.
+StatusOr<parser::AstValue> FieldToValueChecked(const catalog::SysColumnRow& col,
+                                               const DecodedField& field);
+
 }  // namespace kds::wire

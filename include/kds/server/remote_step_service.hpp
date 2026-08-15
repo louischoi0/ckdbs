@@ -67,11 +67,14 @@ struct StepOpenHead {
 };
 static_assert(sizeof(StepOpenHead) == 24);
 
-// One column of a consuming stage's output row (P4d-4b-2): either a
-// pass-through of an input-layout column or a column of the stage's own
-// relation, in output order. What a stage forwards is decided by the
-// session at plan time (fact 3) and told to the stage here - a stage
-// never guesses what its downstream needs.
+// One column of a stage's output row: either a pass-through of an
+// input-layout column or a column of the stage's own relation, in output
+// order. What a stage forwards is decided by the session at plan time
+// (fact 3) and told to the stage here - a stage never guesses what its
+// downstream needs. A **leaf** stage has no input layout, so its spec may
+// only name local columns (P4d-4b-3); an absent spec means the whole row
+// in schema order, which is exactly the P4c shape, so every pre-4b-3
+// encoder's envelope still means what it meant.
 struct StepOutputColumn {
     std::uint8_t from_upstream = 0;  // 1: `index` into the forwarded layout
     std::uint16_t index = 0;         // 0: `index` into the local relation's schema
@@ -89,16 +92,18 @@ struct StepOpenUpstream {
     // rather than (pos, type) pairs because decode and re-encode both
     // need the width/scale semantics only SysColumnRow carries.
     std::vector<catalog::SysColumnRow> forwarded;
-    // The output row this stage seals downstream: input pass-throughs
-    // and local columns, mixed in the order the downstream decodes.
-    std::vector<StepOutputColumn> output;
     // The upstream stage's complete STEP_OPEN payload, forwarded verbatim.
     std::vector<std::byte> enclosed_open;
 };
 
+// The output spec stands beside the upstream section, not inside it
+// (P4d-4b-3): a leaf has an output too - the forwarded layout it seals
+// for its consumer - and a section owned by the upstream half could
+// never say so. Empty means the whole row.
 std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
                                       std::span<const std::byte> descriptor,
-                                      const StepOpenUpstream* upstream = nullptr);
+                                      const StepOpenUpstream* upstream = nullptr,
+                                      std::span<const StepOutputColumn> output = {});
 
 // One STEP_BATCH framing for every producer of one - the server's Seal,
 // the tests' hand-built inputs, and the session side to come. Leaves the
@@ -106,12 +111,15 @@ std::vector<std::byte> EncodeStepOpen(const StepOpenHead& head,
 std::vector<std::byte> EncodeStepBatch(const PipelineTag& tag, std::uint32_t seq,
                                        wire::RowBatchWriter& writer);
 
-// Splits an envelope into its three parts. `descriptor` is a view into
+// Splits an envelope into its parts. `descriptor` is a view into
 // `payload` - the caller keeps the payload alive across the decode of
 // what it points at, which every message handler already does.
 struct StepOpenParts {
     StepOpenHead head{};
     std::optional<StepOpenUpstream> upstream;
+    // The stage's output row, in the order its downstream decodes.
+    // Empty = the whole row in schema order (the P4c shape).
+    std::vector<StepOutputColumn> output;
     std::span<const std::byte> descriptor;
 };
 StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payload);
@@ -154,13 +162,12 @@ public:
     // §3's silent discard.
     //
     // **A scheduler holds exactly one handler per message kind** - the
-    // registration map assigns, it does not append - so these are safe to
-    // register only because `SessionStepClient`'s same-kind handlers live
-    // on a *different* scheduler: the session's is core 0's (expeditor.cpp)
-    // and this one's is a peer `CoreRuntime`'s. The day core 0 hosts a
-    // stage, or a peer hosts a session, the second registration wins and
-    // the first silently stops receiving - which is why that day needs a
-    // demultiplexer here, not a second RegisterMessageHandler call.
+    // registration map assigns, it does not append. On a peer these are
+    // the kind's only claimant. On core 0 - which hosts a session client
+    // *and*, since P4d-4b-3, this server - the expeditor registers one
+    // lambda per kind that calls both consumers in turn: safe exactly
+    // because both discard unmatched tags silently, so the tag is the
+    // demultiplexer and neither consumer can see the other's edge.
     void OnStepBatch(std::span<const std::byte> payload);
     void OnStepEof(std::span<const std::byte> payload);
 
@@ -243,15 +250,19 @@ private:
     // the pipeline, submits RunConsumer, and forwards the enclosed open
     // upstream - in exactly that order, because the chained-open contract
     // is "state first, upstream last".
-    void OpenConsumingStage(const StepOpenHead& head, const StepOpenUpstream& up, exec::Step step,
+    void OpenConsumingStage(const StepOpenHead& head, const StepOpenUpstream& up,
+                            std::span<const StepOutputColumn> output, exec::Step step,
                             const catalog::Schema& schema);
 
     // The streaming producer (P4d-4a): one coroutine per open pipeline,
     // owning the writer and the executor run. It re-finds its Pipeline by
     // tag at every touch - the vector reallocates and CANCEL erases, so a
     // held pointer would be the dangling-reference bug the dispatcher's
-    // remote read already solved the same way.
-    sched::Coro RunProducer(PipelineTag tag, exec::StepChain chain);
+    // remote read already solved the same way. `output` narrows the row
+    // it seals to the spec's local columns (P4d-4b-3); empty keeps the
+    // whole row.
+    sched::Coro RunProducer(PipelineTag tag, exec::StepChain chain,
+                            std::vector<std::uint16_t> output);
 
     // The consuming stage (P4d-4b-2): parks until input arrives, decodes
     // each upstream row into a one-slot outer frame, runs the local step

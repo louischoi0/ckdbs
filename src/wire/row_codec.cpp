@@ -479,4 +479,19 @@ parser::AstValue FieldToValue(const catalog::SysColumnRow& col, const DecodedFie
     return v;
 }
 
+StatusOr<parser::AstValue> FieldToValueChecked(const catalog::SysColumnRow& col,
+                                               const DecodedField& field) {
+    if (!field.is_null) {
+        const std::int16_t want = WireTypeLen(col.type_val);
+        if (want >= 0 && field.bytes.size() != static_cast<std::size_t>(want)) {
+            return Status::Corruption(
+                "wire row codec: field for column type " + std::to_string(col.type_val) +
+                " carries " + std::to_string(field.bytes.size()) + " bytes where " +
+                std::to_string(want) + " are its width; a disagreeing length is never "
+                "interpreted");
+        }
+    }
+    return FieldToValue(col, field);
+}
+
 }  // namespace kds::wire
