@@ -9,9 +9,11 @@ exists in `docs/workplan-drop-table.md`.
 
 ## Where to pick this up
 
-**DT1, DT2 and DT3 done (2026-08-15).** DT3a is next — and it exists
-because DT3 found the spec wrong about how rollback works. Read spec §2's
-"Atomicity is not free" before starting it.
+**DT1, DT2, DT3 and DT3a done (2026-08-15).** The catalog mechanism is
+complete: isolation by view, atomicity by compensation. What is left is
+**wiring it to a session** — nothing above the catalog passes a real
+transaction id or a view yet, so no SQL statement is transactional DDL
+today. That is DT3b, and it is next.
 
 ## The phases
 
@@ -70,7 +72,7 @@ transaction gets `NotFound` and an unlisted relation, while the creator
 sees its own work and an internal (null-view) read still sees everything.
 **Not met for atomicity, and it cannot be** — see below.
 
-### DT3a — rollback actually removes the relation
+### DT3a — rollback actually removes the relation ✅ 2026-08-15
 
 **DT3 discovered that spec §2 was wrong**: `ReadView::Visible` has no
 notion of "aborted", so once the aborting transaction leaves the live
@@ -84,15 +86,41 @@ trail via `NoteInsert`, which needs the `(page_id, slot)` that
 `InsertRow` currently discards — that return value is the whole of the
 code change.
 
-Care needed at `Compensate`'s identity check: it re-reads the row and
-compares `entry.pk` before retiring, which is a *user row's* Keystone id.
-A catalog row has no such id, so either the check has to admit catalog
-rows explicitly or the entry has to carry something that identifies them.
-Decide it there rather than here.
+**The flagged risk resolved favourably and needed no code.**
+`Compensate` confirms identity by re-reading the row and comparing
+`entry.pk` through `KeystoneIdOfPayload` — a *user row's* Keystone id,
+which a catalog row has no equivalent of. It works anyway: every catalog
+row carries its `oid` in its first eight bytes, exactly where a Keystone
+id sits, so recording `entry.pk = row.oid` makes the check pass **and
+still check** (it is a real comparison, not a bypass — the test passes no
+`RowLocator`, so a mismatch would have failed the abort rather than
+silently relocating). Stated because it is a coincidence of layout that
+a future row format could break.
 
-Gate: `BEGIN; CREATE TABLE t ...; ROLLBACK;` leaves no relation, proven
-against a view minted *after* the rollback — the view that would wrongly
-have seen it.
+`InsertRow` grew an optional out-param rather than a changed return type:
+nine call sites, and only three care.
+
+Gate: **met** — a `CREATE TABLE` under a live transaction, its three rows
+registered with `NoteInsert`, then `Abort`, and the relation is gone to a
+view minted *after* the rollback (the one that would wrongly have seen
+it) **and** to an unfiltered read — which is what proves the rows were
+retired rather than merely hidden.
+
+### DT3b — a SQL statement's DDL joins its transaction
+
+Everything above is reachable only from C++. `HandleCreateTableSql` takes
+no `Session`, so no statement passes a transaction id or a view, and
+`BEGIN; CREATE TABLE t; ROLLBACK` still leaves a relation. This phase is
+the plumbing: thread the session into the DDL handlers, pass its
+transaction's id to `CreateTable`, register the returned rows on its
+trail, and pass its view to relation resolution.
+
+Note the resolution surface is wide — ~14 `FindTableOidByName` callers
+outside the catalog, 10 of them in the dispatcher — and each needs to
+know whether its caller is inside a transaction. Expect churn to dominate
+and decisions to be few, as DT3 did.
+
+Gate: the SQL-level statement of DT3a's property, over a real session.
 
 ### DT4 — the cache honours it
 

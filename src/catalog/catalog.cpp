@@ -165,9 +165,14 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> AllocateCatalogPage
 // so there is no key to order by and every page carries `min_key = 0` - the
 // chain here is an append list, not a semi-sorted heap. Sharing the heap's
 // insert would mean inventing an id for a row nothing looks up by id.
+// `where`, when given, receives the (page, slot) the row landed at
+// (workplan-ddl-transactional.md DT3a). A transactional DDL registers
+// that address on its transaction's trail so `Abort` can retire the slot -
+// the engine hides aborted work by compensation, not by visibility (spec
+// §2's correction), so without this a rolled-back CREATE TABLE stays.
 template <typename RowT>
 Status InsertRow(storage::PageStore& store, PageId root, const RowT& row,
-                  std::uint64_t trx_id) {
+                  std::uint64_t trx_id, CatalogRowRef* where = nullptr) {
     const auto encoded = row.Encode();
 
     PageId current = root;
@@ -177,7 +182,10 @@ Status InsertRow(storage::PageStore& store, PageId root, const RowT& row,
 
         heap::PageView page(bytes.value().bytes());
         auto slot = page.InsertTuple(encoded, trx_id);
-        if (slot.ok()) return Status::OK();
+        if (slot.ok()) {
+            if (where != nullptr) *where = CatalogRowRef{current, slot.value()};
+            return Status::OK();
+        }
         if (slot.status().code() != StatusCode::kOutOfSpace) return slot.status();
 
         // Full. Walk on if there is already a next page, otherwise grow.
@@ -198,6 +206,9 @@ Status InsertRow(storage::PageStore& store, PageId root, const RowT& row,
         if (!fresh.ok()) return fresh.status();
 
         auto placed = fresh.value().InsertTuple(encoded, trx_id);
+        if (placed.ok() && where != nullptr) {
+            *where = CatalogRowRef{new_id, placed.value()};
+        }
         if (!placed.ok()) {
             // A row no empty page can hold. The page stays allocated and
             // unlinked rather than freed - there is no free-page path - and
@@ -693,14 +704,15 @@ void Catalog::InvalidateFromPeer() {
 }
 
 Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
-                                 std::string_view name, std::uint64_t trx_id) {
+                                 std::string_view name, std::uint64_t trx_id,
+                                 CatalogRowRef* where) {
     SysObjectRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
     row.type_oid = type_oid;
     row.rel_id = 0;
     SetName(row.name, name);
-    Status s = InsertRow(store_, kCatalogPageObjects, row, trx_id);
+    Status s = InsertRow(store_, kCatalogPageObjects, row, trx_id, where);
     // A new sys.objects row changes what FindTableOidByName and ListTables
     // would answer, so it stales cached name lookups.
     if (s.ok()) BumpVersion("sys.objects insert");
@@ -710,7 +722,8 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                                    PageId desc_page_id, ClusteredType clustered_type,
                                    PageId varheap_page_id, std::uint32_t owner_core,
-                                   KeyMode key_mode, std::uint64_t trx_id) {
+                                   KeyMode key_mode, std::uint64_t trx_id,
+                                   CatalogRowRef* where) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -721,14 +734,15 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.varheap_page_id = varheap_page_id;
     row.owner_core = owner_core;
     row.key_mode = key_mode;
-    Status s = InsertRow(store_, kCatalogPageTables, row, trx_id);
+    Status s = InsertRow(store_, kCatalogPageTables, row, trx_id, where);
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
 }
 
 Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
                                  std::uint32_t type_val, std::uint32_t len, bool notnull,
-                                 std::uint8_t cabin_policy, std::uint64_t trx_id) {
+                                 std::uint8_t cabin_policy, std::uint64_t trx_id,
+                                 CatalogRowRef* where) {
     SysColumnRow row{};
     row.oid = oid;
     row.rel_id = rel_id;
@@ -738,7 +752,7 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.len = len;
     row.notnull = notnull;
     row.cabin_policy = cabin_policy;
-    Status s = InsertRow(store_, kCatalogPageColumns, row, trx_id);
+    Status s = InsertRow(store_, kCatalogPageColumns, row, trx_id, where);
     // A new column row changes the schema half of a cached TableAccess.
     if (s.ok()) BumpVersion("sys.columns insert");
     return s;
@@ -762,7 +776,7 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                     ClusteredType clustered_type, KeyMode key_mode,
-                                    std::uint64_t trx_id) {
+                                    std::uint64_t trx_id, std::vector<CatalogRowRef>* written) {
     // Refused at definition time rather than at the first INSERT: a table
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
@@ -862,22 +876,38 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // could see the sys.tables row but not its sys.columns rows would see
     // a relation with no schema, which is worse than not seeing it at all.
     // One id, one visibility answer for the whole relation.
-    if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name, trx_id); !s.ok()) {
-        return s;
-    }
-    if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
-                                      varheap_root, owner_core, key_mode, trx_id);
+    // Every row's address is reported when a caller asked for them (DT3a),
+    // and the *partial* list is kept on failure too: rows written before
+    // the failure are on the page whether or not the statement finished,
+    // and a rollback that skipped them would leave exactly the half-built
+    // relation this feature exists to prevent.
+    auto note = [written](const CatalogRowRef& ref) {
+        if (written != nullptr) written->push_back(ref);
+    };
+    CatalogRowRef ref;
+    if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeTable, name, trx_id, &ref);
         !s.ok()) {
         return s;
     }
+    ref.oid = new_oid;
+    note(ref);
+    if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
+                                      varheap_root, owner_core, key_mode, trx_id, &ref);
+        !s.ok()) {
+        return s;
+    }
+    ref.oid = new_oid;
+    note(ref);
 
     for (const auto& col : schema.columns) {
         auto col_oid = GenerateUserOid();
         if (!col_oid.ok()) return col_oid.status();
         Status s = InsertColumnRow(col_oid.value(), new_oid, col.pos, NameView(col.name),
                                     col.type_val, col.len, col.notnull, col.cabin_policy,
-                                    trx_id);
+                                    trx_id, &ref);
         if (!s.ok()) return s;
+        ref.oid = col_oid.value();
+        note(ref);
     }
 
     // Debug, not Info: the dispatcher already reports the client-visible

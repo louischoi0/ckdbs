@@ -15,6 +15,7 @@
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
+#include "kds/txn/manager.hpp"
 
 namespace kds::catalog {
 namespace {
@@ -1427,6 +1428,54 @@ TEST_F(CatalogTest, ATransactionalLookupNeitherReadsNorFillsTheSharedCache) {
     EXPECT_EQ(catalog_.FindTableOidByName("half_open", &other).status().code(),
               StatusCode::kNotFound)
         << "the creator's lookup published its uncommitted relation through the cache";
+}
+
+// ---- DT3a: a rolled-back CREATE TABLE leaves no relation ---------------
+
+TEST_F(CatalogTest, ARolledBackCreateTableLeavesNoRelationEvenToALaterReader) {
+    // **The view is not what makes this work, and that is the point.**
+    // `ReadView::Visible` answers "below the high-water mark and not
+    // in-flight" - it has no notion of "aborted" - so a reader minted
+    // *after* the rollback would see the creating id as committed. The
+    // engine hides aborted work by compensation, so DDL has to put its
+    // rows on the trail like every other write
+    // (spec-ddl-transactional.md §2's correction).
+    ASSERT_TRUE(catalog_.Bootstrap().ok());
+    server::SuperBlock sb = server::SuperBlock::CreateFresh(/*now_unix_seconds=*/0);
+    txn::TrxIdSequence ids(sb);
+    txn::UndoLog undo(store_, /*wal=*/nullptr);
+    txn::TransactionManager mgr(ids, undo, store_, /*wal=*/nullptr);
+
+    auto txn = mgr.Begin(txn::IsolationLevel::kReadCommitted);
+    ASSERT_TRUE(txn.ok()) << txn.status().message();
+
+    std::vector<CatalogRowRef> written;
+    auto oid = catalog_.CreateTable(kNamespacePublic, "doomed", MinimalPkSchema(),
+                                    ClusteredType::kHeap, KeyMode::kAssigned,
+                                    txn.value()->id(), &written);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    // sys.objects + sys.tables + one column.
+    ASSERT_EQ(written.size(), 3u) << "not every catalog row was reported";
+
+    for (const CatalogRowRef& row : written) {
+        mgr.NoteInsert(*txn.value(), /*rel_oid=*/0, row.page_id, row.slot, row.oid);
+    }
+    ASSERT_TRUE(mgr.Abort(*txn.value()).ok());
+
+    // A reader minted after the abort: it considers the creating id
+    // committed, and must still not find the relation - because the rows
+    // are gone, not because they are hidden.
+    txn::ReadView later;
+    later.up_to_trx_id = 1u << 20;
+    EXPECT_EQ(catalog_.FindTableOidByName("doomed", &later).status().code(),
+              StatusCode::kNotFound)
+        << "the rolled-back relation survived its own rollback";
+
+    // And an unfiltered read - the one that sees literally everything -
+    // agrees, which is what proves the rows were retired rather than
+    // merely filtered.
+    EXPECT_EQ(catalog_.FindTableOidByName("doomed").status().code(), StatusCode::kNotFound)
+        << "the rows are still on the page; the rollback only hid them";
 }
 
 }  // namespace

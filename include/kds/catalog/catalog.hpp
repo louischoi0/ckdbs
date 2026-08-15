@@ -61,6 +61,21 @@
 
 namespace kds::catalog {
 
+// Where a catalog row landed (workplan-ddl-transactional.md DT3a). A DDL
+// running inside a transaction hands these to
+// `TransactionManager::NoteInsert` so a rollback can retire the slots:
+// the engine undoes aborted work by compensation, and a row nobody
+// recorded is a row nobody can take back.
+struct CatalogRowRef {
+    PageId page_id = kInvalidPageId;
+    std::uint16_t slot = 0;
+    // The row's own oid, which is what `Compensate` re-reads to confirm it
+    // is retiring the row it recorded rather than whatever now occupies
+    // the slot. Every catalog row carries its oid in the first eight
+    // bytes, which is exactly where a Keystone id would be.
+    Oid oid = 0;
+};
+
 class Catalog {
 public:
     // `inline_cell_width` is the instance-pinned kds.inline_cell_width
@@ -199,9 +214,14 @@ public:
     // visibility** (DT3). Until then a real id would make the rows
     // invisible to nobody and visible to everybody, which is what they
     // already are - so DT2 changes no behaviour anywhere, deliberately.
+    // `written`, when given, receives every catalog row this created, in
+    // write order, so a transactional caller can register them for
+    // rollback (DT3a). Filled even when the create fails partway: rows
+    // already on the page are rows a rollback must still retire.
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                ClusteredType clustered_type, KeyMode key_mode,
-                               std::uint64_t trx_id = kBootstrapXid);
+                               std::uint64_t trx_id = kBootstrapXid,
+                               std::vector<CatalogRowRef>* written = nullptr);
 
     StatusOr<SysTableRow> GetSysTableRow(Oid table_oid);
 
@@ -650,7 +670,8 @@ public:
     // one is bootstrap, and a bootstrap row must be visible to every read
     // view forever (spec-ddl-transactional.md §3).
     Status InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid, std::string_view name,
-                            std::uint64_t trx_id = kBootstrapXid);
+                            std::uint64_t trx_id = kBootstrapXid,
+                            CatalogRowRef* where = nullptr);
     // `owner_core` defaults to kSystemCore because every caller but
     // CreateTable() is bootstrap writing a system relation, and M5 puts
     // those on core 0 by definition - it owns the catalog pages they live
@@ -663,7 +684,8 @@ public:
                               PageId varheap_page_id,
                               std::uint32_t owner_core = kSystemCore,
                               KeyMode key_mode = KeyMode::kAssigned,
-                              std::uint64_t trx_id = kBootstrapXid);
+                              std::uint64_t trx_id = kBootstrapXid,
+                              CatalogRowRef* where = nullptr);
 
     // ---- Secondary indexes (docs/feat-index.md §12) --------------------
 
@@ -786,7 +808,8 @@ private:
     Status InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::string_view name,
                             std::uint32_t type_val, std::uint32_t len, bool notnull,
                             std::uint8_t cabin_policy = kCabinPolicyUnset,
-                            std::uint64_t trx_id = kBootstrapXid);
+                            std::uint64_t trx_id = kBootstrapXid,
+                            CatalogRowRef* where = nullptr);
     Status InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type_val,
                           std::uint32_t len);
 
