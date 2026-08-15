@@ -493,8 +493,31 @@ private:
     // control.
     DispatchOutcome HandleShowBudget();
 
-    DispatchOutcome HandleCreateTable(std::string_view args);
-    DispatchOutcome HandleCreateTableSql(std::string_view line);
+    // Both take the session so a `CREATE TABLE` inside an explicit
+    // transaction can stamp its catalog rows with that transaction's id
+    // and register them for rollback (workplan-ddl-transactional.md
+    // DT3b). In autocommit they behave exactly as they always did.
+    DispatchOutcome HandleCreateTable(std::string_view args, Session& session);
+    DispatchOutcome HandleCreateTableSql(std::string_view line, Session& session);
+
+    // The DDL half of a transaction: the id a catalog row should carry,
+    // and where to put the rows it wrote so `ROLLBACK` can retire them.
+    // Answers `kBootstrapXid` and a null sink outside an explicit
+    // transaction, which is every pre-DT3b caller.
+    struct DdlScope {
+        std::uint64_t trx_id = catalog::kBootstrapXid;
+        std::vector<catalog::CatalogRowRef> written;
+        txn::Transaction* txn = nullptr;
+        std::vector<catalog::CatalogRowRef>* sink() {
+            return txn != nullptr ? &written : nullptr;
+        }
+    };
+    DdlScope DdlScopeFor(Session& session);
+    // Registers everything `written` holds on the transaction's trail.
+    // Called **even when the DDL failed**: rows written before the failure
+    // are on the page either way, and a rollback that skipped them would
+    // leave the half-built relation this feature exists to prevent.
+    void NoteDdlRows(DdlScope& scope);
 
     // `CREATE PATTERN` / `DROP PATTERN`. Both take the whole statement
     // line, not a suffix: a declaration's stored canon is its own text

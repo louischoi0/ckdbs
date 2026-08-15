@@ -462,5 +462,53 @@ TEST_F(TxnSessionTest, AnUpdateSkipsARowAlreadyDeleted) {
     EXPECT_TRUE(Rows(s, "SELECT id, v FROM t").empty());
 }
 
+// ---- Transactional DDL at the SQL surface (DT3b) ------------------------
+
+TEST_F(TxnSessionTest, ARolledBackCreateTableLeavesNoRelation) {
+    // What `docs/txn.md` §7 said was a known limitation until 2026-08-15:
+    // "CREATE TABLE inside an explicit transaction is not rolled back by
+    // ROLLBACK". This is that sentence becoming false.
+    Session s;
+    EXPECT_EQ(Run(s, "BEGIN").rfind("BEGIN", 0), 0u);
+    EXPECT_EQ(Run(s, "CREATE TABLE gone (id int64, v int64)").rfind("CREATED", 0), 0u);
+    EXPECT_EQ(Run(s, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+
+    // Gone for good: the rows were retired, not hidden - so even the same
+    // session, outside any transaction, cannot find it.
+    EXPECT_EQ(Run(s, "DESCRIBE gone").rfind("ERR", 0), 0u)
+        << "the rolled-back relation is still in the catalog";
+
+    // And the name is free again, which is the property a migration script
+    // that failed halfway actually needs.
+    EXPECT_EQ(Run(s, "CREATE TABLE gone (id int64, v int64)").rfind("CREATED", 0), 0u);
+}
+
+TEST_F(TxnSessionTest, ACommittedCreateTableSurvivesAndItsRowsAreUsable) {
+    // The other half, and the one that would break quietly if the trail
+    // registration were wrong: a *committed* DDL must not be retired.
+    Session s;
+    EXPECT_EQ(Run(s, "BEGIN").rfind("BEGIN", 0), 0u);
+    EXPECT_EQ(Run(s, "CREATE TABLE kept (id int64, v int64)").rfind("CREATED", 0), 0u);
+    EXPECT_EQ(Run(s, "INSERT INTO kept VALUES (7)").rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(Run(s, "COMMIT").rfind("COMMIT", 0), 0u);
+
+    EXPECT_EQ(Rows(s, "SELECT id, v FROM kept"), (std::vector<std::string>{"1,7"}));
+}
+
+TEST_F(TxnSessionTest, AutocommitDdlIsUnchangedAndIsNotRolledBackByALaterAbort) {
+    // DDL outside an explicit transaction commits as it always did - it
+    // joins no trail, so a later unrelated rollback cannot take it back.
+    Session s;
+    EXPECT_EQ(Run(s, "CREATE TABLE standing (id int64, v int64)").rfind("CREATED", 0), 0u);
+
+    EXPECT_EQ(Run(s, "BEGIN").rfind("BEGIN", 0), 0u);
+    EXPECT_EQ(Run(s, "INSERT INTO standing VALUES (1)").rfind("INSERTED", 0), 0u);
+    EXPECT_EQ(Run(s, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+
+    EXPECT_EQ(Run(s, "DESCRIBE standing").rfind("ERR", 0), std::string::npos)
+        << "an autocommit CREATE TABLE was undone by an unrelated rollback";
+    EXPECT_TRUE(Rows(s, "SELECT id, v FROM standing").empty());
+}
+
 }  // namespace
 }  // namespace kds::server

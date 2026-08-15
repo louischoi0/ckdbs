@@ -713,6 +713,7 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     row.rel_id = 0;
     SetName(row.name, name);
     Status s = InsertRow(store_, kCatalogPageObjects, row, trx_id, where);
+    if (where != nullptr) where->rel_oid = kSysObjectsTable;
     // A new sys.objects row changes what FindTableOidByName and ListTables
     // would answer, so it stales cached name lookups.
     if (s.ok()) BumpVersion("sys.objects insert");
@@ -735,6 +736,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.owner_core = owner_core;
     row.key_mode = key_mode;
     Status s = InsertRow(store_, kCatalogPageTables, row, trx_id, where);
+    if (where != nullptr) where->rel_oid = kSysTablesTable;
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
 }
@@ -753,6 +755,7 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.notnull = notnull;
     row.cabin_policy = cabin_policy;
     Status s = InsertRow(store_, kCatalogPageColumns, row, trx_id, where);
+    if (where != nullptr) where->rel_oid = kSysColumnsTable;
     // A new column row changes the schema half of a cached TableAccess.
     if (s.ok()) BumpVersion("sys.columns insert");
     return s;

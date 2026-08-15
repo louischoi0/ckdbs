@@ -406,9 +406,9 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             // mandatory). Route on that rather than trying to parse both
             // ways and see which succeeds.
             if (sub_rest.find('(') != std::string_view::npos) {
-                return HandleCreateTableSql(Trim(line));
+                return HandleCreateTableSql(Trim(line), session);
             }
-            return HandleCreateTable(sub_rest);
+            return HandleCreateTable(sub_rest, session);
         }
         return {"ERR unknown CREATE target", false};
     }
@@ -878,7 +878,8 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args) {
+DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
+                                                     Session& session) {
     if (args.empty()) {
         return {"ERR CREATE TABLE requires a name", false};
     }
@@ -895,9 +896,11 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args) {
     // kAssigned by name: this legacy command has no syntax for a key mode
     // and is not gaining one (the SQL path owns DDL surface), so the
     // relation it makes is engine-keyed and says so.
+    DdlScope ddl = DdlScopeFor(session);
     auto oid = catalog_.CreateTable(catalog::kNamespacePublic, args, schema,
                                      catalog::ClusteredType::kHeap,
-                                     catalog::KeyMode::kAssigned);
+                                     catalog::KeyMode::kAssigned, ddl.trx_id, ddl.sink());
+    NoteDdlRows(ddl);  // before the status, for the partial-write reason above
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -1924,7 +1927,8 @@ DispatchOutcome CommandDispatcher::HandleShowFkeys() {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
+                                                        Session& session) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
@@ -2117,8 +2121,13 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line) {
     // Passed by name rather than defaulted, per PK01's rule: a defaulted
     // mode is how the wrong one reaches a relation without anyone reading
     // the line.
+    DdlScope ddl = DdlScopeFor(session);
     auto oid = catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema,
-                                     clustered, key_mode);
+                                     clustered, key_mode, ddl.trx_id, ddl.sink());
+    // Registered before the status is read: a create that failed partway
+    // still left rows on the page, and those are exactly the rows a
+    // rollback has to retire.
+    NoteDdlRows(ddl);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -3161,6 +3170,29 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
         return std::nullopt;
     }
     return static_cast<std::uint64_t>(cond.val.int_val);
+}
+
+CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(Session& session) {
+    // DDL joins its transaction only inside an explicit one. In autocommit
+    // a `CREATE TABLE` commits as it always has: `kBootstrapXid`, no trail,
+    // nothing to roll back to - which is what makes DT3b invisible to
+    // every existing caller and every existing test.
+    DdlScope scope;
+    if (txn_ == nullptr || !session.in_explicit_txn()) return scope;
+    txn::Transaction* txn = session.transaction();
+    if (txn == nullptr) return scope;
+    scope.txn = txn;
+    scope.trx_id = txn->id();
+    return scope;
+}
+
+void CommandDispatcher::NoteDdlRows(DdlScope& scope) {
+    if (scope.txn == nullptr) return;
+    for (const catalog::CatalogRowRef& row : scope.written) {
+        txn_->NoteInsert(*scope.txn, static_cast<std::uint32_t>(row.rel_oid), row.page_id,
+                         row.slot, row.oid);
+    }
+    scope.written.clear();
 }
 
 txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {

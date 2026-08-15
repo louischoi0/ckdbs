@@ -74,6 +74,12 @@ struct CatalogRowRef {
     // the slot. Every catalog row carries its oid in the first eight
     // bytes, which is exactly where a Keystone id would be.
     Oid oid = 0;
+    // Which sys relation the row lives in - `kSysObjectsTable`,
+    // `kSysTablesTable`, `kSysColumnsTable`. Carried so a rollback's
+    // `RowLocator` is handed a real relation if it is ever consulted,
+    // rather than a zero nobody can look up. The catalog knows this and
+    // the caller would have to guess, which is why it is set here.
+    Oid rel_oid = 0;
 };
 
 class Catalog {

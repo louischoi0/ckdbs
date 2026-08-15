@@ -9,11 +9,12 @@ exists in `docs/workplan-drop-table.md`.
 
 ## Where to pick this up
 
-**DT1, DT2, DT3 and DT3a done (2026-08-15).** The catalog mechanism is
-complete: isolation by view, atomicity by compensation. What is left is
-**wiring it to a session** — nothing above the catalog passes a real
-transaction id or a view yet, so no SQL statement is transactional DDL
-today. That is DT3b, and it is next.
+**DT1, DT2, DT3, DT3a and DT3b done (2026-08-15).** `BEGIN; CREATE
+TABLE t; ROLLBACK;` now leaves no relation — `docs/txn.md` §7's "not
+rolled back by ROLLBACK" is false as of this step, and its amendment
+says so. **Atomicity (spec §1's property A) is delivered at the SQL
+surface.** Isolation (B) is built in the catalog but not yet wired to
+statement resolution — that is DT3c, and it is next.
 
 ## The phases
 
@@ -106,21 +107,43 @@ view minted *after* the rollback (the one that would wrongly have seen
 it) **and** to an unfiltered read — which is what proves the rows were
 retired rather than merely hidden.
 
-### DT3b — a SQL statement's DDL joins its transaction
+### DT3b — a SQL statement's DDL joins its transaction ✅ 2026-08-15
 
-Everything above is reachable only from C++. `HandleCreateTableSql` takes
-no `Session`, so no statement passes a transaction id or a view, and
-`BEGIN; CREATE TABLE t; ROLLBACK` still leaves a relation. This phase is
-the plumbing: thread the session into the DDL handlers, pass its
-transaction's id to `CreateTable`, register the returned rows on its
-trail, and pass its view to relation resolution.
+Both `CREATE TABLE` handlers take the `Session`. `DdlScopeFor()` answers
+the id a catalog row should carry and where to collect what was written -
+`kBootstrapXid` and a null sink outside an explicit transaction, which is
+what keeps autocommit byte-identical - and `NoteDdlRows()` registers them
+on the trail. **Registration happens before the create's status is
+read**, because a create that failed partway still left rows on the page
+and those are exactly the rows a rollback must retire.
 
-Note the resolution surface is wide — ~14 `FindTableOidByName` callers
-outside the catalog, 10 of them in the dispatcher — and each needs to
-know whether its caller is inside a transaction. Expect churn to dominate
-and decisions to be few, as DT3 did.
+`CatalogRowRef` also gained `rel_oid` (`kSysObjectsTable` /
+`kSysTablesTable` / `kSysColumnsTable`), so if `Compensate` ever does
+consult the `RowLocator` it is handed a real relation rather than a zero
+nobody can look up. The catalog knows which page it wrote; the caller
+would have had to guess.
 
-Gate: the SQL-level statement of DT3a's property, over a real session.
+Gate: **met.** Three tests on the two-sessions-one-dispatcher fixture:
+a rolled-back `CREATE TABLE` is gone (and its *name is free again*, which
+is what a half-failed migration actually needs); a committed one survives
+with usable rows; and an autocommit `CREATE TABLE` is **not** undone by a
+later unrelated rollback - the guard against over-registering.
+
+### DT3c — statement resolution passes the session's view
+
+Isolation exists in the catalog (DT3) and is reached by nothing: no
+statement passes a view, so a second session still resolves another's
+uncommitted relation through an unfiltered scan. This phase threads the
+view into resolution.
+
+The surface is the wide one DT3b's note flagged: ~14
+`FindTableOidByName` callers outside the catalog, 10 in the dispatcher,
+**plus `exec::Compile`**, which is how a `SELECT` resolves its relations
+and therefore the one that matters most. Decisions few, churn large.
+
+Gate: session B cannot `SELECT` from, `INSERT` into, or `DESCRIBE` a
+relation session A created and has not committed - and A can do all
+three.
 
 ### DT4 — the cache honours it
 

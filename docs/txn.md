@@ -462,7 +462,13 @@ Nothing in `src/catalog/` participates in transactions:
   an explicit transaction is not rolled back by `ROLLBACK`.** A known limitation,
   consistent with the catalog's existing instance-scoped coherency caveat.
 
-**Amended 2026-08-15: the second half of that is being built.** Atomicity,
+**Amended 2026-08-15, and the sentence above is now false in part.**
+`CREATE TABLE` inside an explicit transaction **is** rolled back by
+`ROLLBACK` as of workplan DT3b - the catalog rows it wrote are registered
+on the transaction's trail and retired by `Abort`'s existing
+compensation. What is *not* yet true is isolation at the SQL surface
+(another session can still see the uncommitted relation, DT3c) and
+durability (below). Atomicity,
 isolation and consistency for DDL are specified in
 `docs/spec-ddl-transactional.md` and built per
 `docs/workplan-ddl-transactional.md` — by stamping catalog rows with the
