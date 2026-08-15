@@ -758,9 +758,29 @@ protected:
         return step;
     }
 
+    // The walked inner of P4d-4c: `t.qty >= <upstream key>`, which one
+    // input row of key 0 matches on every row of the relation - so a
+    // multi-page relation makes the walk cross page boundaries with
+    // output already sealed, which is the only way to reach the gate.
+    exec::Step WalkJoinStep() {
+        exec::Step step;
+        step.step_id = 1;
+        step.rel_oid = oid_;
+        step.kind = exec::AccessKind::kScan;
+        exec::StepPredicate pred;
+        pred.lhs = exec::ColumnRef{0, 0, 1};  // t.qty
+        pred.op = parser::CompareOp::kGte;
+        pred.rhs.kind = exec::OperandKind::kColumn;
+        pred.rhs.column = exec::ColumnRef{1, 0, 0};  // the forwarded key
+        step.residual.push_back(pred);
+        return step;
+    }
+
     // Opens the consuming stage: output = (upstream key, local qty).
-    void OpenConsuming(std::uint64_t request_id = 7) {
-        auto descriptor = EncodeStepDescriptor(JoinStep());
+    void OpenConsuming(std::uint64_t request_id = 7) { OpenConsumingWith(JoinStep(), request_id); }
+
+    void OpenConsumingWith(const exec::Step& step, std::uint64_t request_id = 7) {
+        auto descriptor = EncodeStepDescriptor(step);
         ASSERT_TRUE(descriptor.ok()) << descriptor.status().message();
 
         StepOpenHead upstream_head{};
@@ -983,6 +1003,180 @@ TEST_F(ConsumingStageTest, AnEnclosedOpenAddressingAnotherStageIsRefused) {
     EXPECT_EQ(sent_.front().kind, sched::RingMessageKind::kStepError);
     EXPECT_EQ(server_->open_pipelines(), 0u);
     EXPECT_TRUE(tasks_.empty());
+}
+
+// ---- P4d-4c: the gated inner walk ---------------------------------------
+
+TEST_F(ConsumingStageTest, TheRowTouchBudgetBoundsTheWholeStageNotOneInputRow) {
+    // The 4c review's finding: the stage passed a *fresh* budget into
+    // every input row's run, and ExecuteAsync seeds its counter from the
+    // limit it is handed - so the count restarted per row and a walked
+    // inner had no statement-wide bound at all. That is exactly the n²
+    // shape `exec/budget.hpp` exists to refuse, and the local path does
+    // refuse it, so the pipeline was answering a statement its local twin
+    // errors on.
+    //
+    // A budget of 12 against the fixture's 8 rows: one input row's walk
+    // spends 8, so a per-row budget would let every row through forever.
+    // Per stage, the second row's walk crosses the ceiling.
+    server_.emplace(
+        boot_->catalog, *store_, /*core_id=*/1,
+        [this](std::uint32_t dst, sched::RingMessageKind kind, std::vector<std::byte> p) {
+            sent_.push_back(Sent{dst, kind, std::move(p)});
+            return Status::OK();
+        },
+        nullptr, /*batch_target_bytes=*/1,
+        [this](std::unique_ptr<sched::Task> task) { tasks_.push_back(std::move(task)); },
+        /*txns=*/nullptr, exec::Budget(12));
+    OpenConsumingWith(WalkJoinStep());
+    Pump();
+
+    // Three input rows, each matching all 8 rows: 24 decodes against 12.
+    // Credit goes to *this stage's* tag (step 1) - `GrantCredits` addresses
+    // the leaf's (step 0), which lives on the other core and is discarded
+    // here by §3's rule.
+    server_->OnStepBatch(InputBatch({0, 0, 0}, /*seq=*/0));
+    auto grant = [&](std::uint32_t n) {
+        StepCreditPayload credit{PipelineTag{7, 0, 1}, n};
+        std::vector<std::byte> bytes;
+        EncodePipelinePayload(credit, bytes);
+        server_->OnStepCredit(bytes);
+    };
+    for (int i = 0; i < 200 && !tasks_.empty(); ++i) {
+        grant(kInitialCreditsPerEdge);
+        Pump();
+    }
+
+    bool errored = false;
+    bool upstream_cancelled = false;
+    for (const Sent& s : sent_) {
+        if (s.kind == sched::RingMessageKind::kStepError) {
+            errored = true;
+            auto error = DecodePipelinePayload<StepErrorPayload>(s.payload);
+            ASSERT_TRUE(error.ok());
+            EXPECT_EQ(error.value().status_code,
+                      static_cast<std::uint32_t>(StatusCode::kResourceExhausted));
+        }
+        if (s.kind == sched::RingMessageKind::kStepCancel) upstream_cancelled = true;
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
+            << "a stage that blew its budget must never claim a clean end";
+    }
+    EXPECT_TRUE(errored) << "the stage ran past its budget without refusing";
+    EXPECT_TRUE(upstream_cancelled) << "§7: a stopping stage owes its upstream a cancel";
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    EXPECT_TRUE(tasks_.empty());
+}
+
+TEST_F(ConsumingStageTest, AWalkedInnerParksAtItsPageBoundaryAndResumesUnderCredit) {
+    // 4c's whole claim: a *walked* inner parks at its own page boundaries
+    // under the downstream credit, so the stage buffers a page's matches
+    // instead of every match of one input row. Needs a multi-page
+    // relation - `RunWalkStep` consults the gate only after a page with a
+    // successor, so a one-page walk never reaches it, which is why every
+    // existing consuming-stage test (8 rows, one page) leaves the gate
+    // untouched.
+    InsertRows(1592);  // 1600 rows over roughly eight pages
+    UseStreamingServer();
+    OpenConsumingWith(WalkJoinStep());
+    Pump();
+    ASSERT_EQ(server_->open_pipelines(), 1u);
+
+    server_->OnStepBatch(InputBatch({0}, /*seq=*/0));
+    SendInputEof();
+
+    // Pumped with no credit ever granted to *this* stage: the walk must
+    // park, and what it holds while parked is the bound under test.
+    std::size_t high_water = 0;
+    for (int i = 0; i < 64; ++i) {
+        Pump();
+        high_water = std::max(high_water, server_->unsent_batches());
+        if (tasks_.empty()) break;
+    }
+    EXPECT_FALSE(tasks_.empty()) << "the walk ran to completion holding no credit";
+    // One 8 KiB page holds about 200 of these rows; the relation holds
+    // 1600. A bound around a page is the claim, and anything approaching
+    // the relation is the unbounded shape 4c exists to have removed.
+    EXPECT_LT(high_water, 300u) << "the stage sealed far more than a page's matches: "
+                                << high_water;
+
+    // Now drain: every grant lets the parked walk make progress, and all
+    // 1600 rows arrive in relation order.
+    auto grant = [&](std::uint32_t n) {
+        StepCreditPayload credit{PipelineTag{7, 0, 1}, n};
+        std::vector<std::byte> bytes;
+        EncodePipelinePayload(credit, bytes);
+        server_->OnStepCredit(bytes);
+    };
+    for (int i = 0; i < 4000 && !tasks_.empty(); ++i) {
+        grant(kInitialCreditsPerEdge);
+        Pump();
+    }
+    EXPECT_TRUE(tasks_.empty()) << "the pipeline never converged";
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+
+    std::vector<std::int64_t> qty_out;
+    bool saw_eof = false;
+    for (const Sent& s : sent_) {
+        if (s.kind == sched::RingMessageKind::kStepEof) saw_eof = true;
+        if (s.kind != sched::RingMessageKind::kStepBatch) continue;
+        std::span<const std::byte> rows;
+        auto header = DecodeStepBatchHeader(s.payload, rows);
+        ASSERT_TRUE(header.ok());
+        auto decoded = wire::DecodeRowBatch(rows, /*field_count=*/2);
+        ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+        for (const auto& row : decoded.value()) {
+            auto key = wire::DecodeInt(row[0].bytes);
+            auto qty = wire::DecodeInt(row[1].bytes);
+            ASSERT_TRUE(key.ok());
+            ASSERT_TRUE(qty.ok());
+            EXPECT_EQ(key.value(), 0) << "the upstream row's slot changed under the park";
+            qty_out.push_back(qty.value());
+        }
+    }
+    EXPECT_TRUE(saw_eof);
+    // The fixture's eight rows (qty = i*10) then this test's 1592 (qty = i),
+    // in relation order - which is what proves the park resumed the walk
+    // where it left off rather than restarting or skipping it.
+    std::vector<std::int64_t> expected;
+    for (int i = 0; i < 8; ++i) expected.push_back(i * 10);
+    for (int i = 0; i < 1592; ++i) expected.push_back(i);
+    EXPECT_EQ(qty_out, expected);
+}
+
+TEST_F(ConsumingStageTest, ACancelReachesAWalkParkedInsideItsInputRow) {
+    // The one teardown window 4c opened: before it, a cancel could only
+    // land between input rows, because the inner ran to completion inside
+    // one synchronous call. Now it can land with the walk parked *inside*
+    // a row - the outer frame filled, the writer half full, the decoded
+    // input batch still being iterated - and everything the resume then
+    // touches has to still be there.
+    InsertRows(1592);
+    UseStreamingServer();
+    OpenConsumingWith(WalkJoinStep());
+    Pump();
+    server_->OnStepBatch(InputBatch({0}, /*seq=*/0));
+    for (int i = 0; i < 8 && !tasks_.empty(); ++i) Pump();
+    ASSERT_FALSE(tasks_.empty()) << "the walk did not park, so nothing is cancelled mid-walk";
+    ASSERT_GT(server_->unsent_batches(), 0u);
+
+    StepEofPayload cancel{PipelineTag{7, 0, 1}};
+    std::vector<std::byte> bytes;
+    EncodePipelinePayload(cancel, bytes);
+    server_->OnStepCancel(bytes);
+    for (int i = 0; i < 8 && !tasks_.empty(); ++i) Pump();
+
+    EXPECT_TRUE(tasks_.empty()) << "the parked walk never saw the cancel";
+    EXPECT_EQ(server_->open_pipelines(), 0u);
+    bool upstream_cancelled = false;
+    for (const Sent& s : sent_) {
+        EXPECT_NE(s.kind, sched::RingMessageKind::kStepEof)
+            << "a cancelled stage must never claim a clean end";
+        if (s.kind != sched::RingMessageKind::kStepCancel) continue;
+        auto tag = DecodePipelinePayload<StepEofPayload>(s.payload);
+        ASSERT_TRUE(tag.ok());
+        if (tag.value().tag == (PipelineTag{7, 0, 0})) upstream_cancelled = true;
+    }
+    EXPECT_TRUE(upstream_cancelled) << "crosscore.md §7: the upstream was left parked";
 }
 
 }  // namespace

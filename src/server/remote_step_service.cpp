@@ -210,16 +210,6 @@ StatusOr<StepOpenParts> DecodeStepOpenEnvelope(std::span<const std::byte> payloa
     return parts;
 }
 
-StatusOr<txn::Snapshot> RemoteStepServer::MintSnapshot() {
-    if (txns_ == nullptr) return txn::Snapshot{};  // sees everything, as before
-    auto view = txns_->MintReadView(txn::kNoTrxId);
-    if (!view.ok()) return view.status();
-    txn::Snapshot snap;
-    snap.view = view.value();
-    snap.undo = &txns_->undo();
-    return snap;
-}
-
 RemoteStepServer::Pipeline* RemoteStepServer::Find(const PipelineTag& tag) {
     for (Pipeline& pipe : pipelines_) {
         if (pipe.tag == tag) return &pipe;
@@ -368,7 +358,7 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
         return;
     }
     const catalog::Schema out_schema = std::move(narrowed.value());
-    auto snapshot = MintSnapshot();
+    auto snapshot = txn::AutocommitSnapshot(txns_);
     if (!snapshot.ok()) {
         SendError(head.tag, session, snapshot.status());
         return;
@@ -386,7 +376,7 @@ void RemoteStepServer::OnStepOpen(const sched::MessageHeader&,
             if (writer.size_bytes() >= batch_target_ || writer.full()) Seal(pipe, writer);
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
+        /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
         /*cabins=*/nullptr, &snapshot.value());
     if (!ran.ok()) {
         SendError(head.tag, session, ran);
@@ -543,11 +533,10 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
     const std::vector<const catalog::Schema*> outer_schemas{&input_schema};
     outer.Open(outer_schemas, nullptr);
 
-    // One view for every input row this stage ever joins against (see
-    // MintSnapshot): a consuming stage is one statement's middle, and a
-    // view re-minted per row would let the same statement's later rows
-    // see writes its earlier rows could not.
-    auto snapshot = MintSnapshot();
+    // One view for every input row this stage joins against: a re-mint
+    // per row would let the same statement's later rows see writes its
+    // earlier rows could not.
+    auto snapshot = txn::AutocommitSnapshot(txns_);
     if (!snapshot.ok()) {
         // §7's upstream half applies to this exit too: by the time this
         // coroutine first runs, OpenConsumingStage has already forwarded
@@ -560,6 +549,26 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
         Erase(tag);
         co_return snapshot.status();
     }
+
+    // **One row-touch bound for the whole stage, not one per input row.**
+    // `ExecuteAsync` seeds a *fresh* counter from whatever limit it is
+    // handed (step_vm.cpp), so handing it the limit again per row would
+    // restart the count and leave this stage with no statement-wide bound
+    // at all. That was harmless while the admitted inner was a probe -
+    // one descent per input row - and stopped being harmless the moment
+    // P4d-4c admitted a *walked* inner: two relations of n rows is n²
+    // decodes, which `exec/budget.hpp` exists to refuse and which the
+    // local path does refuse, so without this the pipeline answers a
+    // statement its local twin errors on. A passed-in `ExecStats` is
+    // written through and never reset, so the stage accumulates there and
+    // hands each row only what is left.
+    //
+    // The ceiling is this core's configured one (`budget_`), not a fresh
+    // default - see the member's comment for why that is the session's
+    // limit in every deployment that configures its cores alike.
+    exec::ExecStats spend;
+    const std::uint64_t limit = budget_.limit();
+    const bool bounded = limit != exec::kUnlimitedRowTouchBudget;
 
     wire::RowBatchWriter writer;
     std::vector<parser::AstValue> out_row(output_schema.columns.size());
@@ -678,6 +687,19 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
             // A probe inner never reaches the gate (it descends rather
             // than walking), which is why the per-row park below stays:
             // it is the only backpressure a probe has.
+            // What this stage has left. Refused *before* the call when
+            // nothing is: `Budget(0)` is the **unlimited** sentinel
+            // (exec/budget.hpp), so subtracting to zero would remove the
+            // bound rather than enforce it.
+            const std::uint64_t used = spend.Total().rows_examined;
+            if (bounded && used >= limit) {
+                const Status over = Status::ResourceExhausted(
+                    "this pipeline stage examined " + std::to_string(used) +
+                    " rows, its whole row-touch budget; a join whose inner side is walked "
+                    "once per input row is what that budget exists to stop");
+                fail(input_tag, upstream_core, over);
+                co_return over;
+            }
             Status ran = co_await exec::ExecuteAsync(
                 catalog_, store_, chain,
                 [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
@@ -694,7 +716,9 @@ sched::Coro RemoteStepServer::RunConsumer(PipelineTag tag, exec::StepChain chain
                     }
                     return storage::VisitControl::kContinue;
                 },
-                /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
+                &spend,
+                exec::Budget(bounded ? limit - used : exec::kUnlimitedRowTouchBudget),
+                /*trail=*/nullptr, /*replay=*/nullptr,
                 /*cabins=*/nullptr, &snapshot.value(), /*indexes=*/true, &output_ok,
                 /*parent=*/&outer);
             if (!ran.ok()) {
@@ -823,12 +847,11 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
     }
     const catalog::Schema out_schema = std::move(narrowed.value());
 
-    // Minted once, before the first row, and held **by value** in this
-    // frame: a ReadView is a POD and the undo pointer outlives the
-    // reactor, so the view survives every page-boundary park unchanged -
-    // which is what makes the whole stream one statement's answer rather
-    // than a series of re-reads.
-    auto snapshot = MintSnapshot();
+    // Minted once and held **by value** in this frame: a ReadView is a
+    // POD and the undo pointer outlives the reactor, so the view survives
+    // every page-boundary park - which is what makes the whole stream one
+    // statement's answer rather than a series of re-reads.
+    auto snapshot = txn::AutocommitSnapshot(txns_);
     if (!snapshot.ok()) {
         SendError(tag, tag.session_core, snapshot.status());
         Erase(tag);
@@ -859,7 +882,7 @@ sched::Coro RemoteStepServer::RunProducer(PipelineTag tag, exec::StepChain chain
             }
             return storage::VisitControl::kContinue;
         },
-        /*stats=*/nullptr, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr,
+        /*stats=*/nullptr, budget_, /*trail=*/nullptr, /*replay=*/nullptr,
         /*cabins=*/nullptr, &snapshot.value(), /*indexes=*/true, &gate);
 
     Pipeline* pipe = Find(tag);

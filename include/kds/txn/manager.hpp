@@ -330,4 +330,24 @@ private:
     std::vector<std::unique_ptr<Transaction>> live_;
 };
 
+// The view a statement outside any transaction reads at: everything
+// committed on this manager's core, nothing in flight. The free-function
+// sibling of `SnapshotFor(const Transaction&)` above, and it lives here
+// for the same reason that one does - two callers mint it (the
+// dispatcher's autocommit arm and every cross-core pipeline stage), and
+// spelling six lines twice is how the two drift.
+//
+// A null manager answers the default snapshot: every writer visible, no
+// undo log, which is the pre-MVCC engine exactly and what a caller
+// without a manager got before.
+inline StatusOr<Snapshot> AutocommitSnapshot(TransactionManager* manager) {
+    if (manager == nullptr) return Snapshot{};
+    auto view = manager->MintReadView(kNoTrxId);
+    if (!view.ok()) return view.status();
+    Snapshot snap;
+    snap.view = view.value();
+    snap.undo = &manager->undo();
+    return snap;
+}
+
 }  // namespace kds::txn

@@ -182,6 +182,92 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
     const exec::Step& outer = chain.steps[0];
     const exec::Step& inner = chain.steps[1];
 
+    // ---- What may ship at all --------------------------------------------
+    //
+    // **The eligible class lives here and nowhere else.** It used to be
+    // stated once in the dispatcher and once again, implicitly, in the
+    // refusals below - and a rule with two spellings is a correctness bug
+    // with two homes (the argument this file's CreditGate/SealAndDrain
+    // already make). The dispatcher now asks only what this cannot know:
+    // whether it may ship at all, and whether anything is remote.
+    //
+    // Every exclusion is a correctness statement, not a shortcut. An
+    // aggregate would fold on the wrong core's sink. A quota (LIMIT /
+    // OFFSET) and a sort both apply at *emission*, and the pipeline's
+    // final edge is not the local sink they decorate - a shipped sorted
+    // statement would answer unordered. A sub-chain cannot ship at all
+    // (the descriptor codec refuses it). `emit_in_key_order` is how a
+    // kExplicit relation's walk is made to emit in key order and the
+    // descriptor does not carry it, so a shipped step would walk in slot
+    // order and answer the clause wrongly. And a projected form is
+    // *required* rather than excluded: the batches carry exactly the
+    // planned output layout, which a star read has no list to describe.
+    if (chain.aggregated()) {
+        return Status::Unsupported("an aggregate folds at its sink and cannot ship");
+    }
+    if (chain.sorted() || chain.limit.has_value() || chain.offset != 0) {
+        return Status::Unsupported(
+            "a sort or a quota applies at emission, which a shipped stage is not");
+    }
+    if (chain.star() || chain.projection.empty()) {
+        return Status::Unsupported("a shipped join needs a projection to lay its batches out");
+    }
+    if (!chain.hoisted.empty() || !outer.sub_chains.empty() || !inner.sub_chains.empty()) {
+        return Status::Unsupported("a sub-chain cannot ship in a step descriptor");
+    }
+    if (outer.emit_in_key_order || inner.emit_in_key_order) {
+        return Status::Unsupported(
+            "emit_in_key_order does not travel in the descriptor, so a shipped step would "
+            "answer the ordering clause in slot order");
+    }
+
+    // The inner step's kind decides how much the consuming stage can
+    // buffer, which is why it is a named allow-list rather than a
+    // catch-all.
+    //
+    // **kProbe** descends on a key taken from the outer row and emits at
+    // most one row per input row.
+    //
+    // **kScan / kFilterScan that joins** - a walk with at least one
+    // residual reaching the outer row, which is what a join on a *non-pk*
+    // column compiles to (the compiler reserves kFilterScan for an
+    // unindexed equality against a **literal**, so a join predicate leaves
+    // the kind kScan). Such a walk would once have sealed every match of
+    // one input row inside one synchronous call; since P4d-4c's gated
+    // inner walk it parks at its own page boundaries under the downstream
+    // credit and buffers a page's matches instead.
+    //
+    // The "reaches the outer row" half is not decoration: without it this
+    // admits a walk that ignores its input entirely - a cross product,
+    // correct but quadratic, and never what anybody asked a join to be.
+    // It can only ever *pass* on a genuine join, because the compiler
+    // places a conjunct at the highest slot it references
+    // (`PredicateReadyAt`), so an outer-only conjunct never lands here.
+    // Every other kind stays refused by name, an index or Cabin probe
+    // because it carries core-local structure state the descriptor cannot
+    // ship at all.
+    const bool joins_the_outer_row = [&] {
+        for (const exec::StepPredicate& pred : inner.residual) {
+            if (pred.lhs.up == 0 && pred.lhs.rel_slot == 0) return true;
+            if (pred.rhs.kind == exec::OperandKind::kColumn && pred.rhs.column.up == 0 &&
+                pred.rhs.column.rel_slot == 0) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    const bool inner_kind_ok =
+        (inner.kind == exec::AccessKind::kProbe && inner.key.has_value() &&
+         inner.key->kind == exec::OperandKind::kColumn) ||
+        ((inner.kind == exec::AccessKind::kScan ||
+          inner.kind == exec::AccessKind::kFilterScan) &&
+         joins_the_outer_row);
+    if (!inner_kind_ok) {
+        return Status::Unsupported(
+            "the inner step is neither a probe keyed by the outer row nor a walk that "
+            "references it, so it is not a join this pipeline can bound");
+    }
+
     // ---- The forwarded layout of edge 0->1 (fact 3) ---------------------
     //
     // The unique outer columns any consumer of the edge reads: the probe

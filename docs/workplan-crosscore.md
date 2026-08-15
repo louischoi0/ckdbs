@@ -566,6 +566,37 @@ the core serve a message instead.
     holding the input row. Proven by three non-pk join shapes in P4e's
     equivalence test, over data where one outer row hits two inner
     rows, two outer rows hit the same inner row, and two hit none.
+    **The 4c review gate (2026-08-15)** confirmed the park is safe and
+    measured the bound real - **194 rows high-water, one 8 KiB page's
+    worth, against a 1600-row relation** - and found one bug and one
+    coverage hole. The bug: the stage handed `ExecuteAsync` a **fresh
+    budget per input row**, and the runner seeds its counter from the
+    limit it is given, so the row-touch count restarted every row and a
+    walked inner had no statement-wide bound at all - the n² shape
+    `exec/budget.hpp` exists to refuse, and which the *local* path does
+    refuse, so the pipeline was answering a statement its local twin
+    errors on. Fixed by accumulating into one `ExecStats` per stage and
+    handing each row only what is left, refusing *before* the call when
+    nothing is (`Budget(0)` is the **unlimited** sentinel, so subtracting
+    to zero would remove the bound rather than enforce it). The ceiling
+    is now this core's **configured** budget, which the server ignored
+    entirely before - `RunProducer` and the reactorless fallback each
+    built a fresh default. Carrying the *session's* limit across a
+    heterogeneous deployment is an envelope field, still open. The
+    coverage hole: the `(gate != null && parent != null)` combination
+    was new with 4c and **no test reached it** - every consuming-stage
+    test used a one-page relation, so the gate was never consulted, and
+    P4e's equivalence test grants credit synchronously inside the send,
+    so its buffer is empty at every check. Closed with a parked-walk
+    test over eight pages and a cancel-inside-a-parked-row test. Also
+    applied: the eligible class moved out of the dispatcher into
+    `BuildTwoStepPipeline` (one home for what may ship, ~45 lines out of
+    the dispatcher), `txn::AutocommitSnapshot` replaced two copies of
+    the same six lines, and the snapshot rule stopped being restated in
+    five places. Left as a known latent: `Drain` holds a `Pipeline&`
+    across `send_`, which a synchronous send reaching `OnStepOpen` would
+    invalidate - unreachable today, and the one place in that file not
+    following its own re-find-by-tag discipline.
     **What remains of 4c**: per-page batching through the walk boundary
     (dissolving the helper's multi-step per-row frames), which the
     workplan gates on P4e's measurement of the per-input-row runner

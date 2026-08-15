@@ -11,6 +11,7 @@
 #include "kds/base/log.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/exec/budget.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/sched/ring_message.hpp"
@@ -143,7 +144,8 @@ public:
     RemoteStepServer(catalog::Catalog& catalog, storage::PageStore& store, std::uint32_t core_id,
                      SendFn send, Logger* log = nullptr,
                      std::size_t batch_target_bytes = kStepBatchTargetBytes,
-                     SubmitFn submit = {}, txn::TransactionManager* txns = nullptr) noexcept
+                     SubmitFn submit = {}, txn::TransactionManager* txns = nullptr,
+                     exec::Budget budget = exec::Budget()) noexcept
         : catalog_(catalog),
           store_(store),
           core_id_(core_id),
@@ -151,7 +153,8 @@ public:
           log_(log),
           batch_target_(batch_target_bytes),
           submit_(std::move(submit)),
-          txns_(txns) {}
+          txns_(txns),
+          budget_(budget) {}
 
     // The kStepOpen handler: decode, validate the single-step class,
     // execute, queue, drain. A failure at any point answers STEP_ERROR to
@@ -248,18 +251,6 @@ private:
     std::function<bool()> CreditGate(const PipelineTag& tag);
     void SealAndDrain(const PipelineTag& tag, wire::RowBatchWriter& writer);
 
-    // The read view a stage executes under (crosscore.md CC4): the
-    // **owning core's** latest committed state, minted here, locally,
-    // once per stage - the shape `CommandDispatcher::SnapshotFor` mints
-    // for an autocommit statement. No view crosses a core: CC4 says the
-    // owning core's snapshot, and each stage of a pipeline therefore
-    // takes its own, which is the same per-core weakening of REPEATABLE
-    // READ that `docs/known-gaps.md` already records for cross-core
-    // reads. Without a manager (the reactorless protocol tests) it is
-    // the default snapshot - every writer visible, the pre-MVCC
-    // behaviour, and no reply changes.
-    StatusOr<txn::Snapshot> MintSnapshot();
-
     // crosscore.md §7's upstream half: a stage that stops consuming -
     // error or cancel - tells its producer to stop too, or that producer
     // parks on its credit gate for the process's life. A duplicate cancel
@@ -302,7 +293,20 @@ private:
     Logger* log_;
     std::size_t batch_target_;
     SubmitFn submit_;
+    // The manager whose committed state every stage on this core reads at
+    // (crosscore.md CC4). **No view crosses a core**: each stage mints its
+    // own from *its* core through `txn::AutocommitSnapshot`, once, held
+    // across its parks - which is the per-core weakening of REPEATABLE
+    // READ `docs/known-gaps.md` records. Null (the reactorless protocol
+    // tests) means every writer visible, exactly the pre-MVCC behaviour.
     txn::TransactionManager* txns_;
+    // The row-touch ceiling every stage on this core runs under - **this
+    // core's** configured limit, which the server ignored before P4d-4c's
+    // review (`exec::Budget()` fresh at each call site). A homogeneous
+    // deployment configures every core alike, so this is the session's
+    // limit too; carrying the session's own across a heterogeneous one is
+    // an envelope field, recorded in the workplan rather than guessed at.
+    exec::Budget budget_;
     std::vector<Pipeline> pipelines_;
 };
 

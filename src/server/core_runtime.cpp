@@ -241,9 +241,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         },
         log_, kStepBatchTargetBytes,
         [this](std::unique_ptr<sched::Task> task) { scheduler_->Submit(std::move(task)); },
-        // This core's own transaction manager: a stage reads at *this*
-        // core's latest committed state (CC4), minted locally per stage.
-        &*txn_manager_);
+        &*txn_manager_,
+        // And this core's configured row-touch ceiling, which the server
+        // ignored until P4d-4c's review - a shipped statement was bounded
+        // only by whatever a fresh `exec::Budget()` defaulted to.
+        config_.budget);
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kStepOpen,
             [this](const sched::MessageHeader& header, std::span<const std::byte> payload) {

@@ -110,9 +110,24 @@ silently; this is the teardown correctness rule, not an error.
 
 ## 5. Isolation Semantics
 
-There is no cross-core ReadView. A remote step reads whatever is committed
-on its core at the moment it produces each batch (`docs/txn.md` visibility
-with an empty live-set view, trx-id domain is global so ids compare cleanly).
+There is no cross-core ReadView. A remote step reads what is committed on
+its own core (`docs/txn.md` visibility with an empty live-set view; the
+trx-id domain is global, so ids compare cleanly).
+
+**Amended 2026-08-15 (P4d-4c's review), and the amendment is a
+tightening.** This section used to say "at the moment it produces each
+batch". The built form mints **one view per stage**, when the stage's
+coroutine first runs, and holds it for that stage's whole life — because
+re-minting per batch is not a weaker promise but a wrong one: a stage
+parks mid-relation, and a view that moved across the park could show the
+same row twice or skip it entirely, depending on which side of the
+boundary a concurrent commit landed. One view per stage is what makes a
+stage's output one statement's answer. Two consequences worth stating:
+the window between `STEP_OPEN` and that first poll is not covered, so a
+transaction committing inside it *is* visible where a local statement's
+view would have excluded it; and each stage of a multi-stage pipeline
+mints its own, so two stages of one statement can disagree about a
+concurrent commit. Both sit inside the per-core weakening below.
 
 - **READ COMMITTED** statements: semantically equivalent to local execution —
   RC already permits each statement (and each lookup within it) to observe

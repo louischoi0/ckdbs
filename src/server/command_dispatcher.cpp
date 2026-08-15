@@ -3704,87 +3704,31 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         }
     }
 
-    // The two-step pipeline class (P4d-4b-3): a join, scan feeding probe,
-    // with at least one relation another core owns. The exclusions above
-    // hold verbatim (aggregate/sort/quota/ANALYZE fold or apply at
-    // emission, which the pipeline's final edge is not), plus the class's
-    // own: sub-chains cannot ship, `emit_in_key_order` does not travel in
-    // the descriptor, and the inner step must be a **probe keyed by the
-    // outer row** - an inner probe emits at most one row per input row,
-    // which is what keeps the consuming stage's buffering bounded by one
-    // input batch; an inner scan stays refused by name until it can park
-    // mid-walk (P4d-4c's gated inner walk). A projected form is required
-    // rather than excluded: the batches carry exactly the planned output
-    // layout, typed by the plan the session kept.
-    if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 2 &&
-        chain.value().hoisted.empty() && !chain.value().star() &&
-        !chain.value().projection.empty() && !chain.value().aggregated() &&
-        !chain.value().sorted() && !chain.value().limit.has_value() &&
-        chain.value().offset == 0) {
-        const exec::Step& outer = chain.value().steps[0];
-        const exec::Step& inner = chain.value().steps[1];
-        // The inner step's kind decides how much the consuming stage can
-        // buffer, which is why it is a named allow-list rather than a
-        // catch-all.
-        //
-        // **kProbe** descends on a key taken from the outer row and emits
-        // at most one row per input row.
-        //
-        // **kScan / kFilterScan that joins** - a walk with at least one
-        // residual reaching the outer row, which is what a join on a
-        // *non-pk* column compiles to (the compiler reserves kFilterScan
-        // for an unindexed equality against a **literal**, so a join
-        // predicate leaves the kind kScan). Such a walk would once have
-        // sealed every match of one input row inside one synchronous
-        // call; since P4d-4c's gated inner walk it parks at its own page
-        // boundaries under the downstream credit and buffers a page's
-        // matches instead.
-        //
-        // The "reaches the outer row" half is not decoration: without it
-        // this admits a walk that ignores its input entirely - a cross
-        // product, correct but quadratic, and never what anybody asked a
-        // join to be. Every other kind stays refused by name, an index or
-        // Cabin probe because it carries core-local structure state the
-        // descriptor cannot ship at all.
-        const bool joins_the_outer_row = [&] {
-            for (const exec::StepPredicate& pred : inner.residual) {
-                if (pred.lhs.up == 0 && pred.lhs.rel_slot == 0) return true;
-                if (pred.rhs.kind == exec::OperandKind::kColumn && pred.rhs.column.up == 0 &&
-                    pred.rhs.column.rel_slot == 0) {
-                    return true;
+    // The two-step pipeline (P4d-4b-3, widened by 4c's gated inner walk).
+    // **What may ship is decided in `BuildTwoStepPipeline` and nowhere
+    // else** - every shape rule, and the reason each one is a correctness
+    // statement rather than a shortcut, lives beside the plan it governs.
+    // What is left here is the two questions the planner cannot answer:
+    // whether this dispatcher can ship at all, and whether anything is
+    // actually on another core. A plan or an open the machinery refuses
+    // falls through to the honest affinity refusal below, never a worse
+    // error.
+    if (remote_reads_ != nullptr && !analyze && chain.value().steps.size() == 2) {
+        auto outer_access = catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
+        auto inner_access = catalog_.InitTableAccess(chain.value().steps[1].rel_oid);
+        if (outer_access.ok() && inner_access.ok() &&
+            (outer_access.value()->owner_core != core_id_ ||
+             inner_access.value()->owner_core != core_id_)) {
+            auto plan = BuildTwoStepPipeline(
+                chain.value(), outer_access.value()->schema, inner_access.value()->schema,
+                outer_access.value()->owner_core, inner_access.value()->owner_core, core_id_,
+                next_remote_request_++);
+            if (plan.ok()) {
+                if (auto tag = remote_reads_->OpenPipeline(std::move(plan.value())); tag.ok()) {
+                    DispatchOutcome pending;
+                    pending.pending_remote = tag.value();
+                    return pending;
                 }
-            }
-            return false;
-        }();
-        const bool inner_kind_ok =
-            (inner.kind == exec::AccessKind::kProbe && inner.key.has_value() &&
-             inner.key->kind == exec::OperandKind::kColumn) ||
-            ((inner.kind == exec::AccessKind::kScan ||
-              inner.kind == exec::AccessKind::kFilterScan) &&
-             joins_the_outer_row);
-        const bool shapes_ok = outer.sub_chains.empty() && inner.sub_chains.empty() &&
-                               !outer.emit_in_key_order && !inner.emit_in_key_order &&
-                               inner_kind_ok;
-        if (shapes_ok) {
-            auto outer_access = catalog_.InitTableAccess(outer.rel_oid);
-            auto inner_access = catalog_.InitTableAccess(inner.rel_oid);
-            if (outer_access.ok() && inner_access.ok() &&
-                (outer_access.value()->owner_core != core_id_ ||
-                 inner_access.value()->owner_core != core_id_)) {
-                auto plan = BuildTwoStepPipeline(
-                    chain.value(), outer_access.value()->schema, inner_access.value()->schema,
-                    outer_access.value()->owner_core, inner_access.value()->owner_core,
-                    core_id_, next_remote_request_++);
-                if (plan.ok()) {
-                    auto tag = remote_reads_->OpenPipeline(std::move(plan.value()));
-                    if (tag.ok()) {
-                        DispatchOutcome pending;
-                        pending.pending_remote = tag.value();
-                        return pending;
-                    }
-                }
-                // A plan or an open the machinery refuses falls through to
-                // the honest affinity refusal, never a worse error.
             }
         }
     }
@@ -4738,13 +4682,9 @@ StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
         return txn_->SnapshotFor(*txn);
     }
 
-    // Autocommit: a view over the committed state, owned by no transaction.
-    auto view = txn_->MintReadView(txn::kNoTrxId);
-    if (!view.ok()) return view.status();
-    txn::Snapshot snap;
-    snap.view = view.value();
-    snap.undo = &txn_->undo();
-    return snap;
+    // Autocommit: a view over the committed state, owned by no
+    // transaction - the same one every shipped pipeline stage mints.
+    return txn::AutocommitSnapshot(txn_);
 }
 
 StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& session) {
