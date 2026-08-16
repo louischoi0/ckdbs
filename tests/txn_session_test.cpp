@@ -572,5 +572,31 @@ TEST_F(TxnSessionTest, WithNoDdlInFlightResolutionStillServesFromTheCache) {
     EXPECT_EQ(Rows(s, "SELECT id, v FROM base"), before);
 }
 
+TEST_F(TxnSessionTest, ARolledBackDdlDoesNotSurviveInTheCatalogCache) {
+    // **The hole DT3c's decision opens.** A rollback retires the catalog
+    // rows through the transaction manager's compensation - the catalog
+    // is never told, so it never drops its cached facts. Any unfiltered
+    // read taken while the DDL was open therefore leaves an entry that
+    // outlives the rows it describes, and once the transaction resolves
+    // `ViewFor` goes back to the fast path and serves it.
+    //
+    // `SHOW TABLES` is the reachable spelling: it lists through
+    // `ListTables`, which DT3c did not thread, so it both leaks the
+    // uncommitted relation *and* caches it.
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "CREATE TABLE ghost (id int64, v int64)").substr(0, 7), "CREATED");
+
+    (void)Run(b, "SHOW TABLES");  // fills the cache while the DDL is open
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // The relation is gone from the pages. Nothing may still report it.
+    EXPECT_EQ(Run(b, "SHOW TABLES").find("ghost"), std::string::npos)
+        << "a rolled-back relation is still listed, from the cache";
+    EXPECT_EQ(Run(b, "DESCRIBE ghost").rfind("ERR", 0), 0u)
+        << "a rolled-back relation still resolves, from the cache";
+}
+
 }  // namespace
 }  // namespace kds::server

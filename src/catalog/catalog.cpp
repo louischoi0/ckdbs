@@ -691,6 +691,10 @@ void Catalog::BumpVersion(std::string_view what) {
     if (on_invalidate_) on_invalidate_();
 }
 
+void Catalog::InvalidateAfterCompensation() {
+    BumpVersion("rows retired by a transaction rollback");
+}
+
 void Catalog::InvalidateFromPeer() {
     // No version bump. `catalog_version_` is the counter parser-v2.md I5
     // stamps *this instance's* bound statements with; another core's DDL is

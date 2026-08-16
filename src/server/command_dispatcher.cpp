@@ -365,7 +365,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "SHOW")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "META")) return HandleShowMeta();
-        if (IEquals(sub, "TABLES")) return HandleListTables();
+        if (IEquals(sub, "TABLES")) return HandleListTables(session);
         if (IEquals(sub, "PAGE")) return HandleShowPage(sub_rest);
         if (IEquals(sub, "PATTERNS")) return HandleShowPatterns();
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
@@ -771,8 +771,12 @@ DispatchOutcome CommandDispatcher::HandleShowBudget() {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleListTables() {
-    auto tables = catalog_.ListTables();
+DispatchOutcome CommandDispatcher::HandleListTables(Session& session) {
+    // Listed under the session's view (DT4): `SHOW TABLES` is a route
+    // into "what relations exist", so it answers the same question
+    // DESCRIBE and SELECT do and must answer it the same way.
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto tables = catalog_.ListTables(view.has_value() ? &*view : nullptr);
     if (!tables.ok()) {
         return {"ERR " + tables.status().message(), false};
     }
@@ -3211,10 +3215,16 @@ std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     return view.value();
 }
 
-void CommandDispatcher::EndDdlScope(const Session& session) {
+void CommandDispatcher::EndDdlScope(const Session& session, bool rows_were_retired) {
     const txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return;
-    std::erase(ddl_txns_, txn->id());
+    const bool held_ddl = std::erase(ddl_txns_, txn->id()) > 0;
+    // Only a rollback needs this, and only from a transaction that wrote
+    // catalog rows: its compensation retired them behind the catalog's
+    // back, so anything cached about them while it was open is now a
+    // description of rows that are gone. A commit leaves the rows in
+    // place, so what was cached about them stays true.
+    if (held_ddl && rows_were_retired) catalog_.InvalidateAfterCompensation();
 }
 
 void CommandDispatcher::NoteDdlRows(DdlScope& scope) {
@@ -4696,7 +4706,7 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     // Its catalog rows are committed now, so every reader may see them
     // unfiltered again (DT3c). Before `Finish()`, which clears the
     // session's transaction pointer this reads.
-    EndDdlScope(session);
+    EndDdlScope(session, /*rows_were_retired=*/false);
 
     // The session leaves the transaction either way: a commit that failed
     // to log is not a transaction the client may keep writing into.
@@ -4732,9 +4742,10 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     }
     Status aborted = txn_->Abort(*txn, RowLocatorForRollback());
     // Its catalog rows were retired by that abort, so there is nothing
-    // left for anyone to be isolated from (DT3c). Before `Finish()`,
-    // which clears the pointer this reads.
-    EndDdlScope(session);
+    // left for anyone to be isolated from - and nothing that may still be
+    // cached about them (DT3c, DT4). Before `Finish()`, which clears the
+    // pointer this reads.
+    EndDdlScope(session, /*rows_were_retired=*/true);
     session.Finish();
     txn_->Release(*txn);
     if (!aborted.ok()) return {"ERR " + aborted.message(), false};

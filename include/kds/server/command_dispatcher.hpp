@@ -479,7 +479,7 @@ private:
     static std::uint64_t WriterId(const WriteScope& scope);
 
     DispatchOutcome HandleShowMeta();
-    DispatchOutcome HandleListTables();
+    DispatchOutcome HandleListTables(Session& session);
     DispatchOutcome HandleDescribe(std::string_view args, Session& session);
     DispatchOutcome HandleShowPage(std::string_view args);
     DispatchOutcome HandleShowPatterns();
@@ -537,7 +537,7 @@ private:
     // is the normal state and the one `ViewFor` optimises for. Entries
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
-    void EndDdlScope(const Session& session);
+    void EndDdlScope(const Session& session, bool rows_were_retired);
 
     // `CREATE PATTERN` / `DROP PATTERN`. Both take the whole statement
     // line, not a suffix: a declaration's stored canon is its own text

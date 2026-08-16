@@ -159,6 +159,21 @@ public:
     // are what would otherwise be stale.
     void InvalidateFromPeer();
 
+    // Rows on this instance's catalog pages were changed by something
+    // other than this catalog (workplan-ddl-transactional.md DT4): a
+    // transaction's rollback, whose compensation retires the slots
+    // directly through the page. The catalog is never told, so without
+    // this any fact cached while that DDL was open outlives the rows it
+    // describes - and once the transaction resolves, resolution goes back
+    // to the cache and serves it.
+    //
+    // Drops cached content **and bumps the version**, unlike
+    // `InvalidateFromPeer`: this *is* an event in this instance's
+    // numbering - the rows really did change here - and a bound statement
+    // compiled against the relation that just vanished must not be
+    // considered current.
+    void InvalidateAfterCompensation();
+
     // Registers the fixed namespace/type sys-objects in the in-memory
     // registry (no disk I/O - these are well-known constants, not stored
     // as catalog rows themselves).

@@ -9,7 +9,7 @@ exists in `docs/workplan-drop-table.md`.
 
 ## Where to pick this up
 
-**DT1 through DT3c done (2026-08-15).** **Spec §1's properties A, B and
+**DT1 through DT4 done (2026-08-15/16).** **Spec §1's properties A, B and
 C are delivered at the SQL surface**: a rolled-back `CREATE TABLE`
 leaves no relation, and an uncommitted one is invisible to every other
 session by every route into it. **D (durability) remains deferred by
@@ -163,16 +163,34 @@ its foreign-key parent lookup, the legacy `HandleCreateTable`, and two
 them is bookkeeping, not design — but it is unfinished bookkeeping and
 is named here rather than left to be discovered.
 
-### DT4 — the cache honours it
+### DT4 — the cache honours it ✅ 2026-08-16
 
-Per spec §4 and §6's open decision. **Blocked until that decision is
-ratified**; recommendation is (a) bypass — a session with DDL in its open
-transaction reads uncached until it resolves.
+The bypass and its gating decision landed in DT3/DT3c. What was left was
+a hole that decision *opened*, found by writing the test first and
+watching it fail: **a rollback retires catalog rows through the
+transaction manager's compensation, so the catalog is never told.** Any
+fact cached by an unfiltered read while the DDL was open therefore
+outlives the rows it describes — and once the transaction resolves,
+`ViewFor` returns to the fast path and serves it. Reproduced with `SHOW
+TABLES`, which listed a rolled-back relation from cache.
 
-Inherits a known hazard: `catalog_version()` is not a sound freshness
-guard, because `InvalidateFromPeer()` clears the cache without bumping it
-(`docs/known-gaps.md`). Any scheme keyed on that counter is wrong on a
-peer.
+Two fixes, because the reproduction needed two things to go wrong:
+
+- `Catalog::InvalidateAfterCompensation()`, called from `EndDdlScope`
+  **on rollback only, and only for a transaction that actually wrote
+  catalog rows**. A commit leaves the rows in place, so what was cached
+  about them stays true; a rollback does not. Unlike
+  `InvalidateFromPeer` this *does* bump the version — the rows really did
+  change on this instance, and a bound statement compiled against a
+  relation that just vanished must not read as current.
+- `SHOW TABLES` resolves under the session's view like the other three
+  routes. It answers "what relations exist", so it must answer it the
+  same way `DESCRIBE` and `SELECT` do.
+
+The hazard this phase inherited — `catalog_version()` is not a sound
+freshness guard because `InvalidateFromPeer` clears without bumping — is
+untouched and still recorded in `docs/known-gaps.md`. Nothing here keys
+on that counter.
 
 ### DT5 — DROP, and the delete-mark
 
