@@ -3,6 +3,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
 
 // `Compile(AST) -> StepChain` (docs/parser-v2-workplan.md V14).
@@ -36,7 +37,14 @@ namespace kds::exec {
 //                   than one; the message carries the byte position
 //   Unsupported     a form the compiler does not yet lower - today that
 //                   is any predicate carrying a subquery (V15)
-StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt);
+// `view`, when given, is the reader's catalog visibility
+// (workplan-ddl-transactional.md DT3c): a relation whose creating
+// transaction it cannot see does not resolve, so the statement is refused
+// as "unknown relation" rather than compiled against something that does
+// not exist for this reader. Null is "see everything", which is every
+// caller outside a session and the fast path while no DDL is in flight.
+StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+                            const txn::ReadView* view = nullptr);
 
 // Compiles a single-relation WHERE clause - what UPDATE and, later,
 // DELETE have instead of a chain.
@@ -60,9 +68,12 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
 // so: UPDATE walks the relation itself rather than through the step VM, so
 // it has no "before the chain opens" to hoist into. Worth revisiting if
 // UPDATE ever runs through a chain.
+// `view` as on `Compile` above: it reaches the subqueries this lowers,
+// which resolve relations of their own.
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
-                            const std::vector<parser::Condition>& where);
+                            const std::vector<parser::Condition>& where,
+                            const txn::ReadView* view = nullptr);
 
 // Resolve an UPDATE's SET list against the relation, before any storage is
 // touched (keystoneid-invariant.md K-M3).

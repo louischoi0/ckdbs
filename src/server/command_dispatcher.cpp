@@ -379,7 +379,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return {"ERR unknown SHOW target", false};
     }
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
-        return HandleDescribe(rest);
+        return HandleDescribe(rest, session);
     }
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
@@ -907,12 +907,14 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
     return {"CREATED oid=" + std::to_string(oid.value()), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args) {
+DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
+                                                  Session& session) {
     if (args.empty()) {
         return {"ERR DESCRIBE requires a table name", false};
     }
 
-    auto oid = catalog_.FindTableOidByName(args);
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto oid = catalog_.FindTableOidByName(args, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -2589,7 +2591,13 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
                 false};
     }
 
-    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    // Resolved under the writing session's view (DT3c): an INSERT into a
+    // relation another transaction created and has not committed must not
+    // find it.
+    const std::optional<txn::ReadView> view =
+        scope.session != nullptr ? ViewFor(*scope.session) : std::nullopt;
+    auto oid =
+        catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -3186,8 +3194,35 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(Session& session) {
     return scope;
 }
 
+std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
+    // The fast path, and the one nearly every statement takes.
+    if (txn_ == nullptr || ddl_txns_.empty()) return std::nullopt;
+
+    // Inside a transaction, that transaction's own view: it must see the
+    // relations it created and no one else's uncommitted ones.
+    if (session.in_explicit_txn() && session.transaction() != nullptr) {
+        return session.transaction()->view();
+    }
+    // Autocommit: everything committed right now. Minted per resolution
+    // rather than reused, because "right now" is the whole meaning of an
+    // autocommit read - and this only runs while DDL is genuinely open.
+    auto view = txn_->MintReadView(txn::kNoTrxId);
+    if (!view.ok()) return std::nullopt;
+    return view.value();
+}
+
+void CommandDispatcher::EndDdlScope(const Session& session) {
+    const txn::Transaction* txn = session.transaction();
+    if (txn == nullptr) return;
+    std::erase(ddl_txns_, txn->id());
+}
+
 void CommandDispatcher::NoteDdlRows(DdlScope& scope) {
     if (scope.txn == nullptr) return;
+    if (!scope.written.empty() &&
+        std::find(ddl_txns_.begin(), ddl_txns_.end(), scope.txn->id()) == ddl_txns_.end()) {
+        ddl_txns_.push_back(scope.txn->id());
+    }
     for (const catalog::CatalogRowRef& row : scope.written) {
         txn_->NoteInsert(*scope.txn, static_cast<std::uint32_t>(row.rel_oid), row.page_id,
                          row.slot, row.oid);
@@ -3685,7 +3720,9 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // decided here - which relation, which access path, where each
     // predicate is evaluated - was settled by the compiler and is sitting
     // in the chain. What is left is formatting.
-    auto chain = exec::Compile(catalog_, stmt);
+    const std::optional<txn::ReadView> resolve_view = ViewFor(session);
+    auto chain =
+        exec::Compile(catalog_, stmt, resolve_view.has_value() ? &*resolve_view : nullptr);
     if (!chain.ok()) {
         return {"ERR " + chain.status().message(), false};
     }
@@ -4176,7 +4213,13 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     }
     auto& stmt = std::get<parser::UpdateStmt>(parsed.value());
 
-    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    // Resolved under the writing session's view (DT3c): an INSERT into a
+    // relation another transaction created and has not committed must not
+    // find it.
+    const std::optional<txn::ReadView> view =
+        scope.session != nullptr ? ViewFor(*scope.session) : std::nullopt;
+    auto oid =
+        catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -4650,6 +4693,11 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     }
     auto committed = txn_->Commit(*txn, durability_);
 
+    // Its catalog rows are committed now, so every reader may see them
+    // unfiltered again (DT3c). Before `Finish()`, which clears the
+    // session's transaction pointer this reads.
+    EndDdlScope(session);
+
     // The session leaves the transaction either way: a commit that failed
     // to log is not a transaction the client may keep writing into.
     session.Finish();
@@ -4683,6 +4731,10 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
         return {ErrorReply(s), false};
     }
     Status aborted = txn_->Abort(*txn, RowLocatorForRollback());
+    // Its catalog rows were retired by that abort, so there is nothing
+    // left for anyone to be isolated from (DT3c). Before `Finish()`,
+    // which clears the pointer this reads.
+    EndDdlScope(session);
     session.Finish();
     txn_->Release(*txn);
     if (!aborted.ok()) return {"ERR " + aborted.message(), false};

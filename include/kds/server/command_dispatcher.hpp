@@ -480,7 +480,7 @@ private:
 
     DispatchOutcome HandleShowMeta();
     DispatchOutcome HandleListTables();
-    DispatchOutcome HandleDescribe(std::string_view args);
+    DispatchOutcome HandleDescribe(std::string_view args, Session& session);
     DispatchOutcome HandleShowPage(std::string_view args);
     DispatchOutcome HandleShowPatterns();
     DispatchOutcome HandleShowAccess();
@@ -513,11 +513,31 @@ private:
         }
     };
     DdlScope DdlScopeFor(Session& session);
+
+    // The view a statement resolves relation names under
+    // (workplan-ddl-transactional.md DT3c), or `nullopt` for "see
+    // everything" - which is the *fast* path and the common one.
+    //
+    // **A view is minted only while some transaction holds uncommitted
+    // DDL.** With none in flight every catalog row is either a bootstrap
+    // row or a committed one, so an unfiltered read is correct for every
+    // reader - and a filtered read would cost a catalog page scan per
+    // statement, because a filtered lookup deliberately bypasses the
+    // shared cache (DT3). That is spec-ddl-transactional.md §6's cache
+    // decision, taken: pay for isolation only where isolation is at
+    // stake.
+    std::optional<txn::ReadView> ViewFor(Session& session);
     // Registers everything `written` holds on the transaction's trail.
     // Called **even when the DDL failed**: rows written before the failure
     // are on the page either way, and a rollback that skipped them would
     // leave the half-built relation this feature exists to prevent.
     void NoteDdlRows(DdlScope& scope);
+
+    // Transactions holding catalog rows nobody has committed yet. Empty
+    // is the normal state and the one `ViewFor` optimises for. Entries
+    // are removed when the transaction resolves, by `EndDdlScope`.
+    std::vector<std::uint64_t> ddl_txns_;
+    void EndDdlScope(const Session& session);
 
     // `CREATE PATTERN` / `DROP PATTERN`. Both take the whole statement
     // line, not a suffix: a declaration's stored canon is its own text

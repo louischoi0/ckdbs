@@ -510,5 +510,67 @@ TEST_F(TxnSessionTest, AutocommitDdlIsUnchangedAndIsNotRolledBackByALaterAbort) 
     EXPECT_TRUE(Rows(s, "SELECT id, v FROM standing").empty());
 }
 
+TEST_F(TxnSessionTest, AnUncommittedCreateTableIsInvisibleToEveryOtherSession) {
+    // Isolation at the SQL surface (DT3c): three routes into a relation -
+    // DESCRIBE, SELECT and INSERT - and none of them may find one whose
+    // creating transaction has not committed.
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "CREATE TABLE secret (id int64, v int64)").substr(0, 7), "CREATED");
+
+    // The creator sees its own work by all three routes.
+    EXPECT_EQ(Run(a, "DESCRIBE secret").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(Run(a, "INSERT INTO secret VALUES (1)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Rows(a, "SELECT id, v FROM secret"), (std::vector<std::string>{"1,1"}));
+
+    // Another session, in a transaction of its own, sees none of it.
+    ASSERT_EQ(Run(b, "BEGIN").substr(0, 5), "BEGIN");
+    EXPECT_EQ(Run(b, "DESCRIBE secret").rfind("ERR", 0), 0u) << "DESCRIBE leaked it";
+    EXPECT_EQ(Run(b, "SELECT id, v FROM secret").rfind("ERR", 0), 0u) << "SELECT leaked it";
+    EXPECT_EQ(Run(b, "INSERT INTO secret VALUES (2)").rfind("ERR", 0), 0u)
+        << "INSERT leaked it";
+    ASSERT_EQ(Run(b, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // ...and an autocommit session sees none of it either, which is the
+    // case that matters most because it is the common one.
+    Session plain;
+    EXPECT_EQ(Run(plain, "DESCRIBE secret").rfind("ERR", 0), 0u)
+        << "an autocommit reader saw an uncommitted relation";
+    EXPECT_EQ(Run(plain, "SELECT id, v FROM secret").rfind("ERR", 0), 0u);
+
+    // Once it commits, everybody sees it - by every route.
+    ASSERT_EQ(Run(a, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_EQ(Run(plain, "DESCRIBE secret").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(Rows(plain, "SELECT id, v FROM secret"), (std::vector<std::string>{"1,1"}));
+    EXPECT_EQ(Run(plain, "INSERT INTO secret VALUES (3)").substr(0, 8), "INSERTED");
+}
+
+TEST_F(TxnSessionTest, WithNoDdlInFlightResolutionStillServesFromTheCache) {
+    // The decision DT3c takes (spec §6): a view is minted **only** while
+    // some transaction holds uncommitted DDL, because a filtered lookup
+    // bypasses the shared cache by design. With none in flight - the
+    // normal state - every catalog row is a bootstrap row or a committed
+    // one, so an unfiltered read is correct for everyone and the fast
+    // path is untouched. Asserted through behaviour: the same statements
+    // answer identically before and after a DDL transaction opens and
+    // resolves.
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE base (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "INSERT INTO base VALUES (5)").substr(0, 8), "INSERTED");
+    const std::vector<std::string> before = Rows(s, "SELECT id, v FROM base");
+
+    Session ddl;
+    ASSERT_EQ(Run(ddl, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(ddl, "CREATE TABLE other (id int64, v int64)").substr(0, 7), "CREATED");
+    // While that is open, `base` still resolves for everyone: filtering is
+    // on, and a committed relation passes it.
+    EXPECT_EQ(Rows(s, "SELECT id, v FROM base"), before);
+    ASSERT_EQ(Run(ddl, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // And afterwards, with nothing in flight again.
+    EXPECT_EQ(Rows(s, "SELECT id, v FROM base"), before);
+}
+
 }  // namespace
 }  // namespace kds::server

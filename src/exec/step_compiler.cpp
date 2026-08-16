@@ -851,13 +851,15 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
 
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
-                                 std::uint32_t depth);
+                                 std::uint32_t depth, const txn::ReadView* view);
 
 }  // namespace
 
-StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt) {
+StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+                            const txn::ReadView* view) {
     std::uint32_t next_step_id = 0;
-    return CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0);
+    return CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
+                        view);
 }
 
 Status CompileAssignments(const catalog::TableAccess& access,
@@ -893,7 +895,8 @@ Status CompileAssignments(const catalog::TableAccess& access,
 
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
-                            const std::vector<parser::Condition>& where) {
+                            const std::vector<parser::Condition>& where,
+                            const txn::ReadView* view) {
     Scope scope;
     scope.relations.push_back(BoundRelation{std::string(binding), &access});
 
@@ -916,7 +919,8 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                 sub.lhs = lhs.value();
             }
 
-            auto inner = CompileBlock(catalog, *cond.subquery, &scope, next_step_id, /*depth=*/1);
+            auto inner =
+                CompileBlock(catalog, *cond.subquery, &scope, next_step_id, /*depth=*/1, view);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
 
@@ -1017,7 +1021,7 @@ std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
 
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
-                                 std::uint32_t depth) {
+                                 std::uint32_t depth, const txn::ReadView* view) {
     // The execute-time half of spec I15 R3: recursion is bounded at both
     // ends. The parser caps nesting too, but a chain can also be built by
     // something other than a parse, and a bound that only one producer
@@ -1036,7 +1040,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     for (const parser::JoinClause& j : stmt.joins) refs.push_back(&j.relation);
 
     for (const parser::RelationRef* rel : refs) {
-        auto oid = catalog.FindTableOidByName(rel->table_name);
+        auto oid = catalog.FindTableOidByName(rel->table_name, view);
         if (!oid.ok()) return oid.status();
         auto access = catalog.InitTableAccess(oid.value());
         if (!access.ok()) return access.status();
@@ -1111,7 +1115,8 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             // Compiled against a scope whose parent is *this* one, which
             // is what turns an inner reference to an outer column into
             // `up == 1` rather than a resolution failure.
-            auto inner = CompileBlock(catalog, *cond.subquery, &scope, next_step_id, depth + 1);
+            auto inner =
+                CompileBlock(catalog, *cond.subquery, &scope, next_step_id, depth + 1, view);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
 
