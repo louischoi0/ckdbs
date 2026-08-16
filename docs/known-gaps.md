@@ -361,14 +361,22 @@ the owner's workplan.
   device — the catalog is not recovered (RV3). **Still true and not
   scheduled.**
   The *other* half of that old entry — "DDL is not transactional,
-  `CREATE TABLE` inside a transaction is not rolled back" — is being
-  built as of 2026-08-15 (`docs/spec-ddl-transactional.md`,
-  `docs/workplan-ddl-transactional.md`): catalog rows take the real
-  transaction id and catalog reads filter through the visibility
-  predicate, so rollback needs no undo record. **Atomicity and isolation
-  only; durability is the sentence above.** Do not quote "transactional
-  DDL" without that distinction — a reader will assume crash-durability
-  and be wrong.
+  `CREATE TABLE` inside a transaction is not rolled back" — is **false
+  for `CREATE TABLE` as of 2026-08-16** (`docs/spec-ddl-transactional.md`,
+  `docs/workplan-ddl-transactional.md`, DT1-DT4): a rolled-back create
+  leaves no relation, and an uncommitted one is invisible to every other
+  session by every route into it. **Atomicity and isolation only;
+  durability is the sentence above, and `SHOW META` prints
+  `ddl_durable=0` beside it so the pair cannot be read apart.** Never
+  quote "transactional DDL" without that distinction — a reader assumes
+  crash-durability and is wrong.
+  **Still non-transactional, by name**: `DROP TABLE`, `ALTER TABLE`,
+  indexes, cabins, patterns, assertions. The asymmetry with `CREATE` is
+  real and is not an oversight — a drop *retires* its dependent rows
+  outright, and a retired slot has no compensation to put it back, where
+  a create only inserts. Making drop transactional needs delete-marking
+  and undo records for catalog rows, which is a scoped decision recorded
+  in the workplan's DT5 rather than a missing patch.
 - **Keystone K1 does not hold across a crash**
   (`docs/keystoneid-k0-findings.md`): the durable log names ids the
   unlogged `sys.tables.next_id` has forgotten. K-M2a/K-M2 own it.

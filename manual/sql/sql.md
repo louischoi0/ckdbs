@@ -152,8 +152,10 @@ decisions land.
   in-memory sets), columns and child-side foreign keys.
 - Patterns and trails naming the dead relation die quietly (advisory);
   `sys.access_stats` ghosts stay, keyed by an oid that cannot return.
-- Unlogged and non-transactional like all DDL — `ROLLBACK` does not
-  resurrect a dropped table.
+- Unlogged and non-transactional — `ROLLBACK` does not resurrect a
+  dropped table. (`CREATE TABLE` *is* transactional as of 2026-08-16;
+  `DROP TABLE` is not, and the asymmetry is real: a drop retires its
+  dependent rows outright, which nothing can put back.)
 
 ### ALTER TABLE (built 2026-08-10, AL1-AL9 / ALT01-ALT05)
 
@@ -179,7 +181,8 @@ enforce, indexes and Cabins still serve, all with no re-declaration.
 - The pk column renames like any other (identity is the Keystone word,
   not the spelling); a `sys.*` relation refuses; a taken name is
   `AlreadyExists`.
-- Unlogged and non-transactional, like all DDL.
+- Unlogged and non-transactional. (`CREATE TABLE` is the one DDL that is
+  transactional; `ALTER` is not.)
 
 ### CREATE INDEX / DROP INDEX (built, IX01-IX16)
 
@@ -601,8 +604,22 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   until the client rolls back. An autocommit statement is its own
   transaction and unwinds fully.
 - Closing a connection with a transaction open rolls it back.
-- DDL is **not** transactional: `CREATE TABLE` inside a transaction is not
-  rolled back.
+- **`CREATE TABLE` is transactional** (2026-08-16): inside an explicit
+  transaction it is rolled back by `ROLLBACK`, and until it commits no
+  other session can see the relation by any route — `SELECT`, `INSERT`,
+  `UPDATE`, `DELETE`, `DESCRIBE` or `SHOW TABLES`. Two limits, both
+  deliberate:
+  - **Not crash-durable.** Catalog writes are still unlogged and the
+    catalog is not recovered, so a committed `CREATE TABLE` survives a
+    crash only if its page reached the device. "Transactional" here means
+    atomic and isolated, not durable.
+  - **A second transaction cannot create the same name** while the first
+    is open: it is refused with `EXISTS`, even though it cannot see the
+    relation. The refusal is deliberate — the alternative is two
+    relations claiming one name — and it can be spurious if the first
+    transaction rolls back.
+- Other DDL (`DROP TABLE`, `ALTER TABLE`, indexes, cabins, patterns,
+  assertions) is **not** transactional and is not rolled back.
 
 **Durability class.** Three classes exist — `strict` (D1, fsync per commit),
 `group` (D2, default), `relaxed` (D3) — but the class is set by the

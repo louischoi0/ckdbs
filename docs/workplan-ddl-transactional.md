@@ -213,18 +213,34 @@ instead of tombstoning immediately, so a rolled-back DROP leaves the
 relation intact. Interacts with `docs/spec-drop-table.md`'s tombstone
 rule — read it first; the oid must still never be reissued.
 
-### DT6 — the second DDL statement, and the refusal
+### DT6 — the second DDL statement, and the refusal ✅ 2026-08-16
 
-Two uncommitted transactions creating the same name (spec §6). The
-recommendation is to refuse the second rather than accept last-writer-
-wins. Needs DT3, because "is there an uncommitted row with this name"
-is a visibility question.
+Delivered by *not* filtering one read. The duplicate-name check in both
+`CREATE TABLE` forms resolves unfiltered, so it sees another
+transaction's uncommitted relation and refuses the second create with
+`EXISTS` — the recommended half of spec §6, reached by leaving a site
+alone rather than by adding a mechanism. Pinned by
+`ASecondCreateOfTheSameNameIsRefusedWhileTheFirstIsOpen`, and the name
+is free again once the first transaction rolls back.
 
-### DT7 — the surface tells the truth
+**What stays open is the message, not the behaviour**: the refusal can
+be spurious (the first transaction may roll back) and it names a
+relation the asker cannot see. Improving that wording, or holding the
+second create instead of refusing it, is spec §6's remainder.
 
-`SHOW META`, `manual/sql/sql.md` and `docs/known-gaps.md` state what is
-true: atomic and isolated, **not yet crash-durable**. Owed before any
-release note says "transactional DDL", and cheap to forget.
+### DT7 — the surface tells the truth ✅ 2026-08-16
+
+- `SHOW META` prints `ddl_transactional=create-table-only` **beside**
+  `ddl_durable=0`, deliberately adjacent: a reader of the first will
+  assume it includes surviving a crash, and the pair has to read as one
+  statement.
+- `manual/sql/sql.md` says `CREATE TABLE` is transactional, names both
+  limits (not crash-durable; a second transaction cannot take the same
+  name while the first is open), and says the other DDL is not — with
+  the asymmetry explained where `DROP TABLE` and `ALTER` are documented,
+  so a reader meets it at the statement rather than in a footnote.
+- `docs/known-gaps.md` records the same split and names what is still
+  non-transactional, with the reason drop is harder than create.
 
 ### DT8 — durability (deferred, not scheduled)
 

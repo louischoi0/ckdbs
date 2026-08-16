@@ -541,7 +541,14 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         // "recovery succeeded" is never read as "nothing was lost".
         os << " recovery_relations_checked=" << recovery_->relations_checked
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
-           << " catalog_recovered=0";
+           << " catalog_recovered=0"
+           // DT7: `CREATE TABLE` became atomic and isolated on 2026-08-16,
+           // and a reader of `ddl_transactional=1` will assume that
+           // includes surviving a crash. It does not, and the two flags
+           // sit together so the pair reads as one statement: transactional
+           // within a running instance, not durable across a restart.
+           << " ddl_transactional=create-table-only"
+           << " ddl_durable=0";
         // RC07: what the mount could resume enforcing, and the honest
         // remainder. A surviving declaration whose directory could not be
         // rebuilt is counted here and left *out* of the registry, so
