@@ -556,13 +556,13 @@ private:
     // workplan ALT03). One handler for both forms, for HandleCabin's
     // reason; the AL4 assertion RESTRICT and the AL7 system-relation
     // refusal live here, before the catalog write.
-    DispatchOutcome HandleAlter(std::string_view line);
+    DispatchOutcome HandleAlter(std::string_view line, Session& session);
 
     // `DROP TABLE <name>` (docs/spec-drop-table.md, workplan DT03). The
     // DT3 RESTRICT gate lives here - a referencing foreign key and an
     // assertion each refuse naming the blocker - before the catalog's
     // tombstone-and-retire; the in-memory Cabin sets are forgotten after.
-    DispatchOutcome HandleDropTable(std::string_view line);
+    DispatchOutcome HandleDropTable(std::string_view line, Session& session);
 
     // `SHOW CABINS` - every declared Cabin, with what it has observed.
     //

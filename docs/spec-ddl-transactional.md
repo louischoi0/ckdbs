@@ -139,6 +139,35 @@ Whatever is chosen, one thing is already known and must be respected:
 - Mixed statements: `BEGIN; CREATE TABLE t ...; INSERT INTO t ...;
   ROLLBACK;` leaves no relation and no rows.
 
+### Which reads filter, and which deliberately do not
+
+Every route into "does this relation exist" must answer the same way, or
+the one that answers differently is the leak. Three classes, and the
+membership is a decision:
+
+- **Filtered — a statement's own resolution.** `SELECT` (through
+  `exec::Compile`, its sub-chains, and `CompileWhere`), `INSERT`,
+  `UPDATE`, `DELETE`, `DESCRIBE`, `SHOW TABLES`, `ALTER`, `DROP TABLE`,
+  and a foreign key's parent lookup. These decide what a statement may
+  touch, so they answer under the session's view.
+- **Unfiltered by design — "does this name already exist".** The
+  duplicate-name check in both `CREATE TABLE` forms. Filtering it would
+  hide another transaction's uncommitted relation of the same name, both
+  creates would succeed, and two rows would claim one name. Seeing
+  everything refuses the second instead — the conservative half of §6's
+  open decision, and the half that cannot corrupt anything. The cost is
+  a refusal that can be spurious (the first transaction may roll back)
+  and that names a relation the asker cannot see.
+- **Unfiltered by design — diagnostics.** `SHOW ACCESS`, `SHOW BUDGET`,
+  `SHOW INDEXES`, `SHOW ASSERTIONS`, `SHOW CABINS`, and the name-rendering
+  helper. These answer *"what does this instance hold"*, which is an
+  operator's question, not a statement's. An operator debugging a stuck
+  transaction needs to see the pages and budget it is consuming; hiding
+  them would make the tool useless exactly when it is needed. Also
+  unfiltered, and unaffected either way: `ALTER`'s system-relation guard,
+  which tests an already-resolved oid against bootstrap rows that every
+  view sees.
+
 Out of v1, by name: `ALTER TABLE` (its own rename semantics interact with
 the cache differently), `CREATE PATTERN` / `CREATE CABIN` / assertions /
 foreign keys (each writes its own catalog page and can follow once the

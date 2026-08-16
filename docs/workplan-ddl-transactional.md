@@ -154,14 +154,28 @@ creator has not committed, while the creator does all three; and after
 statements answer identically before, during and after an unrelated DDL
 transaction.
 
-**Resolution sites deliberately left unthreaded**, because they are
-DDL/admin paths rather than the routes a relation is *used* by, and each
-would need its own reasoning: `HandleAlter`, `HandleDropTable`,
-`HandleShowRelayout`, `HandleCreateTableSql`'s duplicate-name check and
-its foreign-key parent lookup, the legacy `HandleCreateTable`, and two
-`SHOW`-family sites. They see everything, as they did before. Threading
-them is bookkeeping, not design — but it is unfinished bookkeeping and
-is named here rather than left to be discovered.
+**The remaining sites were closed out 2026-08-16**, and closing them
+turned out to be three decisions rather than bookkeeping — the
+classification now lives in spec §5:
+
+- **Filtered**, joining SELECT/INSERT/DESCRIBE: `UPDATE`, `DELETE`,
+  `ALTER`, `DROP TABLE`, `SHOW TABLES`, and a foreign key's parent
+  lookup. All decide what a statement may touch.
+- **Unfiltered on purpose — the duplicate-name check** in both `CREATE
+  TABLE` forms. Filtering it would let two transactions each create a
+  relation of the same name; unfiltered, the second is refused. That is
+  the conservative half of §6's open decision, now pinned by a test so a
+  later change cannot flip it silently.
+- **Unfiltered on purpose — diagnostics**: `SHOW ACCESS`, `SHOW BUDGET`,
+  `SHOW INDEXES`, `SHOW ASSERTIONS`, `SHOW CABINS`, the name renderer,
+  and `ALTER`'s system-relation guard. These answer "what does this
+  instance hold", an operator's question; an operator debugging a stuck
+  transaction needs to see what it is consuming.
+
+One test now walks **every** route into a relation and asserts they
+agree, which is the property that matters: a single route answering
+differently is the leak, and that is exactly how `SHOW TABLES` was
+missed at DT3c.
 
 ### DT4 — the cache honours it ✅ 2026-08-16
 

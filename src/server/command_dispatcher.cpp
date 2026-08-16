@@ -413,7 +413,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return {"ERR unknown CREATE target", false};
     }
     if (IEquals(cmd, "ALTER")) {
-        return HandleAlter(Trim(line));
+        return HandleAlter(Trim(line), session);
     }
     if (IEquals(cmd, "DROP")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
@@ -434,7 +434,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleAssertion(Trim(line));
         }
         if (IEquals(sub, "TABLE")) {
-            return HandleDropTable(Trim(line));
+            return HandleDropTable(Trim(line), session);
         }
         return {"ERR only DROP TABLE, DROP PATTERN, DROP CABIN, DROP INDEX and DROP ASSERTION "
                 "are supported",
@@ -663,6 +663,8 @@ DispatchOutcome CommandDispatcher::HandleShowAccess() {
         auto access = catalog_.InitTableAccess(row.rel_id);
         os << " rel=";
         if (access.ok()) {
+            // Unfiltered by design (DT3c): a diagnostic answers "what does
+            // this instance hold" - spec-ddl-transactional.md §5.
             auto name = catalog_.ListTables();
             bool named = false;
             if (name.ok()) {
@@ -716,6 +718,9 @@ std::string PercentString(double fraction) {
 }  // namespace
 
 DispatchOutcome CommandDispatcher::HandleShowBudget() {
+    // Unfiltered by design (DT3c): a diagnostic surface answers "what does
+    // this instance hold", not "what may this statement touch" - see
+    // spec-ddl-transactional.md §5.
     auto tables = catalog_.ListTables();
     if (!tables.ok()) {
         return {"ERR " + tables.status().message(), false};
@@ -1186,6 +1191,8 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes() {
         auto access = catalog_.InitTableAccess(row.table_oid);
         os << " rel=";
         bool named = false;
+        // Unfiltered by design (DT3c): a diagnostic surface answers "what
+        // does this instance hold" - spec-ddl-transactional.md §5.
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& obj : tables.value()) {
                 if (obj.oid != row.table_oid) continue;
@@ -1293,7 +1300,8 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
+                                               Session& session) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
@@ -1303,7 +1311,10 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line) {
     }
     const auto& stmt = std::get<parser::AlterStmt>(parsed.value());
 
-    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    // You cannot alter a relation you cannot see (DT3c).
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto oid =
+        catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -1311,6 +1322,10 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line) {
     // AL7: the catalog's own names are load-bearing for bootstrap and are
     // nobody's to change - refused here so both forms share the answer,
     // and RenameTable's own guard is defense rather than the door.
+    //
+    // Unfiltered, and filtering could not change it: this asks whether an
+    // **already-resolved** oid belongs to a system namespace, and every
+    // system relation is a bootstrap row visible to every view (DT3c).
     auto tables = catalog_.ListTables();
     if (!tables.ok()) {
         return {"ERR " + tables.status().message(), false};
@@ -1362,7 +1377,8 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line) {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
+                                                   Session& session) {
     auto parsed = parser::Parse(line);
     if (!parsed.ok()) {
         return {"ERR " + parsed.status().message(), false};
@@ -1372,7 +1388,10 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line) {
     }
     const auto& stmt = std::get<parser::DropTableStmt>(parsed.value());
 
-    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    // Nor drop one (DT3c).
+    const std::optional<txn::ReadView> drop_view = ViewFor(session);
+    auto oid = catalog_.FindTableOidByName(
+        stmt.table_name, drop_view.has_value() ? &*drop_view : nullptr);
     if (!oid.ok()) {
         return {"ERR " + oid.status().message(), false};
     }
@@ -1509,6 +1528,8 @@ DispatchOutcome CommandDispatcher::HandleShowAssertions() {
         // narrow, and an inspection surface can afford the lookup.
         os << " rel=";
         bool named = false;
+        // Unfiltered by design (DT3c): a diagnostic surface answers "what
+        // does this instance hold" - spec-ddl-transactional.md §5.
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& obj : tables.value()) {
                 if (obj.oid != def.target_oid) continue;
@@ -1643,6 +1664,8 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
         auto access = catalog_.InitTableAccess(row.rel_oid);
         os << " rel=";
         bool named = false;
+        // Unfiltered by design (DT3c): a diagnostic surface answers "what
+        // does this instance hold" - spec-ddl-transactional.md §5.
         if (auto tables = catalog_.ListTables(); tables.ok()) {
             for (const catalog::SysObjectRow& obj : tables.value()) {
                 if (obj.oid != row.rel_oid) continue;
@@ -1893,6 +1916,9 @@ Status CommandDispatcher::CheckNoChildrenBeforeDelete(const catalog::TableAccess
 }
 
 std::string CommandDispatcher::RelationNameOf(catalog::Oid oid) {
+    // Unfiltered by design (DT3c): this renders a name for an oid the
+    // caller already holds, so hiding it would print an empty label
+    // rather than protect anything.
     if (auto tables = catalog_.ListTables(); tables.ok()) {
         for (const catalog::SysObjectRow& obj : tables.value()) {
             if (obj.oid == oid) return std::string(catalog::NameView(obj.name));
@@ -1944,6 +1970,23 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
     }
     auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
 
+    // **Deliberately unfiltered, and this is a decision rather than an
+    // omission** (spec-ddl-transactional.md §6's second open item: what two
+    // transactions creating the same name should do).
+    //
+    // Resolving this under the session's view would hide another
+    // transaction's uncommitted relation of the same name, both creates
+    // would succeed, and the catalog would end up with two rows claiming
+    // one name - the last-writer-wins outcome the spec declines. Seeing
+    // everything means the second create is **refused** while the first is
+    // still open, which is the conservative half of that decision and the
+    // one that cannot corrupt anything.
+    //
+    // The cost, stated because a user will hit it: the refusal can be
+    // spurious - if the first transaction rolls back, the name was never
+    // taken - and it names a relation the asker cannot see. Improving that
+    // message, or holding the second create instead of refusing it, is
+    // what the spec still has open.
     auto existing = catalog_.FindTableOidByName(stmt.table_name);
     if (existing.ok()) {
         return {"EXISTS oid=" + std::to_string(existing.value()), false};
@@ -2054,7 +2097,12 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         const parser::ColumnDef& col = stmt.columns[i];
         if (col.references_table.empty()) continue;
 
-        auto parent_oid = catalog_.FindTableOidByName(col.references_table);
+        // Under the session's view (DT3c): a child may reference a parent
+        // its own transaction created, and may not reference one another
+        // transaction has not committed.
+        const std::optional<txn::ReadView> parent_view = ViewFor(session);
+        auto parent_oid = catalog_.FindTableOidByName(
+            col.references_table, parent_view.has_value() ? &*parent_view : nullptr);
         if (!parent_oid.ok()) {
             return {"ERR column '" + col.name + "' references unknown relation '" +
                         col.references_table + "' (byte " +
@@ -2595,7 +2643,7 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& stmt,
                 false};
     }
 
-    // Resolved under the writing session's view (DT3c): an INSERT into a
+    // Resolved under the writing session's view (DT3c): a write to a
     // relation another transaction created and has not committed must not
     // find it.
     const std::optional<txn::ReadView> view =
@@ -4223,7 +4271,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
     }
     auto& stmt = std::get<parser::UpdateStmt>(parsed.value());
 
-    // Resolved under the writing session's view (DT3c): an INSERT into a
+    // Resolved under the writing session's view (DT3c): a write to a
     // relation another transaction created and has not committed must not
     // find it.
     const std::optional<txn::ReadView> view =
@@ -4900,7 +4948,11 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     }
     const auto& stmt = std::get<parser::DeleteStmt>(parsed.value());
 
-    auto oid = catalog_.FindTableOidByName(stmt.table_name);
+    // As INSERT and UPDATE (DT3c): a write resolves under its session.
+    const std::optional<txn::ReadView> view =
+        scope.session != nullptr ? ViewFor(*scope.session) : std::nullopt;
+    auto oid =
+        catalog_.FindTableOidByName(stmt.table_name, view.has_value() ? &*view : nullptr);
     if (!oid.ok()) return {"ERR " + oid.status().message(), false};
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return {"ERR " + access.status().message(), false};

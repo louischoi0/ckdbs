@@ -598,5 +598,51 @@ TEST_F(TxnSessionTest, ARolledBackDdlDoesNotSurviveInTheCatalogCache) {
         << "a rolled-back relation still resolves, from the cache";
 }
 
+TEST_F(TxnSessionTest, EveryRouteIntoARelationAgreesItIsInvisible) {
+    // The closing-out of DT3c's list: each of these is a separate route
+    // into "does this relation exist", and a single one that answered
+    // differently would be the leak.
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "CREATE TABLE hidden (id int64, v int64)").substr(0, 7), "CREATED");
+
+    for (const char* sql : {"DESCRIBE hidden",
+                            "SELECT id, v FROM hidden",
+                            "INSERT INTO hidden VALUES (1)",
+                            "UPDATE hidden SET v = 1",
+                            "DELETE FROM hidden WHERE id = 1",
+                            "ALTER TABLE hidden RENAME TO shown",
+                            "DROP TABLE hidden"}) {
+        EXPECT_EQ(Run(b, sql).rfind("ERR", 0), 0u) << "leaked through: " << sql;
+    }
+    EXPECT_EQ(Run(b, "SHOW TABLES").find("hidden"), std::string::npos);
+
+    // The creator reaches it by the same routes.
+    EXPECT_EQ(Run(a, "DESCRIBE hidden").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(Run(a, "INSERT INTO hidden VALUES (5)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run(a, "UPDATE hidden SET v = 6"), "UPDATED 1");
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+}
+
+TEST_F(TxnSessionTest, ASecondCreateOfTheSameNameIsRefusedWhileTheFirstIsOpen) {
+    // Spec §6's open decision, in its conservative half: the duplicate
+    // check is deliberately unfiltered, so the second create is refused
+    // rather than producing two rows claiming one name. Pinned because it
+    // is a decision, and a later change to filter that check would flip
+    // this silently.
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "CREATE TABLE contested (id int64, v int64)").substr(0, 7), "CREATED");
+
+    EXPECT_EQ(Run(b, "CREATE TABLE contested (id int64, v int64)").substr(0, 6), "EXISTS")
+        << "two transactions both created a relation of the same name";
+
+    // And after the first rolls back, the name is free.
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    EXPECT_EQ(Run(b, "CREATE TABLE contested (id int64, v int64)").substr(0, 7), "CREATED");
+}
+
 }  // namespace
 }  // namespace kds::server
