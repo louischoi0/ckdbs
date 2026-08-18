@@ -68,6 +68,17 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
                                     const txn::TransactionManager* txn = nullptr) {
     std::vector<RowT> rows;
     Status inner = Status::OK();
+    // **Taken once per scan, not per row.** `IsInFlight` is a walk of the
+    // core's live list, and a catalog page can hold many delete-marked
+    // rows - the product is what the DT9 measurement priced at
+    // `marks x (0.4 ns + 0.45 ns x live)`
+    // (`bench/results-ddl-catalog-read-ab.md`). Every id below the oldest
+    // running transaction is settled by definition, so the common mark -
+    // left by a drop that committed long ago - costs one comparison and
+    // the walk is never entered. With nothing running this is
+    // `UINT64_MAX` and no mark ever consults the manager at all.
+    const std::uint64_t oldest_active =
+        txn != nullptr ? txn->OldestActiveTrxId() : std::numeric_limits<std::uint64_t>::max();
     Status walked = heap::ChainVisit(
         store, root, storage::PageAccess::kRead,
         [&](PageId, heap::PageView& page,
@@ -96,9 +107,15 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
             // from other readers - spec-ddl-transactional.md §5a says what
             // that costs DROP TABLE, which DT9 does not change.
             if (tuple.value().deleted) {
-                const bool gone =
-                    view != nullptr ? view->Visible(tuple.value().trx_id)
-                                    : txn == nullptr || !txn->IsInFlight(tuple.value().trx_id);
+                const std::uint64_t deleter = tuple.value().trx_id;
+                // The null-manager arm is spelled out rather than left to
+                // `oldest_active`'s sentinel: it *would* short-circuit,
+                // but only because a trx id cannot reach `UINT64_MAX`
+                // (48 bits, `kMaxTrxId`), and no reader should have to
+                // prove that to know this cannot dereference null.
+                const bool gone = view != nullptr ? view->Visible(deleter)
+                                                  : txn == nullptr || deleter < oldest_active ||
+                                                        !txn->IsInFlight(deleter);
                 if (gone) return storage::VisitControl::kContinue;
             } else if (view != nullptr && !view->Visible(tuple.value().trx_id)) {
                 return storage::VisitControl::kContinue;  // not there, for this reader

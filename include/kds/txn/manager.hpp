@@ -327,6 +327,17 @@ public:
     // cross-core writes.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
 
+    // The lowest id among transactions still running here, or `UINT64_MAX`
+    // when none is. **Everything below it is settled**, which is the whole
+    // point: `IsInFlight` is a walk, and a caller asking about many ids can
+    // take this once and answer most of them by comparison.
+    //
+    // Sound because `live_` holds every running transaction on this core:
+    // an id below the smallest of them cannot be one of them. It moves in
+    // both directions as transactions begin and end, so it is a value to
+    // take per pass and not to cache across one.
+    std::uint64_t OldestActiveTrxId() const noexcept;
+
 private:
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);
