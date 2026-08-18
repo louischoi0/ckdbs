@@ -25,7 +25,7 @@ document for this workload and is where the engine's absolute numbers live.
 | **engines** | three, each measured from a **copy** of its binary taken before the first cell and never rewritten |
 | | `c500d4a` — "fix: a transaction's assertion reservations are settled exactly once" era; the commit `results-scenario2-freight.md`'s superseded 2026-08-11 section was measured at. `sha256 85e91d26…` |
 | | `2bd5030` — "fix: Location and TupleLocation carried spans that outlived their pins"; **51 commits** after `c500d4a`. `sha256 9b8efe70…` |
-| | `92c76dd` — "feat: DROP TABLE is atomic inside a transaction (DT5)", `origin/main`; **48 commits** after `2bd5030`. `sha256 13907114…` |
+| | `92c76dd` — "feat: DROP TABLE is atomic inside a transaction (DT5)", the tip of `origin/main` when the run started; **48 commits** after `2bd5030`. `sha256 13907114…` |
 | builds | all three Release (`-O3 -DNDEBUG`), gcc 13.3.0, from pristine `git archive` exports of their own commits. `92c76dd` and `2bd5030` link OpenSSL (`KDS_WITH_TLS=ON`, 3.0.13); `c500d4a` predates the option and has no TLS to build |
 | driver | `tools/scenario2_freight.py`, **byte-identical at all three commits** (`git diff c500d4a..92c76dd -- tools/scenario2_freight.py` is empty), run from the `92c76dd` tree against every server |
 | cells | `--organizations 2000 --ships 200 --operations 2000 --cargos 2000 --bookings 1500 --seed 1 --verify 25`; fresh server and fresh data file per cell; `cores = 1`, `durability = group`, everything else default |
