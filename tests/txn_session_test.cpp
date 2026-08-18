@@ -719,29 +719,16 @@ TEST_F(TxnSessionTest, ARolledBackCreateIndexLeavesNoIndex) {
               std::string::npos);
 }
 
-TEST_F(TxnSessionTest, ARolledBackDropIndexRestoresTheIndex) {
-    Session s;
-    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
-    {
-        const std::string reply = Run(s, "CREATE INDEX by_owner ON t (owner)");
-        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
-    }
-
-    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
-    ASSERT_EQ(Run(s, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
-    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
-
-    EXPECT_NE(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos)
-        << "a rolled-back DROP INDEX did not restore the index";
-}
-
-TEST_F(TxnSessionTest, AnUncommittedDropIndexIsInvisibleToOthers) {
-    // **The distinction from DROP TABLE, and why §5a is about the
-    // tombstone rather than about drops.** An index drop is a pure
-    // delete-mark - no in-place retype - so the row's payload survives
-    // and a reader that cannot see the dropper still sees the index.
+TEST_F(TxnSessionTest, DropIndexInsideATransactionIsRefused) {
+    // **This test asserted the opposite and was wrong.** It claimed an
+    // uncommitted DROP INDEX was invisible to other sessions, which was
+    // true only of `SHOW INDEXES` - the one route threaded with a view.
+    // `InitTableAccess` builds a relation's index list unfiltered, so
+    // index maintenance saw the drop immediately: another session's
+    // INSERT in the window wrote no index entry, and a rollback restored
+    // an index silently missing that row. Refused instead of answered
+    // wrongly (spec-ddl-transactional.md §5a).
     Session a;
-    Session b;
     ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
     {
         const std::string reply = Run(a, "CREATE INDEX by_owner ON t (owner)");
@@ -749,13 +736,14 @@ TEST_F(TxnSessionTest, AnUncommittedDropIndexIsInvisibleToOthers) {
     }
 
     ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
-    ASSERT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    const std::string refused = Run(a, "DROP INDEX by_owner");
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("explicit transaction"), std::string::npos) << refused;
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
 
-    EXPECT_NE(Run(b, "SHOW INDEXES").find("by_owner"), std::string::npos)
-        << "another session saw an uncommitted DROP INDEX";
-
-    ASSERT_EQ(Run(a, "COMMIT").substr(0, 6), "COMMIT");
-    EXPECT_EQ(Run(b, "SHOW INDEXES").find("by_owner"), std::string::npos);
+    // The index is untouched, and dropping it outside a transaction works.
+    EXPECT_NE(Run(a, "SHOW INDEXES").find("by_owner"), std::string::npos);
+    EXPECT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
 }
 
 TEST_F(TxnSessionTest, AutocommitIndexDdlIsUnchanged) {

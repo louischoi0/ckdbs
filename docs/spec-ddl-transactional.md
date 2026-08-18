@@ -153,10 +153,10 @@ Built, and what each actually gets:
   ROLLBACK;` leaves no relation and no rows.
 
 - **`CREATE INDEX`** — atomic and isolated, exactly as `CREATE TABLE`.
-- **`DROP INDEX`** — atomic **and isolated**, which `DROP TABLE` is not.
-  It delete-marks one row whose payload survives, so a reader that
-  cannot see the dropper still sees the index. See §5a: the limit there
-  belongs to the tombstone *overwrite*, not to drops.
+- **`DROP INDEX`** — **refused inside an explicit transaction as of
+  2026-08-16.** It shipped as "atomic and isolated"; that was wrong, and
+  §5a now carries the correction. Outside a transaction it behaves
+  exactly as it always did.
 
 **Not built, and each is now mechanical rather than open.** `ALTER
 TABLE`, patterns, cabins, assertions and foreign keys stay
@@ -177,13 +177,38 @@ transaction's trail — so `ROLLBACK` clears the marks and rewrites the
 tombstone back to a live table, restoring the relation and its rows.
 Autocommit still retires, exactly as before.
 
-**This is specific to `DROP TABLE`, and `DROP INDEX` proves it.** An
-index drop delete-marks a single row whose payload survives, and it *is*
-isolated — a reader that cannot see the dropper still sees the index. A
-table drop is not, and the difference is the `sys.objects` **retype**: an
-in-place overwrite destroys the prior image for every reader at once.
-Do not generalise this section into "drops cannot be isolated"; it is
-"an in-place overwrite with no undo chain cannot be isolated".
+**A claim this section made was wrong, and the correction is the more
+useful statement.** It said the limit belongs to the `sys.objects`
+*retype*, and offered `DROP INDEX` as the contrasting case that "proves"
+it — an index drop delete-marks one row whose payload survives, so a
+filtered reader still sees the index.
+
+**That reasoning generalised from one surface without checking the
+others.** `SHOW INDEXES` filters; `InitTableAccess` does not. It builds a
+relation's index list through `ListIndexes()` with a **null view**, so
+index maintenance and planning treat a delete-mark as done the moment it
+is written. During an uncommitted `DROP INDEX`, another session's
+`INSERT` writes no index entry — and if the drop rolls back, the index
+returns *missing that row*, and a probe answers a committed row with
+nothing. **A wrong query result, not an early view of the schema.**
+
+So the limit is not about the retype. It is: **any catalog change that
+unfiltered readers act on cannot be isolated**, and every internal
+catalog read is unfiltered. A delete-mark is only isolable where every
+reader of that row filters — which is true of `sys.objects` name lookups
+and false of `sys.indexes`.
+
+`DROP INDEX` inside a transaction is therefore **refused** rather than
+answered wrongly (§5). `DROP TABLE` stays atomic-not-isolated, which is
+survivable because its exposure is an early view of the schema rather
+than a wrong answer.
+
+**The open decision this leaves**: how a null-view catalog read should
+treat a delete-mark whose deleter is still in flight. Teaching it "a
+mark counts only once its deleter has committed" is the principled fix
+and would let both drops isolate — but it changes the meaning of every
+internal catalog read, and `ScanAll` is called from about twenty sites.
+Not taken unilaterally.
 
 **Other sessions see the drop immediately, before it commits.** That is
 not an oversight, it is what option (b) costs. The `sys.objects` retype

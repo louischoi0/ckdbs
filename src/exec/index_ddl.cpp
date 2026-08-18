@@ -162,8 +162,9 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt, std::uint64_t trx_id,
-                                     catalog::CatalogRowRef* written) {
-    auto oid = catalog.FindTableOidByName(stmt.table_name);
+                                     catalog::CatalogRowRef* written,
+                                     const txn::ReadView* view) {
+    auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
                                 std::to_string(stmt.table_byte_offset) + ")");

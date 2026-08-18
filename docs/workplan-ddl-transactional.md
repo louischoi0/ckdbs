@@ -13,10 +13,16 @@ exists in `docs/workplan-drop-table.md`.
 scope — `CREATE TABLE`, `DROP TABLE`, `CREATE INDEX`, `DROP INDEX`.**
 DT8 (durability) was never scheduled and stays deferred by name.
 
-The index pair landed last and taught the milestone's sharpest lesson.
-`DROP INDEX` **is** isolated where `DROP TABLE` is not, which is what
-proves §5a's limit belongs to the `sys.objects` *retype* — an in-place
-overwrite with no undo chain — rather than to drops in general. And the
+The index pair landed last and taught the milestone's sharpest lesson —
+**by being wrong first.** It shipped claiming `DROP INDEX` is isolated
+where `DROP TABLE` is not, and that this proved §5a's limit belongs to
+the `sys.objects` retype. Review disproved it: `SHOW INDEXES` filters,
+`InitTableAccess` does not, so index maintenance saw an uncommitted drop
+immediately and a rollback left an index silently missing rows — a wrong
+query result. `DROP INDEX` inside a transaction is now refused, and
+§5a's real statement is that **any catalog change unfiltered readers act
+on cannot be isolated**. The lesson is about generalising from one
+surface without checking the others. And the
 test asserting that isolation failed at first for a reason worth
 keeping: `SHOW INDEXES` had been classified as a *diagnostic* alongside
 `SHOW ACCESS` and `SHOW BUDGET`. It is not. A surface reporting **schema
