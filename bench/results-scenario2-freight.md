@@ -480,9 +480,10 @@ reporter entirely changes nothing anywhere — its two commit p99s straddle the
 baseline's. Pushing the checkpoint interval past the length of the run, so
 that no checkpoint happens inside it, moves the commit's p99 to 2,287 and
 2,816 µs: **both cells below both baseline cells and both reporter-off
-cells**, the four unchanged ones spanning 3,366–3,709 µs. That is a clean
-separation on four samples a side, and it costs a quarter of the commit's
-tail.
+cells**, the four unchanged ones spanning 3,366–3,709 µs. Two cells against
+four is a small sample and is reported as one, but the separation is clean:
+no unchanged cell reaches down to a checkpoint-free one, and the effect is a
+quarter of the commit's tail.
 
 **It does not move the commit's median**, which stays at 1,142–1,188 µs
 against the baseline's 1,183 µs. The checkpointer is not a steady-state tax
