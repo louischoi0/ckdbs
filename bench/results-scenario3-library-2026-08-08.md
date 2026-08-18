@@ -1,11 +1,18 @@
 # scenario3, superseded: the 2026-08-08 measurement at `94727ee`
 
-**Do not quote anything below as current, and do not difference it against the
-tables above.** It was measured on a different machine (AMD EPYC 7571, EC2,
-7.6 GiB) and a different engine (`94727ee`; the superblock format has since
-moved 12 → 14). It is retained because it contains the only PostgreSQL
-comparison scenario3 has ever had, and because its §11 gap list is still the
-best statement of what the harness could not reach. Its "Status" row describes
+**Do not quote anything below as current, and do not difference it against
+`bench/results-scenario3-library.md`.** (The two were one file once, which is
+where "the tables above" in this line used to point.) It was measured on a
+different machine (AMD EPYC 7571, EC2, 7.6 GiB) and a different engine (`94727ee`; the superblock format has since
+moved 12 → 14). **Its PostgreSQL tables are no longer the only ones**:
+scenario3 was re-measured against PostgreSQL 16.14 on 2026-08-18 at
+`9f762a3`, and `bench/results-scenario3-library.md` is where a current
+cross-engine number comes from. What keeps this file is §11's mechanism
+analysis, which the 2026-08-18 run does not reproduce — the coupon-collector
+model of the Cabin's hit rate, the per-entry index build and storage costs,
+and the structural confirmation that Cabin entry sets are memory-resident.
+Those are statements about *why*, and they survive the numbers they were
+derived from. Its "Status" row describes
 a refresh that was aborted before measuring anything; the refresh that
 replaces it is the one documented above.
 
