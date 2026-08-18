@@ -485,23 +485,29 @@ There is no purge pass, and readers are deliberately unregistered
 
 ## Concurrency and multicore
 
-- **An indexed join column makes a peer-owned join refuse instead of
-  answer.** The step descriptor refuses to ship any index step, and the
-  pipeline's inner-step eligibility admits only `kProbe`/`kScan`/
-  `kFilterScan` — so on a multi-core instance, `CREATE INDEX` on the join
-  column of a peer-owned relation flips that join's inner step to
-  `kIndexProbe` and the statement from a pipeline run to an affinity
-  `ERR`. Opened by equality propagation (`881f69a`, 2026-08-18: a literal
-  restriction already compiled the inner side to an index probe) and
-  **widened by IX17 the same day** to every join on an indexed column,
-  literal or not. `cores = 1` — the shipping default — is unaffected, and
-  no cross-core test declares an index, which is why no suite catches it.
-  The recorded fix: a **ship-time downgrade** — send the inner step as
-  the walk it would take anyway (`kind = kScan`, aux dropped, residual
-  intact), sound because downgrading any step to a scan cannot change the
-  result, and exactly the pre-`881f69a` behaviour. `docs/feat-index.md`
-  §8a and `docs/workplan-index.md` IX17 state the refusal; the seam is
-  `session_step_client.cpp`'s eligibility plus the descriptor encode.
+- **An indexed join column made a peer-owned join refuse instead of
+  answer — closed 2026-08-18, the same day it widened.** The step
+  descriptor refuses to ship any index or Cabin step, and the pipeline's
+  inner-step eligibility admitted only `kProbe`/`kScan`/`kFilterScan` —
+  so on a multi-core instance, `CREATE INDEX` on the join column of a
+  peer-owned relation flipped that join's inner step to `kIndexProbe` and
+  the statement from a pipeline run to an affinity `ERR`. Opened by
+  equality propagation (`881f69a`: a literal restriction already compiled
+  the inner side to an index probe), widened by IX17 (`4f304fd`) to every
+  join on an indexed column. **Closed by the ship-time downgrade**
+  (`ShippedForm`, `step_descriptor.cpp`): a structure-served
+  step ships as the walk it would fall back to anyway — `kScan`, aux
+  dropped, residual intact — which cannot change a result by the property
+  `step_chain.hpp` states, and restores the pre-`881f69a` behaviour on
+  every seam (the single-step open, the pipeline's leaf, and its
+  consuming stage). The fix closes more than the entry named: a
+  **`kCabinProbe`** on a peer-owned relation had hit the descriptor
+  refusal since Cabins landed — long before `881f69a`, never recorded
+  here — and ships as its walk by the same route now. What remains open:
+  the peer runs the *walk*, not the structure — re-deriving the index or
+  Cabin from the peer's own catalog is the recorded improvement, and the
+  descriptor's refusal stays as the backstop for any caller that skips
+  the sanctioned route.
 
 - **Cross-core execution is two shapes wide, and the second is a join.**
   P4a-P4c (2026-08-10) built the single-relation remote read; **P4d

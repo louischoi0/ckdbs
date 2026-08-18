@@ -446,21 +446,26 @@ What it deliberately does not change:
   descriptor makes that the encoding the index was built from. Any decline,
   at compile or per row, takes the walk and returns identical rows by the
   residual.
-- **Cross-core — a refusal today, stated plainly.** An index step cannot
-  ship (the descriptor refuses it) and the pipeline's inner-step
-  eligibility admits only `kProbe`/`kScan`/`kFilterScan` — so on a
-  multi-core instance, a join over a peer-owned relation whose inner side
-  compiles to an index probe falls out of the pipeline and lands on the
-  affinity check, which answers **`ERR`, not a slower plan**. The hole was
-  opened by equality propagation (`881f69a`: a literal restriction already
-  produced `kIndexProbe` inner steps) and IX17 widens it from "joins with
-  a literal" to "joins on an indexed column, period" — declaring an index
-  on a peer relation's join column stops such statements answering.
-  `cores = 1` instances are unaffected. The recorded fix is a **ship-time
-  downgrade** — send the inner step as the walk it would take anyway,
-  sound by the residual property — owned by `docs/known-gaps.md`'s entry
-  until it lands; "re-plan locally on the peer" is the descriptor
-  comment's aspiration, not a built path.
+- **Cross-core — shipped as its walk. `[CLOSED 2026-08-18, same day]`** An
+  index step cannot cross the descriptor (core-local structure state), and
+  before the fix that made a peer-owned join fall out of the pipeline onto
+  the affinity check — `CREATE INDEX` on a peer relation's join column
+  turned answers into `ERR`s, a hole opened by equality propagation
+  (`881f69a`) and widened by IX17. The session now applies a **ship-time
+  downgrade** (`ShippedForm`, `step_descriptor.cpp`) at every
+  encode seam: the shipped copy becomes the walk the step would fall back
+  to anyway — `kScan`, aux dropped, residual intact — which cannot change
+  a result, and the local half of the statement still takes the
+  structure. The peer therefore pays the walk the pre-index engine paid,
+  not an error — and that is *walk* cost, not local cost: a downgraded
+  correlated probe runs O(outer × inner) where the local form runs
+  O(outer × log inner), and the consuming stage's row-touch budget can
+  refuse a large enough shipped join that the local side answers.
+  Re-deriving the structure from the peer's own catalog is the recorded
+  improvement; the same route also closes the older, never-recorded
+  `kCabinProbe` case, broken since Cabins landed. The descriptor's
+  refusal stays as the backstop for callers that skip the sanctioned
+  route.
 
 ---
 

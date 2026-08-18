@@ -3997,8 +3997,11 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                 pending.pending_remote = tag.value();
                 return pending;
             }
-            // A step the descriptor refuses (an index probe, say) falls
-            // through to the honest refusal rather than a worse error.
+            // A step the descriptor refuses falls through to the honest
+            // refusal rather than a worse error. An index or Cabin probe
+            // is no longer in that class - the session ships it as the
+            // walk it would fall back to (ShippedForm) - so what
+            // remains here is the genuinely unshippable.
         }
     }
 

@@ -172,6 +172,24 @@ StatusOr<exec::Operand> DecodeOperand(Reader& r) {
 
 }  // namespace
 
+bool ShipsAsWalk(exec::AccessKind kind) {
+    return kind == exec::AccessKind::kIndexProbe || kind == exec::AccessKind::kIndexRange ||
+           kind == exec::AccessKind::kCabinProbe;
+}
+
+exec::Step ShippedForm(exec::Step step) {
+    if (!ShipsAsWalk(step.kind)) return step;
+    step.kind = exec::AccessKind::kScan;
+    step.index.reset();
+    step.cabin.reset();
+    // Cleared for self-consistency, not for a peer-side consumer (no
+    // shipped stage records statistics today): a Step whose kind and
+    // access shape disagree is a lie on the wire, and kScan's shape is
+    // empty (AccessColumnsOf).
+    step.access_columns.clear();
+    return step;
+}
+
 StatusOr<std::vector<std::byte>> EncodeStepDescriptor(const exec::Step& step) {
     if (!step.sub_chains.empty()) {
         return Status::Unsupported(
@@ -188,10 +206,15 @@ StatusOr<std::vector<std::byte>> EncodeStepDescriptor(const exec::Step& step) {
         case exec::AccessKind::kCabinProbe:
         case exec::AccessKind::kIndexProbe:
         case exec::AccessKind::kIndexRange:
+            // A backstop, not the policy: the session ships these as
+            // `ShippedForm`'s walk, so reaching this refusal means a
+            // caller skipped the sanctioned route - refused rather than
+            // silently transformed, because a codec that rewrites what it
+            // is given hides the decision from the one place that owns it.
             return Status::Unsupported(
                 "a " + std::string(exec::AccessKindName(step.kind)) +
-                " step carries core-local structure state and cannot ship; the owning core "
-                "re-derives it when P4b re-plans locally");
+                " step carries core-local structure state and cannot ship; the session "
+                "ships its walk (ShippedForm) instead");
     }
 
     std::vector<std::byte> out;

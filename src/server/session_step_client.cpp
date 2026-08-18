@@ -12,7 +12,7 @@ namespace kds::server {
 
 StatusOr<PipelineTag> SessionStepClient::Open(const exec::Step& step, std::uint32_t owner_core,
                                               std::uint64_t request_id) {
-    auto descriptor = EncodeStepDescriptor(step);
+    auto descriptor = EncodeStepDescriptor(ShippedForm(step));
     if (!descriptor.ok()) return descriptor.status();
 
     StepOpenHead head{};
@@ -246,9 +246,11 @@ Status TwoStepPipelineEligible(const exec::StepChain& chain) {
     // It can only ever *pass* on a genuine join, because the compiler
     // places a conjunct at the highest slot it references
     // (`PredicateReadyAt`), so an outer-only conjunct never lands here.
-    // Every other kind stays refused by name, an index or Cabin probe
-    // because it carries core-local structure state the descriptor cannot
-    // ship at all.
+    //
+    // **An index or Cabin probe joins the walked class**, because that is
+    // what it ships as (`ShippedForm`): the same outer-row requirement,
+    // the same 4c gated-walk buffering. The history of refusing these
+    // kinds outright is docs/known-gaps.md's closed entry.
     const bool joins_the_outer_row = [&] {
         for (const exec::StepPredicate& pred : inner.residual) {
             if (pred.lhs.up == 0 && pred.lhs.rel_slot == 0) return true;
@@ -263,7 +265,7 @@ Status TwoStepPipelineEligible(const exec::StepChain& chain) {
         (inner.kind == exec::AccessKind::kProbe && inner.key.has_value() &&
          inner.key->kind == exec::OperandKind::kColumn) ||
         ((inner.kind == exec::AccessKind::kScan ||
-          inner.kind == exec::AccessKind::kFilterScan) &&
+          inner.kind == exec::AccessKind::kFilterScan || ShipsAsWalk(inner.kind)) &&
          joins_the_outer_row);
     if (!inner_kind_ok) {
         return Status::Unsupported(
@@ -339,7 +341,11 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
     // it executes as a chain of one - and the outer row's at (up=1,
     // slot=0) with col_pos into the *forwarded* layout, read through the
     // one-slot parent frame RunConsumer fills per input row.
-    exec::Step shipped = inner;
+    // Downgraded before the normalize below: `ShippedForm` drops the
+    // structure aux whole, so no reference inside one is ever rewritten,
+    // and the join equality the walk filters on rides the residual
+    // exactly as a compiled walk's would.
+    exec::Step shipped = ShippedForm(inner);
     auto normalize = [&](exec::ColumnRef& ref) -> Status {
         if (ref.up != 0 || ref.rel_slot > 1) {
             return Status::InvalidArgument("a reference outside the two-step chain");
@@ -407,7 +413,10 @@ StatusOr<SessionStepClient::PipelinePlan> BuildTwoStepPipeline(
     }
 
     // ---- The two opens, the leaf's enclosed in the final's (fact 1) -----
-    auto leaf_descriptor = EncodeStepDescriptor(outer);
+    // The leaf gets the same ship-time downgrade as the consuming stage: a
+    // literal restriction on the outer relation's indexed or cabined
+    // column compiles to a structure step too, and it ships as its walk.
+    auto leaf_descriptor = EncodeStepDescriptor(ShippedForm(outer));
     if (!leaf_descriptor.ok()) return leaf_descriptor.status();
     auto final_descriptor = EncodeStepDescriptor(shipped);
     if (!final_descriptor.ok()) return final_descriptor.status();

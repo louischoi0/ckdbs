@@ -246,58 +246,110 @@ TEST(SessionStepPipelineTest, AStageErrorUnderAnotherTagCompletesTheStatementsRe
     EXPECT_EQ(client.open_reads(), 0u);
 }
 
+// ---- The plan-time tests' shared chain -----------------------------------
+
+namespace {
+
+// The two-relation chain the plan-time tests share: outer(id, b_id),
+// inner(id, qty), joined on `inner.qty = outer.b_id` - a non-pk join
+// column, which is the shape a secondary index serves locally and the
+// descriptor cannot ship. Each test reshapes only the step whose kind it
+// is about: the plan test makes the inner a kProbe, the downgrade tests
+// (docs/feat-index.md §8a) a structure kind.
+struct DowngradeFixture {
+    catalog::Schema outer_schema;
+    catalog::Schema inner_schema;
+    exec::StepChain chain;
+
+    DowngradeFixture() {
+        auto add = [](catalog::Schema& schema, const char* name) {
+            catalog::SysColumnRow row{};
+            row.pos = static_cast<std::uint16_t>(schema.columns.size());
+            catalog::SetName(row.name, name);
+            row.type_val = catalog::kTypeValInt64;
+            row.len = 8;
+            row.notnull = true;
+            schema.columns.push_back(row);
+        };
+        add(outer_schema, "id");
+        add(outer_schema, "b_id");
+        add(inner_schema, "id");
+        add(inner_schema, "qty");
+
+        exec::Step outer;
+        outer.step_id = 0;
+        outer.rel_oid = 100;
+        outer.kind = exec::AccessKind::kScan;
+        chain.steps.push_back(outer);
+
+        exec::Step inner;
+        inner.step_id = 1;
+        inner.rel_oid = 200;
+        inner.kind = exec::AccessKind::kScan;
+        exec::StepPredicate join_eq;
+        join_eq.lhs = exec::ColumnRef{0, 1, 1};  // inner.qty
+        join_eq.op = parser::CompareOp::kEq;
+        join_eq.rhs.kind = exec::OperandKind::kColumn;
+        join_eq.rhs.column = exec::ColumnRef{0, 0, 1};  // outer.b_id
+        inner.residual.push_back(join_eq);
+        chain.steps.push_back(inner);
+
+        chain.projection = {exec::ColumnRef{0, 0, 0},   // outer.id
+                            exec::ColumnRef{0, 1, 1}};  // inner.qty
+        chain.column_names = {"id", "qty"};
+        chain.projection_types = {catalog::kTypeValInt64, catalog::kTypeValInt64};
+    }
+};
+
+// A correlated index probe over the fixture's join column - IX17's kind,
+// with the aux the descriptor refuses.
+exec::IndexProbe CorrelatedProbeOnQty() {
+    exec::IndexProbe probe;
+    probe.index_oid = 7;
+    probe.key_width = 9;
+    probe.entry_width = 17;
+    probe.eq_prefix = 1;
+    probe.key_cols = {1};
+    probe.key_from = exec::ColumnRef{0, 0, 1};  // outer.b_id
+    probe.low.assign(17, std::byte{0x00});
+    probe.high.assign(17, std::byte{0xFF});
+    return probe;
+}
+
+// The literal form: bounds pre-encoded at compile time, no per-row key.
+exec::IndexProbe LiteralProbeOnQty() {
+    exec::IndexProbe probe = CorrelatedProbeOnQty();
+    probe.key_from.reset();
+    return probe;
+}
+
+}  // namespace
+
 TEST(SessionStepPipelineTest, BuildTwoStepPipelineComputesTheEdgeAndNormalizesTheRefs) {
     // The plan-time facts, end to end: the forwarded layout falls out of
     // the chain's own references, both output specs are decided by the
     // session, and the shipped inner step's references arrive normalized -
     // (up=1, slot=0, forwarded index) for the outer row, (up=0, slot=0)
-    // for its own.
-    catalog::Schema outer_schema;
-    catalog::Schema inner_schema;
-    auto add = [](catalog::Schema& schema, const char* name) {
-        catalog::SysColumnRow row{};
-        row.pos = static_cast<std::uint16_t>(schema.columns.size());
-        catalog::SetName(row.name, name);
-        row.type_val = catalog::kTypeValInt64;
-        row.len = 8;
-        row.notnull = true;
-        schema.columns.push_back(row);
-    };
-    add(outer_schema, "id");
-    add(outer_schema, "b_id");
-    add(inner_schema, "id");
-    add(inner_schema, "qty");
-
-    exec::StepChain chain;
-    exec::Step outer;
-    outer.step_id = 0;
-    outer.rel_oid = 100;
-    outer.kind = exec::AccessKind::kScan;
-    chain.steps.push_back(outer);
-
-    exec::Step inner;
-    inner.step_id = 1;
-    inner.rel_oid = 200;
+    // for its own. The fixture's inner is reshaped into the kProbe form:
+    // keyed by outer.b_id, joined on the inner pk.
+    DowngradeFixture fx;
+    exec::Step& inner = fx.chain.steps[1];
     inner.kind = exec::AccessKind::kProbe;
     exec::Operand key;
     key.kind = exec::OperandKind::kColumn;
     key.column = exec::ColumnRef{0, 0, 1};  // outer.b_id
     inner.key = key;
+    inner.residual.clear();
     exec::StepPredicate join_eq;
     join_eq.lhs = exec::ColumnRef{0, 1, 0};  // inner.id
     join_eq.op = parser::CompareOp::kEq;
     join_eq.rhs.kind = exec::OperandKind::kColumn;
     join_eq.rhs.column = exec::ColumnRef{0, 0, 1};  // outer.b_id
     inner.residual.push_back(join_eq);
-    chain.steps.push_back(inner);
 
-    chain.projection = {exec::ColumnRef{0, 0, 0},   // outer.id
-                        exec::ColumnRef{0, 1, 1}};  // inner.qty
-    chain.column_names = {"id", "qty"};
-    chain.projection_types = {catalog::kTypeValInt64, catalog::kTypeValInt64};
-
-    auto plan = BuildTwoStepPipeline(chain, outer_schema, inner_schema, /*outer_core=*/1,
-                                     /*inner_core=*/2, /*session_core=*/0, /*request_id=*/31);
+    auto plan = BuildTwoStepPipeline(fx.chain, fx.outer_schema, fx.inner_schema,
+                                     /*outer_core=*/1, /*inner_core=*/2, /*session_core=*/0,
+                                     /*request_id=*/31);
     ASSERT_TRUE(plan.ok()) << plan.status().message();
     EXPECT_EQ(plan.value().final_core, 2u);
     EXPECT_EQ(plan.value().final_tag, (PipelineTag{31, 0, 1}));
@@ -357,6 +409,133 @@ TEST(SessionStepPipelineTest, BuildTwoStepPipelineComputesTheEdgeAndNormalizesTh
     EXPECT_EQ(leaf.value().output[0].from_upstream, 0);
     EXPECT_EQ(leaf.value().output[0].index, 0u);
     EXPECT_EQ(leaf.value().output[1].index, 1u);
+}
+
+
+TEST(SessionStepPipelineTest, AStructureServedInnerStepShipsAsItsWalk) {
+    // The hole this closes: an inner step of IX17's kind used to fail
+    // eligibility outright, so CREATE INDEX on a peer relation's join
+    // column turned the join's answers into affinity ERRs
+    // (docs/known-gaps.md's closed entry). It now plans, and the
+    // consuming stage receives the walk the step would fall back to
+    // anyway: kScan, no aux, the join equality still in the residual.
+    DowngradeFixture fx;
+    fx.chain.steps[1].kind = exec::AccessKind::kIndexProbe;
+    fx.chain.steps[1].index = CorrelatedProbeOnQty();
+
+    ASSERT_TRUE(TwoStepPipelineEligible(fx.chain).ok());
+    auto plan = BuildTwoStepPipeline(fx.chain, fx.outer_schema, fx.inner_schema,
+                                     /*outer_core=*/1, /*inner_core=*/2, /*session_core=*/0,
+                                     /*request_id=*/41);
+    ASSERT_TRUE(plan.ok()) << plan.status().message();
+
+    auto parts = DecodeStepOpenEnvelope(plan.value().final_open);
+    ASSERT_TRUE(parts.ok()) << parts.status().message();
+    auto shipped = DecodeStepDescriptor(parts.value().descriptor);
+    ASSERT_TRUE(shipped.ok()) << shipped.status().message();
+    EXPECT_EQ(shipped.value().kind, exec::AccessKind::kScan);
+    EXPECT_FALSE(shipped.value().index.has_value());
+    EXPECT_FALSE(shipped.value().cabin.has_value());
+    EXPECT_TRUE(shipped.value().access_columns.empty());
+    // The join equality rides the residual, normalized: inner.qty at
+    // (0,0), the outer row's b_id through the forwarded layout at (1,0).
+    ASSERT_EQ(shipped.value().residual.size(), 1u);
+    EXPECT_EQ(shipped.value().residual[0].lhs, (exec::ColumnRef{0, 0, 1}));
+    EXPECT_EQ(shipped.value().residual[0].rhs.column.up, 1u);
+}
+
+TEST(SessionStepPipelineTest, AStructureServedLeafShipsAsItsWalkToo) {
+    // The outer side has the same exposure - a literal restriction on the
+    // outer relation's indexed column compiles it to kIndexProbe - and
+    // gets the same downgrade at the leaf's encode.
+    DowngradeFixture fx;
+    fx.chain.steps[0].kind = exec::AccessKind::kIndexProbe;
+    fx.chain.steps[0].index = LiteralProbeOnQty();
+
+    ASSERT_TRUE(TwoStepPipelineEligible(fx.chain).ok());
+    auto plan = BuildTwoStepPipeline(fx.chain, fx.outer_schema, fx.inner_schema,
+                                     /*outer_core=*/1, /*inner_core=*/2, /*session_core=*/0,
+                                     /*request_id=*/42);
+    ASSERT_TRUE(plan.ok()) << plan.status().message();
+
+    auto final_parts = DecodeStepOpenEnvelope(plan.value().final_open);
+    ASSERT_TRUE(final_parts.ok());
+    ASSERT_TRUE(final_parts.value().upstream.has_value());
+    auto leaf = DecodeStepOpenEnvelope(final_parts.value().upstream->enclosed_open);
+    ASSERT_TRUE(leaf.ok()) << leaf.status().message();
+    auto shipped = DecodeStepDescriptor(leaf.value().descriptor);
+    ASSERT_TRUE(shipped.ok()) << shipped.status().message();
+    EXPECT_EQ(shipped.value().kind, exec::AccessKind::kScan);
+    EXPECT_FALSE(shipped.value().index.has_value());
+}
+
+TEST(SessionStepPipelineTest, AStructureProbeJoinsTheWalkedClassAndItsRules) {
+    // The A/B that pins the widening itself: one cabined inner step, once
+    // with the join conjunct and once without. With it, the structure kind
+    // is now eligible (this half fails on the pre-downgrade code); without
+    // it, the downgraded walk would be a cross product, which stays
+    // refused for the reason the walked class always refused one.
+    DowngradeFixture fx;
+    fx.chain.steps[1].kind = exec::AccessKind::kCabinProbe;
+    exec::CabinProbe cabin;
+    cabin.cabin_id = 3;
+    cabin.col_pos = 1;
+    cabin.value.type = parser::ValueType::kInt;
+    cabin.value.int_val = 5;
+    fx.chain.steps[1].cabin = cabin;
+    exec::StepPredicate literal_eq;
+    literal_eq.lhs = exec::ColumnRef{0, 1, 1};
+    literal_eq.op = parser::CompareOp::kEq;
+    literal_eq.rhs.kind = exec::OperandKind::kLiteral;
+    literal_eq.rhs.literal = cabin.value;
+    fx.chain.steps[1].residual.push_back(literal_eq);
+
+    // With the fixture's join conjunct beside the cabined literal:
+    // eligible, into the walked class.
+    EXPECT_TRUE(TwoStepPipelineEligible(fx.chain).ok());
+
+    // Without any reference to the outer row: a cross product, refused.
+    fx.chain.steps[1].residual.erase(fx.chain.steps[1].residual.begin());
+    EXPECT_FALSE(TwoStepPipelineEligible(fx.chain).ok());
+}
+
+TEST(SessionStepPipelineTest, ASingleStepStructureOpenShipsAsItsWalk) {
+    // The P4c single-step seam gets the identical treatment: an indexed
+    // filter on a peer-owned relation used to die at the descriptor's
+    // refusal and fall through to the affinity ERR; the open now carries
+    // the walk.
+    std::vector<std::byte> captured;
+    SessionStepClient client(
+        /*core_id=*/0, [&](std::uint32_t, sched::RingMessageKind, std::vector<std::byte> p) {
+            captured = std::move(p);
+            return Status::OK();
+        });
+
+    exec::Step step;
+    step.step_id = 0;
+    step.rel_oid = 300;
+    step.kind = exec::AccessKind::kIndexProbe;
+    step.index = LiteralProbeOnQty();
+    exec::StepPredicate literal_eq;
+    literal_eq.lhs = exec::ColumnRef{0, 0, 1};
+    literal_eq.op = parser::CompareOp::kEq;
+    literal_eq.rhs.kind = exec::OperandKind::kLiteral;
+    literal_eq.rhs.literal.type = parser::ValueType::kInt;
+    literal_eq.rhs.literal.int_val = 5;
+    step.residual.push_back(literal_eq);
+
+    auto tag = client.Open(step, /*owner_core=*/1, /*request_id=*/43);
+    ASSERT_TRUE(tag.ok()) << tag.status().message();
+    ASSERT_FALSE(captured.empty());
+    auto parts = DecodeStepOpenEnvelope(captured);
+    ASSERT_TRUE(parts.ok()) << parts.status().message();
+    auto shipped = DecodeStepDescriptor(parts.value().descriptor);
+    ASSERT_TRUE(shipped.ok()) << shipped.status().message();
+    EXPECT_EQ(shipped.value().kind, exec::AccessKind::kScan);
+    EXPECT_FALSE(shipped.value().index.has_value());
+    // The literal equality is untouched: the walk filters to the same rows.
+    ASSERT_EQ(shipped.value().residual.size(), 1u);
+    EXPECT_EQ(shipped.value().residual[0].rhs.literal.int_val, 5);
 }
 
 }  // namespace

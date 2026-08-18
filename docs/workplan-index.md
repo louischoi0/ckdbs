@@ -637,11 +637,12 @@ which returns identical rows because the join equality stays in the residual.
 printer renders it as `key=` directly, and `Step::key` keeps its two-kind
 contract — the outer column's decode is already forced by the join equality
 in the residual, which the read-mask pass walks. Trust class and
-`AccessColumnsOf`'s pinned-columns rule are unchanged. Cross-core is not:
-an index step cannot ship, so on a multi-core instance a peer-owned join
-whose inner side takes this form is refused by the affinity check rather
-than answered — spec §8a states it plainly and `docs/known-gaps.md` carries
-the entry with the recorded fix (a ship-time downgrade to the walk).
+`AccessColumnsOf`'s pinned-columns rule are unchanged. Cross-core briefly
+was not: an index step cannot ship, and until the same-day fix a
+peer-owned join whose inner side took this form was refused by the
+affinity check rather than answered. Closed by the ship-time downgrade
+(`ShippedForm` in `step_descriptor.cpp`) — spec §8a's
+cross-core bullet and `docs/known-gaps.md`'s closed entry carry it.
 
 This closes the shape equality propagation (docs/parser-v2.md §5) cannot
 reach: a join with no literal to propagate — `WHERE u.id BETWEEN ? AND ?`

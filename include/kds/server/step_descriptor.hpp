@@ -22,9 +22,10 @@
 //    multi-step work, not a field this codec can quietly flatten;
 //  - **kCabinProbe / kIndexProbe / kIndexRange** steps: their aux structs
 //    carry core-local state (byte-encoded index keys, cabin ids) that has
-//    no meaning off the owning core - and selection is f(shape, catalog),
-//    so the owner would re-derive them from the shipped shape once P4b
-//    re-plans locally. Until it does, the honest answer is Unsupported;
+//    no meaning off the owning core. The session ships such a step as the
+//    walk it would fall back to anyway (`ShippedForm` below), so this
+//    refusal is the backstop for a caller that skipped the sanctioned
+//    route, not the policy;
 //  - a **kParam literal**: a declared pattern's body never executes
 //    (spec-create-pattern §3), so a param in a shipped step is a defect
 //    upstream, not a value to encode.
@@ -38,6 +39,22 @@
 namespace kds::server {
 
 inline constexpr std::uint8_t kStepDescriptorVersion = 1;
+
+// The kinds whose aux structs carry the core-local state above - the ones
+// the encoder refuses. Declared beside the codec so the list and the
+// refusal switch are read (and extended) together: the switch is
+// exhaustive with no default, so a new structure kind is a compile error
+// there, and this predicate is the other half of that contract.
+bool ShipsAsWalk(exec::AccessKind kind);
+
+// The step as it must ship: a structure-served kind becomes the walk it
+// would fall back to anyway - kind kScan, aux dropped, the residual
+// untouched, which is what makes the downgrade result-identical (the
+// residual alone fully expresses the predicate, step_chain.hpp) - and
+// every other kind passes through unchanged. Before this, a structure
+// step made the whole statement fall out of the remote path onto the
+// affinity refusal (docs/known-gaps.md's closed entry).
+exec::Step ShippedForm(exec::Step step);
 
 // Serializes `step`. Fails with Unsupported for the refused classes above
 // and InvalidArgument for a step no compiler produces (an unknown kind).

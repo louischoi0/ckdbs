@@ -620,6 +620,20 @@ the core serve a message instead.
     await decision, and the frame re-open caveat 4b inherits from the
     re-Bind fix.
 
+    **The ship-time downgrade — added 2026-08-18.** An index or Cabin
+    probe carries core-local structure state the descriptor cannot ship,
+    and refusing those kinds outright meant a peer-owned join stopped
+    answering the day its join column gained an index (opened by equality
+    propagation, widened by IX17 — `docs/known-gaps.md`'s closed entry).
+    `ShippedForm` (`step_descriptor.cpp`) now sends such a
+    step as the walk it would fall back to anyway — `kScan`, aux dropped,
+    residual intact, sound by the residual property — at all three encode
+    seams (the single-step open, the pipeline's leaf, its consuming
+    stage), and `TwoStepPipelineEligible` admits the kinds into the
+    walked class under the same outer-row requirement. The peer pays the
+    walk, never an error; re-deriving the structure from the peer's own
+    catalog is the recorded improvement.
+
     **The per-batch runner handle: justified, designed, and blocked on a
     catalog change - surveyed 2026-08-15.** P4e priced it at 0.626 µs
     per forwarded row, 1.5x the whole local per-row cost of the same

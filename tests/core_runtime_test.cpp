@@ -977,6 +977,69 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
     EXPECT_EQ(local.Dispatch("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id")
                   .response,
               "a.id,c.id\\n1,1\\n1,4\\n2,2\\n5,2");
+
+    // ---- The structure-served shapes ship as their walk -----------------
+    //
+    // docs/known-gaps.md's closed entry named its own blind spot: "no
+    // cross-core test declares an index, which is why no suite catches
+    // it." This block is that test. An index or Cabin probe cannot cross
+    // the descriptor; before the ship-time downgrade every shape below
+    // fell out of the remote path and answered the affinity ERR - so
+    // declaring an index on a peer relation's join column stopped the
+    // join answering. Now each ships as the walk it would fall back to,
+    // and the reply must equal the local one byte for byte, through the
+    // same shipped() guard that proves something actually crossed.
+    //
+    // `td` is created through the dispatcher rather than the catalog
+    // helper because an index needs a BTREE relation (IX3) and the
+    // dispatcher's insert path is what maintains it.
+    ASSERT_EQ(local.Dispatch("CREATE TABLE td (id int64, tag int64) BTREE")
+                  .response.substr(0, 7),
+              "CREATED");
+    for (std::int64_t tag : {2, 1, 5, 2}) {
+        ASSERT_EQ(local.Dispatch("INSERT INTO td VALUES (" + std::to_string(tag) + ")")
+                      .response.substr(0, 8),
+                  "INSERTED");
+    }
+    ASSERT_EQ(local.Dispatch("CREATE INDEX td_tag ON td (tag)").response.substr(0, 7),
+              "CREATED");
+    // Cabins on both sides of the join, so the downgrade is exercised at
+    // the leaf (outer) as well as the consuming stage (inner).
+    ASSERT_EQ(local.Dispatch("CREATE CABIN ON tc(tag)").response.substr(0, 7), "CREATED");
+    ASSERT_EQ(local.Dispatch("CREATE CABIN ON ta(b_id)").response.substr(0, 7), "CREATED");
+
+    for (const std::string& sql : {
+             // The single-step seam: a literal IndexProbe, an IndexRange,
+             // and a CabinProbe, each a star read of a peer relation.
+             std::string("SELECT * FROM td WHERE tag = 2"),
+             std::string("SELECT * FROM td WHERE tag BETWEEN 1 AND 2"),
+             std::string("SELECT * FROM tc WHERE tag = 2"),
+             // The consuming stage: IX17's correlated probe (no literal
+             // anywhere), the literal probe propagation derives, and a
+             // cabined inner.
+             std::string("SELECT a.id, d.id FROM ta AS a JOIN td AS d ON d.tag = a.b_id"),
+             std::string("SELECT a.id, d.id FROM ta AS a JOIN td AS d ON d.tag = a.b_id "
+                         "WHERE d.tag = 2"),
+             std::string("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
+                         "WHERE c.tag = 2"),
+             // The leaf: the outer relation's cabined column, single-step
+             // and inside a join.
+             std::string("SELECT * FROM ta WHERE b_id = 1"),
+             std::string("SELECT a.id, c.id FROM ta AS a JOIN tc AS c ON c.tag = a.b_id "
+                         "WHERE a.b_id = 1"),
+         }) {
+        const std::string local_reply = local.Dispatch(sql).response;
+        ASSERT_EQ(local_reply.rfind("ERR ", 0), std::string::npos)
+            << "the local side refused, so the comparison would prove nothing: " << sql
+            << " -> " << local_reply;
+        EXPECT_EQ(shipped(sql), local_reply) << sql;
+    }
+
+    // Not vacuous either: the indexed join matches the same four pairs
+    // the tc join does, through the index this time.
+    EXPECT_EQ(local.Dispatch("SELECT a.id, d.id FROM ta AS a JOIN td AS d ON d.tag = a.b_id")
+                  .response,
+              "a.id,d.id\\n1,1\\n1,4\\n2,2\\n5,2");
 }
 
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
