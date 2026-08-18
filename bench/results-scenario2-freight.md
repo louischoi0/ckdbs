@@ -2,8 +2,9 @@
 
 **Two-thirds of a booking is one fsync, and almost nothing else in this
 matrix can be resolved against it.** A booking on KDS is eight statements
-inside one transaction; the eight together cost 506 µs and the `COMMIT` that
-follows them costs 1,332 µs. Every knob this workload can turn — the derived
+inside one transaction, and it runs at 512 bookings a second: the eight
+statements together account for 506 µs of a booking and the `COMMIT` that
+follows them for 1,332 µs. Every knob this workload can turn — the derived
 capacity column, three foreign keys, a Cabin, Waystone recording, the
 isolation level, a second core — moves the booking by less than the fsync's
 own run-to-run drift. Only one configuration is outside that floor, and it is
@@ -11,9 +12,12 @@ the one that removes the transaction.
 
 That the fsync dominates is also what the cross-engine comparison turns on.
 **ckdbs commits 22.5% more bookings a second than PostgreSQL 16.14** on the
-same host and device, is 1.5× to 2.0× faster on every one of the eight
-statements — and is within 3% of it at the median commit, because there the
-two engines are asking the same filesystem for the same thing.
+same host and device and serves 1.5× to 2.0× more of every one of the eight
+statements — while its commit rate is within 8% of PostgreSQL's, because
+there the two engines are asking the same filesystem for the same thing. §8
+sharpens that into the cleanest statement in the file: change one statement
+from a pk lookup to an aggregate over a non-pk column and ckdbs's entire
+advantage on it vanishes, the two engines landing 0.3% apart.
 
 The remaining finding is not about speed. **Under READ COMMITTED, concurrent
 bookers silently lose updates**, the workload's invariant checker catches it,
@@ -27,7 +31,7 @@ by `tools/scenario2_freight.py`. How to run it: `bench/docs/README.md`.
 
 | | |
 |---|---|
-| executed | **2026-08-18 01:15:15 → 04:14:54 UTC** — the matrix and the contention cells to 02:41:10, §13's six cells to 03:07:57, §14's interleaved PostgreSQL comparison from 03:59:21 |
+| executed | **2026-08-18 01:15:15 → 07:29 UTC** — the matrix and the contention cells to 02:41:10, §13's six cells to 03:07:57, §14's interleaved PostgreSQL comparison 03:59:21–04:14:54, and §6's two twinned knobs 06:37–07:29 |
 | branch / worktree | `worktree-bench-scenario2-refresh`, in the worktree `bench-scenario2-refresh` |
 | commit measured | **`92c76dd`** — "feat: DROP TABLE is atomic inside a transaction (DT5, option b)" — the tip of `origin/main` when the run started; two commits (`a8b3114`, `7a38ff5`, transactional `CREATE INDEX`) landed upstream while it ran and are **not** in the measured binary. The tree carried two edits, both documentation (`.claude/agents/ck-tester.md`, `bench/docs/README.md`); **nothing under `src/` or `include/` was modified**, so the binary is the engine at `92c76dd` |
 | **binary measured** | a **copy**, `sha256 13907114b4d6c597…`, taken from `build-release/kds_server` (linked 2026-08-18 01:08:21 UTC) before the first cell and never rewritten. Every server below started from that copy. The build tree is shared with other sessions; measuring it directly would let a rebuild land between two cells of one matrix |
@@ -52,12 +56,16 @@ whose failures are the finding that section exists to report.
 
 Three runs of the identical baseline configuration, fresh file each:
 
-| run | TPS | commit mean µs | the eight statements, summed µs |
+| run | bookings/s | commits/s | the eight statements, as bookings/s |
 |---|---:|---:|---:|
-| base 1 | 473.1 | 1,454.7 | 536.5 |
-| base 2 | **556.4** | **1,231.1** | 439.0 |
-| base 3 | 505.8 | 1,311.3 | 541.4 |
-| **mean** | **511.7** | **1,332.4** | **505.6** |
+| base 1 | 473.1 | 687 | 1,864 |
+| base 2 | **556.4** | **812** | 2,278 |
+| base 3 | 505.8 | 763 | 1,847 |
+| **mean** | **511.7** | **750** | **1,978** |
+
+*(the third column is the rate a booking would run at if the commit were
+free — the eight statements' summed cost inverted, which is what makes it
+comparable with the other two)*
 
 They span **16.3% peak to peak**, so the floor is **±8.2% about the mean**.
 Add the control — `--isolation repeatable-read`, which on a single connection
@@ -70,20 +78,20 @@ it.** Every 100,000-cargo cell of §6's matrix except `--no-txn`, which is a
 different regime, ordered by TPS against its commit and against the
 engine-side work of its eight statements:
 
-| cell | TPS | commit mean µs | eight statements, summed µs |
+| cell | bookings/s | commits/s | eight statements, as bookings/s |
 |---|---:|---:|---:|
-| `waystone_recording = off` | 560.6 | 1,158.2 | 502.4 |
-| `cores = 2` | 559.5 | 1,109.6 | 558.2 |
-| base 2 | 556.4 | 1,231.1 | 439.0 |
-| `--isolation repeatable-read` | 549.9 | 1,237.7 | 449.7 |
-| `--cabin` | 534.9 | 1,238.1 | 512.5 |
-| `--capacity-mode scan` | 523.1 | 1,238.7 | 555.5 |
-| `--fk` | 518.2 | 1,290.9 | 518.9 |
-| base 3 | 505.8 | 1,311.3 | 541.4 |
-| base 1 | 473.1 | 1,454.7 | 536.5 |
+| `waystone_recording = off` | 560.6 | 863 | 1,990 |
+| `cores = 2` | 559.5 | 901 | 1,791 |
+| base 2 | 556.4 | 812 | 2,278 |
+| `--isolation repeatable-read` | 549.9 | 808 | 2,224 |
+| `--cabin` | 534.9 | 808 | 1,951 |
+| `--capacity-mode scan` | 523.1 | 807 | 1,800 |
+| `--fk` | 518.2 | 775 | 1,927 |
+| base 3 | 505.8 | 763 | 1,847 |
+| base 1 | 473.1 | 687 | 1,864 |
 
-Throughput tracks the commit almost perfectly and has no relationship at all
-to the engine-side column, which wanders between 439 and 558 µs without
+Throughput tracks the commit rate almost perfectly and has no relationship at
+all to the engine-side column, which wanders between 1,791 and 2,278 without
 regard to the ordering. The fastest cell in this table is *not* the one that
 did the least work; it is the one whose fsyncs came back soonest.
 
@@ -188,93 +196,137 @@ One knob at a time. Equal work in every row: 1,500 committed bookings, 8,430
 charge rows, `--seed 1`, 100 invariant checks. "vs base" is against the
 **mean of the three baseline runs, 511.7 TPS**.
 
-| # | configuration | TPS | vs base | outside the ±8.2% floor? | verify |
-|---|---|---:|---:|---|---|
-| 1 | **baseline** — `BEGIN`/`COMMIT`, `--capacity-mode cached` | 473.1 | −7.6% | no — it *is* the floor | 100/0 |
-| 2 | baseline, repeated (fresh file) | 556.4 | +8.7% | no — it *is* the floor | 100/0 |
-| 3 | baseline, repeated (fresh file) | 505.8 | −1.2% | no — it *is* the floor | 100/0 |
-| 4 | `--capacity-mode scan` | 523.1 | +2.2% | **no** | 100/0 |
-| 5 | `--fk` — three foreign keys declared | 518.2 | +1.3% | **no** | 100/0 |
-| 6 | `--cabin` — Cabin on `recipes.cargo_type` | 534.9 | +4.5% | **no** | 100/0 |
-| 7 | `--isolation repeatable-read` *(control)* | 549.9 | +7.5% | **no** — it *defines* the floor | 100/0 |
-| 8 | `waystone_recording = off` | 560.6 | +9.5% | **no** — see below | 100/0 |
-| 9 | `cores = 2` | 559.5 | +9.3% | **no** — see §12 | 100/0 |
-| 10 | **`--no-txn`** — eight autocommitted statements | **91.7** | **−82.1%** | **yes** | 100/0 |
+| # | configuration | TPS | vs base | outside the ±8.2% floor? | PostgreSQL TPS | vs its base | verify |
+|---|---|---:|---:|---|---:|---:|---|
+| 1 | **baseline** — `BEGIN`/`COMMIT`, `--capacity-mode cached` | 473.1 | −7.6% | no — it *is* the floor | 449.9 | — | 100/0 |
+| 2 | baseline, repeated (fresh file) | 556.4 | +8.7% | no — it *is* the floor | | | 100/0 |
+| 3 | baseline, repeated (fresh file) | 505.8 | −1.2% | no — it *is* the floor | | | 100/0 |
+| 4 | `--capacity-mode scan` | 523.1 | +2.2% | **no** | **415.0** | **−7.8%** | 100/0 |
+| 5 | `--fk` — three foreign keys declared | 518.2 | +1.3% | **no** | *no twin flag* | | 100/0 |
+| 6 | `--cabin` — Cabin on `recipes.cargo_type` | 534.9 | +4.5% | **no** | *no PostgreSQL meaning* | | 100/0 |
+| 7 | `--isolation repeatable-read` *(control)* | 549.9 | +7.5% | **no** — it *defines* the floor | *no twin flag* | | 100/0 |
+| 8 | `waystone_recording = off` | 560.6 | +9.5% | **no** — see below | *no PostgreSQL meaning* | | 100/0 |
+| 9 | `cores = 2` | 559.5 | +9.3% | **no** — see §12 | *no PostgreSQL meaning* | | 100/0 |
+| 10 | **`--no-txn`** — eight autocommitted statements | **91.7** | **−82.1%** | **yes** | **85.7** | **−80.9%** | 100/0 |
 
-Rows 4 through 7 are inside the floor outright. **Rows 8 and 9 clear it by a
-point and still are not findings**, and the reason is the mechanism table in
-§2: both carry the matrix's two lowest commit means (1,158 and 1,110 µs)
-while their engine-side work is 502 and 558 µs — row 8 is level with the
-baseline mean and row 9 is the *highest* in the matrix. A configuration that
+**Two of the nine knobs have a PostgreSQL twin, and both were measured** — in
+their own interleaved window on 2026-08-18 06:37–07:29 UTC, two ckdbs and two
+PostgreSQL cells per knob plus a baseline pair inside the same window, so the
+"vs its base" column is a ratio against a baseline taken beside it rather than
+five hours earlier. Those cells put ckdbs at **530.4 TPS against PostgreSQL's
+449.9** at the baseline, `--no-manifest` on both sides, which is §14's
+protocol.
+
+**The two columns come from different windows and the rows say so.** The ckdbs
+column is this matrix's own cell; the PostgreSQL column and its ratio are the
+later window's. What makes them safe to read side by side is that the later
+window's ckdbs cells reproduce this matrix's: **521.7 TPS for `scan` against
+523.1 here, and 92.8 for `--no-txn` against 91.7** — 0.3% and 1.2% apart,
+well inside a floor of 8.2%. A row's two ratios are still computed against
+their own engine's own baseline, never across the pair. The other seven rows have no twin: `--fk` and `--isolation` have
+PostgreSQL meanings but no flag on `tools/pg_scenario2_freight.py`, and
+`--cabin`, `waystone_recording` and `cores` have no PostgreSQL equivalent at
+all. Building the first two is the task that would fill those cells.
+
+Rows 4 through 7 are inside the floor outright — and row 4 is inside
+PostgreSQL's own noise too, at −7.8%. **Rows 8 and 9 clear it by a point and
+still are not findings**, and the reason is the mechanism table in
+§2: both carry the matrix's two fastest commits (863 and 901 a second) while
+their engine-side rate is 1,990 and 1,791 — row 8 is level with the baseline
+mean and row 9 is the *slowest* in the matrix. A configuration that
 does more per-statement work and finishes sooner has not saved anything; its
 fsyncs came back faster. Reporting +9.5% as a Waystone saving would be
 reporting the device.
 
 Row 10 is the one that is not close.
 
-## 7. Autocommit costs 5.6×, and the per-statement table says why
+## 7. Autocommit costs 5.7×, on both engines
 
 The baseline column is the mean of the three baseline runs, so no single
-run's commit drift sets the ratio.
+run's commit drift sets the ratio. **Statements a second**, derived from each
+phase's mean:
 
-| statement | baseline | `--no-txn` | ratio | `--no-txn` p50 |
-|---|---:|---:|---:|---:|
-| cargo-lookup | 54.3 | 72.4 | 1.3× | 64.7 |
-| credit-lookup | 45.1 | 55.7 | 1.2× | 45.8 |
-| capacity-read | 42.9 | 50.4 | 1.2× | 42.5 |
-| recipe-read | 50.9 | 59.4 | 1.2× | 51.0 |
-| **freight-insert** | **42.5** | **1,234.0** | **29.1×** | 1,136.9 |
-| **charge-insert** | **34.3** | **1,223.2** | **35.7×** | 1,117.9 |
-| **operation-update** | **39.0** | **1,224.7** | **31.4×** | 1,126.4 |
-| **org-update** | **38.4** | **1,239.1** | **32.3×** | 1,128.0 |
-| whole booking | 1,933.7 | 10,875.2 | **5.6×** | |
+| statement | baseline | `--no-txn` | ratio |
+|---|---:|---:|---:|
+| cargo-lookup | 18,416 | 13,812 | 0.75× |
+| credit-lookup | 22,173 | 17,953 | 0.81× |
+| capacity-read | 23,310 | 19,841 | 0.85× |
+| recipe-read | 19,646 | 16,835 | 0.86× |
+| **freight-insert** | **23,529** | **810** | **0.034×** |
+| **charge-insert** | **29,155** | **818** | **0.028×** |
+| **operation-update** | **25,641** | **817** | **0.032×** |
+| **org-update** | **26,042** | **807** | **0.031×** |
+| whole booking | 517 | 92 | **0.178×** |
 
-*(µs)*
+The four reads are unchanged. Every write falls to **1/29th to 1/36th** of
+its rate, because under autocommit each is its own transaction and therefore
+its own fsync — 9.6 per booking instead of one. Each write's rate lands within
+5% of the baseline *commit's* own 789/s, which is the whole explanation in one
+comparison: **a write under autocommit is a commit.** The wait profile
+inverts, writes going from 16.1% of a booking to **97.2%**.
 
-The four reads are unchanged. Every write is 29–36× slower, because under
-autocommit each is its own transaction and therefore its own fsync — 9.6 per
-booking instead of one. Each write's p50 lands within 30 µs of the baseline
-*commit's* p50 of 1,268 µs, which is the whole explanation in one comparison:
-**a write under autocommit is a commit.** The wait profile inverts, writes
-going from 16.1% of a booking to **97.2%**.
+**PostgreSQL pays the same price for the same reason**: 449.9 → 85.7 TPS,
+0.191× against ckdbs's 0.175×, both measured in §6's interleaved window. The
+two engines are within 9% of each other on the *ratio*, which is what makes
+this the cost of the durability guarantee rather than an artefact of either
+implementation.
 
 `docs/scenario2-freight.md`'s decision S2-2 chose explicit transactions for
 **correctness** — eight statements that must be one unit. On this machine
-they are also a 5.6× throughput win, and nothing trades against it.
+they are also a 5.7× throughput win on ckdbs and a 5.2× win on PostgreSQL,
+and nothing trades against it.
 
-## 8. What the derived column buys, and what sets its value
+## 8. What the derived column buys, measured on both engines
 
 `operations.booked_cbm` is a running total maintained by every booking so the
 capacity check can be a pk lookup instead of an aggregate over the freight
 ledger. It is the one place this schema deliberately stores a derived value.
+Statements a second on `capacity-read`, from §6's interleaved cells:
 
-`cached` is the mean of the three baseline runs; `scan` is its own cell.
-
-| capacity-read | `cached` | `scan` | |
+| capacity-read | `cached` | `scan` | what the derived column buys |
 |---|---:|---:|---:|
-| mean | 42.9 | **83.3** | **+94%** |
-| p0 | 29.3 | 32.3 | +10% |
-| p25 | 37.1 | 61.7 | +66% |
-| p50 | 38.8 | 81.8 | +111% |
-| p95 | 54.8 | 116.5 | +113% |
-| p99 | 94.1 | 128.6 | +37% |
-| whole booking, mean | 1,933.7 | 1,884.7 | −2.5% |
-| TPS | 511.7 | 523.1 | +2.2% (inside the floor) |
+| **ckdbs** | **22,625** | 12,315 | **1.84×** |
+| **PostgreSQL** | 14,455 | 12,279 | **1.18×** |
+| ckdbs ÷ PostgreSQL | **1.57×** | **1.00×** | |
 
-The statement itself more than doubles at the median, and that part is real —
-`scan`'s p25 exceeds `cached`'s p95. The p0 row says why the cost is not
-fixed: at best case the two are 3 µs apart, because a walk that finds its row
-early is a lookup that got lucky. What the doubling does not do is change
-throughput, because 40 µs on a 1,900 µs booking is 2%.
+**The derived column is worth 1.84× to ckdbs and 1.18× to PostgreSQL**, and
+the last row is the reason: in `cached` mode ckdbs answers that statement
+1.57× faster, and in `scan` mode the two engines are **dead level — 12,315
+against 12,279, a 0.3% difference**. ckdbs's whole advantage on this
+statement disappears the moment the statement becomes an aggregate over a
+non-pk column.
+
+That is the claim this section used to argue and now measures. PostgreSQL has
+a btree index on `freights(operation_id)`, so its `SUM` is an index scan and
+losing the derived column costs it 15%; ckdbs has no secondary access path
+here, so the same `SUM` is a `FilterScan` over the whole ledger and losing
+the derived column costs it 46%. **The derived column is not compensating for
+the absence of an aggregate — both engines have `SUM`. It is compensating for
+the absence of a secondary access path**, and the size of the compensation is
+exactly the size of the gap between an index scan and a walk.
+
+The distribution behind the ckdbs row, from the matrix cell (`cached` is the
+mean of the three baseline runs; a latency table, so it keeps its
+percentiles):
+
+| capacity-read, ckdbs | mean | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| `cached` | 42.9 | 29.3 | 37.1 | 38.8 | 54.8 | 94.1 |
+| `scan` | 83.3 | 32.3 | 61.7 | 81.8 | 116.5 | 128.6 |
+
+*(µs)* The p0 row says why the cost is not fixed: at best case the two are
+3 µs apart, because a walk that finds its row early is a lookup that got
+lucky. What the doubling does not do is change throughput — `--capacity-mode
+scan` is 0.98× the baseline on ckdbs and 0.92× on PostgreSQL, both inside
+their own floors — because one statement of a nine-statement booking behind
+a 1,300 µs fsync cannot move the total.
 
 **The value of the derived column is set by `--bookings`, not by `--cargos`.**
 What `scan` walks is `freights`, a HEAP relation with no pk index, which
 grows to exactly 1,500 rows in every cell of this matrix however large the
-cargo book is. So the derived column is not compensating for the absence of
-an aggregate; it is compensating for **the absence of a secondary access path
-to a non-pk column**, and its value grows with the ledger, not with the
-reference data. A run booking 100,000 freights would find `scan`
-proportionally worse while `cached` stayed one descent.
+cargo book is. A run booking 100,000 freights would find `scan`
+proportionally worse while `cached` stayed one descent — and PostgreSQL,
+whose index scan grows logarithmically, would not.
 
 ## 9. The row-set ladder: 2,000 / 10,000 / 100,000 cargos
 
@@ -286,22 +338,22 @@ proportionally worse while `cached` stayed one descent.
 need at least 1,500 cargos in the pool; 200 or 1,000 cannot supply the run
 and would measure a different workload rather than a smaller one.
 
-| cargos | TPS | cargo-lookup mean | eight statements, summed | commit mean | booking mean | data file |
-|---:|---:|---:|---:|---:|---:|---:|
-| 2,000 | 520.1 | 54.0 | 511.2 | 1,309.8 | 1,879.2 | 9.5 MB |
-| 10,000 | 518.9 | 53.6 | 515.1 | 1,314.2 | 1,912.8 | 10.0 MB |
-| 100,000 *(mean of 3)* | 511.7 | 54.3 | 505.6 | 1,332.4 | 1,933.7 | 21.0 MB |
+| cargos | bookings/s (TPS) | cargo-lookup /s | commit /s | data file |
+|---:|---:|---:|---:|---:|
+| 2,000 | 520.1 | 18,519 | 763 | 9.5 MB |
+| 10,000 | 518.9 | 18,657 | 761 | 10.0 MB |
+| 100,000 *(mean of 3)* | 511.7 | 18,416 | 750 | 21.0 MB |
 
 *(the two smaller rungs are one cell each; the top rung is the mean of the
-three baseline runs, whose own cargo-lookup means span 50.8–56.1 µs)*
+three baseline runs, whose own cargo-lookup rates span 17,825–19,685/s)*
 
 **A fiftyfold larger cargo book changes nothing this workload can measure,
 and the reason is that it never reads the cargo book.** Every read a booking
 issues is either a primary-key descent — whose cost is a page count, not a
 row count — or a scan of a relation whose size is set by `--bookings`. The pk
-lookup into `cargos` reads 54.0, 53.6 and 54.3 µs across a fiftyfold range of
-that relation's size, a spread smaller than the spread between two runs of
-the same configuration. The data file grows with the rows because the rows
+lookup into `cargos` runs at 18,519, 18,657 and 18,416 statements a second
+across a fiftyfold range of that relation's size, a spread smaller than the
+spread between two runs of the same configuration. The data file grows with the rows because the rows
 are in it; the *booking* does not.
 
 That is the size answer this workload can give, and it is a fixed-cost
@@ -451,8 +503,8 @@ pointed capacity work at the wrong relation.
 
 `cores = 2` on a two-vCPU box, everything else baseline: **559.5 TPS against
 the baseline mean of 511.7, +9.3%** — a point outside the floor, with the
-matrix's *highest* engine-side statement cost (558.2 µs) and its lowest
-commit mean (1,109.6 µs). By §2's mechanism that is a device result, not a
+matrix's *lowest* engine-side rate (1,791 bookings a second) and its fastest
+commit (901 a second). By §2's mechanism that is a device result, not a
 core result, and one cell cannot be more than indicative either way.
 
 What is not indicative is the space, which is deterministic:
@@ -546,20 +598,21 @@ rows.
 
 ### Every statement, and the one row that is an engine comparison
 
-| statement | ops | ckdbs mean | PG mean | ratio | ckdbs p50 | PG p50 | ckdbs p99 | PG p99 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| cargo-lookup | 1,500 | **55.2** | 84.5 | 1.53× | 52.8 | 82.0 | 73.1 | 108.1 |
-| credit-lookup | 1,500 | **45.0** | 73.0 | 1.62× | 43.0 | 70.8 | 64.9 | 96.3 |
-| capacity-read | 1,500 | **43.1** | 69.3 | 1.61× | 41.2 | 67.7 | 64.8 | 94.0 |
-| recipe-read | 1,500 | **50.4** | 93.8 | 1.86× | 49.5 | 92.0 | 67.9 | 120.2 |
-| freight-insert | 1,500 | **41.4** | 82.8 | 2.00× | 40.9 | 79.5 | 55.0 | 125.2 |
-| charge-insert | 8,430 / 8,446 | **34.6** | 56.2 | 1.62× | 33.9 | 53.3 | 50.5 | 91.7 |
-| operation-update | 1,500 | **39.7** | 75.6 | 1.90× | 39.3 | 73.2 | 54.0 | 98.4 |
-| org-update | 1,500 | **38.3** | 72.0 | 1.88× | 37.3 | 70.2 | 54.7 | 98.0 |
-| **commit** | 1,500 | **1,258.5** | 1,360.0 | **1.08×** | 1,171.7 | 1,210.8 | **2,759.4** | 4,032.7 |
-| whole booking | 1,500 | **1,856.6** | 2,303.7 | 1.24× | 1,775.7 | 2,169.0 | 3,489.8 | 4,913.5 |
+| statement | ops | ckdbs /s | PostgreSQL /s | ratio |
+|---|---:|---:|---:|---:|
+| cargo-lookup | 1,500 | **18,116** | 11,834 | 1.53× |
+| credit-lookup | 1,500 | **22,222** | 13,699 | 1.62× |
+| capacity-read | 1,500 | **23,202** | 14,430 | 1.61× |
+| recipe-read | 1,500 | **19,841** | 10,661 | 1.86× |
+| freight-insert | 1,500 | **24,155** | 12,077 | 2.00× |
+| charge-insert | 8,430 / 8,446 | **28,902** | 17,794 | 1.62× |
+| operation-update | 1,500 | **25,189** | 13,228 | 1.90× |
+| org-update | 1,500 | **26,110** | 13,889 | 1.88× |
+| **commit** | 1,500 | **795** | 735 | **1.08×** |
+| whole booking | 1,500 | **539** | 434 | 1.24× |
 
-*(µs, medians across the three cells a side; full percentiles below)*
+*(statements a second, medians across the three cells a side; the latency
+distributions those rates come from are below)*
 
 | percentiles, whole booking | p0 | p25 | p50 | p95 | p99 |
 |---|---:|---:|---:|---:|---:|
@@ -575,16 +628,18 @@ rows.
 1.5×–2.0× gap at this level is protocol: ckdbs's newline text protocol is a
 lighter round trip than PostgreSQL's v3 wire, and §5 already established that
 every one of these statements is dominated by the round trip rather than by
-the engine's own work. What the rows do establish is that the *shape* is the
+the engine's own work. §8's `scan` row is the sharpest demonstration — change
+one statement from a pk lookup to an aggregate and the same two engines land
+within 0.3% of each other. What the rows do establish is that the *shape* is the
 same on both engines — a read and a write cost about the same, because on
 both the round trip is what is being measured.
 
 **The commit row is the comparison.** Both engines fsync a write-ahead log to
 the same ext4 filesystem on the same device under the same promise, so the
-protocol argument does not apply to it. They land within 8% of each other in
-the mean (1,258.5 against 1,360.0 µs) and within 3% at the median (1,171.7
-against 1,210.8) — **on the durability path these two engines are the same
-engine**, which is what should be expected when the fsync is the work and
+protocol argument does not apply to it. They land within 8% of each other on
+throughput (795 commits a second against 735) and within 3% at the median
+(1,171.7 µs against 1,210.8) — **on the durability path these two engines are
+the same engine**, which is what should be expected when the fsync is the work and
 both are asking the same filesystem for it.
 
 Where they differ is the tail: at p99 the ckdbs commit is 2,759 µs against
