@@ -82,6 +82,22 @@ struct CatalogRowRef {
     Oid rel_oid = 0;
 };
 
+// One catalog row a DROP changed, and enough to undo it
+// (workplan-ddl-transactional.md DT5). Two shapes: a delete-mark, which a
+// rollback clears; and an in-place overwrite, which a rollback rewrites
+// from `prior_image` - the only copy there is, since a catalog row has no
+// undo chain.
+struct CatalogRowChange {
+    PageId page_id = kInvalidPageId;
+    std::uint16_t slot = 0;
+    Oid oid = 0;
+    Oid rel_oid = 0;
+    std::uint64_t prior_trx_id = 0;
+    std::uint64_t prior_undo_ptr = 0;
+    bool deleted = false;  // true: a delete-mark; false: an overwrite
+    std::vector<std::byte> prior_image;
+};
+
 class Catalog {
 public:
     // `inline_cell_width` is the instance-pinned kds.inline_cell_width
@@ -298,7 +314,19 @@ public:
     // assertion) are the dispatcher's, made *before* this call - this
     // function only refuses a non-public relation and an unknown oid.
     // One BumpVersion() at the end.
-    Status DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins);
+    // `trx_id` and `written` make the drop transactional (DT5): the
+    // dependent rows are **delete-marked** rather than retired, so a
+    // rollback can clear the marks, and every change is reported for the
+    // caller to register on its trail. Defaulted to the autocommit path,
+    // which retires exactly as it always did.
+    //
+    // **Atomic, not isolated** - see spec-ddl-transactional.md §5a. The
+    // `sys.objects` retype is in place and a catalog row has no undo
+    // chain, so other sessions see the relation become a tombstone the
+    // moment the drop runs, before it commits.
+    Status DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
+                      std::uint64_t trx_id = kBootstrapXid,
+                      std::vector<CatalogRowChange>* written = nullptr);
 
     // T3's contiguous id range (docs/workplan-t3.md T3-3): one catalog
     // write bumps next_id by `count` and returns the first id - issuance

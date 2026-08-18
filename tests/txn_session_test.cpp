@@ -644,5 +644,59 @@ TEST_F(TxnSessionTest, ASecondCreateOfTheSameNameIsRefusedWhileTheFirstIsOpen) {
     EXPECT_EQ(Run(b, "CREATE TABLE contested (id int64, v int64)").substr(0, 7), "CREATED");
 }
 
+// ---- DT5: DROP TABLE is atomic (not isolated - spec §5a) ---------------
+
+TEST_F(TxnSessionTest, ARolledBackDropTableRestoresTheRelationAndItsRows) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE keep (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "INSERT INTO keep VALUES (11)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run(s, "INSERT INTO keep VALUES (22)").substr(0, 8), "INSERTED");
+
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "DROP TABLE keep").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // The relation is back, by name and by schema...
+    EXPECT_EQ(Run(s, "DESCRIBE keep").rfind("ERR", 0), std::string::npos)
+        << "a rolled-back DROP did not restore the relation";
+    // ...and so are its rows, which were never touched: a drop retires
+    // catalog rows, not data pages.
+    EXPECT_EQ(Rows(s, "SELECT id, v FROM keep"),
+              (std::vector<std::string>{"1,11", "2,22"}));
+}
+
+TEST_F(TxnSessionTest, ACommittedDropTableStaysDropped) {
+    // The guard against over-compensating: a committed drop must not be
+    // undone, and its delete-marked rows must read as gone to everyone.
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE doomed (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "DROP TABLE doomed").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+
+    EXPECT_EQ(Run(s, "DESCRIBE doomed").rfind("ERR", 0), 0u);
+    Session other;
+    EXPECT_EQ(Run(other, "DESCRIBE doomed").rfind("ERR", 0), 0u);
+    EXPECT_EQ(Run(other, "SHOW TABLES").find("doomed"), std::string::npos);
+
+    // And the name is free again - the tombstone retype is what makes
+    // that true, and it survived the commit.
+    EXPECT_EQ(Run(other, "CREATE TABLE doomed (id int64, v int64)").substr(0, 7), "CREATED");
+}
+
+TEST_F(TxnSessionTest, AnAutocommitDropStillRetiresAndIsUnaffected) {
+    // The path that always existed: no transaction, so the dependents are
+    // retired outright exactly as before, and nothing is registered.
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE plain (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "DROP TABLE plain").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(Run(s, "DESCRIBE plain").rfind("ERR", 0), 0u);
+
+    // A later unrelated rollback cannot resurrect it.
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    EXPECT_EQ(Run(s, "DESCRIBE plain").rfind("ERR", 0), 0u);
+}
+
 }  // namespace
 }  // namespace kds::server

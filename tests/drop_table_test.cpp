@@ -145,16 +145,29 @@ TEST_F(DropTableTest, ASystemRelationIsRefused) {
     EXPECT_NE(out.find("system relation"), std::string::npos) << out;
 }
 
-// DT5: a catalog write like all DDL - ROLLBACK does not resurrect it.
-TEST_F(DropTableTest, ADropInsideATransactionIsNotRolledBack) {
+// **This test asserted the opposite until 2026-08-16**, and it was right
+// to: `docs/spec-drop-table.md` DT5 called a drop "a catalog write like
+// all DDL - ROLLBACK does not resurrect it". Transactional DDL's own DT5
+// (`docs/workplan-ddl-transactional.md`, a different numbering - cite the
+// file) made that false on purpose: a drop inside a transaction
+// delete-marks its dependent rows and records the tombstone retype's
+// before-image on the trail, so `Abort` puts both back.
+//
+// Kept and inverted rather than deleted: the statement it pins is still
+// the interesting one, and a reader coming from the drop-table spec needs
+// to find the contradiction here rather than infer it.
+TEST_F(DropTableTest, ADropInsideATransactionIsRolledBack) {
     Ok("CREATE TABLE t (id int64, v varchar)");
+    Ok("INSERT INTO t VALUES ('kept')");
 
     Session session;
     ASSERT_EQ(Run(session, "BEGIN").substr(0, 5), "BEGIN");
     EXPECT_EQ(Run(session, "DROP TABLE t").rfind("ERR", 0), std::string::npos);
     Run(session, "ROLLBACK");
 
-    EXPECT_EQ(Run("SELECT v FROM t").rfind("ERR", 0), 0u);
+    // The relation is back, and so is its row - a drop retires catalog
+    // rows, never data pages.
+    EXPECT_EQ(Run("SELECT v FROM t"), "v\\nkept");
 }
 
 }  // namespace

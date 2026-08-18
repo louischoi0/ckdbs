@@ -139,6 +139,42 @@ Whatever is chosen, one thing is already known and must be respected:
 - Mixed statements: `BEGIN; CREATE TABLE t ...; INSERT INTO t ...;
   ROLLBACK;` leaves no relation and no rows.
 
+### 5a. `DROP TABLE` is atomic, and deliberately **not** isolated
+
+Built 2026-08-16 as option (b) of DT5's decision. A drop inside a
+transaction **delete-marks** its dependent rows instead of retiring them
+and records the `sys.objects` retype's before-image, both on the
+transaction's trail — so `ROLLBACK` clears the marks and rewrites the
+tombstone back to a live table, restoring the relation and its rows.
+Autocommit still retires, exactly as before.
+
+**Other sessions see the drop immediately, before it commits.** That is
+not an oversight, it is what option (b) costs. The `sys.objects` retype
+is an *in-place overwrite*, and a catalog row has no undo chain
+(`txn.md` §7) — so the prior image exists only in the aborting
+transaction's own trail, and there is nowhere for another reader to
+recover it from. Isolating a drop needs undo *records* for catalog rows,
+which is option (a) and is not built.
+
+The consequence a user meets: between `DROP TABLE t` and the `COMMIT`
+or `ROLLBACK` that resolves it, other sessions see `t` as already gone.
+If the transaction rolls back, `t` comes back. Reads in that window are
+not wrong about the rows — the data pages are untouched — they are early
+about the schema.
+
+Two smaller facts worth stating with it:
+
+- **The sweep loop's termination changed meaning.** It runs until
+  nothing matches, which a retired slot satisfies by disappearing and a
+  delete-marked one does not. The transactional path therefore skips
+  rows already marked; without that it re-marks the same row forever.
+  This is why the original code's *"retired, not delete-marked"* comment
+  was load-bearing twice over, not only for read semantics.
+- **A committed transactional drop leaves its marked rows on the page**,
+  where autocommit's retire reclaims the slot. Nothing purges either way
+  (`known-gaps.md`), and both read as gone, so the difference is space
+  rather than meaning.
+
 ### Which reads filter, and which deliberately do not
 
 Every route into "does this relation exist" must answer the same way, or

@@ -9,7 +9,8 @@ exists in `docs/workplan-drop-table.md`.
 
 ## Where to pick this up
 
-**DT1 through DT4 done (2026-08-15/16).** **Spec §1's properties A, B and
+**DT1 through DT7 done (2026-08-15/16); the milestone is complete except
+DT8, which was never scheduled.** **Spec §1's properties A, B and
 C are delivered at the SQL surface**: a rolled-back `CREATE TABLE`
 leaves no relation, and an uncommitted one is invisible to every other
 session by every route into it. **D (durability) remains deferred by
@@ -206,7 +207,46 @@ freshness guard because `InvalidateFromPeer` clears without bumping — is
 untouched and still recorded in `docs/known-gaps.md`. Nothing here keys
 on that counter.
 
-### DT5 — DROP, and the delete-mark
+### DT5 — DROP, and the delete-mark ✅ 2026-08-16 (option (b))
+
+Decided by the user from three options: **(b) delete-mark plus trail
+compensation, no undo records.** A drop inside a transaction
+delete-marks its dependents instead of retiring them and captures the
+`sys.objects` retype's before-image, both on the trail, so `Abort`
+restores the relation and its rows. Autocommit still retires.
+
+**Atomic, not isolated** — spec §5a states what that costs and why: an
+in-place overwrite with no undo chain leaves the prior image only in the
+aborting transaction's own trail, so other sessions see the drop before
+it commits. Closing that is option (a)'s undo records, not built.
+
+Two things this found:
+
+- **The sweep loop stopped terminating.** It runs until nothing matches,
+  which a retired slot satisfies by vanishing and a delete-marked one
+  does not — so it re-marked the same row forever. Caught as a hang
+  rather than a failure. The original *"retired, not delete-marked"*
+  comment was load-bearing for termination as well as for reads, and
+  changing one half without the other is what broke it.
+- **`ForFirstRow` had to report the page it acted on.** The sweeps knew
+  the slot but not the page, which is wrong the moment a catalog
+  relation overflows onto a chained page — the trail would have
+  addressed the wrong row. An optional out-param, so none of its
+  fourteen callers changed.
+
+**One pre-existing test asserted the opposite and was inverted, not
+deleted**: `DropTableTest.ADropInsideATransactionIsNotRolledBack` pinned
+the old limitation, and `docs/spec-drop-table.md`'s own DT5 stated it in
+prose. Both are amended, and both now point here. Note the numbering
+collision CLAUDE.md warns about is live: **two specs have a "DT5" and
+they say opposite things about the same statement** — cite the file.
+
+Gate: **met.** A rolled-back drop restores the relation *and* its rows
+(the data pages were never touched); a committed one stays dropped with
+its name freed by the tombstone retype; an autocommit drop still retires
+and is unaffected by a later unrelated rollback.
+
+### DT5 — original plan (superseded by the entry above)
 
 `DROP TABLE` delete-marks its `sys.tables` row under the transaction's id
 instead of tombstoning immediately, so a rolled-back DROP leaves the

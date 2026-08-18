@@ -66,7 +66,23 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
                 inner = tuple.status();
                 return tuple.status();
             }
-            if (view != nullptr && !view->Visible(tuple.value().trx_id)) {
+            // A delete-marked row (DT5): `trx_id` is the *deleter*, so the
+            // question flips. With no view the answer is latest state -
+            // the row is gone. With one, it is gone for a reader that can
+            // see the deleting transaction and still there for one that
+            // cannot, which is what makes a rolled-back drop invisible to
+            // everyone but the dropper.
+            //
+            // **No undo chain is consulted**, because a catalog row has
+            // none: `undo_ptr` is 0 (txn.md §7). That is exactly why an
+            // in-place *overwrite* under a transaction cannot be hidden
+            // from other readers - spec-ddl-transactional.md §5a says what
+            // that costs DROP.
+            if (tuple.value().deleted) {
+                if (view == nullptr || view->Visible(tuple.value().trx_id)) {
+                    return storage::VisitControl::kContinue;
+                }
+            } else if (view != nullptr && !view->Visible(tuple.value().trx_id)) {
                 return storage::VisitControl::kContinue;  // not there, for this reader
             }
             auto row = RowT::Decode(tuple.value().payload);
@@ -93,8 +109,13 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
 // **kWrite**, unconditionally: every caller of this writes. A reader uses
 // ScanAll, which fetches read-only so a lookup does not dirty a catalog
 // page (the bug multicore's ownership check surfaced).
+// `acted_page`, when given, receives the page the accepted row was on -
+// which is not `root` once a catalog relation has overflowed onto a
+// chained page, and is what a rollback needs to address the row again
+// (workplan-ddl-transactional.md DT5).
 template <typename RowT, typename Fn>
-StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn) {
+StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
+                            PageId* acted_page = nullptr) {
     // **Its own page walk, not `heap::ChainVisit`.** The walk is four lines
     // and the difference is measurable: ChainVisit takes a `std::function`,
     // so every slot costs an indirect call plus a `StatusOr<VisitControl>`
@@ -123,7 +144,10 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn) {
 
             auto done = fn(row.value(), page, slot, tuple.value());
             if (!done.ok()) return done.status();
-            if (done.value()) return true;
+            if (done.value()) {
+                if (acted_page != nullptr) *acted_page = current;
+                return true;
+            }
         }
 
         const PageId next = page.next_page_id();
@@ -1085,10 +1109,21 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
     return Status::OK();
 }
 
-Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins) {
+Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
+                          std::uint64_t trx_id, std::vector<CatalogRowChange>* written) {
+    // Transactional only when a caller supplies an id (DT5). Without one
+    // this is the path that always existed: retype, then **retire** the
+    // dependents outright, which no rollback can put back - and which is
+    // right for autocommit, where there is no rollback to serve.
+    const bool transactional = trx_id != kBootstrapXid;
+    auto note = [written](const CatalogRowChange& change) {
+        if (written != nullptr) written->push_back(change);
+    };
     // 1. The tombstone (DT2): retype, never retire. The row is the oid
     //    floor's evidence, and a reissued oid could serve a dead table's
     //    row as a live answer through a stale advisory structure.
+    PageId retyped_page = kInvalidPageId;
+    CatalogRowChange retype_change;
     auto retyped = ForFirstRow<SysObjectRow>(
         store_, kCatalogPageObjects,
         [&](SysObjectRow& row, heap::PageView& page, std::uint16_t i,
@@ -1099,16 +1134,38 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                                                 std::string(NameView(row.name)) +
                                                 "' is a system relation and cannot be dropped");
             }
+            // The before-image, captured *before* the overwrite: it is
+            // what a rollback writes back, and it is the only copy - a
+            // catalog row has no undo chain to recover it from.
+            CatalogRowChange change;
+            change.slot = i;
+            change.oid = row.oid;
+            change.rel_oid = kSysObjectsTable;
+            change.prior_trx_id = tuple.trx_id;
+            change.prior_undo_ptr = tuple.undo_ptr;
+            const auto before = row.Encode();
+            change.prior_image.assign(before.begin(), before.end());
+
             row.type_oid = kTypeDroppedTable;
             const auto encoded = row.Encode();
-            if (Status s = page.OverwriteTuple(i, encoded, tuple.trx_id, tuple.undo_ptr);
+            // Stamped with the dropping transaction when there is one, so
+            // the retype is this transaction's to undo.
+            if (Status s = page.OverwriteTuple(i, encoded,
+                                               transactional ? trx_id : tuple.trx_id,
+                                               tuple.undo_ptr);
                 !s.ok()) {
                 return s;
             }
+            retype_change = std::move(change);
             return true;
-        });
+        },
+        &retyped_page);
     if (!retyped.ok()) return retyped.status();
     if (!retyped.value()) return Status::NotFound("no sys.objects row for this relation");
+    if (transactional) {
+        retype_change.page_id = retyped_page;  // known only once the walk found it
+        note(retype_change);
+    }
 
     // 2. Everything the relation owns retires (DT3's "dependents out").
     //    Retired, not delete-marked - RetirePattern() states the argument:
@@ -1120,16 +1177,50 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     const auto sweep = [&](auto row_tag, PageId root, auto matches) -> Status {
         using RowT = decltype(row_tag);
         for (;;) {
+            PageId acted_page = kInvalidPageId;
+            CatalogRowChange marked;
             auto acted = ForFirstRow<RowT>(
                 store_, root,
                 [&](RowT& row, heap::PageView& page, std::uint16_t i,
-                    const heap::PageView::Tuple&) -> StatusOr<bool> {
+                    const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
                     if (!matches(row)) return false;
-                    if (Status s = page.RetireSlot(i); !s.ok()) return s;
+                    // **Already marked is already done.** The sweep loops
+                    // until nothing matches, and a retired slot stops
+                    // matching because it is gone - a delete-marked one
+                    // does not. Without this the loop never terminates.
+                    if (tuple.deleted) return false;
+                    if (!transactional) {
+                        if (Status s = page.RetireSlot(i); !s.ok()) return s;
+                        return true;
+                    }
+                    // Delete-marked, not retired: a retired slot has no
+                    // compensation that puts it back, and `ScanAll` now
+                    // knows how to read a mark (DT5). The row's bytes stay
+                    // where they are, which is what a rollback needs and
+                    // what nothing purges.
+                    if (Status s = page.DeleteMark(i, trx_id); !s.ok()) return s;
+                    CatalogRowChange change;
+                    change.slot = i;
+                    // The identity `Compensate` will re-read before it
+                    // clears the mark, taken the way that check takes it -
+                    // not from a `.oid` member, which not every catalog row
+                    // has.
+                    if (auto id = KeystoneIdOfPayload(tuple.payload); id.ok()) {
+                        change.oid = static_cast<Oid>(id.value());
+                    }
+                    change.prior_trx_id = tuple.trx_id;
+                    change.prior_undo_ptr = tuple.undo_ptr;
+                    change.deleted = true;
+                    marked = std::move(change);
                     return true;
-                });
+                },
+                &acted_page);
             if (!acted.ok()) return acted.status();
             if (!acted.value()) return Status::OK();
+            if (transactional) {
+                marked.page_id = acted_page;
+                note(marked);
+            }
         }
     };
 

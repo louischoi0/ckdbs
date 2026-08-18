@@ -538,6 +538,9 @@ private:
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
     void EndDdlScope(const Session& session, bool rows_were_retired);
+    // Records that this transaction now holds uncommitted catalog rows,
+    // which is what turns on `ViewFor`'s filtering.
+    void MarkHoldsDdl(const txn::Transaction& txn);
 
     // `CREATE PATTERN` / `DROP PATTERN`. Both take the whole statement
     // line, not a suffix: a declaration's stored canon is its own text

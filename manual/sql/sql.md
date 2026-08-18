@@ -152,10 +152,15 @@ decisions land.
   in-memory sets), columns and child-side foreign keys.
 - Patterns and trails naming the dead relation die quietly (advisory);
   `sys.access_stats` ghosts stay, keyed by an oid that cannot return.
-- Unlogged and non-transactional — `ROLLBACK` does not resurrect a
-  dropped table. (`CREATE TABLE` *is* transactional as of 2026-08-16;
-  `DROP TABLE` is not, and the asymmetry is real: a drop retires its
-  dependent rows outright, which nothing can put back.)
+- **Atomic inside a transaction as of 2026-08-16**: `ROLLBACK` restores
+  the relation and its rows. Unlogged still, so a committed drop is no
+  more crash-durable than any catalog write.
+- **Not isolated, and this one is visible to users.** Between the `DROP`
+  and the `COMMIT`/`ROLLBACK` that resolves it, *other* sessions already
+  see the relation as gone; if the transaction rolls back, it returns.
+  The rows are never at risk — data pages are untouched — but the schema
+  change is early. Isolating it needs undo records for catalog rows,
+  which is not built (`docs/spec-ddl-transactional.md` §5a).
 
 ### ALTER TABLE (built 2026-08-10, AL1-AL9 / ALT01-ALT05)
 

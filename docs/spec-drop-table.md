@@ -59,13 +59,27 @@ argument verbatim. `sys.access_stats` rows for the dead oid stay as
 ghosts (keyed by an oid that can never be reissued, they can never
 mis-attribute; `SHOW ACCESS` may list them and honesty costs a row).
 
-## DT5 — Unlogged, non-transactional, one bump
+## DT5 — Unlogged, one bump (**and, since 2026-08-16, atomic**)
 
-A catalog write like all DDL: not undone by ROLLBACK, lost by a crash
-before the pages flush, `BumpVersion()` once at the end (a dropped name
-is read by resolution itself — no in-place exception), peers invalidated
-through the built `kCatalogInvalidate` path. `sys.*` relations are
-refused, ALTER's AL7 verbatim.
+A catalog write like all DDL: lost by a crash before the pages flush,
+`BumpVersion()` once at the end (a dropped name is read by resolution
+itself — no in-place exception), peers invalidated through the built
+`kCatalogInvalidate` path. `sys.*` relations are refused, ALTER's AL7
+verbatim.
+
+**Amended 2026-08-16: "not undone by ROLLBACK" is no longer true.** This
+section said a drop was non-transactional; the transactional-DDL
+milestone's own DT5 (`docs/workplan-ddl-transactional.md` — a different
+numbering, cite the file) changed it. Inside an explicit transaction a
+drop **delete-marks** its dependent rows instead of retiring them and
+records the `sys.objects` retype's before-image, both on the
+transaction's trail, so `ROLLBACK` restores the relation and its rows.
+Autocommit still retires, exactly as this section describes.
+
+Two limits carried from there rather than restated: the drop is
+**atomic but not isolated** (other sessions see it before it commits —
+`docs/spec-ddl-transactional.md` §5a says why), and it is still not
+crash-durable, which the first sentence above already says.
 
 ## DT6 — Grammar
 

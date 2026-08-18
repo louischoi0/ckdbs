@@ -1431,7 +1431,36 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
     }
 
     std::vector<std::uint64_t> dropped_cabins;
-    if (Status s = catalog_.DropTable(oid.value(), dropped_cabins); !s.ok()) {
+    // Transactional when inside an explicit transaction (DT5): the
+    // dependents are delete-marked instead of retired, and every change -
+    // the marks and the `sys.objects` retype - goes on the trail so
+    // `Abort` undoes it. Registered before the status is read, for the
+    // same reason CREATE's rows are: a drop that failed partway still
+    // changed rows.
+    DdlScope ddl = DdlScopeFor(session);
+    std::vector<catalog::CatalogRowChange> changed;
+    Status dropped =
+        catalog_.DropTable(oid.value(), dropped_cabins, ddl.trx_id,
+                           ddl.txn != nullptr ? &changed : nullptr);
+    if (ddl.txn != nullptr) {
+        for (const catalog::CatalogRowChange& c : changed) {
+            if (c.deleted) {
+                txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
+                                     c.page_id, c.slot, c.oid, c.prior_trx_id,
+                                     c.prior_undo_ptr);
+            } else {
+                txn_->NoteOverwrite(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
+                                    c.page_id, c.slot, c.oid, c.prior_trx_id,
+                                    c.prior_undo_ptr, c.prior_image);
+            }
+        }
+        // Mark the transaction as holding DDL so `ViewFor` starts
+        // filtering - **not** by pushing a fake row into `written`, which
+        // would put an insert with an invalid page on the trail and have
+        // the abort try to retire it.
+        if (!changed.empty()) MarkHoldsDdl(*ddl.txn);
+    }
+    if (Status s = dropped; !s.ok()) {
         return {"ERR " + s.message(), false};
     }
     // The catalog rows are gone and the compiler stops emitting probes;
@@ -3282,12 +3311,15 @@ void CommandDispatcher::EndDdlScope(const Session& session, bool rows_were_retir
     if (held_ddl && rows_were_retired) catalog_.InvalidateAfterCompensation();
 }
 
+void CommandDispatcher::MarkHoldsDdl(const txn::Transaction& txn) {
+    if (std::find(ddl_txns_.begin(), ddl_txns_.end(), txn.id()) == ddl_txns_.end()) {
+        ddl_txns_.push_back(txn.id());
+    }
+}
+
 void CommandDispatcher::NoteDdlRows(DdlScope& scope) {
     if (scope.txn == nullptr) return;
-    if (!scope.written.empty() &&
-        std::find(ddl_txns_.begin(), ddl_txns_.end(), scope.txn->id()) == ddl_txns_.end()) {
-        ddl_txns_.push_back(scope.txn->id());
-    }
+    if (!scope.written.empty()) MarkHoldsDdl(*scope.txn);
     for (const catalog::CatalogRowRef& row : scope.written) {
         txn_->NoteInsert(*scope.txn, static_cast<std::uint32_t>(row.rel_oid), row.page_id,
                          row.slot, row.oid);
