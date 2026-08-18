@@ -126,6 +126,13 @@ Status CollectFrom(catalog::Catalog& catalog, const std::vector<Step>& steps, Ch
         for (const StepPredicate& pred : step.residual) {
             if (pred.rhs.kind != OperandKind::kLiteral) continue;
             if (pred.rhs.literal.type != parser::ValueType::kParam) continue;
+            // A conjunct equality propagation derived, not one the client
+            // wrote. Skipped for the same reason `Step::key` is (below): a
+            // check-6 line must name a predicate the client can find in
+            // their text, and the derived occurrence's verdict is never
+            // different - propagation only crosses an identical type
+            // descriptor, so `CoercionBetween` answers the same both ways.
+            if (pred.derived) continue;
 
             // The lhs is always a column (spec I10: no expression on the
             // left), so its catalog type is the parameter's context type.

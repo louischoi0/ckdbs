@@ -389,5 +389,72 @@ TEST(IndexSwitchTest, TheRowsAreByteIdenticalEitherWay) {
     }
 }
 
+// ---- Equality propagation reaches the index (docs/parser-v2.md §5) --------
+
+TEST_F(IndexCompileTest, AJoinRestrictionOnTheOtherRelationReachesTheIndex) {
+    // bench/results-scenario3-library.md §9's shape: the restriction sits
+    // on `u`, the index on `l`. Before the propagation pass this compiled
+    // to a full Scan of `l` with a probe per row - 10,086 pages for six
+    // rows at the measured size; the derived `l.uid = 3` is what lets the
+    // step compiler reach the index it already had.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+    for (int i = 0; i < 40; ++i) Ok("INSERT INTO u VALUES (" + std::to_string(100 + i) + ")");
+    for (int i = 0; i < 40; ++i) {
+        Ok("INSERT INTO l VALUES (" + std::to_string(1 + i % 8) + ", " + std::to_string(i) + ")");
+    }
+
+    const std::string written = "SELECT l.v FROM l JOIN u ON l.uid = u.id WHERE u.id = 3";
+    const std::string by_hand = "SELECT l.v FROM l JOIN u ON l.uid = u.id WHERE l.uid = 3";
+
+    EXPECT_EQ(KindOf(written), "IndexProbe");
+    // Five matching rows entered through the index, not forty through the
+    // relation - and the two writings of one question answer identically.
+    const std::string plan = Plan(written);
+    EXPECT_NE(plan.find("index_scanned=5"), std::string::npos) << plan;
+    // The conjunct the probe keys on was derived, and the plan says so -
+    // an unmarked line would be a filter the reader cannot find in the
+    // statement they wrote.
+    EXPECT_NE(plan.find(" derived"), std::string::npos) << plan;
+    EXPECT_EQ(Run(written), Run(by_hand));
+}
+
+TEST_F(IndexCompileTest, PropagationDeclinesAMatchingTypeWithADifferentLen) {
+    // decimal(10,2) and decimal(18,2) share type_val and scale - the one
+    // reachable pair that passes the column-column compare while differing
+    // in descriptor `len` (precision packs into it). The literal was
+    // coerced against one column's descriptor and must not cross to the
+    // other, so the join side keeps its unpropagated plan.
+    Ok("CREATE TABLE dn (id int64, m decimal(10, 2)) BTREE");
+    Ok("CREATE TABLE dw (id int64, m decimal(18, 2)) BTREE");
+    const std::string sql = "SELECT dw.id FROM dw JOIN dn ON dw.m = dn.m WHERE dn.m = 1.50";
+    EXPECT_EQ(KindOf(sql), "Scan");
+    EXPECT_EQ(Plan(sql).find(" derived"), std::string::npos) << Plan(sql);
+}
+
+TEST_F(IndexCompileTest, TheSwappedWritingGetsALookupAndAnIndexedInnerSide) {
+    // The same join written u-first: the written conjunct makes step 0 a
+    // Lookup, and the derived one gives the *inner* step an IndexProbe -
+    // an inner side a secondary index serves, which no written form
+    // without a literal on `l` could produce before.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+    for (int i = 0; i < 40; ++i) Ok("INSERT INTO u VALUES (" + std::to_string(100 + i) + ")");
+    for (int i = 0; i < 40; ++i) {
+        Ok("INSERT INTO l VALUES (" + std::to_string(1 + i % 8) + ", " + std::to_string(i) + ")");
+    }
+
+    const std::string swapped = "SELECT l.v FROM u JOIN l ON l.uid = u.id WHERE u.id = 3";
+    EXPECT_EQ(KindOf(swapped), "Lookup");
+    const std::string plan = Plan(swapped);
+    EXPECT_NE(plan.find("step 1 IndexProbe"), std::string::npos) << plan;
+
+    // Same rows as the l-first writing, which is the equivalence the two
+    // access kinds must not disturb.
+    EXPECT_EQ(Run(swapped), Run("SELECT l.v FROM l JOIN u ON l.uid = u.id WHERE u.id = 3"));
+}
+
 }  // namespace
 }  // namespace kds::exec

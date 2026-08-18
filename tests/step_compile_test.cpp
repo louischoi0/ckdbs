@@ -292,6 +292,158 @@ TEST_F(StepCompileTest, AJoinPredicateIsAConjunctLikeAnyOther) {
     EXPECT_EQ(chain.steps[1].residual[0].rhs.kind, OperandKind::kColumn);
 }
 
+// ---- Equality propagation (docs/parser-v2.md §5) --------------------------
+
+TEST_F(StepCompileTest, ALiteralOnTheJoinKeyPropagatesToTheOtherSide) {
+    // `acct.id = 7` plus `trade.acct_id = acct.id` implies
+    // `trade.acct_id = 7`, and the derived conjunct lands on step 0 - the
+    // step that can be keyed on it. bench/results-scenario3-library.md §9
+    // is the measured shape this exists for.
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM trade JOIN acct ON trade.acct_id = acct.id "
+        "WHERE acct.id = 7");
+    ASSERT_EQ(chain.steps.size(), 2u);
+
+    // Step 0 gained the derived equality. No index exists in this fixture,
+    // so the kind is the filter scan the conjunct names; an index on
+    // trade(acct_id) is what would key on it (index_compile_test.cpp).
+    ASSERT_EQ(chain.steps[0].residual.size(), 1u);
+    EXPECT_EQ(chain.steps[0].residual[0].lhs.col_pos, 1);
+    EXPECT_EQ(chain.steps[0].residual[0].op, parser::CompareOp::kEq);
+    EXPECT_EQ(chain.steps[0].residual[0].rhs.kind, OperandKind::kLiteral);
+    EXPECT_EQ(chain.steps[0].residual[0].rhs.literal.int_val, 7);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kFilterScan);
+
+    // Step 1 is untouched: the probe the written conjuncts chose, and both
+    // written conjuncts still in its residual - a derived conjunct may
+    // upgrade a step, never displace what was written.
+    EXPECT_EQ(chain.steps[1].kind, AccessKind::kProbe);
+    EXPECT_EQ(chain.steps[1].residual.size(), 2u);
+}
+
+TEST_F(StepCompileTest, PropagationOntoThePkMakesTheStepALookup) {
+    // The restriction written against the non-pk side: the implied
+    // `acct.id = 7` turns step 0 from the scan
+    // AProbeKeyMustComeFromAnEarlierStepNotALaterOne pins into a lookup.
+    const StepChain chain = MustCompile(
+        "SELECT acct.name FROM acct JOIN trade ON acct.id = trade.acct_id "
+        "WHERE trade.acct_id = 7");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup);
+    ASSERT_TRUE(chain.steps[0].key.has_value());
+    EXPECT_EQ(chain.steps[0].key->kind, OperandKind::kLiteral);
+    EXPECT_EQ(chain.steps[0].key->literal.int_val, 7);
+}
+
+TEST_F(StepCompileTest, PropagationCrossesAChainOfJoinKeys) {
+    // The class is transitive: one literal on a key three relations share
+    // reaches all three, not just the written one's neighbour.
+    const StepChain chain = MustCompile(
+        "SELECT a.sym FROM trade AS a JOIN trade AS b ON a.acct_id = b.acct_id "
+        "JOIN trade AS c ON b.acct_id = c.acct_id WHERE c.acct_id = 5");
+    ASSERT_EQ(chain.steps.size(), 3u);
+    ASSERT_EQ(chain.steps[0].residual.size(), 1u);
+    EXPECT_EQ(chain.steps[0].residual[0].rhs.literal.int_val, 5);
+    // Step 1 carries its ON conjunct plus the derived equality.
+    ASSERT_EQ(chain.steps[1].residual.size(), 2u);
+    EXPECT_EQ(chain.steps[1].residual[1].rhs.kind, OperandKind::kLiteral);
+}
+
+TEST_F(StepCompileTest, PropagationRequiresAnIdenticalTypeDescriptor) {
+    // The literal was coerced against the column it was written on, and it
+    // is copied bytes-for-bytes - so an int64-to-int32 join key does not
+    // propagate, it keeps today's plan.
+    Create("CREATE TABLE narrow (id int64, small int32)");
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM trade JOIN narrow ON trade.acct_id = narrow.small "
+        "WHERE narrow.small = 7");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].residual.size(), 0u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kScan);
+}
+
+TEST_F(StepCompileTest, AWrittenConjunctIsNeverDerivedAgain) {
+    // Both forms written by hand: nothing to add, and no duplicate residual
+    // to evaluate per row.
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM trade JOIN acct ON trade.acct_id = acct.id "
+        "WHERE acct.id = 7 AND trade.acct_id = 7");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].residual.size(), 1u);
+    EXPECT_EQ(chain.steps[1].residual.size(), 2u);
+}
+
+TEST_F(StepCompileTest, AColumnWithItsOwnWrittenLiteralDerivesNothing) {
+    // `acct.id = 7 AND trade.acct_id = 8` is a contradiction, and both
+    // columns already carry a written equality-to-literal - so propagation
+    // appends nothing. A second literal on a column is plan-inert (a keyed
+    // candidate already exists there) and result-inert (the written
+    // conjuncts fully express the predicate, contradiction included), and
+    // deriving it anyway is the unbounded blowup §5's one-per-column cap
+    // exists to stop. The statement still answers empty, by its residual.
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM trade JOIN acct ON trade.acct_id = acct.id "
+        "WHERE acct.id = 7 AND trade.acct_id = 8");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].residual.size(), 1u);
+    EXPECT_EQ(chain.steps[1].residual.size(), 2u);
+}
+
+TEST_F(StepCompileTest, ADerivedEqualityPromotesAWrittenRangeToALookup) {
+    // §5 "plans may only be strengthened": the written conjuncts give
+    // step 0 a kRange; the derived `acct.id = 5` gives it a kLookup - a
+    // strictly stronger trust class for the same rows - and both written
+    // bounds stay in the residual, so the located row is still checked
+    // against them.
+    const StepChain chain = MustCompile(
+        "SELECT acct.name FROM acct JOIN trade ON acct.id = trade.acct_id "
+        "WHERE acct.id BETWEEN 1 AND 10 AND trade.acct_id = 5");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup);
+    EXPECT_FALSE(chain.steps[0].range.has_value());
+    // The two written bounds plus the derived equality, marked as such.
+    ASSERT_EQ(chain.steps[0].residual.size(), 3u);
+    EXPECT_TRUE(chain.steps[0].residual[2].derived);
+}
+
+TEST_F(StepCompileTest, AParamOnTheJoinKeyPropagatesAndIsMarkedDerived) {
+    // §5: a declared pattern's body must compile to the plan the traffic's
+    // literal form takes, so `$p` propagates - and the derived conjunct is
+    // marked, which is what lets CREATE PATTERN's checks and ANALYZE name
+    // only what the client wrote. A `$param` parses only inside a pattern
+    // body, so the body is compiled through the declaration's AST.
+    auto parsed = parser::Parse(
+        "CREATE PATTERN jp($p int64) OF "
+        "SELECT acct.name FROM acct JOIN trade ON acct.id = trade.acct_id "
+        "WHERE trade.acct_id = $p");
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& decl = std::get<parser::CreatePatternStmt>(parsed.value());
+    auto compiled = Compile(boot_->catalog, *decl.body);
+    ASSERT_TRUE(compiled.ok()) << compiled.status().message();
+    const StepChain& chain = compiled.value();
+
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kLookup);
+    ASSERT_EQ(chain.steps[0].residual.size(), 1u);
+    EXPECT_TRUE(chain.steps[0].residual[0].derived);
+    EXPECT_EQ(chain.steps[0].residual[0].rhs.literal.type, parser::ValueType::kParam);
+}
+
+TEST_F(StepCompileTest, PropagationStaysInsideItsOwnBlock) {
+    // The sub-chain's `trade.acct_id = acct.id` reaches outward (up == 1),
+    // which is not a same-chain edge: no class forms across a block
+    // boundary, and the outer block's literal derives nothing inside.
+    const StepChain chain = MustCompile(
+        "SELECT * FROM acct WHERE id = 7 AND EXISTS "
+        "(SELECT trade.id FROM trade WHERE trade.acct_id = acct.id)");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
+    const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
+    ASSERT_EQ(inner.size(), 1u);
+    ASSERT_EQ(inner[0].residual.size(), 1u);
+    EXPECT_FALSE(inner[0].residual[0].derived);
+}
+
 // ---- Resolution -----------------------------------------------------------
 
 TEST_F(StepCompileTest, ACompiledChainCarriesNoColumnOrRelationNames) {

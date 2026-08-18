@@ -292,6 +292,15 @@ struct StepPredicate {
     ColumnRef lhs;
     parser::CompareOp op = parser::CompareOp::kEq;
     Operand rhs;
+
+    // True for a conjunct the compiler derived by equality propagation
+    // (docs/parser-v2.md §5) rather than one the client wrote. Execution
+    // ignores it; the two consumers are diagnostic truthfulness: ANALYZE
+    // marks the line, and CREATE PATTERN's parameter checks skip it - a
+    // warning must name a predicate the client can find in their text.
+    // Deliberately not serialized by step_descriptor.cpp: a shipped chain's
+    // peer only evaluates residuals, and false is the safe default.
+    bool derived = false;
 };
 
 struct Step;

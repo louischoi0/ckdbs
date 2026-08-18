@@ -398,6 +398,105 @@ bool IsOwnColumn(const ColumnRef& ref, std::uint16_t slot) {
     return ref.up == 0 && ref.rel_slot == slot;
 }
 
+// ---- Equality propagation (docs/parser-v2.md §5) -------------------------
+//
+// From `A = B` - two columns of this chain - and `B = <literal>`, append
+// the implied `A = <literal>`, so the step owning A can be keyed instead
+// of walked - the join whose restriction sits on the other relation,
+// bench/results-scenario3-library.md §9's 10,086-page shape. The contract -
+// what may be derived, why results cannot change, and what stays out of
+// scope - is the §5 amendment; two facts a reader of this function needs
+// that the spec cannot supply:
+//
+//  - The literal is copied bytes-for-bytes, so it crosses only an
+//    identical (type_val, len) descriptor: it was coerced against the
+//    column it was written on (CoercePredicate), and re-coercing a coerced
+//    decimal would rescale it twice.
+//  - At most one conjunct is derived per column, and only for a column
+//    with no written equality-to-literal of its own. A second literal on
+//    one column is plan-inert (a keyed candidate already exists there) and
+//    result-inert (the written conjuncts fully express the predicate,
+//    contradiction included) - and without the bound, a class of M columns
+//    carrying L written literals appends L*(M-1) conjuncts, which turned a
+//    10 KB statement into seconds of compile and tens of thousands of
+//    per-row comparisons when measured.
+//
+// Derived conjuncts carry `StepPredicate::derived`, so ANALYZE can mark
+// them and CREATE PATTERN's parameter checks can name only what the client
+// wrote.
+void PropagateEqualities(const Scope& scope, std::vector<StepPredicate>& predicates) {
+    // Equivalence classes over this chain's columns (`up == 0` on both
+    // sides) connected by written column-column equalities, in first-seen
+    // order throughout - same statement, same classes, same appended
+    // conjuncts (V14's purity). A merged class is folded into the
+    // earlier-seen one and the later left empty rather than erased, because
+    // both indices are live within one iteration.
+    std::vector<std::vector<ColumnRef>> classes;
+    const auto find_class = [&classes](const ColumnRef& ref) -> std::size_t {
+        for (std::size_t c = 0; c < classes.size(); ++c) {
+            for (const ColumnRef& member : classes[c]) {
+                if (member == ref) return c;
+            }
+        }
+        return classes.size();
+    };
+
+    const std::size_t written = predicates.size();
+    for (std::size_t i = 0; i < written; ++i) {
+        const StepPredicate& pred = predicates[i];
+        if (pred.op != parser::CompareOp::kEq) continue;
+        if (pred.rhs.kind != OperandKind::kColumn) continue;
+        if (pred.lhs.up != 0 || pred.rhs.column.up != 0) continue;
+        std::size_t a = find_class(pred.lhs);
+        if (a == classes.size()) classes.push_back({pred.lhs});
+        std::size_t b = find_class(pred.rhs.column);
+        if (b == classes.size()) classes.push_back({pred.rhs.column});
+        if (a == b) continue;
+        if (a > b) std::swap(a, b);
+        classes[a].insert(classes[a].end(), classes[b].begin(), classes[b].end());
+        classes[b].clear();
+    }
+
+    // A written equality-to-literal on this exact column, in the written
+    // prefix alone - derived conjuncts never beget further ones.
+    const auto has_own_literal = [&predicates, written](const ColumnRef& ref) {
+        for (std::size_t i = 0; i < written; ++i) {
+            const StepPredicate& p = predicates[i];
+            if (p.op == parser::CompareOp::kEq && p.rhs.kind == OperandKind::kLiteral &&
+                p.lhs == ref) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (const std::vector<ColumnRef>& cls : classes) {
+        for (const ColumnRef& member : cls) {
+            if (has_own_literal(member)) continue;
+            const catalog::SysColumnRow& dst = ColumnAt(scope, member);
+            for (std::size_t i = 0; i < written; ++i) {
+                const StepPredicate& p = predicates[i];
+                if (p.op != parser::CompareOp::kEq) continue;
+                if (p.rhs.kind != OperandKind::kLiteral) continue;
+                const bool in_class = std::any_of(cls.begin(), cls.end(),
+                                                  [&p](const ColumnRef& m) { return m == p.lhs; });
+                if (!in_class) continue;
+                const catalog::SysColumnRow& src = ColumnAt(scope, p.lhs);
+                if (dst.type_val != src.type_val || dst.len != src.len) continue;
+                StepPredicate derived;
+                derived.lhs = member;
+                derived.op = parser::CompareOp::kEq;
+                derived.rhs = p.rhs;
+                derived.derived = true;
+                // Constructed whole before the push_back invalidates `p`,
+                // and the break keeps anything dangling from being read.
+                predicates.push_back(std::move(derived));
+                break;
+            }
+        }
+    }
+}
+
 // A non-negative integer literal, as a pk bound. Anything else - a string,
 // a NULL, a declared `$param`, a negative number - is not a pk value
 // (invariant 7: ids are zero-extended 40-bit), so it cannot bound a range.
@@ -1185,6 +1284,13 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         if (Status s = CoercePredicate(scope, pred, cond.col.byte_offset); !s.ok()) return s;
         predicates.push_back(pred);
     }
+
+    // ---- 2a. Close the conjunct list under join-key equality -------------
+    //
+    // After lowering and before attachment, because the pass reads the
+    // whole flat list - ON and WHERE conjuncts alike - and what it appends
+    // must go through the same placement as everything written.
+    PropagateEqualities(scope, predicates);
 
     // ---- 3. Attach each conjunct to the step that makes it evaluable -----
     for (const StepPredicate& pred : predicates) {

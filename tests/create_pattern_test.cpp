@@ -205,6 +205,44 @@ TEST_F(CreatePatternTest, Check6ChecksEveryOccurrenceOfOneParameter) {
     EXPECT_EQ(out.value().warnings.size(), 2u);
 }
 
+TEST_F(CreatePatternTest, Check6SkipsAConjunctEqualityPropagationDerived) {
+    // Propagation (docs/parser-v2.md §5) derives `other.aid = $f` from the
+    // ON equality and the written `account.flag = $f`. Check 6 must name
+    // only what the client wrote - a line about `aid` points at a predicate
+    // they cannot find - and skipping the derived occurrence loses nothing:
+    // the descriptor guard makes both columns the same type, so its verdict
+    // is never different.
+    server::CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE other (id int64, aid int64)").response.substr(0, 7),
+              "CREATED");
+
+    // The warning half: one implicit-conversion line, for the written
+    // occurrence alone.
+    auto warned = Declare(
+        "CREATE PATTERN p($f bool) OF SELECT other.id FROM other "
+        "JOIN account ON other.aid = account.flag WHERE account.flag = $f");
+    ASSERT_TRUE(warned.ok()) << warned.status().message();
+    // Counted by kind rather than in total, because this body also earns
+    // check 8's replayability warning; what is pinned is that no line of
+    // any kind names the derived column.
+    std::size_t conversions = 0;
+    for (const std::string& w : warned.value().warnings) {
+        EXPECT_EQ(w.find("aid"), std::string::npos) << w;
+        if (w.find("implicit conversion") != std::string::npos) ++conversions;
+    }
+    EXPECT_EQ(conversions, 1u);
+
+    // The refusal half: named at the written column, not the derived one.
+    auto refused = Declare(
+        "CREATE PATTERN q($f varchar) OF SELECT other.id FROM other "
+        "JOIN account ON other.aid = account.flag WHERE account.flag = $f");
+    ASSERT_FALSE(refused.ok());
+    EXPECT_NE(refused.status().message().find("flag"), std::string::npos)
+        << refused.status().message();
+    EXPECT_EQ(refused.status().message().find("aid"), std::string::npos)
+        << refused.status().message();
+}
+
 TEST_F(CreatePatternTest, Check8WarnsWhenNoStepCouldEverReplay) {
     // A non-pk predicate is a search, and invariant 9 forbids a trail from
     // replacing one. Legal to declare; being surprised later is not.

@@ -144,7 +144,11 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     os << '\n';
 
     for (const StepPredicate& pred : step.residual) {
-        os << Indent(depth + 1) << "filter " << FormatPredicate(pred) << '\n';
+        // `derived` marks a conjunct equality propagation added
+        // (docs/parser-v2.md §5): without it, ANALYZE would print a filter
+        // the reader cannot find in the statement they wrote.
+        os << Indent(depth + 1) << "filter " << FormatPredicate(pred)
+           << (pred.derived ? " derived" : "") << '\n';
     }
     // Correlated by placement: a sub-chain attached to a step runs once per
     // row that step accepts, which is the fact worth seeing next to it.
