@@ -65,6 +65,16 @@ Every file you write or revise under `bench/` follows all of them.
    month", no comparisons between ckdbs versions. A results file describes one
    state of the engine; if a change is what is interesting, that belongs in
    the commit message, not here.
+1b. **`bench/` keeps one results document per scenario, and no others.**
+   Decided 2026-08-18, when 28 files were removed to leave
+   `results-scenario1-vs-pg.md`, `results-scenario2-freight.md` and
+   `results-scenario3-library.md`. A narrower measurement — one subsystem,
+   one commit range, one flag — is reported in the reply that asked for it
+   and in the commit message that lands the change; it does not become a
+   file. When it belongs anywhere permanent, it belongs in the scenario
+   document whose workload exercises it, or in the spec that owns the
+   feature. The drivers all survive in `tools/` and stay documented in
+   `bench/docs/README.md`, so any removed number is one run away.
 1a. **A re-run deletes what it supersedes.** When you measure a workload
    again after a patch, the older version's content is removed from the
    results file, not appended to or kept beside the new numbers. The file
