@@ -51,8 +51,9 @@ it changes no conclusion. Its presence is why the old side's ranges are wider
 than the new side's on two write rows.
 
 **Why 2,000 cargos and not 100,000.** The eight statements cost the same at
-every cargo count — `results-scenario2-freight.md` §9 measures 54.0 → 56.1 µs
-for the pk lookup across a fiftyfold ladder — and the smaller load is what
+every cargo count — `results-scenario2-freight.md` §9 measures the pk lookup
+at 54.0, 53.6 and 54.3 µs across a fiftyfold ladder — and the smaller load is
+what
 buys 27 cells inside one quiet window instead of 6.
 
 ## 2. What moved
