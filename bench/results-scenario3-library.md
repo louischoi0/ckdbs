@@ -550,6 +550,296 @@ PG twin at this commit is the measurement that would retire it.
 - **Non-pk or literal-free join keys.** The workload's restriction is
   `u.id = ?` against the pk; a join with no literal at all, or one whose
   derived equality lands on an unindexed column, is not in this driver.
+  *(2026-08-18, later the same day: the literal-free case is now measured —
+  §9b below. The unindexed-column case remains open.)*
+
+## 9b. Addendum, 2026-08-18 — the join with no literal: the inner index, probed per outer row
+
+§9a closed the join whose restriction is a literal, and its §9a.6 named
+what that pass cannot reach: a join with no literal at all. `ON l.user_id =
+u.id WHERE u.id BETWEEN ? AND ?` gives the propagation nothing to derive —
+there is no constant to push onto `loans` — so the inner side stayed a full
+scan *per outer row*, and the same is true of a correlated `EXISTS`. **IX17**
+(`4f304fd`, `perf(index): the correlated probe`, `docs/feat-index.md` §8a)
+closes that shape differently: when the inner side of a join step carries a
+secondary index on the join column, the executor probes that index keyed by
+each outer row's value (`IndexProbe::key_from`) instead of walking the
+relation. This addendum measures exactly two things by interleaved A/B —
+**what the probe wins on the shapes propagation cannot reach, and what its
+compile-side selection costs every other statement** — against BASE
+`9af3c8d`, which already contains the propagation, so the delta is IX17
+alone.
+
+**The answers: 95.8× on the no-literal join's p50 at 10,000 loans and 16
+outer rows — the inner side's cost falls from ~527 µs per outer row,
+proportional to the relation, to ~3.3 µs per outer row at every size — 16.5×
+on the correlated EXISTS, and no other shape outside this run's replicate
+floor.** The floor itself needs an honest paragraph: it came out at 16–42%,
+an order worse than §9a's, because the box's round-trip latency was bimodal
+for the whole window; §9b.5 shows the p0 evidence that the modes are the
+machine and not the engine, and bounds any real overhead at ≈2% by
+comparing mode-matched cells.
+
+### 9b.1 The A/B run
+
+| | |
+|---|---|
+| executed | **2026-08-18 09:04:36 → 09:13:40 UTC** (24 ckdbs cells in two passes of 12, alternating BASE, NEW, BASE, NEW at each size), PostgreSQL twin cells 09:16–09:17 UTC |
+| branch / worktree | `worktree-enhence-join-perf`, in the worktree `enhence-join-perf` |
+| commit measured | **`4f304fd`** (IX17), recorded by every cell, `dirty: false` |
+| BASE binary | a **copy**, `sha256 f9eee9abe6a0e83b…`, built fresh for this run (09:02:39 UTC) from a temporary worktree at **`9af3c8d`** — the commit §9a landed at. The hash is **byte-identical to §9a's NEW binary**, which both proves the rebuild reproduces that engine exactly and makes §9a's tables directly comparable to this run's BASE column |
+| NEW binary | a **copy**, `sha256 74ecca3d0301e307…`, from this worktree's `build-release/kds_server`, linked 08:59:34 UTC — the same minute `4f304fd` was committed; `cmake --build` immediately before the run was a no-op |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, `KDS_WITH_TLS=OFF` (no libssl-dev on this box, as in §9a) |
+| device | ext4 on `/dev/root` (`df -T`; `/tmp` is ext4 on this host too); data files under `$HOME/bench-s3-ix17ab/db/`, WAL under `$HOME/bench-s3-ix17ab/wal/<cell>/`, binary copies under `$HOME/bench-s3-ix17ab/bin/` |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, port 15499. One server process and one **fresh data file** per cell, started from the run's own binary copy |
+| driver, standard shapes | `tools/scenario3_library.py --suffix s3 --loans N --index-mode single --ops 200 --verify 25 --assert-index-reads`, N ∈ {200, 1,000, 10,000} (`loans` = N, `users`/`books` = N/5, `reservations` = N/2) — equal work per cell, 4 cells per binary per size |
+| the two new shapes | driven against each cell's already-loaded server over `tools/ckdbs_cli.py`'s `ServerConnection`, percentiles by `bench_common.Phase` — 50 ops per point after 3 warm-ups. The harness is a session scratch script, **not checked in**; the statements are quoted in full below and §9b.7 names the task that folds them into the driver |
+| contention control | every cell gated on `bench/wait_quiet.sh`; `pgrep -c cc1plus` sampled before and after each cell was 0 throughout. **All 24 ckdbs cells passed on the first attempt; none was discarded.** The box was *not* otherwise idle — see §9b.5 |
+| correctness | 24 cells, 0 driver errors, `verify_problems` empty, `--assert-index-reads` green in all 24. Per cell, the k=16 no-literal join reply was checked as a **multiset against rows assembled from single-relation probes** (`loans WHERE user_id = i` joined client-side to `users WHERE id = i`): 24/24 equal (79 rows at N=200 and 10,000, 83 at N=1,000), and the EXISTS returned exactly 20 rows in every cell |
+
+The two statements, verbatim (suffix `s3`; `k` ∈ {1, 2, 4, 8, 16} is the
+outer-row count, since ids 1…k all exist):
+
+```
+SELECT l.book_id, u.member_code FROM users_s3 AS u
+  JOIN loans_s3 AS l ON l.user_id = u.id WHERE u.id BETWEEN 1 AND k
+
+SELECT id FROM users_s3 WHERE EXISTS
+  (SELECT l.id FROM loans_s3 AS l WHERE l.user_id = users_s3.id) LIMIT 20
+```
+
+### 9b.2 The plan, before and after
+
+Captured by each cell's own harness at N=10,000, k=4. BASE (`9af3c8d`) —
+the inner side is a full scan **per outer row**, which §9a's propagation
+cannot touch because there is no literal:
+
+```
+analyze rows=21 class=JoinSelect steps=2 examined=40032 pages=346 opens=5
+step 0 Range users AS u  opens=1 examined=32    matched=4  sel=12% pages=2 range_stopped_early=1
+step 1 Scan  loans AS l  opens=4 examined=40000 matched=21 sel=0%  pages=344
+  filter 0:1.1 = 0:0.0       <- the join key, no constant anywhere
+```
+
+NEW (`4f304fd`) — the same statement, the inner side entered through
+`loans_user` keyed by the outer row:
+
+```
+analyze rows=21 class=JoinSelect steps=2 examined=53 pages=27 opens=5
+step 0 Range      users AS u  opens=1 examined=32 matched=4  sel=12% pages=2 range_stopped_early=1
+step 1 IndexProbe loans AS l  opens=4 examined=21 matched=21 sel=100% pages=25 index_scanned=21 index_resolved=21
+  key=0:0.0                  <- the probe key is the outer row's u.id
+```
+
+**53 rows examined against 40,032, 27 pages against 346, for the same 21
+rows.** The correlated EXISTS converts identically: BASE examined 25,050
+inner rows over 20 correlated scans (221 pages); NEW examined 20 over 20
+probes (40 pages), `index_scanned=97 index_resolved=20`.
+
+### 9b.3 The no-literal join, BASE against NEW
+
+p50 µs per statement, **median of 4 cells** per binary per size, 50 ops per
+cell per point; stmts/s derived as 1e6/p50 (single serial connection, so the
+conversion is exact):
+
+| N | k | BASE p50 | NEW p50 | BASE ≈stmts/s | NEW ≈stmts/s | speedup |
+|---:|---:|---:|---:|---:|---:|---:|
+| 200 | 1 | 48.4 | 45.4 | 20,680 | 22,030 | 1.06× |
+| 200 | 4 | 85.0 | 53.2 | 11,760 | 18,820 | 1.60× |
+| 200 | 16 | 228.4 | 86.5 | 4,380 | 11,560 | **2.64×** |
+| 1,000 | 1 | 96.2 | 46.2 | 10,400 | 21,670 | 2.08× |
+| 1,000 | 4 | 257.6 | 53.7 | 3,880 | 18,620 | 4.80× |
+| 1,000 | 16 | 905.3 | 90.5 | 1,105 | 11,040 | **10.0×** |
+| 10,000 | 1 | 600.5 | 46.1 | 1,665 | 21,690 | 13.0× |
+| 10,000 | 4 | 2,234.0 | 55.2 | 448 | 18,120 | 40.5× |
+| 10,000 | 16 | 8,635.2 | 90.2 | 116 | 11,090 | **95.8×** |
+
+(k=2 and k=8 were measured too and sit on the same curves: at 10,000 rows,
+23.3× and 69.4×.)
+
+The number that explains the whole table is the **marginal cost per outer
+row** — the k=8→k=16 slope, which excludes the statement's fixed part (the
+round trip and the outer range walk, identical in both binaries):
+
+| N | BASE µs/outer row | NEW µs/outer row |
+|---:|---:|---:|
+| 200 | 12.1 | 3.1 |
+| 1,000 | 53.6 | 3.0 |
+| 10,000 | 527.0 | 3.3 |
+
+BASE's inner side costs one full scan of `loans` per outer row —
+proportional to the relation, tripling the sweep's decade steps. NEW's is a
+~3.2 µs probe **independent of the relation's size**: the same conversion of
+a per-row cost into a fixed one that §6 measured for the single-relation
+equality and §9a for the literal join, now on the last shape that lacked it.
+NEW's p50 at any k is ≈ 42 µs + 3.2·k µs at every size measured.
+
+The full distributions at N=10,000, k=16, because the shape of BASE's
+latency (tight around a huge mean) is itself evidence that the cost is the
+scan and not a stall:
+
+| cell | ops | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| ab-base-10000-1 | 50 | 8,426.2 | 8,465.5 | 8,514.3 | 10,342.9 | 10,781.8 |
+| ab-base-10000-2 | 50 | 9,135.1 | 9,164.2 | 9,196.5 | 9,272.7 | 9,291.4 |
+| ab-base-10000-3 | 50 | 8,462.0 | 8,500.7 | 8,514.2 | 8,568.7 | 8,584.8 |
+| ab-base-10000-4 | 50 | 8,704.0 | 8,743.3 | 8,756.2 | 8,808.2 | 9,802.2 |
+| ab-new-10000-1 | 50 | 88.7 | 91.2 | 92.0 | 101.5 | 105.5 |
+| ab-new-10000-2 | 50 | 83.9 | 88.6 | 89.9 | 101.9 | 105.2 |
+| ab-new-10000-3 | 50 | 87.9 | 88.7 | 89.1 | 100.9 | 104.1 |
+| ab-new-10000-4 | 50 | 87.3 | 89.3 | 90.4 | 106.1 | 107.0 |
+
+On waits: single-connection reads — no commit/fsync wait, no lock wait; the
+unit is one localhost round trip. NEW's p0 of ~84–89 µs at k=16 decomposes
+as the ~27 µs socket floor every §5 shape pays, plus 16 index probes and pk
+resolutions at ~3.2 µs each, plus the two-relation projection of 79 rows;
+no per-step timing exists to split it further (`docs/observability.md` owns
+that gap).
+
+### 9b.4 The correlated EXISTS
+
+Same treatment: p50 median of 4, stmts/s derived. The statement returns 20
+rows at every size (`LIMIT 20`).
+
+| N | BASE p50 | NEW p50 | BASE ≈stmts/s | NEW ≈stmts/s | speedup |
+|---:|---:|---:|---:|---:|---:|
+| 200 | 88.2 | 84.2 | 11,340 | 11,880 | 1.05× |
+| 1,000 | 238.8 | 85.1 | 4,190 | 11,760 | 2.81× |
+| 10,000 | 1,403.9 | 85.2 | 710 | 11,730 | **16.5×** |
+
+Distributions at N=10,000 (50 ops per cell):
+
+| cell | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| ab-base-10000-1 | 1,359.7 | 1,369.5 | 1,376.2 | 1,824.8 | 2,928.9 |
+| ab-base-10000-2 | 1,427.9 | 1,437.3 | 1,476.8 | 1,499.9 | 1,508.0 |
+| ab-base-10000-3 | 1,370.9 | 1,377.8 | 1,383.8 | 1,418.3 | 1,426.9 |
+| ab-base-10000-4 | 1,416.0 | 1,421.1 | 1,424.1 | 1,436.7 | 1,444.3 |
+| ab-new-10000-1 | 82.9 | 84.2 | 85.6 | 97.3 | 403.6 |
+| ab-new-10000-2 | 85.1 | 85.8 | 86.5 | 96.0 | 98.0 |
+| ab-new-10000-3 | 79.3 | 83.7 | 84.9 | 94.9 | 98.0 |
+| ab-new-10000-4 | 81.8 | 83.6 | 84.1 | 95.4 | 97.9 |
+
+The N=200 row is the instructive one: **1.05× is not a miss, it is the
+walk being short**. A correlated EXISTS short-circuits at the first inner
+match, and at 200 loans the scan finds one within ~30 rows, so there was
+little for the probe to save; NEW's p50 is flat at ~85 µs across the sweep
+(20 probes plus the round trip) while BASE grows with the relation. The
+probe pays exactly where §9's argument predicts: when the walk it replaces
+is long.
+
+### 9b.5 Every other shape, and the floor this run could actually reach
+
+The overhead question: IX17 extends step compilation (index selection now
+runs for the probe side of a join) and the executor's probe setup, so the
+claim needing evidence is again the null one. p50 per shape, **median of 4
+cells**, NEW/BASE − 1; the floor at each size is the widest within-binary
+disagreement across the 4 replicates of any shape:
+
+| shape | N=200 Δ | N=1,000 Δ | N=10,000 Δ |
+|---|---:|---:|---:|
+| pk-user | +13.6% | +0.1% | +2.0% |
+| loans-by-user | +15.4% | −0.8% | +0.7% |
+| loans-by-book | +15.0% | +0.8% | +0.9% |
+| resv-by-user | +17.3% | +0.0% | +0.1% |
+| books-by-author | +14.2% | +0.8% | −0.5% |
+| books-by-genre | +15.8% | +0.1% | −0.4% |
+| loans-by-daterange | +11.3% | −0.0% | −0.2% |
+| overdue | +10.9% | −0.5% | −0.0% |
+| join-loan-user | +13.5% | +3.3% | +0.4% |
+| count-by-user | +14.7% | +0.4% | +1.9% |
+| **replicate floor** | **42.1%** | **16.3%** | **30.5%** |
+
+No shape at any size moves outside its floor — but floors of 16–42% against
+§9a's 2.4–4.1% would make that verdict hollow without an account, so here
+it is. **The box's round-trip body was bimodal through the whole window.**
+The per-shape best case barely moved between binaries — min-of-4 p0 differs
+by under ~3 µs with no consistent sign on every shape at every size, e.g.
+pk-user 26.0→26.6/27.4→28.7/26.9→27.1 across the sweep — but a cell's p50
+landed either ~2 µs above its p0 or ~10 µs above it, and mode membership
+tracked *time, not binary* (BASE's own pk-user replicates read
+27.3/29.2/37.9/38.8 at N=200 — that pair disagreement *is* the 42% floor). The machine was not idle: an unrelated resident `kds_server`
+belonging to another project on this host started inside the window (09:04:41,
+port 15432, ~1% CPU) alongside resident agent processes, and 1-minute load
+ran 0.2–0.7 — under `wait_quiet.sh`'s 0.70 gate, with zero compilers, but
+enough wakeup traffic on 2 vCPUs to add ~10 µs of scheduling delay to a
+serial ping-pong in the affected stretches.
+
+Two measurements cut through the modes. First, **N=1,000's column, where
+by luck both binaries' cells landed predominantly in the same mode: every
+shape within ±0.8% except `join-loan-user` at +3.3%.** Second, comparing
+only mode-matched cells (classified by pk-user p50−p0, threshold 5 µs): at
+N=10,000 all four NEW cells and three BASE cells share the slow mode, and
+the worst shape delta between them is **+1.2%**; at N=1,000 the tight-mode
+cells (3 BASE vs 2 NEW) put the worst at +2.2%; N=200's systematic-looking
++11–17% column dissolves under the same treatment (tight vs tight ≤ +4.8%
+on a single-cell comparison, loose vs loose ≤ +2.2%). The verdict this
+supports: **any per-statement cost of IX17's added compile-side selection
+is below ≈2% (≈1 µs) — unmeasurable on this box this day — and
+`join-loan-user`, the shape that takes the propagation path on both
+binaries and was required not to regress, is +0.4% at N=10,000, dead inside
+every floor.** Deltas inside the floor are not findings; none of the rows
+above is one.
+
+### 9b.6 Versus PostgreSQL — measured this time, on the same shapes
+
+Unlike §9a.5 this addendum ran its own twin: the same two statements against
+PostgreSQL 16.14 (the scratch cluster of `tools/pg_setup.sh`, port 15433,
+**defaults untouched**), loaded by `tools/pg_scenario3_library.py --loans N
+--matches 5 --index-mode single --suffix s3` — same seed, same row counts
+(79/83/79 rows at k=16 across the sizes, equal to ckdbs's replies). Two
+replicates per size, 09:16–09:17 UTC on the same box, quiet-gated; not
+interleaved with the ckdbs cells, which the stability of both sides' pairs
+(≤1% disagreement on PG, table below from pair means) makes tolerable for
+factor-level reading. Both columns are the same Python client discipline,
+so both carry their client's floor.
+
+N=10,000, p50 µs and derived stmts/s:
+
+| shape | KDS NEW p50 | PG p50 | KDS ≈stmts/s | PG ≈stmts/s | factor |
+|---|---:|---:|---:|---:|---:|
+| join-nolit k=1 | 46.1 | 152.0 | 21,690 | 6,580 | 3.3× |
+| join-nolit k=4 | 55.2 | 181.0 | 18,120 | 5,520 | 3.3× |
+| join-nolit k=8 | 63.7 | 186.6 | 15,710 | 5,360 | 2.9× |
+| join-nolit k=16 | 90.2 | 769.4 | 11,090 | 1,300 | **8.5×** |
+| exists-corr | 85.2 | 171.8 | 11,730 | 5,820 | 2.0× |
+
+At k ≤ 8 PostgreSQL plans exactly what IX17 now executes — a nested loop
+probing `loans_user` per outer row (`Bitmap Index Scan … Index Cond:
+(user_id = u.id)`, 0.147 ms execution at k=4) — and the ~3× factor is
+mostly the two clients' fixed costs plus per-statement planning, which the
+simple-query protocol repays every time. **At k=16 PostgreSQL's optimizer
+flips to a merge semi-join over full index scans and loses 4× to its own
+k=8 number** (186.6 → 769.4 µs), while ckdbs's fixed rule — first index,
+first conjunct — has no flip available and stays on the probe. At N=200 and
+1,000 the same table reads 2.4×/3.1× at k=16 (86.5 vs 206.1, 90.5 vs 284.6)
+and 1.9× on the EXISTS. The caveat cuts the other way from §9a.5's: this
+twin measured only the two new shapes; §11's published matrix for the
+standard shapes was not re-run.
+
+### 9b.7 What this addendum does not re-measure, and what it opens
+
+- **Everything §9a.6 already lists.** §1–§8 and §10–§12 still describe
+  `9f762a3`; §9a's tables still describe `9af3c8d`'s engine — which this
+  run's BASE binary reproduced byte-for-byte, so the two addenda chain.
+- **The no-literal join without the index.** Every cell declared
+  `--index-mode single`; with no index on the join column IX17 has nothing
+  to probe and the walk remains. What that walk costs was measured here as
+  BASE; that it is *still* the plan at `4f304fd` when no index exists is
+  asserted by the guard tests (`tests/index_compile_test.cpp`), not by a
+  cell in this run.
+- **A join key on an unindexed non-pk column** — §9a.6's other half, still
+  open.
+- **Multi-core.** `cores = 1` throughout. On a multi-core instance an index
+  step cannot ship, so a peer-owned join on an indexed column is *refused*
+  by the affinity check — opened at `881f69a`, widened by IX17, recorded in
+  `docs/known-gaps.md` with the ship-time-downgrade fix. A cross-core cell
+  of this workload is not currently runnable.
+- **The driver does not carry these shapes.** The no-literal join and the
+  correlated EXISTS were driven by a session scratch harness (statements in
+  §9b.1). The task this opens: fold both into `tools/scenario3_library.py`
+  and `tools/pg_scenario3_library.py` as first-class phases so the next
+  full-matrix run measures them without ceremony.
 
 ## 10. Durability decides the load, and nothing else here
 
