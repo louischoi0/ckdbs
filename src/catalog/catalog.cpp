@@ -1003,6 +1003,45 @@ StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::Read
     return Status::NotFound("no table with this name");
 }
 
+StatusOr<bool> Catalog::NameHeldByPendingDrop(std::string_view name,
+                                              const txn::ReadView& view) {
+    // Its own walk rather than `ScanAll`, for one reason: the answer is in
+    // the tuple *header*, and `ScanAll` hands out decoded rows only. A row
+    // this view cannot see is one whose last writer is still in flight -
+    // and on a `sys.objects` row that writer can only be a `DROP TABLE`'s
+    // retype, since nothing else overwrites one under a transaction.
+    bool held = false;
+    Status inner = Status::OK();
+    Status walked = heap::ChainVisit(
+        store_, kCatalogPageObjects, storage::PageAccess::kRead,
+        [&](PageId, heap::PageView& page,
+            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            auto tuple = page.ReadTuple(slot);
+            if (!tuple.ok()) {
+                if (tuple.status().code() == StatusCode::kNotFound) {
+                    return storage::VisitControl::kContinue;
+                }
+                inner = tuple.status();
+                return tuple.status();
+            }
+            if (view.Visible(tuple.value().trx_id)) return storage::VisitControl::kContinue;
+            auto row = SysObjectRow::Decode(tuple.value().payload);
+            if (!row.ok()) {
+                inner = row.status();
+                return row.status();
+            }
+            if (row.value().type_oid == kTypeDroppedTable &&
+                NameView(row.value().name) == name) {
+                held = true;
+                return storage::VisitControl::kStop;
+            }
+            return storage::VisitControl::kContinue;
+        });
+    if (!inner.ok()) return inner;
+    if (!walked.ok()) return walked;
+    return held;
+}
+
 // ALTER TABLE's catalog half (docs/spec-alter.md, workplan ALT02). Both
 // renames are one fixed-width Name rewrite - MutatePatternRow's shape -
 // followed by BumpVersion(): a name is read by resolution itself, so the

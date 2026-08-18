@@ -609,14 +609,18 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   until the client rolls back. An autocommit statement is its own
   transaction and unwinds fully.
 - Closing a connection with a transaction open rolls it back.
-- **`CREATE TABLE`, `DROP TABLE`, `CREATE INDEX` and `DROP INDEX` are
-  transactional** (2026-08-16): inside an explicit transaction they are
-  rolled back by `ROLLBACK`. For `CREATE TABLE` and both index
-  statements, nothing is visible to another session until it commits —
-  by any route: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DESCRIBE`,
-  `SHOW TABLES` or `SHOW INDEXES`. **`DROP TABLE` is the exception**: it
-  rolls back, but other sessions see it *before* it commits (see its own
-  entry). Two limits, both
+- **`CREATE TABLE`, `DROP TABLE` and `CREATE INDEX` are transactional**
+  (2026-08-16): inside an explicit transaction they are rolled back by
+  `ROLLBACK`. For `CREATE TABLE` and `CREATE INDEX`, nothing is visible
+  to another session until it commits — by any route: `SELECT`,
+  `INSERT`, `UPDATE`, `DELETE`, `DESCRIBE`, `SHOW TABLES` or
+  `SHOW INDEXES`.
+- **`DROP TABLE` rolls back, but is *not* isolated**: other sessions see
+  it before it commits (see its own entry).
+- **`DROP INDEX` is refused inside an explicit transaction.** Index
+  maintenance does not honour an uncommitted drop, so a rollback would
+  restore an index missing any rows written meanwhile — refused rather
+  than answered wrongly. Run it outside a transaction. Two limits, both
   deliberate:
   - **Not crash-durable.** Catalog writes are still unlogged and the
     catalog is not recovered, so a committed `CREATE TABLE` survives a

@@ -500,6 +500,20 @@ private:
     DispatchOutcome HandleCreateTable(std::string_view args, Session& session);
     DispatchOutcome HandleCreateTableSql(std::string_view line, Session& session);
 
+    // The other half of the duplicate-name refusal, for **both** CREATE
+    // TABLE forms: the reply to send when `name` is claimed by a drop that
+    // has not committed, or nullopt when it is genuinely free.
+    //
+    // The unfiltered duplicate check answers "is a live relation using this
+    // name" and is deliberately unfiltered so a second create is refused
+    // (spec-ddl-transactional.md §6). It cannot see the case this covers -
+    // `DROP TABLE` retypes the `sys.objects` row in place, so the name
+    // reads as free to everyone while the drop is still undoable, and a
+    // create that took it would leave two live rows claiming one name once
+    // the drop rolled back.
+    std::optional<DispatchOutcome> RefuseIfNameHeldByPendingDrop(std::string_view name,
+                                                                 Session& session);
+
     // The DDL half of a transaction: the id a catalog row should carry,
     // and where to put the rows it wrote so `ROLLBACK` can retire them.
     // Answers `kBootstrapXid` and a null sink outside an explicit

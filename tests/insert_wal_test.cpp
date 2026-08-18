@@ -795,5 +795,55 @@ TEST_F(InsertWalTest, ASplitTakesFullPageImagesAndNoIndexInsert) {
     EXPECT_GT(CountOf(types, wal::RecordType::kFullPageImage), 0u);
 }
 
+// ---- 4. Nothing logs a catalog page, not even a rollback ----------------
+
+// A transactional DDL registers its catalog rows on the trail so `ROLLBACK`
+// can undo them (workplan-ddl-transactional.md DT3a/DT5). The forward
+// writes are unlogged - catalog writes have no records and the catalog is
+// not recovered (known-gaps.md RV3) - so a *compensation* record naming a
+// catalog page would be the only record in the stream that does, and
+// recovery would apply it to a page image that never saw the write it
+// undoes. A SLOT_RETIRE for a slot the on-disk page does not have yet is
+// `NotFound` from the applier, and redo reports rather than skips: the
+// consequence is a failed mount, not a lost row.
+TEST_F(InsertWalTest, ARolledBackDdlWritesNoRecordAgainstACatalogPage) {
+    CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("BEGIN").response.substr(0, 5), "BEGIN");
+    ASSERT_EQ(d.Dispatch("CREATE TABLE gone (id int64, v int32)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    std::vector<std::vector<std::byte>> storage;
+    for (const wal::DecodedRecord& record : DeviceRecords(storage)) {
+        const PageId page_id = record.header.page_id;
+        if (page_id == kInvalidPageId) continue;
+        EXPECT_GE(page_id, catalog::kCatalogOverflowLimit)
+            << wal::RecordTypeName(record.type()) << " names catalog page " << page_id
+            << ", whose forward writes are unlogged";
+    }
+}
+
+// The same for a drop, whose compensation is a delete-unmark plus the
+// tombstone's overwrite rather than a retire (DT5).
+TEST_F(InsertWalTest, ARolledBackDropWritesNoRecordAgainstACatalogPage) {
+    CommandDispatcher d = TransactionalDispatcher(wal::DurabilityClass::kStrict);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE doomed (id int64, v int32)").response.substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(d.Dispatch("BEGIN").response.substr(0, 5), "BEGIN");
+    ASSERT_EQ(d.Dispatch("DROP TABLE doomed").response.rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(d.Dispatch("ROLLBACK").response.substr(0, 8), "ROLLBACK");
+    ASSERT_TRUE(wal_->Flush().ok());
+
+    std::vector<std::vector<std::byte>> storage;
+    for (const wal::DecodedRecord& record : DeviceRecords(storage)) {
+        const PageId page_id = record.header.page_id;
+        if (page_id == kInvalidPageId) continue;
+        EXPECT_GE(page_id, catalog::kCatalogOverflowLimit)
+            << wal::RecordTypeName(record.type()) << " names catalog page " << page_id
+            << ", whose forward writes are unlogged";
+    }
+}
+
 }  // namespace
 }  // namespace kds::server

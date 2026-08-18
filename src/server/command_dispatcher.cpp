@@ -547,7 +547,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // includes surviving a crash. It does not, and the two flags
            // sit together so the pair reads as one statement: transactional
            // within a running instance, not durable across a restart.
-           << " ddl_transactional=tables-and-indexes"
+           << " ddl_transactional=create-table,drop-table,create-index"
            << " ddl_durable=0";
         // RC07: what the mount could resume enforcing, and the honest
         // remainder. A surviving declaration whose directory could not be
@@ -907,6 +907,9 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
     if (existing.status().code() != StatusCode::kNotFound) {
         return {"ERR " + existing.status().message(), false};
     }
+    if (auto refused = RefuseIfNameHeldByPendingDrop(args, session); refused.has_value()) {
+        return *refused;
+    }
 
     catalog::Schema schema;
     // kAssigned by name: this legacy command has no syntax for a key mode
@@ -1144,8 +1147,31 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
 
     if (stmt.drop) {
-        // DT5: delete-marked and registered inside a transaction, so a
-        // rollback restores the index.
+        // **Refused inside an explicit transaction, and this retracts a
+        // claim.** DT5 shipped `DROP INDEX` as atomic *and isolated* on
+        // the strength of `SHOW INDEXES` filtering. It is not isolated
+        // where it matters: `InitTableAccess` builds a relation's index
+        // list through `ListIndexes()` with a **null view**, so index
+        // maintenance and planning treat the delete-mark as done the
+        // moment it is written. Another session's INSERT in that window
+        // writes no index entry - and if the drop then rolls back, the
+        // index is restored *missing that row*, and a probe answers a
+        // committed row with nothing. A wrong result, not an early view.
+        //
+        // Refused rather than answered wrongly, which is this engine's
+        // rule everywhere else. The principled fix - teaching a null-view
+        // catalog read that a delete-mark counts only once its deleter
+        // has committed - changes the meaning of every internal catalog
+        // read and is an open decision
+        // (`docs/spec-ddl-transactional.md` §5a).
+        if (txn_ != nullptr && session.in_explicit_txn()) {
+            return {ErrorReply(Status::Unsupported(
+                        "DROP INDEX inside an explicit transaction is refused: index "
+                        "maintenance does not honour an uncommitted drop, so a rollback "
+                        "would leave the index missing rows written meanwhile. Run it "
+                        "outside a transaction")),
+                    false};
+        }
         DdlScope ddl = DdlScopeFor(session);
         catalog::CatalogRowChange change;
         auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -1169,8 +1195,13 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
 
     DdlScope create_ddl = DdlScopeFor(session);
     catalog::CatalogRowRef created_row;
+    // Resolved under the session's view (spec §5's rule: an index is a
+    // schema object and CREATE INDEX is a resolution route). An index
+    // must not be built against a relation the caller cannot see.
+    const std::optional<txn::ReadView> create_view = ViewFor(session);
     auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
-                                    create_ddl.txn != nullptr ? &created_row : nullptr);
+                                    create_ddl.txn != nullptr ? &created_row : nullptr,
+                                    create_view.has_value() ? &*create_view : nullptr);
     // Before the status is read: a create that failed after the catalog
     // row went down still left it there.
     if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
@@ -2057,6 +2088,10 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
     }
     if (existing.status().code() != StatusCode::kNotFound) {
         return {"ERR " + existing.status().message(), false};
+    }
+    if (auto refused = RefuseIfNameHeldByPendingDrop(stmt.table_name, session);
+        refused.has_value()) {
+        return *refused;
     }
 
     // Resolve each column's parsed type_name against sys.types - the
@@ -3325,6 +3360,30 @@ std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     auto view = txn_->MintReadView(txn::kNoTrxId);
     if (!view.ok()) return std::nullopt;
     return view.value();
+}
+
+std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
+    std::string_view name, Session& session) {
+    // `ViewFor` answers nullopt exactly when no transaction holds
+    // uncommitted DDL - and with none open there is no pending drop for a
+    // create to collide with, so the fast path pays nothing.
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    if (!view.has_value()) return std::nullopt;
+
+    auto held = catalog_.NameHeldByPendingDrop(name, *view);
+    if (!held.ok()) return DispatchOutcome{"ERR " + held.status().message(), false};
+    if (!held.value()) return std::nullopt;
+
+    // Refused rather than allowed, for §6's reason and with §6's cost: the
+    // refusal is spurious if that transaction commits its drop, and it
+    // names a relation the asker can no longer see. Allowing it is the
+    // outcome that corrupts - the drop's rollback restores a second live
+    // row with this name, and resolution then answers with whichever one
+    // sits earlier on the page.
+    return DispatchOutcome{"ERR relation '" + std::string(name) +
+                               "' is being dropped by a transaction that has not committed; "
+                               "the name is not free until that transaction resolves",
+                           false};
 }
 
 void CommandDispatcher::EndDdlScope(const Session& session, bool rows_were_retired) {

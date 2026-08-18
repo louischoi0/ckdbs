@@ -6,6 +6,7 @@
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
+#include "kds/txn/read_view.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/storage/page_store.hpp"
 
@@ -73,7 +74,8 @@ struct IndexDdlResult {
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt,
                                      std::uint64_t trx_id = catalog::kBootstrapXid,
-                                     catalog::CatalogRowRef* written = nullptr);
+                                     catalog::CatalogRowRef* written = nullptr,
+                                     const txn::ReadView* view = nullptr);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //

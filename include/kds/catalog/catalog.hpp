@@ -280,6 +280,25 @@ public:
     StatusOr<Oid> FindTableOidByName(std::string_view name,
                                       const txn::ReadView* view = nullptr);
 
+    // Is `name` claimed by a **tombstone whose drop has not committed**?
+    //
+    // `DROP TABLE` frees a name the instant it runs, for everybody: the
+    // retype to `kTypeDroppedTable` is an in-place overwrite and a catalog
+    // row has no undo chain, so no reader can be isolated from it
+    // (spec-ddl-transactional.md §5a). But the drop can still roll back,
+    // and the rollback rewrites that row back to a live `kTypeTable` -
+    // so a `CREATE TABLE` that took the name meanwhile leaves **two live
+    // rows claiming one name**, which is precisely the corruption §6's
+    // unfiltered duplicate check exists to prevent. That check cannot see
+    // it, because the retype hid the name from it.
+    //
+    // True when some `kTypeDroppedTable` row carries `name` and its stamp -
+    // the dropping transaction's, written by the retype - is one `view`
+    // cannot see. A view minted by the asking session answers "another
+    // transaction's pending drop" and not its own, so `DROP TABLE t;
+    // CREATE TABLE t` inside one transaction still works.
+    StatusOr<bool> NameHeldByPendingDrop(std::string_view name, const txn::ReadView& view);
+
     // Lists every table registered in sys.objects (type_oid == kTypeTable),
     // including the catalog's own bootstrap tables - not just user-created
     // ones. Added for the

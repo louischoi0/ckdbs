@@ -263,10 +263,30 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     if (!bytes.ok()) return bytes.status();
     heap::PageView page(bytes.value().bytes());
 
+    // ---- Catalog pages are compensated, and never logged ----------------
+    //
+    // A transactional DDL registers its catalog rows here so a rollback can
+    // undo them (workplan-ddl-transactional.md DT3a/DT5). The *forward*
+    // writes that put those rows on the page are unlogged - catalog writes
+    // have no WAL records and the catalog is not recovered (known-gaps.md
+    // RV3) - so a compensation record for one would be the only record in
+    // the stream naming that page, and recovery would try to apply it to a
+    // page image that never saw the write it is undoing.
+    //
+    // That is not a lost update, it is a **failed mount**: a SLOT_RETIRE or
+    // DELETE_UNMARK naming a slot the on-disk page does not have yet is
+    // `NotFound` from the applier, and redo reports rather than skips
+    // (wal/redo.cpp). Undoing the page and saying nothing is the only
+    // reading consistent with the forward write, which said nothing either.
+    //
+    // Keyed on the page rather than on a flag the caller passes, so a DDL
+    // added later inherits it instead of remembering it.
+    const bool unlogged_page = page_id < catalog::kCatalogOverflowLimit;
+
     switch (entry.action) {
         case TrailAction::kInsert: {
             if (Status s = page.RetireSlot(slot); !s.ok()) return s;
-            if (wal_ == nullptr) return Status::OK();
+            if (wal_ == nullptr || unlogged_page) return Status::OK();
             std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
             const wal::SlotRetirePayload fields{slot};
             if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
@@ -287,7 +307,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
                 !s.ok()) {
                 return s;
             }
-            if (wal_ == nullptr) return Status::OK();
+            if (wal_ == nullptr || unlogged_page) return Status::OK();
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + entry.image.size());
             const wal::HeapWritePayload fields{entry.prior_trx_id, entry.prior_undo_ptr,
                                                slot,
@@ -307,7 +327,7 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
                 !s.ok()) {
                 return s;
             }
-            if (wal_ == nullptr) return Status::OK();
+            if (wal_ == nullptr || unlogged_page) return Status::OK();
             // **HEAP_DELETE_UNMARK, not HEAP_DELETE_MARK.** This logged the
             // mark record until 2026-08-11, which redo replays by *setting*
             // a mark - so a crash after this rollback brought the row back
