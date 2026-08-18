@@ -337,17 +337,8 @@ every row written since the drop. Silently missing rows — where the
 pre-DT9 rule answered correctly.
 
 No cheap guard separates the two: a reissued id is at or above this
-mount's floor, exactly like a live one. It belongs beside `txn.md` §8's
-accepted post-crash family and RV3 in `docs/known-gaps.md`, and the
-answer that would remove it rather than document it is **DT10, proposed
-and not built**: retire every delete-marked catalog row at mount, before
-the listener binds. A mark from a previous mount is unresolvable anyway
-with no catalog recovery, so finalizing it is the only answer that
-exists — and the same sweep would purge the marks that otherwise
-accumulate forever, one per column and per index of every transactionally
-dropped relation, re-scanned on every catalog cache miss. One sweep of
-nine pages. Not taken here because it is new behaviour at mount and
-needs its own decision.
+mount's floor, exactly like a live one. **Closed by §5c**, which removes
+the question rather than documenting it.
 
 **The claim is core-0-scoped, and must be written that way.**
 `IsInFlight` answers about one core's `live_` list. That is every
@@ -375,6 +366,48 @@ row whose writer it cannot see — so an outsider's name lookup answers
 `NotFound` and the relation vanishes rather than lingering. No rule about
 delete-marks reaches an overwrite. Isolating `DROP TABLE` still needs
 undo *records* for catalog rows, which is option (a) and is not built.
+
+### 5c. DT10 — delete-marks are finalized at mount
+
+**Decided and built 2026-08-18.** Every delete-marked catalog row is
+retired at mount, on the system core, after recovery and before the
+listener binds.
+
+**Why it has to exist at all.** DT9 made a mark's meaning depend on
+whether its deleter is in flight. A mark that outlived its mount has no
+deleter to ask about — and worse, may have one that is not its own: the
+transaction-id ceiling is unlogged (`txn/trx_id.hpp`), so a crash
+reissues the block, and a live transaction wearing a committed dropper's
+id makes a finished drop read as open. The dropped index is re-armed and
+answers probes from a btree missing every row written since. §5b names
+that exposure; this section is its answer.
+
+**Retiring is the only available answer, not the conservative one.** A
+mark whose transaction committed should be gone. A mark whose
+transaction did not commit cannot be rolled back either — the trail that
+would compensate it died with the process, and the catalog is not
+recovered (RV3), so nothing can reconstruct the intent. Both already read
+as gone to every unfiltered reader before DT9. What changes is that they
+stop being *ambiguous*.
+
+**A second effect that would justify it alone.** Nothing else ever purges
+these rows. A transactional `DROP TABLE` leaves one mark per column, per
+index and per foreign key, forever, re-read on every catalog cache miss.
+The sweep is also the purge.
+
+**Where, and why only there.** After recovery, so a mark this mount's own
+log restored is included; before the transaction stack exists, so no live
+transaction can own a mark it retires — which is what makes "retire every
+mark" safe here and catastrophic anywhere else. The system core's alone:
+a peer may not write a catalog page (P6), and by the time a peer mounts,
+core 0 has done it.
+
+**What it costs.** One forward pass over the catalog root chains.
+`RetireSlot` sets the dead flag in place and never renumbers slots behind
+the walk, so one pass suffices. Unlogged, like every catalog write — a
+crash mid-sweep leaves exactly the state it started from, which the next
+mount sweeps again. `SHOW META` reports `catalog_marks_finalized`; zero
+is what a clean shutdown produces.
 
 ## 6. Open decisions — do not assume
 

@@ -382,24 +382,27 @@ the owner's workplan.
   its deleter commits (§5b), which is core-0-scoped only because
   `IsInFlight` walks one core's live list and CC3 refuses cross-core
   writes.
+  Delete-marked catalog rows no longer accumulate across mounts (DT10,
+  §5c); within a mount they still do, and nothing purges them until the
+  next restart.
   **Still non-transactional, by name**: `ALTER TABLE`, cabins, patterns,
   assertions, foreign keys. Each only inserts its own catalog rows, so
   each can adopt the mechanism the table statements proved; nothing new
   has to be decided for them. Isolating `DROP TABLE` is the one that
   still needs undo *records* for catalog rows — option (a) of DT5, not
   built.
-- **DT9's in-flight test can be fooled by a reissued transaction id
-  after a crash** (`docs/spec-ddl-transactional.md` §5b). An unfiltered
-  catalog read counts a delete-mark only once its deleter is no longer in
-  flight; the id ceiling is unlogged (`txn/trx_id.hpp`), so a crash can
-  reissue a committed dropper's id to a new transaction, and while that
-  one is open the dropped index is re-armed and probes answer from a
-  btree missing every row written since the drop. **Silently missing
-  rows**, and the pre-DT9 rule answered this case correctly. Bounded by
-  the same 4096-id block and by nothing else. The fix that removes it
-  rather than documenting it is **DT10, proposed and not built**: retire
-  every delete-marked catalog row at mount, which also purges the marks
-  that otherwise accumulate forever.
+- ~~**DT9's in-flight test can be fooled by a reissued transaction id
+  after a crash**~~ — **closed 2026-08-18 by DT10**
+  (`docs/spec-ddl-transactional.md` §5c). The exposure was real: an
+  unfiltered catalog read counts a delete-mark only once its deleter is
+  no longer in flight, the id ceiling is unlogged (`txn/trx_id.hpp`), so
+  a crash could reissue a committed dropper's id and a live transaction
+  wearing it would re-arm a dropped index whose btree is missing every
+  row written since. DT10 retires every delete-marked catalog row at
+  mount, before the listener binds, which deletes the question instead of
+  answering it — and purges the marks that otherwise accumulated forever,
+  one per column, index and foreign key of every transactionally dropped
+  relation. `SHOW META` reports `catalog_marks_finalized`.
 - **Keystone K1 does not hold across a crash**
   (`docs/keystoneid-k0-findings.md`): the durable log names ids the
   unlogged `sys.tables.next_id` has forgotten. K-M2a/K-M2 own it.

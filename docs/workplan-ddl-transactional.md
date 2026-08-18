@@ -415,6 +415,47 @@ only thing that makes it a test rather than a passing assertion. A
 second test pins the committed half: once the drop commits, the mark
 counts and the name is free again.
 
+### DT10 — delete-marks are finalized at mount ✅ 2026-08-18
+
+Spec §5c. Found by the `critics-developer` pass over DT9's own diff, and
+it is the finding that made the review worth running: DT9's rule is
+correct within a mount and has exactly one hole across one.
+
+**The hole.** A mark outlives the transaction that wrote it, and the next
+mount has no deleter to ask about. `txn/trx_id.hpp` makes it worse than
+"unknown": the id ceiling is unlogged, so a crash reissues the block, and
+a live transaction wearing a committed dropper's id makes `IsInFlight`
+answer true — the dropped index is re-armed by `InitTableAccess` and
+probes answer from a btree missing every row written since the drop.
+Silently missing rows, in a case the *pre*-DT9 rule got right. No cheap
+guard exists: a reissued id sits at or above this mount's floor, exactly
+where a live one does.
+
+**Why retiring is the only answer rather than the safe one.** A mark
+whose transaction committed should be gone. A mark whose transaction did
+not commit cannot be rolled back either — the trail died with the process
+and the catalog is not recovered (RV3). Both already read as gone to
+every unfiltered reader. The sweep removes the ambiguity, it does not
+choose a side.
+
+**The second reason, which would justify it alone**: nothing else purges
+these rows. A transactional `DROP TABLE` leaves one mark per column,
+index and foreign key, forever, re-read on every catalog cache miss.
+
+**Placement is load-bearing.** After recovery, so a mark this mount's own
+log restored is included; before the transaction stack exists, so no live
+transaction can own a mark it retires. "Retire every mark" is safe there
+and catastrophic anywhere else — that is why the accessor's comment says
+so and why it takes no arguments to narrow it. Core 0 only (P6).
+
+Gate: **met.** Two tests — a committed transactional drop leaves a mark
+the sweep retires, and the second sweep finds nothing (idempotence is
+what keeps an ordinary restart free) — plus a clean instance where it
+finds nothing and disturbs nothing. `SHOW META` gains
+`catalog_marks_finalized`, and `ddl_transactional` regains `drop-index`,
+which is the reason that field is a list of statement names and not a
+bare `=1`.
+
 ## Rules this milestone inherits
 
 - Every step gets a `critics-developer` review and a `ck-tester` run
