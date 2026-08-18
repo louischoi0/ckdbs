@@ -719,31 +719,73 @@ TEST_F(TxnSessionTest, ARolledBackCreateIndexLeavesNoIndex) {
               std::string::npos);
 }
 
-TEST_F(TxnSessionTest, DropIndexInsideATransactionIsRefused) {
-    // **This test asserted the opposite and was wrong.** It claimed an
-    // uncommitted DROP INDEX was invisible to other sessions, which was
-    // true only of `SHOW INDEXES` - the one route threaded with a view.
-    // `InitTableAccess` builds a relation's index list unfiltered, so
-    // index maintenance saw the drop immediately: another session's
-    // INSERT in the window wrote no index entry, and a rollback restored
-    // an index silently missing that row. Refused instead of answered
-    // wrongly (spec-ddl-transactional.md §5a).
+// **The test this replaces asserted a refusal, and the one before that
+// asserted isolation.** DT5 shipped `DROP INDEX` as isolated on the
+// strength of `SHOW INDEXES` filtering; `InitTableAccess` reads the index
+// list unfiltered, so maintenance took the delete-mark the moment it was
+// written and a rollback restored an index missing every row written
+// meanwhile. It was refused rather than answered wrongly, and DT9 closes
+// it at the read instead: an unfiltered catalog read counts a mark only
+// once its deleter is no longer in flight.
+//
+// So this is the wrong-result scenario itself, run forwards.
+TEST_F(TxnSessionTest, ARolledBackDropIndexLeavesTheIndexWholeIncludingTheWindowsWrites) {
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    {
+        const std::string reply = Run(a, "CREATE INDEX by_owner ON t (owner)");
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    }
+    ASSERT_EQ(Run(a, "INSERT INTO t VALUES (10)").substr(0, 8), "INSERTED");
+
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    {
+        const std::string dropped = Run(a, "DROP INDEX by_owner");
+        ASSERT_EQ(dropped.rfind("ERR", 0), std::string::npos) << dropped;
+    }
+
+    // The window. Another session writes a row while the drop is open; its
+    // index entry is the one the old behaviour skipped.
+    ASSERT_EQ(Run(b, "INSERT INTO t VALUES (20)").substr(0, 8), "INSERTED");
+
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    EXPECT_NE(Run(a, "SHOW INDEXES").find("by_owner"), std::string::npos)
+        << "a rolled-back DROP INDEX did not restore the index";
+
+    // Reached through the restored index. Zero rows here is the wrong
+    // answer the refusal existed to prevent.
+    const std::vector<std::string> found = Rows(a, "SELECT id, owner FROM t WHERE owner = 20");
+    ASSERT_EQ(found.size(), 1u) << "the index lost the row written while the drop was open";
+    EXPECT_NE(found[0].find("20"), std::string::npos) << found[0];
+
+    // And the row that predates the window is still there, so the arm did
+    // not simply stop honouring marks.
+    EXPECT_EQ(Rows(a, "SELECT id, owner FROM t WHERE owner = 10").size(), 1u);
+}
+
+// The committed half of the same rule: once the drop commits, the mark
+// counts, and the index is gone by every route.
+TEST_F(TxnSessionTest, ACommittedDropIndexInsideATransactionRemovesTheIndex) {
     Session a;
     ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
     {
         const std::string reply = Run(a, "CREATE INDEX by_owner ON t (owner)");
         ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
     }
+    ASSERT_EQ(Run(a, "INSERT INTO t VALUES (10)").substr(0, 8), "INSERTED");
 
     ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
-    const std::string refused = Run(a, "DROP INDEX by_owner");
-    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
-    EXPECT_NE(refused.find("explicit transaction"), std::string::npos) << refused;
-    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    ASSERT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(a, "COMMIT").substr(0, 6), "COMMIT");
 
-    // The index is untouched, and dropping it outside a transaction works.
-    EXPECT_NE(Run(a, "SHOW INDEXES").find("by_owner"), std::string::npos);
-    EXPECT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(Run(a, "SHOW INDEXES").find("by_owner"), std::string::npos);
+    // The rows are the index's business, not the relation's: the answer is
+    // the same one, found by a scan.
+    EXPECT_EQ(Rows(a, "SELECT id, owner FROM t WHERE owner = 10").size(), 1u);
+    // And the name is free, which only a mark that counts can make true.
+    EXPECT_EQ(Run(a, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
 }
 
 TEST_F(TxnSessionTest, AutocommitIndexDdlIsUnchanged) {

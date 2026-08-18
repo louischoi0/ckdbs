@@ -18,6 +18,14 @@
 #include "kds/storage/tagged_cell.hpp"
 #include "kds/txn/read_view.hpp"
 
+namespace kds::txn {
+// Forward-declared rather than included: the catalog asks it one question
+// (`IsInFlight`), and `txn/manager.hpp` drags the WAL manager and the
+// checkpointer in behind it, into every translation unit that names a
+// relation.
+class TransactionManager;
+}  // namespace kds::txn
+
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
 //
@@ -125,6 +133,20 @@ public:
     // catalog. Set rather than constructed with, because bootstrap builds
     // a Catalog before the server has decided anything about logging.
     void SetLogger(Logger* log) noexcept { log_ = log; }
+
+    // The core's transaction manager, for the one question an *unfiltered*
+    // catalog read has to ask: is the transaction that delete-marked this
+    // row still running? (`spec-ddl-transactional.md` §5a.) Set rather
+    // than constructed with, for SetLogger's reason - the manager is built
+    // after the catalog, and bootstrap has none at all.
+    //
+    // Left null, every unfiltered read answers exactly as it did before
+    // DT5: a mark is done the moment it is written. That is the wrong
+    // answer while a drop is open, and it is deliberately the one a
+    // catalog with no manager keeps, because a reader with no manager -
+    // bootstrap, recovery, a test over a bare store - has no in-flight
+    // transaction to be wrong about.
+    void SetTransactionManager(const txn::TransactionManager* txn) noexcept { txn_ = txn; }
 
     // Called after every DDL that invalidates cached facts - i.e. from
     // BumpVersion(), the single choke point, and from nowhere else
@@ -934,6 +956,10 @@ private:
     std::uint32_t core_count_ = 1;
 
     Logger* log_ = nullptr;
+    // Null until a core's runtime arms it, and null forever for bootstrap,
+    // recovery and every test that builds a Catalog over a bare store -
+    // which is what keeps those readers on the pre-DT5 behaviour exactly.
+    const txn::TransactionManager* txn_ = nullptr;
     InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
     PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;

@@ -1152,31 +1152,27 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
 
     if (stmt.drop) {
-        // **Refused inside an explicit transaction, and this retracts a
-        // claim.** DT5 shipped `DROP INDEX` as atomic *and isolated* on
-        // the strength of `SHOW INDEXES` filtering. It is not isolated
-        // where it matters: `InitTableAccess` builds a relation's index
-        // list through `ListIndexes()` with a **null view**, so index
-        // maintenance and planning treat the delete-mark as done the
-        // moment it is written. Another session's INSERT in that window
-        // writes no index entry - and if the drop then rolls back, the
-        // index is restored *missing that row*, and a probe answers a
-        // committed row with nothing. A wrong result, not an early view.
+        // **Allowed inside an explicit transaction again as of DT9, and
+        // the history is the point.** DT5 shipped this as atomic *and
+        // isolated* on the strength of `SHOW INDEXES` filtering; that was
+        // wrong, because `InitTableAccess` builds a relation's index list
+        // through `ListIndexes()` with a **null view**, so index
+        // maintenance treated the delete-mark as done the moment it was
+        // written - another session's INSERT wrote no index entry, and a
+        // rollback restored the index missing that row. It was then
+        // refused rather than answered wrongly.
         //
-        // Refused rather than answered wrongly, which is this engine's
-        // rule everywhere else. The principled fix - teaching a null-view
-        // catalog read that a delete-mark counts only once its deleter
-        // has committed - changes the meaning of every internal catalog
-        // read and is an open decision
-        // (`docs/spec-ddl-transactional.md` §5a).
-        if (txn_ != nullptr && session.in_explicit_txn()) {
-            return {ErrorReply(Status::Unsupported(
-                        "DROP INDEX inside an explicit transaction is refused: index "
-                        "maintenance does not honour an uncommitted drop, so a rollback "
-                        "would leave the index missing rows written meanwhile. Run it "
-                        "outside a transaction")),
-                    false};
-        }
+        // DT9 closes it at the read instead of at the statement: an
+        // unfiltered catalog read now counts a delete-mark only once its
+        // deleter is no longer in flight (`catalog.cpp`'s `ScanAll`), so
+        // maintenance keeps writing entries for an index whose drop has
+        // not committed. If the drop commits the entries go with the
+        // index; if it rolls back the index is whole.
+        //
+        // **The claim this may carry is core-0-scoped**, not "isolated"
+        // outright: `IsInFlight` answers about one core's transactions,
+        // and it is every writer's core only while CC3 refuses
+        // cross-core writes (`docs/spec-ddl-transactional.md` §5a).
         DdlScope ddl = DdlScopeFor(session);
         catalog::CatalogRowChange change;
         auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,

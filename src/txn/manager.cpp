@@ -438,4 +438,15 @@ std::size_t TransactionManager::ActiveCount() const noexcept {
     return n;
 }
 
+bool TransactionManager::IsInFlight(std::uint64_t trx_id) const noexcept {
+    // kNoTrxId is nobody's, and kAlwaysVisibleTrxId is the bootstrap stamp
+    // no transaction was ever issued - neither can be live, and neither
+    // should walk the list to find that out.
+    if (trx_id == kNoTrxId || trx_id == kAlwaysVisibleTrxId) return false;
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (t->id_ == trx_id) return t->active_;
+    }
+    return false;
+}
+
 }  // namespace kds::txn
