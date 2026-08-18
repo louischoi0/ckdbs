@@ -1,9 +1,11 @@
 # Transactional DDL
 
-Status: **built 2026-08-16** (DT1-DT7; DT8, durability, deferred by name
-and never scheduled). `CREATE TABLE` is atomic, isolated and consistent;
-`DROP TABLE` is atomic only — §5 says exactly what each gets and §5a why
-they differ. Owning workplan: `docs/workplan-ddl-transactional.md`.
+Status: **built 2026-08-16, extended 2026-08-18** (DT1-DT7 and DT9;
+DT8, durability, deferred by name and never scheduled). `CREATE TABLE`
+is atomic, isolated and consistent; `DROP INDEX` is atomic and isolated
+**on core 0** since DT9 took §5a's open decision; `DROP TABLE` is atomic
+only — §5 says exactly what each gets and §5a why they still differ.
+Owning workplan: `docs/workplan-ddl-transactional.md`.
 
 ## 0. This reverses a recorded decision, deliberately
 
@@ -153,10 +155,13 @@ Built, and what each actually gets:
   ROLLBACK;` leaves no relation and no rows.
 
 - **`CREATE INDEX`** — atomic and isolated, exactly as `CREATE TABLE`.
-- **`DROP INDEX`** — **refused inside an explicit transaction as of
-  2026-08-16.** It shipped as "atomic and isolated"; that was wrong, and
-  §5a now carries the correction. Outside a transaction it behaves
-  exactly as it always did.
+- **`DROP INDEX`** — **atomic and isolated again as of 2026-08-18
+  (DT9), and the round trip is worth reading in §5a.** It shipped as
+  "atomic and isolated" on 2026-08-16; that was wrong, so it was refused
+  inside a transaction; DT9 fixed the read the claim actually depended on
+  and the refusal was withdrawn. The isolation claim is **core-0-scoped**
+  — see §5a's last paragraph for what that means and when it stops being
+  enough. Outside a transaction it behaves exactly as it always did.
 
 **Not built, and each is now mechanical rather than open.** `ALTER
 TABLE`, patterns, cabins, assertions and foreign keys stay
@@ -198,17 +203,10 @@ catalog read is unfiltered. A delete-mark is only isolable where every
 reader of that row filters — which is true of `sys.objects` name lookups
 and false of `sys.indexes`.
 
-`DROP INDEX` inside a transaction is therefore **refused** rather than
-answered wrongly (§5). `DROP TABLE` stays atomic-not-isolated, which is
-survivable because its exposure is an early view of the schema rather
-than a wrong answer.
-
-**The open decision this leaves**: how a null-view catalog read should
-treat a delete-mark whose deleter is still in flight. Teaching it "a
-mark counts only once its deleter has committed" is the principled fix
-and would let both drops isolate — but it changes the meaning of every
-internal catalog read, and `ScanAll` is called from about twenty sites.
-Not taken unilaterally.
+`DROP INDEX` inside a transaction was therefore **refused** rather than
+answered wrongly, until DT9 below made the unfiltered read itself
+correct. `DROP TABLE` stays atomic-not-isolated, and DT9 does not change
+that — see the retype paragraph, and the correction beneath it.
 
 **Other sessions see the drop immediately, before it commits.** That is
 not an oversight, it is what option (b) costs. The `sys.objects` retype
@@ -278,6 +276,73 @@ Concurrent DDL from two transactions is §6's, and its conservative half
 *is* built: the second create of a name in use is refused. What stays
 open there is the message, not the behaviour.
 
+### 5b. DT9 — what an unfiltered read does with an open delete-mark
+
+**Decided and built 2026-08-18**, taking the decision §5a left open.
+
+> **An object exists from the moment its row is written until its
+> removal commits.**
+
+That is the whole rule, and it is deliberately **asymmetric**. An
+unfiltered read still sees an *inserted* row immediately, whoever wrote
+it; it stops seeing a *delete-marked* one only once the deleter is no
+longer in flight. The symmetric version — mint a committed-now view for
+internal reads, hiding uncommitted inserts too — is a bug in the mirror
+direction: a session's own uncommitted `CREATE INDEX` would stop being
+maintained by its own `INSERT`s, and would commit an index missing every
+row the transaction wrote. Both halves as stated fail toward *"the
+object is there"*, and the object is only ever **maintained** by a
+writer that would otherwise skip it.
+
+What it costs when a drop is open: index maintenance keeps writing
+entries for an index that is about to disappear. If the drop commits,
+those entries go with the index; if it rolls back, the index is whole.
+The wasted work is bounded by the length of the transaction holding the
+drop.
+
+**Where it lives.** One arm of one function — `ScanAll`'s delete-mark
+branch in `src/catalog/catalog.cpp`, which is the only *reader* of a
+catalog delete-mark in the tree. §5a estimated "about twenty sites";
+`ScanAll` has 16 call sites, three of which already pass a view. The
+predicate is `txn::TransactionManager::IsInFlight`, a walk of the live
+list rather than a minted `ReadView`, because the caller wants one bit
+and a view is a 528-byte array copy.
+
+**"No longer in flight" is safe to read as "committed"** for exactly one
+reason, and it is an ordering fact rather than a definition:
+`TransactionManager::Abort` compensates the entire trail *before* it
+clears `active_`. A mark whose deleter has gone inactive is a mark no
+rollback is coming for. If that order is ever inverted, this rule breaks
+silently — a reader would treat an about-to-be-reversed mark as final.
+
+**The catalog asks only when it has a manager to ask.** `Catalog`
+carries a `SetTransactionManager` handle, armed by the
+`CommandDispatcher` constructor — the one place a catalog and a manager
+are known to belong together, so a new construction site cannot silently
+keep the pre-DT9 answer. Left null, every unfiltered read answers
+exactly as it did before: bootstrap, recovery and a test over a bare
+store have no in-flight transaction to be wrong about. A mark left by a
+transaction from a *previous mount* also reads as final, which is both
+the old behaviour and the only available answer while the catalog is not
+recovered (RV3).
+
+**The claim is core-0-scoped, and must be written that way.**
+`IsInFlight` answers about one core's `live_` list. That is every
+writer's core only while CC3 refuses cross-core writes and core 0 alone
+listens; the day DML shipping lands, a peer's index maintenance can meet
+a core-0 deleter it cannot see, and this rule needs a cross-core commit
+oracle before `DROP INDEX` may be called isolated outright. Saying
+"isolated" without the scope would repeat exactly the overclaim the rest
+of this section exists to correct.
+
+**A correction to §5a's own estimate of the payoff.** §5a said this fix
+"would let both drops isolate". It does not. `DROP TABLE`'s exposure is
+the `sys.objects` **in-place retype**, and a filtered `ScanAll` *skips* a
+row whose writer it cannot see — so an outsider's name lookup answers
+`NotFound` and the relation vanishes rather than lingering. No rule about
+delete-marks reaches an overwrite. Isolating `DROP TABLE` still needs
+undo *records* for catalog rows, which is option (a) and is not built.
+
 ## 6. Open decisions — do not assume
 
 - **The cache strategy** (§4): (a) bypass, (b) overlay, (c) snapshot-keyed.
@@ -297,6 +362,11 @@ open there is the message, not the behaviour.
 - **Whether a transaction that did DDL may be shipped** (crosscore).
   Today writes bind to a home core, which already covers it, but the
   interaction should be stated rather than inherited.
+- **A cross-core commit oracle for DT9's rule** (§5b). `IsInFlight`
+  answers about one core's live list, so `DROP INDEX`'s isolation is
+  core-0-scoped. Sound while CC3 refuses cross-core writes; the day DML
+  shipping lands, a peer's index maintenance can meet a deleter it
+  cannot see. Not a defect today, and not something to quietly inherit.
 
 ## 7. Durability, deferred and named
 

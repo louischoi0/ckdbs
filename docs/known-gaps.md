@@ -370,13 +370,24 @@ the owner's workplan.
   `ddl_durable=0` beside it so the pair cannot be read apart.** Never
   quote "transactional DDL" without that distinction — a reader assumes
   crash-durability and is wrong.
-  **Still non-transactional, by name**: `DROP TABLE`, `ALTER TABLE`,
-  indexes, cabins, patterns, assertions. The asymmetry with `CREATE` is
-  real and is not an oversight — a drop *retires* its dependent rows
-  outright, and a retired slot has no compensation to put it back, where
-  a create only inserts. Making drop transactional needs delete-marking
-  and undo records for catalog rows, which is a scoped decision recorded
-  in the workplan's DT5 rather than a missing patch.
+  **This paragraph said `DROP TABLE` and indexes were "still
+  non-transactional, by name" and was stale from 2026-08-16; corrected
+  2026-08-18.** What is true now: `DROP TABLE` is **atomic but not
+  isolated** (DT5 shipped delete-marking for its dependent rows; other
+  sessions still see the drop before it commits, because the
+  `sys.objects` retype is an in-place overwrite with no undo chain —
+  `spec-ddl-transactional.md` §5a). `CREATE INDEX` is atomic and
+  isolated; `DROP INDEX` is atomic and isolated **on core 0** since DT9
+  taught the unfiltered catalog read that a delete-mark counts only once
+  its deleter commits (§5b), which is core-0-scoped only because
+  `IsInFlight` walks one core's live list and CC3 refuses cross-core
+  writes.
+  **Still non-transactional, by name**: `ALTER TABLE`, cabins, patterns,
+  assertions, foreign keys. Each only inserts its own catalog rows, so
+  each can adopt the mechanism the table statements proved; nothing new
+  has to be decided for them. Isolating `DROP TABLE` is the one that
+  still needs undo *records* for catalog rows — option (a) of DT5, not
+  built.
 - **Keystone K1 does not hold across a crash**
   (`docs/keystoneid-k0-findings.md`): the durable log names ids the
   unlogged `sys.tables.next_id` has forgotten. K-M2a/K-M2 own it.
