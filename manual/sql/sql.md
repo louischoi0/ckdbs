@@ -617,11 +617,15 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   `SHOW INDEXES`.
 - **`DROP TABLE` rolls back, but is *not* isolated**: other sessions see
   it before it commits (see its own entry).
-- **`DROP INDEX` is refused inside an explicit transaction.** Index
-  maintenance does not honour an uncommitted drop, so a rollback would
-  restore an index missing any rows written meanwhile — refused rather
-  than answered wrongly. Run it outside a transaction. Two limits, both
-  deliberate:
+- **`DROP INDEX` is transactional too** (2026-08-18): inside an explicit
+  transaction it is rolled back, and it is isolated — index maintenance
+  keeps writing entries for an index whose drop has not committed, so a
+  `ROLLBACK` leaves the index whole, including rows another session
+  wrote while the drop was open. The isolation is proved for writers on
+  one core, which is every writer this engine has today (cross-core
+  writes are refused). It was refused inside a transaction
+  between 2026-08-16 and 2026-08-18, for the wrong result that fix
+  closes. Two limits on all of the above, both deliberate:
   - **Not crash-durable.** Catalog writes are still unlogged and the
     catalog is not recovered, so a committed `CREATE TABLE` survives a
     crash only if its page reached the device. "Transactional" here means
