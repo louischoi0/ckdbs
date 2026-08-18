@@ -408,12 +408,33 @@ resolution fits `marks × (0.4 ns + 0.45 ns × live)` — the `IsInFlight`
 loop and nothing else. `live` is capped at 64 by `kMaxTrackedLiveTxns`;
 **`marks` is capped only by this sweep, which runs once per mount.** So
 accumulation is bounded across restarts and *unbounded within one
-long-lived process*: a server that runs for weeks doing transactional
-drops keeps paying more per cold catalog read, ~180 µs per resolution at
-6,000 marks and 64 live transactions. Bounding it *within* a mount needs
-a purge, and purge cadence is an open decision this spec does not own
-(CLAUDE.md, Storage). Stated so the sweep is not mistaken for a bound it
-does not provide.
+long-lived process*.
+
+**Half of that product is now gone, and the other half cannot be.** The
+`live` factor left the per-mark term on 2026-08-18: `ScanAll` takes
+`TransactionManager::OldestActiveTrxId()` once per scan, and a deleter
+below it is settled by definition — `live_` holds every running
+transaction on this core, so an id below the smallest of them is not one
+of them. The common mark, left by a drop that committed long ago, costs
+one comparison; with nothing running the manager is not consulted at all.
+Only a mark whose deleter is at or above the oldest active transaction
+still pays the walk, and there is at most one such drop per open
+transaction.
+
+**`marks` itself needs a purge, and a purge cannot be built.** `txn.md`
+says it twice by name — *"purge does not exist, cannot without reader
+registration"* (§4.1's note on undo pages) and §9's undo-retention entry.
+It binds here specifically, not just in general: a purge must not retire
+a mark some reader's view still needs, and consulting `live_` is not
+enough, because a cross-core stage mints its snapshot through
+`AutocommitSnapshot` and holds it **across its parks**
+(`remote_step_service.hpp`) — a reader that is nowhere in `live_`. So
+the sound condition is undecidable with what the engine records today,
+and the prerequisite is the same one that blocks the MVCC undo purge.
+
+What that leaves, stated so it is not rediscovered as a surprise: a
+long-lived server doing many transactional drops grows its catalog pages
+and pays a bounded per-mark comparison on cold reads, until it restarts.
 
 **What it costs.** One forward pass over the catalog root chains.
 `RetireSlot` sets the dead flag in place and never renumbers slots behind

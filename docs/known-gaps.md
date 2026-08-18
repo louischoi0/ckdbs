@@ -385,11 +385,18 @@ the owner's workplan.
   Delete-marked catalog rows no longer accumulate across mounts (DT10,
   §5c); **within a mount they still do, and nothing purges them until the
   next restart** — measured, and it has a price: DT9's cold-catalog cost
-  is `marks × (0.4 ns + 0.45 ns × live)`
-  (`bench/results-ddl-catalog-read-ab.md`), so a long-lived server doing
-  transactional drops pays ~180 µs per cold catalog resolution at 6,000
-  marks and 64 live transactions. Bounding it within a mount needs a
-  purge, whose cadence is an open decision.
+  was `marks × (0.4 ns + 0.45 ns × live)`
+  (`bench/results-ddl-catalog-read-ab.md`); the `live` factor left the
+  per-mark term on 2026-08-18 (`ScanAll` settles a mark by comparison
+  against `OldestActiveTrxId()` instead of walking the live list), so
+  what remains is one comparison per mark per cold read.
+  **`marks` itself cannot be bounded within a mount**, and the reason is
+  a stated prerequisite rather than a missing patch: a purge must not
+  retire a mark a reader's view still needs, and `live_` does not name
+  every reader — a cross-core stage holds an `AutocommitSnapshot` across
+  its parks (`remote_step_service.hpp`). That is the reader registration
+  `txn.md` §4.1 omits and §9 lists, the same prerequisite blocking the
+  MVCC undo purge.
   Also measured there and **not** DT9's: a transactional `DROP TABLE`
   costs ~517 µs against `CREATE TABLE`'s 48 and `DROP INDEX`'s 36,
   identical on both binaries — `Catalog::DropTable`'s five
