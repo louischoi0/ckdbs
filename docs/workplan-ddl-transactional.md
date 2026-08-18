@@ -10,7 +10,17 @@ exists in `docs/workplan-drop-table.md`.
 ## Where to pick this up
 
 **DT1 through DT7 done (2026-08-15/16); the milestone is complete except
-DT8, which was never scheduled.** **Spec §1's properties A, B and
+DT8, which was never scheduled.**
+
+**Spec §5's scope line was amended 2026-08-16 to match what shipped**: it
+had named `CREATE INDEX` / `DROP INDEX` in v1 and they were not built.
+No surface ever claimed them, so nothing overclaimed — but a scope list
+that runs ahead of the code is how a later reader concludes a statement
+is transactional and learns otherwise in production. Adopting the
+mechanism for the remaining DDL is now mechanical; the one to check
+first is an index *drop*, since anything that retires rather than
+delete-marks inherits §5a's isolation limit and DT5's terminating-sweep
+trap. **Spec §1's properties A, B and
 C are delivered at the SQL surface**: a rolled-back `CREATE TABLE`
 leaves no relation, and an uncommitted one is invisible to every other
 session by every route into it. **D (durability) remains deferred by

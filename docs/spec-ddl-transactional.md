@@ -1,7 +1,9 @@
 # Transactional DDL
 
-Status: **specification, nothing built** (2026-08-15). Owning workplan:
-`docs/workplan-ddl-transactional.md`.
+Status: **built 2026-08-16** (DT1-DT7; DT8, durability, deferred by name
+and never scheduled). `CREATE TABLE` is atomic, isolated and consistent;
+`DROP TABLE` is atomic only — §5 says exactly what each gets and §5a why
+they differ. Owning workplan: `docs/workplan-ddl-transactional.md`.
 
 ## 0. This reverses a recorded decision, deliberately
 
@@ -132,12 +134,36 @@ Whatever is chosen, one thing is already known and must be respected:
 
 ## 5. What is in scope for v1
 
-- `CREATE TABLE`, `DROP TABLE`, `CREATE INDEX`, `DROP INDEX` inside an
-  explicit transaction: atomic, isolated, rolled back by `ROLLBACK`.
+**Amended 2026-08-16 to match what was built.** This section originally
+named `CREATE INDEX` / `DROP INDEX` alongside the two table statements.
+They were not built, and the line is corrected rather than left ahead of
+the code — a scope list that overstates is how a later reader concludes
+a statement is transactional and finds out otherwise in production. No
+surface ever claimed them: `manual/sql/sql.md` names exactly which DDL
+is transactional, and `SHOW META` says `create-table-only`.
+
+Built, and what each actually gets:
+
+- **`CREATE TABLE`** — atomic, isolated, rolled back by `ROLLBACK`. All
+  four properties §1 lists except durability.
+- **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
+  §5a is the whole argument, and it is a property of in-place overwrites
+  with no undo chain rather than a gap to fill in later.
 - The autocommit path is unchanged in behaviour: a bare `CREATE TABLE`
-  commits immediately, exactly as today.
+  commits immediately, exactly as today, and a bare `DROP TABLE` still
+  retires its dependent rows rather than delete-marking them.
 - Mixed statements: `BEGIN; CREATE TABLE t ...; INSERT INTO t ...;
   ROLLBACK;` leaves no relation and no rows.
+
+**Not built, and each is now mechanical rather than open.** `CREATE
+INDEX` / `DROP INDEX`, `ALTER TABLE`, patterns, cabins, assertions and
+foreign keys stay non-transactional. Each writes its own catalog page
+and can adopt the mechanism the two table statements proved: stamp the
+transaction's id, register what was written on its trail, and let
+`Abort` compensate. **Nothing new has to be decided for the ones that
+only insert rows.** An index drop is the exception worth checking first
+— if it retires rather than delete-marks, it inherits §5a's limit and
+DT5's terminating-sweep trap with it.
 
 ### 5a. `DROP TABLE` is atomic, and deliberately **not** isolated
 
@@ -204,11 +230,9 @@ membership is a decision:
   which tests an already-resolved oid against bootstrap rows that every
   view sees.
 
-Out of v1, by name: `ALTER TABLE` (its own rename semantics interact with
-the cache differently), `CREATE PATTERN` / `CREATE CABIN` / assertions /
-foreign keys (each writes its own catalog page and can follow once the
-mechanism is proven on the two simplest), and anything about concurrent
-DDL from two transactions — see §6.
+Concurrent DDL from two transactions is §6's, and its conservative half
+*is* built: the second create of a name in use is refused. What stays
+open there is the message, not the behaviour.
 
 ## 6. Open decisions — do not assume
 
