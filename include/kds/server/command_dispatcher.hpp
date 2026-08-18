@@ -243,7 +243,15 @@ public:
           core_id_(core_id),
           indexes_enabled_(indexes),
           max_insert_rows_(max_insert_rows),
-          default_key_mode_(default_key_mode) {}
+          default_key_mode_(default_key_mode) {
+        // The one place a catalog and a manager are known to belong
+        // together, which is why DT9's wiring is here and not in each
+        // server's startup: a new construction site - a test fixture
+        // especially - cannot forget it. Two dispatchers over one catalog
+        // leave the later manager installed, the same relation the single
+        // `catalog_` reference already has.
+        if (txn != nullptr) catalog.SetTransactionManager(txn);
+    }
 
     // Parses and executes one line. Never fails outward: a malformed or
     // unrecognized line produces an "ERR ..." response rather than any
@@ -570,7 +578,7 @@ private:
     // is the normal state and the one `ViewFor` optimises for. Entries
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
-    void EndDdlScope(const Session& session, bool rows_were_retired);
+    void EndDdlScope(const Session& session);
     // Records that this transaction now holds uncommitted catalog rows,
     // which is what turns on `ViewFor`'s filtering.
     void MarkHoldsDdl(const txn::Transaction& txn);

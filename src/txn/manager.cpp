@@ -1,6 +1,7 @@
 #include "kds/txn/manager.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cctype>
 #include <string>
 
@@ -436,6 +437,21 @@ std::size_t TransactionManager::ActiveCount() const noexcept {
         if (t->active_) ++n;
     }
     return n;
+}
+
+std::uint64_t TransactionManager::OldestActiveTrxId() const noexcept {
+    std::uint64_t oldest = std::numeric_limits<std::uint64_t>::max();
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (t->active_ && t->id_ < oldest) oldest = t->id_;
+    }
+    return oldest;
+}
+
+bool TransactionManager::IsInFlight(std::uint64_t trx_id) const noexcept {
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (t->id_ == trx_id) return t->active_;
+    }
+    return false;
 }
 
 }  // namespace kds::txn

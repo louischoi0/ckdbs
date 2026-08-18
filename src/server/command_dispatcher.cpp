@@ -547,12 +547,24 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         os << " recovery_relations_checked=" << recovery_->relations_checked
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
            << " catalog_recovered=0"
+           // DT10: delete-marked catalog rows a previous mount left
+           // behind, retired before the listener bound. Zero is what a
+           // clean shutdown produces, so a non-zero here is the sign that
+           // this mount followed one that left a transactional DROP
+           // half-resolved.
+           << " catalog_marks_finalized=" << recovery_->catalog_marks_finalized
            // DT7: `CREATE TABLE` became atomic and isolated on 2026-08-16,
            // and a reader of `ddl_transactional=1` will assume that
            // includes surviving a crash. It does not, and the two flags
            // sit together so the pair reads as one statement: transactional
            // within a running instance, not durable across a restart.
-           << " ddl_transactional=create-table,drop-table,create-index"
+           //
+           // `drop-index` rejoined the list on 2026-08-18 (DT9). It was in
+           // it, came out when the statement was refused inside a
+           // transaction, and is back because the refusal was withdrawn -
+           // which is the whole reason this is a list of statement names
+           // and not a bare `=1`.
+           << " ddl_transactional=create-table,drop-table,create-index,drop-index"
            << " ddl_durable=0";
         // RC07: what the mount could resume enforcing, and the honest
         // remainder. A surviving declaration whose directory could not be
@@ -1152,31 +1164,27 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
     const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
 
     if (stmt.drop) {
-        // **Refused inside an explicit transaction, and this retracts a
-        // claim.** DT5 shipped `DROP INDEX` as atomic *and isolated* on
-        // the strength of `SHOW INDEXES` filtering. It is not isolated
-        // where it matters: `InitTableAccess` builds a relation's index
-        // list through `ListIndexes()` with a **null view**, so index
-        // maintenance and planning treat the delete-mark as done the
-        // moment it is written. Another session's INSERT in that window
-        // writes no index entry - and if the drop then rolls back, the
-        // index is restored *missing that row*, and a probe answers a
-        // committed row with nothing. A wrong result, not an early view.
+        // **Allowed inside an explicit transaction again as of DT9, and
+        // the history is the point.** DT5 shipped this as atomic *and
+        // isolated* on the strength of `SHOW INDEXES` filtering; that was
+        // wrong, because `InitTableAccess` builds a relation's index list
+        // through `ListIndexes()` with a **null view**, so index
+        // maintenance treated the delete-mark as done the moment it was
+        // written - another session's INSERT wrote no index entry, and a
+        // rollback restored the index missing that row. It was then
+        // refused rather than answered wrongly.
         //
-        // Refused rather than answered wrongly, which is this engine's
-        // rule everywhere else. The principled fix - teaching a null-view
-        // catalog read that a delete-mark counts only once its deleter
-        // has committed - changes the meaning of every internal catalog
-        // read and is an open decision
-        // (`docs/spec-ddl-transactional.md` §5a).
-        if (txn_ != nullptr && session.in_explicit_txn()) {
-            return {ErrorReply(Status::Unsupported(
-                        "DROP INDEX inside an explicit transaction is refused: index "
-                        "maintenance does not honour an uncommitted drop, so a rollback "
-                        "would leave the index missing rows written meanwhile. Run it "
-                        "outside a transaction")),
-                    false};
-        }
+        // DT9 closes it at the read instead of at the statement: an
+        // unfiltered catalog read now counts a delete-mark only once its
+        // deleter is no longer in flight (`catalog.cpp`'s `ScanAll`), so
+        // maintenance keeps writing entries for an index whose drop has
+        // not committed. If the drop commits the entries go with the
+        // index; if it rolls back the index is whole.
+        //
+        // **The claim this may carry is core-0-scoped**, not "isolated"
+        // outright: `IsInFlight` answers about one core's transactions,
+        // and it is every writer's core only while CC3 refuses
+        // cross-core writes (`docs/spec-ddl-transactional.md` §5a).
         DdlScope ddl = DdlScopeFor(session);
         catalog::CatalogRowChange change;
         auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
@@ -3408,16 +3416,31 @@ std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
                            false};
 }
 
-void CommandDispatcher::EndDdlScope(const Session& session, bool rows_were_retired) {
+void CommandDispatcher::EndDdlScope(const Session& session) {
     const txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return;
     const bool held_ddl = std::erase(ddl_txns_, txn->id()) > 0;
-    // Only a rollback needs this, and only from a transaction that wrote
-    // catalog rows: its compensation retired them behind the catalog's
-    // back, so anything cached about them while it was open is now a
-    // description of rows that are gone. A commit leaves the rows in
-    // place, so what was cached about them stays true.
-    if (held_ddl && rows_were_retired) catalog_.InvalidateAfterCompensation();
+    // **Both endings need this, and only the rollback half used to.** A
+    // rollback compensates through the page, retiring rows behind the
+    // catalog's back, so anything cached about them while the transaction
+    // was open now describes rows that are gone.
+    //
+    // The commit half is DT9's (`spec-ddl-transactional.md` §5b). The old
+    // comment here said "a commit leaves the rows in place, so what was
+    // cached about them stays true", which was correct until an unfiltered
+    // read started asking whether a mark's deleter is still in flight:
+    // **commit is now the moment a delete-mark starts counting.** A cache
+    // filled during an open `DROP INDEX` holds the index deliberately -
+    // that is what keeps maintenance writing entries a rollback would
+    // need - and holding it past the commit would keep maintaining an
+    // index that is gone.
+    //
+    // Unconditional on the ending rather than split by it, because the
+    // condition that would split it ("did this transaction delete-mark
+    // anything?") is one more thing to keep true, and a DDL transaction
+    // ending is rare enough that a cache clear it did not strictly need
+    // costs nothing worth measuring.
+    if (held_ddl) catalog_.InvalidateAfterCompensation();
 }
 
 void CommandDispatcher::MarkHoldsDdl(const txn::Transaction& txn) {
@@ -4899,18 +4922,44 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     }
     auto committed = txn_->Commit(*txn, durability_);
 
+    if (!committed.ok()) {
+        // **A failed commit must abort, not merely be reported.**
+        // `Commit` returns on a logging failure *before* it clears
+        // `active_`, and `Release` refuses to erase an active
+        // transaction - so without this the transaction sits in `live_`
+        // for the life of the process: in every future read view's
+        // in-flight set, counting against `kMaxTrackedLiveTxns`, and
+        // since DT9 answering `IsInFlight` true forever, which would keep
+        // every catalog row it delete-marked alive to every unfiltered
+        // read. A dropped index maintained and probed for ever after.
+        //
+        // Aborting is what the line below already claimed - "the session
+        // leaves the transaction either way" - carried through to the
+        // transaction itself. It also undoes the writes the failed commit
+        // never made durable, which is the only outcome that leaves the
+        // instance consistent with the "ERR" the client is about to read.
+        //
+        // Before `EndDdlScope`, so the invalidation it does describes
+        // pages the compensation has already rewritten.
+        Status rolled = txn_->Abort(*txn, RowLocatorForRollback());
+        EndDdlScope(session);
+        session.Finish();
+        txn_->Release(*txn);
+        // The commit failure is the client's answer; a failure to unwind
+        // on top of it is a second, worse fact and is not swallowed.
+        if (!rolled.ok()) {
+            return {"ERR " + committed.status().message() +
+                        " (and rolling it back failed: " + rolled.message() + ")",
+                    false};
+        }
+        return {"ERR " + committed.status().message(), false};
+    }
+
     // Its catalog rows are committed now, so every reader may see them
     // unfiltered again (DT3c). Before `Finish()`, which clears the
     // session's transaction pointer this reads.
-    EndDdlScope(session, /*rows_were_retired=*/false);
-
-    // The session leaves the transaction either way: a commit that failed
-    // to log is not a transaction the client may keep writing into.
+    EndDdlScope(session);
     session.Finish();
-    if (!committed.ok()) {
-        txn_->Release(*txn);
-        return {"ERR " + committed.status().message(), false};
-    }
 
     // The durability wait the client is owed, for the same reason
     // LogInsert() takes it: kGroup staged the commit for the next drain,
@@ -4941,7 +4990,7 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     // left for anyone to be isolated from - and nothing that may still be
     // cached about them (DT3c, DT4). Before `Finish()`, which clears the
     // pointer this reads.
-    EndDdlScope(session, /*rows_were_retired=*/true);
+    EndDdlScope(session);
     session.Finish();
     txn_->Release(*txn);
     if (!aborted.ok()) return {"ERR " + aborted.message(), false};

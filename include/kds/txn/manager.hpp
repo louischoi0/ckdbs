@@ -314,6 +314,30 @@ public:
     // counted, and is already invisible to every read view.
     std::size_t ActiveCount() const noexcept;
 
+    // Whether `trx_id` is still running **on this manager's core**. The
+    // membership test a `ReadView` runs, without minting one to learn a
+    // single bit. Its user is the unfiltered catalog read
+    // (`spec-ddl-transactional.md` §5b), which reads a false answer as
+    // "committed" - sound only because `Abort` compensates the whole trail
+    // *before* it clears `active_`, so an inactive transaction is one no
+    // rollback is coming for.
+    //
+    // **Per-core, and the caller must know it**: a transaction on another
+    // core answers false. Sound for its one user only while CC3 refuses
+    // cross-core writes.
+    bool IsInFlight(std::uint64_t trx_id) const noexcept;
+
+    // The lowest id among transactions still running here, or `UINT64_MAX`
+    // when none is. **Everything below it is settled**, which is the whole
+    // point: `IsInFlight` is a walk, and a caller asking about many ids can
+    // take this once and answer most of them by comparison.
+    //
+    // Sound because `live_` holds every running transaction on this core:
+    // an id below the smallest of them cannot be one of them. It moves in
+    // both directions as transactions begin and end, so it is a value to
+    // take per pass and not to cache across one.
+    std::uint64_t OldestActiveTrxId() const noexcept;
+
 private:
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);

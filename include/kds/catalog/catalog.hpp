@@ -18,6 +18,14 @@
 #include "kds/storage/tagged_cell.hpp"
 #include "kds/txn/read_view.hpp"
 
+namespace kds::txn {
+// Forward-declared rather than included: the catalog asks it one question
+// (`IsInFlight`), and `txn/manager.hpp` drags the WAL manager and the
+// checkpointer in behind it, into every translation unit that names a
+// relation.
+class TransactionManager;
+}  // namespace kds::txn
+
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
 //
@@ -126,6 +134,14 @@ public:
     // a Catalog before the server has decided anything about logging.
     void SetLogger(Logger* log) noexcept { log_ = log; }
 
+    // The core's transaction manager, for the one question an *unfiltered*
+    // catalog read has to ask: is the transaction that delete-marked this
+    // row still running? (`spec-ddl-transactional.md` §5b.) Set rather
+    // than constructed with, for SetLogger's reason - the manager is built
+    // after the catalog, and bootstrap has none at all. What null means is
+    // on the member.
+    void SetTransactionManager(const txn::TransactionManager* txn) noexcept { txn_ = txn; }
+
     // Called after every DDL that invalidates cached facts - i.e. from
     // BumpVersion(), the single choke point, and from nowhere else
     // (docs/workplan-crosscore.md P6).
@@ -175,13 +191,24 @@ public:
     // are what would otherwise be stale.
     void InvalidateFromPeer();
 
-    // Rows on this instance's catalog pages were changed by something
-    // other than this catalog (workplan-ddl-transactional.md DT4): a
-    // transaction's rollback, whose compensation retires the slots
-    // directly through the page. The catalog is never told, so without
-    // this any fact cached while that DDL was open outlives the rows it
-    // describes - and once the transaction resolves, resolution goes back
-    // to the cache and serves it.
+    // A transaction that wrote catalog rows has resolved, and what this
+    // catalog cached while it was open may now be a lie. **Both endings
+    // reach here**, for two different reasons:
+    //
+    //   - a **rollback** (workplan-ddl-transactional.md DT4) compensates
+    //     through the page directly, retiring slots the catalog is never
+    //     told about, so a fact cached while the DDL was open outlives the
+    //     rows it describes;
+    //   - a **commit** is the moment a delete-mark starts counting (DT9,
+    //     spec §5b). A cache filled during an open `DROP INDEX` holds the
+    //     index deliberately - that is what keeps maintenance writing
+    //     entries a rollback would need - and must not hold it afterwards.
+    //
+    // Without either, resolution goes back to the cache once the
+    // transaction resolves and serves what it found mid-flight.
+    //
+    // The name says "compensation" for the case it was built for; it is
+    // the resolution of a catalog-writing transaction that calls it.
     //
     // Drops cached content **and bumps the version**, unlike
     // `InvalidateFromPeer`: this *is* an event in this instance's
@@ -189,6 +216,40 @@ public:
     // compiled against the relation that just vanished must not be
     // considered current.
     void InvalidateAfterCompensation();
+
+    // **DT10** (`spec-ddl-transactional.md` §5c): retires every
+    // delete-marked catalog row, and answers how many. Runs once at mount,
+    // on the system core, before the listener binds — never afterwards,
+    // because afterwards a mark may belong to a transaction that is still
+    // open, and retiring one of those destroys the row a rollback needs.
+    //
+    // It exists because DT9 made a mark's meaning depend on whether its
+    // deleter is in flight, and a mark that outlived its mount has no
+    // deleter to ask about. The id could even be **reissued** — the
+    // transaction-id ceiling is unlogged (`txn/trx_id.hpp`), so a crash
+    // reissues the block — and then a live transaction wearing a dead
+    // one's id would make a committed drop read as open, re-arm a dropped
+    // index, and answer probes from a btree missing every row written
+    // since. Finalizing at mount deletes that question instead of
+    // answering it.
+    //
+    // **Retiring is the only available answer, not the conservative one.**
+    // A mark whose transaction committed should be gone. A mark whose
+    // transaction did not commit cannot be rolled back either: the trail
+    // that would compensate it died with the process, and the catalog is
+    // not recovered (RV3), so nothing can reconstruct the intent. Both
+    // already read as gone to every unfiltered reader before DT9. What
+    // this changes is that they stop being ambiguous.
+    //
+    // Second effect, and the reason it is worth a page sweep on its own:
+    // nothing else ever purges these rows. A transactional `DROP TABLE`
+    // leaves one mark per column, index and foreign key, forever, re-read
+    // on every catalog cache miss.
+    //
+    // Unlogged, like every catalog write (RV3). A crash mid-sweep leaves
+    // some marks retired and some not, which is exactly the state it
+    // started from and what the next mount sweeps again.
+    StatusOr<std::uint64_t> FinalizeDeleteMarksAtMount();
 
     // Registers the fixed namespace/type sys-objects in the in-memory
     // registry (no disk I/O - these are well-known constants, not stored
@@ -934,6 +995,16 @@ private:
     std::uint32_t core_count_ = 1;
 
     Logger* log_ = nullptr;
+    // Armed by the `CommandDispatcher` constructor, so it is null for
+    // bootstrap, for recovery, for a test over a bare store - and **for
+    // every peer core**, whose `CoreRuntime` builds a Catalog and no
+    // dispatcher. That last one is deliberate rather than missed: a peer's
+    // live list can never hold the core-0 transaction that wrote a
+    // catalog mark, so armed and unarmed answer identically there
+    // (`spec-ddl-transactional.md` §5b's core-0 scope, from the other
+    // side). Null is the pre-DT9 answer: a mark counts the moment it is
+    // written.
+    const txn::TransactionManager* txn_ = nullptr;
     InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
     PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;

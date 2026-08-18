@@ -15,6 +15,7 @@
 #include "kds/storage/visit.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/varheap.hpp"
+#include "kds/txn/manager.hpp"
 
 namespace kds::catalog {
 
@@ -46,14 +47,38 @@ namespace {
 // pass - and what every caller passed before DT3 existed, so a null view
 // reproduces the old behaviour byte for byte.
 //
+// **A null view is not the absence of a rule, it is one rule: an object
+// exists from the moment its row is written until its removal commits**
+// (`spec-ddl-transactional.md` §5a, DT9). `txn`, when given, is what makes
+// the second half true - a delete-mark counts only once its deleter is no
+// longer in flight. The two halves are deliberately asymmetric, and the
+// symmetric version is a bug: hiding *inserted* rows from unfiltered
+// readers too would stop a session's own uncommitted `CREATE INDEX` from
+// being maintained by its own `INSERT`s, which is the same wrong-result
+// class this arm exists to close, mirrored.
+//
+// Both halves fail toward "the object is there".
+//
 // Only the `trx_id` is consulted, not the undo chain: a catalog row's
 // `undo_ptr` is always 0 (txn.md §7), so there is no older version to step
 // back to. A delete-marked catalog row is DT5's business, not this one's.
 template <typename RowT>
 StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
-                                    const txn::ReadView* view = nullptr) {
+                                    const txn::ReadView* view = nullptr,
+                                    const txn::TransactionManager* txn = nullptr) {
     std::vector<RowT> rows;
     Status inner = Status::OK();
+    // **Taken once per scan, not per row.** `IsInFlight` is a walk of the
+    // core's live list, and a catalog page can hold many delete-marked
+    // rows - the product is what the DT9 measurement priced at
+    // `marks x (0.4 ns + 0.45 ns x live)`
+    // (`bench/results-ddl-catalog-read-ab.md`). Every id below the oldest
+    // running transaction is settled by definition, so the common mark -
+    // left by a drop that committed long ago - costs one comparison and
+    // the walk is never entered. With nothing running this is
+    // `UINT64_MAX` and no mark ever consults the manager at all.
+    const std::uint64_t oldest_active =
+        txn != nullptr ? txn->OldestActiveTrxId() : std::numeric_limits<std::uint64_t>::max();
     Status walked = heap::ChainVisit(
         store, root, storage::PageAccess::kRead,
         [&](PageId, heap::PageView& page,
@@ -67,21 +92,31 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
                 return tuple.status();
             }
             // A delete-marked row (DT5): `trx_id` is the *deleter*, so the
-            // question flips. With no view the answer is latest state -
-            // the row is gone. With one, it is gone for a reader that can
-            // see the deleting transaction and still there for one that
-            // cannot, which is what makes a rolled-back drop invisible to
-            // everyone but the dropper.
+            // question flips. With a view, the row is gone for a reader
+            // that can see the deleting transaction and still there for
+            // one that cannot, which is what makes a rolled-back drop
+            // invisible to everyone but the dropper. Without one, the mark
+            // counts once its deleter is no longer in flight (DT9) - and
+            // for a catalog that has no manager to ask, immediately, which
+            // is the pre-DT9 answer and the wrong one while a drop is
+            // open.
             //
             // **No undo chain is consulted**, because a catalog row has
             // none: `undo_ptr` is 0 (txn.md §7). That is exactly why an
             // in-place *overwrite* under a transaction cannot be hidden
             // from other readers - spec-ddl-transactional.md §5a says what
-            // that costs DROP.
+            // that costs DROP TABLE, which DT9 does not change.
             if (tuple.value().deleted) {
-                if (view == nullptr || view->Visible(tuple.value().trx_id)) {
-                    return storage::VisitControl::kContinue;
-                }
+                const std::uint64_t deleter = tuple.value().trx_id;
+                // The null-manager arm is spelled out rather than left to
+                // `oldest_active`'s sentinel: it *would* short-circuit,
+                // but only because a trx id cannot reach `UINT64_MAX`
+                // (48 bits, `kMaxTrxId`), and no reader should have to
+                // prove that to know this cannot dereference null.
+                const bool gone = view != nullptr ? view->Visible(deleter)
+                                                  : txn == nullptr || deleter < oldest_active ||
+                                                        !txn->IsInFlight(deleter);
+                if (gone) return storage::VisitControl::kContinue;
             } else if (view != nullptr && !view->Visible(tuple.value().trx_id)) {
                 return storage::VisitControl::kContinue;  // not there, for this reader
             }
@@ -659,7 +694,7 @@ StatusOr<Oid> Catalog::HighestIssuedUserOid() {
     // special case for the empty database.
     Oid highest = kUserOidStart - 1;
 
-    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects);
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
     if (!objects.ok()) return objects.status();
     for (const SysObjectRow& row : objects.value()) {
         if (row.oid > highest) highest = row.oid;
@@ -669,7 +704,7 @@ StatusOr<Oid> Catalog::HighestIssuedUserOid() {
     // subtle way to get this wrong: column oids come from the *same* counter
     // as relation oids, so a database whose last DDL was a `CREATE TABLE`
     // has its high-water mark on a column and not on the table.
-    auto columns = ScanAll<SysColumnRow>(store_, kCatalogPageColumns);
+    auto columns = ScanAll<SysColumnRow>(store_, kCatalogPageColumns, nullptr, txn_);
     if (!columns.ok()) return columns.status();
     for (const SysColumnRow& row : columns.value()) {
         if (row.oid > highest) highest = row.oid;
@@ -716,7 +751,56 @@ void Catalog::BumpVersion(std::string_view what) {
 }
 
 void Catalog::InvalidateAfterCompensation() {
-    BumpVersion("rows retired by a transaction rollback");
+    BumpVersion("a transaction that wrote catalog rows resolved");
+}
+
+StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
+    std::uint64_t retired = 0;
+    for (const PageId root : kAllCatalogPages) {
+        Status inner = Status::OK();
+        // **kWrite**, and one forward pass per page is enough:
+        // `RetireSlot` sets the dead flag in place, so it never renumbers
+        // the slots behind the walk. (The DROP sweep loops for a different
+        // reason - `ForFirstRow` returns at its first match.)
+        Status walked = heap::ChainVisit(
+            store_, root, storage::PageAccess::kWrite,
+            [&](PageId, heap::PageView& page,
+                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                auto tuple = page.ReadTuple(slot);
+                if (!tuple.ok()) {
+                    // An already-dead slot, which is what a retired one
+                    // is - nothing to finalize.
+                    if (tuple.status().code() == StatusCode::kNotFound) {
+                        return storage::VisitControl::kContinue;
+                    }
+                    inner = tuple.status();
+                    return tuple.status();
+                }
+                if (!tuple.value().deleted) return storage::VisitControl::kContinue;
+                if (Status s = page.RetireSlot(slot); !s.ok()) {
+                    inner = s;
+                    return s;
+                }
+                ++retired;
+                return storage::VisitControl::kContinue;
+            });
+        if (!inner.ok()) return inner;
+        if (!walked.ok()) return walked;
+    }
+
+    if (retired > 0) {
+        // Info, not Debug: this is a structural catalog write, and it is
+        // the only record that rows a previous mount left behind are gone.
+        if (log_ != nullptr) {
+            log_->Info("catalog", "finalized " + std::to_string(retired) +
+                                      " delete-marked catalog row(s) left by a previous mount");
+        }
+        // Nothing can have cached them yet - this runs before the listener
+        // binds - but the version is what a bound statement is stamped
+        // with, and the rows really did change on this instance.
+        BumpVersion("delete-marks finalized at mount");
+    }
+    return retired;
 }
 
 void Catalog::InvalidateFromPeer() {
@@ -895,7 +979,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // including columns, where placement wants relations that exist now.
     // Nothing here decides the policy - AssignOwnerCore does, and it is
     // `[PROPOSED]`.
-    auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables);
+    auto existing_relations = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
     if (!existing_relations.ok()) return existing_relations.status();
     // DDL runs on the system core and allocates from its free map, so the
     // relation's pages are the system core's - and a relation must be owned
@@ -963,7 +1047,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
 }
 
 StatusOr<SysTableRow> Catalog::GetSysTableRow(Oid table_oid) {
-    auto rows = ScanAll<SysTableRow>(store_, kCatalogPageTables);
+    auto rows = ScanAll<SysTableRow>(store_, kCatalogPageTables, nullptr, txn_);
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
@@ -986,7 +1070,7 @@ StatusOr<Oid> Catalog::FindTableOidByName(std::string_view name, const txn::Read
         }
     }
 
-    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view);
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
@@ -1112,7 +1196,7 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
 
     // Sibling collision and old-name existence in one read, before any
     // write - the same core-local atomicity argument RenameTable makes.
-    auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns);
+    auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
     bool found_old = false;
     for (const SysColumnRow& row : rows.value()) {
@@ -1287,7 +1371,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     // Cabins: the ids are collected first so the in-memory store can
     // forget them - the catalog row is what makes the compiler emit a
     // probe, but the entry sets live beside the dispatcher.
-    auto cabin_rows = ScanAll<SysCabinRow>(store_, kCatalogPageCabins);
+    auto cabin_rows = ScanAll<SysCabinRow>(store_, kCatalogPageCabins, nullptr, txn_);
     if (!cabin_rows.ok()) return cabin_rows.status();
     for (const SysCabinRow& row : cabin_rows.value()) {
         if (row.rel_oid == table_oid) dropped_cabins.push_back(row.cabin_id);
@@ -1310,7 +1394,7 @@ StatusOr<std::vector<SysObjectRow>> Catalog::ListTables(const txn::ReadView* vie
         }
     }
 
-    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view);
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
     if (!rows.ok()) return rows.status();
 
     std::vector<SysObjectRow> tables;
@@ -1335,7 +1419,7 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
 }
 
 StatusOr<Schema> Catalog::ScanSchemaFromColumns(Oid rel_id) {
-    auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns);
+    auto rows = ScanAll<SysColumnRow>(store_, kCatalogPageColumns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
 
     Schema schema;
@@ -1364,7 +1448,7 @@ StatusOr<const std::vector<SysTypeRow>*> Catalog::EnsureTypes() {
     if (const std::vector<SysTypeRow>* cached = cache_.FindTypes(); cached != nullptr) {
         return cached;
     }
-    auto rows = ScanAll<SysTypeRow>(store_, kCatalogPageTypes);
+    auto rows = ScanAll<SysTypeRow>(store_, kCatalogPageTypes, nullptr, txn_);
     if (!rows.ok()) return rows.status();
     return cache_.PutTypes(std::move(rows.value()));
 }
@@ -1764,11 +1848,11 @@ Status CheckWaystonePair(PageId root, std::uint8_t depth) {
 StatusOr<const std::vector<SysTypeRow>*> Catalog::ListTypes() { return EnsureTypes(); }
 
 StatusOr<std::vector<SysPatternRow>> Catalog::ListPatterns() {
-    return ScanAll<SysPatternRow>(store_, kCatalogPagePatterns);
+    return ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
 }
 
 StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t pattern_id) {
-    auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns);
+    auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
@@ -2120,7 +2204,7 @@ Status Catalog::DropCabin(std::uint64_t cabin_id) {
 }
 
 StatusOr<std::vector<SysCabinRow>> Catalog::ListCabins() {
-    return ScanAll<SysCabinRow>(store_, kCatalogPageCabins);
+    return ScanAll<SysCabinRow>(store_, kCatalogPageCabins, nullptr, txn_);
 }
 
 StatusOr<SysCabinRow> Catalog::FindCabinOnColumn(Oid rel_oid, std::uint16_t col_pos) {
@@ -2194,7 +2278,7 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
 }
 
 StatusOr<std::vector<SysFkeyRow>> Catalog::ListForeignKeys() {
-    return ScanAll<SysFkeyRow>(store_, kCatalogPageFkeys);
+    return ScanAll<SysFkeyRow>(store_, kCatalogPageFkeys, nullptr, txn_);
 }
 
 StatusOr<SysFkeyRow> Catalog::FindForeignKeyOnColumn(Oid child_rel_oid,
@@ -2210,7 +2294,7 @@ StatusOr<SysFkeyRow> Catalog::FindForeignKeyOnColumn(Oid child_rel_oid,
 }
 
 StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
-    return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats);
+    return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats, nullptr, txn_);
 }
 
 Status Catalog::CheckIndexDef(const IndexDef& def) {
@@ -2346,23 +2430,34 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
     const bool transactional = trx_id != kBootstrapXid;
     PageId acted_page = kInvalidPageId;
     CatalogRowChange marked;
+    bool already_marked = false;
     auto acted = ForFirstRow<SysIndexRow>(
         store_, kCatalogPageIndexes,
         [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.index_oid != index_oid) return false;
-            if (tuple.deleted) return false;  // already marked by this transaction
+            if (tuple.deleted) {
+                // Matched, but a transaction has already marked it. Since
+                // DT9 an unfiltered read keeps such a row alive, so
+                // `FindIndexByName` hands it to us and this is now
+                // reachable from a client - it was not before. Recorded
+                // rather than skipped silently, because falling through to
+                // "no sys.indexes row for this index_oid" answers a user's
+                // statement with a system row's name and no byte position.
+                already_marked = true;
+                return false;
+            }
 
             // Retired outside a transaction - DropCabin() and
             // RetirePattern() state that argument and it still holds.
             // **Inside one, delete-marked**, which a rollback can clear
             // (DT5's mechanism).
             //
-            // Unlike `DROP TABLE`, this is *also isolated*: there is no
-            // in-place retype here, so the row's payload survives intact
-            // and a reader that cannot see the dropper still sees the
-            // index. §5a's limit is a property of the tombstone overwrite,
-            // not of drops in general.
+            // Unlike `DROP TABLE`, this is also **isolated**, but for a
+            // reason §5a had to correct: not because the payload survives
+            // an overwrite, which was the original and wrong argument, but
+            // because DT9 taught the unfiltered read to leave an open mark
+            // alone. On core 0, which is where every writer is.
             if (!transactional) {
                 if (Status s = page.RetireSlot(i); !s.ok()) return s;
             } else {
@@ -2383,7 +2478,19 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
         },
         &acted_page);
     if (!acted.ok()) return acted.status();
-    if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+    if (!acted.value()) {
+        // Understood and declined, not "simply wrong": the index is there
+        // and named correctly, and a transaction nobody here can wait for
+        // is in the middle of removing it. The wording matches
+        // `RefuseIfNameHeldByPendingDrop`'s for the table case, so the two
+        // read as one rule; the caller appends the byte position.
+        if (already_marked) {
+            return Status::Unsupported(
+                "the index is being dropped by a transaction that has not committed; it is "
+                "not gone, and not droppable again, until that transaction resolves");
+        }
+        return Status::NotFound("no sys.indexes row for this index_oid");
+    }
     if (transactional && change != nullptr) {
         marked.page_id = acted_page;  // known only once the walk found it
         *change = std::move(marked);
@@ -2423,7 +2530,7 @@ Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root) {
 }
 
 StatusOr<std::vector<SysIndexRow>> Catalog::ListIndexes(const txn::ReadView* view) {
-    return ScanAll<SysIndexRow>(store_, kCatalogPageIndexes, view);
+    return ScanAll<SysIndexRow>(store_, kCatalogPageIndexes, view, txn_);
 }
 
 StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {

@@ -370,13 +370,55 @@ the owner's workplan.
   `ddl_durable=0` beside it so the pair cannot be read apart.** Never
   quote "transactional DDL" without that distinction — a reader assumes
   crash-durability and is wrong.
-  **Still non-transactional, by name**: `DROP TABLE`, `ALTER TABLE`,
-  indexes, cabins, patterns, assertions. The asymmetry with `CREATE` is
-  real and is not an oversight — a drop *retires* its dependent rows
-  outright, and a retired slot has no compensation to put it back, where
-  a create only inserts. Making drop transactional needs delete-marking
-  and undo records for catalog rows, which is a scoped decision recorded
-  in the workplan's DT5 rather than a missing patch.
+  **This paragraph said `DROP TABLE` and indexes were "still
+  non-transactional, by name" and was stale from 2026-08-16; corrected
+  2026-08-18.** What is true now: `DROP TABLE` is **atomic but not
+  isolated** (DT5 shipped delete-marking for its dependent rows; other
+  sessions still see the drop before it commits, because the
+  `sys.objects` retype is an in-place overwrite with no undo chain —
+  `spec-ddl-transactional.md` §5a). `CREATE INDEX` is atomic and
+  isolated; `DROP INDEX` is atomic and isolated **on core 0** since DT9
+  taught the unfiltered catalog read that a delete-mark counts only once
+  its deleter commits (§5b), which is core-0-scoped only because
+  `IsInFlight` walks one core's live list and CC3 refuses cross-core
+  writes.
+  Delete-marked catalog rows no longer accumulate across mounts (DT10,
+  §5c); **within a mount they still do, and nothing purges them until the
+  next restart** — measured, and it has a price: DT9's cold-catalog cost
+  was `marks × (0.4 ns + 0.45 ns × live)`
+  (`bench/results-ddl-catalog-read-ab.md`); the `live` factor left the
+  per-mark term on 2026-08-18 (`ScanAll` settles a mark by comparison
+  against `OldestActiveTrxId()` instead of walking the live list), so
+  what remains is one comparison per mark per cold read.
+  **`marks` itself cannot be bounded within a mount**, and the reason is
+  a stated prerequisite rather than a missing patch: a purge must not
+  retire a mark a reader's view still needs, and `live_` does not name
+  every reader — a cross-core stage holds an `AutocommitSnapshot` across
+  its parks (`remote_step_service.hpp`). That is the reader registration
+  `txn.md` §4.1 omits and §9 lists, the same prerequisite blocking the
+  MVCC undo purge.
+  Also measured there and **not** DT9's: a transactional `DROP TABLE`
+  costs ~517 µs against `CREATE TABLE`'s 48 and `DROP INDEX`'s 36,
+  identical on both binaries — `Catalog::DropTable`'s five
+  restart-from-head `ForFirstRow` sweeps.
+  **Still non-transactional, by name**: `ALTER TABLE`, cabins, patterns,
+  assertions, foreign keys. Each only inserts its own catalog rows, so
+  each can adopt the mechanism the table statements proved; nothing new
+  has to be decided for them. Isolating `DROP TABLE` is the one that
+  still needs undo *records* for catalog rows — option (a) of DT5, not
+  built.
+- ~~**DT9's in-flight test can be fooled by a reissued transaction id
+  after a crash**~~ — **closed 2026-08-18 by DT10**
+  (`docs/spec-ddl-transactional.md` §5c). The exposure was real: an
+  unfiltered catalog read counts a delete-mark only once its deleter is
+  no longer in flight, the id ceiling is unlogged (`txn/trx_id.hpp`), so
+  a crash could reissue a committed dropper's id and a live transaction
+  wearing it would re-arm a dropped index whose btree is missing every
+  row written since. DT10 retires every delete-marked catalog row at
+  mount, before the listener binds, which deletes the question instead of
+  answering it — and purges the marks that otherwise accumulated forever,
+  one per column, index and foreign key of every transactionally dropped
+  relation. `SHOW META` reports `catalog_marks_finalized`.
 - **Keystone K1 does not hold across a crash**
   (`docs/keystoneid-k0-findings.md`): the durable log names ids the
   unlogged `sys.tables.next_id` has forgotten. K-M2a/K-M2 own it.
