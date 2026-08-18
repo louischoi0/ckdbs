@@ -9,7 +9,13 @@ isolation level, a second core — moves the booking by less than the fsync's
 own run-to-run drift. Only one configuration is outside that floor, and it is
 the one that removes the transaction.
 
-The second finding is not about speed. **Under READ COMMITTED, concurrent
+That the fsync dominates is also what the cross-engine comparison turns on.
+**ckdbs commits 22.5% more bookings a second than PostgreSQL 16.14** on the
+same host and device, is 1.5× to 2.0× faster on every one of the eight
+statements — and is within 3% of it at the median commit, because there the
+two engines are asking the same filesystem for the same thing.
+
+The remaining finding is not about speed. **Under READ COMMITTED, concurrent
 bookers silently lose updates**, the workload's invariant checker catches it,
 and REPEATABLE READ removes every one of them for no throughput that this
 machine can measure.
@@ -21,7 +27,7 @@ by `tools/scenario2_freight.py`. How to run it: `bench/docs/README.md`.
 
 | | |
 |---|---|
-| executed | **2026-08-18 01:15:15 → 03:07:57 UTC** (the matrix and the contention cells to 02:41:10, §13's six cells after) |
+| executed | **2026-08-18 01:15:15 → 04:14:54 UTC** — the matrix and the contention cells to 02:41:10, §13's six cells to 03:07:57, §14's interleaved PostgreSQL comparison from 03:59:21 |
 | branch / worktree | `worktree-bench-scenario2-refresh`, in the worktree `bench-scenario2-refresh` |
 | commit measured | **`92c76dd`** — "feat: DROP TABLE is atomic inside a transaction (DT5, option b)" — the tip of `origin/main` when the run started; two commits (`a8b3114`, `7a38ff5`, transactional `CREATE INDEX`) landed upstream while it ran and are **not** in the measured binary. The tree carried two edits, both documentation (`.claude/agents/ck-tester.md`, `bench/docs/README.md`); **nothing under `src/` or `include/` was modified**, so the binary is the engine at `92c76dd` |
 | **binary measured** | a **copy**, `sha256 13907114b4d6c597…`, taken from `build-release/kds_server` (linked 2026-08-18 01:08:21 UTC) before the first cell and never rewritten. Every server below started from that copy. The build tree is shared with other sessions; measuring it directly would let a rebuild land between two cells of one matrix |
@@ -36,7 +42,7 @@ by `tools/scenario2_freight.py`. How to run it: `bench/docs/README.md`.
 | work | `--bookings 1500 --seed 1 --verify 25` in every cell. Equal work, not equal time |
 | isolation | fresh server **and** fresh data file per cell |
 | machine quiet | every cell gates on `bench/wait_quiet.sh` — no `cc1plus`, `ld`, `dpkg` or test binary running and 1-minute load below 0.70 — and samples the load every 5 s for its own life. No cell was discarded |
-| PostgreSQL | **no cluster on this host** — see §14 |
+| PostgreSQL | **16.14**, on the same host and device, defaults, `synchronous_commit = on` — §14 |
 
 Every cell committed exactly 1,500 bookings and passed `--verify 25` at 100
 invariant checks — except the four contended READ COMMITTED cells of §11,
@@ -502,34 +508,114 @@ decision, `docs/wal.md` §15's.
 
 ## 14. Versus PostgreSQL
 
-**Not measured: this host has no PostgreSQL.** There is no `psql`, no
-`initdb`, and no server package installed, so `tools/pg_setup.sh init` cannot
-create the scratch cluster on port 15433 that `tools/pg_scenario2_freight.py`
-needs. The twin exists and is current — it imports its schema and its
-business logic from the ckdbs driver, so the two cannot drift into measuring
-different questions — and the comparison is one command once a cluster is
-available:
+Three cells a side, **interleaved** — ckdbs, PostgreSQL, ckdbs, PostgreSQL,
+ckdbs, PostgreSQL — 2026-08-18 03:59:21 → 04:14:54 UTC, after the matrix
+above and on the same host, the same device and the same quiet-machine gate.
+Same booking, same `--seed 1`, same 1,500 committed target, same 100
+invariant checks; fresh data file per ckdbs cell and a **fresh database** per
+PostgreSQL cell, because dropping and recreating relations leaves the
+cluster's bloat behind and a fresh data file does not.
 
-```bash
-./tools/pg_setup.sh init
-./tools/pg_scenario2_freight.py --port 15433 --database bench \
-    --organizations 2000 --ships 200 --operations 2000 --cargos 100000 \
-    --bookings 1500 --seed 1 --verify 25 --json pg.json
-```
+| | |
+|---|---|
+| PostgreSQL | **16.14** (Ubuntu 16.14-0ubuntu0.24.04.1), extracted rootless into `$HOME/pg16` — this host has no `postgresql` package and `sudo` needs a password, so the archive `.deb`s were unpacked with `dpkg -x` and put on `PATH`. `tools/pg_setup.sh init` then ran unmodified |
+| cluster | `$HOME/pg-bench/data`, port 15433, database per cell, **ext4 on `/dev/root`, not tmpfs** |
+| tuning | **PostgreSQL's own defaults** — a baseline tuned by hand is not a baseline. `synchronous_commit = on` and `fsync = on`, so both engines fsync per commit to the same device |
+| ckdbs | the same `92c76dd` binary copy as the rest of this document, `sha256 13907114…` |
+| both | `--no-manifest`. The two drivers place the analytic reporter differently — ckdbs runs it in a second process that contends, the twin runs it inline on one connection where it displaces bookings — which is a difference between drivers, not engines. §13 measured the reporter as costing ckdbs nothing, so removing it costs this comparison no information |
 
-Until that runs, **no cross-engine claim in this document exists**, and the
-per-statement figures above should not be read as an engine comparison: much
-of what a cross-engine table would show at this level is protocol, since
-KDS's newline text protocol is a lighter round trip than PostgreSQL's v3
-wire. The finding that would survive such a table is the commit row, because
-both engines fsync a write-ahead log to the same device under the same
-durability promise — and that row is exactly the one this document is about.
+**ckdbs commits 22.5% more bookings a second**, and the three cells a side
+barely move: 531.2, 532.7, 527.6 against 440.8, 432.7, 433.6 — a 1.0% and a
+1.9% spread, far tighter than the ±8.2% §2 measured across the matrix, which
+is what an interleaved window buys.
+
+| | ckdbs | PostgreSQL |
+|---|---:|---:|
+| TPS (median of three) | **531.2** | 433.6 |
+| whole booking, mean | **1,856.6** | 2,303.7 |
+| committed / charge rows | 1,500 / 8,430 | 1,500 / 8,446 |
+| invariant checks | 100, 0 failures | 100, 0 failures |
+
+**The work is equal to within 0.2%, not exactly equal.** The twin applied
+5.63 fees per booking against ckdbs's 5.62 — 16 charge rows more over 1,500
+bookings, from a different draw order in the two drivers rather than from a
+different rule. It is stated rather than corrected because it is smaller than
+any difference below and because it runs *against* ckdbs, which wrote fewer
+rows.
+
+### Every statement, and the one row that is an engine comparison
+
+| statement | ops | ckdbs mean | PG mean | ratio | ckdbs p50 | PG p50 | ckdbs p99 | PG p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| cargo-lookup | 1,500 | **55.2** | 84.5 | 1.53× | 52.8 | 82.0 | 73.1 | 108.1 |
+| credit-lookup | 1,500 | **45.0** | 73.0 | 1.62× | 43.0 | 70.8 | 64.9 | 96.3 |
+| capacity-read | 1,500 | **43.1** | 69.3 | 1.61× | 41.2 | 67.7 | 64.8 | 94.0 |
+| recipe-read | 1,500 | **50.4** | 93.8 | 1.86× | 49.5 | 92.0 | 67.9 | 120.2 |
+| freight-insert | 1,500 | **41.4** | 82.8 | 2.00× | 40.9 | 79.5 | 55.0 | 125.2 |
+| charge-insert | 8,430 / 8,446 | **34.6** | 56.2 | 1.62× | 33.9 | 53.3 | 50.5 | 91.7 |
+| operation-update | 1,500 | **39.7** | 75.6 | 1.90× | 39.3 | 73.2 | 54.0 | 98.4 |
+| org-update | 1,500 | **38.3** | 72.0 | 1.88× | 37.3 | 70.2 | 54.7 | 98.0 |
+| **commit** | 1,500 | **1,258.5** | 1,360.0 | **1.08×** | 1,171.7 | 1,210.8 | **2,759.4** | 4,032.7 |
+| whole booking | 1,500 | **1,856.6** | 2,303.7 | 1.24× | 1,775.7 | 2,169.0 | 3,489.8 | 4,913.5 |
+
+*(µs, medians across the three cells a side; full percentiles below)*
+
+| percentiles, whole booking | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| ckdbs | 1,524.6 | 1,715.5 | 1,775.7 | 2,226.1 | 3,489.8 |
+| PostgreSQL | 1,828.7 | 2,090.2 | 2,169.0 | 2,993.8 | 4,913.5 |
+
+| percentiles, commit | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| ckdbs | 1,016.8 | 1,130.3 | 1,171.7 | 1,568.4 | 2,759.4 |
+| PostgreSQL | 1,036.5 | 1,158.7 | 1,210.8 | 2,037.8 | 4,032.7 |
+
+**Do not read the eight statement rows as an engine comparison.** Much of a
+1.5×–2.0× gap at this level is protocol: ckdbs's newline text protocol is a
+lighter round trip than PostgreSQL's v3 wire, and §5 already established that
+every one of these statements is dominated by the round trip rather than by
+the engine's own work. What the rows do establish is that the *shape* is the
+same on both engines — a read and a write cost about the same, because on
+both the round trip is what is being measured.
+
+**The commit row is the comparison.** Both engines fsync a write-ahead log to
+the same ext4 filesystem on the same device under the same promise, so the
+protocol argument does not apply to it. They land within 8% of each other in
+the mean (1,258.5 against 1,360.0 µs) and within 3% at the median (1,171.7
+against 1,210.8) — **on the durability path these two engines are the same
+engine**, which is what should be expected when the fsync is the work and
+both are asking the same filesystem for it.
+
+Where they differ is the tail: at p99 the ckdbs commit is 2,759 µs against
+PostgreSQL's 4,033, and the whole booking 3,490 against 4,914. §13 places a
+quarter of ckdbs's own commit tail in its checkpointer; PostgreSQL's
+equivalents — its checkpointer and its background writer — are untuned here
+by the deliberate choice above, and a tuned cluster is the obvious next
+measurement rather than a claim this run can make.
+
+### Space
+
+| | bytes | of which |
+|---|---:|---|
+| ckdbs data file | 22,020,096 | 16,777,216 data pages + 5,242,880 of Waystone trail (§10) |
+| PostgreSQL database | 21,380,119 | 7,586,319 is an empty database on this cluster, so **13,793,800** is the workload |
+
+PostgreSQL stores the same rows in about **18% fewer bytes than ckdbs's data
+pages alone**, and it does so while carrying btree indexes ckdbs does not
+have — the two the twin's own header names, on `freights` and `charges`,
+which is what makes its `--capacity-mode scan` cheap and ckdbs's expensive
+(§8). Counting Waystone, ckdbs's file is 1.60× the bytes PostgreSQL spends
+on the same workload.
+Neither number is tuned: ckdbs allocates in extents and PostgreSQL has not
+been vacuumed, so both carry slack this run did not try to remove.
 
 ## 15. What this run does not answer
 
-- **Whether KDS's commit is fast.** 1,311 µs is two-thirds of a booking, but
-  with no second engine on this host there is nothing to say it is slow. The
-  §14 command is the whole gap.
+- **Whether either engine's commit is fast in absolute terms.** §14 shows the
+  two agree to within 3% at the median, which says they are asking the same
+  filesystem the same question — not that ~1,200 µs is a good answer. Pricing
+  the fsync itself against the raw device is a measurement no driver here
+  makes.
 - **The other three quarters of the commit's tail.** §13 places a quarter of
   it in the checkpointer; what remains is 2,300–2,800 µs at p99 against a p0
   of 1,057 µs with the checkpointer removed, and the engine exposes no

@@ -32,6 +32,26 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-re
 ./tools/pg_setup.sh init                                    # the baseline, port 15433
 ```
 
+**When the host has no `postgresql` package and no usable `sudo`**, the
+baseline is still reachable — `apt-get download` needs no root and `dpkg -x`
+unpacks anywhere. Done on this box 2026-08-18 for PostgreSQL 16.14:
+
+```bash
+apt-get download postgresql-16 postgresql-client-16 postgresql-common \
+        postgresql-client-common libpq5
+for d in *.deb; do dpkg -x "$d" $HOME/pg16; done
+export PATH=$HOME/pg16/usr/lib/postgresql/16/bin:$PATH
+export LD_LIBRARY_PATH=$HOME/pg16/usr/lib/x86_64-linux-gnu
+./tools/pg_setup.sh init          # runs unmodified from here
+```
+
+PostgreSQL relocates its own share directory relative to the binary, so an
+unpacked tree needs no configure-time prefix. `libllvm17t64` is listed as a
+dependency for the JIT plugin only — the `postgres` binary does not link it,
+so a missing LLVM is not a reason to stop. `pg_setup.sh`'s "install the
+server package first" message names `dnf`, which is the Amazon Linux host
+this suite also runs on; on Ubuntu the four packages above are the set.
+
 ---
 
 ## The scenarios
@@ -158,6 +178,11 @@ workload at `bench/results-scenario2-engine-ab.md`.
 | `--isolation` | server default | `read-committed` or `repeatable-read` |
 | `--verify N` | 0 | check the four invariants over a sample of N |
 | `--seed`, `--json`, `--echo`, `--sync`, `--server-log` | | as the other scenarios |
+
+**`bench/run_pg_cell.sh` is its PostgreSQL twin** — fresh database per cell,
+the same load sampling and quiet gate — so an interleaved cross-engine run is
+the two scripts alternating. Pass `PGENV=` a wrapper when the server is not
+on `PATH`.
 
 **`bench/run_s2_cell.sh` runs one cell of that matrix** — fresh server, fresh
 data file, quiet-machine gate, load sampling, clean shutdown, and the started
