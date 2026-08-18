@@ -304,6 +304,11 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
 }  // namespace
 
 DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session& session) {
+    // A new statement: the next reader to need a view takes the boundary
+    // (see `EnsureStatementBoundary`). One statement runs at a time on a
+    // core (sched.md §3), so a plain member is the right scope.
+    statement_boundary_taken_ = false;
+
     auto [cmd, rest] = SplitFirstToken(line);
 
     if (cmd.empty()) {
@@ -3345,9 +3350,26 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(Session& session) {
     return scope;
 }
 
+Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
+    if (txn_ == nullptr || !session.in_explicit_txn()) return Status::OK();
+    if (statement_boundary_taken_) return Status::OK();
+    txn::Transaction* txn = session.transaction();
+    if (txn == nullptr) return Status::OK();
+    if (Status s = txn_->StartStatement(*txn); !s.ok()) return s;
+    statement_boundary_taken_ = true;
+    return Status::OK();
+}
+
 std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     // The fast path, and the one nearly every statement takes.
     if (txn_ == nullptr || ddl_txns_.empty()) return std::nullopt;
+
+    // Take the statement boundary if nothing has yet, so a route that
+    // never reaches `SnapshotFor`/`BeginWrite` still resolves under a
+    // current view. A failure here means the transaction is no longer
+    // active, which the statement itself is about to report - resolving
+    // under the view it already holds is the harmless answer.
+    (void)EnsureStatementBoundary(session);
 
     // Inside a transaction, that transaction's own view: it must see the
     // relations it created and no one else's uncommitted ones.
@@ -4954,7 +4976,7 @@ StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
         // The statement boundary. Under READ COMMITTED this re-mints;
         // under REPEATABLE READ it is a no-op, and that one branch is the
         // whole difference between the levels.
-        if (Status s = txn_->StartStatement(*txn); !s.ok()) return s;
+        if (Status s = EnsureStatementBoundary(session); !s.ok()) return s;
         return txn_->SnapshotFor(*txn);
     }
 
@@ -4971,7 +4993,7 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(Session& s
     if (session.in_explicit_txn()) {
         scope.txn = session.transaction();
         scope.owned = false;
-        if (Status s = txn_->StartStatement(*scope.txn); !s.ok()) return s;
+        if (Status s = EnsureStatementBoundary(session); !s.ok()) return s;
         return scope;
     }
 

@@ -541,6 +541,25 @@ private:
     // decision, taken: pay for isolation only where isolation is at
     // stake.
     std::optional<txn::ReadView> ViewFor(Session& session);
+
+    // **The statement boundary, taken exactly once per statement.**
+    // Under READ COMMITTED a transaction re-mints its view at each
+    // statement (`txn.md` §1), and before DT3c only the routes that
+    // reached `SnapshotFor`/`BeginWrite` ever took it — so `DESCRIBE`,
+    // `SHOW TABLES`, `SHOW INDEXES`, `ALTER`, `DROP TABLE` and the FK
+    // parent lookup resolved under whatever view the transaction last
+    // happened to hold, and could miss a relation committed since. That
+    // is a READ COMMITTED violation and it breaks DT3c's own property
+    // that every route agrees.
+    //
+    // Latched rather than called per site, because the alternative -
+    // each caller taking its own boundary - moves the view *within* one
+    // statement as soon as a handler resolves twice (the FK loop did),
+    // and then two resolutions in one statement disagree. One latch,
+    // reset per statement, is the single answer to "when does the view
+    // move".
+    Status EnsureStatementBoundary(Session& session);
+    bool statement_boundary_taken_ = false;
     // Registers everything `written` holds on the transaction's trail.
     // Called **even when the DDL failed**: rows written before the failure
     // are on the page either way, and a rollback that skipped them would

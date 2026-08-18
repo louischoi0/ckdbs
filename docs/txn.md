@@ -12,8 +12,16 @@ restatement.
 
 | Level | Read view | Meaning |
 |---|---|---|
-| `READ COMMITTED` | taken afresh at the start of **every statement** | a statement sees everything committed before it began |
+| `READ COMMITTED` | taken afresh at the start of **every statement** — see the note below on what "statement" means | a statement sees everything committed before it began |
 | `REPEATABLE READ` | taken once at `BEGIN`, held for the transaction | every statement in the transaction sees the same database state |
+
+**What takes the boundary** (amended 2026-08-16): the re-mint happens
+once per statement, latched by the dispatcher and taken by whichever
+reader needs a view first. Before that it was taken only by the routes
+reaching `SnapshotFor`/`BeginWrite`, so a statement that resolved a
+relation without reading rows — `DESCRIBE`, `SHOW TABLES` — could
+resolve under the *previous* statement's view. See
+`docs/workplan-ddl-transactional.md` DT3d.
 
 **`READ COMMITTED` is the default.** Rationale: under first-updater-wins with no
 waiting (§5), `REPEATABLE READ` holds one read view for the whole transaction and
