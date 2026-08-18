@@ -52,8 +52,16 @@ catalog than the arm before it.
     ddl-cidx         CREATE INDEX on an *empty* relation, so the arm prices
                      the catalog path and not a backfill
     ddl-didx         DROP INDEX of the index the arm before it created
-    drop-txn         BEGIN / DROP TABLE / COMMIT, timed on the DROP - the
-                     statement that *creates* delete-marked catalog rows
+    txn-begin        BEGIN, inside a transaction that goes on to do DDL
+    txn-create       CREATE TABLE inside that transaction
+    txn-commit       the COMMIT that resolves it - **the arm carrying the
+                     commit-side cache invalidation** (`EndDdlScope`), which
+                     a committed DDL transaction did not pay before DT9
+    txn-rollback     the same shape ended by ROLLBACK, which paid the
+                     invalidation on both binaries and must not move
+    drop-txn         DROP TABLE inside a transaction - the statement that
+                     *creates* delete-marked catalog rows
+    drop-commit      the COMMIT after it
 
 ---- The adversarial half: cold catalog, with delete-marks present ---------
 
@@ -144,9 +152,14 @@ class Side:
         except OSError as e:
             abort(f"could not connect to {label} at {host}:{port}: {e}")
         self.orders = f"cra_ord_{suffix}"
+        # The write arms get their own indexed relation, so `orders` stays
+        # at exactly --rows for every read arm. An insert arm that grew the
+        # relation the reads are measured against would move two variables.
+        self.wins = f"cra_win_{suffix}"
         self.plain = f"cra_pln_{suffix}"
         self.scratch = f"cra_scr_{suffix}"
         self.index = f"ix_cra_cust_{suffix}"
+        self.win_index = f"ix_cra_win_{suffix}"
         self.scratch_index = f"ix_cra_scr_{suffix}"
         self.errors = 0
         self.first_error = None
@@ -257,14 +270,17 @@ def values(row):
 
 def build(side, rows_data, batch):
     side.must(f"CREATE TABLE {side.orders} ({COLUMNS}) {CLUSTERED}")
+    side.must(f"CREATE TABLE {side.wins} ({COLUMNS}) {CLUSTERED}")
     side.must(f"CREATE TABLE {side.plain} ({COLUMNS}) {CLUSTERED}")
     side.must(f"CREATE TABLE {side.scratch} ({COLUMNS}) {CLUSTERED}")
     side.must(f"CREATE INDEX {side.index} ON {side.orders} (cust_id)")
+    side.must(f"CREATE INDEX {side.win_index} ON {side.wins} (cust_id)")
     for start in range(0, len(rows_data), batch):
         chunk = rows_data[start:start + batch]
         side.must("BEGIN")
         for row in chunk:
             side.must(f"INSERT INTO {side.orders} VALUES ({values(row)})")
+            side.must(f"INSERT INTO {side.wins} VALUES ({values(row)})")
             side.must(f"INSERT INTO {side.plain} VALUES ({values(row)})")
         side.must("COMMIT")
 
@@ -350,7 +366,7 @@ def read_arms(sides, ops, rows, customers, rng):
 def write_arms(sides, ops, customers, rng):
     rows_data = make_rows(rng, ops, customers)
     return [
-        ("ins-idx", {s.label: [f"INSERT INTO {s.orders} VALUES ({values(r)})"
+        ("ins-idx", {s.label: [f"INSERT INTO {s.wins} VALUES ({values(r)})"
                                for r in rows_data] for s in sides}),
         ("ins-plain", {s.label: [f"INSERT INTO {s.plain} VALUES ({values(r)})"
                                  for r in rows_data] for s in sides}),
@@ -403,8 +419,67 @@ def ddl_cpu_pass(sides, meter, ops, rounds, tag_base):
                 meter.add_cpu(side, "ddl-triple", after - before, ops)
 
 
+def txn_ddl_pass(sides, meter, ops, tag):
+    """`BEGIN` / `CREATE TABLE` / `COMMIT`, with all three timed separately.
+
+    This is where a *commit-side* cost shows up. `EndDdlScope` invalidates
+    the catalog cache when a transaction that wrote catalog rows resolves,
+    and as of DT9's follow-up it does so on **both** endings rather than on
+    rollback alone - so a commit that used to pay nothing now pays one
+    `BumpVersion`: a cache clear plus the `on_invalidate_` hook, which
+    flushes the catalog pages and broadcasts `kCatalogInvalidate`.
+
+    The three arms are separate because only one of them can carry the cost:
+    `txn-begin` and `txn-create` are the control, `txn-commit` is the arm.
+    The rollback twin is `txn-rollback`, which paid the invalidation on both
+    binaries and must therefore not move.
+    """
+    for i in range(ops):
+        for side in ordered(sides, i):
+            for arm, stmt in (
+                    ("txn-begin", "BEGIN"),
+                    ("txn-create",
+                     f"CREATE TABLE cra_t_{side.label}_{tag}_{i} "
+                     f"({COLUMNS}) {CLUSTERED}"),
+                    ("txn-commit", "COMMIT")):
+                phase = meter.phase(side, arm)
+                t0 = time.perf_counter()
+                reply = side(stmt)
+                phase.record(time.perf_counter() - t0, reply)
+    for i in range(ops):
+        for side in ordered(sides, i):
+            side.must("BEGIN")
+            side.must(f"CREATE TABLE cra_r_{side.label}_{tag}_{i} "
+                      f"({COLUMNS}) {CLUSTERED}")
+            phase = meter.phase(side, "txn-rollback")
+            t0 = time.perf_counter()
+            reply = side("ROLLBACK")
+            phase.record(time.perf_counter() - t0, reply)
+
+
+def txn_ddl_cpu_pass(sides, meter, ops, rounds, tag_base):
+    """Server CPU over the whole BEGIN/CREATE/COMMIT triple.
+
+    One window rather than three: the commit alone is far below a scheduler
+    tick, and the triple is what a DDL-heavy setup phase actually costs.
+    """
+    for r in range(rounds):
+        for side in ordered(sides, r):
+            tag = f"{tag_base}t{r}"
+            before = side.cpu_seconds()
+            for i in range(ops):
+                side("BEGIN")
+                side(f"CREATE TABLE cra_tc_{side.label}_{tag}_{i} "
+                     f"({COLUMNS}) {CLUSTERED}")
+                side("COMMIT")
+            after = side.cpu_seconds()
+            if before is not None and after is not None:
+                meter.add_cpu(side, "txn-ddl-triple", after - before, ops)
+
+
 def mark_pass(sides, meter, marks, tag):
-    """`marks` transactional DROP TABLEs per side, timed on the DROP.
+    """`marks` transactional DROP TABLEs per side, timed on the DROP and on
+    the COMMIT that follows it.
 
     Each one delete-marks the relation's sys.tables row and its five
     sys.columns rows, and nothing purges them - which is how the cold arms
@@ -425,7 +500,10 @@ def mark_pass(sides, meter, marks, tag):
             t0 = time.perf_counter()
             reply = side(f"DROP TABLE {name}")
             phase.record(time.perf_counter() - t0, reply)
-            side.must("COMMIT")
+            commit = meter.phase(side, "drop-commit")
+            t0 = time.perf_counter()
+            reply = side("COMMIT")
+            commit.record(time.perf_counter() - t0, reply)
             side.marks += 6
 
 
@@ -446,7 +524,8 @@ def cold_pass(sides, meter, ops, rows, rng, suffix, timed):
         for i, template in enumerate(templates):
             for side in ordered(sides, i):
                 side.invalidate()
-                stmt = template % side.orders
+                target = side.wins if "ins" in arm else side.orders
+                stmt = template % target
                 if timed:
                     phase = meter.phase(side, arm)
                     t0 = time.perf_counter()
@@ -473,11 +552,13 @@ def cold_cpu_pass(sides, meter, ops, rounds, rows, rng, suffix):
                 ("cold-ins-idx" + suffix,
                  [f"INSERT INTO %s VALUES ({values(x)})" for x in rows_data]))
         for arm, templates in arms:
+            target_is_write = "ins" in arm
             for side in ordered(sides, r):
                 before = side.cpu_seconds()
+                target = side.wins if target_is_write else side.orders
                 for template in templates:
                     side.invalidate()
-                    side(template % side.orders)
+                    side(template % target)
                 after = side.cpu_seconds()
                 if before is not None and after is not None:
                     meter.add_cpu(side, arm, after - before, len(templates))
@@ -501,7 +582,8 @@ def verify(sides, rng, rows, customers):
     problems = []
     counts = {}
     for side in sides:
-        counts[side.label] = (count(side, side.orders), count(side, side.plain))
+        counts[side.label] = (count(side, side.orders), count(side, side.wins),
+                              count(side, side.plain))
     distinct = set(counts.values())
     if len(distinct) != 1:
         problems.append(f"row counts differ across sides: {counts}")
@@ -569,7 +651,8 @@ def cpu_table(meter, sides):
     for (_, arm) in meter.cpu:
         if arm not in arms:
             arms.append(arm)
-    header = f"{'arm':<18}{'side':<10}{'ops':>9}{'cpu us/op':>12}"
+    width = max(len(a) for (_, a) in meter.cpu) + 2
+    header = f"{'arm':<{width}}{'side':<8}{'ops':>9}{'cpu us/op':>12}"
     print(header)
     print("-" * len(header))
     for arm in arms:
@@ -579,10 +662,11 @@ def cpu_table(meter, sides):
             if entry is None or entry[1] == 0:
                 continue
             per[side.label] = entry[0] / entry[1] * 1e6
-            print(f"{arm:<18}{side.label:<10}{entry[1]:>9}{per[side.label]:>12.2f}")
+            print(f"{arm:<{width}}{side.label:<8}{entry[1]:>9}"
+                  f"{per[side.label]:>12.2f}")
         if len(per) == 2:
             a, b = [per[s.label] for s in sides]
-            print(f"{'':<18}{'delta':<10}{'':>9}{b - a:>+12.2f}")
+            print(f"{'':<{width}}{'delta':<8}{'':>9}{b - a:>+12.2f}")
         print()
 
 
@@ -603,11 +687,15 @@ def main():
     p.add_argument("--matches", type=int, default=6,
                    help="rows per indexed value, so the probe's answer stays "
                         "the same size at every --rows")
-    p.add_argument("--ops", type=int, default=1500, help="ops per read/write arm")
+    p.add_argument("--ops", type=int, default=2500, help="ops per read arm")
+    p.add_argument("--write-ops", type=int, default=400,
+                   help="ops per INSERT arm; the insert relations grow by "
+                        "this much plus --cpu-write-ops x --cpu-rounds")
+    p.add_argument("--cpu-write-ops", type=int, default=400)
     p.add_argument("--ddl-ops", type=int, default=40, help="ops per DDL arm")
     p.add_argument("--block", type=int, default=150)
     p.add_argument("--cpu-rounds", type=int, default=4)
-    p.add_argument("--cpu-ops", type=int, default=1200)
+    p.add_argument("--cpu-ops", type=int, default=2500)
     p.add_argument("--cpu-ddl-ops", type=int, default=20)
     p.add_argument("--marks", type=int, default=100,
                    help="transactional DROP TABLEs per side; each leaves 6 "
@@ -666,11 +754,12 @@ def main():
                           random.Random(args.seed + 1))
     latency_pass(sides, meter, arms_read, args.block)
 
-    arms_write = write_arms(sides, args.ops, customers,
+    arms_write = write_arms(sides, args.write_ops, customers,
                             random.Random(args.seed + 2))
     latency_pass(sides, meter, arms_write, args.block)
 
     ddl_pass(sides, meter, args.ddl_ops, "lat", timed=True)
+    txn_ddl_pass(sides, meter, args.ddl_ops, "lat")
 
     # From here the catalog carries delete-marked rows, which is the state
     # DT9's branch exists for. Everything above ran without any.
@@ -691,10 +780,11 @@ def main():
     cpu_started = time.perf_counter()
     cpu_read = read_arms(sides, args.cpu_ops, args.rows, customers,
                          random.Random(args.seed + 3))
-    cpu_write = write_arms(sides, args.cpu_ops, customers,
+    cpu_write = write_arms(sides, args.cpu_write_ops, customers,
                            random.Random(args.seed + 4))
     cpu_pass(sides, meter, cpu_read + cpu_write, args.cpu_rounds)
     ddl_cpu_pass(sides, meter, args.cpu_ddl_ops, args.cpu_rounds, "cpu")
+    txn_ddl_cpu_pass(sides, meter, args.cpu_ddl_ops, args.cpu_rounds, "cpu")
     cold_cpu_pass(sides, meter, args.cold_cpu_ops, args.cpu_rounds, args.rows,
                   random.Random(args.seed + 7), "")
     if args.live_txns:
@@ -708,7 +798,8 @@ def main():
 
     arms = ["ping", "pk-select", "pk-select-again", "idx-probe", "show-tables",
             "ins-idx", "ins-plain", "ddl-create", "ddl-cidx", "ddl-didx",
-            "drop-txn", "cold-pk-select", "cold-ins-idx",
+            "txn-begin", "txn-create", "txn-commit", "txn-rollback",
+            "drop-txn", "drop-commit", "cold-pk-select", "cold-ins-idx",
             "cold-pk-select-live", "cold-ins-idx-live"]
 
     print()
@@ -746,6 +837,8 @@ def main():
                 "customers": customers,
                 "matches": args.matches,
                 "ops": args.ops,
+                "write_ops": args.write_ops,
+                "cpu_write_ops": args.cpu_write_ops,
                 "ddl_ops": args.ddl_ops,
                 "block": args.block,
                 "cpu_rounds": args.cpu_rounds,
