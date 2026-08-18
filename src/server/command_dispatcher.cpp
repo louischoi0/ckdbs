@@ -907,6 +907,9 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
     if (existing.status().code() != StatusCode::kNotFound) {
         return {"ERR " + existing.status().message(), false};
     }
+    if (auto refused = RefuseIfNameHeldByPendingDrop(args, session); refused.has_value()) {
+        return *refused;
+    }
 
     catalog::Schema schema;
     // kAssigned by name: this legacy command has no syntax for a key mode
@@ -2057,6 +2060,10 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
     }
     if (existing.status().code() != StatusCode::kNotFound) {
         return {"ERR " + existing.status().message(), false};
+    }
+    if (auto refused = RefuseIfNameHeldByPendingDrop(stmt.table_name, session);
+        refused.has_value()) {
+        return *refused;
     }
 
     // Resolve each column's parsed type_name against sys.types - the
@@ -3325,6 +3332,30 @@ std::optional<txn::ReadView> CommandDispatcher::ViewFor(Session& session) {
     auto view = txn_->MintReadView(txn::kNoTrxId);
     if (!view.ok()) return std::nullopt;
     return view.value();
+}
+
+std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
+    std::string_view name, Session& session) {
+    // `ViewFor` answers nullopt exactly when no transaction holds
+    // uncommitted DDL - and with none open there is no pending drop for a
+    // create to collide with, so the fast path pays nothing.
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    if (!view.has_value()) return std::nullopt;
+
+    auto held = catalog_.NameHeldByPendingDrop(name, *view);
+    if (!held.ok()) return DispatchOutcome{"ERR " + held.status().message(), false};
+    if (!held.value()) return std::nullopt;
+
+    // Refused rather than allowed, for §6's reason and with §6's cost: the
+    // refusal is spurious if that transaction commits its drop, and it
+    // names a relation the asker can no longer see. Allowing it is the
+    // outcome that corrupts - the drop's rollback restores a second live
+    // row with this name, and resolution then answers with whichever one
+    // sits earlier on the page.
+    return DispatchOutcome{"ERR relation '" + std::string(name) +
+                               "' is being dropped by a transaction that has not committed; "
+                               "the name is not free until that transaction resolves",
+                           false};
 }
 
 void CommandDispatcher::EndDdlScope(const Session& session, bool rows_were_retired) {

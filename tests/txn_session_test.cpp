@@ -773,5 +773,53 @@ TEST_F(TxnSessionTest, AutocommitIndexDdlIsUnchanged) {
     EXPECT_EQ(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos);
 }
 
+// The other half of §6's refusal, and the one the duplicate check cannot
+// make on its own. `DROP TABLE` frees the name for everyone the moment it
+// runs (§5a's in-place retype), but the drop can still roll back - so a
+// create that took the name meanwhile left **two live rows claiming it**
+// once the rollback rewrote the tombstone back to a table.
+TEST_F(TxnSessionTest, ACreateIsRefusedWhileAnotherTransactionsDropOfTheNameIsOpen) {
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "CREATE TABLE shared (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "DROP TABLE shared").rfind("ERR", 0), std::string::npos);
+
+    EXPECT_EQ(Run(b, "CREATE TABLE shared (id int64, v int64)").rfind("ERR", 0), 0u)
+        << "a second session took a name a pending drop can still restore";
+
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // Exactly one relation is named `shared`, and it is the original.
+    const std::string tables = Run(b, "SHOW TABLES");
+    std::size_t claims = 0;
+    for (std::size_t at = tables.find("shared"); at != std::string::npos;
+         at = tables.find("shared", at + 1)) {
+        ++claims;
+    }
+    EXPECT_EQ(claims, 1u) << "two rows claim one name: " << tables;
+
+    // And once the drop resolves, the name is free again.
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "DROP TABLE shared").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(a, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_EQ(Run(b, "CREATE TABLE shared (id int64, v int64)").substr(0, 7), "CREATED");
+}
+
+TEST_F(TxnSessionTest, ATransactionMayDropAndRecreateOneNameItself) {
+    // The refusal above is about *another* transaction's pending drop. A
+    // transaction sees its own, so the migration shape still works - and
+    // rolls back whole.
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE mine (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "DROP TABLE mine").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(Run(s, "CREATE TABLE mine (id int64, w int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+
+    Session other;
+    EXPECT_NE(Run(other, "DESCRIBE mine").find("w"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace kds::server
