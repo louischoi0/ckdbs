@@ -704,6 +704,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         expeditor->database_->catalog, *expeditor->store_, expeditor->recovery_,
         &*expeditor->logger_);
 
+    // DT10 (`spec-ddl-transactional.md` §5c): retire the delete-marked
+    // catalog rows a previous mount left behind, before anything can read
+    // one. **Here and only here** - after recovery, so a mark this mount's
+    // own log restored is included, and before the transaction stack
+    // exists, so no live transaction can own a mark this retires.
+    //
+    // The system core's alone: a peer may not write a catalog page (P6),
+    // and by the time a peer mounts, core 0 has already done this.
+    auto finalized = expeditor->database_->catalog.FinalizeDeleteMarksAtMount();
+    if (!finalized.ok()) return finalized.status();
+    expeditor->recovery_.catalog_marks_finalized = finalized.value();
+
     // The transaction ceiling recovery computed, applied and made durable
     // before the sequence that caches it is built. `SetNextTrxId` refuses to
     // lower one, so the guard is what keeps a log that names nothing from

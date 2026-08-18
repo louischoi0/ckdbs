@@ -223,6 +223,40 @@ public:
     // considered current.
     void InvalidateAfterCompensation();
 
+    // **DT10** (`spec-ddl-transactional.md` §5c): retires every
+    // delete-marked catalog row, and answers how many. Runs once at mount,
+    // on the system core, before the listener binds — never afterwards,
+    // because afterwards a mark may belong to a transaction that is still
+    // open, and retiring one of those destroys the row a rollback needs.
+    //
+    // It exists because DT9 made a mark's meaning depend on whether its
+    // deleter is in flight, and a mark that outlived its mount has no
+    // deleter to ask about. The id could even be **reissued** — the
+    // transaction-id ceiling is unlogged (`txn/trx_id.hpp`), so a crash
+    // reissues the block — and then a live transaction wearing a dead
+    // one's id would make a committed drop read as open, re-arm a dropped
+    // index, and answer probes from a btree missing every row written
+    // since. Finalizing at mount deletes that question instead of
+    // answering it.
+    //
+    // **Retiring is the only available answer, not the conservative one.**
+    // A mark whose transaction committed should be gone. A mark whose
+    // transaction did not commit cannot be rolled back either: the trail
+    // that would compensate it died with the process, and the catalog is
+    // not recovered (RV3), so nothing can reconstruct the intent. Both
+    // already read as gone to every unfiltered reader before DT9. What
+    // this changes is that they stop being ambiguous.
+    //
+    // Second effect, and the reason it is worth a page sweep on its own:
+    // nothing else ever purges these rows. A transactional `DROP TABLE`
+    // leaves one mark per column, index and foreign key, forever, re-read
+    // on every catalog cache miss.
+    //
+    // Unlogged, like every catalog write (RV3). A crash mid-sweep leaves
+    // some marks retired and some not, which is exactly the state it
+    // started from and what the next mount sweeps again.
+    StatusOr<std::uint64_t> FinalizeDeleteMarksAtMount();
+
     // Registers the fixed namespace/type sys-objects in the in-memory
     // registry (no disk I/O - these are well-known constants, not stored
     // as catalog rows themselves).

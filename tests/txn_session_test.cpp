@@ -791,6 +791,53 @@ TEST_F(TxnSessionTest, ACommittedDdlTransactionInvalidatesTheCatalogCache) {
 
 // The committed half of the same rule: once the drop commits, the mark
 // counts, and the index is gone by every route.
+// DT10 (spec §5c). A committed transactional drop leaves its marked rows
+// on the page, and nothing purges them - so the next mount inherits marks
+// whose deleter it cannot ask about, and whose id the unlogged ceiling may
+// even have reissued. Finalizing at mount deletes that question.
+TEST_F(TxnSessionTest, TheMountSweepRetiresTheMarksACommittedDropLeftBehind) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+
+    // The mark is on the page - that is what makes the sweep necessary,
+    // and asserting the count proves the test is looking at a real one.
+    auto first = boot_->catalog.FinalizeDeleteMarksAtMount();
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    EXPECT_GE(first.value(), 1u) << "a committed transactional drop left no mark to finalize";
+
+    // Idempotent: the second mount over the same pages has nothing to do.
+    // This is the property that keeps an ordinary restart free.
+    auto second = boot_->catalog.FinalizeDeleteMarksAtMount();
+    ASSERT_TRUE(second.ok()) << second.status().message();
+    EXPECT_EQ(second.value(), 0u);
+
+    // And the sweep changed no answer: the index was already gone.
+    EXPECT_EQ(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos);
+    EXPECT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+}
+
+// The other half: a clean instance that never dropped anything has no
+// marks, so the sweep is free and says so.
+TEST_F(TxnSessionTest, TheMountSweepFindsNothingOnAnInstanceThatDroppedNothing) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(s, "INSERT INTO t VALUES (10)").substr(0, 8), "INSERTED");
+
+    auto swept = boot_->catalog.FinalizeDeleteMarksAtMount();
+    ASSERT_TRUE(swept.ok()) << swept.status().message();
+    EXPECT_EQ(swept.value(), 0u);
+
+    // Nothing it could reach was disturbed.
+    EXPECT_NE(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos);
+    EXPECT_EQ(Rows(s, "SELECT id, owner FROM t WHERE owner = 10").size(), 1u);
+}
+
 TEST_F(TxnSessionTest, ACommittedDropIndexInsideATransactionRemovesTheIndex) {
     Session a;
     ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");

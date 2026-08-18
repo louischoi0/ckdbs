@@ -747,6 +747,55 @@ void Catalog::InvalidateAfterCompensation() {
     BumpVersion("a transaction that wrote catalog rows resolved");
 }
 
+StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
+    std::uint64_t retired = 0;
+    for (const PageId root : kAllCatalogPages) {
+        Status inner = Status::OK();
+        // **kWrite**, and one forward pass per page is enough:
+        // `RetireSlot` sets the dead flag in place, so it never renumbers
+        // the slots behind the walk. (The DROP sweep loops for a different
+        // reason - `ForFirstRow` returns at its first match.)
+        Status walked = heap::ChainVisit(
+            store_, root, storage::PageAccess::kWrite,
+            [&](PageId, heap::PageView& page,
+                std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                auto tuple = page.ReadTuple(slot);
+                if (!tuple.ok()) {
+                    // An already-dead slot, which is what a retired one
+                    // is - nothing to finalize.
+                    if (tuple.status().code() == StatusCode::kNotFound) {
+                        return storage::VisitControl::kContinue;
+                    }
+                    inner = tuple.status();
+                    return tuple.status();
+                }
+                if (!tuple.value().deleted) return storage::VisitControl::kContinue;
+                if (Status s = page.RetireSlot(slot); !s.ok()) {
+                    inner = s;
+                    return s;
+                }
+                ++retired;
+                return storage::VisitControl::kContinue;
+            });
+        if (!inner.ok()) return inner;
+        if (!walked.ok()) return walked;
+    }
+
+    if (retired > 0) {
+        // Info, not Debug: this is a structural catalog write, and it is
+        // the only record that rows a previous mount left behind are gone.
+        if (log_ != nullptr) {
+            log_->Info("catalog", "finalized " + std::to_string(retired) +
+                                      " delete-marked catalog row(s) left by a previous mount");
+        }
+        // Nothing can have cached them yet - this runs before the listener
+        // binds - but the version is what a bound statement is stamped
+        // with, and the rows really did change on this instance.
+        BumpVersion("delete-marks finalized at mount");
+    }
+    return retired;
+}
+
 void Catalog::InvalidateFromPeer() {
     // No version bump. `catalog_version_` is the counter parser-v2.md I5
     // stamps *this instance's* bound statements with; another core's DDL is

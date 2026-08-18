@@ -121,6 +121,13 @@ struct MountRecovery {
     std::uint32_t relations_checked = 0;
     std::uint32_t relations_missing_pages = 0;
 
+    // Delete-marked catalog rows a previous mount left behind, retired
+    // before the listener bound (DT10, `spec-ddl-transactional.md` §5c).
+    // Non-zero says this mount followed a crash or a shutdown that left a
+    // transactional DROP's rows half-resolved; zero is the ordinary case
+    // and the one a clean shutdown always produces.
+    std::uint64_t catalog_marks_finalized = 0;
+
     // ---- Assertion enforcement, resumed (RC07) ----
     //
     // `assertions_enforcing` is what `SHOW ASSERTIONS` will report `enforcing=1`

@@ -547,12 +547,24 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
         os << " recovery_relations_checked=" << recovery_->relations_checked
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
            << " catalog_recovered=0"
+           // DT10: delete-marked catalog rows a previous mount left
+           // behind, retired before the listener bound. Zero is what a
+           // clean shutdown produces, so a non-zero here is the sign that
+           // this mount followed one that left a transactional DROP
+           // half-resolved.
+           << " catalog_marks_finalized=" << recovery_->catalog_marks_finalized
            // DT7: `CREATE TABLE` became atomic and isolated on 2026-08-16,
            // and a reader of `ddl_transactional=1` will assume that
            // includes surviving a crash. It does not, and the two flags
            // sit together so the pair reads as one statement: transactional
            // within a running instance, not durable across a restart.
-           << " ddl_transactional=create-table,drop-table,create-index"
+           //
+           // `drop-index` rejoined the list on 2026-08-18 (DT9). It was in
+           // it, came out when the statement was refused inside a
+           // transaction, and is back because the refusal was withdrawn -
+           // which is the whole reason this is a list of statement names
+           // and not a bare `=1`.
+           << " ddl_transactional=create-table,drop-table,create-index,drop-index"
            << " ddl_durable=0";
         // RC07: what the mount could resume enforcing, and the honest
         // remainder. A surviving declaration whose directory could not be
