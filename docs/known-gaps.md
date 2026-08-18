@@ -388,6 +388,18 @@ the owner's workplan.
   has to be decided for them. Isolating `DROP TABLE` is the one that
   still needs undo *records* for catalog rows — option (a) of DT5, not
   built.
+- **DT9's in-flight test can be fooled by a reissued transaction id
+  after a crash** (`docs/spec-ddl-transactional.md` §5b). An unfiltered
+  catalog read counts a delete-mark only once its deleter is no longer in
+  flight; the id ceiling is unlogged (`txn/trx_id.hpp`), so a crash can
+  reissue a committed dropper's id to a new transaction, and while that
+  one is open the dropped index is re-armed and probes answer from a
+  btree missing every row written since the drop. **Silently missing
+  rows**, and the pre-DT9 rule answered this case correctly. Bounded by
+  the same 4096-id block and by nothing else. The fix that removes it
+  rather than documenting it is **DT10, proposed and not built**: retire
+  every delete-marked catalog row at mount, which also purges the marks
+  that otherwise accumulate forever.
 - **Keystone K1 does not hold across a crash**
   (`docs/keystoneid-k0-findings.md`): the durable log names ids the
   unlogged `sys.tables.next_id` has forgotten. K-M2a/K-M2 own it.

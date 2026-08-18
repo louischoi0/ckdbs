@@ -321,10 +321,33 @@ carries a `SetTransactionManager` handle, armed by the
 are known to belong together, so a new construction site cannot silently
 keep the pre-DT9 answer. Left null, every unfiltered read answers
 exactly as it did before: bootstrap, recovery and a test over a bare
-store have no in-flight transaction to be wrong about. A mark left by a
-transaction from a *previous mount* also reads as final, which is both
-the old behaviour and the only available answer while the catalog is not
-recovered (RV3).
+store have no in-flight transaction to be wrong about.
+
+**A mark left by a transaction from a previous mount is the one case
+where this rule can answer wrongly, and it is stated rather than
+patched.** An earlier draft of this section claimed such a mark "reads
+as final". It does not, necessarily: `txn/trx_id.hpp` says by name that
+the id ceiling is unlogged, so a crash between the in-memory raise and
+the page reaching the platter **reissues the block on the next boot**.
+A committed transactional `DROP INDEX` leaves its deleter's id on a
+catalog page, which persists; if the next mount reissues that id, then
+while the new holder is open `IsInFlight` answers true, the dropped
+index is re-armed by `InitTableAccess`, and probes read a btree missing
+every row written since the drop. Silently missing rows — where the
+pre-DT9 rule answered correctly.
+
+No cheap guard separates the two: a reissued id is at or above this
+mount's floor, exactly like a live one. It belongs beside `txn.md` §8's
+accepted post-crash family and RV3 in `docs/known-gaps.md`, and the
+answer that would remove it rather than document it is **DT10, proposed
+and not built**: retire every delete-marked catalog row at mount, before
+the listener binds. A mark from a previous mount is unresolvable anyway
+with no catalog recovery, so finalizing it is the only answer that
+exists — and the same sweep would purge the marks that otherwise
+accumulate forever, one per column and per index of every transactionally
+dropped relation, re-scanned on every catalog cache miss. One sweep of
+nine pages. Not taken here because it is new behaviour at mount and
+needs its own decision.
 
 **The claim is core-0-scoped, and must be written that way.**
 `IsInFlight` answers about one core's `live_` list. That is every
