@@ -18,10 +18,12 @@ that cannot be tied to a commit is not evidence.
    Measure with `build-release/kds_server`. `bench/results-aggregate.md`
    records a document written from a debug build that was wrong in *both*
    directions; do not repeat it.
-2. **A block device, never tmpfs.** `/tmp` here is tmpfs. A data file placed
-   there makes fsync free, which turns every write measurement into fiction
-   and every read-side structure into a much larger win than it is. Put data
-   files under `$HOME`, and name the device in the document.
+2. **A block device, never tmpfs.** A data file on tmpfs makes fsync free,
+   which turns every write measurement into fiction and every read-side
+   structure into a much larger win than it is. Put data files under `$HOME`,
+   **check with `df -T` rather than from memory** — `/tmp` has been tmpfs on
+   some hosts this suite has run on and ext4 on others — and name the device
+   in the document.
 3. **Check the machine is quiet.** `uptime`, and `pgrep cc1plus` for a
    concurrent build. A build running alongside a scenario2 run cut its
    throughput by 3× and widened the spread between two identical runs to 34%,
@@ -31,13 +33,25 @@ that cannot be tied to a commit is not evidence.
    `stat -c %y build-release/kds_server` against the commit timestamps, because
    a binary older than HEAD measures an engine that is not at HEAD. Say so in
    the document when they differ.
-5. **Fresh server and fresh data file per configuration.** Catalog rows are
+5. **Measure a copy of the binary, never the build tree's own.** `cp
+   build-release/kds_server` into the run's own directory before the first
+   cell, record the copy's `sha256sum` and the source binary's mtime in the
+   document, and start every server from the copy. The build tree is shared:
+   another agent — or another session in another worktree — can `cmake
+   --build` into it at any moment, and a matrix that starts a fresh server
+   per configuration would then measure two different engines under one
+   heading, with nothing in any driver's output to show for it. The copy
+   makes the measured engine immutable for the life of the run and gives the
+   document a hash to name. **Only the binary may live on tmpfs; the rule
+   above still forbids the data file there** — the binary is read once at
+   exec, the data file is what fsync must be honest about.
+6. **Fresh server and fresh data file per configuration.** Catalog rows are
    never reclaimed and undo never purges, so a second run on one file is not
    a repeat of the first.
-6. **Equal work, not equal time**, when comparing configurations — a fixed
+7. **Equal work, not equal time**, when comparing configurations — a fixed
    count of completed units, so a slow configuration is not also a smaller
    sample.
-7. **Establish the noise floor from inside the run.** Repeat one
+8. **Establish the noise floor from inside the run.** Repeat one
    configuration, or include a control that cannot affect the result (an
    isolation-level change on a single connection is one). Any delta smaller
    than the floor is not a finding — say that instead of reporting it.

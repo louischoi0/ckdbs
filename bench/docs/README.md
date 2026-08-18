@@ -6,16 +6,25 @@ results file states findings and links here — it does not re-explain how to
 run a tool.
 
 The rules those results files follow are in `.claude/agents/ck-tester.md`, the
-agent that owns this directory. Two of them decide whether a run is worth
+agent that owns this directory. Three of them decide whether a run is worth
 recording at all, so they are repeated here:
 
 - **Release build.** `CMakeLists.txt` defaults `CMAKE_BUILD_TYPE` to
   **Debug** — roughly 14× slower on a scan, with assertions live. Measure
   with `build-release/kds_server`, and rebuild it before measuring, because a
   stale binary silently measures an older engine than the one at `HEAD`.
-- **A block device, never tmpfs.** `/tmp` on this machine is tmpfs. A data
-  file there makes fsync free, which turns every write number into fiction
-  and inflates every read-side structure. Put data files under `$HOME`.
+- **A block device, never tmpfs.** A data file on tmpfs makes fsync free,
+  which turns every write number into fiction and inflates every read-side
+  structure. Put data files under `$HOME` and **name the device in the
+  document** — `/tmp` is tmpfs on some of the hosts this suite has run on and
+  ext4 on others, so the check is `df -T`, not a memory of last time.
+- **Measure a copy of the binary, not `build-release/kds_server` itself.**
+  `cp` it into the run's own directory first, hash the copy, and start every
+  server from the copy. The build tree is shared with every other agent and
+  session working in this repository; a `cmake --build` landing mid-matrix
+  swaps the engine under a run that starts a fresh server per configuration,
+  and no driver output would show it. The binary may sit on tmpfs — the rule
+  above is about the *data* file.
 
 ```bash
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release -j
@@ -115,7 +124,8 @@ A freight and cargo book: eight relations, and one measured transaction of
 eight statements that can be **refused** two ways (over a voyage's capacity,
 over a customer's credit) and can **conflict** on either of the two rows it
 updates. Documented in full at `docs/scenario2-freight.md`; results at
-`bench/results-scenario2-freight.md`.
+`bench/results-scenario2-freight.md`, and the two-build A/B of the same
+workload at `bench/results-scenario2-engine-ab.md`.
 
 ```bash
 # prepare a data file once, then drive it many times
@@ -148,6 +158,22 @@ updates. Documented in full at `docs/scenario2-freight.md`; results at
 | `--isolation` | server default | `read-committed` or `repeatable-read` |
 | `--verify N` | 0 | check the four invariants over a sample of N |
 | `--seed`, `--json`, `--echo`, `--sync`, `--server-log` | | as the other scenarios |
+
+**`bench/run_s2_cell.sh` runs one cell of that matrix** — fresh server, fresh
+data file, quiet-machine gate, load sampling, clean shutdown, and the started
+binary's sha256 recorded beside the results. It takes a copy of the server
+binary rather than the build tree's own, for the reason in the third rule
+above:
+
+```bash
+cp build-release/kds_server /tmp/kds_server-$(git rev-parse --short HEAD)
+ROOT=$HOME/bench-s2 ./bench/run_s2_cell.sh base1 \
+    /tmp/kds_server-$(git rev-parse --short HEAD) 15501 . -- \
+    --organizations 2000 --ships 200 --operations 2000 --cargos 100000 \
+    --bookings 1500 --seed 1 --verify 25
+EXTRA_CONF="waystone_recording = off" ROOT=$HOME/bench-s2 \
+    ./bench/run_s2_cell.sh wsoff /tmp/kds_server-... 15501 . -- ...
+```
 
 The twin takes the same flags plus `--synchronous-commit`, and connects with
 `--port 15433 --database bench`.
