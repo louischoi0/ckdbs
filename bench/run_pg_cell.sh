@@ -11,6 +11,8 @@
 #              host where the distro package is not installed (see
 #              bench/docs/README.md). Empty when psql is already on PATH.
 #      DRV     the tree the twin is run from (default: this repository)
+#      DRIVER  which twin to run (default tools/pg_scenario2_freight.py;
+#              tools/pg_scenario3_library.py takes the same treatment)
 #      ROOT    where output lands (default $HOME/bench-s2-pg)
 set -euo pipefail
 
@@ -42,7 +44,7 @@ $PGENV psql -h 127.0.0.1 -p 15433 -d postgres -qc "CREATE DATABASE $DB" >/dev/nu
 sampler=$!
 
 set +e
-$PGENV python3 "$DRV/tools/pg_scenario2_freight.py" --port 15433 --database "$DB" \
+$PGENV python3 "$DRV/${DRIVER:-tools/pg_scenario2_freight.py}" --port 15433 --database "$DB" \
     --json "$OUTDIR/$label.json" "$@" >> "$OUTDIR/$label.txt" 2>&1
 rc=$?
 set -e
