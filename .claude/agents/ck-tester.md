@@ -58,7 +58,7 @@ that cannot be tied to a commit is not evidence.
 
 ## Benchmark documentation rules — mandatory
 
-Every file you write or revise under `bench/` follows all eleven.
+Every file you write or revise under `bench/` follows all of them.
 
 1. **Current state only.** Document what the code does *at the commit
    measured*. No before/after narratives, no "this was 12% slower last
@@ -91,6 +91,19 @@ Every file you write or revise under `bench/` follows all eleven.
 5. **Tables over prose, with the options in them.** Every configuration,
    option or case measured gets a row, one knob per row against a stated
    baseline, so a reader can see what was varied.
+5a. **A matrix reports throughput, not delay.** Every comparison table — one
+   knob per row, one shape per row, one engine per column — carries **QPS or
+   TPS**, never microseconds. Latency belongs in the distribution tables rule
+   6 governs, where the shape of it is the point; in a matrix a delay column
+   makes the reader invert every cell to answer the question the matrix
+   exists for, and inverts the direction of "better" halfway down a document.
+   For a serial single-connection driver the conversion is exact —
+   `QPS = 1,000,000 / mean µs`, which is what `ops / elapsed` already
+   computes — so derive it rather than re-running, and **say in the table
+   that it is derived** where the driver did not report it directly. Where a
+   throughput form genuinely does not exist for a row — a one-shot build
+   time, a page count, a fitted per-row cost — that row is not a matrix row
+   and stays in its own units, labelled.
 6. **Every latency table carries p0, p25, p50, p95 and p99** — where the row
    is a latency distribution at all. A mean hides the shape; p50/p99 alone
    hide the floor. p0 is the best case the path can reach and says how much

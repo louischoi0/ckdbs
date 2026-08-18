@@ -19,13 +19,14 @@ any size.
 Two findings sit beside that and neither is about a shape.
 
 **A Cabin converts a per-row cost into a fixed one here, and beats
-PostgreSQL's index doing it.** At 10,080 bars a day-slice goes 580.2 → **37.9
-µs with a Cabin declared, 15.3×**, against PostgreSQL's index at 68.7 µs; a
-cross-join goes 594.9 → **48.5 µs, 12.3×**, against PostgreSQL's 155.4.
-Dropping the Cabin returns both to their cold cost, which is what proves the
-Cabin was doing the work. **This is the opposite of what the same structure
-does in `bench/results-scenario3-library.md`**, and §7 explains why the two
-results are consistent.
+PostgreSQL's index doing it.** At 10,080 bars a day-slice goes from 1,724 to
+**27,181 statements a second with a Cabin declared, 15.8×**, against
+PostgreSQL's indexed 12,604/s; a cross-join goes from 1,670 to **19,982/s,
+12.0×**, against PostgreSQL's 6,179. Dropping the Cabin returns both to their
+cold rate, which is what proves the Cabin was doing the work. **This is the
+opposite of what the same structure does in
+`bench/results-scenario3-library.md`**, and §7 explains why the two results
+are consistent.
 
 **ckdbs does not scale with connections on a read workload, and PostgreSQL
 does.** From 1 to 8 connections ckdbs moves 1,655 → 1,707 aggregate QPS —
@@ -70,56 +71,65 @@ shared one.
 ## 3. The noise floor, and the two classes it splits into
 
 One repeat of each end of the ladder, per engine, against a fresh data file
-or database. Dividing by the smaller of each pair, which is the conservative
-direction:
+or database, on the same throughput basis every matrix below uses. Dividing
+by the smaller of each pair, which is the conservative direction:
 
-| replicate pair | bars | engine | read shapes: max Δ p50 | median | durable-write phases: max Δ p50 |
+| replicate pair | bars | engine | read shapes: max Δ QPS | median | durable-write phases: max Δ QPS |
 |---|---:|---|---:|---:|---:|
-| `ck-y1` vs `ck-y1-rep` | 252 | ckdbs | 15.0% | 1.8% | 21.8% |
-| `pg-y1` vs `pg-y1-rep` | 252 | postgresql | 11.3% | 3.6% | **144.1%** |
-| `ck-y40` vs `ck-y40-rep` | 10,080 | ckdbs | 13.2% | 2.1% | 10.0% |
-| `pg-y40` vs `pg-y40-rep` | 10,080 | postgresql | 17.6% | 1.0% | **83.6%** |
+| `ck-y1` vs `ck-y1-rep` | 252 | ckdbs | 18.9% | 3.7% | 55.0% |
+| `pg-y1` vs `pg-y1-rep` | 252 | postgresql | **57.3%** | 3.4% | **144.1%** |
+| `ck-y40` vs `ck-y40-rep` | 10,080 | ckdbs | 13.5% | 2.7% | 12.2% |
+| `pg-y40` vs `pg-y40-rep` | 10,080 | postgresql | 20.5% | 3.7% | **132.7%** |
 
-**The read shapes are tight and the durable-write phases are not.** Every
-read shape in the matrix repeats to within 17.6% and the median repeat is
-1–3.6%; the load and `result-insert` phases — one fsync per statement —
-disagree between two runs of the same configuration by up to 144%, on
-PostgreSQL more than on ckdbs. **So the floor adopted below is ±17.6% for a
-read shape, and no claim rests on a single load-phase number at all.** §8
-prices the write side through the batch sweep instead, where the fsync is
-amortised and the numbers are stable.
+**The read shapes are tight in the middle and the durable-write phases are
+not.** The median read shape repeats to within 2.7–3.7% on both engines; the
+load and `result-insert` phases — one fsync per statement — disagree between
+two runs of the same configuration by up to 144%. **So the floor adopted
+below is ±20.5% for a read shape at 10,080 bars, ±57.3% at 252, and no claim
+rests on a single load-phase number at all.** §8 prices the write side
+through the batch sweep instead, where the fsync is amortised and the numbers
+are stable.
+
+PostgreSQL's 57.3% at 252 bars is one shape — a small-relation read whose
+absolute rate is high enough that a few microseconds of scheduling move it a
+long way — and it is why nothing at the bottom of the ladder is claimed on
+the PostgreSQL side without a factor behind it.
 
 ## 4. Every shape, at three sizes
 
-p50 µs. The eight `read-*`/`agg-*` rows are the read matrix; `backtest-*`,
-`compare-*` and `result-insert` are the workload's own phases.
+**Statements per second**, which is what the driver's own `ops / elapsed`
+reports. The eight `read-*`/`agg-*` rows are the read matrix; `backtest-*`,
+`compare-*` and `result-insert` are the workload's own phases. Higher is
+better in every cell.
 
 | phase | ck 252 | pg 252 | ck 1,008 | pg 1,008 | ck 10,080 | pg 10,080 |
 |---|---:|---:|---:|---:|---:|---:|
-| read-bar-lookup | **38.5** | 72.0 | **32.2** | 66.5 | **37.0** | 62.4 |
-| read-bar-range | **116.7** | 708.6 | **127.3** | 713.2 | **125.8** | 735.1 |
-| read-symbol-history | **143.8** | 1,041.5 | **537.6** | 3,882.9 | **8,599.2** | 41,328.6 |
-| read-day-slice | **49.7** | 71.2 | **94.0** | 103.6 | 588.2 | **509.9** |
-| read-join-point | **44.4** | 122.9 | **44.6** | 118.7 | **43.9** | 122.7 |
-| read-join-exists | **37.3** | 91.8 | **40.2** | 89.5 | **39.2** | 92.3 |
-| agg-global | **64.9** | 91.9 | **133.6** | 148.1 | 944.9 | **857.8** |
-| agg-by-symbol | **70.5** | 111.4 | **159.8** | 206.8 | **1,278.0** | 1,372.9 |
-| agg-by-session | **142.5** | 561.3 | **489.6** | 1,834.8 | **5,136.7** | 18,258.0 |
-| agg-day-slice | **52.6** | 86.3 | **98.9** | 120.3 | 601.4 | **518.3** |
-| agg-distinct | **60.1** | 85.5 | **130.5** | 142.7 | 1,072.0 | **839.3** |
-| backtest-read | **91.1** | 212.9 | **131.0** | 235.5 | **627.9** | 659.3 |
-| backtest-replay | **71.5** | 170.5 | **117.6** | 188.6 | 599.7 | **591.5** |
-| compare-all | **118.4** | 497.2 | **333.5** | 1,242.6 | **2,544.8** | 12,250.0 |
-| compare-one | **53.4** | 118.6 | **89.1** | 202.1 | **427.3** | 1,281.9 |
-| result-insert | 1,105.9 | 1,052.9 | 997.9 | 1,011.5 | 972.0 | 1,040.8 |
+| read-bar-lookup | **25,126** | 13,831 | **28,409** | 14,599 | **26,247** | 14,881 |
+| read-bar-range | **8,418** | 1,392 | **7,746** | 1,389 | **7,874** | 1,304 |
+| read-symbol-history | **6,614** | 903 | **1,826** | 252 | **101** | 24 |
+| read-day-slice | **19,881** | 13,680 | **10,438** | 9,524 | 1,692 | **1,867** |
+| read-join-point | **21,459** | 7,862 | **21,459** | 8,130 | **22,422** | 7,782 |
+| read-join-exists | **25,907** | 10,627 | **23,419** | 10,846 | **24,390** | 10,341 |
+| agg-global | **14,556** | 8,795 | **7,097** | 5,914 | **1,055** | 1,018 |
+| agg-by-symbol | **13,624** | 8,726 | **6,188** | 4,773 | **788** | 699 |
+| agg-by-session | **6,309** | 1,761 | **1,834** | 502 | **184** | 53 |
+| agg-day-slice | **19,417** | 11,338 | **9,524** | 7,680 | 1,639 | **1,916** |
+| agg-distinct | **16,502** | 11,186 | **7,524** | 6,667 | 921 | **1,160** |
+| backtest-read | **10,582** | 4,110 | **7,364** | 4,137 | **1,582** | 1,465 |
+| backtest-replay | **12,987** | 5,647 | **8,084** | 5,198 | **1,647** | 1,621 |
+| compare-all | **8,446** | 2,011 | **2,999** | 805 | **393** | 82 |
+| compare-one | **17,331** | 7,981 | **10,811** | 4,760 | **2,337** | 771 |
+| result-insert | 804 | 736 | 918 | 937 | 961 | 789 |
 
-**ckdbs wins every shape at 252 and 1,008 rows.** At 10,080 four have flipped
-— `read-day-slice`, `agg-global`, `agg-day-slice`, `agg-distinct` — by 10–28%,
-and `backtest-replay` by 1.4%, which is inside the floor. Every flipped shape
-is a fold or slice over the whole relation. None of the join, range or
-grouped shapes flips, and two of them end up far in ckdbs's
-favour at the top of the ladder: `read-symbol-history` at **4.8×** and
-`agg-by-session` at **3.6×**.
+**ckdbs wins every shape at 252 and 1,008 rows.** At 10,080 three have
+flipped — `read-day-slice`, `agg-day-slice`, `agg-distinct` — by 10–26%, and
+`backtest-replay` by 1.6%, which is inside the floor. Every flipped shape is
+a fold or slice over the whole relation. None of the join, range or grouped
+shapes flips, and two of them end up far in ckdbs's favour at the top of the
+ladder: `read-symbol-history` at **4.2×** and `agg-by-session` at **3.5×**.
+`agg-global` and `agg-by-symbol` are the two the crossover has almost reached
+— 1,055 against 1,018 and 788 against 699 — both inside the floor and neither
+claimed as a win.
 
 `result-insert` is the same on both engines at every size, within the floor,
 because it is one fsync per row on both — the same result
@@ -129,21 +139,21 @@ because it is one fsync per row on both — the same result
 ## 5. The primary-key lookup does not scale, and that is the control
 
 `read-bar-lookup` is a pk equality — one btree descent. Across a **40×**
-growth in the relation it reads 38.5, 32.2, 37.0 µs on ckdbs and 72.0, 66.5,
-62.4 on PostgreSQL: flat on both, within the floor on both. `read-join-point`
-(44.4 / 44.6 / 43.9) and `read-join-exists` (37.3 / 40.2 / 39.2) are flatter
-still.
+growth in the relation it serves 25,126, 28,409, 26,247 statements a second
+on ckdbs and 13,831, 14,599, 14,881 on PostgreSQL: flat on both, within the
+floor on both. `read-join-point` (21,459 / 21,459 / 22,422) and
+`read-join-exists` (25,907 / 23,419 / 24,390) are flatter still.
 
 That is the control this ladder needs. A shape that does not move with the
 row count says the harness is measuring the row count where it should and not
 somewhere else — and it prices the fixed cost directly: **a ckdbs statement
-that touches one row costs ~37 µs of client-measured round trip against
-PostgreSQL's ~62 µs.**
+that touches one row runs at ~26,000 a second against PostgreSQL's ~14,500**,
+a 1.8× ratio that holds across the whole ladder.
 
 ## 6. Fixed cost, per-row cost, and where they cross
 
-Fitting `p50 = fixed + per-row × bars` over the three sizes, per shape and per
-engine. The crossover column is the row count at which the two engines' lines
+Fitting `p50 µs = fixed + per-row × bars` over the three sizes, per shape and
+per engine — **a cost model, not a matrix**, so it is stated in delay. The crossover column is the row count at which the two engines' lines
 meet — where it falls inside or near the ladder, the shape has no
 size-independent winner:
 
@@ -170,6 +180,10 @@ physical reading; their per-row columns still compare)*
 
 **ckdbs's fixed cost is lower on every shape without exception** — 35–45 µs
 against 60–121 µs on the point shapes, and 121 against 709 µs on the range.
+(This is the one table in the file that is not a throughput matrix, and
+deliberately: a fitted fixed cost and a fitted per-row cost are the two
+parameters of a cost model, and they only add in the delay domain. Rule 5a's
+exception covers it — the rows it feeds, §4 and §7, are throughput.)
 That is the engine's structural advantage on this workload and it is why it
 wins the whole table at 252 and 1,008 rows.
 
@@ -187,32 +201,42 @@ size this workload can reach.
 
 The QPS matrix runs each shape cold, warm, with an accelerator declared, and
 after dropping it. `--warm-keys 8` cycles eight distinct arguments, so a
-declared Cabin sees each value again. At **10,080 bars**, p50 µs:
+declared Cabin sees each value again. At **10,080 bars**, statements a second
+as the driver reports them:
 
 | shape | ck cold | ck warm | **ck cabin** | ck dropped | pg cold | pg warm | **pg index** | pg dropped |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| bar-lookup | 37.7 | 37.1 | — | — | 69.5 | 68.3 | — | — |
-| bar-range | 125.0 | 121.1 | — | — | 753.7 | 720.8 | — | — |
-| day-slice | 580.2 | 579.1 | **37.9** | 593.1 | 505.3 | 499.7 | **68.7** | 491.3 |
-| symbol-history | 8,644.5 | 6,706.8 | 7,505.1 | 7,203.6 | 54,929.2 | 40,375.3 | 40,061.8 | 40,516.1 |
-| cross-join | 594.9 | 596.0 | **48.5** | 597.3 | 596.3 | 592.4 | **155.4** | 593.0 |
-| point-join | 44.4 | 44.2 | — | — | 123.2 | 127.7 | — | — |
-| model-join | 435.0 | 422.6 | **299.5** | 424.6 | 1,148.3 | 1,193.8 | 1,123.4 | 1,255.0 |
+| bar-lookup | 25,857 | 26,410 | — | — | 13,568 | 13,718 | — | — |
+| bar-range | 7,917 | 8,108 | — | — | 1,284 | 1,366 | — | — |
+| day-slice | 1,724 | 1,724 | **27,181** | 1,666 | 1,952 | 1,947 | **12,604** | 2,022 |
+| symbol-history | 116 | 136 | 132 | 138 | 18 | 24 | 24 | 25 |
+| cross-join | 1,670 | 1,677 | **19,982** | 1,674 | 1,617 | 1,633 | **6,179** | 1,630 |
+| point-join | 21,932 | 22,172 | — | — | 7,688 | 7,515 | — | — |
+| model-join | 2,274 | 2,355 | **1,499** | 2,300 | 863 | 799 | 858 | 794 |
 
 *(a dash is a shape whose column is a pk — a Cabin on a pk column is refused)*
 
-**The Cabin is worth 15.3× on the day slice and 12.3× on the cross-join**, and
-in both cases it beats PostgreSQL's btree index on the same column — 37.9 µs
-against 68.7, and 48.5 against 155.4. `dropped` returns both to within 3% of
-cold, which is the control: the Cabin was the whole difference.
+**The Cabin is worth 15.8× on the day slice and 12.0× on the cross-join**, and
+in both cases it beats PostgreSQL's btree index on the same column — 27,181/s
+against 12,604, and 19,982 against 6,179. `dropped` returns both to within 3%
+of cold, which is the control: the Cabin was the whole difference.
 
-At **252 bars** the same Cabins are worth 1.34× and 1.25× (50.3 → 37.5, 61.7 →
-49.3), because the walk they replace is already cheap. The Cabin's benefit
-therefore tracks the relation, which is the per-row-to-fixed conversion in the
-same form §6 measures for the index-less shapes.
+**On `model-join` the same Cabin costs 34%** — 1,499/s against a cold 2,274 —
+and that row is worth as much as the two wins. The shape's argument is a model
+id drawn from a wider pool than `--warm-keys` cycles, so its hit rate is low
+and what remains is the probe's own cost paid on top of the walk. It is the
+scenario3 result in miniature, inside the same cell as the two that go the
+other way.
+
+At **252 bars** the two winning Cabins are worth 1.37× and 1.29× (19,315 →
+26,476 and 15,557 → 20,135), because the walk they replace is already cheap.
+The Cabin's benefit therefore tracks the relation, which is the
+per-row-to-fixed conversion in the same form §6 measures for the shapes with
+no accelerator at all.
 
 **Why this does not contradict `bench/results-scenario3-library.md`**, where
-the same structure was 1.8× *worse* than no accelerator at all. A Cabin is
+the same structure serves 0.59× of what no accelerator at all does — and why
+the `model-join` row above is that same result appearing here. A Cabin is
 authoritative only for values a query has already observed, so its benefit is
 a function of how often a probe's argument repeats. Here `--warm-keys 8`
 cycles eight arguments through hundreds of operations and the hit rate is
@@ -225,9 +249,9 @@ which is the input the `CABIN AUTO` threshold in `docs/feat-cabin.md` §11 is
 still open on.
 
 `symbol-history` is the counter-case on both engines: its result set grows
-with the relation, so neither the Cabin (7,505 against 8,645 cold) nor
-PostgreSQL's index (40,062 against 54,929) can make it fixed-cost. An
-accelerator removes the cost of *finding* rows, never of *having* them.
+with the relation, so neither the Cabin (132/s against 116 cold) nor
+PostgreSQL's index (24/s against 18) can make it fixed-cost. An accelerator
+removes the cost of *finding* rows, never of *having* them.
 
 ## 8. The write side: identical at batch 1, 1.73× apart at batch 1,000
 
