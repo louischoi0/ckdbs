@@ -161,7 +161,8 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 }  // namespace
 
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt) {
+                                     const parser::IndexStmt& stmt, std::uint64_t trx_id,
+                                     catalog::CatalogRowRef* written) {
     auto oid = catalog.FindTableOidByName(stmt.table_name);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
@@ -275,7 +276,7 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     // duplicate-name refusals all live in the catalog and are deliberately
     // not restated here: two answers to "why not" is how one of them ends up
     // wrong.
-    auto index_oid = catalog.CreateIndex(def);
+    auto index_oid = catalog.CreateIndex(def, trx_id, written);
     if (!index_oid.ok()) return index_oid.status();
 
     IndexDdlResult out;
@@ -298,13 +299,16 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
     return out;
 }
 
-StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt) {
+StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
+                                  std::uint64_t trx_id, catalog::CatalogRowChange* change) {
     auto row = catalog.FindIndexByName(stmt.index_name);
     if (!row.ok()) {
         return Status::NotFound("no index named '" + stmt.index_name + "' (byte " +
                                 std::to_string(stmt.byte_offset) + ")");
     }
-    if (Status s = catalog.DropIndex(row.value().index_oid); !s.ok()) return s;
+    if (Status s = catalog.DropIndex(row.value().index_oid, trx_id, change); !s.ok()) {
+        return s;
+    }
     return row.value().index_oid;
 }
 

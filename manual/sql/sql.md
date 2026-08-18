@@ -609,10 +609,14 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   until the client rolls back. An autocommit statement is its own
   transaction and unwinds fully.
 - Closing a connection with a transaction open rolls it back.
-- **`CREATE TABLE` is transactional** (2026-08-16): inside an explicit
-  transaction it is rolled back by `ROLLBACK`, and until it commits no
-  other session can see the relation by any route — `SELECT`, `INSERT`,
-  `UPDATE`, `DELETE`, `DESCRIBE` or `SHOW TABLES`. Two limits, both
+- **`CREATE TABLE`, `DROP TABLE`, `CREATE INDEX` and `DROP INDEX` are
+  transactional** (2026-08-16): inside an explicit transaction they are
+  rolled back by `ROLLBACK`. For `CREATE TABLE` and both index
+  statements, nothing is visible to another session until it commits —
+  by any route: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DESCRIBE`,
+  `SHOW TABLES` or `SHOW INDEXES`. **`DROP TABLE` is the exception**: it
+  rolls back, but other sessions see it *before* it commits (see its own
+  entry). Two limits, both
   deliberate:
   - **Not crash-durable.** Catalog writes are still unlogged and the
     catalog is not recovered, so a committed `CREATE TABLE` survives a
@@ -623,8 +627,8 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
     relation. The refusal is deliberate — the alternative is two
     relations claiming one name — and it can be spurious if the first
     transaction rolls back.
-- Other DDL (`DROP TABLE`, `ALTER TABLE`, indexes, cabins, patterns,
-  assertions) is **not** transactional and is not rolled back.
+- Other DDL (`ALTER TABLE`, cabins, patterns, assertions) is **not**
+  transactional and is not rolled back.
 
 **Durability class.** Three classes exist — `strict` (D1, fsync per commit),
 `group` (D2, default), `relaxed` (D3) — but the class is set by the

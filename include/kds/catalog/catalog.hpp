@@ -771,7 +771,11 @@ public:
     // It does **not** build the tree or check the key columns' types: the
     // root page is allocated and formatted by the caller, which is what
     // keeps the catalog free of the index page format.
-    StatusOr<Oid> CreateIndex(const IndexDef& def);
+    // `trx_id` / `where` as on `CreateTable` (DT5): the row is stamped
+    // with the creating transaction and its address reported, so a
+    // rollback can retire it.
+    StatusOr<Oid> CreateIndex(const IndexDef& def, std::uint64_t trx_id = kBootstrapXid,
+                               CatalogRowRef* where = nullptr);
 
     // Every refusal `CreateIndex` makes, without writing anything.
     //
@@ -791,9 +795,19 @@ public:
     // engine yet - so a dropped index leaks its tree until page reclamation
     // exists, exactly as a dropped Cabin's memory and a superseded var-heap
     // value do.
-    Status DropIndex(Oid index_oid);
+    // Transactional when given an id: the row is **delete-marked**
+    // rather than retired and the change reported, so a rollback clears
+    // the mark. Unlike `DROP TABLE` this is also *isolated* - there is no
+    // in-place retype, so a reader that cannot see the dropper still sees
+    // the index (spec-ddl-transactional.md §5a).
+    Status DropIndex(Oid index_oid, std::uint64_t trx_id = kBootstrapXid,
+                      CatalogRowChange* change = nullptr);
 
-    StatusOr<std::vector<SysIndexRow>> ListIndexes();
+    // `view` as on `ListTables` (DT3): `SHOW INDEXES` answers "which
+    // indexes exist", which is a schema question and not a diagnostic -
+    // so it filters like the other schema routes rather than reporting
+    // whatever is on the page.
+    StatusOr<std::vector<SysIndexRow>> ListIndexes(const txn::ReadView* view = nullptr);
     StatusOr<std::vector<SysIndexRow>> FindIndexesForTable(Oid table_oid);
     StatusOr<SysIndexRow> FindIndexByName(std::string_view name);
 

@@ -9,8 +9,21 @@ exists in `docs/workplan-drop-table.md`.
 
 ## Where to pick this up
 
-**DT1 through DT7 done (2026-08-15/16); the milestone is complete except
-DT8, which was never scheduled.**
+**The milestone is complete (2026-08-15/16): DT1-DT7, and v1's full
+scope — `CREATE TABLE`, `DROP TABLE`, `CREATE INDEX`, `DROP INDEX`.**
+DT8 (durability) was never scheduled and stays deferred by name.
+
+The index pair landed last and taught the milestone's sharpest lesson.
+`DROP INDEX` **is** isolated where `DROP TABLE` is not, which is what
+proves §5a's limit belongs to the `sys.objects` *retype* — an in-place
+overwrite with no undo chain — rather than to drops in general. And the
+test asserting that isolation failed at first for a reason worth
+keeping: `SHOW INDEXES` had been classified as a *diagnostic* alongside
+`SHOW ACCESS` and `SHOW BUDGET`. It is not. A surface reporting **schema
+objects** is a resolution route and must filter; one reporting **engine
+state** is a diagnostic and must not. That misclassification let an
+uncommitted `DROP INDEX` be visible to everyone while the rest of the
+catalog hid it, and only an adversarial test found it.
 
 **Spec §5's scope line was amended 2026-08-16 to match what shipped**: it
 had named `CREATE INDEX` / `DROP INDEX` in v1 and they were not built.

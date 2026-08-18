@@ -2250,7 +2250,8 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
     return Status::OK();
 }
 
-StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
+StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
+                                    CatalogRowRef* where) {
     // Re-checked here even when the caller already asked: this is the door
     // every non-DDL caller comes through, and a check that only runs when
     // someone remembers to ask is not a check.
@@ -2281,7 +2282,13 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
         row.covered_cols[i] = def.covered_cols[i];
     }
 
-    if (Status s = InsertRow(store_, kCatalogPageIndexes, row, kBootstrapXid); !s.ok()) return s;
+    if (Status s = InsertRow(store_, kCatalogPageIndexes, row, trx_id, where); !s.ok()) {
+        return s;
+    }
+    if (where != nullptr) {
+        where->oid = row.index_oid;
+        where->rel_oid = kSysIndexesTable;
+    }
 
     // **Bumped**, where InsertIndexRow() deliberately did not. That comment
     // was true while nothing cached anything derived from sys.indexes; an
@@ -2296,25 +2303,52 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def) {
     return row.index_oid;
 }
 
-Status Catalog::DropIndex(Oid index_oid) {
+Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange* change) {
+    const bool transactional = trx_id != kBootstrapXid;
+    PageId acted_page = kInvalidPageId;
+    CatalogRowChange marked;
     auto acted = ForFirstRow<SysIndexRow>(
         store_, kCatalogPageIndexes,
         [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
-            const heap::PageView::Tuple&) -> StatusOr<bool> {
+            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.index_oid != index_oid) return false;
+            if (tuple.deleted) return false;  // already marked by this transaction
 
-            // Retired, not delete-marked - DropCabin() and RetirePattern()
-            // state the argument, and it is the same one here.
-            if (Status s = page.RetireSlot(i); !s.ok()) return s;
+            // Retired outside a transaction - DropCabin() and
+            // RetirePattern() state that argument and it still holds.
+            // **Inside one, delete-marked**, which a rollback can clear
+            // (DT5's mechanism).
+            //
+            // Unlike `DROP TABLE`, this is *also isolated*: there is no
+            // in-place retype here, so the row's payload survives intact
+            // and a reader that cannot see the dropper still sees the
+            // index. §5a's limit is a property of the tombstone overwrite,
+            // not of drops in general.
+            if (!transactional) {
+                if (Status s = page.RetireSlot(i); !s.ok()) return s;
+            } else {
+                if (Status s = page.DeleteMark(i, trx_id); !s.ok()) return s;
+                marked.slot = i;
+                marked.oid = index_oid;
+                marked.rel_oid = kSysIndexesTable;
+                marked.prior_trx_id = tuple.trx_id;
+                marked.prior_undo_ptr = tuple.undo_ptr;
+                marked.deleted = true;
+            }
 
             BumpVersion("sys.indexes drop");
             if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
                 log_->Info("catalog", "dropped index oid " + std::to_string(index_oid));
             }
             return true;
-        });
+        },
+        &acted_page);
     if (!acted.ok()) return acted.status();
     if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+    if (transactional && change != nullptr) {
+        marked.page_id = acted_page;  // known only once the walk found it
+        *change = std::move(marked);
+    }
     return Status::OK();
 }
 
@@ -2349,8 +2383,8 @@ Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root) {
     return Status::OK();
 }
 
-StatusOr<std::vector<SysIndexRow>> Catalog::ListIndexes() {
-    return ScanAll<SysIndexRow>(store_, kCatalogPageIndexes);
+StatusOr<std::vector<SysIndexRow>> Catalog::ListIndexes(const txn::ReadView* view) {
+    return ScanAll<SysIndexRow>(store_, kCatalogPageIndexes, view);
 }
 
 StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {
