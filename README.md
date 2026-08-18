@@ -242,7 +242,8 @@ Two operating decisions worth stating because they were made *from measurement*,
 
 **Observability is the deliverable, not a nicety.** `SHOW CABIN_OPTIMIZER` reports every managed Cabin with its state, net-benefit score, hint hit rate, coverage, pages, and last action *with the scores that produced it*; `ANALYZE` marks a probe served by an optimizer-managed Cabin. The controller's whole claim is auditable after the fact.
 
-**Measured** (`bench/results-cabin-optimizer.md`, `-days.md`):
+**Measured** (the run is no longer written up in `bench/`; the driver is
+`tools/cabin_optimizer_benchmark.py`):
 
 | Question | Answer |
 |---|---|
@@ -404,7 +405,7 @@ Every number below comes from a results file under [`bench/`](bench/), each reco
 
 ### Environment and method
 
-One method, established in [`bench/results.md`](bench/results.md) and kept by every later file:
+One method, kept by every results file in `bench/`:
 
 | | |
 |---|---|
@@ -494,27 +495,18 @@ Ground rules, learned the hard way: measure `build-release` only (`./build` is D
 
 ### Full results index
 
+`bench/` keeps a results document for each whole-workload scenario and for
+nothing else. The narrower measurements — the id allocator, the fold, the
+index's write cost, the durability ladder, the statistics feed and the rest —
+were each written up once and have been removed; their drivers are still in
+`tools/`, documented in `bench/docs/README.md`, and re-running one is how to
+get the number back.
+
 | File | What it measures |
 |---|---|
-| [`bench/results.md`](bench/results.md) | The original four-phase client-path comparison (partly superseded — its own header says which parts) |
-| [`bench/results-waystone-vs-pg.md`](bench/results-waystone-vs-pg.md) | pk point access vs PostgreSQL's btree — the 6× result |
-| [`bench/results-waystone-v2.md`](bench/results-waystone-v2.md) / [`-waystone.md`](bench/results-waystone.md) | Waystone's win and its overhead, heap and btree |
 | [`bench/results-scenario1-vs-pg.md`](bench/results-scenario1-vs-pg.md) | Joins, subqueries, ranges at three sizes — the fixed-cost/per-row fit and the crossover |
-| [`bench/results-scenario2-freight.md`](bench/results-scenario2-freight.md) | Where a whole transaction spends its time — FK-checked writes and mixed reads |
-| [`bench/results-scenario3-library.md`](bench/results-scenario3-library.md) | What a non-pk equality costs: Cabin vs index vs walk vs PostgreSQL |
-| [`bench/results-latency-matrix.md`](bench/results-latency-matrix.md) | TPS and tail latency, 1 and 4 connections, vs `synchronous_commit=on` |
-| [`bench/results-index.md`](bench/results-index.md) | Secondary indexes: read win, write cost, build cost, the crossover |
-| [`bench/results-aggregate.md`](bench/results-aggregate.md) | The fold's cost by group count |
-| [`bench/results-cabin.md`](bench/results-cabin.md) | Cabin on a real device, and the tmpfs warning |
-| [`bench/results-cabin-optimizer.md`](bench/results-cabin-optimizer.md) / [`-days.md`](bench/results-cabin-optimizer-days.md) | The physical optimizer's controller: idle cost, the 10.9× improvement case, and three business days vs PostgreSQL |
-| [`bench/results-physical-optimizer-shadow.md`](bench/results-physical-optimizer-shadow.md) | Shadow mode's idle cost (zero) and report cost |
-| [`bench/results-txn.md`](bench/results-txn.md) / [`-txn-layers.md`](bench/results-txn-layers.md) / [`-txn-layer-budget.md`](bench/results-txn-layer-budget.md) | MVCC's read-path cost; the durability ladder; the undo-page fix (716 → 1,344 TPS) |
-| [`bench/results-assertion.md`](bench/results-assertion.md) | Assertion admission checks on the INSERT path — and why no PostgreSQL twin exists |
-| [`bench/results-bulk-insert.md`](bench/results-bulk-insert.md) | Multi-row VALUES against the per-row pipeline, batch ladder vs PostgreSQL |
-| [`bench/results-business-stress.md`](bench/results-business-stress.md) | The four-table business mix under sustained load — and the 10× tmpfs finding |
-| [`bench/results-keystone-alloc.md`](bench/results-keystone-alloc.md) | What the id allocator costs, and why the block size is 4096 |
-| [`bench/results-access-stats.md`](bench/results-access-stats.md) | The statistics feed's overhead |
-| [`bench/results-multicore.md`](bench/results-multicore.md) | The multi-core parity baseline |
+| [`bench/results-scenario2-freight.md`](bench/results-scenario2-freight.md) | Where a whole transaction spends its time — the fsync's share, the options matrix, lost updates under READ COMMITTED, and PostgreSQL beside it |
+| [`bench/results-scenario3-library.md`](bench/results-scenario3-library.md) | What a non-pk equality costs: index vs Cabin vs walk vs PostgreSQL, and the join that does not use the index |
 
 ---
 

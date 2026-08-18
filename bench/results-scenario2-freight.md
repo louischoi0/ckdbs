@@ -36,7 +36,7 @@ by `tools/scenario2_freight.py`. How to run it: `bench/docs/README.md`.
 | device | `/dev/root` — Azure, ext4, 247 GB with 223 GB free. **Not tmpfs**; every data file under `$HOME/bench-s2-*/` |
 | kernel / host | 6.17.0-1022-azure, Ubuntu 24.04, AMD EPYC 9V74, **2 vCPUs** |
 | KDS server | `cores = 1`, `durability = group`, `placement = creating`, everything else default — including `buffer_pool_frames = 0`, so the eviction sweep armed in MG03–MG06 is present and never fires |
-| ports | 15501 (this engine), 15502/15503 (the A/B engines of `results-scenario2-engine-ab.md`). Not the documented 15432, which another process on this box binds intermittently; every cell refuses to start if its port is already bound |
+| ports | 15501. Not the documented 15432, which another process on this box binds intermittently; every cell refuses to start if its port is already bound |
 | client | one connection per booker, plus the driver's analytic reporter process, Python driver |
 | scale | 2,000 organizations, 200 ships, 2,000 voyages, **100,000 cargos** — except the ladder (§9) and the contention cells (§11), which say their own |
 | work | `--bookings 1500 --seed 1 --verify 25` in every cell. Equal work, not equal time |
@@ -163,9 +163,10 @@ by the round trip; the engine's own work is below this driver's resolution
 for every statement except the commit. That is a statement about the
 measurement, not about the engine, and it is why the wait table above is the
 honest unit of analysis rather than these rows. It is also why a real
-statement-side change in this engine does not show up in this table or in the
-TPS column at all — `bench/results-scenario2-engine-ab.md` resolves one, by
-interleaving two builds instead of reading one run's rows.
+statement-side change in this engine would not show up in this table or in
+the TPS column at all: resolving one needs two builds interleaved against
+each other, which is a different measurement from this one and is not in this
+file.
 
 **The eight statements are tight and the commit is not.** Every statement's
 p99 sits within 1.6× of its own p0 and its p95 tracks its p50; the commit's
@@ -625,8 +626,9 @@ been vacuumed, so both carry slack this run did not try to remove.
   eight-booker rows are already oversubscribed 4:1, so their absolute
   throughput is a scheduling result as much as an engine one.
 - **Whether a Cabin or an index removes the `scan` cost.** §8 says the
-  derived column stands in for a secondary access path; measuring the
-  replacement belongs to `bench/results-index.md`, not here.
-- **Anything about recovery.** Every cell shuts down cleanly, and a booking
-  workload that crashed mid-matrix is `bench/results-wal-recovery.md`'s
-  subject.
+  derived column stands in for a secondary access path. Measuring the
+  replacement is `tools/index_benchmark.py`'s question and this workload does
+  not ask it.
+- **Anything about recovery.** Every cell shuts down cleanly. What a booking
+  workload costs when it crashes mid-matrix is `tools/mount_cost_benchmark.py`'s
+  question, against `docs/workplan-wal-recovery.md`.

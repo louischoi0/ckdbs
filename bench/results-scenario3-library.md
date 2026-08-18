@@ -444,13 +444,13 @@ is a ckdbs-only comparison against ckdbs's own alternatives.
   the engine exposes no per-step timing that would say which part of that
   path is the cost. `docs/observability.md` owns that gap and it is unbuilt.
 - **The Cabin's hit rate, and the space each structure costs.** This run
-  measures neither. The superseded
-  `bench/results-scenario3-library-2026-08-08.md` §11 does — it models the
-  hit rate as a coupon-collector function of key space against probe count,
-  and it counts the pages a Cabin and an index each add to the data file.
-  Those are the mechanism behind §7's inversion and they are why that file is
-  still in the tree; its **numbers** are a different machine and a different
-  engine and must not be differenced against anything here.
+  measures neither, and they are the mechanism behind §7's inversion: a Cabin
+  is authoritative only for values already observed, so its benefit is a
+  function of how often a probe's argument repeats, and holding
+  matches-per-key constant necessarily grows the key space with the relation.
+  Measuring that needs the driver to report hit rate per cell, which it does
+  not. The page counts each structure adds to the data file are equally
+  unmeasured here.
 - **What a covering index is worth.** §8 shows this matrix contains no shape
   whose projection fits inside a covering key, so the `covering` column
   measures its cost and none of its benefit.
