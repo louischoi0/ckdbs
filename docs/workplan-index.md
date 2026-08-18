@@ -619,3 +619,31 @@ The shape records the **pinned key columns and no others** - the columns the
 access was assigned for, not every column the residual filters - which is the
 rule `kCabinProbe` already follows and the reason an index probe and a filter
 scan on one relation stay two shapes rather than merging into one.
+
+## Milestone IX-M6 — the correlated probe
+
+### IX17 — `kIndexProbe` keyed by an earlier step's row — **built 2026-08-18**
+
+Spec §8a. The step compiler gains `CorrelatedIndexProbeOf`, reached only
+after the literal `IndexProbeOf` declined: an index whose **leading** key
+column is bound by equality to a column of an earlier step or an enclosing
+chain compiles to a `kIndexProbe` carrying `IndexProbe::key_from`, and the
+executor copies the compile-time padding templates and encodes that column's
+frame value into the leading width per outer row. Every decline — descriptor
+mismatch, encoder refusal, an unresolvable frame reference — takes the walk,
+which returns identical rows because the join equality stays in the residual.
+
+`IndexProbe::key_from` is the single authority for the key source: the plan
+printer renders it as `key=` directly, and `Step::key` keeps its two-kind
+contract — the outer column's decode is already forced by the join equality
+in the residual, which the read-mask pass walks. Trust class and
+`AccessColumnsOf`'s pinned-columns rule are unchanged. Cross-core is not:
+an index step cannot ship, so on a multi-core instance a peer-owned join
+whose inner side takes this form is refused by the affinity check rather
+than answered — spec §8a states it plainly and `docs/known-gaps.md` carries
+the entry with the recorded fix (a ship-time downgrade to the walk).
+
+This closes the shape equality propagation (docs/parser-v2.md §5) cannot
+reach: a join with no literal to propagate — `WHERE u.id BETWEEN ? AND ?`
+over `ON l.user_id = u.id`, a correlated `EXISTS` — which paid a full inner
+walk per outer row while the join column's index sat unused.

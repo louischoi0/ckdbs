@@ -10,6 +10,7 @@
 
 #include <string>
 
+#include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/tuple_verify.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -679,11 +680,58 @@ private:
             co_return co_await RunWalkStep(steps, index, step, access);
         }
 
+        // The correlated form (feat-index.md §8a): the bounds are built
+        // here, per outer row - the padding templates copied, the frame
+        // value encoded once into the leading width. Every decline takes
+        // the walk, per this function's opening rule.
+        const std::vector<std::byte>* low = &probe.low;
+        const std::vector<std::byte>* high = &probe.high;
+        if (probe.key_from.has_value()) {
+            // The live index's leading column must be the one the compiler
+            // chose: the value is encoded into *that* column's key format,
+            // and a different one would narrow the range to a column the
+            // residual never bound - a lost row, where the stale cases
+            // above merely walk. Unreachable while index oids are never
+            // reissued; guarded because this is the one decline whose
+            // absence would be a wrong answer rather than an error.
+            if (ix->nkeys == 0 || probe.key_cols.empty() ||
+                probe.key_cols[0] != ix->keys()[0]) {
+                co_return co_await RunWalkStep(steps, index, step, access);
+            }
+            if (!frame_.CanResolve(*probe.key_from)) {
+                co_return Status::Corruption(
+                    "a correlated index probe references a column the frame cannot resolve");
+            }
+            const parser::AstValue& value = frame_.Get(*probe.key_from);
+            // A frame never holds a param at execute; refused rather than
+            // encoded if one ever appears, per KeyFromOperand's discipline.
+            if (value.type == parser::ValueType::kParam) {
+                co_return co_await RunWalkStep(steps, index, step, access);
+            }
+            const catalog::SysColumnRow& col = access.schema.columns[ix->keys()[0]];
+            auto width = IndexKeyColumnWidth(col);
+            if (!width.ok() || width.value() > ix->key_width) {
+                co_return co_await RunWalkStep(steps, index, step, access);
+            }
+            corr_low_.assign(probe.low.begin(), probe.low.end());
+            corr_high_.assign(probe.high.begin(), probe.high.end());
+            if (!EncodeIndexKeyColumn(col, value,
+                                      std::span<std::byte>(corr_low_).subspan(0, width.value()))
+                     .ok()) {
+                co_return co_await RunWalkStep(steps, index, step, access);
+            }
+            // The equality's two bounds share their leading bytes; only the
+            // padding tails differ, so the encode happens once.
+            std::memcpy(corr_high_.data(), corr_low_.data(), width.value());
+            low = &corr_low_;
+            high = &corr_high_;
+        }
+
         StepStats& step_stats = stats_.For(step.step_id);
         index_scratch_.clear();
         seen_pks_.clear();
 
-        auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, probe.low);
+        auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, *low);
         if (!first.ok()) co_return first.status();
         NoteFetch();
         ++step_stats.pages_fetched;
@@ -700,12 +748,12 @@ private:
                 // The descent lands on the first leaf that *could* hold the
                 // low bound, so the entries before it are skipped rather
                 // than assumed absent.
-                if (std::memcmp(sort_key.data(), probe.low.data(), sort_key_width) < 0) {
+                if (std::memcmp(sort_key.data(), low->data(), sort_key_width) < 0) {
                     return storage::VisitControl::kContinue;
                 }
                 // Past the high bound: the leaves to the right are never
                 // fetched, which is what makes a range cost its range.
-                if (std::memcmp(sort_key.data(), probe.high.data(), sort_key_width) > 0) {
+                if (std::memcmp(sort_key.data(), high->data(), sort_key_width) > 0) {
                     return storage::VisitControl::kStop;
                 }
                 ++step_stats.index_entries_scanned;
@@ -1637,6 +1685,15 @@ private:
     // regression once.
     std::vector<std::uint64_t> index_scratch_;
     parser::AstValue covered_scratch_;
+
+    // A correlated index probe's per-row bounds (IndexProbe::key_from): the
+    // compile-time padding templates with the outer row's value encoded into
+    // the leading width. On the runner for index_scratch_'s allocation
+    // reason, and safe against its re-entrancy hazard by a narrower
+    // argument: these are read only inside phase 1's leaf visit, which never
+    // re-enters RunStep - phase 2, which does, no longer touches them.
+    std::vector<std::byte> corr_low_;
+    std::vector<std::byte> corr_high_;
 
     std::vector<Bound> bound_;
     std::vector<const catalog::Schema*> schemas_;

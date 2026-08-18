@@ -485,6 +485,24 @@ There is no purge pass, and readers are deliberately unregistered
 
 ## Concurrency and multicore
 
+- **An indexed join column makes a peer-owned join refuse instead of
+  answer.** The step descriptor refuses to ship any index step, and the
+  pipeline's inner-step eligibility admits only `kProbe`/`kScan`/
+  `kFilterScan` — so on a multi-core instance, `CREATE INDEX` on the join
+  column of a peer-owned relation flips that join's inner step to
+  `kIndexProbe` and the statement from a pipeline run to an affinity
+  `ERR`. Opened by equality propagation (`881f69a`, 2026-08-18: a literal
+  restriction already compiled the inner side to an index probe) and
+  **widened by IX17 the same day** to every join on an indexed column,
+  literal or not. `cores = 1` — the shipping default — is unaffected, and
+  no cross-core test declares an index, which is why no suite catches it.
+  The recorded fix: a **ship-time downgrade** — send the inner step as
+  the walk it would take anyway (`kind = kScan`, aux dropped, residual
+  intact), sound because downgrading any step to a scan cannot change the
+  result, and exactly the pre-`881f69a` behaviour. `docs/feat-index.md`
+  §8a and `docs/workplan-index.md` IX17 state the refusal; the seam is
+  `session_step_client.cpp`'s eligibility plus the descriptor encode.
+
 - **Cross-core execution is two shapes wide, and the second is a join.**
   P4a-P4c (2026-08-10) built the single-relation remote read; **P4d
   completed 2026-08-15** (`docs/workplan-crosscore.md`) and with it a

@@ -408,6 +408,60 @@ Whether a **unique** index could ever be lookup-class is a genuine question
 and is left open in §12. v1 does not need to answer it, because v1 has no
 unique index (IX11).
 
+### 8a. The correlated probe `[AMENDED 2026-08-18 — IX17]`
+
+> **IX17 — a `kIndexProbe` may be keyed by an earlier step's row.** When an
+> index's **leading** key column is bound by equality to a column of an
+> earlier step or an enclosing chain — a join key — the step compiles to a
+> `kIndexProbe` whose leading key value is encoded **per outer row** from
+> the chain frame (`IndexProbe::key_from`), instead of the relation being
+> walked once per outer row.
+
+This is what an index-served inner join side is, and it is the fix for the
+shape equality propagation cannot reach: a join with **no literal** to
+propagate — `ON l.user_id = u.id WHERE u.id BETWEEN ? AND ?`, a correlated
+`EXISTS` — used to pay a full inner walk per outer row (~540 µs per outer
+row at 10,000 rows, measured before this landed) while the join column's
+index sat unused.
+
+What it deliberately does not change:
+
+- **Trust class.** Still search-class; `IsTrailReplayable` does not move.
+  The set-completeness argument above is unchanged by where the key value
+  comes from.
+- **The per-row-encoding rule, by one priced exception.** §9's "no per-row
+  key building" stands for every literal-keyed step; the correlated form
+  encodes exactly one fixed-width column per outer row, priced against the
+  full inner walk it replaces. The compile-time `low`/`high` stay as pure
+  padding templates the executor copies and fills.
+- **Selection purity.** First index in oid order whose leading column
+  carries such an equality, first qualifying conjunct in residual order —
+  no score, since the pinned prefix is always exactly 1. A literal equality
+  that `IndexProbeOf` can encode at compile time always wins over the
+  deferred form. Deeper prefixes mixing deferred and literal columns are
+  out of scope by decision.
+- **The decline rule.** The outer column must share the key column's exact
+  type descriptor (`type_val`, `len`) — the executor encodes the outer
+  row's decoded value into this column's key format, and only an identical
+  descriptor makes that the encoding the index was built from. Any decline,
+  at compile or per row, takes the walk and returns identical rows by the
+  residual.
+- **Cross-core — a refusal today, stated plainly.** An index step cannot
+  ship (the descriptor refuses it) and the pipeline's inner-step
+  eligibility admits only `kProbe`/`kScan`/`kFilterScan` — so on a
+  multi-core instance, a join over a peer-owned relation whose inner side
+  compiles to an index probe falls out of the pipeline and lands on the
+  affinity check, which answers **`ERR`, not a slower plan**. The hole was
+  opened by equality propagation (`881f69a`: a literal restriction already
+  produced `kIndexProbe` inner steps) and IX17 widens it from "joins with
+  a literal" to "joins on an indexed column, period" — declaring an index
+  on a peer relation's join column stops such statements answering.
+  `cores = 1` instances are unaffected. The recorded fix is a **ship-time
+  downgrade** — send the inner step as the walk it would take anyway,
+  sound by the residual property — owned by `docs/known-gaps.md`'s entry
+  until it lands; "re-plan locally on the peer" is the descriptor
+  comment's aspiration, not a built path.
+
 ---
 
 ## 9. How the compiler picks one
@@ -457,7 +511,8 @@ The two kinds **execute identically** — both walk the entries between two
 encoded bounds — so the split is a statistics distinction, the same one
 `kFilterScan` draws against `kScan`. The bounds are encoded **at compile
 time**: coercion is a compile-time act (`spec-types.md` §3.1) and so is the
-encoding that follows it, so no per-row key building happens on the read path.
+encoding that follows it, so no per-row key building happens on the read path
+— except the correlated form (§8a), which prices its one per-row encode there.
 `low` pads its unpinned tail with `0x00` and `high` with `0xFF`, which are the
 true bounds because a key column's discriminator byte is 1 for every value
 that exists.

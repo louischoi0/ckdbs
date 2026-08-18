@@ -45,7 +45,7 @@ statements, not style.
 | Waystone (pattern-keyed access trails) | Recording + replay built (P01-P13); retention/decay/epoch bumps not (P15-P17) | `docs/waystone-concpets.md`, `docs/waystone-workplan.md` |
 | CREATE PATTERN | Built through spec §8 step 4 | `docs/spec-create-pattern-user-defined-patterns-v1.md` |
 | Cabin (value-observed authoritative store) | v1 built (CB01-CB11); entry sets memory-resident | `docs/feat-cabin.md`, `docs/cabin-workplan.md` |
-| Secondary indexes (multi-column, covering) | All built (IX01-IX16) | `docs/feat-index.md`, `docs/workplan-index.md` |
+| Secondary indexes (multi-column, covering) | All built (IX01-IX17; IX17 2026-08-18: the correlated probe — a join key's index entered per outer row, spec §8a) | `docs/feat-index.md`, `docs/workplan-index.md` |
 | Foreign keys | Declared and enforced (FK-M1..FK-M5); CASCADE/SET NULL out of v1 | `docs/impl-foreign-keys.md` |
 | Assertions (group-level constraints) | **Complete and enforcing** (AST01-AST10). The recovery-side registry rebuild — outside the AST series — **landed 2026-08-12** as `docs/workplan-wal-recovery.md` RC07: `enforcing=1` immediately after a restart | `docs/feat-assertion.md`, `docs/workplan-assertion.md` |
 | Access statistics | Built (`SHOW ACCESS`) | `docs/heap-and-tuple.md` §7 |

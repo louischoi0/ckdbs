@@ -420,6 +420,116 @@ TEST_F(IndexCompileTest, AJoinRestrictionOnTheOtherRelationReachesTheIndex) {
     EXPECT_EQ(Run(written), Run(by_hand));
 }
 
+// ---- The correlated probe (spec §8a, IX17) --------------------------------
+
+TEST_F(IndexCompileTest, AJoinKeyWithNoLiteralEntersTheIndexPerOuterRow) {
+    // The shape equality propagation cannot reach: no literal exists on the
+    // join-key class, so before IX17 the inner side was a full Scan per
+    // outer row - 40 rows examined per outer row here, the whole relation.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+    for (int i = 0; i < 8; ++i) Ok("INSERT INTO u VALUES (" + std::to_string(100 + i) + ")");
+    for (int i = 0; i < 40; ++i) {
+        Ok("INSERT INTO l VALUES (" + std::to_string(1 + i % 8) + ", " + std::to_string(i) + ")");
+    }
+
+    const std::string sql =
+        "SELECT l.v FROM u JOIN l ON l.uid = u.id WHERE u.id BETWEEN 1 AND 4";
+    const std::string plan = Plan(sql);
+    // The inner step probes the index keyed by the outer row, and the plan
+    // says which column keys it.
+    EXPECT_NE(plan.find("step 1 IndexProbe"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("key=0:0.0"), std::string::npos) << plan;
+    // Four outer rows at five matches each: twenty index entries scanned,
+    // not four scans of forty rows.
+    EXPECT_NE(plan.find("index_scanned=20"), std::string::npos) << plan;
+
+    // The identical rows the walk returns, proven against an unindexed twin
+    // of the same data.
+    Ok("CREATE TABLE l2 (id int64, uid int64, v int64) BTREE");
+    for (int i = 0; i < 40; ++i) {
+        Ok("INSERT INTO l2 VALUES (" + std::to_string(1 + i % 8) + ", " + std::to_string(i) +
+           ")");
+    }
+    // Aliased `l` so the two replies' headers match and the comparison is
+    // over the rows alone.
+    EXPECT_EQ(Run(sql),
+              Run("SELECT l.v FROM u JOIN l2 AS l ON l.uid = u.id WHERE u.id BETWEEN 1 AND 4"));
+}
+
+TEST_F(IndexCompileTest, TheOnClauseOrientationDoesNotDecideTheCorrelatedProbe) {
+    // `ON l.uid = u.id` and `ON u.id = l.uid` are the same join; both must
+    // give the inner step the probe, as the pk arm already guarantees for
+    // its kinds.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+    Ok("INSERT INTO u VALUES (1)");
+    Ok("INSERT INTO l VALUES (1, 10)");
+
+    for (const char* on : {"l.uid = u.id", "u.id = l.uid"}) {
+        const std::string plan = Plan(std::string("SELECT l.v FROM u JOIN l ON ") + on +
+                                      " WHERE u.id BETWEEN 1 AND 2");
+        EXPECT_NE(plan.find("step 1 IndexProbe"), std::string::npos) << on << "\n" << plan;
+    }
+}
+
+TEST_F(IndexCompileTest, ACorrelatedExistsProbesTheIndexInsteadOfWalking) {
+    // The other owner of the per-outer-row walk: a correlated sub-chain.
+    // Its join equality reaches outward (up == 1), which is exactly the
+    // "available before this step runs" case - the enclosing row is bound
+    // before the sub-chain opens.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+    for (int i = 0; i < 4; ++i) Ok("INSERT INTO u VALUES (" + std::to_string(100 + i) + ")");
+    Ok("INSERT INTO l VALUES (2, 20)");
+
+    const std::string sql =
+        "SELECT id FROM u WHERE EXISTS (SELECT l.id FROM l WHERE l.uid = u.id)";
+    const std::string plan = Plan(sql);
+    EXPECT_NE(plan.find("IndexProbe"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("key=1:0.0"), std::string::npos) << plan;
+
+    Ok("CREATE TABLE l2 (id int64, uid int64, v int64) BTREE");
+    Ok("INSERT INTO l2 VALUES (2, 20)");
+    EXPECT_EQ(Run(sql),
+              Run("SELECT id FROM u WHERE EXISTS (SELECT l2.id FROM l2 WHERE l2.uid = u.id)"));
+}
+
+TEST_F(IndexCompileTest, TheCorrelatedProbeDeclinesAMismatchedDescriptor) {
+    // int32 against int64: the executor would encode the outer row's int64
+    // value into an int32 key format the index was not built from, so the
+    // compiler keeps the walk instead.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE ln (id int64, uid int32, v int64) BTREE");
+    Ok("CREATE INDEX ixn ON ln (uid)");
+    const std::string plan =
+        Plan("SELECT ln.v FROM u JOIN ln ON ln.uid = u.id WHERE u.id BETWEEN 1 AND 2");
+    EXPECT_EQ(plan.find("step 1 IndexProbe"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("step 1 Scan"), std::string::npos) << plan;
+}
+
+TEST_F(IndexCompileTest, ALiteralEqualityStillBeatsTheCorrelatedForm) {
+    // Propagation gives the inner step a literal on the indexed column; the
+    // compile-time-encoded probe wins over the deferred one - same descent,
+    // no per-row encode - which the absence of `key=` on the step line is
+    // the visible half of.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+    Ok("INSERT INTO u VALUES (1)");
+    Ok("INSERT INTO l VALUES (1, 10)");
+
+    const std::string plan =
+        Plan("SELECT l.v FROM u JOIN l ON l.uid = u.id WHERE u.id = 1");
+    const std::size_t at = plan.find("step 1 IndexProbe");
+    ASSERT_NE(at, std::string::npos) << plan;
+    const std::size_t line_end = plan.find("\\n", at);
+    EXPECT_EQ(plan.substr(at, line_end - at).find("key="), std::string::npos) << plan;
+}
+
 TEST_F(IndexCompileTest, PropagationDeclinesAMatchingTypeWithADifferentLen) {
     // decimal(10,2) and decimal(18,2) share type_val and scale - the one
     // reachable pair that passes the column-column compare while differing

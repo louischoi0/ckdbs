@@ -14,6 +14,7 @@
 // construction rather than by two call sites agreeing.
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/row_codec.hpp"
+#include "kds/storage/index/index_page.hpp"  // kIndexPkWidth - the sort-key suffix
 
 namespace kds::exec {
 
@@ -609,6 +610,28 @@ const parser::AstValue* EqualityOnColumn(const Step& step, std::uint16_t slot,
     return nullptr;
 }
 
+// Everything about a probe that comes from the index alone: the catalog
+// fields, the column lists, and the padding templates the bounds are built
+// on top of - `low` all 0x00 and `high` all 0xFF, the true tail bounds
+// because a key column's discriminator byte is 1 for every value that
+// exists. One constructor for both selection paths, so a field added to
+// `IndexProbe` cannot be set at one site and forgotten at the other; the
+// caller sets only what its own selection decided.
+IndexProbe ProbeOverIndex(const catalog::TableAccess::IndexRef& ix) {
+    IndexProbe probe;
+    probe.index_oid = ix.index_oid;
+    probe.root_page_id = ix.root_page_id;
+    probe.key_width = ix.key_width;
+    probe.entry_width = ix.entry_width;
+    probe.key_cols.assign(ix.keys().begin(), ix.keys().end());
+    probe.covered_cols.assign(ix.covered().begin(), ix.covered().end());
+    const std::size_t sort_key_width =
+        static_cast<std::size_t>(ix.key_width) + index::kIndexPkWidth;
+    probe.low.assign(sort_key_width, std::byte{0x00});
+    probe.high.assign(sort_key_width, std::byte{0xFF});
+    return probe;
+}
+
 // The index this step should enter, or nullopt.
 //
 // Picks the **longest usable key prefix**, ties broken by lowest
@@ -639,22 +662,11 @@ std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const
         const int score = static_cast<int>(eq) * 2 + (ranged ? 1 : 0);
         if (score == 0 || score <= best_score) continue;
 
-        IndexProbe probe;
-        probe.index_oid = ix.index_oid;
-        probe.root_page_id = ix.root_page_id;
-        probe.key_width = ix.key_width;
-        probe.entry_width = ix.entry_width;
+        // The bounds are encoded into the templates now: coercion is a
+        // compile-time act and so is the encoding that follows it.
+        IndexProbe probe = ProbeOverIndex(ix);
         probe.eq_prefix = eq;
         probe.ranged = ranged;
-        probe.key_cols.assign(ix.keys().begin(), ix.keys().end());
-        probe.covered_cols.assign(ix.covered().begin(), ix.covered().end());
-
-        // The two bounds, encoded now. `low` pads its unpinned tail with
-        // 0x00 and `high` with 0xFF - the true bounds, because a key
-        // column's discriminator byte is 1 for every value that exists.
-        const std::size_t sort_key_width = static_cast<std::size_t>(ix.key_width) + 8;
-        probe.low.assign(sort_key_width, std::byte{0x00});
-        probe.high.assign(sort_key_width, std::byte{0xFF});
 
         std::size_t at = 0;
         bool encoded = true;
@@ -689,6 +701,81 @@ std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const
         best_score = score;
     }
     return best;
+}
+
+// The correlated index probe (docs/feat-index.md §8a), or nullopt: an index
+// whose **leading** key column is bound by equality to a column of an
+// *earlier* step or an enclosing chain - a join key - so the descent is
+// keyed per outer row instead of the relation being walked per outer row.
+// This is what an index-served inner join side is; before it, a join on an
+// indexed non-pk column read the whole inner relation once per outer row
+// (bench/results-scenario3-library.md §9a.6 named the gap).
+//
+// Reached only after `IndexProbeOf` declined, so a literal equality that
+// can be encoded at compile time always wins over a deferred one - it
+// serves the same descent without the per-row encode. Selection is the
+// first index in oid order whose leading column has such an equality,
+// taking the first qualifying conjunct in residual order: no score, since
+// `eq_prefix` is always exactly 1 here (a deeper prefix would mix deferred
+// and literal encoding; out of scope by decision, not omission).
+//
+// Two guards, each a correctness statement:
+//  - **Identical (type_val, len) descriptors** between the outer column and
+//    the index key column, for equality propagation's reason read in the
+//    other direction: the executor encodes the outer row's decoded value
+//    into this column's key format, and only an identical descriptor makes
+//    that encoding the one the index was built from.
+//  - **The other side must be available before this step runs** (an earlier
+//    slot, or `up > 0` - an enclosing chain's row is bound before this
+//    chain opens). A reference to this step or a later one has no value
+//    when the descent happens; same rule as the pk-probe arm.
+std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
+                                                 const catalog::TableAccess& access,
+                                                 const Step& step, std::uint16_t slot) {
+    if (access.indexes.empty()) return std::nullopt;
+
+    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        if (ix.nkeys == 0) continue;
+        const std::uint16_t k0 = ix.keys()[0];
+
+        // Index-level facts, settled once per index rather than once per
+        // conjunct: if the leading column's key width cannot fit, no
+        // conjunct can enter this index.
+        const catalog::SysColumnRow& own_col = access.schema.columns[k0];
+        auto width = IndexKeyColumnWidth(own_col);
+        if (!width.ok() || width.value() > ix.key_width) continue;
+
+        for (const StepPredicate& pred : step.residual) {
+            if (pred.op != parser::CompareOp::kEq) continue;
+            if (pred.rhs.kind != OperandKind::kColumn) continue;
+
+            // Equality is symmetric and an ON clause is written either way
+            // round - both orientations are examined, as the pk-probe arm
+            // does and for its reason.
+            ColumnRef other;
+            if (IsOwnColumn(pred.lhs, slot) && pred.lhs.col_pos == k0) {
+                other = pred.rhs.column;
+            } else if (IsOwnColumn(pred.rhs.column, slot) && pred.rhs.column.col_pos == k0) {
+                other = pred.lhs;
+            } else {
+                continue;
+            }
+            if (other.up == 0 && AvailableAt(other) >= slot) continue;
+
+            const catalog::SysColumnRow& other_col = ColumnAt(scope, other);
+            if (own_col.type_val != other_col.type_val || own_col.len != other_col.len) {
+                continue;
+            }
+
+            // The templates stay as pure padding - the leading width is
+            // encoded per outer row by the executor, from `key_from`.
+            IndexProbe probe = ProbeOverIndex(ix);
+            probe.eq_prefix = 1;
+            probe.key_from = other;
+            return probe;
+        }
+    }
+    return std::nullopt;
 }
 
 // The Cabin this step can probe, or nullopt.
@@ -1441,6 +1528,17 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // dead weight the operator may drop.
                 step.kind = ix->ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
                 step.index = std::move(ix);
+            } else if (auto cx = CorrelatedIndexProbeOf(scope, *scope.relations[i].access, step,
+                                                         static_cast<std::uint16_t>(i));
+                       cx.has_value()) {
+                // The correlated form, after the literal one for the reason
+                // its comment gives, and ahead of the Cabin per spec §9's
+                // ordering: an index is complete for every key value.
+                // `IndexProbe::key_from` is the single authority - the plan
+                // printer renders it, and `Step::key` keeps its two-kind
+                // contract untouched.
+                step.kind = AccessKind::kIndexProbe;
+                step.index = std::move(cx);
             } else if (auto probe = CabinProbeOf(*scope.relations[i].access, step,
                                                   static_cast<std::uint16_t>(i));
                        probe.has_value()) {

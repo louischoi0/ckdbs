@@ -185,6 +185,21 @@ const std::vector<std::string>& Queries() {
         "SELECT id FROM b WHERE owner BETWEEN 1 AND 3 LIMIT 3",
         "SELECT id FROM b WHERE owner = 42 LIMIT 1",
         "SELECT id, owner, qty, sym FROM b LIMIT 5 OFFSET 2",
+
+        // ---- The correlated probe (spec §8a, IX17) ---------------------
+        //
+        // A self-join whose inner side is keyed by the outer row - no
+        // literal for propagation to reach, so with the index declared the
+        // inner step is the per-outer-row IndexProbe, and under
+        // `indexes = off` and in `plain` it is the walk. All four must
+        // agree byte for byte, the same equivalence §1 demands of every
+        // other kind.
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.owner = a.id "
+        "WHERE a.id BETWEEN 1 AND 4",
+        "SELECT a.id FROM b AS a JOIN b AS c ON c.owner = a.id "
+        "WHERE a.id BETWEEN 1 AND 4 LIMIT 3",
+        "SELECT id FROM b AS o WHERE EXISTS "
+        "(SELECT i.id FROM b AS i WHERE i.owner = o.id)",
     };
     return kQueries;
 }

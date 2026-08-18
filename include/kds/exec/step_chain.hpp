@@ -274,6 +274,18 @@ struct IndexProbe {
     // Carried for the access statistics and for IX11's entry-side filtering.
     std::vector<std::uint16_t> key_cols;
     std::vector<std::uint16_t> covered_cols;
+
+    // The correlated form (docs/feat-index.md §8a): the leading key
+    // column's value comes from an *earlier step's row* - a join key - so
+    // it cannot be encoded at compile time. When set, `eq_prefix == 1`,
+    // `ranged == false`, and `low`/`high` above are pure padding templates
+    // (all 0x00 / all 0xFF): the executor copies them and encodes this
+    // column's frame value into the leading width per outer row, which is
+    // the one exception to "no per-row key building" - priced at one
+    // fixed-width encode against the full inner walk it replaces. The
+    // single authority for the key source: the plan printer renders it,
+    // and `Step::key` keeps its two-kind contract.
+    std::optional<ColumnRef> key_from;
 };
 
 // The right-hand side of a compiled predicate: a value the statement
@@ -366,7 +378,9 @@ struct Step {
     AccessKind kind = AccessKind::kScan;
 
     // The pk key, for kLookup (a literal) and kProbe (a column produced
-    // by an earlier step). Empty for every other kind.
+    // by an earlier step). Empty for every other kind - a correlated
+    // kIndexProbe's key source lives in `IndexProbe::key_from`, its single
+    // authority, which the plan printer renders directly.
     std::optional<Operand> key;
 
     // The pk bounds, for kRange. Empty for every other kind.

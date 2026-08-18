@@ -130,6 +130,12 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     os << Indent(depth) << "step " << step.step_id << ' ' << AccessKindName(step.kind) << ' '
        << (step.rel_name.empty() ? "oid=" + std::to_string(step.rel_oid) : step.rel_name);
     if (step.key.has_value()) os << " key=" << FormatOperand(*step.key);
+    // A correlated index probe's key source (docs/feat-index.md §8a),
+    // rendered from the probe's own field - the executor's single
+    // authority; nothing is mirrored into `Step::key` for it.
+    if (step.index.has_value() && step.index->key_from.has_value()) {
+        os << " key=" << FormatColumnRef(*step.index->key_from);
+    }
     if (step.range.has_value()) {
         os << " range=[" << step.range->low << ", " << step.range->high << ']';
     }
