@@ -28,6 +28,9 @@ identical predicate written against one relation compiles to an `IndexProbe`
 and reads **7 pages**. KDS does not push an equality through a join key, so
 the index it has is invisible to the join. PostgreSQL pushes it, reads 14
 buffers, and serves **8,850 statements a second against KDS's 223**.
+*(2026-08-18: closed — the propagation landed as `881f69a` and §9a measures
+it by interleaved A/B at **84.8× on p50**, with every other shape inside the
+replicate floor.)*
 
 **The Cabin still does not convert the cost, and at 10,000 rows it halves
 the throughput.** On the same column and the same predicate it serves **926
@@ -322,6 +325,13 @@ not contain one.
 
 ## 9. The join is the engine's one large loss, and it is one optimization
 
+> **2026-08-18: this loss is closed.** The rewrite this section asks for
+> shipped as `881f69a` (equality propagation through a join key), and §9a
+> below measures it by interleaved A/B against the engine state this section
+> describes. This section stands as the account of *why* the pre-`881f69a`
+> plan cost what it did; its throughput figures describe `9f762a3`, not the
+> current engine.
+
 `join-loan-user` is `SELECT l.book_id, l.due_day, u.member_code FROM loans l
 JOIN users u ON l.user_id = u.id WHERE u.id = ?` — six rows out. At 10,000
 rows ckdbs serves **223 statements a second against PostgreSQL's 8,850, a
@@ -372,6 +382,175 @@ It is also the one shape where ckdbs loses at *every* size — 7,955/s against
 gap widens with the relation, because the scanned side grows and the
 propagated form would not.
 
+## 9a. Addendum, 2026-08-18 — the join gap is closed, and the fix costs nothing measurable
+
+The rewrite §9 named — deriving `l.user_id = 3` from `l.user_id = u.id` and
+`u.id = 3` at compile — landed as `881f69a` (`perf(exec): propagate a join
+key's literal equality to the step that can be keyed on it`,
+`src/exec/step_compiler.cpp`, `docs/parser-v2.md` §5). This addendum
+answers the two questions that change raises and nothing else: **how much of
+§9's loss the propagation recovers, and what the new compile pass costs
+every other statement.** Both by interleaved A/B — the base engine and the
+patched engine alternating cell by cell on the same box within the same
+half hour — which the published matrix above, one engine at one commit,
+could not do. Nothing else in this file is re-measured; every section above
+still describes `9f762a3`.
+
+**The answers: 84.8× on the join's p50 at 10,000 rows, and no other shape
+moved outside the replicate floor.**
+
+### 9a.1 The A/B run
+
+| | |
+|---|---|
+| executed | **2026-08-18 08:10:59 → 08:13:56 UTC**, 12 ckdbs cells, alternating BASE, NEW, BASE, NEW at each size |
+| branch / worktree | `worktree-enhence-join-perf`, in the worktree `enhence-join-perf` |
+| commit measured | **`b058d5d`** (recorded by every cell, `dirty: false`) — a merge of `881f69a` with `eb680e4`; `git diff 881f69a b058d5d -- src include tests` is **empty**, so the engine code measured as NEW is exactly `881f69a`'s |
+| BASE binary | a **copy**, `sha256 fababa23532cd60f…`, built fresh for this run from a temporary worktree at **`eb680e4`** (origin/main, the merge's other parent — the same engine minus the propagation commit), linked 2026-08-18 08:09:43 UTC |
+| NEW binary | a **copy**, `sha256 f9eee9abe6a0e83b…`, from this worktree's `build-release/kds_server` (linked 08:04:15 UTC — one minute *before* `881f69a` was committed at 08:05:13; the tree was clean and `cmake --build` immediately before the run considered the binary current against HEAD's sources, so it is the engine at `b058d5d`) |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, **`KDS_WITH_TLS=OFF`** — the published run above was built `KDS_WITH_TLS=ON`; this box has no libssl-dev. §9a.5 is where that difference is priced before any cross-run comparison is made |
+| device | ext4 on `/dev/root` (checked with `df -T`; `/tmp` is ext4 on this host too, not tmpfs); data files under `$HOME/bench-s3-joinab/db/`, WAL under `$HOME/bench-s3-joinab/wal/<cell>/`, binary copies under `$HOME/bench-s3-joinab/bin/` |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, port 15499. One server process and one **fresh data file** per cell, started from the run's own binary copy |
+| driver | `tools/scenario3_library.py --loans N --index-mode single --ops 200 --verify 25 --assert-index-reads`, N ∈ {200, 1,000, 10,000} — which sizes `loans` at N, `users` and `books` at N/5, `reservations` at N/2, and runs 200 ops per shape, so BASE and NEW do **equal work**, not equal time |
+| contention control | every cell gated on `bench/wait_quiet.sh`, and `bench/run_cell.sh` sampled `pgrep -c cc1plus` before and after each cell. **All 12 cells passed on the first attempt; none was discarded** |
+| correctness | 12 cells, 0 errors, `verify_problems` empty in all (25 verified statements per shape per cell, join replies checked against a client-side join of full scans), `--assert-index-reads` green in all 12 |
+
+### 9a.2 The plan, before and after
+
+Captured after the run by reopening two measured cells' own data files with
+the binaries that produced them. BASE (`eb680e4`), cell `ab-base-10000-1` —
+§9's plan, reproduced:
+
+```
+analyze rows=6 class=JoinSelect steps=2 examined=20000 pages=10086 opens=10001
+step 0 Scan  loans AS l   opens=1     examined=10000 matched=10000 sel=100% pages=86
+step 1 Probe users AS u   opens=10000 examined=10000 matched=6     sel=0%   pages=10000
+```
+
+NEW (`881f69a`), cell `ab-new-10000-1`:
+
+```
+analyze rows=6 class=JoinSelect steps=2 examined=12 pages=13 opens=7
+step 0 IndexProbe loans AS l  opens=1 examined=6 matched=6 sel=100% pages=7 index_scanned=6 index_resolved=6
+  filter 0:0.1 = 3 derived      <- the propagated equality, marked as such
+step 1 Probe users AS u       opens=6 examined=6 matched=6 sel=100% pages=6 memo_hits=5
+```
+
+**13 pages against 10,086, for the same six rows.** Step 0 is now the exact
+`IndexProbe` §9 showed for the single-relation form (7 pages), and the join
+adds only its inner side: six pk probes, five of them memoized. The
+`derived` marker on the filter is the propagation pass naming itself.
+
+### 9a.3 The join, BASE against NEW
+
+p50 µs per statement, 200 ops per cell, two cells per binary per size:
+
+| N | BASE p50 (cell 1 / 2) | NEW p50 (cell 1 / 2) | speedup (p50) | BASE ≈ stmts/s | NEW ≈ stmts/s |
+|---:|---|---|---:|---:|---:|
+| 200 | 122.4 / 120.9 | 51.6 / 51.3 | **2.4×** | 8,090 | 18,975 |
+| 1,000 | 453.5 / 449.6 | 52.0 / 52.7 | **8.6×** | 2,210 | 18,710 |
+| 10,000 | 4,381.1 / 4,398.8 | 51.9 / 51.6 | **84.8×** | 227 | 18,850 |
+
+The full distributions, because a p50 alone cannot show that the *shape* of
+the latency changed:
+
+| cell | N | ops | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ab-base-200-1 | 200 | 200 | 110.3 | 119.9 | 122.4 | 135.3 | 141.0 |
+| ab-base-200-2 | 200 | 200 | 110.7 | 118.8 | 120.9 | 136.2 | 141.5 |
+| ab-new-200-1 | 200 | 200 | 41.8 | 49.1 | 51.6 | 63.3 | 73.2 |
+| ab-new-200-2 | 200 | 200 | 34.3 | 48.9 | 51.3 | 62.2 | 68.4 |
+| ab-base-1000-1 | 1,000 | 200 | 430.6 | 446.8 | 453.5 | 472.7 | 487.6 |
+| ab-base-1000-2 | 1,000 | 200 | 429.5 | 441.3 | 449.6 | 474.0 | 492.9 |
+| ab-new-1000-1 | 1,000 | 200 | 42.1 | 47.8 | 52.0 | 66.1 | 75.4 |
+| ab-new-1000-2 | 1,000 | 200 | 39.8 | 49.5 | 52.7 | 63.5 | 75.4 |
+| ab-base-10000-1 | 10,000 | 200 | 4,338.1 | 4,370.8 | 4,381.1 | 4,477.6 | 4,755.1 |
+| ab-base-10000-2 | 10,000 | 200 | 4,333.2 | 4,386.8 | 4,398.8 | 4,451.1 | 4,629.8 |
+| ab-new-10000-1 | 10,000 | 200 | 45.3 | 49.8 | 51.9 | 60.6 | 74.6 |
+| ab-new-10000-2 | 10,000 | 200 | 44.0 | 49.9 | 51.6 | 63.0 | 79.9 |
+
+Two readings. **First, the propagation converts §9's per-row cost into a
+fixed one**: NEW's p50 is 51.3–52.7 µs at *every* size — the join no longer
+scales with the relation, which is the definition of the conversion this
+file's §6 credits the index with on the single-relation shapes. BASE's p50
+grows 122 → 454 → 4,390 µs over the same sweep. **Second, the residual over
+the single-relation form is small and explicable**: `loans-by-user` (one
+`IndexProbe`, no join) runs at ~45 µs p50 in these same cells, so the join's
+second step — six memoized pk probes and the projection across two relations
+— costs ~7 µs. §12 asked whether the fix would reach the single-relation
+form's throughput; the answer is ~89% of it, and the missing 11% is the
+inner step, not the propagation.
+
+On waits: every measured statement is a single-connection read, so there is
+no commit/fsync wait and no lock wait in these numbers; the unit is a client
+round trip on localhost. NEW's join p0 of ~44 µs is the same fixed
+round-trip floor every ~40 µs shape in §5 pays, which is what bounds the
+decomposition available here — engine time above the floor is ~7 µs and no
+per-step timing exists to split it further (`docs/observability.md` owns
+that gap).
+
+### 9a.4 Every other shape is unchanged — the pass's overhead is below the floor
+
+The propagation pass runs at compile time on every statement, so the claim
+that needs evidence is the null one. p50 per shape, NEW/BASE as the ratio of
+pair means; the floor at each size is the **widest within-binary replicate
+disagreement across all ten shapes** (dividing by the smaller of the pair),
+i.e. the noise measured from inside this run:
+
+| shape | N=200 Δ | N=1,000 Δ | N=10,000 Δ |
+|---|---:|---:|---:|
+| pk-user | −1.2% | +4.8% | −0.5% |
+| loans-by-user | −1.2% | +1.8% | −1.1% |
+| loans-by-book | −1.0% | +0.8% | −1.2% |
+| resv-by-user | −0.7% | +0.5% | −2.7% |
+| books-by-author | −2.3% | −0.4% | −1.6% |
+| books-by-genre | +0.1% | −0.1% | −1.4% |
+| loans-by-daterange | −0.3% | +1.3% | +1.6% |
+| overdue | +0.6% | 0.0% | +1.7% |
+| count-by-user | −2.3% | −0.8% | −0.5% |
+| **replicate floor** | **2.4%** | **10.3%** | **4.1%** |
+
+**No shape at any size moves outside its floor**, in either direction, and
+the deltas carry no consistent sign. The 1,000-row floor of 10.3% is one
+BASE `pk-user` pair disagreeing with itself (35.8 vs 39.5 µs); the shape's
+NEW pair disagrees by 0.8%, and every other 1,000-row pair is under 3.3% —
+the wide floor is a property of one cell, not of the change under test. The
+verdict this table supports: **the compile-time cost of the propagation
+pass is unmeasurable at a 2.4–4.1% floor.** Deltas inside the floor are not
+findings, so none of the rows above is one.
+
+### 9a.5 Versus PostgreSQL — cited from §11, not re-measured
+
+This addendum ran no PostgreSQL cells. The published twin figures in §11
+stand for the comparison, and the cross-run bridge is BASE itself: this
+run's BASE join at 10,000 rows (227/s, mean 4,402 µs) reproduces the
+published `ck-single-10000` figure (223/s) within **1.9%**, across a
+different worktree, a different binary, and the TLS-OFF build — so at the
+*factor* level, comparing this run's NEW against §11's PostgreSQL column is
+admissible, and build-difference effects are below that 2% on this shape.
+On those terms: NEW serves **≈18,850 statements a second where §11's
+`pg-single` serves 8,850** — the shape moves from a 40× loss to **≈2.1×
+ahead**, in line with the 1.4–2.3× every other indexed shape in §11 already
+showed. The caveat stays: the published PG number was measured beside a
+TLS-ON ckdbs build on 2026-08-18 05:01–05:20 UTC, and a fresh interleaved
+PG twin at this commit is the measurement that would retire it.
+
+### 9a.6 What this addendum does not re-measure
+
+- **Everything else in this file.** §1–§8 and §10–§12 describe `9f762a3`.
+  The propagation touches statement compilation only; §9a.4 is the evidence
+  that the other nine shapes did not move, but the `none`/`cabin`/`off`/
+  `covering` columns, the durability matrix and the backfill cost were not
+  re-run.
+- **The PostgreSQL twin** (§9a.5 above: cited, bridged by BASE, not re-run).
+- **The join at `--index-mode none`.** §9 measured 216/s without the index;
+  propagation without an index to propagate *into* would have no
+  `IndexProbe` to reach. This run declared the index in every cell, so what
+  a propagated-but-unindexed join costs is unmeasured.
+- **Non-pk or literal-free join keys.** The workload's restriction is
+  `u.id = ?` against the pk; a join with no literal at all, or one whose
+  derived equality lands on an unindexed column, is not in this driver.
+
 ## 10. Durability decides the load, and nothing else here
 
 The read shapes are identical under all three durability classes — every
@@ -413,7 +592,7 @@ Nine of ten shapes go to ckdbs at 10,000 rows, the tenth by 40×. Ratios are
 | books-by-genre | 8,905 | 3,798 | **2.34×** |
 | loans-by-daterange | 1,429 | 910 | **1.57×** |
 | overdue | 1,318 | 943 | **1.40×** |
-| **join-loan-user** | 223 | 8,850 | **0.03× — 40× short** |
+| **join-loan-user** | 223 | 8,850 | **0.03× — 40× short** *(closed 2026-08-18, §9a: ≈18,850/s at `881f69a`)* |
 | count-by-user | 25,189 | 13,351 | **1.89×** |
 
 **Read the 1.4×–2.3× column with the same caution scenario2's does.** A
@@ -450,11 +629,13 @@ is a ckdbs-only comparison against ckdbs's own alternatives.
 
 ## 12. What this run does not answer
 
-- **Whether the join's 45× survives its fix.** §9 identifies the missing
+- **Whether the join's 45× survives its fix.** *(Answered 2026-08-18, §9a:
+  the fix landed as `881f69a` and the same cell, run A/B, gives 84.8× on p50
+  at 10,000 rows — ~89% of the single-relation form's throughput, the
+  missing 11% being the join's second step.)* §9 identifies the missing
   rewrite and prices the gap; it does not prove that propagating the equality
   would reach the 21,322 statements a second the single-relation form gets,
-  because the join still has a second step to run. The measurement to make after the fix is
-  this same cell.
+  because the join still has a second step to run.
 - **Why `CabinProbe` costs more than a `FilterScan` per row.** §7 measures the
   inversion twice and locates it in the Cabin's own path via `ANALYZE`, but
   the engine exposes no per-step timing that would say which part of that
