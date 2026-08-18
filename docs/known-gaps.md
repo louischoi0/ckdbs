@@ -383,8 +383,17 @@ the owner's workplan.
   `IsInFlight` walks one core's live list and CC3 refuses cross-core
   writes.
   Delete-marked catalog rows no longer accumulate across mounts (DT10,
-  §5c); within a mount they still do, and nothing purges them until the
-  next restart.
+  §5c); **within a mount they still do, and nothing purges them until the
+  next restart** — measured, and it has a price: DT9's cold-catalog cost
+  is `marks × (0.4 ns + 0.45 ns × live)`
+  (`bench/results-ddl-catalog-read-ab.md`), so a long-lived server doing
+  transactional drops pays ~180 µs per cold catalog resolution at 6,000
+  marks and 64 live transactions. Bounding it within a mount needs a
+  purge, whose cadence is an open decision.
+  Also measured there and **not** DT9's: a transactional `DROP TABLE`
+  costs ~517 µs against `CREATE TABLE`'s 48 and `DROP INDEX`'s 36,
+  identical on both binaries — `Catalog::DropTable`'s five
+  restart-from-head `ForFirstRow` sweeps.
   **Still non-transactional, by name**: `ALTER TABLE`, cabins, patterns,
   assertions, foreign keys. Each only inserts its own catalog rows, so
   each can adopt the mechanism the table statements proved; nothing new

@@ -402,6 +402,19 @@ mark" safe here and catastrophic anywhere else. The system core's alone:
 a peer may not write a catalog page (P6), and by the time a peer mounts,
 core 0 has done it.
 
+**What it bounds, and what it does not.** Measured at `04ae010`
+(`bench/results-ddl-catalog-read-ab.md`), DT9's cost on a cold catalog
+resolution fits `marks × (0.4 ns + 0.45 ns × live)` — the `IsInFlight`
+loop and nothing else. `live` is capped at 64 by `kMaxTrackedLiveTxns`;
+**`marks` is capped only by this sweep, which runs once per mount.** So
+accumulation is bounded across restarts and *unbounded within one
+long-lived process*: a server that runs for weeks doing transactional
+drops keeps paying more per cold catalog read, ~180 µs per resolution at
+6,000 marks and 64 live transactions. Bounding it *within* a mount needs
+a purge, and purge cadence is an open decision this spec does not own
+(CLAUDE.md, Storage). Stated so the sweep is not mistaken for a bound it
+does not provide.
+
 **What it costs.** One forward pass over the catalog root chains.
 `RetireSlot` sets the dead flag in place and never renumbers slots behind
 the walk, so one pass suffices. Unlogged, like every catalog write — a
