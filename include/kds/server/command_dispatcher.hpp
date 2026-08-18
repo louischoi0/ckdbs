@@ -588,8 +588,8 @@ private:
     // lost.
     Status LogIndexWrites(const std::vector<exec::IndexWrite>& writes, std::uint64_t txn_id);
 
-    DispatchOutcome HandleIndex(std::string_view line);
-    DispatchOutcome HandleShowIndexes();
+    DispatchOutcome HandleIndex(std::string_view line, Session& session);
+    DispatchOutcome HandleShowIndexes(Session& session);
 
     // `CREATE ASSERTION` / `DROP ASSERTION` (docs/feat-assertion.md §3,
     // workplan AST03). One handler for both, for HandleCabin's reason.

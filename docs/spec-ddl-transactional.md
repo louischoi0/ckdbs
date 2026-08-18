@@ -1,7 +1,9 @@
 # Transactional DDL
 
-Status: **specification, nothing built** (2026-08-15). Owning workplan:
-`docs/workplan-ddl-transactional.md`.
+Status: **built 2026-08-16** (DT1-DT7; DT8, durability, deferred by name
+and never scheduled). `CREATE TABLE` is atomic, isolated and consistent;
+`DROP TABLE` is atomic only — §5 says exactly what each gets and §5a why
+they differ. Owning workplan: `docs/workplan-ddl-transactional.md`.
 
 ## 0. This reverses a recorded decision, deliberately
 
@@ -132,12 +134,39 @@ Whatever is chosen, one thing is already known and must be respected:
 
 ## 5. What is in scope for v1
 
-- `CREATE TABLE`, `DROP TABLE`, `CREATE INDEX`, `DROP INDEX` inside an
-  explicit transaction: atomic, isolated, rolled back by `ROLLBACK`.
+**v1's scope is complete as of 2026-08-16.** This section briefly said
+`CREATE INDEX` / `DROP INDEX` were not built — true for a few hours
+between the table statements landing and the index pair following. Both
+now ship, so the original list stands as written.
+
+Built, and what each actually gets:
+
+- **`CREATE TABLE`** — atomic, isolated, rolled back by `ROLLBACK`. All
+  four properties §1 lists except durability.
+- **`DROP TABLE`** — **atomic only**, and deliberately not isolated;
+  §5a is the whole argument, and it is a property of in-place overwrites
+  with no undo chain rather than a gap to fill in later.
 - The autocommit path is unchanged in behaviour: a bare `CREATE TABLE`
-  commits immediately, exactly as today.
+  commits immediately, exactly as today, and a bare `DROP TABLE` still
+  retires its dependent rows rather than delete-marking them.
 - Mixed statements: `BEGIN; CREATE TABLE t ...; INSERT INTO t ...;
   ROLLBACK;` leaves no relation and no rows.
+
+- **`CREATE INDEX`** — atomic and isolated, exactly as `CREATE TABLE`.
+- **`DROP INDEX`** — atomic **and isolated**, which `DROP TABLE` is not.
+  It delete-marks one row whose payload survives, so a reader that
+  cannot see the dropper still sees the index. See §5a: the limit there
+  belongs to the tombstone *overwrite*, not to drops.
+
+**Not built, and each is now mechanical rather than open.** `ALTER
+TABLE`, patterns, cabins, assertions and foreign keys stay
+non-transactional. Each writes its own catalog page
+and can adopt the mechanism the two table statements proved: stamp the
+transaction's id, register what was written on its trail, and let
+`Abort` compensate. **Nothing new has to be decided for the ones that
+only insert rows.** An index drop is the exception worth checking first
+— if it retires rather than delete-marks, it inherits §5a's limit and
+DT5's terminating-sweep trap with it.
 
 ### 5a. `DROP TABLE` is atomic, and deliberately **not** isolated
 
@@ -147,6 +176,14 @@ and records the `sys.objects` retype's before-image, both on the
 transaction's trail — so `ROLLBACK` clears the marks and rewrites the
 tombstone back to a live table, restoring the relation and its rows.
 Autocommit still retires, exactly as before.
+
+**This is specific to `DROP TABLE`, and `DROP INDEX` proves it.** An
+index drop delete-marks a single row whose payload survives, and it *is*
+isolated — a reader that cannot see the dropper still sees the index. A
+table drop is not, and the difference is the `sys.objects` **retype**: an
+in-place overwrite destroys the prior image for every reader at once.
+Do not generalise this section into "drops cannot be isolated"; it is
+"an in-place overwrite with no undo chain cannot be isolated".
 
 **Other sessions see the drop immediately, before it commits.** That is
 not an oversight, it is what option (b) costs. The `sys.objects` retype
@@ -194,9 +231,17 @@ membership is a decision:
   open decision, and the half that cannot corrupt anything. The cost is
   a refusal that can be spurious (the first transaction may roll back)
   and that names a relation the asker cannot see.
+**The line between the two, learned the hard way.** A surface reporting
+**schema objects** — which relations or indexes exist — is a resolution
+route and must filter. A surface reporting **engine state** — statistics,
+budgets, memory-resident structures — is a diagnostic and must not.
+`SHOW INDEXES` was first grouped with the diagnostics, which let an
+uncommitted `DROP INDEX` be visible to everyone while the rest of the
+catalog hid it. Only a test asserting the isolation caught it.
+
 - **Unfiltered by design — diagnostics.** `SHOW ACCESS`, `SHOW BUDGET`,
-  `SHOW INDEXES`, `SHOW ASSERTIONS`, `SHOW CABINS`, and the name-rendering
-  helper. These answer *"what does this instance hold"*, which is an
+  `SHOW ASSERTIONS`, `SHOW CABINS`, and the name-rendering helper.
+  (`SHOW INDEXES` was moved *out* of this list — see above.) These answer *"what does this instance hold"*, which is an
   operator's question, not a statement's. An operator debugging a stuck
   transaction needs to see the pages and budget it is consuming; hiding
   them would make the tool useless exactly when it is needed. Also
@@ -204,11 +249,9 @@ membership is a decision:
   which tests an already-resolved oid against bootstrap rows that every
   view sees.
 
-Out of v1, by name: `ALTER TABLE` (its own rename semantics interact with
-the cache differently), `CREATE PATTERN` / `CREATE CABIN` / assertions /
-foreign keys (each writes its own catalog page and can follow once the
-mechanism is proven on the two simplest), and anything about concurrent
-DDL from two transactions — see §6.
+Concurrent DDL from two transactions is §6's, and its conservative half
+*is* built: the second create of a name in use is refused. What stays
+open there is the message, not the behaviour.
 
 ## 6. Open decisions — do not assume
 

@@ -371,7 +371,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "ACCESS")) return HandleShowAccess();
         if (IEquals(sub, "BUDGET")) return HandleShowBudget();
         if (IEquals(sub, "CABINS")) return HandleShowCabins();
-        if (IEquals(sub, "INDEXES")) return HandleShowIndexes();
+        if (IEquals(sub, "INDEXES")) return HandleShowIndexes(session);
         if (IEquals(sub, "FKEYS")) return HandleShowFkeys();
         if (IEquals(sub, "ASSERTIONS")) return HandleShowAssertions();
         if (IEquals(sub, "RELAYOUT")) return HandleShowRelayout(sub_rest);
@@ -396,7 +396,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         // with the byte offset of the word itself rather than from this
         // layer as "unknown CREATE target".
         if (IEquals(sub, "INDEX") || IEquals(sub, "UNIQUE")) {
-            return HandleIndex(Trim(line));
+            return HandleIndex(Trim(line), session);
         }
         if (IEquals(sub, "TABLE")) {
             // Disambiguate the bare-name form ("CREATE TABLE foo")
@@ -428,7 +428,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
             return HandleCabin(Trim(line));
         }
         if (IEquals(sub, "INDEX")) {
-            return HandleIndex(Trim(line));
+            return HandleIndex(Trim(line), session);
         }
         if (IEquals(sub, "ASSERTION")) {
             return HandleAssertion(Trim(line));
@@ -547,7 +547,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // includes surviving a crash. It does not, and the two flags
            // sit together so the pair reads as one statement: transactional
            // within a running instance, not durable across a restart.
-           << " ddl_transactional=create-table-only"
+           << " ddl_transactional=tables-and-indexes"
            << " ddl_durable=0";
         // RC07: what the mount could resume enforcing, and the honest
         // remainder. A surviving declaration whose directory could not be
@@ -1131,7 +1131,8 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line) {
+DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
+                                               Session& session) {
     parser::Parser parser(line);
     auto parsed = parser.Parse();
     if (!parsed.ok()) {
@@ -1143,7 +1144,18 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line) {
     const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
 
     if (stmt.drop) {
-        auto index_oid = exec::DropIndex(catalog_, stmt);
+        // DT5: delete-marked and registered inside a transaction, so a
+        // rollback restores the index.
+        DdlScope ddl = DdlScopeFor(session);
+        catalog::CatalogRowChange change;
+        auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
+                                         ddl.txn != nullptr ? &change : nullptr);
+        if (ddl.txn != nullptr && change.page_id != kInvalidPageId) {
+            txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(change.rel_oid),
+                                 change.page_id, change.slot, change.oid,
+                                 change.prior_trx_id, change.prior_undo_ptr);
+            MarkHoldsDdl(*ddl.txn);
+        }
         if (!index_oid.ok()) {
             return {"ERR " + index_oid.status().message(), false};
         }
@@ -1155,7 +1167,16 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line) {
         return {os.str(), false};
     }
 
-    auto result = exec::CreateIndex(catalog_, page_store_, stmt);
+    DdlScope create_ddl = DdlScopeFor(session);
+    catalog::CatalogRowRef created_row;
+    auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
+                                    create_ddl.txn != nullptr ? &created_row : nullptr);
+    // Before the status is read: a create that failed after the catalog
+    // row went down still left it there.
+    if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
+        create_ddl.written.push_back(created_row);
+        NoteDdlRows(create_ddl);
+    }
     if (!result.ok()) {
         return {"ERR " + result.status().message(), false};
     }
@@ -1179,8 +1200,15 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line) {
     return {os.str(), false};
 }
 
-DispatchOutcome CommandDispatcher::HandleShowIndexes() {
-    auto rows = catalog_.ListIndexes();
+DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
+    // **Reclassified 2026-08-16.** This was grouped with the diagnostic
+    // surfaces, which answer "what does this instance hold". It does not:
+    // it answers "which indexes exist", a schema question, and every
+    // schema route has to give one answer (DT3c's rule). Grouping it with
+    // `SHOW ACCESS` made an uncommitted `DROP INDEX` visible to everyone
+    // while the rest of the catalog hid it.
+    const std::optional<txn::ReadView> view = ViewFor(session);
+    auto rows = catalog_.ListIndexes(view.has_value() ? &*view : nullptr);
     if (!rows.ok()) {
         return {"ERR " + rows.status().message(), false};
     }

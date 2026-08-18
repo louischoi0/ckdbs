@@ -66,14 +66,26 @@ struct IndexDdlResult {
 // key column whose type has no index encoding, and whatever
 // `Catalog::CreateIndex` answers for the rest - passed through rather than
 // restated, so there is one answer to "why not" and not two that can drift.
+// `trx_id` / `written` make the DDL transactional
+// (workplan-ddl-transactional.md DT5): the catalog row is stamped with
+// the creating transaction and its address reported, so a rollback can
+// retire it. Defaulted to the autocommit path.
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
-                                     const parser::IndexStmt& stmt);
+                                     const parser::IndexStmt& stmt,
+                                     std::uint64_t trx_id = catalog::kBootstrapXid,
+                                     catalog::CatalogRowRef* written = nullptr);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
 // **Frees no page.** Nothing frees a page in this engine, so a dropped index
 // leaks its tree exactly as a dropped Cabin leaks its sets and a superseded
 // var-heap value leaks its bytes.
-StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt);
+// As above, but a drop **delete-marks** its `sys.indexes` row rather than
+// retiring it when transactional, so a rollback clears the mark. Unlike
+// `DROP TABLE` this is isolated too - there is no in-place retype here
+// (spec-ddl-transactional.md §5a).
+StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexStmt& stmt,
+                                  std::uint64_t trx_id = catalog::kBootstrapXid,
+                                  catalog::CatalogRowChange* change = nullptr);
 
 }  // namespace kds::exec
