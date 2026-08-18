@@ -583,7 +583,7 @@ private:
     // is the normal state and the one `ViewFor` optimises for. Entries
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
-    void EndDdlScope(const Session& session, bool rows_were_retired);
+    void EndDdlScope(const Session& session);
     // Records that this transaction now holds uncommitted catalog rows,
     // which is what turns on `ViewFor`'s filtering.
     void MarkHoldsDdl(const txn::Transaction& txn);

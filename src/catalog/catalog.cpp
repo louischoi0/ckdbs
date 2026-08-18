@@ -744,7 +744,7 @@ void Catalog::BumpVersion(std::string_view what) {
 }
 
 void Catalog::InvalidateAfterCompensation() {
-    BumpVersion("rows retired by a transaction rollback");
+    BumpVersion("a transaction that wrote catalog rows resolved");
 }
 
 void Catalog::InvalidateFromPeer() {

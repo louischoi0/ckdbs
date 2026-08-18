@@ -136,12 +136,12 @@ public:
 
     // The core's transaction manager, for the one question an *unfiltered*
     // catalog read has to ask: is the transaction that delete-marked this
-    // row still running? (`spec-ddl-transactional.md` §5a.) Set rather
+    // row still running? (`spec-ddl-transactional.md` §5b.) Set rather
     // than constructed with, for SetLogger's reason - the manager is built
     // after the catalog, and bootstrap has none at all.
     //
     // Left null, every unfiltered read answers exactly as it did before
-    // DT5: a mark is done the moment it is written. That is the wrong
+    // DT9: a mark is done the moment it is written. That is the wrong
     // answer while a drop is open, and it is deliberately the one a
     // catalog with no manager keeps, because a reader with no manager -
     // bootstrap, recovery, a test over a bare store - has no in-flight
@@ -197,13 +197,24 @@ public:
     // are what would otherwise be stale.
     void InvalidateFromPeer();
 
-    // Rows on this instance's catalog pages were changed by something
-    // other than this catalog (workplan-ddl-transactional.md DT4): a
-    // transaction's rollback, whose compensation retires the slots
-    // directly through the page. The catalog is never told, so without
-    // this any fact cached while that DDL was open outlives the rows it
-    // describes - and once the transaction resolves, resolution goes back
-    // to the cache and serves it.
+    // A transaction that wrote catalog rows has resolved, and what this
+    // catalog cached while it was open may now be a lie. **Both endings
+    // reach here**, for two different reasons:
+    //
+    //   - a **rollback** (workplan-ddl-transactional.md DT4) compensates
+    //     through the page directly, retiring slots the catalog is never
+    //     told about, so a fact cached while the DDL was open outlives the
+    //     rows it describes;
+    //   - a **commit** is the moment a delete-mark starts counting (DT9,
+    //     spec §5b). A cache filled during an open `DROP INDEX` holds the
+    //     index deliberately - that is what keeps maintenance writing
+    //     entries a rollback would need - and must not hold it afterwards.
+    //
+    // Without either, resolution goes back to the cache once the
+    // transaction resolves and serves what it found mid-flight.
+    //
+    // The name says "compensation" for the case it was built for; it is
+    // the resolution of a catalog-writing transaction that calls it.
     //
     // Drops cached content **and bumps the version**, unlike
     // `InvalidateFromPeer`: this *is* an event in this instance's

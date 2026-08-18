@@ -765,6 +765,30 @@ TEST_F(TxnSessionTest, ARolledBackDropIndexLeavesTheIndexWholeIncludingTheWindow
     EXPECT_EQ(Rows(a, "SELECT id, owner FROM t WHERE owner = 10").size(), 1u);
 }
 
+// DT9 moved when a delete-mark starts counting, and therefore moved when
+// the catalog's cache stops being true. A cache filled during an open
+// `DROP INDEX` holds the index **deliberately** - that is what keeps
+// maintenance writing entries a rollback would need - so the commit has
+// to drop it. Before DT9 only a rollback invalidated, on the reasoning
+// that "a commit leaves the rows in place"; that reasoning is what DT9
+// retired.
+TEST_F(TxnSessionTest, ACommittedDdlTransactionInvalidatesTheCatalogCache) {
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(a, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    // Another session fills the cache mid-flight, with the index in it.
+    ASSERT_EQ(Run(b, "INSERT INTO t VALUES (10)").substr(0, 8), "INSERTED");
+
+    const std::uint64_t before = boot_->catalog.catalog_version();
+    ASSERT_EQ(Run(a, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_GT(boot_->catalog.catalog_version(), before)
+        << "a committed DDL transaction left the cache holding a dropped index";
+}
+
 // The committed half of the same rule: once the drop commits, the mark
 // counts, and the index is gone by every route.
 TEST_F(TxnSessionTest, ACommittedDropIndexInsideATransactionRemovesTheIndex) {

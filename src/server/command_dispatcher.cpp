@@ -3404,16 +3404,31 @@ std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
                            false};
 }
 
-void CommandDispatcher::EndDdlScope(const Session& session, bool rows_were_retired) {
+void CommandDispatcher::EndDdlScope(const Session& session) {
     const txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return;
     const bool held_ddl = std::erase(ddl_txns_, txn->id()) > 0;
-    // Only a rollback needs this, and only from a transaction that wrote
-    // catalog rows: its compensation retired them behind the catalog's
-    // back, so anything cached about them while it was open is now a
-    // description of rows that are gone. A commit leaves the rows in
-    // place, so what was cached about them stays true.
-    if (held_ddl && rows_were_retired) catalog_.InvalidateAfterCompensation();
+    // **Both endings need this, and only the rollback half used to.** A
+    // rollback compensates through the page, retiring rows behind the
+    // catalog's back, so anything cached about them while the transaction
+    // was open now describes rows that are gone.
+    //
+    // The commit half is DT9's (`spec-ddl-transactional.md` §5b). The old
+    // comment here said "a commit leaves the rows in place, so what was
+    // cached about them stays true", which was correct until an unfiltered
+    // read started asking whether a mark's deleter is still in flight:
+    // **commit is now the moment a delete-mark starts counting.** A cache
+    // filled during an open `DROP INDEX` holds the index deliberately -
+    // that is what keeps maintenance writing entries a rollback would
+    // need - and holding it past the commit would keep maintaining an
+    // index that is gone.
+    //
+    // Unconditional on the ending rather than split by it, because the
+    // condition that would split it ("did this transaction delete-mark
+    // anything?") is one more thing to keep true, and a DDL transaction
+    // ending is rare enough that a cache clear it did not strictly need
+    // costs nothing worth measuring.
+    if (held_ddl) catalog_.InvalidateAfterCompensation();
 }
 
 void CommandDispatcher::MarkHoldsDdl(const txn::Transaction& txn) {
@@ -4898,7 +4913,7 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     // Its catalog rows are committed now, so every reader may see them
     // unfiltered again (DT3c). Before `Finish()`, which clears the
     // session's transaction pointer this reads.
-    EndDdlScope(session, /*rows_were_retired=*/false);
+    EndDdlScope(session);
 
     // The session leaves the transaction either way: a commit that failed
     // to log is not a transaction the client may keep writing into.
@@ -4937,7 +4952,7 @@ DispatchOutcome CommandDispatcher::HandleRollback(Session& session) {
     // left for anyone to be isolated from - and nothing that may still be
     // cached about them (DT3c, DT4). Before `Finish()`, which clears the
     // pointer this reads.
-    EndDdlScope(session, /*rows_were_retired=*/true);
+    EndDdlScope(session);
     session.Finish();
     txn_->Release(*txn);
     if (!aborted.ok()) return {"ERR " + aborted.message(), false};
