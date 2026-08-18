@@ -335,6 +335,16 @@ oracle before `DROP INDEX` may be called isolated outright. Saying
 "isolated" without the scope would repeat exactly the overclaim the rest
 of this section exists to correct.
 
+**The cache had to learn the same thing, and this was the step's one
+real bug.** `EndDdlScope` invalidated the catalog cache on rollback
+only, reasoning that "a commit leaves the rows in place, so what was
+cached about them stays true". DT9 retires that reasoning: **commit is
+the moment a delete-mark starts counting.** A cache filled during an open
+`DROP INDEX` holds the index deliberately — that is the whole point — and
+holding it past the commit keeps maintenance writing entries for an index
+that is gone, and never tells a peer to re-read. Invalidation is now
+unconditional on a DDL-holding transaction resolving, either ending.
+
 **A correction to §5a's own estimate of the payoff.** §5a said this fix
 "would let both drops isolate". It does not. `DROP TABLE`'s exposure is
 the `sys.objects` **in-place retype**, and a filtered `ScanAll` *skips* a

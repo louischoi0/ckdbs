@@ -390,6 +390,17 @@ new construction site (a test fixture especially) cannot silently keep
 the pre-DT9 answer. Null leaves every reader as it was, which is what
 bootstrap, recovery and a test over a bare store need.
 
+**The bug this step introduced and caught in its own review.**
+`EndDdlScope` invalidated the catalog cache on rollback only, because a
+commit used not to change what a cached fact meant. It does now. The
+window: another session's `INSERT` during an open `DROP INDEX` fills the
+cache with the index still in it (deliberately — that is what keeps
+maintenance correct under a rollback), and nothing dropped that cache at
+commit. Invalidation is now unconditional on a DDL-holding transaction
+resolving, and `rows_were_retired` lost its last caller. Pinned by a test
+that asserts the version moves across the commit, verified to fail with
+the commit-side call removed.
+
 **Also corrected here**: §5a claimed this fix "would let both drops
 isolate". It does not. `DROP TABLE`'s exposure is the `sys.objects`
 in-place retype, which a filtered read skips outright; no delete-mark
