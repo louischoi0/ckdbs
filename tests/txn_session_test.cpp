@@ -809,5 +809,71 @@ TEST_F(TxnSessionTest, ATransactionMayDropAndRecreateOneNameItself) {
     EXPECT_NE(Run(other, "DESCRIBE mine").find("w"), std::string::npos);
 }
 
+// ---- C4: every route takes the statement boundary ---------------------
+
+TEST_F(TxnSessionTest, EveryRouteSeesARelationCommittedSinceTheTransactionBegan) {
+    // **A READ COMMITTED violation, and a violation of DT3c's own rule
+    // that every route agrees.** `ViewFor` reads the transaction's view,
+    // but only the routes reaching `SnapshotFor`/`BeginWrite` re-minted
+    // it at the statement boundary - so `DESCRIBE`, `SHOW TABLES` and
+    // friends resolved under whatever view the transaction last held and
+    // could miss a relation committed since it began. `SELECT` saw it,
+    // `DESCRIBE` did not, in the same transaction.
+    //
+    // Only reachable while some transaction holds uncommitted DDL, since
+    // that is when `ViewFor` filters at all - which is why `holder` is
+    // here.
+    Session reader;
+    Session holder;
+    Session writer;
+
+    ASSERT_EQ(Run(reader, "BEGIN").substr(0, 5), "BEGIN");
+    // Turn filtering on and keep it on.
+    ASSERT_EQ(Run(holder, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(holder, "CREATE TABLE unrelated (id int64, v int64)").substr(0, 7),
+              "CREATED");
+
+    // A relation committed after `reader` began. Under READ COMMITTED the
+    // next statement in `reader` must see it - by every route.
+    ASSERT_EQ(Run(writer, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(writer, "CREATE TABLE later (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(writer, "COMMIT").substr(0, 6), "COMMIT");
+
+    EXPECT_EQ(Run(reader, "DESCRIBE later").rfind("ERR", 0), std::string::npos)
+        << "DESCRIBE resolved under a stale view";
+    EXPECT_NE(Run(reader, "SHOW TABLES").find("later"), std::string::npos)
+        << "SHOW TABLES resolved under a stale view";
+    EXPECT_EQ(Run(reader, "SELECT id, v FROM later").rfind("ERR", 0), std::string::npos)
+        << "SELECT and DESCRIBE disagree, which is the property DT3c claims";
+
+    ASSERT_EQ(Run(reader, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    ASSERT_EQ(Run(holder, "ROLLBACK").substr(0, 8), "ROLLBACK");
+}
+
+TEST_F(TxnSessionTest, RepeatableReadStillHoldsOneViewAcrossTheseRoutes) {
+    // The latch must not turn RR into RC: `StartStatement` is a no-op
+    // under REPEATABLE READ, so taking the boundary more often changes
+    // nothing there. Pinned because the fix touches the one branch that
+    // *is* the difference between the levels.
+    Session reader;
+    Session holder;
+    Session writer;
+    ASSERT_EQ(Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(holder, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(holder, "CREATE TABLE unrelated (id int64, v int64)").substr(0, 7),
+              "CREATED");
+
+    ASSERT_EQ(Run(writer, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(writer, "CREATE TABLE after_rr (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(writer, "COMMIT").substr(0, 6), "COMMIT");
+
+    // RR held its view from BEGIN, so the new relation is not there yet.
+    EXPECT_EQ(Run(reader, "DESCRIBE after_rr").rfind("ERR", 0), 0u)
+        << "REPEATABLE READ saw a relation committed after it began";
+    ASSERT_EQ(Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+    EXPECT_EQ(Run(reader, "DESCRIBE after_rr").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(holder, "ROLLBACK").substr(0, 8), "ROLLBACK");
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -311,6 +311,38 @@ second create instead of refusing it, is spec §6's remainder.
 - `docs/known-gaps.md` records the same split and names what is still
   non-transactional, with the reason drop is harder than create.
 
+### DT3d — every route takes the statement boundary ✅ 2026-08-16
+
+Found by the milestone's review, and it was a **READ COMMITTED
+violation**, not only a DDL wrinkle. `ViewFor` reads the transaction's
+view, but only routes reaching `SnapshotFor`/`BeginWrite` re-minted it
+at the statement boundary — so `DESCRIBE`, `SHOW TABLES`, `SHOW INDEXES`,
+`ALTER`, `DROP TABLE` and the FK parent lookup resolved under whatever
+view the transaction last happened to hold. A relation committed after
+the transaction began was visible to `SELECT` and invisible to
+`DESCRIBE`, in the same transaction — which also breaks DT3c's own
+stated property that every route agrees.
+
+**The boundary is latched, not taken per handler**, and that is the
+decision. Per-handler would move the view *within* a statement wherever
+a handler resolves twice — the FK lookup does — and two resolutions in
+one statement could then disagree, which is this same bug in a new
+place. One latch, reset at the top of `DispatchInner` where a statement
+genuinely begins, taken by whichever reader needs a view first;
+`SnapshotFor`, `BeginWrite` and `ViewFor` all route through it. A plain
+member is the right scope because one statement runs at a time on a
+core.
+
+Reachable only while some transaction holds uncommitted DDL, since that
+is when `ViewFor` filters at all — which is why the test has a third
+session holding DDL open, and why the bug survived the milestone.
+
+Gate: **met**, and the test was verified to fail with the latch removed
+(both `DESCRIBE` and `SHOW TABLES` resolve stale). A second test pins
+what the fix risked: `StartStatement` is *the* branch separating READ
+COMMITTED from REPEATABLE READ, so taking the boundary more often had to
+be proven a no-op under RR rather than assumed.
+
 ### DT8 — durability (deferred, not scheduled)
 
 WAL-logged catalog writes and catalog recovery — RV3. Spec §7. Listed so
