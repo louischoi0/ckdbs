@@ -4922,18 +4922,44 @@ DispatchOutcome CommandDispatcher::HandleCommit(Session& session) {
     }
     auto committed = txn_->Commit(*txn, durability_);
 
+    if (!committed.ok()) {
+        // **A failed commit must abort, not merely be reported.**
+        // `Commit` returns on a logging failure *before* it clears
+        // `active_`, and `Release` refuses to erase an active
+        // transaction - so without this the transaction sits in `live_`
+        // for the life of the process: in every future read view's
+        // in-flight set, counting against `kMaxTrackedLiveTxns`, and
+        // since DT9 answering `IsInFlight` true forever, which would keep
+        // every catalog row it delete-marked alive to every unfiltered
+        // read. A dropped index maintained and probed for ever after.
+        //
+        // Aborting is what the line below already claimed - "the session
+        // leaves the transaction either way" - carried through to the
+        // transaction itself. It also undoes the writes the failed commit
+        // never made durable, which is the only outcome that leaves the
+        // instance consistent with the "ERR" the client is about to read.
+        //
+        // Before `EndDdlScope`, so the invalidation it does describes
+        // pages the compensation has already rewritten.
+        Status rolled = txn_->Abort(*txn, RowLocatorForRollback());
+        EndDdlScope(session);
+        session.Finish();
+        txn_->Release(*txn);
+        // The commit failure is the client's answer; a failure to unwind
+        // on top of it is a second, worse fact and is not swallowed.
+        if (!rolled.ok()) {
+            return {"ERR " + committed.status().message() +
+                        " (and rolling it back failed: " + rolled.message() + ")",
+                    false};
+        }
+        return {"ERR " + committed.status().message(), false};
+    }
+
     // Its catalog rows are committed now, so every reader may see them
     // unfiltered again (DT3c). Before `Finish()`, which clears the
     // session's transaction pointer this reads.
     EndDdlScope(session);
-
-    // The session leaves the transaction either way: a commit that failed
-    // to log is not a transaction the client may keep writing into.
     session.Finish();
-    if (!committed.ok()) {
-        txn_->Release(*txn);
-        return {"ERR " + committed.status().message(), false};
-    }
 
     // The durability wait the client is owed, for the same reason
     // LogInsert() takes it: kGroup staged the commit for the next drain,

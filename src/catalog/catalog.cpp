@@ -26,13 +26,6 @@ static_assert(kCatalogOverflowLimit == server::kFirstUserPageId,
 
 namespace {
 
-// `txn->IsInFlight`, with "no manager" spelled once. A catalog built over a
-// bare store - bootstrap, recovery, a test - answers false, which reads
-// every delete-mark as done and is the behaviour that existed before DT9.
-bool InFlight(const txn::TransactionManager* txn, std::uint64_t trx_id) {
-    return txn != nullptr && txn->IsInFlight(trx_id);
-}
-
 // Scans every live row of type RowT out of the heap page at `page_id`.
 // Dead slots (RowT::Decode's caller never sees them - ReadTuple() itself
 // reports NotFound for a dead slot) are skipped.
@@ -64,11 +57,7 @@ bool InFlight(const txn::TransactionManager* txn, std::uint64_t trx_id) {
 // being maintained by its own `INSERT`s, which is the same wrong-result
 // class this arm exists to close, mirrored.
 //
-// Both halves therefore fail toward "the object is there", and the object
-// is only ever maintained by a writer that would otherwise skip it. Under
-// an open `DROP INDEX` that costs index maintenance on an index about to
-// disappear; under a rollback it is the difference between an index that
-// is whole and one silently missing every row written in the window.
+// Both halves fail toward "the object is there".
 //
 // Only the `trx_id` is consulted, not the undo chain: a catalog row's
 // `undo_ptr` is always 0 (txn.md §7), so there is no older version to step
@@ -107,8 +96,9 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
             // from other readers - spec-ddl-transactional.md §5a says what
             // that costs DROP TABLE, which DT9 does not change.
             if (tuple.value().deleted) {
-                const bool gone = view != nullptr ? view->Visible(tuple.value().trx_id)
-                                                  : !InFlight(txn, tuple.value().trx_id);
+                const bool gone =
+                    view != nullptr ? view->Visible(tuple.value().trx_id)
+                                    : txn == nullptr || !txn->IsInFlight(tuple.value().trx_id);
                 if (gone) return storage::VisitControl::kContinue;
             } else if (view != nullptr && !view->Visible(tuple.value().trx_id)) {
                 return storage::VisitControl::kContinue;  // not there, for this reader
@@ -2423,23 +2413,34 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
     const bool transactional = trx_id != kBootstrapXid;
     PageId acted_page = kInvalidPageId;
     CatalogRowChange marked;
+    bool already_marked = false;
     auto acted = ForFirstRow<SysIndexRow>(
         store_, kCatalogPageIndexes,
         [&](SysIndexRow& row, heap::PageView& page, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.index_oid != index_oid) return false;
-            if (tuple.deleted) return false;  // already marked by this transaction
+            if (tuple.deleted) {
+                // Matched, but a transaction has already marked it. Since
+                // DT9 an unfiltered read keeps such a row alive, so
+                // `FindIndexByName` hands it to us and this is now
+                // reachable from a client - it was not before. Recorded
+                // rather than skipped silently, because falling through to
+                // "no sys.indexes row for this index_oid" answers a user's
+                // statement with a system row's name and no byte position.
+                already_marked = true;
+                return false;
+            }
 
             // Retired outside a transaction - DropCabin() and
             // RetirePattern() state that argument and it still holds.
             // **Inside one, delete-marked**, which a rollback can clear
             // (DT5's mechanism).
             //
-            // Unlike `DROP TABLE`, this is *also isolated*: there is no
-            // in-place retype here, so the row's payload survives intact
-            // and a reader that cannot see the dropper still sees the
-            // index. §5a's limit is a property of the tombstone overwrite,
-            // not of drops in general.
+            // Unlike `DROP TABLE`, this is also **isolated**, but for a
+            // reason §5a had to correct: not because the payload survives
+            // an overwrite, which was the original and wrong argument, but
+            // because DT9 taught the unfiltered read to leave an open mark
+            // alone. On core 0, which is where every writer is.
             if (!transactional) {
                 if (Status s = page.RetireSlot(i); !s.ok()) return s;
             } else {
@@ -2460,7 +2461,19 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
         },
         &acted_page);
     if (!acted.ok()) return acted.status();
-    if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+    if (!acted.value()) {
+        // Understood and declined, not "simply wrong": the index is there
+        // and named correctly, and a transaction nobody here can wait for
+        // is in the middle of removing it. The wording matches
+        // `RefuseIfNameHeldByPendingDrop`'s for the table case, so the two
+        // read as one rule; the caller appends the byte position.
+        if (already_marked) {
+            return Status::Unsupported(
+                "the index is being dropped by a transaction that has not committed; it is "
+                "not gone, and not droppable again, until that transaction resolves");
+        }
+        return Status::NotFound("no sys.indexes row for this index_oid");
+    }
     if (transactional && change != nullptr) {
         marked.page_id = acted_page;  // known only once the walk found it
         *change = std::move(marked);

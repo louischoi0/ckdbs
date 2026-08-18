@@ -308,6 +308,14 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
                                 std::to_string(stmt.byte_offset) + ")");
     }
     if (Status s = catalog.DropIndex(row.value().index_oid, trx_id, change); !s.ok()) {
+        // The byte belongs to the statement, and only this layer has it.
+        // `WithContext` would prefix instead of append and would bury the
+        // position mid-sentence, so the one refusal that names the user's
+        // object gets it spelled out the way the sibling above does.
+        if (s.code() == StatusCode::kUnsupported) {
+            return Status::Unsupported("index '" + stmt.index_name + "': " + s.message() +
+                                       " (byte " + std::to_string(stmt.byte_offset) + ")");
+        }
         return s;
     }
     return row.value().index_oid;

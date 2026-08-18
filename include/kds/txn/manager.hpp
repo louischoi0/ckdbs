@@ -315,23 +315,16 @@ public:
     std::size_t ActiveCount() const noexcept;
 
     // Whether `trx_id` is still running **on this manager's core**. The
-    // membership test a `ReadView` runs, without minting one: the caller
-    // that needs it asks about a single id and would otherwise pay for a
-    // 64-entry array copy and a walk of `live_` to learn one bit.
-    //
-    // Its user is the unfiltered catalog read
-    // (`spec-ddl-transactional.md` §5a): a delete-marked catalog row
-    // counts as deleted only once its deleter is no longer in flight.
-    // "No longer in flight" is safe to read as "committed" there, and
-    // only because `Abort` compensates the whole trail *before* it clears
-    // `active_` - so a mark whose deleter has gone inactive is a mark no
+    // membership test a `ReadView` runs, without minting one to learn a
+    // single bit. Its user is the unfiltered catalog read
+    // (`spec-ddl-transactional.md` §5b), which reads a false answer as
+    // "committed" - sound only because `Abort` compensates the whole trail
+    // *before* it clears `active_`, so an inactive transaction is one no
     // rollback is coming for.
     //
-    // **Per-core, and the caller must know it.** `live_` is this core's;
-    // a transaction running on another core answers false here. Sound
-    // today for its one user because every catalog write and every index
-    // maintenance runs on core 0 (CC3 refuses cross-core writes), and
-    // false the moment that stops being true.
+    // **Per-core, and the caller must know it**: a transaction on another
+    // core answers false. Sound for its one user only while CC3 refuses
+    // cross-core writes.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
 
 private:

@@ -754,6 +754,15 @@ TEST_F(TxnSessionTest, ARolledBackDropIndexLeavesTheIndexWholeIncludingTheWindow
     EXPECT_NE(Run(a, "SHOW INDEXES").find("by_owner"), std::string::npos)
         << "a rolled-back DROP INDEX did not restore the index";
 
+    // **The control this test needs to mean anything** (the pattern
+    // `index_contract_test.cpp` calls "the control every equivalence suite
+    // needs"): the SELECT below proves DT9 only while it actually probes
+    // the index. If the planner ever stops choosing it, the query returns
+    // the row from a scan and the assertion passes having tested nothing.
+    EXPECT_NE(Run(a, "ANALYZE SELECT id, owner FROM t WHERE owner = 20").find("IndexProbe"),
+              std::string::npos)
+        << "this test no longer reaches the index, so it no longer tests DT9";
+
     // Reached through the restored index. Zero rows here is the wrong
     // answer the refusal existed to prevent.
     const std::vector<std::string> found = Rows(a, "SELECT id, owner FROM t WHERE owner = 20");
@@ -791,6 +800,59 @@ TEST_F(TxnSessionTest, ACommittedDdlTransactionInvalidatesTheCatalogCache) {
 
 // The committed half of the same rule: once the drop commits, the mark
 // counts, and the index is gone by every route.
+// A refusal DT9 made reachable from a client for the first time: with one
+// drop open, the index row is still there to be found, so the second drop
+// matches a row it must not act on. Before DT9 the answer was "no index
+// named ..."; without this it became "no sys.indexes row for this
+// index_oid" - a system row's name, and no byte position, both against
+// the rules every other refusal here follows.
+TEST_F(TxnSessionTest, ASecondDropOfAnIndexAlreadyBeingDroppedIsRefusedInTheUsersTerms) {
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(a, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+
+    for (Session* s : {&b, &a}) {  // another session, and the dropper itself
+        const std::string refused = Run(*s, "DROP INDEX by_owner");
+        EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+        EXPECT_NE(refused.find("by_owner"), std::string::npos) << refused;
+        EXPECT_NE(refused.find("has not committed"), std::string::npos) << refused;
+        EXPECT_NE(refused.find("byte "), std::string::npos) << refused;
+        EXPECT_EQ(refused.find("sys.indexes"), std::string::npos)
+            << "the refusal names a system row instead of the user's index: " << refused;
+    }
+
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    EXPECT_NE(Run(a, "SHOW INDEXES").find("by_owner"), std::string::npos);
+}
+
+// DT9 closed a corruption nobody had a test for. `CREATE INDEX` of a name
+// whose drop is open used to be allowed - the marked row was invisible to
+// the duplicate check - and the dropper's rollback then left two live
+// sys.indexes rows claiming one name. That is exactly what §6 refuses for
+// tables.
+TEST_F(TxnSessionTest, ACreateIsRefusedWhileThatIndexNamesDropIsOpen) {
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(a, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+
+    EXPECT_EQ(Run(b, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), 0u)
+        << "a second session took an index name a pending drop can still restore";
+
+    ASSERT_EQ(Run(a, "ROLLBACK").substr(0, 8), "ROLLBACK");
+    // Exactly one row claims the name, which is what the refusal bought.
+    const std::string shown = Run(a, "SHOW INDEXES");
+    EXPECT_NE(shown.find("by_owner"), std::string::npos);
+    EXPECT_EQ(shown.find("by_owner", shown.find("by_owner") + 1), std::string::npos) << shown;
+}
+
 // DT10 (spec §5c). A committed transactional drop leaves its marked rows
 // on the page, and nothing purges them - so the next mount inherits marks
 // whose deleter it cannot ask about, and whose id the unlogged ceiling may

@@ -244,16 +244,11 @@ public:
           indexes_enabled_(indexes),
           max_insert_rows_(max_insert_rows),
           default_key_mode_(default_key_mode) {
-        // DT9: an unfiltered catalog read needs to ask whether a delete-
-        // marked row's deleter is still open, and this constructor is the
-        // one place a catalog and a manager are known to belong together.
-        // Wiring it here rather than at each server's startup is what
-        // keeps a new construction site - a test fixture especially - from
-        // silently getting the pre-DT9 answer.
-        //
-        // A null manager leaves the catalog as it was: no transactions to
-        // be wrong about. Two dispatchers over one catalog would leave the
-        // later manager installed, which is the same relation the single
+        // The one place a catalog and a manager are known to belong
+        // together, which is why DT9's wiring is here and not in each
+        // server's startup: a new construction site - a test fixture
+        // especially - cannot forget it. Two dispatchers over one catalog
+        // leave the later manager installed, the same relation the single
         // `catalog_` reference already has.
         if (txn != nullptr) catalog.SetTransactionManager(txn);
     }

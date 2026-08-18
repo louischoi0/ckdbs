@@ -138,14 +138,8 @@ public:
     // catalog read has to ask: is the transaction that delete-marked this
     // row still running? (`spec-ddl-transactional.md` §5b.) Set rather
     // than constructed with, for SetLogger's reason - the manager is built
-    // after the catalog, and bootstrap has none at all.
-    //
-    // Left null, every unfiltered read answers exactly as it did before
-    // DT9: a mark is done the moment it is written. That is the wrong
-    // answer while a drop is open, and it is deliberately the one a
-    // catalog with no manager keeps, because a reader with no manager -
-    // bootstrap, recovery, a test over a bare store - has no in-flight
-    // transaction to be wrong about.
+    // after the catalog, and bootstrap has none at all. What null means is
+    // on the member.
     void SetTransactionManager(const txn::TransactionManager* txn) noexcept { txn_ = txn; }
 
     // Called after every DDL that invalidates cached facts - i.e. from
@@ -1001,9 +995,15 @@ private:
     std::uint32_t core_count_ = 1;
 
     Logger* log_ = nullptr;
-    // Null until a core's runtime arms it, and null forever for bootstrap,
-    // recovery and every test that builds a Catalog over a bare store -
-    // which is what keeps those readers on the pre-DT5 behaviour exactly.
+    // Armed by the `CommandDispatcher` constructor, so it is null for
+    // bootstrap, for recovery, for a test over a bare store - and **for
+    // every peer core**, whose `CoreRuntime` builds a Catalog and no
+    // dispatcher. That last one is deliberate rather than missed: a peer's
+    // live list can never hold the core-0 transaction that wrote a
+    // catalog mark, so armed and unarmed answer identically there
+    // (`spec-ddl-transactional.md` §5b's core-0 scope, from the other
+    // side). Null is the pre-DT9 answer: a mark counts the moment it is
+    // written.
     const txn::TransactionManager* txn_ = nullptr;
     InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
