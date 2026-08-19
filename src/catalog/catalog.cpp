@@ -315,6 +315,14 @@ Status LogCatPageImage(wal::WalManager* wal, storage::PageStore& store, std::uin
     return store.StampPageLsn(page_id, rec.value());
 }
 
+// The identity a compensation re-reads (DT5's rule): the Keystone word of
+// the payload, or 0 for a payload too short to carry one - which no
+// catalog row is, so the fallback is a never-taken safety.
+std::uint64_t UndoPkOf(std::span<const std::byte> payload) {
+    auto id = KeystoneIdOfPayload(payload);
+    return id.ok() ? id.value() : 0;
+}
+
 StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> AllocateCatalogPage(
     storage::PageStore& store) {
     for (PageId id = kCatalogOverflowFirst; id < kCatalogOverflowLimit; ++id) {
@@ -344,7 +352,8 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> AllocateCatalogPage
 // the engine hides aborted work by compensation, not by visibility (spec
 // §2's correction), so without this a rolled-back CREATE TABLE stays.
 template <typename RowT>
-Status InsertRow(wal::WalManager* wal, storage::PageStore& store, PageId root, const RowT& row,
+Status InsertRow(wal::WalManager* wal, const Catalog::DdlUndoHook& hook,
+                  storage::PageStore& store, PageId root, const RowT& row,
                   std::uint64_t trx_id, CatalogRowRef* where = nullptr) {
     const auto encoded = row.Encode();
 
@@ -356,6 +365,16 @@ Status InsertRow(wal::WalManager* wal, storage::PageStore& store, PageId root, c
         heap::PageView page(bytes.value().bytes());
         auto slot = page.InsertTuple(encoded, trx_id);
         if (slot.ok()) {
+            // The undo record first, then the row record - the hook's
+            // whole contract (catalog.hpp): redo alone must never be able
+            // to resurrect a loser's row that undo has no record for.
+            if (hook) {
+                if (Status s = hook({Catalog::DdlUndoEvent::Kind::kInsert, current,
+                                     slot.value(), encoded, 0, 0, UndoPkOf(encoded)});
+                    !s.ok()) {
+                    return s;
+                }
+            }
             if (Status s = LogCatInsert(wal, store, trx_id, current, slot.value(), encoded);
                 !s.ok()) {
                 return s;
@@ -394,6 +413,13 @@ Status InsertRow(wal::WalManager* wal, storage::PageStore& store, PageId root, c
             // unlinked rather than freed - there is no free-page path - and
             // nothing reaches it, which is the same trade heap_chain makes.
             return placed.status();
+        }
+        if (hook) {
+            if (Status s = hook({Catalog::DdlUndoEvent::Kind::kInsert, new_id, placed.value(),
+                                 encoded, 0, 0, UndoPkOf(encoded)});
+                !s.ok()) {
+                return s;
+            }
         }
         if (Status s = LogCatInsert(wal, store, trx_id, new_id, placed.value(), encoded);
             !s.ok()) {
@@ -881,7 +907,8 @@ void Catalog::InvalidateAfterCompensation() {
     BumpVersion("a transaction that wrote catalog rows resolved");
 }
 
-StatusOr<std::uint64_t> Catalog::RetireDeleteMarksBelow(std::uint64_t horizon) {
+StatusOr<std::uint64_t> Catalog::RetireDeleteMarksBelow(std::uint64_t horizon,
+                                                          std::uint64_t* remaining_out) {
     std::uint64_t retired = 0;
     for (const PageId root : kAllCatalogPages) {
         Status inner = Status::OK();
@@ -907,7 +934,10 @@ StatusOr<std::uint64_t> Catalog::RetireDeleteMarksBelow(std::uint64_t horizon) {
                 // A mark's trx_id is its *deleter*. At or above the
                 // horizon proves nothing - some live view may still see
                 // the row - so the mark stays for a later pass.
-                if (tuple.value().trx_id >= horizon) return storage::VisitControl::kContinue;
+                if (tuple.value().trx_id >= horizon) {
+                    if (remaining_out != nullptr) ++*remaining_out;
+                    return storage::VisitControl::kContinue;
+                }
                 if (Status s = page.RetireSlot(slot); !s.ok()) {
                     inner = s;
                     return s;
@@ -935,6 +965,7 @@ StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
     // that admits everything is any value above kMaxTrxId.
     auto swept = RetireDeleteMarksBelow(std::numeric_limits<std::uint64_t>::max());
     if (!swept.ok()) return swept;
+    pending_marks_ = 0;  // nothing survives a horizon above every id
     const std::uint64_t retired = swept.value();
 
     if (retired > 0) {
@@ -956,8 +987,14 @@ StatusOr<std::uint64_t> Catalog::PurgeSettledDeleteMarks() {
     // No manager, no marks: DDL then writes at kBootstrapXid and retires
     // its rows directly, so there is nothing this sweep could find.
     if (txn_ == nullptr) return std::uint64_t{0};
-    auto swept = RetireDeleteMarksBelow(txn_->ReadHorizon());
+    // The gate: a sweep is a kWrite fetch of every catalog page - it
+    // dirties the whole catalog even when it retires nothing - so it runs
+    // only while some mark written this run may still be on a page.
+    if (pending_marks_ == 0) return std::uint64_t{0};
+    std::uint64_t remaining = 0;
+    auto swept = RetireDeleteMarksBelow(txn_->ReadHorizon(), &remaining);
     if (!swept.ok()) return swept;
+    pending_marks_ = remaining;
     if (swept.value() > 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("catalog", "purged " + std::to_string(swept.value()) +
                                    " settled delete-marked catalog row(s)");
@@ -989,7 +1026,7 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     row.type_oid = type_oid;
     row.rel_id = 0;
     SetName(row.name, name);
-    Status s = InsertRow(wal_, store_, kCatalogPageObjects, row, trx_id, where);
+    Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageObjects, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysObjectsTable;
     // A new sys.objects row changes what FindTableOidByName and ListTables
     // would answer, so it stales cached name lookups.
@@ -1012,7 +1049,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.varheap_page_id = varheap_page_id;
     row.owner_core = owner_core;
     row.key_mode = key_mode;
-    Status s = InsertRow(wal_, store_, kCatalogPageTables, row, trx_id, where);
+    Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
     if (s.ok()) BumpVersion("sys.tables insert");
     return s;
@@ -1031,7 +1068,7 @@ Status Catalog::InsertColumnRow(Oid oid, Oid rel_id, std::uint32_t pos, std::str
     row.len = len;
     row.notnull = notnull;
     row.cabin_policy = cabin_policy;
-    Status s = InsertRow(wal_, store_, kCatalogPageColumns, row, trx_id, where);
+    Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageColumns, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysColumnsTable;
     // A new column row changes the schema half of a cached TableAccess.
     if (s.ok()) BumpVersion("sys.columns insert");
@@ -1045,7 +1082,7 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
     SetName(row.name, name);
     row.type_val = type_val;
     row.len = len;
-    Status s = InsertRow(wal_, store_, kCatalogPageTypes, row, kBootstrapXid);
+    Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTypes, row, kBootstrapXid);
     // The cache treats sys.types as immutable and keeps its snapshot across
     // Invalidate(). This is the only writer, so it is the only place that
     // assumption can be broken - drop the snapshot here rather than rely on
@@ -1436,6 +1473,17 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
 
             row.type_oid = kTypeDroppedTable;
             const auto encoded = row.Encode();
+            // The undo record first (hook contract, catalog.hpp): the
+            // prior image is the only copy a crash leaves of these bytes.
+            if (ddl_undo_hook_) {
+                if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kOverwrite, page_id, i,
+                                               change.prior_image, tuple.trx_id,
+                                               tuple.undo_ptr,
+                                               UndoPkOf(change.prior_image)});
+                    !s.ok()) {
+                    return s;
+                }
+            }
             // Stamped with the dropping transaction when there is one, so
             // the retype is this transaction's to undo.
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
@@ -1489,10 +1537,19 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
                     // knows how to read a mark (DT5). The row's bytes stay
                     // where they are, which is what a rollback needs and
                     // what nothing purges.
+                    if (ddl_undo_hook_) {
+                        if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id,
+                                                       i, {}, tuple.trx_id, tuple.undo_ptr,
+                                                       UndoPkOf(tuple.payload)});
+                            !s.ok()) {
+                            return s;
+                        }
+                    }
                     if (Status s = DeleteMarkLogged(wal_, store_, page, page_id, i, trx_id);
                         !s.ok()) {
                         return s;
                     }
+                    ++pending_marks_;
                     CatalogRowChange change;
                     change.slot = i;
                     // The identity `Compensate` will re-read before it
@@ -2095,7 +2152,7 @@ StatusOr<const PatternAccess*> Catalog::RegisterPattern(std::uint64_t pattern_id
     row.origin = origin;
     row.flags = flags;
 
-    if (Status s = InsertRow(wal_, store_, kCatalogPagePatterns, row, kBootstrapXid); !s.ok()) {
+    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPagePatterns, row, kBootstrapXid); !s.ok()) {
         return s;
     }
     // No BumpVersion(): nothing cached can go stale from a pattern
@@ -2275,7 +2332,7 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
     // argument is the one sys.patterns' registration already makes - a
     // statistic appearing cannot stale a cached relation, and this runs on
     // the statement path where a cache drop would dangle a held pointer.
-    return InsertRow(wal_, store_, kCatalogPageAccessStats, row, kBootstrapXid);
+    return InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageAccessStats, row, kBootstrapXid);
 }
 
 StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
@@ -2336,7 +2393,7 @@ StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
     // is a statement that was going to scan anyway.
     row.status = kCabinStatusActive;
 
-    if (Status s = InsertRow(wal_, store_, kCatalogPageCabins, row, kBootstrapXid); !s.ok()) {
+    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageCabins, row, kBootstrapXid); !s.ok()) {
         return s;
     }
 
@@ -2433,7 +2490,7 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     row.child_column_no = child_column_no;
     row.flags = flags;
 
-    if (Status s = InsertRow(wal_, store_, kCatalogPageFkeys, row, kBootstrapXid); !s.ok()) {
+    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageFkeys, row, kBootstrapXid); !s.ok()) {
         return s;
     }
 
@@ -2580,7 +2637,7 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
         row.covered_cols[i] = def.covered_cols[i];
     }
 
-    if (Status s = InsertRow(wal_, store_, kCatalogPageIndexes, row, trx_id, where); !s.ok()) {
+    if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageIndexes, row, trx_id, where); !s.ok()) {
         return s;
     }
     if (where != nullptr) {
@@ -2638,10 +2695,19 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
                     return s;
                 }
             } else {
+                if (ddl_undo_hook_) {
+                    if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id, i,
+                                                   {}, tuple.trx_id, tuple.undo_ptr,
+                                                   UndoPkOf(tuple.payload)});
+                        !s.ok()) {
+                        return s;
+                    }
+                }
                 if (Status s = DeleteMarkLogged(wal_, store_, page, page_id, i, trx_id);
                     !s.ok()) {
                     return s;
                 }
+                ++pending_marks_;
                 marked.slot = i;
                 marked.oid = index_oid;
                 marked.rel_oid = kSysIndexesTable;
