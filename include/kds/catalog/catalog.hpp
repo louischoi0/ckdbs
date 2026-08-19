@@ -26,6 +26,12 @@ namespace kds::txn {
 class TransactionManager;
 }  // namespace kds::txn
 
+namespace kds::wal {
+// Forward-declared for the same reason: the catalog only stores the
+// pointer here; the record encoding lives in catalog.cpp.
+class WalManager;
+}  // namespace kds::wal
+
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
 //
@@ -141,6 +147,15 @@ public:
     // after the catalog, and bootstrap has none at all. What null means is
     // on the member.
     void SetTransactionManager(const txn::TransactionManager* txn) noexcept { txn_ = txn; }
+
+    // The WAL, for RV3 (`docs/workplan-rv3-catalog-recovery.md`): every
+    // catalog page mutation logs the ordinary record types - kHeapInsert,
+    // kHeapOverwrite, kHeapDeleteMark, kSlotRetire, kPageInit, plus a
+    // full page image for a chain-link edit - exactly as wal.md's
+    // "Catalog" line always planned. Set rather than constructed with,
+    // for SetLogger's reason; null (bootstrap, socket-free tests) means
+    // catalog writes are unlogged, which is the pre-RV3 engine exactly.
+    void SetWal(wal::WalManager* wal) noexcept { wal_ = wal; }
 
     // Called after every DDL that invalidates cached facts - i.e. from
     // BumpVersion(), the single choke point, and from nowhere else
@@ -1020,6 +1035,8 @@ private:
     // side). Null is the pre-DT9 answer: a mark counts the moment it is
     // written.
     const txn::TransactionManager* txn_ = nullptr;
+    // RV3: null means unlogged catalog writes, the pre-RV3 engine.
+    wal::WalManager* wal_ = nullptr;
     InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
     PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;

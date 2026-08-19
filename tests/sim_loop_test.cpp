@@ -365,7 +365,15 @@ TEST_F(SimIntegrityCorruption, ASpilledCellPointingOffChainIsAVarHeapFinding) {
     ExpectOnly(Check(), CheckKind::kVarHeap);
 }
 
+// The sweep's category, proved on a **recoveryless** boot (RC10's fault
+// injection): the flush runs in page-id order, so the torn write lands on
+// a catalog page - and since RV3 logs catalog mutations, a *recovered*
+// mount no longer serves that page at all (the test below pins that).
+// Skipping recovery is what still boots the corrupt store the sweep needs.
 TEST_F(SimIntegrityCorruption, ATornPageWriteSurfacesAsAPageHeaderFinding) {
+    auto without = SimInstance::Create({.skip_recovery = true});
+    ASSERT_TRUE(without.ok()) << without.status().message();
+    instance_ = std::move(without.value());
     MakeTables();
     for (int i = 0; i < 20; ++i) Insert("h", i, "short");
 
@@ -380,6 +388,27 @@ TEST_F(SimIntegrityCorruption, ATornPageWriteSurfacesAsAPageHeaderFinding) {
     const IntegrityReport report =
         CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
     EXPECT_GE(report.CountOf(CheckKind::kPageHeader), 1u) << report.Summary();
+}
+
+// RV3's stronger arm of the same scenario: with catalog mutations logged,
+// redo now *names* the torn catalog page, finds no full page image to
+// heal it with (wal.md §10's first-write-per-checkpoint FPI is still
+// unbuilt for every page class), and **refuses the mount** - the same
+// contract a torn heap page already lives under, extended to the catalog.
+// Before RV3 this boot succeeded and served the corruption; refusing is
+// the honest interim until §10's FPI cadence exists.
+TEST_F(SimIntegrityCorruption, ATornCatalogPageRefusesTheMountInsteadOfServingIt) {
+    MakeTables();
+    for (int i = 0; i < 20; ++i) Insert("h", i, "short");
+
+    instance_->page_device().TearNextWrite(100);
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");
+    instance_->Crash();
+
+    Status rebooted = instance_->Reboot();
+    ASSERT_FALSE(rebooted.ok()) << "a recovered mount served a torn catalog page";
+    EXPECT_NE(rebooted.message().find("no full page image"), std::string::npos)
+        << rebooted.message();
 }
 
 }  // namespace

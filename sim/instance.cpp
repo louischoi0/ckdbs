@@ -45,6 +45,9 @@ Status SimInstance::Boot() {
     auto boot = bootstrap::BootstrapDatabase(*store_, kMountTime);
     if (!boot.ok()) return boot.status();
     boot_.emplace(std::move(boot.value()));
+    // RV3, exactly where the expeditor arms it: after bootstrap (which is
+    // entitled to run unlogged), before recovery and everything else.
+    boot_->catalog.SetWal(wal_.get());
 
     // **Recovery, exactly where the expeditor runs it** (RV1,
     // server/mount_recovery.hpp). The harness is a full instance, and a

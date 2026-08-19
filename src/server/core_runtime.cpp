@@ -113,6 +113,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // does is *read* and cache, and drop the cache when core 0 says so.
     runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width, config.core_count);
     runtime->catalog_->SetLogger(log);
+    // RV3: a peer may not write a catalog page (P6), so this should never
+    // fire - but if a write ever slips through, logged beats silent.
+    runtime->catalog_->SetWal(runtime->wal_.get());
     // A peer may not write the catalog, so its row ids come from leased
     // blocks (P5's shape, catalog/row_id_lease.hpp): AllocateRowId() draws
     // from this table, and a spent block is retryable exhaustion until the
