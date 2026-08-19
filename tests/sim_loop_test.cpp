@@ -411,5 +411,108 @@ TEST_F(SimIntegrityCorruption, ATornCatalogPageRefusesTheMountInsteadOfServingIt
         << rebooted.message();
 }
 
+// ---- RV3: DDL is durable (docs/workplan-rv3-catalog-recovery.md) ----------
+//
+// Four crash shapes, each the smallest statement of one guarantee. kStrict
+// where the test needs "acknowledged means durable in the log"; pages are
+// deliberately never flushed unless the test flushes them, because redo
+// rebuilding catalog pages from the log alone is the feature.
+
+class Rv3CrashTest : public ::testing::Test {
+protected:
+    void MakeStrict() {
+        auto instance = SimInstance::Create({.durability = wal::DurabilityClass::kStrict});
+        ASSERT_TRUE(instance.ok()) << instance.status().message();
+        instance_ = std::move(instance.value());
+    }
+    std::string Run(std::string_view sql) { return instance_->Execute(sql); }
+
+    std::unique_ptr<SimInstance> instance_;
+};
+
+TEST_F(Rv3CrashTest, ACommittedCreateTableSurvivesACrashItsPagesNeverReached) {
+    MakeStrict();
+    ASSERT_EQ(Run("CREATE TABLE t (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO t VALUES (7)").substr(0, 8), "INSERTED");
+
+    // No SYNC: every catalog page dies with the crash, and redo alone must
+    // bring the relation back - which is RV3's entire promise, and exactly
+    // what `ddl_durable=0` used to disclaim.
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_EQ(Run("DESCRIBE t").rfind("ERR", 0), std::string::npos)
+        << "a committed CREATE TABLE did not survive the crash";
+    EXPECT_NE(Run("SELECT id, v FROM t WHERE id = 1").find("7"), std::string::npos);
+}
+
+TEST_F(Rv3CrashTest, AnUncommittedCreateAtCrashLeavesNoRelation) {
+    MakeStrict();
+    ASSERT_EQ(Run("BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run("CREATE TABLE ghost (id int64, v int64)").substr(0, 7), "CREATED");
+    // The hostile flush: the uncommitted rows reach the platter, WAL and
+    // pages both. Recovery's undo phase - walking the undo records the
+    // catalog's hook appended - is the only thing that can remove them.
+    ASSERT_EQ(Run("SYNC"), "OK synced");
+    instance_->Crash();
+    ASSERT_TRUE(instance_->Reboot().ok());
+    EXPECT_EQ(Run("DESCRIBE ghost").rfind("ERR", 0), 0u)
+        << "an uncommitted CREATE TABLE survived the crash";
+    // And the name is free - the half-created relation left no debris a
+    // re-create trips on.
+    EXPECT_EQ(Run("CREATE TABLE ghost (id int64, v int64)").substr(0, 7), "CREATED");
+}
+
+TEST_F(Rv3CrashTest, AnUncommittedDropAtCrashLeavesTheRelationWhole) {
+    MakeStrict();
+    ASSERT_EQ(Run("CREATE TABLE keep (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO keep VALUES (9)").substr(0, 8), "INSERTED");
+
+    ASSERT_EQ(Run("BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run("DROP TABLE keep").rfind("ERR", 0), std::string::npos);
+    // Same hostile flush: the retype and the delete-marks are on the
+    // platter. Rolling them back at mount is the kOverwrite undo record
+    // (the prior image is its only surviving copy) and the kDeleteMark
+    // ones, through the ordinary recovery-undo machinery.
+    ASSERT_EQ(Run("SYNC"), "OK synced");
+    instance_->Crash();
+    ASSERT_TRUE(instance_->Reboot().ok());
+    EXPECT_EQ(Run("DESCRIBE keep").rfind("ERR", 0), std::string::npos)
+        << "an uncommitted DROP TABLE stayed dropped across the crash";
+    EXPECT_NE(Run("SELECT id, v FROM keep WHERE id = 1").find("9"), std::string::npos);
+}
+
+TEST_F(Rv3CrashTest, ACommittedCreateIndexAnswersProbesAfterACrash) {
+    MakeStrict();
+    ASSERT_EQ(Run("CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("INSERT INTO t VALUES (10)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(Run("CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+
+    EXPECT_NE(Run("SHOW INDEXES").find("by_owner"), std::string::npos)
+        << "a committed CREATE INDEX did not survive the crash";
+    // The control index_contract_test.cpp calls for: the SELECT proves the
+    // tree only while it actually probes it.
+    EXPECT_NE(Run("ANALYZE SELECT id, owner FROM t WHERE owner = 10").find("IndexProbe"),
+              std::string::npos);
+    EXPECT_NE(Run("SELECT id, owner FROM t WHERE owner = 10").find("10"), std::string::npos)
+        << "the recovered index lost the backfilled row";
+}
+
+TEST_F(Rv3CrashTest, ACommittedDropStaysDroppedAcrossACrash) {
+    MakeStrict();
+    ASSERT_EQ(Run("CREATE TABLE gone (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("DROP TABLE gone").rfind("ERR", 0), std::string::npos);
+
+    instance_->Crash();
+    ASSERT_TRUE(instance_->Reboot().ok());
+    EXPECT_EQ(Run("DESCRIBE gone").rfind("ERR", 0), 0u)
+        << "a committed DROP TABLE resurrected across the crash";
+    EXPECT_EQ(Run("CREATE TABLE gone (id int64, v int64)").substr(0, 7), "CREATED");
+}
+
 }  // namespace
 }  // namespace kds::sim

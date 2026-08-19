@@ -287,15 +287,17 @@ Status RetireLogged(wal::WalManager* wal, storage::PageStore& store, heap::PageV
     return LogCatRetire(wal, store, env_trx, page_id, slot);
 }
 
-// A fresh catalog overflow page. Deliberately unstamped, like the DML
-// path's new-tuple-page PAGE_INIT: the insert that follows stamps it.
-Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id) {
+// A page a DDL created, deliberately unstamped like the DML path's
+// new-tuple-page PAGE_INIT: the first record that lands in it stamps it,
+// and an empty formatted page is exactly what redo rebuilds. The defaults
+// are the catalog overflow page's (min_key 0, kHeap, unattributed); a
+// relation's own root pages pass their type and owning oid.
+Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id,
+                      PageType type = PageType::kHeap, Oid owner_oid = 0) {
     if (wal == nullptr) return Status::OK();
     std::array<std::byte, wal::kPageInitPayloadSize> buf{};
-    // min_key 0 (catalog rows carry no key space), owner_oid 0 (the
-    // convention CreateEmpty documents for system callers).
-    const wal::PageInitPayload fields{0, static_cast<std::uint8_t>(PageType::kHeap), {0, 0, 0},
-                                      /*reserved2=*/0, /*owner_oid=*/0};
+    const wal::PageInitPayload fields{0, static_cast<std::uint8_t>(type), {0, 0, 0},
+                                      /*reserved2=*/0, owner_oid};
     if (auto n = wal::EncodePageInit(buf, fields); !n.ok()) return n.status();
     auto rec = wal->Append(wal::RecordSpec{wal::RecordType::kPageInit, trx_id, page_id}, buf);
     return rec.ok() ? Status::OK() : rec.status();
@@ -1157,6 +1159,19 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
             break;
     }
     if (!formatted.ok()) return formatted;
+    // RV3: the relation's root must exist in the log or a crash that
+    // loses the unflushed page makes the first HEAP_INSERT irreplayable -
+    // redo refuses a record naming a page nothing creates. Both clustered
+    // types start as one leaf-shaped page, which is exactly what a
+    // PAGE_INIT rebuilds.
+    if (Status s = LogCatPageInit(wal_, trx_id, root_id,
+                                  clustered_type == ClusteredType::kBtree
+                                      ? PageType::kBtreeLeaf
+                                      : PageType::kHeap,
+                                  new_oid);
+        !s.ok()) {
+        return s;
+    }
 
     // The var-heap root, allocated here or not at all. Eager rather than
     // on-first-spill, and the reason is the catalog cache's rule
@@ -1171,6 +1186,12 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         auto created_varheap = varheap::CreateChain(store_, new_oid);
         if (!created_varheap.ok()) return created_varheap.status();
         varheap_root = created_varheap.value();
+        // Same argument as the root above: a VARHEAP_APPEND replayed into
+        // a page nothing creates refuses the mount (RC03's reproducer).
+        if (Status s = LogCatPageInit(wal_, trx_id, varheap_root, PageType::kVarHeap, new_oid);
+            !s.ok()) {
+            return s;
+        }
     }
 
     // Placement (docs/workplan-crosscore.md M1). The rotation counter is

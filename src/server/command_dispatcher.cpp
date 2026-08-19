@@ -552,26 +552,25 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " recovery_undo_us=" << recovery_->timings.undo_ns / 1000
                << " recovery_checkpoint_us=" << recovery_->checkpoint_ns / 1000;
         }
-        // RV3's report, both halves. `relations_missing_pages` is the one that
-        // is computable; `catalog_recovered=0` is the standing statement that
-        // the converse - rows whose relation the crash erased - is **not
-        // detectable**, because no page names its relation
-        // (mount_recovery.hpp). Printed as a flag rather than left unsaid, so
-        // "recovery succeeded" is never read as "nothing was lost".
+        // RV3 closed 2026-08-19: catalog mutations log the ordinary record
+        // types, DDL runs under a real transaction, and redo/undo restore
+        // catalog pages like any page - so `catalog_recovered` flips to 1.
+        // `relations_missing_pages` stays as the audit: it counted the gap
+        // while it existed, and a zero from here on is the proof it closed.
         os << " recovery_relations_checked=" << recovery_->relations_checked
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
-           << " catalog_recovered=0"
+           << " catalog_recovered=1"
            // DT10: delete-marked catalog rows a previous mount left
            // behind, retired before the listener bound. Zero is what a
            // clean shutdown produces, so a non-zero here is the sign that
            // this mount followed one that left a transactional DROP
            // half-resolved.
            << " catalog_marks_finalized=" << recovery_->catalog_marks_finalized
-           // DT7: `CREATE TABLE` became atomic and isolated on 2026-08-16,
-           // and a reader of `ddl_transactional=1` will assume that
-           // includes surviving a crash. It does not, and the two flags
-           // sit together so the pair reads as one statement: transactional
-           // within a running instance, not durable across a restart.
+           // DT7 made these transactional; RV3 (2026-08-19) made them
+           // durable - a committed DDL survives a crash by redo, an
+           // uncommitted one is rolled back by the undo records the
+           // catalog's hook appends. The pair finally reads as one true
+           // statement.
            //
            // `drop-index` rejoined the list on 2026-08-18 (DT9). It was in
            // it, came out when the statement was refused inside a
@@ -579,7 +578,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // which is the whole reason this is a list of statement names
            // and not a bare `=1`.
            << " ddl_transactional=create-table,drop-table,create-index,drop-index"
-           << " ddl_durable=0";
+           << " ddl_durable=1";
         // RC07: what the mount could resume enforcing, and the honest
         // remainder. A surviving declaration whose directory could not be
         // rebuilt is counted here and left *out* of the registry, so
@@ -1245,7 +1244,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
         const std::optional<txn::ReadView> create_view = ViewFor(session);
         auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
                                         create_ddl.txn != nullptr ? &created_row : nullptr,
-                                        create_view.has_value() ? &*create_view : nullptr);
+                                        create_view.has_value() ? &*create_view : nullptr, wal_);
         // Before the status is read: a create that failed after the catalog
         // row went down still left it there.
         if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {

@@ -12,6 +12,8 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/index/index_page.hpp"
+#include "kds/wal/payload.hpp"
+#include "kds/wal/record.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/txn/undo_log.hpp"
 
@@ -46,6 +48,51 @@ struct StagedRow {
     std::uint64_t undo_ptr = 0;
     std::vector<std::byte> payload;
 };
+
+// RV3's record of the whole built tree: one full page image per page,
+// depth-first from the root. Order among the images is irrelevant - each
+// describes a whole page and redo's FPI arm creates the page it names -
+// and every image is stamped so the WAL-before-data gate holds the pages
+// until the images are durable. A null `wal` no-ops (tests, bootstrap).
+Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
+                    PageId page_id) {
+    if (wal == nullptr) return Status::OK();
+
+    // The children first, collected under a scope that drops this page's
+    // pin before recursing - depth bounds the pin count either way, but a
+    // copied id list keeps the shape obviously safe.
+    std::vector<PageId> children;
+    {
+        auto bytes = store.GetForRead(page_id);
+        if (!bytes.ok()) return bytes.status();
+        if (storage::RawPageType(bytes.value().bytes()) ==
+            static_cast<std::uint8_t>(PageType::kIndexInternal)) {
+            index::IndexInternalView node(bytes.value().bytes());
+            children.push_back(node.leftmost_child());
+            for (std::uint16_t i = 0; i < node.entry_count(); ++i) {
+                auto child = node.Child(i);
+                if (!child.ok()) return child.status();
+                children.push_back(child.value());
+            }
+        }
+    }
+    for (const PageId child : children) {
+        if (Status s = LogBuiltTree(wal, store, trx_id, child); !s.ok()) return s;
+    }
+
+    auto bytes = store.Get(page_id);
+    if (!bytes.ok()) return bytes.status();
+    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
+    if (auto n = wal::EncodeFullPageImage(
+            image, std::span<const std::byte, kPageSize>(bytes.value().bytes()));
+        !n.ok()) {
+        return n.status();
+    }
+    auto fpi = wal->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, trx_id, page_id},
+                           image);
+    if (!fpi.ok()) return fpi.status();
+    return store.StampPageLsn(page_id, fpi.value());
+}
 
 // Appends one version's entry, decoding the key columns out of `payload`.
 //
@@ -163,7 +210,7 @@ StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess&
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt, std::uint64_t trx_id,
                                      catalog::CatalogRowRef* written,
-                                     const txn::ReadView* view) {
+                                     const txn::ReadView* view, wal::WalManager* wal) {
     auto oid = catalog.FindTableOidByName(stmt.table_name, view);
     if (!oid.ok()) {
         return Status::NotFound("no relation named '" + stmt.table_name + "' (byte " +
@@ -272,6 +319,16 @@ StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageSto
         return final_root.status().WithContext("building index '" + stmt.index_name + "'");
     }
     def.root_page_id = final_root.value();
+
+    // RV3: the built tree travels as full page images, **before** the
+    // sys.indexes row that publishes it - a crash after the commit must
+    // find a tree the recovered catalog row can probe, and the backfill
+    // logged nothing per entry. An FPI both creates and fills a page at
+    // redo, so no PAGE_INIT is needed; the cost is tree bytes per CREATE
+    // INDEX, on a statement that is already O(relation).
+    if (Status s = LogBuiltTree(wal, store, trx_id, def.root_page_id); !s.ok()) {
+        return s.WithContext("logging the built tree of index '" + stmt.index_name + "'");
+    }
 
     // The heap-relation, pk-column, duplicate-column, over-cap, UNIQUE and
     // duplicate-name refusals all live in the catalog and are deliberately

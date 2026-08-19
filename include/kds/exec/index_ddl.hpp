@@ -71,11 +71,16 @@ struct IndexDdlResult {
 // (workplan-ddl-transactional.md DT5): the catalog row is stamped with
 // the creating transaction and its address reported, so a rollback can
 // retire it. Defaulted to the autocommit path.
+// `wal` (RV3): the built tree is logged as full page images before the
+// catalog row publishes it, so a committed CREATE INDEX survives a crash
+// with a tree its recovered row can probe. Null = unlogged, the pre-RV3
+// path every socket-free test runs.
 StatusOr<IndexDdlResult> CreateIndex(catalog::Catalog& catalog, storage::PageStore& store,
                                      const parser::IndexStmt& stmt,
                                      std::uint64_t trx_id = catalog::kBootstrapXid,
                                      catalog::CatalogRowRef* written = nullptr,
-                                     const txn::ReadView* view = nullptr);
+                                     const txn::ReadView* view = nullptr,
+                                     wal::WalManager* wal = nullptr);
 
 // Removes the index named by `stmt` and returns its `index_oid`.
 //
