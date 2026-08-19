@@ -46,17 +46,20 @@
 namespace kds::server {
 namespace {
 
-// One database, one dispatcher, one configuration.
+// One database, one dispatcher, one configuration. Limits and budget are
+// parameters because the cap tests need caps a real workload would hit
+// and a budget tight enough to catch a walk that should not have run.
 class Instance {
 public:
-    explicit Instance(bool cabins) {
+    explicit Instance(bool cabins, stats::CabinLimits limits = {},
+                      exec::Budget budget = exec::Budget()) {
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         EXPECT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
-        if (cabins) cabins_.emplace();
+        if (cabins) cabins_.emplace(limits);
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
-                            exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            budget, /*recorder=*/nullptr, /*replay_enabled=*/false,
                             /*access_statistics=*/true, cabins_ ? &*cabins_ : nullptr);
     }
 
@@ -811,5 +814,98 @@ TEST(CabinContractTest, AnExplicitKeyRelationServesTheOrderItWalks) {
     EXPECT_EQ(db.Run(ordered), base.Run(ordered));
 }
 
+TEST(CabinContractTest, ACorrelatedExistsConvergesToObservedSets) {
+    // feat-cabin.md §4a's non-convergence, closed: an EXISTS whose every
+    // outer key has a qualifying match stops each recording walk before it
+    // can commit, so the probed values re-observed forever and every
+    // execution paid the full miss path. In sub-chain mode the walk now
+    // completes *through* the stop - the answer is already decided, the
+    // remaining rows feed the recording alone - and the set commits.
+    Instance db(/*cabins=*/true);
+    Load(db);
+    DeclareCabins(db);
+
+    // Every sym has a row with qty > 30 ('aaa' has 60, 'bbb' 80, 'ccc' 40,
+    // 'ddd' 70), so pre-fix no key ever recorded.
+    const std::string q =
+        "SELECT id FROM h AS o WHERE EXISTS "
+        "(SELECT i.id FROM h AS i WHERE i.sym = o.sym AND i.qty > 30)";
+    const std::string first = db.Run(q);
+    ASSERT_EQ(first.rfind("ERR", 0), std::string::npos) << first;
+
+    // The witness: a declared Cabin records on the first miss, and the
+    // completed-through-stop walk is what lets it commit - so after one
+    // execution the probed values are observed sets, not eternal misses.
+    auto oid = db.catalog().FindTableOidByName("h", nullptr);
+    ASSERT_TRUE(oid.ok());
+    auto access = db.catalog().InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    const std::uint64_t cabin_id = access.value()->CabinOn(/*col_pos=*/1).id;
+    ASSERT_NE(cabin_id, 0u);
+    for (const char* sym : {"aaa", "bbb", "ccc", "ddd"}) {
+        parser::AstValue v;
+        v.type = parser::ValueType::kStr;
+        v.str_val = sym;
+        auto key = stats::MakeCabinKey(cabin_id, v);
+        ASSERT_TRUE(key.has_value());
+        EXPECT_NE(db.cabins().Find(*key), nullptr) << sym;
+    }
+
+    // And the served executions answer exactly what the first did.
+    for (int r = 0; r < 3; ++r) EXPECT_EQ(db.Run(q), first);
+
+    // The completed set is whole, not the prefix the stop saw: a probe of
+    // a recorded value returns every matching row byte-identically to a
+    // cabin-free walk.
+    //
+    // **'bbb' is the value that discriminates**, which is why every sym is
+    // probed rather than one. Its rows are 2, 5 and 8 and the EXISTS stop
+    // landed on 5 (qty 50, the first over 30), so a set committed at the
+    // stop would be missing row 8 - the C1 break. 'aaa' cannot show that:
+    // its stop lands on 6, the last of its rows, so its prefix and its
+    // whole set are the same list and a partial commit would pass.
+    Instance ref(/*cabins=*/false);
+    Load(ref);
+    for (const char* sym : {"aaa", "bbb", "ccc", "ddd"}) {
+        const std::string probe = std::string("SELECT * FROM h WHERE sym = '") + sym + "'";
+        EXPECT_EQ(db.Run(probe), ref.Run(probe)) << sym;
+    }
+}
+
+TEST(CabinContractTest, ACapRefusedValueKeepsTheShortCircuitedCost) {
+    // The review's reproduction of the completion license's cap hole,
+    // pinned: with caps a value cannot fit under, CB13's walk-through-stops
+    // must not run - each doomed attempt was a full relation walk, re-armed
+    // on every probe, and under a tight row budget the cabined database
+    // answered ResourceExhausted where the cabin-free one answered rows.
+    // An accelerator changing a result is what §1 forbids outright.
+    //
+    // Caps: 'aaa' and 'bbb' have three rows each, past the entry cap of 2;
+    // the value cap of 2 lets at most two values observe at all. The
+    // per-statement budget of 60 rows bounds one execution comfortably
+    // when every stop ends its walk (~25 examined), and not when doomed
+    // completions walk the whole relation per outer row (8 x 8 and up).
+    stats::CabinLimits limits;
+    limits.max_values = 2;
+    limits.max_entries_per_value = 2;
+    Instance db(/*cabins=*/true, limits, exec::Budget(60));
+    Instance ref(/*cabins=*/false, {}, exec::Budget(60));
+    Load(db);
+    Load(ref);
+    DeclareCabins(db);
+
+    const std::string q =
+        "SELECT id FROM h AS o WHERE EXISTS "
+        "(SELECT i.id FROM h AS i WHERE i.sym = o.sym AND i.qty > 30)";
+    for (int r = 0; r < 4; ++r) {
+        const std::string got = db.Run(q);
+        const std::string want = ref.Run(q);
+        ASSERT_EQ(got.rfind("ERR", 0), std::string::npos)
+            << "round " << r << ": the cabined side burned budget on doomed walks: " << got;
+        EXPECT_EQ(got, want) << "round " << r;
+    }
+}
+
 }  // namespace
 }  // namespace kds::server
+

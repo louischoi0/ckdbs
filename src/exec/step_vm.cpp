@@ -180,6 +180,10 @@ public:
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes),
           resume_gate_(resume_gate) {}
 
+    // Sub-chain mode - see `record_through_stops_`'s comment for what it
+    // licenses and why only a sub-chain may have it.
+    void RecordThroughStops() { record_through_stops_ = true; }
+
     sched::Coro Run(const std::vector<Step>& steps) {
         if (depth_ > kMaxExecDepth) {
             co_return Status::Unsupported("chain nesting deeper than " +
@@ -311,6 +315,9 @@ public:
         // step would make one statement see two databases.
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
                           trail_, replay_, cabins_, &snapshot_, indexes_);
+        // Sub-chain mode - `record_through_stops_`'s comment carries the
+        // argument.
+        inner.RecordThroughStops();
         Status ran = RunToCompletionAtWalkBoundary(inner.Run(sub.steps));
         if (!ran.ok()) return ran;
 
@@ -598,8 +605,17 @@ private:
         // The miss path is why the first query for a value costs nothing
         // extra: it was going to walk anyway, and recording is a side
         // effect of the walk (§4). `n = 2` - the first miss only counts.
+        // `MayObserve` is the value-cap gate, asked before a recording walk
+        // is paid for: a value Commit could never accept must not start
+        // one - under the sub-chain completion license each doomed attempt
+        // was a full relation walk, re-armed on every probe.
         const bool record =
-            cabins_->WouldRecord(cabins_->Observe(*key), step.cabin->declared);
+            cabins_->WouldRecord(cabins_->Observe(*key), step.cabin->declared) &&
+            [&] {
+                if (cabins_->MayObserve(*key)) return true;
+                cabins_->NoteCapRefusal();
+                return false;
+            }();
         if (!record) co_return co_await RunWalkStep(steps, index, step, access);
         co_return co_await WalkAndRecord(steps, index, step, access, *key);
     }
@@ -629,16 +645,27 @@ private:
         recording.step_id = step.step_id;
         recording.col_pos = step.cabin->col_pos;
         recording.value = &ProbeValue(step);
+        recording.key = &key;
         // **Saved and restored, never cleared.** The walk below descends into
         // the next step, which may be a cabin step recording a walk of its
         // own - and clearing to null on its way out would cancel *this*
         // recording from the second row onwards. The set would then be
         // committed as observed while missing qualifying pks, which is the
         // C1 break the completed-walk check below exists to prevent.
+        // `completing_recording_` travels in lockstep: it is the completion
+        // license for exactly this walk, and the entry-cap lapse in the
+        // recording block may revoke it mid-flight.
         Recording* outer_recording = recording_;
+        const bool outer_completing = completing_recording_;
         recording_ = &recording;
+        completing_recording_ = record_through_stops_;
         Status walked = co_await RunWalkStep(steps, index, step, access);
+        // Read before the restore: whether THIS walk's license survived -
+        // the entry-cap lapse revokes it, after which a stop ends the walk
+        // and the set is partial.
+        const bool walked_through_stops = completing_recording_;
         recording_ = outer_recording;
+        completing_recording_ = outer_completing;
 
         if (!walked.ok()) co_return walked;
         // **Only a completed walk may be committed.** A walk that a sink
@@ -646,8 +673,10 @@ private:
         // and not the rows it did not - and a set marked observed while
         // missing qualifying pks is precisely the break C1 forbids. This is
         // the one place that check can be made, because it is the only place
-        // that knows whether the walk finished.
-        if (stopped_) co_return Status::OK();
+        // that knows whether the walk finished. A stopped walk whose
+        // completion license survived ran to the relation's end *through*
+        // the stop, so its set is whole.
+        if (stopped_ && !walked_through_stops) co_return Status::OK();
 
         // Sorted here, once, rather than on every hit: entries served in
         // page order batch same-page tuples into one fetch (§3), and a set
@@ -1150,9 +1179,20 @@ private:
         // refilled entry while the parameter's referent is freed memory.
         const catalog::TableAccess* live_access = &access;
 
+        // Whether a stop ends this walk. Normally yes (V03; the quota's
+        // bounded-work property rides on it) - the one exception is
+        // `completing_recording_`'s license, held by the walk whose own
+        // recording is live, and read per call because the entry-cap lapse
+        // can revoke it mid-flight. The step-id refinement scopes it: a
+        // deeper step walking *under* a recording stops normally.
+        const auto walk_ends_on_stop = [&] {
+            return stopped_ && !(completing_recording_ && recording_ != nullptr &&
+                                 recording_->step_id == step.step_id);
+        };
+
         auto visitor = [&](PageId page_id, heap::PageView& page,
                            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            if (stopped_) return storage::VisitControl::kStop;
+            if (walk_ends_on_stop()) return storage::VisitControl::kStop;
 
             // The walk's page count, exact by construction: the chain hands
             // the visitor one page's slots consecutively, so a transition
@@ -1207,7 +1247,7 @@ private:
                         inner = ok;
                         return ok;
                     }
-                    if (stopped_) return storage::VisitControl::kStop;
+                    if (walk_ends_on_stop()) return storage::VisitControl::kStop;
                 }
                 return storage::VisitControl::kContinue;
             }
@@ -1217,7 +1257,8 @@ private:
                 inner = accepted;
                 return accepted;
             }
-            return stopped_ ? storage::VisitControl::kStop : storage::VisitControl::kContinue;
+            return walk_ends_on_stop() ? storage::VisitControl::kStop
+                                       : storage::VisitControl::kContinue;
         };
 
         NoteFetch();
@@ -1477,10 +1518,6 @@ private:
 
         StepStats& step_stats = stats_.For(step.step_id);
         ++step_stats.rows_examined;
-        // Charged where the tuple was actually decoded, which is the unit
-        // that tracks work: a page fetch amortizes over its tuples, but
-        // every tuple is decoded and filtered on its own.
-        if (Status s = budget_.ChargeRow(); !s.ok()) return s;
 
         // ---- Cabin recording (docs/feat-cabin.md §4's miss path) ---------
         //
@@ -1527,8 +1564,49 @@ private:
                 entry.slot = slot;
                 entry.flags = stats::kCabinHintValid;
                 recording_->entries.push_back(entry);
+                // The entry-cap lapse: once the set is past what Commit can
+                // accept, walking on for it is doomed work, so the
+                // completion license is revoked - the next stop check ends
+                // the walk and the guard refuses the partial set. A walk
+                // the sink never stops is untouched: it is the statement's
+                // own answer and runs to the end regardless, with Commit
+                // refusing at the cap exactly as before.
+                if (completing_recording_ &&
+                    recording_->entries.size() > cabins_->max_entries_per_value()) {
+                    completing_recording_ = false;
+                    // Marked sticky, not merely counted: an append-only set
+                    // can only grow, so re-attempting on the next probe is
+                    // doomed work re-armed - MayObserve refuses the key
+                    // until the store's clear signals say the world moved.
+                    cabins_->NoteEntryCapRefusal(*recording_->key);
+                }
             }
+
+            // Completion mode: the statement is already stopped and this
+            // row was visited for the recording above alone - **uncharged**,
+            // because a completion row is the Cabin's work and billing the
+            // statement for it turned a within-budget statement into
+            // ResourceExhausted, the result change §1 forbids (the work is
+            // bounded per key: a commitable set completes once ever, and
+            // the caps' gate and sticky mark stop the doomed forms). The
+            // check lives *inside* `recording_here` so a plain walk pays
+            // nothing for the feature: `stopped_` can only be true here
+            // while this step's own recording is live - the walk visitor
+            // and both phase-2 loops gate on it otherwise, and a stopped
+            // recording walk never descends, so no other step's
+            // AcceptTupleAt runs at all. Nothing further may run for this
+            // row - not the residual, not a sub-chain, least of all a
+            // second emit.
+            if (stopped_) return Status::OK();
         }
+
+        // Charged where the tuple was actually decoded, which is the unit
+        // that tracks work: a page fetch amortizes over its tuples, but
+        // every tuple is decoded and filtered on its own. Below the
+        // completion exit, so it is unconditional again on the plain walk -
+        // the guard form measured as ~2 ns on every examined row of every
+        // walk in the engine (bench/results-scenario3-library.md §7c.5).
+        if (Status s = budget_.ChargeRow(); !s.ok()) return s;
 
         auto matched = EvaluateAll(schemas_, step.residual, frame_);
         if (!matched.ok()) return matched.status();
@@ -1727,9 +1805,21 @@ private:
         std::uint32_t step_id = 0;
         std::uint16_t col_pos = 0;
         const parser::AstValue* value = nullptr;
+        // The set's key, for the entry-cap lapse to mark it sticky in the
+        // store. Points at WalkAndRecord's parameter, which outlives the
+        // walk for the reason `value` does.
+        const stats::CabinKey* key = nullptr;
         std::vector<stats::CabinEntry> entries;
     };
     Recording* recording_ = nullptr;
+
+    // The completion license for the walk whose recording `recording_` is,
+    // saved and restored in lockstep with it. True only while
+    // `record_through_stops_` (sub-chain mode) held at the walk's start
+    // and the entry-cap lapse has not revoked it; the walk's stop checks
+    // and WalkAndRecord's commit guard both read it, which is what keeps
+    // "may walk past a stop" and "may commit a stopped walk" one fact.
+    bool completing_recording_ = false;
 
     // Phase 1's output (see ServeFromCabin): the verified locations, held
     // until every entry has been resolved so that the heap fallback can
@@ -1763,6 +1853,17 @@ private:
     ChainFrame frame_;
     bool stopped_ = false;
     bool indexes_ = true;
+
+    // Sub-chain mode (EvaluateSubChain sets it on the runner it builds):
+    // every stop in a sub-chain is its own short-circuit - no quota exists
+    // at subquery depth (V09) - so a stop decides the answer without
+    // bounding the work a *recording* is entitled to. With this set, a
+    // walk carrying a live recording runs to completion past a stop,
+    // visiting the remaining rows for the recording block alone, and
+    // WalkAndRecord may then commit the whole set. Never set on a
+    // top-level runner: there a stop can be a quota, whose bounded-work
+    // property (pagination_exec_test) a completed walk would break.
+    bool record_through_stops_ = false;
 
     // The page-boundary resume gate (workplan-crosscore.md P4d-4a). Null
     // for every local statement. When set, the outermost walk consults it

@@ -206,16 +206,34 @@ observation threshold on its own — up to `cabin_max_values` sets from a
 single SELECT, each imposing the write-hook cost thereafter — where the
 literal form observed one value per statement.
 
-Two refinements recorded, not built: `correlated_scans` (the statistics
+One refinement recorded, not built: `correlated_scans` (the statistics
 counter for the quadratic join shape) does not count a correlated
 `kCabinProbe` whose misses still walk, so a still-quadratic statement can
-report zero; and a correlated `EXISTS` over a cabined column re-observes
-without ever recording when every outer key has a qualifying match — the
-stopping sink correctly refuses to commit a partial set — paying the
-recording setup per outer row for nothing. The narrow fix (skip recording
-under a stopping sink) would also skip the completed walk that commits an
-authoritative **empty** set, which is worth keeping, so the right cut
-needs a finer distinction than the sink alone.
+report zero.
+
+**The correlated `EXISTS` converges. `[CLOSED 2026-08-19 — CB13]`** It
+did not at first: an EXISTS whose outer key had a qualifying match
+stopped each recording walk before it could commit — correctly, since a
+stopped walk's set is partial (C1) — so such keys re-observed forever,
+paying the recording setup per outer row for nothing. The fix is
+**sub-chain mode**: inside a sub-chain there is no quota (V09 refuses the
+tail at subquery depth), so every stop is the sub-chain's own
+short-circuit, whose answer is already decided — and a walk carrying a
+live recording therefore runs on *through* the stop, visiting the
+remaining rows for the recording block alone, and commits a whole set.
+The first probe of a key pays a full walk instead of the short-circuited
+prefix — the observation charge, once — and every repeat serves at hit
+cost with the short-circuit landing on the set's first entry. **The caps
+bound the license**: a value the per-cabin value cap could never admit is
+refused *before* the walk (`MayObserve`) and keeps the short-circuited
+cost outright, and a set that outgrows the per-value entry cap mid-walk
+revokes the license there — the walk ends at the next stop and nothing is
+committed. Without both, a cap-refused value re-armed on every probe and
+each doomed attempt was a full relation walk — an accelerator turning a
+rows-returning statement into a budget refusal, which §1 forbids; found
+in review, reproduced, and pinned. Top-level statements are untouched:
+there a stop can be a quota, whose bounded-work property a completed walk
+would break, and the mode is never set on a top-level runner.
 
 **Found while building it, and fixed with it: the serve emitted in entry
 order, which stops being the walk's order after a write-hook append.** An
