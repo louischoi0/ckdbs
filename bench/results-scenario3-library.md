@@ -791,7 +791,10 @@ statement at 67 µs on a column that *has* no index. What was not measured,
 and would complete the picture, is PostgreSQL at `--index-mode none` on
 this shape — its seq-scan-per-outer-row against BASE's walk; the twin
 driver supports the mode, and that cell is the named task if the number is
-ever wanted.
+ever wanted. *(Measured 2026-08-19 — §7e: six cells at three sizes. The
+anticipated seq-scan-per-outer-row is a plan PostgreSQL never produces —
+it hash-joins over one scan per statement, 1,314/s at k=16 and 10,000
+loans against the walk's 117/s and the warm serve's 14,870/s.)*
 
 ### 7b.8 What §7b changes, and what it does not
 
@@ -1127,7 +1130,9 @@ index (a hashed semi-join over it), measured against ckdbs-with-index in
 §9b. The named task is also unchanged: PostgreSQL at `--index-mode none`
 on the correlated shapes — its seq-scan-per-outer-row against BASE's walk
 — is the cell that would complete the picture, and the twin driver
-supports the mode.
+supports the mode. *(Measured 2026-08-19 — §7e: on the EXISTS PostgreSQL
+is flat at 681/s, behind even this run's BASE at 1,021/s, and 19.7×
+behind NEW's converged 13,423/s.)*
 
 ### 7c.8 What §7c changes, and what it does not
 
@@ -1380,7 +1385,10 @@ measured against ckdbs-with-index in §9b. The named task is unchanged:
 `tools/pg_scenario3_library.py` at the no-index configuration on the
 correlated shapes — its seq-scan-per-outer-row against the walk column —
 is the cell that would complete the picture, and the twin driver
-supports the mode.
+supports the mode. *(Measured 2026-08-19 — §7e, which also qualifies
+this addendum's "an index or nothing": PostgreSQL's per-statement hash
+build is a third answer for the never-repeating key, at a tenth of the
+banked structures' ceiling.)*
 
 ### 7d.6 What §7d changes, and what it does not
 
@@ -1412,6 +1420,227 @@ can oscillate below threshold; untested here, this run's ~570 distinct
 keys sit far under the 4,096-entry window, and it stays §8's open
 budget); §7c's sticky entry-cap mark; and the rest of this file, which
 describes its own stamped commits.
+
+## 7e. Addendum, 2026-08-19 — versus PostgreSQL at `--index-mode none`: the cells §7b.7 named, and the three-way account
+
+§7b.7 named one missing cell and §7c.7 and §7d.5 repeated it: PostgreSQL
+at the no-index configuration on the two correlated shapes, set against
+the walk column the whole §7 family measures. This addendum runs those
+cells — six of them, three sizes, two replicates, a fresh database each —
+and closes the task. No ckdbs cell was re-run: §7b/§7c/§7d's cells ran
+the same morning on the same box under the same background load, and
+their numbers are cited below with their commits. The PG cells were not
+interleaved with them, which the tightness of the PG pairs (≤2.9%
+disagreement) and factor-level reading make tolerable, as §9b.6's twin
+already was.
+
+**The answers: the plan the named task anticipated does not exist —
+PostgreSQL never produces a scan per outer row. At every k and every size
+it plans one hash join with a single seq scan of `loans` per statement,
+so its cost is nearly flat in k: 761 µs p50 at 10,000 loans and k=16
+(1,314 stmts/s derived), which beats the ckdbs walk's 117/s by 11.2× and
+loses to the warm Cabin serve's 14,870/s by 11.3×. On the correlated
+EXISTS PostgreSQL is flat at ~1,469 µs (681/s) — slower than even the
+pre-CB13 ckdbs short-circuit walk (1,021/s), and 19.7× behind CB13's
+converged 13,423/s. The floor both engines share is the pass over the
+relation: a 10,000-row pass costs ~530–550 µs on either engine; the
+engines differ only in how many passes a statement pays and whether a
+pass can be banked.**
+
+### 7e.1 The run
+
+| | |
+|---|---|
+| executed | **2026-08-19 08:00:14 → 08:00:22 UTC**, six PostgreSQL cells — 3 sizes × 2 replicates, each database created seconds before its load. A prior 200-loan smoke cell (`ops=20`) validated the harnesses and was dropped: a harness check, not a measurement, and none of its numbers appear here. **All six measured cells passed on the first attempt; none discarded** |
+| branch / worktree | `worktree-enhence-join-perf` at **`41f8dff`** (clean) — the tree the harnesses and loader ran from; no ckdbs server ran in this addendum |
+| server | **PostgreSQL 16.14**, the standing scratch cluster of `tools/pg_setup.sh` on port 15433 (the rootless dpkg-extracted tree, recipe in `bench/docs/README.md`), data directory `/home/cdkbs/pg-bench/data` on ext4 `/dev/root` (`df -T`; `/tmp` is ext4 on this host too). **Configuration at PostgreSQL defaults** — the loader's `--synchronous-commit off` is a per-session `SET` on the load connection only; every measured statement ran on a fresh connection at cluster defaults, and every measured statement is a read |
+| databases | `s3pgnone_{200,1000,10000}_{1,2}`, one per cell, `createdb`-fresh, never reused |
+| loader | `tools/pg_scenario3_library.py --host 127.0.0.1 --port 15433 --user cdkbs --database <db> --suffix s3 --loans N --matches 5 --index-mode none --ops 200 --synchronous-commit off --seed 1` — seed and row counts identical to the §7b/§7c/§7d ckdbs cells (10,000 / 2,000 / 2,000 / 5,000 rows at N=10,000, verified by `count(*)`). `--index-mode none` leaves exactly the four pk btrees (`pg_indexes` verified), the twin of ckdbs's always-present Keystone; the loader's closing `ANALYZE` ran, the driver's honest default, not tuning |
+| the measured statements | per cell, in §7c's order: the §7c correlated EXISTS (**10 timed executions**, then 50 sampled ops, reply checked byte-level before and after), then the §7b k-sweep (per k ∈ {1,2,4,8,16}: `EXPLAIN (ANALYZE, BUFFERS)`, one first statement, 50 sampled ops) — session scratch twins of the §7b/§7c harnesses over `tools/pg_wire.py`'s benchmark path; §9b.7's fold-into-the-driver task now covers these twins too |
+| contention control | every cell gated on `bench/wait_quiet.sh` (loadavg 0.15–0.36 at starts); `pgrep -c cc1plus` 0 before and after every cell. Background load, noted not killed: the resident autotrade `kds_server` on port 15432 (idle, warn-level logging) and resident agent processes — the same residents the ckdbs cells sat beside |
+| correctness | 0 errors across all six driver runs (12 phases each); every EXISTS timed reply equal to its cell's first (60/60) and the closing full fetch byte-equal to the opening one in all six; the k=16 join returns **79 / 83 / 79 rows** at 200 / 1,000 / 10,000 — equal to the ckdbs replies (§9b.1) — and the EXISTS returns 20 rows in every cell |
+| protocol asymmetry | both sides are Python clients on localhost TCP without TLS (the ckdbs cells were `KDS_WITH_TLS=OFF`); PostgreSQL replans every statement (simple-query protocol, no prepared statements) as ckdbs recompiles every statement. The client floors differ: `pk-user` p50 is ~60 µs in these cells against 37–38 µs in §7c's ckdbs cells, so ~22 µs of every PG number below is client and protocol — negligible against the 160–1,470 µs bodies |
+
+### 7e.2 The plan — one hash join at every k, and nothing to flip to
+
+Captured per k in every cell; the headline is identical across all 30
+captures (6 cells × 5 ks): a hash join whose probe side is **one seq scan
+of `loans` per statement**, with the pk btree serving the `users` range.
+At 10,000 loans, k=16:
+
+```
+Hash Join  (actual rows=79)
+  Hash Cond: (l.user_id = u.id)
+  ->  Seq Scan on loans_s3 l  (actual rows=10000)   <- once per statement, any k
+  ->  Hash  (rows=16)
+        ->  Index Scan using users_s3_pkey on users_s3 u
+              Index Cond: ((id >= 1) AND (id <= 16))
+```
+
+And the EXISTS — one seq scan feeding a `HashAggregate` over the 1,988
+distinct `user_id`s, hash-joined to the 20 outer keys, every execution:
+
+```
+Hash Join  (actual rows=20)
+  ->  HashAggregate  (rows=1988, Memory 241kB)
+        ->  Seq Scan on loans_s3 l  (actual rows=10000)
+  ->  Hash (rows=20)  <- Index Only Scan users_s3_pkey, id 1..20
+```
+
+Two readings. First, **the plan the named task anticipated — a
+seq-scan-per-outer-row — is a plan PostgreSQL will not produce** at any k
+or size measured: the nested-loop-over-scans shape that ckdbs's
+pre-CB12/CB13 engine executes (§7b.2's BASE, `examined=40000` for 21
+rows) has no PostgreSQL counterpart here, so the walk column's true twin
+is a plan PostgreSQL's optimizer refuses. Second, **no flip anywhere**:
+unlike §9b.6's indexed twin, where the optimizer left its own index at
+k=16 for a merge semi-join and lost 4×, the unindexed matrix gives it
+exactly one shape and it keeps it — flat plans, flat costs.
+`EXPLAIN ANALYZE`'s own timings (1.04 ms execution at k=16 against the
+761 µs measured statement) carry instrumentation and are used here for
+shape only, never as the cost.
+
+### 7e.3 The k-sweep: PostgreSQL pays the scan once per statement
+
+p50 µs of 50 sampled ops per point, both replicates; stmts/s derived as
+1e6/p50 of the pair mean (single serial connection — the harness reports
+latency, so throughput is derived, per this file's matrix rule). The
+ckdbs walk column is **cited**, not re-run: §9b.3 BASE (`9af3c8d`,
+median of 4 cells) at 200 and 1,000; §7b.3 BASE (`6c5bb14`) at 10,000 —
+and the warm Cabin column is §7b.3 NEW (`8f3f730`), measured at 10,000
+only, its size-independence asserted from the structure (§7b.1):
+
+| N | k | PG p50 (r1 / r2) | PG ≈stmts/s | ckdbs walk ≈stmts/s | PG ÷ walk |
+|---:|---:|---:|---:|---:|---:|
+| 200 | 1 | 124.7 / 128.3 | 7,905 | 20,680 | 0.38× |
+| 200 | 4 | 138.4 / 136.2 | 7,283 | 11,760 | 0.62× |
+| 200 | 16 | 202.7 / 198.5 | 4,985 | 4,380 | 1.14× |
+| 1,000 | 1 | 196.1 / 194.7 | 5,118 | 10,400 | 0.49× |
+| 1,000 | 4 | 204.0 / 204.4 | 4,897 | 3,880 | 1.26× |
+| 1,000 | 16 | 270.3 / 272.1 | 3,687 | 1,105 | 3.3× |
+| 10,000 | 1 | 678.4 / 680.1 | 1,472 | 1,713 | 0.86× |
+| 10,000 | 4 | 698.9 / 697.3 | 1,433 | 459 | 3.1× |
+| 10,000 | 8 | 707.4 / 707.1 | 1,414 | 233 | 6.1× |
+| 10,000 | 16 | 761.5 / 760.2 | **1,314** | 117 | **11.2×** |
+
+(k=2 and k=8 were measured at every size and sit on the same curves; the
+10,000-row k=8 row is shown because the slope below uses it. Replicate
+floors: worst pair disagreement 0.4% at 10,000, 1.4% at 1,000, 2.9% at
+200 — the k=16 factors clear them by orders.)
+
+The structure of the table is the finding. PostgreSQL's k=8→16 slope at
+10,000 loans is **6.7 µs per outer row** (4.6–5.2 at the smaller sizes) —
+output projection and hash probes, not scanning — against the ckdbs
+walk's **527–539 µs per outer row** (§9b.3, §7b.3), because PostgreSQL's
+scan happens once per statement while the walk happens k times. So the
+crossing sits exactly where one pass amortizes: **at k=1 the two engines
+pay one pass each and ckdbs is ahead** (584 µs walk against 679 µs
+scan+hash+plan+client at 10,000; 0.86× in the table), and every k beyond
+one multiplies the walk while PostgreSQL's line stays flat. Meanwhile the
+warm Cabin serve (§7b.3 NEW, 67.2/67.3 µs at k=16, 14,870/s) is **11.3×
+ahead of PostgreSQL's best unindexed plan** — it pays no pass at all.
+
+The distributions at 10,000, k=16 (50 ops each):
+
+| cell | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| s3pgnone_10000_1 | 744.1 | 757.6 | 761.5 | 786.5 | 815.4 |
+| s3pgnone_10000_2 | 739.7 | 756.6 | 760.2 | 795.3 | 809.8 |
+
+On waits: single-connection reads, no commit/fsync wait, no lock wait in
+the unit. The 761 µs decomposes at best effort as ~60 µs of client and
+round trip (the `pk-user` floor in these cells), ~70 µs of per-statement
+planning (`EXPLAIN`'s planning time at k=16, uninstrumented estimate),
+and ~630 µs of scan, hash build and 79-row projection; PostgreSQL
+publishes no finer split of an executed statement and none is invented.
+
+### 7e.4 The correlated EXISTS: flat by construction
+
+The §7c statement, verbatim, 10 timed executions then 50 sampled ops per
+cell. The series is flat — executions 2–10 spread at most 2.3% at 10,000
+(9.9% at 1,000, 15.3% at 200, a declining warm-up tail, no step anywhere)
+— because **there is nothing to converge: PostgreSQL rebuilds the
+HashAggregate every execution and banks nothing**. The first execution
+reads +3% at 10,000 and up to +29% at the smaller sizes — a fresh
+connection's cache and catalog warm-up, not structure; the sampled table
+below is taken after the series, past all of it. Sampled
+distributions and the cited ckdbs columns (§7c.3, BASE `82ff9b7` flat /
+NEW `fa1f320` steady, measured at 10,000 only):
+
+| N | PG p0 / p25 / p50 / p95 / p99 (r1) | PG p50 r2 | PG ≈stmts/s |
+|---:|---|---:|---:|
+| 200 | 156.9 / 160.0 / 161.7 / 178.1 / 203.0 | 163.0 | 6,159 |
+| 1,000 | 282.0 / 291.9 / 295.4 / 314.6 / 318.0 | 300.8 | 3,354 |
+| 10,000 | 1,437.4 / 1,454.6 / 1,464.1 / 1,516.3 / 1,538.8 | 1,473.3 | **681** |
+
+At 10,000 the three-way reads: PostgreSQL 681/s; the pre-CB13 ckdbs
+engine — **flat forever at 1,021/s** (§7c.3 BASE pooled 979.3 µs), ahead
+of PostgreSQL because its short-circuit walks ~15,248 rows per execution
+where PostgreSQL scans all 10,000 *and* builds a 1,988-group hash; and
+CB13's converged serve at **13,423/s** (§7c.3 NEW pooled 74.5 µs) —
+19.7× past PostgreSQL — after an observation charge PostgreSQL never
+pays and never banks. The ckdbs columns exist at 10,000 only (§7c.1's
+"one size, deliberately"); the 200 and 1,000 rows above stand as
+PostgreSQL's own scaling record, with no same-statement ckdbs twin
+measured.
+
+### 7e.5 The three-way account
+
+Three engines' answers to an unindexed join column, priced at 10,000
+loans (stmts/s derived from the cited p50s; observation charge from
+§7c.3/§7c.4, CB14's split from §7d.2):
+
+| | ckdbs walk (§7b/§7c BASE) | PostgreSQL, no index (this run) | ckdbs Cabin steady (§7b/§7c NEW) |
+|---|---:|---:|---:|
+| join k=16, stmts/s | 117 | 1,314 | 14,870 |
+| correlated EXISTS, stmts/s | 1,021 | 681 | 13,423 |
+| cost model | k passes per statement | one pass + hash build per statement, discarded at statement end | zero passes after observation |
+| cross-statement memory | none | none | the store: ~6.4–9.3 ms charged once (CB14: on a key's second touch) |
+
+The honest framing: **PostgreSQL's best unindexed plan is a
+per-statement build with no cross-statement memory; the Cabin amortizes
+across statements at the price of observation; and the pass over the
+relation is the floor both engines share** — PostgreSQL's k-intercept
+puts its 10,000-row pass at ~550 µs (679 µs at k=1 minus its ~125 µs
+size-independent fixed part), against ckdbs's measured 527–539 µs per
+walk of the same relation. Neither engine scans meaningfully faster;
+they differ in how often they scan. The break-even arithmetic follows:
+against PostgreSQL, the EXISTS's observation charge repays in **5–7
+executions** (6.4–9.3 ms ÷ the ~1,394 µs/execution saving) and the k=16
+join's in 9–13; against ckdbs's own walk it was 6–10 (§7c.4). A shape
+that repeats a handful of times has already beaten both per-statement
+engines.
+
+One reading cuts against a sentence this file already carries. §7d.6
+says of the uncabined, unindexed never-repeating join key that "the
+answer there is an index (§9b) or nothing." This run measures a third
+answer in the baseline: a per-statement hash build needs no repetition
+and no index, and at k=16 it beats the walk 11.2× on first touch —
+PostgreSQL's every touch is a first touch. ckdbs has no such operator;
+whether it ever should is a design question this file only prices: the
+per-statement build tops out at 1,314/s where the banked structures run
+11,000–22,000/s (§9b.3, §7b.3), so the operator would buy the
+never-repeating distribution only, at roughly a tenth of the banked
+ceiling.
+
+### 7e.6 What §7e changes, and what it does not
+
+**Changed: the §7-family's PostgreSQL column exists.** §7b.7, §7c.7 and
+§7d.5's named task is closed by this run's six cells; those sections now
+point here and stand otherwise, because their central claim — no
+PostgreSQL structure answers a value-observed authoritative store — is
+confirmed, not weakened, by the measurement: PostgreSQL's unindexed best
+is per-statement and memoryless, and the Cabin column still has no twin.
+§7d.6's "an index or nothing" is qualified as §7e.5 states.
+
+**Not changed:** every ckdbs number in the §7 family (cited here, not
+re-measured); §9b.6's indexed twin and its k=16 flip, which this run's
+flip-free unindexed matrix complements; §11, which compares the `single`
+columns and is not amended — these cells' driver phases ran at
+`pg-none` and sit in the run's JSONs, but no §11 claim rests on them;
+and the rest of this file, which describes its own stamped commits.
+
+## 8. Composite is the only structure that helps `overdue`
 
 `overdue` filters two columns (`due_day BETWEEN ? AND ?` and `status = ?`),
 which no single-column index satisfies — §4 shows it staying a `FilterScan`
