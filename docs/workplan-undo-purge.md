@@ -115,20 +115,31 @@ stays reserved and `nr_records == 0` remains the fast skip.
 ## Task sketch (firm after ratification)
 
 - **UP1** — ratify D1-D3 here and in `txn.md` §9; this file becomes the
-  workplan.
-- **UP2** — the sweep: `UndoLog::ReclaimBelow(horizon)` walking the tail
-  chain, per-page max-writer by decode, freeing onto the recycle list;
-  unit tests over hand-built chains.
-- **UP3** — the trigger: chain growth consults the recycle list first,
-  then attempts reclaim, then allocates; `SHOW META` gains
-  `undo_pages_recycled` / `undo_pages_live`.
-- **UP4** — the crash story: mount rebuilds the recycle list from empty
-  `kUndo` pages (or defers with the leak stated in `known-gaps.md` —
-  decide inside UP4 by cost).
+  workplan. ☑
+- **UP2** — the sweep. ☑ — with one design correction found in survey:
+  the per-page bound is **kept at append time in memory**
+  (`UndoLog::TrackedPage`), not computed by decoding records at sweep
+  time as sketched above, because **a record does not store its own
+  writer's id** — it stores the superseded writer's. The 48-bit section
+  below fell away with it: no header field is needed at all for the
+  live chain, since a restart abandons it anyway. `reserved1` stays
+  reserved; the on-disk `prev_page_id` chain becomes historical once
+  reuse starts (its only reader, `PageCount()`, now counts the
+  in-memory chain).
+- **UP3** — the trigger. ☑ — growth reclaims then prefers the recycle
+  list; the manager arms the horizon source at construction and disarms
+  at destruction; `SHOW META` prints `undo_pages_live` /
+  `undo_pages_recycled`. A bare log (no manager) never frees, which is
+  what keeps every pre-existing socket-free test byte-identical.
+- **UP4** — **deferred by the ratified D2 sub-decision**: the recycle
+  list is memory-resident, a previous run's pages leak exactly as they
+  always have, and `known-gaps.md` states it. The mount-time rebuild
+  (`nr_records` exists to make its scan cheap) is the open remainder.
 - **UP5** — ck-tester: the growth-path cost A/B, and the end-to-end
   proof that a write-heavy loop's undo footprint plateaus.
-- **UP6** — docs: `txn.md` §3/§9, `undo_log.hpp`'s "Nothing is ever
-  freed" header, `known-gaps.md`'s reclamation section, `CLAUDE.md` row.
+- **UP6** — docs: `txn.md` §3/§4.1/§9, `undo_log.hpp`'s header,
+  `undo_page.hpp`'s field notes, `known-gaps.md`'s reclamation section,
+  `CLAUDE.md` row and Open Decisions index. ☑
 
 ## Not in scope whatever is ratified
 

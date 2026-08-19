@@ -463,17 +463,24 @@ the owner's workplan.
 - **Waystone sighting counts** restart (a performance event, never a
   correctness one — invariant 8).
 
-## Reclamation — one purge exists, everything else still does not
+## Reclamation — two purges exist, everything else still does not
 
 Readers are **registered** as of 2026-08-19 (`txn.md` §4.1,
 `docs/workplan-reader-registration.md`): `ReadHorizon()` answers the one
-question every purge must ask, and the catalog delete-mark purge
-(`spec-ddl-transactional.md` §5d) is its first and only consumer. Every
-other reclamation still waits on its own §9-open policy, so:
+question every purge must ask. Two consumers exist — the catalog
+delete-mark purge (`spec-ddl-transactional.md` §5d) and the undo purge
+(`docs/workplan-undo-purge.md`, the same day: settled pages recycle into
+the log's own growth, so this run's chain plateaus). Everything else
+still waits on its own gate, so:
 
-- undo pages grow monotonically; `SnapshotTooOld` is structurally
-  unreachable (the retention policy, not the registration, is what is
-  missing now — `txn.md` §9);
+- undo pages from a **previous run** leak: a restart abandons the old
+  chain and the recycle list is memory-resident, so those pages stay
+  allocated until UP4's mount-time reclaim exists (they always leaked;
+  what is new is that the current run stops adding to the pile).
+  `SnapshotTooOld` is structurally unreachable **by decision** now, not
+  by omission — D1's horizon-only retention frees nothing a live view
+  can reach, and the byte-cap that would make the error real was
+  declined for v1;
 - delete-marked tuples keep their slots; var-heap bytes of superseded
   values stay; superseded index and Cabin entries stay
   (`docs/feat-index.md` §13);
