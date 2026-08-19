@@ -24,8 +24,12 @@
 //                   RowLayout row_size, exactly.
 //   kTrxId          a stored trx_id at or above the superblock's persisted
 //                   next_trx_id names a transaction that was never issued.
-//   kUndoPtr        every nonzero undo_ptr decodes plausibly, points at a
-//                   kUndo page, and its version chain walks to the end.
+//   kUndoPtr        every nonzero undo_ptr decodes plausibly and points at
+//                   a kUndo page. The chain walk it once included was
+//                   retired by the undo purge - a settled page recycles,
+//                   so a committed tuple's pointer may legally name bytes
+//                   that belong to newer records now (integrity.cpp says
+//                   why the two surviving halves stay true under reuse).
 //   kVarHeap        the per-relation var-heap chain is walkable and typed
 //                   kVarHeap; every kSpilled cell resolves to bytes of the
 //                   recorded length on a page of this relation's own chain.

@@ -523,6 +523,15 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        // this one is live dispatcher state and prints unconditionally.
        << " catalog_marks_purged=" << catalog_marks_purged_;
 
+    // The undo purge's two numbers (docs/workplan-undo-purge.md UP3):
+    // live pages plateauing under a write-heavy loop is the feature, and
+    // the recycle count is what proves the plateau came from reuse rather
+    // than idleness. Absent without a manager, like the transaction rows.
+    if (txn_ != nullptr) {
+        os << " undo_pages_live=" << txn_->undo().LivePages()
+           << " undo_pages_recycled=" << txn_->undo().PagesRecycled();
+    }
+
     // The last recovery, for the operator who has to answer "what did the
     // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
     // report is installed - a dispatcher built without one (every socket-free

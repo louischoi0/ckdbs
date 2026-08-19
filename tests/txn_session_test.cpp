@@ -1085,6 +1085,21 @@ TEST_F(TxnSessionTest, AnOlderOpenTransactionHoldsTheMarksUntilItResolves) {
     EXPECT_GE(freed.value(), 1u);
 }
 
+// The undo purge's SHOW META pair (docs/workplan-undo-purge.md UP3):
+// present whenever a manager is, and live pages count at least the page
+// a write created.
+TEST_F(TxnSessionTest, ShowMetaCarriesTheUndoPurgeCounters) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "INSERT INTO t VALUES (1)").substr(0, 8), "INSERTED");
+
+    const std::string meta = Run(s, "SHOW META");
+    EXPECT_NE(meta.find("undo_pages_live="), std::string::npos) << meta;
+    EXPECT_NE(meta.find("undo_pages_recycled="), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("undo_pages_live=0"), std::string::npos)
+        << "an INSERT wrote an undo record, so at least one page must be live: " << meta;
+}
+
 TEST_F(TxnSessionTest, ARolledBackDropLeavesNothingForThePurge) {
     Session s;
     ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");

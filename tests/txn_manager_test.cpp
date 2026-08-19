@@ -477,6 +477,47 @@ TEST_F(TxnManagerTest, SlotExhaustionIsOutOfSpaceAndAReleaseReopensIt) {
     EXPECT_TRUE(reopened.ok());
 }
 
+// ---- The undo purge, end to end (docs/workplan-undo-purge.md D1) -----------
+//
+// The manager installs its ReadHorizon() on the log at construction, so
+// the two mechanisms compose without a call site: while a writer runs,
+// its own id bounds the horizon and its pages hold; once it resolves,
+// the next writer's growth recycles them.
+TEST_F(TxnManagerTest, UndoPagesRecycleOnceTheirWritersClearTheHorizon) {
+    const std::vector<std::byte> image(kUndoPageCapacity / 4 - kUndoRecordHeaderSize,
+                                       std::byte{0x5A});
+    UndoRecordFields fields{};
+    fields.type = static_cast<std::uint8_t>(UndoRecordType::kOverwrite);
+    fields.prior_trx_id = kAlwaysVisibleTrxId;
+    fields.prior_undo_ptr = kNoUndoPtr;
+    fields.target_page_id = 300;
+    fields.target_slot = 2;
+
+    Transaction* a = Begin();
+    ASSERT_NE(a, nullptr);
+    // Two pages and one growth while `a` runs: its own id bounds the
+    // horizon, so nothing may recycle - a rollback could still need it.
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(mgr_->AppendUndo(*a, fields, /*pk=*/1, image).ok());
+    }
+    EXPECT_EQ(undo_->PagesRecycled(), 0u)
+        << "a running transaction's undo was recycled under it";
+    ASSERT_TRUE(mgr_->Commit(*a, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*a);
+
+    // The next writer's growths find `a`'s pages settled and reuse them:
+    // the chain plateaus instead of growing without bound.
+    Transaction* b = Begin();
+    ASSERT_NE(b, nullptr);
+    for (int i = 0; i < 8; ++i) {
+        ASSERT_TRUE(mgr_->AppendUndo(*b, fields, /*pk=*/1, image).ok());
+    }
+    EXPECT_GE(undo_->PagesRecycled(), 1u);
+    EXPECT_LE(undo_->LivePages(), 3u) << "undo grew where it should have recycled";
+    ASSERT_TRUE(mgr_->Commit(*b, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*b);
+}
+
 // ---- Isolation-level parsing ----------------------------------------------
 
 TEST(IsolationLevelTest, ParsesTheSpellingsAConfigFileInvites) {

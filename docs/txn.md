@@ -118,16 +118,21 @@ names a page and an offset directly; rollback replays the transaction's
 in-memory trail (§3.6) and never walks undo pages; redo names each record's
 offset explicitly, so interleaved writers replay onto one page in LSN order
 correctly. Exclusivity would only have let a purge free a transaction's pages
-without a side table — and an undo purge does not exist (registration now
-does, §4.1; the retention policy stays §9-open), and would need a per-page
-horizon rather than an owner
-anyway, because a page's records outlive their writer. `reserved1` is where
-that horizon goes.
+without a side table — and the purge that now exists (2026-08-19,
+`docs/workplan-undo-purge.md`) confirms the analysis: it frees by a
+per-page bound rather than by owner, because a page's records outlive
+their writer. The bound lives **in memory** beside this run's chain, not
+in the header — it is a 48-bit writer id and `reserved1` is 32 bits — so
+`reserved1` stays reserved.
 
-`prev_page_id` therefore chains the log's pages in creation order, for the same
-future purge pass, and no longer answers "which pages are this transaction's" —
-which sharing makes unanswerable. The on-disk layout is unchanged: same
-offsets, same widths, two fields with new meanings, so no format version moves.
+`prev_page_id` therefore chains the log's pages in creation order and no longer
+answers "which pages are this transaction's" — which sharing makes
+unanswerable. The on-disk layout is unchanged: same offsets, same widths, two
+fields with new meanings, so no format version moves. **The purge does not read
+it**: a reclaimed page is re-linked without the link that pointed at it being
+rewritten, so a device walk can revisit a reused page — the on-disk chain is
+historical once reuse starts, and `UndoLog::PageCount()` counts the in-memory
+chain instead.
 
 ### 3.3 Undo record
 
@@ -324,11 +329,17 @@ exemption to re-check whenever the executor gains a suspension point.
 The horizon is **per-core**, sound while every reader reads its own
 core's versions (CC3/CC4); a cross-core writer must extend it.
 
-What is built on the horizon today is only the catalog delete-mark purge
-(`spec-ddl-transactional.md` §5d). **Undo retention remains a non-goal**
-— its policy and `SnapshotTooOld`'s surfacing are still §9-open — so undo
-is never purged and `SnapshotTooOld` stays structurally unreachable; what
-changed is that the prerequisite for deciding otherwise now exists.
+Two purges consume the horizon: the catalog delete-mark purge
+(`spec-ddl-transactional.md` §5d) and, **as of 2026-08-19, the undo
+purge** (`docs/workplan-undo-purge.md`, ratified horizon-only /
+internal-recycle / purge-on-growth): a settled undo page — newest writer
+below the horizon — recycles into the log's own next growth, so this
+run's chain plateaus instead of growing without bound. The policy is
+deliberately horizon-only, so `SnapshotTooOld` **stays structurally
+unreachable**: nothing a live view can reach is ever freed, and the
+price is that one long-running transaction holds reclamation for its
+lifetime. A byte-cap retention that makes the error reachable was
+drafted and declined for v1 — the workplan's D1 records both sides.
 
 ### 4.2 The always-visible transaction id
 
@@ -529,12 +540,15 @@ no replay) — now stated precisely rather than left to be discovered.
 Carried over from `docs/wal.md` §15 and `CLAUDE.md`, still open, with the seam
 that keeps each one viable:
 
-- **Undo retention policy** and `SnapshotTooOld` surfacing (error class,
-  retryability). Nothing frees an undo page today, so a write-heavy relation
-  grows undo monotonically — the same trade `heap_chain.hpp` already documents
-  for deleted heap space. The reader registration purge needs **exists as of
-  2026-08-19** (§4.1, `ReadHorizon()`), so what stays open is the policy
-  itself and the sweep — which would be a `maintenance`-group task.
+- ~~**Undo retention policy** and `SnapshotTooOld` surfacing~~ — **decided
+  and built 2026-08-19** (`docs/workplan-undo-purge.md` D1-D3, §4.1):
+  horizon-only retention, pages recycling within the log, triggered by
+  growth. `SnapshotTooOld` stays structurally unreachable *by that
+  decision* — surfacing it belongs to the byte-cap policy D1 declined,
+  and reopens with it, generation-stamped pages and all. Still open
+  underneath: UP4's mount-time reclaim of a previous run's pages (they
+  leak today, as they always have) and any `maintenance`-group cadence
+  beyond the growth trigger.
 - **48-bit `trx_id` wraparound / epoch handling.** Exhaustion is reported
   `OutOfRange` and never wrapped, exactly as the row-id sequence does.
 - **Cross-core transaction commit protocol** — `wal.md` §3 says "do not design it

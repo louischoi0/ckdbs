@@ -26,12 +26,13 @@
 // PostgreSQL's READ COMMITTED, which re-reads; it is a deliberate
 // simplification, and the whole reason there is nothing to wait on.
 //
-// **Reader registration, but no purge of undo.** RegisterReader/ReadHorizon
+// **No SnapshotTooOld.** RegisterReader/ReadHorizon
 // (docs/workplan-reader-registration.md) record which snapshots exist so a
-// purge can prove no live view still needs a version. What is *built on*
-// that today is only the catalog delete-mark purge; undo retention stays a
-// non-goal until docs/txn.md section 9's retention policy is decided, so
-// SnapshotTooOld remains structurally unreachable.
+// purge can prove no live view still needs a version, and two purges are
+// built on that: the catalog delete-mark purge, and the undo purge this
+// class arms on the log at construction (docs/workplan-undo-purge.md).
+// Both are horizon-only - they free nothing a live view can reach - so the
+// error stays structurally unreachable by decision, not by omission.
 //
 // **No cross-core protocol.** One manager, one core, one WAL stream; a
 // transaction spanning cores is not representable and `wal.md` section 3
@@ -213,7 +214,19 @@ public:
     // `wal` may be null - the unlogged path the socket-free tests run on.
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
                        wal::WalManager* wal = nullptr) noexcept
-        : ids_(ids), undo_(undo), store_(store), wal_(wal) {}
+        : ids_(ids), undo_(undo), store_(store), wal_(wal) {
+        // Arms the undo purge (docs/workplan-undo-purge.md): the log's
+        // only appender is this manager, so `this` is alive at every call
+        // by construction. Structural, like the snapshot lease - a
+        // manager-owned log purges, a bare one (tests, tools) does not.
+        undo_.SetHorizonSource([this]() noexcept { return ReadHorizon(); });
+    }
+
+    // Uninstalls the horizon source. The lambda above dangles past this
+    // point, and "only this class ever calls it" is exactly the kind of
+    // assumption the reader-registration review watched break (its B1) -
+    // so the destructor removes the question instead of relying on it.
+    ~TransactionManager() { undo_.SetHorizonSource(nullptr); }
 
     // Starts a transaction and takes its first read view. Fails with
     // OutOfSpace past kMaxTrackedLiveTxns live transactions - the bound

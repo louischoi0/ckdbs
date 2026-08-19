@@ -453,7 +453,6 @@ private:
     }
 
     void ResolveUndo(const std::string& name) {
-        txn::UndoLog undo(store_, /*wal=*/nullptr);
         for (const PendingUndo& pending : pending_undo_) {
             if (Status s = txn::UndoPtrIsPlausible(pending.ptr); !s.ok()) {
                 Add(CheckKind::kUndoPtr, txn::UndoPtrPageId(pending.ptr),
@@ -476,14 +475,19 @@ private:
                         ": undo_ptr points at a non-undo page");
                 continue;
             }
-            // Walk the whole version chain; UndoLog caps the length, so a
-            // cycle reports as Corruption rather than hanging the sweep.
-            Status walked = undo.Walk(pending.ptr, [](const txn::UndoVersion&) { return true; });
-            if (!walked.ok()) {
-                Add(CheckKind::kUndoPtr, undo_page,
-                    "relation '" + name + "' id " + std::to_string(pending.keystone_id) +
-                        ": version chain does not walk: " + walked.message());
-            }
+            // **The chain walk was retired by the undo purge**
+            // (docs/workplan-undo-purge.md, review finding 2). A settled
+            // page recycles, so a committed tuple's undo_ptr may point
+            // into bytes that now belong to newer records - legal on a
+            // healthy database, and exactly the pointer no production
+            // reader dereferences (the writer is visible, so every walk
+            // stops at the tuple). Walking it here validated somebody
+            // else's chain and could neither fail honestly nor pass
+            // meaningfully. The checks above survive because they stay
+            // true under reuse: the pointer must be plausible and must
+            // name a kUndo page, recycled or not. A per-page reuse
+            // generation would let this walk return - it is paired with
+            // the byte-cap retention D1 declined, not buildable alone.
         }
     }
 

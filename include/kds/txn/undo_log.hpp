@@ -34,9 +34,9 @@
 // redo names each record's offset explicitly, so interleaved writers replay
 // in LSN order onto the same page correctly. The only thing exclusivity
 // would have bought is a purge that could free a transaction's pages
-// without a side table - and purge does not exist, cannot exist without
-// reader registration (§9), and would in any case need a per-page horizon
-// rather than an owner, because a page's records outlive their writer.
+// without a side table - and the purge that now exists (below) confirms
+// the analysis: it frees by a per-page bound rather than by an owner,
+// because a page's records outlive their writer.
 //
 // So there are **three** chains here and no two of them are the same chain:
 //
@@ -73,13 +73,37 @@
 // the merits rather than by omission - unlike a heap page, whose link edits
 // no record type describes.
 //
-// ---- Nothing is ever freed ------------------------------------------------
+// ---- The purge: pages recycle within the log ------------------------------
 //
-// There is no `Free()` and no reuse. Purge is a non-goal (txn.md section 9)
-// because readers are deliberately not registered, so nothing can know a
-// version is unreachable. A write-heavy relation therefore grows undo
-// monotonically - the same trade `heap_chain.hpp` already documents for
-// deleted heap space, recorded here rather than discovered later.
+// (docs/workplan-undo-purge.md, D1-D3 ratified 2026-08-19; this section
+// replaced "Nothing is ever freed" when the reader-registration
+// prerequisite fell.)
+//
+// **The reachability fact**: a record holds the version its writer
+// *replaced*, and a reader walks into undo only while writers are
+// invisible - so a record whose writer is below the manager's
+// ReadHorizon() is unreachable by every live and future traversal, and
+// recovery's undo phase cannot need it either (an active transaction
+// bounds the horizon at or below its own id).
+//
+// The purge unit is a whole page (records are addressed by byte offset;
+// nothing smaller can be reclaimed), the bound is a per-page maximum
+// writer id kept **in memory** beside the chain - a record does not store
+// its own writer, and this run's chain is the only one the log appends
+// to, so the side table needs no on-disk home - and the trigger is
+// growth: TailFor reclaims settled pages from the old end before it
+// allocates, and allocation prefers the recycle list to CreateNew(). A
+// freed page's stale `undo_ptr`s are harmless by the fact above; its
+// stale `prev_page_id` links are why LivePages() counts the in-memory
+// chain and no device walk remains.
+//
+// **Disarmed by default**: with no horizon source installed the log
+// behaves exactly as before - nothing is freed. TransactionManager
+// installs its ReadHorizon() on construction, so every manager-owned log
+// purges; a log built bare (tests, tools) does not. A crash forgets the
+// recycle list and this run's chain alike; the next run starts a fresh
+// chain, so the old pages leak exactly as they always have - the
+// mount-time reclaim of prior-run pages is UP4, not built.
 //
 // ---- Concurrency ----------------------------------------------------------
 //
@@ -159,24 +183,57 @@ public:
     // rollback and for tests that assert a whole chain.
     Status Walk(std::uint64_t ptr, const std::function<bool(const UndoVersion&)>& fn);
 
-    // How many undo pages this log has allocated, walked off the page chain
-    // rather than counted in memory, so it reports what is on the device.
-    // For tests and inspection; it is O(pages) and not for a hot path.
-    //
-    // It replaced `PageCountFor(trx_id)`, which sharing makes unanswerable:
-    // a page holds records from many transactions and none of them owns it.
-    StatusOr<std::uint32_t> PageCount();
+    // There is no PageCount() either: it walked the on-disk prev chain,
+    // which reuse made partly historical, and its honest replacement is
+    // LivePages() below. (Its own predecessor, `PageCountFor(trx_id)`,
+    // fell to sharing - a page holds records from many transactions and
+    // none of them owns it.)
 
     // There is no Forget(). It existed to drop a finished transaction's tail
     // from a per-transaction table, and there is no such table now - one
     // current page serves everyone, and a transaction ending changes nothing
     // about it.
 
+    // ---- The purge (header note above; docs/workplan-undo-purge.md) -----
+
+    // Arms purge-on-growth: `horizon` answers the manager's ReadHorizon()
+    // when called. Null disarms (the default, and the pre-purge behaviour).
+    // The source is called only from inside Append(), so a caller whose
+    // lambda captures an object need only guarantee that object is alive
+    // while appends run - which TransactionManager, the sole appender,
+    // does trivially for itself. It uninstalls on destruction anyway,
+    // because "the only caller keeps the rule" is the assumption the
+    // reader-registration review saw break once already (its B1).
+    void SetHorizonSource(std::function<std::uint64_t()> horizon) {
+        horizon_ = std::move(horizon);
+    }
+
+    // This run's live chain length and lifetime recycle count, for
+    // SHOW META. Plateauing live pages under a write-heavy loop is the
+    // whole feature; the recycle count is what proves the plateau came
+    // from reuse rather than from idleness.
+    std::uint32_t LivePages() const noexcept {
+        return static_cast<std::uint32_t>(pages_.size());
+    }
+    std::uint64_t PagesRecycled() const noexcept { return pages_recycled_; }
+
 private:
     StatusOr<PageId> TailFor(std::uint64_t trx_id, std::size_t need);
-    Status LogPageInit(std::uint64_t trx_id, PageId page_id);
+    // Appends the PAGE_INIT for a new or reclaimed page and returns its
+    // LSN - `wal::kNoLsn` on the unlogged path. **Stamping is separate**
+    // because FormatUndoPage memsets the frame, `page_lsn` included, so
+    // the stamp must follow the format while on a reclaimed page the
+    // format must follow the append (TailFor says why).
+    StatusOr<wal::Lsn> LogPageInit(std::uint64_t trx_id, PageId page_id);
+    Status StampInit(PageId page_id, wal::Lsn lsn);
     Status LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t offset,
                         const UndoRecordFields& fields, std::span<const std::byte> image);
+    // Moves every settled page - maximum writer below the horizon - from
+    // the old end of the chain to the recycle list. Stops at the first
+    // page that fails (append order is not id order, so later pages may
+    // be settled too; skipping them is conservative and bounds the pass),
+    // and never takes the tail, whose free space is in use.
+    void ReclaimSettledPages();
 
     storage::PageStore& store_;
     wal::WalManager* wal_;
@@ -186,6 +243,19 @@ private:
     // undo_ptr, but nothing appends to it, because its free space is not
     // recorded anywhere this log reads at startup.
     PageId tail_ = kInvalidPageId;
+
+    // This run's chain, oldest first, each page with the largest writer id
+    // ever appended to it - the purge bound, kept here because a record
+    // does not store its own writer and the page header has no 48-bit
+    // field free. `pages_.back().page_id == tail_` whenever non-empty.
+    struct TrackedPage {
+        PageId page_id = kInvalidPageId;
+        std::uint64_t max_trx_id = 0;
+    };
+    std::vector<TrackedPage> pages_;
+    std::vector<PageId> recycle_;
+    std::function<std::uint64_t()> horizon_;
+    std::uint64_t pages_recycled_ = 0;
 };
 
 }  // namespace kds::txn

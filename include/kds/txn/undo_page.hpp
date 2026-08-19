@@ -52,10 +52,11 @@ inline constexpr std::size_t kUndoHeaderOffset = storage::kPageBodyOffset;
 
 struct UndoPageHeaderFields {
     std::uint16_t flags;
-    // O(1) "is this page empty", for a purge pass that does not exist yet.
-    // Derivable by counting records, which is exactly why it is stored: a
-    // purge sweep that had to walk every record to learn a page holds none
-    // would be walking the pages it is trying to skip.
+    // O(1) "is this page empty". The live purge keeps its bound in memory
+    // and never reads this; what still wants it is UP4's mount-time
+    // reclaim of a previous run's pages (docs/workplan-undo-purge.md),
+    // whose sweep would otherwise walk every record to learn a page holds
+    // nothing.
     std::uint16_t nr_records;
     // **Absolute** page offset of the next free byte, for the reason
     // HeapPageHeaderFields::lower is: it is compared against kPageSize and
@@ -73,10 +74,16 @@ struct UndoPageHeaderFields {
     // *reachability* is a property of the tuples pointing at it.
     std::uint64_t first_trx_id;
     // The log's previous undo page - **not** the previous page of any one
-    // transaction, which sharing makes unanswerable. It chains the pages in
-    // creation order so a future purge pass can walk them without a side
-    // table; that pass will need a per-page high-water mark this header does
-    // not carry yet, and reserved1 is where it goes.
+    // transaction, which sharing makes unanswerable. It chains the pages
+    // in creation order. **Historical once page reuse starts**: the purge
+    // (docs/workplan-undo-purge.md) recycles a settled page without
+    // rewriting the link that points at it, so a device walk can revisit
+    // a reused page - which is why UndoLog::PageCount() counts the
+    // in-memory chain instead. The purge keeps its per-page bound in
+    // memory too: the bound is a 48-bit writer id, this field's neighbour
+    // reserved1 is 32 bits, and this run's chain is the only one the log
+    // appends to, so the side table needs no on-disk home. reserved1
+    // stays reserved.
     PageId prev_page_id;
     std::uint32_t reserved1;  // 0
 };
@@ -190,9 +197,10 @@ inline constexpr std::size_t kUndoRecPkOffset = 36;
 // **Grew 28 -> 44 at RV10**, and the cost is stated rather than absorbed:
 // 16 bytes per undo record, so a kOverwrite carrying a 64-byte image goes
 // from 92 to 108 bytes and a page holds ~17 % fewer of them. That is the
-// price of a chain that can be walked without the log, and it is paid on
-// undo pages, which nothing purges - so it compounds with the reclamation
-// gap rather than standing apart from it (docs/known-gaps.md).
+// price of a chain that can be walked without the log. It used to compound
+// with the reclamation gap, undo pages being unpurgeable; since
+// `docs/workplan-undo-purge.md` it costs a higher steady-state page count
+// instead, ~17 % more growths per unit of undo written.
 //
 // The two new fields are appended rather than fitted into `reserved`, which
 // is 2 bytes and holds neither. Appending also keeps every existing offset
