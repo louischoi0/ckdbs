@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -25,10 +26,12 @@
 // PostgreSQL's READ COMMITTED, which re-reads; it is a deliberate
 // simplification, and the whole reason there is nothing to wait on.
 //
-// **No reader registration.** Nothing records that a snapshot exists, which
-// is what makes undo retention a non-goal and SnapshotTooOld structurally
-// unreachable (section 4.1). It is also exactly what has to change when
-// purge lands.
+// **Reader registration, but no purge of undo.** RegisterReader/ReadHorizon
+// (docs/workplan-reader-registration.md) record which snapshots exist so a
+// purge can prove no live view still needs a version. What is *built on*
+// that today is only the catalog delete-mark purge; undo retention stays a
+// non-goal until docs/txn.md section 9's retention policy is decided, so
+// SnapshotTooOld remains structurally unreachable.
 //
 // **No cross-core protocol.** One manager, one core, one WAL stream; a
 // transaction spanning cores is not representable and `wal.md` section 3
@@ -143,6 +146,58 @@ private:
     std::vector<TrailEntry> trail_;
     std::uint64_t last_undo_ptr_ = kNoUndoPtr;
     bool active_ = false;
+};
+
+// Readers a purge must not purge under, beyond the live transactions the
+// manager already holds: autocommit snapshots held across a park, which
+// today means the shipped pipeline stages alone - `RunProducer` and
+// `RunConsumer` keep theirs on a coroutine frame across every credit gate.
+// Bounded and fixed like kMaxTrackedLiveTxns, for the same reason:
+// a reader the registry could not admit would be a reader a purge cannot
+// see, so exhaustion refuses the reader rather than unsoundly proceeding.
+inline constexpr std::size_t kMaxRegisteredReaders = 256;
+
+class TransactionManager;
+
+// Proof that one read view is still alive, as far as ReadHorizon() is
+// concerned. Move-only RAII: RegisterReader hands one out, destruction
+// (or Release) withdraws the registration. A default-constructed or
+// moved-from lease holds nothing and its destruction does nothing.
+//
+// The manager must outlive every lease it issued - which the ownership
+// order already guarantees: the core runtime owns the manager, and the
+// dispatcher and pipeline stages that hold leases die first.
+class ReaderLease {
+public:
+    ReaderLease() = default;
+    ReaderLease(ReaderLease&& other) noexcept : mgr_(other.mgr_), slot_(other.slot_) {
+        other.mgr_ = nullptr;
+    }
+    ReaderLease& operator=(ReaderLease&& other) noexcept {
+        if (this != &other) {
+            Release();
+            mgr_ = other.mgr_;
+            slot_ = other.slot_;
+            other.mgr_ = nullptr;
+        }
+        return *this;
+    }
+    ReaderLease(const ReaderLease&) = delete;
+    ReaderLease& operator=(const ReaderLease&) = delete;
+    ~ReaderLease() { Release(); }
+
+    // Withdraws the registration now. Idempotent.
+    void Release() noexcept;
+
+    bool held() const noexcept { return mgr_ != nullptr; }
+
+private:
+    friend class TransactionManager;
+    ReaderLease(TransactionManager* mgr, std::uint32_t slot) noexcept
+        : mgr_(mgr), slot_(slot) {}
+
+    TransactionManager* mgr_ = nullptr;
+    std::uint32_t slot_ = 0;
 };
 
 // Implements `wal::ActiveTransactions`, which is how a checkpoint asks for
@@ -338,7 +393,41 @@ public:
     // take per pass and not to cache across one.
     std::uint64_t OldestActiveTrxId() const noexcept;
 
+    // ---- Reader registration (docs/workplan-reader-registration.md) -----
+    //
+    // Records that `view` is alive until the returned lease dies, so
+    // ReadHorizon() can account for it. Who must register: a holder whose
+    // view can read a *superseded* version - walk an undo chain, or filter
+    // a catalog read - across a park. Live transactions are already
+    // accounted for through `live_`; latest-state check views and views
+    // that never outlive one synchronous span need no lease (the workplan's
+    // table states the rule and the exemptions' proofs).
+    //
+    // OutOfSpace past kMaxRegisteredReaders: a reader the registry cannot
+    // see is a reader a purge would purge under, so the bound refuses the
+    // reader, never the accounting.
+    StatusOr<ReaderLease> RegisterReader(const ReadView& view);
+
+    // The smallest transaction id any live reader on this core might still
+    // need a superseded version from: the minimum of MinVisibleBound()
+    // over every active transaction's view (and its own id) and every
+    // leased reader. `UINT64_MAX` with no readers at all.
+    //
+    // What it licenses: a version superseded by a **committed** transaction
+    // with id below this is invisible to every live view and every future
+    // view - future views only raise the high-water mark, and a committed
+    // id joins no in-flight set - so a purge may retire it. An id at or
+    // above it proves nothing and its versions must stay.
+    //
+    // Per-core, like everything here: sound while every reader reads its
+    // own core's versions (CC3/CC4). A cross-core writer must revisit -
+    // the workplan's D1 names the condition.
+    std::uint64_t ReadHorizon() const noexcept;
+
 private:
+    friend class ReaderLease;
+
+    void UnregisterReader(std::uint32_t slot) noexcept;
     Status Compensate(const TrailEntry& entry, std::uint64_t trx_id,
                       const RowLocator& locate_row);
 
@@ -352,6 +441,32 @@ private:
     // every read view minted - which under READ COMMITTED is every
     // statement.
     std::vector<std::unique_ptr<Transaction>> live_;
+
+    // Leased readers: slot value is the view's MinVisibleBound(), and the
+    // bitmap beside it says which slots are held - the value itself
+    // carries no free/held meaning, because **a view can genuinely bound
+    // at 0** (a core whose id sequence has issued nothing mints
+    // `up_to_trx_id == 0`; a full-suite run on a peer core found it).
+    // Register scans four words for a zero bit, release clears one: O(1),
+    // no allocation, per read_view.hpp's POD rule. ReadHorizon() visits
+    // only set bits, and runs only at a purge.
+    std::array<std::uint64_t, kMaxRegisteredReaders> reader_slots_{};
+    std::array<std::uint64_t, kMaxRegisteredReaders / 64> reader_used_{};
+};
+
+inline void ReaderLease::Release() noexcept {
+    if (mgr_ == nullptr) return;
+    mgr_->UnregisterReader(slot_);
+    mgr_ = nullptr;
+}
+
+// A snapshot plus the registration that keeps a purge honest about it.
+// The snapshot half stays the same POD as ever - copy `snap` freely into
+// whatever the executor wants; what the lease tracks is the *holding*,
+// and it ends with this object. Move-only because the lease is.
+struct LeasedSnapshot {
+    Snapshot snap;
+    ReaderLease lease;
 };
 
 // The view a statement outside any transaction reads at: everything
@@ -361,17 +476,39 @@ private:
 // dispatcher's autocommit arm and every cross-core pipeline stage), and
 // spelling six lines twice is how the two drift.
 //
-// A null manager answers the default snapshot: every writer visible, no
-// undo log, which is the pre-MVCC engine exactly and what a caller
-// without a manager got before.
-inline StatusOr<Snapshot> AutocommitSnapshot(TransactionManager* manager) {
-    if (manager == nullptr) return Snapshot{};
+// Registered by construction, on the seam and not at the call sites: a
+// shipped stage holds its snapshot on a coroutine frame across every
+// credit grant, which is exactly the reader `live_` cannot name, and
+// putting the lease here is what keeps a stage from forgetting one.
+// Transactions need none: `live_` is their record.
+//
+// **The dispatcher's autocommit snapshot does not currently outlive its
+// statement**, and its lease is structural rather than load-bearing:
+// `DispatchInner` is synchronous throughout (`exec::Execute`, not
+// `ExecuteAsync`), and a statement that ships a read returns its
+// `pending_remote` outcome - dropping this object - *before*
+// `DispatchAsync` awaits anything. So that reader is today the
+// synchronous one txn.md section 4.1 exempts by proof. Kept leased
+// anyway because the exemption is an invariant to re-check whenever the
+// session-side executor gains a suspension point (P4d-3's page-boundary
+// awaits are the named watch item), and one slot store per statement is
+// cheaper than rediscovering that.
+//
+// A null manager answers the default snapshot with an empty lease: every
+// writer visible, no undo log, which is the pre-MVCC engine exactly and
+// what a caller without a manager got before - and nothing to register,
+// because with no manager there is no purge either.
+inline StatusOr<LeasedSnapshot> AutocommitSnapshot(TransactionManager* manager) {
+    if (manager == nullptr) return LeasedSnapshot{};
     auto view = manager->MintReadView(kNoTrxId);
     if (!view.ok()) return view.status();
-    Snapshot snap;
-    snap.view = view.value();
-    snap.undo = &manager->undo();
-    return snap;
+    auto lease = manager->RegisterReader(view.value());
+    if (!lease.ok()) return lease.status();
+    LeasedSnapshot out;
+    out.snap.view = view.value();
+    out.snap.undo = &manager->undo();
+    out.lease = std::move(lease.value());
+    return out;
 }
 
 }  // namespace kds::txn

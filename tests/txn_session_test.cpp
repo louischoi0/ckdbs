@@ -854,13 +854,23 @@ TEST_F(TxnSessionTest, ACreateIsRefusedWhileThatIndexNamesDropIsOpen) {
 }
 
 // DT10 (spec §5c). A committed transactional drop leaves its marked rows
-// on the page, and nothing purges them - so the next mount inherits marks
-// whose deleter it cannot ask about, and whose id the unlogged ceiling may
-// even have reissued. Finalizing at mount deletes that question.
+// on the page whenever the resolution-time purge (§5d) could not take
+// them - here because a leased reader still held the horizon, the same
+// state a crash or a shutdown with a parked statement leaves behind - so
+// the next mount inherits marks whose deleter it cannot ask about, and
+// whose id the unlogged ceiling may even have reissued. Finalizing at
+// mount deletes that question, and does so unconditionally: no reader
+// exists at mount, so the horizon is nobody's business there.
 TEST_F(TxnSessionTest, TheMountSweepRetiresTheMarksACommittedDropLeftBehind) {
     Session s;
     ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
     ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    // The reader that keeps §5d's resolution-time purge off the marks.
+    auto view = mgr_->MintReadView(txn::kNoTrxId);
+    ASSERT_TRUE(view.ok());
+    auto lease = mgr_->RegisterReader(view.value());
+    ASSERT_TRUE(lease.ok());
 
     ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
     ASSERT_EQ(Run(s, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
@@ -982,6 +992,114 @@ TEST_F(TxnSessionTest, ATransactionMayDropAndRecreateOneNameItself) {
 
     Session other;
     EXPECT_NE(Run(other, "DESCRIBE mine").find("w"), std::string::npos);
+}
+
+// ---- §5d: the horizon-gated purge at DDL resolution --------------------
+//
+// docs/workplan-reader-registration.md D5. DDL resolution is the only
+// event that creates or settles a catalog delete-mark, so EndDdlScope
+// attempts the purge there; the read horizon is what proves no live view
+// can still see a marked row, and a reader that holds the horizon simply
+// holds the marks - to the next resolution, or to the mount sweep above.
+
+TEST_F(TxnSessionTest, ACommittedDropsMarksArePurgedAtItsOwnResolution) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+
+    // The commit's own resolution took the marks: nothing is left for a
+    // manual pass, nothing for the next mount, and SHOW META counted it.
+    auto again = boot_->catalog.PurgeSettledDeleteMarks();
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(again.value(), 0u);
+    auto mount = boot_->catalog.FinalizeDeleteMarksAtMount();
+    ASSERT_TRUE(mount.ok()) << mount.status().message();
+    EXPECT_EQ(mount.value(), 0u) << "the resolution-time purge left marks for the mount sweep";
+    const std::string meta = Run(s, "SHOW META");
+    EXPECT_NE(meta.find("catalog_marks_purged="), std::string::npos) << meta;
+    EXPECT_EQ(meta.find("catalog_marks_purged=0"), std::string::npos) << meta;
+
+    EXPECT_EQ(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos);
+}
+
+TEST_F(TxnSessionTest, ALeasedReaderHoldsTheMarksAndItsReleaseFreesThem) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    // An autocommit reader from before the drop - what a parked
+    // session-side statement or a shipped stage holds.
+    auto view = mgr_->MintReadView(txn::kNoTrxId);
+    ASSERT_TRUE(view.ok());
+    auto lease = mgr_->RegisterReader(view.value());
+    ASSERT_TRUE(lease.ok());
+
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(s, "COMMIT").substr(0, 6), "COMMIT");
+
+    // Held: the lease's view cannot see the dropper, so the horizon sits
+    // below it and the purge must leave the marks.
+    auto held = boot_->catalog.PurgeSettledDeleteMarks();
+    ASSERT_TRUE(held.ok()) << held.status().message();
+    EXPECT_EQ(held.value(), 0u) << "the purge retired marks a leased reader could still need";
+
+    lease.value().Release();
+    auto freed = boot_->catalog.PurgeSettledDeleteMarks();
+    ASSERT_TRUE(freed.ok()) << freed.status().message();
+    EXPECT_GE(freed.value(), 1u) << "releasing the last older reader did not free the marks";
+
+    // And done: a second pass has nothing left.
+    auto empty = boot_->catalog.PurgeSettledDeleteMarks();
+    ASSERT_TRUE(empty.ok());
+    EXPECT_EQ(empty.value(), 0u);
+}
+
+TEST_F(TxnSessionTest, AnOlderOpenTransactionHoldsTheMarksUntilItResolves) {
+    Session a;
+    Session b;
+    ASSERT_EQ(Run(a, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(a, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    // b's transaction starts first, so its id sits below the dropper's and
+    // bounds the horizon - live_ is its registration, no lease involved.
+    ASSERT_EQ(Run(b, "BEGIN").substr(0, 5), "BEGIN");
+
+    ASSERT_EQ(Run(a, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(a, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(a, "COMMIT").substr(0, 6), "COMMIT");
+
+    auto held = boot_->catalog.PurgeSettledDeleteMarks();
+    ASSERT_TRUE(held.ok()) << held.status().message();
+    EXPECT_EQ(held.value(), 0u) << "the purge retired marks an open older transaction could see";
+
+    // b resolves without DDL, so nothing triggers automatically - the
+    // marks wait for the next resolution or the mount, by design.
+    ASSERT_EQ(Run(b, "COMMIT").substr(0, 6), "COMMIT");
+    auto freed = boot_->catalog.PurgeSettledDeleteMarks();
+    ASSERT_TRUE(freed.ok()) << freed.status().message();
+    EXPECT_GE(freed.value(), 1u);
+}
+
+TEST_F(TxnSessionTest, ARolledBackDropLeavesNothingForThePurge) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, owner int64) BTREE").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run(s, "CREATE INDEX by_owner ON t (owner)").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run(s, "BEGIN").substr(0, 5), "BEGIN");
+    ASSERT_EQ(Run(s, "DROP INDEX by_owner").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run(s, "ROLLBACK").substr(0, 8), "ROLLBACK");
+
+    // The rollback cleared its own marks synchronously; the purge finds a
+    // clean page and the index is whole.
+    auto swept = boot_->catalog.PurgeSettledDeleteMarks();
+    ASSERT_TRUE(swept.ok()) << swept.status().message();
+    EXPECT_EQ(swept.value(), 0u);
+    EXPECT_NE(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos);
 }
 
 // ---- C4: every route takes the statement boundary ---------------------

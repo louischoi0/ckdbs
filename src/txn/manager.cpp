@@ -1,6 +1,7 @@
 #include "kds/txn/manager.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <cctype>
 #include <string>
@@ -60,7 +61,7 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
         // the refusal says why rather than "unknown level".
         return Status::Unsupported(
             "SERIALIZABLE is out of scope: it needs predicate locking or read-tracking, and "
-            "this engine has neither a lock manager nor reader registration");
+            "this engine has neither a lock manager nor row-level read tracking");
     }
     return Status::InvalidArgument("unknown isolation level '" + std::string(text) +
                                    "'; expected 'read committed' or 'repeatable read'");
@@ -452,6 +453,48 @@ bool TransactionManager::IsInFlight(std::uint64_t trx_id) const noexcept {
         if (t->id_ == trx_id) return t->active_;
     }
     return false;
+}
+
+StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
+    for (std::size_t word = 0; word < reader_used_.size(); ++word) {
+        if (reader_used_[word] == ~std::uint64_t{0}) continue;
+        const unsigned bit = static_cast<unsigned>(std::countr_one(reader_used_[word]));
+        const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + bit);
+        reader_used_[word] |= std::uint64_t{1} << bit;
+        // Stored as-is, zero included: a core whose id sequence has issued
+        // nothing mints `up_to_trx_id == 0`, and a bound of 0 simply holds
+        // the horizon below every real id - which is what that view means.
+        reader_slots_[slot] = view.MinVisibleBound();
+        return ReaderLease(this, slot);
+    }
+    return Status::OutOfSpace("more than " + std::to_string(kMaxRegisteredReaders) +
+                              " registered readers on this core");
+}
+
+void TransactionManager::UnregisterReader(std::uint32_t slot) noexcept {
+    reader_used_[slot / 64] &= ~(std::uint64_t{1} << (slot % 64));
+}
+
+std::uint64_t TransactionManager::ReadHorizon() const noexcept {
+    std::uint64_t horizon = std::numeric_limits<std::uint64_t>::max();
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (!t->active_) continue;
+        // One term, not two: the view's bound already folds in the owner's
+        // own id - Begin and StartStatement always mint with it - so a
+        // separate `t->id_` comparison could never lower this further.
+        const std::uint64_t bound = t->view_.MinVisibleBound();
+        if (bound < horizon) horizon = bound;
+    }
+    for (std::size_t word = 0; word < reader_used_.size(); ++word) {
+        std::uint64_t used = reader_used_[word];
+        while (used != 0) {
+            const unsigned bit = static_cast<unsigned>(std::countr_zero(used));
+            used &= used - 1;
+            const std::uint64_t bound = reader_slots_[word * 64 + bit];
+            if (bound < horizon) horizon = bound;
+        }
+    }
+    return horizon;
 }
 
 }  // namespace kds::txn

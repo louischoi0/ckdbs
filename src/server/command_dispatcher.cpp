@@ -516,7 +516,12 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     os << "version=" << superblock_.version() << " create_time=" << superblock_.create_time()
        << " last_mount_time=" << superblock_.last_mount_time()
        << " wal_anchor_count=" << superblock_.wal_anchor_count()
-       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off");
+       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+       // §5d: delete-marked catalog rows the horizon-gated purge retired
+       // *this* mount. Its sibling `catalog_marks_finalized` below counts a
+       // previous mount's leftovers, and is part of the recovery report;
+       // this one is live dispatcher state and prints unconditionally.
+       << " catalog_marks_purged=" << catalog_marks_purged_;
 
     // The last recovery, for the operator who has to answer "what did the
     // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
@@ -3440,7 +3445,34 @@ void CommandDispatcher::EndDdlScope(const Session& session) {
     // anything?") is one more thing to keep true, and a DDL transaction
     // ending is rare enough that a cache clear it did not strictly need
     // costs nothing worth measuring.
-    if (held_ddl) catalog_.InvalidateAfterCompensation();
+    if (held_ddl) {
+        // The first purge consumer (workplan-reader-registration.md D5).
+        // Here and nowhere hotter: DDL resolution is the only event that
+        // creates or settles a mark, the core is between resolutions so no
+        // unregistered synchronous view is live, and the resolved
+        // transaction is already inactive so its own marks are fair game
+        // the moment no older reader holds a lease. **Before** the
+        // invalidation below, so its flush carries the retirements too.
+        // A failed sweep is a maintenance failure, not the statement's:
+        // the marks it left are exactly as reachable as before, so it is
+        // logged and the reply stands.
+        //
+        // **System core only.** This core's ReadHorizon() is blind to
+        // every other core's readers, and a peer's - no transactions, no
+        // leases - answers UINT64_MAX, which would retire a mark whose
+        // deleter is live on core 0. Unreachable while peers take no DDL,
+        // but that property is enforced nowhere, and this gate is what
+        // makes the soundness argument local (spec §5d, workplan D1).
+        if (core_id_ == catalog::kSystemCore) {
+            auto purged = catalog_.PurgeSettledDeleteMarks();
+            if (purged.ok()) {
+                catalog_marks_purged_ += purged.value();
+            } else if (log_ != nullptr) {
+                log_->Warn("catalog", "delete-mark purge failed: " + purged.status().message());
+            }
+        }
+        catalog_.InvalidateAfterCompensation();
+    }
 }
 
 void CommandDispatcher::MarkHoldsDdl(const txn::Transaction& txn) {
@@ -4132,7 +4164,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // parse, same compile, same executor - and a diagnostic that skipped
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
-    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value());
+    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value().snap);
 
     // ---- AG1: the fold wraps the sink, and nothing else moves -----------
     //
@@ -4143,7 +4175,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // and access statistics hold unchanged" a structural fact rather than a
     // list of things that were remembered.
     if (compiled.aggregated()) {
-        return RunAggregated(compiled, os, trail, replay_ptr, instance, snapshot.value());
+        return RunAggregated(compiled, os, trail, replay_ptr, instance, snapshot.value().snap);
     }
 
     // ---- V09: the emission quota wraps the sink, and nothing else moves --
@@ -4228,7 +4260,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                        ? storage::VisitControl::kStop
                        : storage::VisitControl::kContinue;
         },
-        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value(), indexes_enabled_);
+        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value().snap, indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -4424,7 +4456,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     auto snapshot = SnapshotFor(session);
     if (!snapshot.ok()) return {"ERR " + snapshot.status().message(), false};
 
-    DispatchOutcome out = UpdateInner(line, scope, snapshot.value());
+    DispatchOutcome out = UpdateInner(line, scope, snapshot.value().snap);
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
@@ -5020,8 +5052,8 @@ DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Ses
 
 // ---- Snapshots and the write scope ---------------------------------------
 
-StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
-    if (txn_ == nullptr) return txn::Snapshot{};  // sees everything, as before
+StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
+    if (txn_ == nullptr) return txn::LeasedSnapshot{};  // sees everything, as before
 
     if (session.in_explicit_txn()) {
         txn::Transaction* txn = session.transaction();
@@ -5029,11 +5061,20 @@ StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
         // under REPEATABLE READ it is a no-op, and that one branch is the
         // whole difference between the levels.
         if (Status s = EnsureStatementBoundary(session); !s.ok()) return s;
-        return txn_->SnapshotFor(*txn);
+        // No lease: the transaction is its own registration - `live_` is
+        // what ReadHorizon() walks, and it holds this view until the
+        // transaction resolves.
+        txn::LeasedSnapshot out;
+        out.snap = txn_->SnapshotFor(*txn);
+        return out;
     }
 
     // Autocommit: a view over the committed state, owned by no
-    // transaction - the same one every shipped pipeline stage mints.
+    // transaction - the same one every shipped pipeline stage mints, and
+    // leased because that seam leases (manager.hpp says why, and says
+    // plainly that *this* holder's statement never parks with it: the
+    // dispatch path is synchronous, and a statement that ships a read
+    // drops this object at its `pending_remote` return, before the wait).
     return txn::AutocommitSnapshot(txn_);
 }
 
@@ -5129,7 +5170,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
     auto snapshot = SnapshotFor(session);
     if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false};
 
-    DispatchOutcome out = DeleteInner(line, scope, snapshot.value());
+    DispatchOutcome out = DeleteInner(line, scope, snapshot.value().snap);
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();

@@ -13,6 +13,13 @@
 
 namespace kds::server {
 
+// The header states the rule; this is all it takes. Dropping the optional
+// destroys the ready queues, and with them every unfinished `CoroTask` and
+// the coroutine frame it owns - while `txn_manager_`, `catalog_` and
+// `store_` are still standing, which is exactly what those frames' locals
+// need.
+CoreRuntime::~CoreRuntime() { scheduler_.reset(); }
+
 StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                                          storage::PageDevice& device,
                                                          const sched::Clock& clock, Logger* log) {

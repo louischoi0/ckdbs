@@ -32,12 +32,14 @@
 // commit watermark, i.e. recovery. It is the single thing recovery must
 // revisit here.
 //
-// ---- Readers are not registered ------------------------------------------
+// ---- Reader registration lives on the manager, not here -------------------
 //
-// Nothing anywhere records that this view exists. That is what makes undo
-// retention a non-goal today - nothing can be purged, so nothing can be
-// purged too early, so SnapshotTooOld is structurally unreachable - and it
-// is exactly what has to change when purge lands.
+// The view itself stays a POD that nothing tracks. What records that a
+// reader exists is a ReaderLease from TransactionManager::RegisterReader
+// (docs/workplan-reader-registration.md): holders whose view can read a
+// superseded version across a park register there, and a purge consults
+// the manager's ReadHorizon(). MinVisibleBound below is the one number a
+// registration stores about a view.
 
 namespace kds::txn {
 
@@ -104,6 +106,21 @@ struct ReadView {
         in_flight[at] = trx_id;
         ++in_flight_count;
         return Status::OK();
+    }
+
+    // The smallest transaction id this view might still need a superseded
+    // version from - equivalently, the smallest id for which Visible() is
+    // not yet guaranteed true. Everything below it is visible to this view
+    // whatever else happens, so a purge holding "superseded by a committed
+    // id < every live view's bound" retires nothing this view can reach.
+    // The three terms mirror Visible()'s three refusal routes: the
+    // high-water mark, the smallest in-flight id (sorted, so [0]), and the
+    // owner's own id - whose versions its rollback may still need.
+    constexpr std::uint64_t MinVisibleBound() const noexcept {
+        std::uint64_t bound = up_to_trx_id;
+        if (in_flight_count > 0 && in_flight[0] < bound) bound = in_flight[0];
+        if (own_trx_id != kNoTrxId && own_trx_id < bound) bound = own_trx_id;
+        return bound;
     }
 
     // The view a caller with no transaction manager holds: everything below

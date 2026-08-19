@@ -33,8 +33,9 @@ per session (`SET ISOLATION LEVEL`), and per transaction (`BEGIN ISOLATION
 LEVEL ...`) — the same three-level precedence chain `durability` already uses.
 
 `SERIALIZABLE` is out of scope and is **not** `[OPEN]`: it needs predicate
-locking or SSI read-tracking, neither of which fits a design with no lock manager
-and no reader registration (§4).
+locking or SSI read-tracking, neither of which fits a design with no lock
+manager and no row-level read tracking. (§4.1's reader registration is not
+that: it records which *snapshots* exist, never which rows they read.)
 
 ## 2. MVCC version identity
 
@@ -117,8 +118,9 @@ names a page and an offset directly; rollback replays the transaction's
 in-memory trail (§3.6) and never walks undo pages; redo names each record's
 offset explicitly, so interleaved writers replay onto one page in LSN order
 correctly. Exclusivity would only have let a purge free a transaction's pages
-without a side table — and purge does not exist, cannot without reader
-registration (§9), and would need a per-page horizon rather than an owner
+without a side table — and an undo purge does not exist (registration now
+does, §4.1; the retention policy stays §9-open), and would need a per-page
+horizon rather than an owner
 anyway, because a page's records outlive their writer. `reserved1` is where
 that horizon goes.
 
@@ -306,10 +308,27 @@ synchronously, in-process (§6). That is the load-bearing assumption of the whol
 design, and §8 states the crash consequence it implies. It is the single thing
 recovery must revisit.
 
-Readers are **not registered anywhere**. That is what makes undo retention a
-non-goal today — nothing can be purged, so nothing can be purged too early, so
-`SnapshotTooOld` is structurally unreachable — and it is exactly what has to
-change when purge lands.
+Readers **are registered** as of 2026-08-19
+(`docs/workplan-reader-registration.md`). Two records together name every
+reader on a core: live transactions in the manager's `live_`, and every
+other snapshot that can read a superseded version across a park — an
+autocommit statement's, a shipped pipeline stage's — through a move-only
+`ReaderLease` that `txn::AutocommitSnapshot` now returns beside the
+snapshot, so registering is structural rather than disciplinary.
+`TransactionManager::ReadHorizon()` folds both into one bound: a version
+superseded by a **committed** transaction below it is invisible to every
+live and future view, so a purge may retire it. Views exempt by proof:
+latest-state check views (they never read a superseded version) and views
+that never outlive one synchronous span on the core's single thread — an
+exemption to re-check whenever the executor gains a suspension point.
+The horizon is **per-core**, sound while every reader reads its own
+core's versions (CC3/CC4); a cross-core writer must extend it.
+
+What is built on the horizon today is only the catalog delete-mark purge
+(`spec-ddl-transactional.md` §5d). **Undo retention remains a non-goal**
+— its policy and `SnapshotTooOld`'s surfacing are still §9-open — so undo
+is never purged and `SnapshotTooOld` stays structurally unreachable; what
+changed is that the prerequisite for deciding otherwise now exists.
 
 ### 4.2 The always-visible transaction id
 
@@ -513,8 +532,9 @@ that keeps each one viable:
 - **Undo retention policy** and `SnapshotTooOld` surfacing (error class,
   retryability). Nothing frees an undo page today, so a write-heavy relation
   grows undo monotonically — the same trade `heap_chain.hpp` already documents
-  for deleted heap space. Purge needs the reader registration §4.1 deliberately
-  omits, and would be a `maintenance`-group task.
+  for deleted heap space. The reader registration purge needs **exists as of
+  2026-08-19** (§4.1, `ReadHorizon()`), so what stays open is the policy
+  itself and the sweep — which would be a `maintenance`-group task.
 - **48-bit `trx_id` wraparound / epoch handling.** Exhaustion is reported
   `OutOfRange` and never wrapped, exactly as the row-id sequence does.
 - **Cross-core transaction commit protocol** — `wal.md` §3 says "do not design it
@@ -523,8 +543,8 @@ that keeps each one viable:
 - **Buffer-pool page-frame reclamation** under the page-latch model.
 - **Page compaction / free-space reuse.** `heap-and-tuple.md` §3.1b says
   compaction "needs a transaction manager to know no snapshot still needs the
-  bytes". This manager *could* answer that once readers are registered, but the
-  split policy it interacts with is open.
+  bytes". This manager **can now answer that** (§4.1's `ReadHorizon()`), but
+  the split policy it interacts with is open.
 
 Explicitly **not** open, and out of scope: `SERIALIZABLE` (§1), savepoints and
 statement-level rollback (§6), lock-based blocking (§5).
