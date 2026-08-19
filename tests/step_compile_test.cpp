@@ -720,6 +720,23 @@ TEST_F(StepCompileTest, AFilteredColumnStaysReadableAfterTheFilter) {
     EXPECT_TRUE(chain.steps[0].read_columns & Col(2));
 }
 
+TEST_F(StepCompileTest, ACabinStepsKeyColumnIsAlwaysInItsFilterMask) {
+    // The invariant the VM's recording path stands on (step_vm.cpp,
+    // WalkAndRecord's guard): a kCabinProbe step's key column sits in
+    // `filter_columns`, because the cabined equality is a residual conjunct
+    // and the mask is derived from that same residual. This fails the day
+    // someone reorders the mask pass past the kind assignment - which is
+    // the only way the recording could read a stale slot.
+    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    const StepChain chain = MustCompile("SELECT sym FROM trade WHERE acct_id = 7");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kCabinProbe);
+    EXPECT_TRUE(chain.steps[0].filter_columns & Col(1));
+}
+
 TEST_F(StepCompileTest, ARelationWiderThanSixtyFourColumnsGetsNoMask) {
     // **A latent correctness bug, found while building AP01 and fixed with
     // it.** A uint64 mask cannot name column 64, and DecodeColumnsInto stops

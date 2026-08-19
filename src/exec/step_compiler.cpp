@@ -1024,9 +1024,12 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
         mask |= 1;  // column 0 is the pk (invariant 11)
     }
 
-    // A Cabin's miss walk records the key column and the pk. It forces a
-    // full decode at execute time already (step_vm.cpp), and naming the
-    // column here as well costs nothing and removes the dependency.
+    // A Cabin's miss walk records the key column and the pk. At execute
+    // time the walk decodes `filter_columns` per row, plus the pk for a
+    // row whose key matches (step_vm.cpp - the full-decode form it
+    // replaced was scenario3 §7's cost inversion), and naming both here
+    // keeps the survivors' remaining-columns decode honest about what was
+    // already read.
     if (step.cabin.has_value() && step.cabin->col_pos < 64) {
         mask |= std::uint64_t{1} << step.cabin->col_pos;
         mask |= 1;

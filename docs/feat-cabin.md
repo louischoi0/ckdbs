@@ -160,6 +160,16 @@ At execution, for key value `v`:
 
 The miss path is why the first query for a value costs nothing extra in
 big-O: it was going to scan anyway; recording is a side effect.
+`[AMENDED 2026-08-19]` — for two builds, that claim held only in big-O
+and not in the constant: the recording walk decoded **every column of
+every row** where the plain filter scan decodes only the filtered ones,
+and a walk's cost is decode-dominated on rejected rows — so a recording
+miss over an 8-column relation priced at **2× the walk it shadows**
+(`bench/results-scenario3-library.md` §7's inversion, measured twice).
+The recording walk now decodes the filter's columns, and the pk only for
+a row whose key matches — everything the recording reads and nothing
+else. What remains in the constant is **~14%**, one key comparison per
+walked row: the price of building the set, not of decoding for it.
 
 ## 5. Write path — the witness
 

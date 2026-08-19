@@ -584,6 +584,29 @@ private:
         const bool record =
             cabins_->WouldRecord(cabins_->Observe(*key), step.cabin->declared);
         if (!record) co_return co_await RunWalkStep(steps, index, step, access);
+        co_return co_await WalkAndRecord(steps, index, step, access, *key);
+    }
+
+    // Walks `step` with a recording for `key` live, and commits the set iff
+    // the walk completed. **The only place a Recording is created** - the
+    // miss path and the heap hint-failure path both end here, which is what
+    // keeps every rule below one rule with one home.
+    sched::Coro WalkAndRecord(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                         const catalog::TableAccess& access, const stats::CabinKey& key) {
+        // The recording reads the key column out of this row's frame slots,
+        // so the partial decode must have filled it. Guaranteed by the
+        // compiler - the cabined equality is a residual conjunct, and
+        // `filter_columns` is derived from that same residual - and checked
+        // here because the failure would not be an error: it would be a
+        // stale slot recorded into a set that is then served as
+        // authoritative while missing qualifying pks, the C1 break.
+        // Declining to record is always legal (§1's corollary): this walk
+        // still answers, and the value simply stays unobserved.
+        if (step.filter_columns != Step::kAllColumns &&
+            (step.cabin->col_pos >= 64 ||
+             ((step.filter_columns >> step.cabin->col_pos) & 1) == 0)) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
 
         Recording recording;
         recording.step_id = step.step_id;
@@ -619,7 +642,7 @@ private:
                   [](const stats::CabinEntry& a, const stats::CabinEntry& b) {
                       return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
                   });
-        if (cabins_->Commit(*key, std::move(recording.entries))) {
+        if (cabins_->Commit(key, std::move(recording.entries))) {
             ++stats_.For(step.step_id).cabin_recordings;
         }
         co_return Status::OK();
@@ -1032,29 +1055,7 @@ private:
                                const Step& step, const catalog::TableAccess& access,
                                const stats::CabinKey& key) {
         cabins_->Unobserve(key);
-
-        Recording recording;
-        recording.step_id = step.step_id;
-        recording.rel_slot = static_cast<std::uint16_t>(index);
-        recording.col_pos = step.cabin->col_pos;
-        recording.value = &step.cabin->value;
-        // Saved and restored rather than cleared, for RunCabinStep's reason.
-        Recording* outer_recording = recording_;
-        recording_ = &recording;
-        Status walked = co_await RunWalkStep(steps, index, step, access);
-        recording_ = outer_recording;
-
-        if (!walked.ok()) co_return walked;
-        if (stopped_) co_return Status::OK();  // a partial walk records nothing
-
-        std::sort(recording.entries.begin(), recording.entries.end(),
-                  [](const stats::CabinEntry& a, const stats::CabinEntry& b) {
-                      return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
-                  });
-        if (cabins_->Commit(key, std::move(recording.entries))) {
-            ++stats_.For(step.step_id).cabin_recordings;
-        }
-        co_return Status::OK();
+        co_return co_await WalkAndRecord(steps, index, step, access, key);
     }
 
     sched::Coro RunWalkStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
@@ -1397,15 +1398,16 @@ private:
         // carries kAllColumns and takes the whole row here as before.
         const std::span<parser::AstValue> slots =
             frame_.SlotsFor(static_cast<std::uint16_t>(index));
-        // **Not while recording a Cabin.** The write-hook block below reads
-        // the cabin's key column and the pk before the residual runs, and a
-        // slot this row did not decode still holds the *previous* row's
-        // value - which would record an entry for a row that does not carry
-        // the value. A miss walk is already committed to reading everything,
-        // so it decodes everything.
+        // **Recording a Cabin adds nothing to this decode.** The cabined
+        // equality *is* this step's filter, so the key column already sits
+        // in `filter_columns` (the invariant WalkAndRecord's guard checks);
+        // the pk is decoded on demand below, only for a row whose key
+        // matches. The full-decode form this replaced priced a recording
+        // walk at 2x the FilterScan it shadows
+        // (bench/results-scenario3-library.md §7a).
         const bool recording_here =
             recording_ != nullptr && recording_->step_id == step.step_id;
-        const bool partial = step.filter_columns != Step::kAllColumns && !recording_here;
+        const bool partial = step.filter_columns != Step::kAllColumns;
         if (partial) {
             if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
                                              step.filter_columns, &spills_);
@@ -1445,16 +1447,28 @@ private:
         // the rest of the residual continues to decide what this statement
         // emits - which happens below and changes nothing about what was
         // recorded.
-        if (recording_ != nullptr && recording_->step_id == step.step_id) {
-            const ColumnRef ref{0, recording_->rel_slot, recording_->col_pos};
-            if (frame_.CanResolve(ref) &&
-                CompareValues(/*type_val=*/0, frame_.Get(ref), *recording_->value,
+        if (recording_here) {
+            // `slots` is this step's own frame span and the recording is
+            // scoped to this step by its id, so the key column is read
+            // directly rather than through a per-row frame resolution. One
+            // comparison per walked row is the recording's whole per-row
+            // cost.
+            if (recording_->col_pos < slots.size() &&
+                CompareValues(/*type_val=*/0, slots[recording_->col_pos], *recording_->value,
                               parser::CompareOp::kEq)) {
-                // Column 0 is the Keystone pk, already decoded into the
-                // frame by this step - so the id costs a read, never a
-                // lookup. Same source the trail collector uses, deliberately.
-                const parser::AstValue& pk =
-                    frame_.Get(ColumnRef{0, static_cast<std::uint16_t>(index), 0});
+                // The pk, decoded **on demand and only for a matching
+                // row**: paying one extra column on every *rejected* row
+                // was most of the recording walk's residual cost over the
+                // plain one. Column 0 is fixed-width and never spills, and
+                // the nullptr enforces that rather than assuming it.
+                if (partial) {
+                    if (Status s = DecodeColumnsInto(access.schema, access.layout, version_,
+                                                     slots, /*columns=*/1, /*spills=*/nullptr);
+                        !s.ok()) {
+                        return s;
+                    }
+                }
+                const parser::AstValue& pk = slots[0];
                 stats::CabinEntry entry;
                 entry.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
                 entry.page_id = page_id;
