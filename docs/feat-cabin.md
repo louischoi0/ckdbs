@@ -168,7 +168,8 @@ miss over an 8-column relation priced at **2× the walk it shadows**
 (`bench/results-scenario3-library.md` §7's inversion, measured twice).
 The recording walk now decodes the filter's columns, and the pk only for
 a row whose key matches — everything the recording reads and nothing
-else. What remains in the constant is **~14%**, one key comparison per
+else. What remains in the constant is **~6%** (5.1–5.9% by interleaved
+A/B, `bench/results-scenario3-library.md` §7a), one key comparison per
 walked row: the price of building the set, not of decoding for it.
 
 ## 5. Write path — the witness
