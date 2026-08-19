@@ -208,15 +208,23 @@ recommendations carry the next_id carve.
   rows never join the trail: a failed or rolled-back statement leaves
   orphan `sys.fkeys`/`sys.cabins` rows (review B2's second half). The
   fix is threading the out-param the other DDL writers already have.
-- **A hot-path cost to price before landing**: the `sys.tables.next_id`
-  bump was among the ten converted overwrite sites, so **every INSERT
-  now logs one extra catalog record** (~90 B). That is what closes K1's
-  unlogged-ceiling half — a stale recovered ceiling over recovered rows
-  would reissue live ids — so it is correctness, not accounting; but the
-  per-INSERT price must be measured, and if it clears the floor the
-  batching lever is the row-id lease (`catalog/row_id_lease.hpp`),
-  which already amortizes carves and would take the bump off the
-  statement path.
+- ~~**A hot-path cost to price before landing**~~ — **measured
+  2026-08-19** (Release, interleaved, `4eae38f` vs `bd640bc`; raw JSON
+  in `/home/cdkbs/bench-rv3-4eae38f/`, no `bench/` file by the
+  one-document rule). The `sys.tables.next_id` bump that closes K1's
+  unlogged-ceiling half costs **+160 B of WAL per INSERT and no
+  measurable time**: every p50/p99 delta at 200/1k/10k rows sits inside
+  a ±4 µs in-run floor with unstable sign, does not separate from the
+  no-bump UPDATE control, and server CPU moves by quantization steps in
+  both directions. The row-id-lease batching lever is **not needed** at
+  today's floor. The rest of the bill: autocommit DDL pays +3–7 µs p50
+  (+7–19%, the catalog records + undo records + the implicit
+  begin/commit pair); a mark-free DDL-transaction resolution got
+  **faster** (−8 µs commit, −15 µs rollback — the `pending_marks_` gate
+  skips the sweep the base always ran); a 10k-row `CREATE INDEX` pays
+  **+0.9% latency for ~272 KB of WAL** — the whole built tree, where
+  the base logged **zero bytes**, which is the crash exposure RV3-2
+  closed stated as a number.
 
 ## Not in scope
 
