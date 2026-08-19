@@ -551,9 +551,12 @@ private:
     // scope runs the DDL-resolution seam - cache invalidation and the §5d
     // purge - that explicit COMMIT/ROLLBACK reaches through EndDdlScope.
     void FinishDdlStatement(Session& session, WriteScope& scope, DispatchOutcome& out);
-    // kStrict's promise for the transactionless DDL statements (pattern,
-    // assertion): their records sync before the acknowledgement - they
-    // have no commit record for the durability class to ride on.
+    // D1/D2's promise for the transactionless DDL statements (pattern,
+    // assertion, cabin, ALTER): their records sync before the
+    // acknowledgement - they have no commit record for the durability
+    // class to ride on. Every route that writes without a WriteScope owes
+    // this call on its success path; the .cpp says why D2 syncs rather
+    // than batching.
     Status AwaitDdlDurability();
     // EndDdlScope's core, keyed by id: the session-based wrapper serves
     // explicit COMMIT/ROLLBACK, this serves an implicit DDL transaction
@@ -1098,8 +1101,6 @@ private:
     // The caller owes the *ordering*: these records precede the HEAP_INSERT or
     // HEAP_OVERWRITE whose cell points at the value, so a replay never reaches
     // a pointer that resolves to nothing (spec §5).
-    Status LogSpills(const std::vector<exec::AppendedSpill>& spills, std::uint64_t txn_id,
-                     std::uint64_t owner_oid);
 
     // What a `WHERE id = <const>` statement should do instead of scanning.
     // The three cases are distinct because the *authority* of the answer

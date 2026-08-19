@@ -49,13 +49,15 @@ the owner's workplan.
   acknowledged `CREATE TABLE` is restored like any acknowledged commit.
   ~~The two row-codec definition relations stayed outside the log~~ —
   **closed 2026-08-19, the same day it was named**: `sys.pattern_defs`
-  and `sys.assertions` write through `exec/wal_row_log.hpp` now, an
-  acknowledged `CREATE ASSERTION` survives a crash and **enforces**
-  (the genesis arm in `assertion_recover.cpp` and redo's `kCabinBound`
-  arm were the two pre-existing holes proving it exposed), and
-  `kStrict` syncs at pattern/assertion DDL acknowledgement, which no
-  commit record ever did for them. What stays outside the log is
-  ALLOC/FREE alone (`wal.md` §11a). One
+  and `sys.assertions` write through `exec/wal_row_log.hpp` now, and an
+  acknowledged `CREATE ASSERTION` survives a crash and **enforces**.
+  Proving it exposed two pre-existing holes, both closed: redo
+  mis-formatted `kCabinBound` bodies, and every transactionless DDL
+  statement (pattern, assertion, cabin, ALTER) had no commit record for
+  the durability class to ride - `kStrict` **and `kGroup`, the default,
+  whose documented point is D1's**, now sync at the acknowledgement.
+  What stays outside the log: ALLOC/FREE and the advisory Waystone
+  classes invariant 8 exempts (`wal.md` §11a). One
   contract also got *stricter*: a torn catalog page used to boot and be
   served corrupt; redo now names it, cannot heal it (§10's FPI cadence
   is unbuilt for every page class), and refuses the mount — the rule

@@ -14,6 +14,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/visibility.hpp"
+#include "kds/wal/log_page_init.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/payload.hpp"
 
@@ -123,26 +124,15 @@ Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* w
     if (Status s = BoundCabinPage::Format(bytes); !s.ok()) return s;
     ++pages_;
 
-    if (wal != nullptr) {
-        // Deliberately unstamped, LogInsert's rule for a new tuple page:
-        // the first entry record into it stamps it, and an empty root that
-        // never receives one carries page_lsn 0, "never logged".
-        // owner_oid 0, spelled rather than defaulted: a Bound Cabin page is
-        // the assertion registry's, not a relation's, and page.md §2a leaves
-        // that class unattributed - so 0 here is what BoundCabinPage::Format()
-        // stamps on the live path, and redo must not diverge from it.
-        std::array<std::byte, wal::kPageInitPayloadSize> init{};
-        const wal::PageInitPayload fields{0,
-                                          static_cast<std::uint8_t>(PageType::kCabinBound),
-                                          {0, 0, 0},
-                                          /*reserved2=*/0,
-                                          /*owner_oid=*/0};
-        if (auto n = wal::EncodePageInit(init, fields); !n.ok()) return n.status();
-        if (auto rec = wal->Append(
-                wal::RecordSpec{wal::RecordType::kPageInit, wal::kNoTxnId, pid}, init);
-            !rec.ok()) {
-            return rec.status();
-        }
+    // Deliberately unstamped, LogInsert's rule for a new tuple page: the
+    // first entry record into it stamps it. owner_oid 0, spelled rather
+    // than defaulted: a Bound Cabin page is the assertion registry's, not
+    // a relation's (page.md §2a leaves the class unattributed), so 0 is
+    // what BoundCabinPage::Format() stamps and redo must not diverge.
+    if (auto rec = wal::LogPageInit(wal, wal::kNoTxnId, pid, PageType::kCabinBound,
+                                    /*min_key=*/0, /*owner_oid=*/0);
+        !rec.ok()) {
+        return rec.status();
     }
 
     if (tail_ == kInvalidPageId) {

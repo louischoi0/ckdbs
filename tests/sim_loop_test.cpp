@@ -550,6 +550,35 @@ TEST_F(Rv3CrashTest, ACommittedCreatePatternSurvivesACrash) {
         << "an acknowledged CREATE PATTERN vanished across the crash";
 }
 
+// The SLOT_RETIRE half of the same remainder: a dropped declaration must
+// stay dropped, or a crash resurrects an assertion the operator removed -
+// which for an enforcing constraint is a refusal nobody asked for.
+TEST_F(Rv3CrashTest, ADroppedDeclarationStaysDroppedAcrossACrash) {
+    MakeStrict();
+    ASSERT_EQ(Run("CREATE TABLE trades (id int64, account int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK COUNT(*) <= 1")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("DROP ASSERTION cap").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run("CREATE PATTERN watch($k int64) OF SELECT id FROM trades WHERE id = $k")
+                  .rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(Run("DROP PATTERN watch").rfind("ERR", 0), std::string::npos);
+
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+
+    EXPECT_EQ(Run("SHOW ASSERTIONS").find("cap"), std::string::npos)
+        << "a dropped assertion resurrected across the crash";
+    EXPECT_EQ(Run("SHOW PATTERNS").find("watch"), std::string::npos)
+        << "a dropped pattern resurrected across the crash";
+    // And the dropped assertion must not refuse: two rows into one group
+    // crosses its old bound of 1, which only a resurrected cap would mind.
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7)").substr(0, 8), "INSERTED");
+    EXPECT_EQ(Run("INSERT INTO trades VALUES (7)").substr(0, 8), "INSERTED");
+}
+
 TEST_F(Rv3CrashTest, ACommittedDropStaysDroppedAcrossACrash) {
     MakeStrict();
     ASSERT_EQ(Run("CREATE TABLE gone (id int64, v int64)").substr(0, 7), "CREATED");

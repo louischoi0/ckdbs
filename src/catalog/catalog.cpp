@@ -17,6 +17,7 @@
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/varheap.hpp"
 #include "kds/txn/manager.hpp"
+#include "kds/wal/log_page_init.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
@@ -302,14 +303,10 @@ Status RetireLogged(wal::WalManager* wal, storage::PageStore& store, heap::PageV
 // relation's own root pages pass their type and owning oid.
 Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id,
                       PageType type = PageType::kHeap, Oid owner_oid = 0) {
-    if (wal == nullptr) return Status::OK();
-    // LogCatRow's envelope rule (B1), stated there.
+    // LogCatRow's envelope rule (B1), stated there; min_key 0 - catalog
+    // rows carry no key space, and a relation root passes owner + type.
     if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
-    std::array<std::byte, wal::kPageInitPayloadSize> buf{};
-    const wal::PageInitPayload fields{0, static_cast<std::uint8_t>(type), {0, 0, 0},
-                                      /*reserved2=*/0, owner_oid};
-    if (auto n = wal::EncodePageInit(buf, fields); !n.ok()) return n.status();
-    auto rec = wal->Append(wal::RecordSpec{wal::RecordType::kPageInit, trx_id, page_id}, buf);
+    auto rec = wal::LogPageInit(wal, trx_id, page_id, type, /*min_key=*/0, owner_oid);
     return rec.ok() ? Status::OK() : rec.status();
 }
 

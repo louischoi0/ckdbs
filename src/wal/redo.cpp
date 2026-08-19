@@ -82,6 +82,9 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
         // walked into the superblock and the assertion could not be revived
         // (found when the sys.assertions row first survived a crash;
         // pre-existing since the chain's PAGE_INIT was first logged).
+        // The record's owner_oid is deliberately ignored: Format stamps 0,
+        // Grow logs 0, and honoring a nonzero one here would be the
+        // divergence, not the fidelity.
         return storage::cabin::BoundCabinPage::Format(page);
     }
     storage::FormatPage(page, type, /*flags=*/0, owner_oid);

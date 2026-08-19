@@ -168,22 +168,29 @@ crash loser's mount rolls back through, and `SHOW META` prints
 with everything else, which closes the unlogged-ceiling half of
 `docs/keystoneid-k0-findings.md` §4's K1 exposure. Still outside the log,
 precisely: `ALLOC`/`FREE`, reserved in the record enum and emitted by
-nothing (the SpaceManager of `docs/page.md` §5 is unbuilt) — and nothing
-else. The two **row-codec definition relations** (`sys.pattern_defs`,
+nothing (the SpaceManager of `docs/page.md` §5 is unbuilt), and the
+**advisory Waystone classes** — trail pages (`stats/trail_store.cpp`)
+and directory pages (`stats/waystone_dir.cpp`) — which invariant 8
+exempts by construction: deleting them wholesale must never change a
+result, so they owe the log nothing. Nothing *authoritative* is outside.
+The two **row-codec definition relations** (`sys.pattern_defs`,
 `sys.assertions`' source rows) joined on 2026-08-19 through
 `exec/wal_row_log.hpp` — the same order rules, `kNoTxnId` envelopes —
 which closed the last silent crash loss: an acknowledged
-`CREATE ASSERTION` now survives and **enforces** after a crash. Three
-things fell out of proving that end to end: pattern/assertion DDL has no
-commit record for the durability class to ride, so `kStrict` now syncs
-at those statements' acknowledgement (`AwaitDdlDurability`); redo gained
-a `kCabinBound` arm (`BoundCabinPage::Format` writes a body whose
-`next_page_id` a zeroed page misreads as page 0 — `AdoptChain` on a
-redone root walked into the superblock); and assertion recovery gained
-its **genesis arm** — a declaration born after the last checkpoint has
-no `ASSERT_SNAPSHOT` and needs none, its first `ASSERT_BUILD` in range
-is the base (`assertion_recover.cpp`; the last two were pre-existing,
-unobservable while the row itself always died with the crash).
+`CREATE ASSERTION` now survives and **enforces** after a crash. Two
+pre-existing holes fell out of proving that end to end (both
+unobservable while the row itself always died with the crash): every
+transactionless DDL statement — pattern, assertion, cabin, ALTER — had
+no commit record for the durability class to ride, so `kStrict` **and
+`kGroup`, whose documented durability point is D1's**, now sync at the
+acknowledgement (`AwaitDdlDurability`); and redo gained a `kCabinBound`
+arm (`BoundCabinPage::Format` writes a body whose `next_page_id` a
+zeroed page misreads as page 0 — `AdoptChain` on a redone root walked
+into the superblock). A genesis arm for assertion recovery was built and
+deleted the same day — the publish-time `ASSERT_SNAPSHOT`
+(`assertion_catalog.cpp`, AS6a) already covers a declaration born after
+the last checkpoint, and the arm's ordering could adopt an under-counted
+base over that better one; the refusal site records the reasoning.
 
 Three properties of the INSERT path are worth stating, because they are the shape the remaining paths should copy or deliberately not copy:
 

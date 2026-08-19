@@ -253,31 +253,24 @@ StatusOr<AssertionRecoveryReport> RecoverAssertions(
             return Status::OK();  // not ours; the fold's own skip rule agrees
         }
         if (!context.based(id)) {
-            if (record.type() == wal::RecordType::kAssertBuild) {
-                // **Genesis, AS6a's missing arm** - found the day the
-                // sys.assertions row first survived a crash (the RV3
-                // remainder round): a declaration born after the last
-                // checkpoint has no ASSERT_SNAPSHOT in range and needs
-                // none, because a cabin is born empty. Its first BUILD
-                // record in range IS the base; the fold below replays the
-                // build's own entries onto it, and DedupeEntryLinkage
-                // reconciles any overlap with entries whose page reached
-                // the device before the crash. Sound because ASSERT_BUILD
-                // is emitted only at CREATE: an assertion born before the
-                // checkpoint has all its BUILD records below the range and
-                // its snapshot in it, so this arm cannot fire for one.
-                context.MarkBased(id);
-                if (AssertionRecoveryResult* r = result_for(id); r != nullptr) {
-                    r->recovered = true;
-                }
-            } else {
-                // No snapshot and no birth in range: there is no base to
-                // fold onto and folding would under-count. Counted and
-                // skipped; the assertion stays unrecovered and its caller
-                // leaves it unenforcing.
-                ++report.records_without_a_base;
-                return Status::OK();
-            }
+            // No snapshot yet for this assertion, so there is no base to fold
+            // onto and folding would under-count. Counted and skipped; the
+            // assertion stays unrecovered and its caller leaves it unenforcing.
+            //
+            // **A BUILD record takes this arm too, on purpose** - a genesis
+            // rule ("born empty, so its first BUILD is the base") was built
+            // here on 2026-08-19 and deleted the same day by review: the
+            // publish-time ASSERT_SNAPSHOT (`assertion_catalog.cpp`, AS6a)
+            // already covers a declaration born after the last checkpoint -
+            // even an empty one gets a snapshot record - and a genesis base
+            // would make the `based(id)` skip above *discard* that better,
+            // complete snapshot whenever the range ever began mid-build,
+            // adopting an under-counted directory as enforcing. The one case
+            // genesis covered that this refusal does not is a torn,
+            // unacknowledged CREATE (builds durable, publish snapshot lost),
+            // where the honest answer is exactly this `enforcing=0`.
+            ++report.records_without_a_base;
+            return Status::OK();
         }
 
         if (Status s = ReplayAssertionRecord(record, store, context); !s.ok()) {

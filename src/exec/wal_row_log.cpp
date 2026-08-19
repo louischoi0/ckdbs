@@ -4,6 +4,7 @@
 
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/log_page_image.hpp"
+#include "kds/wal/log_page_init.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
@@ -27,14 +28,8 @@ Status LogSpills(wal::WalManager* wal, storage::PageStore& store,
         // Unstamped, for the reason the heap path gives for a new tuple page:
         // the append below lands in exactly this page and stamps it.
         if (spill.created_page_id != kInvalidPageId) {
-            std::array<std::byte, wal::kPageInitPayloadSize> init{};
-            const wal::PageInitPayload init_fields{
-                /*min_key=*/0, static_cast<std::uint8_t>(PageType::kVarHeap), {0, 0, 0},
-                /*reserved2=*/0, owner_oid};
-            if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
-            if (auto rec = wal->Append(
-                    wal::RecordSpec{wal::RecordType::kPageInit, env_txn, spill.created_page_id},
-                    init);
+            if (auto rec = wal::LogPageInit(wal, env_txn, spill.created_page_id,
+                                            PageType::kVarHeap, /*min_key=*/0, owner_oid);
                 !rec.ok()) {
                 return rec.status();
             }
@@ -74,25 +69,19 @@ Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
     if (wal == nullptr) return Status::OK();
 
     if (placed.grew_chain) {
-        // ChainInsertResult does not carry the new page's min_key; the
-        // landed page does, and PAGE_INIT's redo must format with the
-        // same value or the redone page checksums differently.
+        // Read back off the landed page rather than derived from the
+        // tuple's Keystone id (which is what ChainInsert sets it to
+        // today): a change in ChainInsert's min_key choice then cannot
+        // silently diverge redo from the live format (invariant 2).
         std::uint64_t min_key = 0;
         {
             auto bytes = store.GetForRead(placed.page_id);
             if (!bytes.ok()) return bytes.status();
             min_key = heap::PageView(bytes.value().bytes()).min_key();
         }
-        std::array<std::byte, wal::kPageInitPayloadSize> init{};
-        const wal::PageInitPayload init_fields{min_key,
-                                               static_cast<std::uint8_t>(PageType::kHeap),
-                                               {0, 0, 0},
-                                               /*reserved2=*/0, owner_oid};
-        if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
         // Unstamped: the HEAP_INSERT below lands in this page and stamps it.
-        if (auto rec = wal->Append(
-                wal::RecordSpec{wal::RecordType::kPageInit, wal::kNoTxnId, placed.page_id},
-                init);
+        if (auto rec = wal::LogPageInit(wal, wal::kNoTxnId, placed.page_id, PageType::kHeap,
+                                        min_key, owner_oid);
             !rec.ok()) {
             return rec.status();
         }

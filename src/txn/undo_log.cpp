@@ -4,6 +4,7 @@
 #include <cstring>
 #include <string>
 
+#include "kds/wal/log_page_init.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
@@ -19,24 +20,11 @@ std::size_t UndoWriteSize(std::size_t image_len) {
 }  // namespace
 
 StatusOr<wal::Lsn> UndoLog::LogPageInit(std::uint64_t trx_id, PageId page_id) {
-    if (wal_ == nullptr) return wal::kNoLsn;
-
-    std::array<std::byte, wal::kPageInitPayloadSize> buf{};
-    // min_key 0: an undo page has no key space. PageInitPayload already
-    // provides for that on non-heap page types (payload.hpp).
-    // owner_oid 0: undo is a system page class, unattributed by page.md
-    // §2a - and it must be spelled, because what redo stamps here has to
-    // equal what UndoPage::Format() stamps on the live path, which is 0.
-    const wal::PageInitPayload fields{0,
-                                      static_cast<std::uint8_t>(PageType::kUndo),
-                                      {0, 0, 0},
-                                      /*reserved2=*/0,
-                                      /*owner_oid=*/0};
-    if (auto n = wal::EncodePageInit(buf, fields); !n.ok()) return n.status();
-
-    auto rec = wal_->Append(wal::RecordSpec{wal::RecordType::kPageInit, trx_id, page_id}, buf);
-    if (!rec.ok()) return rec.status();
-    return rec.value();
+    // min_key 0 (an undo page has no key space), owner_oid 0 (a system
+    // page class, unattributed by page.md §2a - and it must match what
+    // UndoPage::Format() stamps on the live path, which is 0).
+    return wal::LogPageInit(wal_, trx_id, page_id, PageType::kUndo, /*min_key=*/0,
+                            /*owner_oid=*/0);
 }
 
 Status UndoLog::StampInit(PageId page_id, wal::Lsn lsn) {

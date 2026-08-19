@@ -32,6 +32,7 @@
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/exec/tuple_verify.hpp"
+#include "kds/wal/log_page_init.hpp"
 #include "kds/exec/wal_row_log.hpp"
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
@@ -1374,6 +1375,9 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
         // stops emitting cabin probes for the column - so this frees memory
         // rather than protecting an answer.
         if (cabins_ != nullptr) cabins_->Forget(cabin_id.value());
+        // Transactionless like the pattern and assertion routes: the
+        // sys.cabins row is logged but no commit record follows it.
+        if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
         std::ostringstream os;
         os << "DROPPED CABIN on=" << stmt.table_name << '.' << stmt.column_name
            << " cabin_id=" << cabin_id.value();
@@ -1387,6 +1391,7 @@ DispatchOutcome CommandDispatcher::HandleCabin(std::string_view line) {
     if (!result.ok()) {
         return {"ERR " + result.status().message(), false};
     }
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
 
     std::ostringstream os;
     // `observed=0` is printed rather than left out, because it is the thing
@@ -1465,6 +1470,9 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
     if (!renamed.ok()) {
         return {"ERR " + renamed.message(), false};
     }
+    // Transactionless like the pattern and assertion routes: the renamed
+    // catalog rows are logged but no commit record follows them.
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
 
     std::ostringstream os;
     if (stmt.rename_column) {
@@ -1622,12 +1630,17 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     if (!created.ok()) {
         return {ErrorReply(created.status()), false};
     }
-    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
     exec::AssertionDdlResult& result = created.value();
     const bool adopted = result.live.has_value();
     if (adopted) {
         enforcer_.Adopt(std::move(*result.live));
     }
+    // After the adoption, deliberately (the review's asymmetry note): a
+    // sync failure then answers ERR with the live registry still enforcing
+    // what the log already holds - over-enforcing until the operator
+    // retries, where the other order left a durably created constraint
+    // unenforced on the running instance.
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
 
     // Truthful now in the other direction: the check runs (AST07), so a
     // freshly created assertion **is** enforcing - and says so. The
@@ -2440,23 +2453,26 @@ Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id)
 
 // The durability a statement with no commit record owes its
 // acknowledgement (workplan-rv3-catalog-recovery.md's remainder round):
-// pattern and assertion DDL run under no transaction, so nothing ever
-// synced their records - at kStrict an acknowledged CREATE ASSERTION
-// could die with the WAL buffer, which is the strict promise broken.
-// kStrict syncs here; kGroup and kRelaxed keep their loss windows,
-// exactly as they do for DML.
+// pattern, assertion, cabin and ALTER DDL run under no transaction, so
+// nothing ever synced their records - an acknowledged CREATE ASSERTION
+// could die with the WAL buffer, which is the durability promise broken.
+//
+// **D2 syncs here too, and that is not a policy choice.** `wal.md` §1 gives
+// D2 the same durability point as D1 - "D1/D2 differ only in batching,
+// never in the durability point", §14's "D1/D2 never lose an acked commit
+// under any injected crash" - and D2 is the *default* class, so leaving it
+// out would have left the very defect RV3 closed open for every default
+// deployment. D2's batching lives in `pending_commit_lsn_`, which is keyed
+// to a registered group commit (`DrainOnce` syncs only when
+// `pending_group_commits_ > 0`); a statement with no commit record has
+// nothing to register, so the honest way to keep D2's point is to sync.
+// DDL is rare, so what that costs is one fsync per declaration.
+// D3 keeps its loss window, exactly as it does for DML.
 Status CommandDispatcher::AwaitDdlDurability() {
-    if (wal_ == nullptr || durability_ != wal::DurabilityClass::kStrict) return Status::OK();
+    if (wal_ == nullptr || durability_ == wal::DurabilityClass::kRelaxed) return Status::OK();
     return wal_->SyncAll();
 }
 
-Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spills,
-                                   std::uint64_t txn_id, std::uint64_t owner_oid) {
-    // The one writer (exec/wal_row_log.hpp), kept as a member for its
-    // callers' brevity - the extraction is what let the row-codec system
-    // relations (sys.pattern_defs, sys.assertions) log the same records.
-    return exec::LogSpills(wal_, page_store_, spills, txn_id, owner_oid);
-}
 
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,
                                     std::span<const std::byte> tuple, std::uint64_t trx_id,
@@ -2486,14 +2502,8 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     // no record type describes those (insert_placement.hpp).
     for (const storage::StructuralChange& change : placed.changes()) {
         if (change.is_new_page) {
-            std::array<std::byte, wal::kPageInitPayloadSize> init{};
-            const wal::PageInitPayload init_fields{change.min_key,
-                                                   static_cast<std::uint8_t>(leaf_type),
-                                                   {0, 0, 0},
-                                                   /*reserved2=*/0, owner_oid};
-            if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
-            if (auto rec = wal_->Append(
-                    wal::RecordSpec{wal::RecordType::kPageInit, txn_id, change.page_id}, init);
+            if (auto rec = wal::LogPageInit(wal_, txn_id, change.page_id, leaf_type,
+                                            change.min_key, owner_oid);
                 !rec.ok()) {
                 return rec.status();
             }
@@ -2512,7 +2522,7 @@ Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, Page
     // section 5): a replay must never reach a cell whose pointer resolves
     // to nothing, and the reverse failure - a value with no tuple - is an
     // unreferenced value purge collects.
-    if (Status s = LogSpills(spills, txn_id, owner_oid); !s.ok()) return s;
+    if (Status s = exec::LogSpills(wal_, page_store_, spills, txn_id, owner_oid); !s.ok()) return s;
 
     // The index entries this row is now reachable through, before the row
     // itself (docs/feat-index.md §12.1). Same direction as the var-heap
@@ -4864,7 +4874,10 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
             // INSERT already obeyed: the cell in the tuple record below points
             // into these pages, so the records that create, link and fill them
             // must precede it.
-            if (Status s = LogSpills(appended_spills, scope.txn->id(), ta.oid); !s.ok()) return s;
+            if (Status s = exec::LogSpills(wal_, page_store_, appended_spills, scope.txn->id(), ta.oid);
+                !s.ok()) {
+                return s;
+            }
             if (Status s = LogIndexWrites(index_writes, scope.txn->id()); !s.ok()) return s;
 
             std::vector<std::byte> buf(wal::kHeapWriteFixedSize + encoded.value().size());

@@ -203,14 +203,20 @@ recommendations carry the next_id carve.
   ChainInsert logger, kNoTxnId envelopes), their retires log
   `SLOT_RETIRE`, and two crash tests pin the outcome — a recovered
   `CREATE ASSERTION` *enforces*, a recovered `CREATE PATTERN` lists.
-  Proving it end to end exposed and closed three more: `kStrict` had no
-  sync for transactionless DDL acknowledgements (`AwaitDdlDurability`);
-  redo's generic arm zeroed a `kCabinBound` body whose `next_page_id`
-  then read as page 0, walking `AdoptChain` into the superblock; and
-  assertion recovery had no genesis — a declaration born after the last
-  checkpoint had no snapshot base and stayed `enforcing=0`, so its
-  first `ASSERT_BUILD` in range is now the base. The last two were
-  pre-existing, unobservable while the row always died with the crash.
+  Proving it end to end exposed and closed two pre-existing holes,
+  unobservable while the row always died with the crash: no durability
+  class ever synced a transactionless DDL acknowledgement — the review
+  caught that `kGroup`, the default, whose documented point is D1's
+  zero-loss, was as exposed as the rest, and that cabin and ALTER
+  routes were too (`AwaitDdlDurability`, seven arms) — and redo's
+  generic arm zeroed a `kCabinBound` body whose `next_page_id` then
+  read as page 0, walking `AdoptChain` into the superblock. A genesis
+  arm for assertion recovery was built and **deleted the same day by
+  review**: the publish-time `ASSERT_SNAPSHOT` (AS6a) already covers a
+  declaration born after the last checkpoint — ablation showed the
+  crash test passes without the arm — and its ordering could adopt an
+  under-counted base over that better snapshot; the refusal site in
+  `assertion_recover.cpp` records the full reasoning.
 - The sim workload writes no DDL, so the crash *loop* never exercises
   these paths — the five shapes above do, deterministically.
 - `CreateForeignKey`/`CreateCabin` report no `CatalogRowRef`, so their
