@@ -814,7 +814,8 @@ each imposing the write-hook cost thereafter. A join whose outer keys
 never repeat pays ~6% per key (§7a's miss surcharge) for nothing — **the
 never-repeating-key distribution on an unindexed column remains the
 uncovered case**, and it is a `CABIN AUTO` policy question
-(`docs/feat-cabin.md` §11), not an executor one. Also unchanged: the
+(`docs/feat-cabin.md` §11), not an executor one *(closed on the Cabin's
+side later by CB14 — §7d measures it)*. Also unchanged: the
 EXISTS non-convergence (§7b.4 above, recorded in §4a with the reason the
 narrow fix is wrong) *(closed later the same day by CB13 — §7c measures
 it)*; the `correlated_scans` counter blind spot (§4a: a still-quadratic
@@ -849,7 +850,10 @@ walk-heavy shape a resolvable +2.9–4.0% (~2 ns per examined row), the
 fix moved the completion exit inside the recording block and made the row
 charge unconditional again, and at `fa1f320` all ten driver shapes read
 inside their replicate floors. CB12's headline is untouched: the warm
-no-literal join serves at 67–68 µs on both binaries.**
+no-literal join serves at 67–68 µs on both binaries.** *(CB14, later the
+same day, moves the correlated observation to a key's second touch — the
+charge lands on execution 2 and steady state on execution 3; §7d measures
+the shifted series against this engine.)*
 
 ### 7c.1 The A/B run
 
@@ -1141,7 +1145,8 @@ puts every walk shape back inside its floor at `fa1f320`.
 
 **Not changed:** §8's per-key economics — the observation is still paid,
 now once even for a stopping shape, and the never-repeating-key
-distribution remains the uncovered case (`CABIN AUTO`, §11); the
+distribution remains the uncovered case (`CABIN AUTO`, §11) *(closed on
+the Cabin's side the same day by CB14 — §7d)*; the
 `correlated_scans` blind spot (§4a — a still-quadratic correlated
 CabinProbe still reports zero, though fewer shapes now stay quadratic);
 the serve path and its §7b numbers; the indexed answers (§9a/§9b); the
@@ -1150,7 +1155,263 @@ as the only clears, so a key refused at the entry cap stays refused until
 policy says otherwise — a §11 question, not measured here; and the rest
 of this file, which describes `9f762a3`.
 
-## 8. Composite is the only structure that helps `overdue`
+## 7d. Addendum, 2026-08-19 — the correlated probe earns observation per key: sight, then charge, then serve
+
+§7b.8 and §7c.8 both left the same case uncovered: a join whose outer
+keys never repeat paid the observation surcharge for nothing, and one
+SELECT could push up to `cabin_max_values` keys into observation — each a
+dead set carrying a standing write-hook cost for a key nobody would probe
+again. **CB14** (`8420242`, `docs/feat-cabin.md` §4a and §8.1 amended)
+closes it at the admission seam: the correlated probe now takes the
+`n = 2` threshold whatever the Cabin's declaration says, because a
+declaration is evidence about the value the operator *named* — the
+literal shape — and says nothing about a value a walk produced. Per key:
+the first touch costs one sighting insert and records nothing; a
+repeating key records on its second touch and serves from its third; the
+literal probe's `n = 1` is untouched. This addendum measures CB14 by
+interleaved A/B — BASE **`e9531ce`** (§7c's engine plus the
+`correlated_scans` counter fix) against NEW **`8420242`** — and this run
+is the file's record of it on `worktree-enhence-join-perf`.
+
+**The answers: the EXISTS convergence shifts exactly one execution —
+sight at ~969 µs (the pre-CB13 cost, paid once), charge at ~6.4 ms,
+steady from execution 3 at ~79 µs against BASE's ~77, the same steady
+state one execution later. Sixteen keys touched exactly once grow the
+store by 11 sets and 49 entries on BASE and by nothing on NEW — and NEW's
+first touch is ~9.6% *cheaper*, because declining to record 11 dead sets
+saves ~56 µs per set on the very walk that would have built them. The
+literal path is untouched at the strongest level this run can state:
+after 21,004 identical driver ops, the store's four counters are
+byte-equal across the two engines, and every captured reply — 74-row
+single-shot, EXISTS, all five sweep widths — is byte-identical across all
+eight cells.**
+
+### 7d.1 The A/B run
+
+| | |
+|---|---|
+| executed | **2026-08-19 07:34:35 → 07:40:57 UTC**, 8 ckdbs cells, alternating BASE, NEW ×3, then a replacement pair after one NEW cell was discarded for contamination (below) |
+| branch / worktree | `worktree-enhence-join-perf`, in the worktree `enhence-join-perf` |
+| commit measured | **`8420242`** (CB14), recorded by every cell, `dirty: false` |
+| BASE binary | a **copy**, `sha256 e4d96806…`, built at 07:33:27 from a temporary worktree at **`e9531ce`** (clean, removed after) — §7c's NEW engine plus the counter-only `correlated_scans` fix, so §7c's tables chain to this run's BASE column |
+| NEW binary | a **copy**, `sha256 a20d2cbf…`, from this worktree's `build-release/kds_server`, source mtime 07:26:14 — 28 s *before* `8420242` was committed at 07:26:42; a `cmake --build` at 07:29 recompiled nothing and left the hash unchanged, so the copy is HEAD's sources |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, **`KDS_WITH_TLS=OFF`** both sides |
+| device | ext4 on `/dev/root` (`df -T`); data files under `$HOME/bench-s3-cb14ab/db/`, WAL under `$HOME/bench-s3-cb14ab/wal/<cell>/`, binary copies under `$HOME/bench-s3-cb14ab/bin/` |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, port 15499. One server and one **fresh data file** per cell, started from the run's own copy |
+| driver | `tools/scenario3_library.py --suffix s3 --loans 10000 --index-mode none --cabin --ops 200 --verify 25`, seed 1 — §7b/§7c's configuration exactly |
+| the measured statements | against each cell's loaded server, in order: `SHOW CABINS`, the **single-shot never-repeating probe** (the §7b join over `u.id BETWEEN 41 AND 56` — 16 keys, each touched exactly once — executed **once**), `SHOW CABINS` again; the correlated EXISTS **8 timed executions** plus `ANALYZE`; the §7b k-sweep once at 3 sampled ops per k (a control, not this run's serve measurement — §7c.6 owns that at 50 ops); one reply capture per cell; a final `SHOW CABINS` |
+| contention control | every cell gated on `bench/wait_quiet.sh` (loadavg 0.39–0.67 at starts); `pgrep -c cc1plus` 0 before and after all 8 cells. **`new-2` is discarded**: every phase of its cell ran 2–4× wide (single-shot 12,908 µs against 5,857–5,891 on its siblings, EXISTS steady oscillating 260–1,533 µs, four driver shapes +30–50%) with nothing in the gates to show for it — sar reports no steal, the journal shows Azure's `collect-logs` scope only before its window — yet its counters, store snapshots and replies are byte-identical to the other NEW cells: a machine mode, not a path, replaced by the `base-4`/`new-4` pair. Named modes kept: `base-4` ran whole-cell high (EXISTS charge 7,743 against 6,356–6,535, single-shot 7,537), and `overdue` ran +80 µs across its whole distribution in `new-1`/`new-4` but not `new-3` (§7d.4) |
+| correctness | 8 × 21,004 driver ops, 0 errors, `verify_problems` empty in all 8; every EXISTS reply equal to its cell's first, all 64 executions; the closing `ANALYZE` identical across all clean cells of both binaries (`cabin_hits=20 cabin_entries=97 hint_hits=97`). Cross-binary: the single-shot's 74-row reply and the captured EXISTS + k=1/2/4/8/16 replies are **byte-identical across all eight cells**. The Debug test suite was **not executed in this measurement session** (no engine code changed here; CB14 landed with its own suite run) |
+
+**One size, deliberately, again.** As in §7b.1 and §7c.1 this addendum
+runs at 10,000 loans only; the swept axes are *touches per key* (one, for
+the sixteen single-shot keys; two-then-more, for the EXISTS keys) and
+*executions* (eight). What CB14 changes is which touch records — a count,
+not a row cost: the store-growth evidence below is in keys and entries
+and would read identically at 200 or 1,000 loans, while the observation
+charge's proportionality to relation size is §9b's measured walk table
+(12.1 / 53.6 / 527 µs per outer row at 200 / 1K / 10K), unchanged by
+when the charge lands. The k-sweep control sweeps the outer cardinality
+1→16 as before.
+
+### 7d.2 The convergence series — shifted one execution, to the same steady state
+
+The §7c statement, verbatim, eight executions per cell. BASE (CB13)
+charges on execution 1 and serves from 2; NEW sights on 1, charges on 2,
+serves from 3. Per-execution latency in µs, the seven clean cells:
+
+| exec | base-1 | base-2 | base-3 | base-4 | new-1 | new-3 | new-4 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 6,355.7 | 6,382.3 | 6,534.5 | 7,742.7 | **971.8** | **955.2** | **979.5** |
+| 2 | 101.1 | 103.0 | 101.5 | 121.8 | **6,394.6** | **6,390.2** | **6,359.4** |
+| 3 | 84.3 | 80.1 | 80.5 | 76.7 | 100.1 | 96.7 | 99.9 |
+| 4 | 77.7 | 77.0 | 74.8 | 68.4 | 78.3 | 79.5 | 79.2 |
+| 5 | 76.5 | 75.8 | 72.3 | 68.1 | 75.5 | 75.9 | 76.4 |
+| 6 | 74.9 | 75.9 | 73.2 | 79.3 | 74.1 | 74.5 | 74.4 |
+| 7 | 74.4 | 72.9 | 73.0 | 89.3 | 72.9 | 73.0 | 73.0 |
+| 8 | 73.1 | 72.7 | 71.4 | 93.0 | 73.0 | 74.9 | 73.4 |
+
+A convergence series, not a distribution — no percentiles over ordered
+executions. The steady state (executions 3–8, mean; stmts/s derived as
+1e6/mean, single serial connection, per this file's matrix rule):
+
+| | BASE (c1 / c2 / c3 / c4) | NEW (c1 / c3 / c4) |
+|---|---:|---:|
+| steady mean µs | 76.8 / 75.7 / 74.2 / 79.1 | 79.0 / 79.1 / 79.4 |
+| pooled mean µs | 76.5 | 79.2 |
+| ≈stmts/s (derived) | 13,072 | 12,626 |
+
+The pooled steady delta, +3.5%, sits inside BASE's own 6.6% replicate
+spread — not a finding. The shift is exact and the sum decomposes (each
+execution is ~42 µs of client/socket round trip plus the 32-row outer
+range — §7b.3's intercept — plus the probe work; no commit/fsync wait,
+these are read statements on one connection, and no lock wait exists to
+account for): **NEW's execution 1** costs 969 µs pooled — 6
+driver-inherited keys serve, 14 miss into sighting inserts with the
+short-circuited prefix kept (~1,089 inner rows per missed key, §7c.4's
+account) — which is precisely the cost the pre-CB13 engine paid on
+*every* execution (§7c.3's flat ~979 µs), paid once here. **Execution 2**
+is §7c.4's observation charge, unchanged in size (6,359–6,395 against
+BASE's 6,356–6,535 on the mode-free cells): 14 recording walks run
+through the stop. Execution 3 carries the same ~25 µs first-serve residue
+§7c.3 noted, and from there the two engines are the same machine. CB14
+delays the charge by one execution and one short-circuit pass (~890 µs);
+it never re-prices it.
+
+### 7d.3 The store after sixteen keys touched once — what BASE keeps and NEW declines
+
+The single-shot probe is the §7b join over `u.id BETWEEN 41 AND 56`,
+executed exactly once per cell against the freshly driven store: sixteen
+correlated keys, each touched once — the never-repeating distribution
+distilled. Five of the sixteen were already observed sets (the driver's
+literal phases had named them; hits 87→92 on both engines), so eleven
+keys arrive genuinely unseen. `SHOW CABINS` (`observed/entries/hits/
+misses` — counts, no percentiles), identical across **every** cell of
+its binary including the discarded one (the mode moved time, never
+state):
+
+| snapshot (after) | BASE `e9531ce` | NEW `8420242` |
+|---|---|---|
+| the driver's 21,004 ops | 539 / 2,709 / 87 / 539 | **539 / 2,709 / 87 / 539** — byte-equal |
+| + single-shot, 16 keys × 1 touch | **550 / 2,758** / 92 / 550 | **539 / 2,709** / 92 / 550 |
+| + EXISTS ×8 (keys 1–20) | 564 / 2,823 / 258 / 564 | 553 / 2,774 / 244 / 578 |
+| + k-sweep and captures (final) | 564 / 2,823 / 390 / 564 | 553 / 2,774 / 376 / 578 |
+
+**BASE records 11 sets and 49 entries for keys it will never be asked
+again; NEW records nothing** — its 11 misses are the sighting inserts,
+its store numerically unmoved. Each of BASE's 11 sets is a standing
+obligation: every future write of a `loans` row carrying one of those
+`user_id`s pays the write hook to maintain a set nobody reads (§8's
+economics), and the 49 entries count against the same `cabin_max_values`
+/ entry budgets §7b.8 warned one SELECT could flood. That flood is now
+bounded to intra-statement repeats — this statement, sixteen keys, bought
+zero. The EXISTS rows show the repeating side pays as before: both
+engines record the same 14 sets and 65 entries for keys 1–20, NEW one
+execution later and 14 sighting-misses richer, converging on stores that
+differ by exactly the once-touched keys.
+
+The single-shot's own latency makes the finer point — one execution per
+cell by design (a first touch happens once per data file), so these are
+single timings, not distributions:
+
+| cell | BASE µs | cell | NEW µs |
+|---|---:|---|---:|
+| base-1 | 6,496.3 | new-1 | 5,856.8 |
+| base-2 | 6,528.1 | new-3 | 5,864.0 |
+| base-3 | 6,449.4 | new-4 | 5,891.3 |
+| base-4 | 7,536.6 † | | |
+
+† base-4's whole-cell high mode (its EXISTS charge reads +18% the same
+way). Against the three mode-free BASE cells (spread 1.2%; NEW's 0.6%):
+**NEW is 9.6% faster on the first touch itself** — 6,491 µs against
+5,871 — because the walk no longer builds what it records: ~56 µs per
+declined set (620 µs / 11 keys) of entry inserts and set commits. CB14
+is not a trade of first-touch cost against later convergence: the
+never-repeating statement is cheaper *and* the store stays clean; the
+only price is borne by genuinely repeating keys, whose charge arrives
+one execution later (§7d.2). The 74-row reply is byte-identical across
+all eight cells — sighting against recording never changes an answer.
+
+### 7d.4 Every shape inside floors — and the literal path untouched twice over
+
+The overhead question: does the per-key threshold test (one branch and a
+`key_from` check per probe) or the sighting traffic cost the rest of the
+workload anything? Ten driver shapes, 200 timed ops each, p50 per cell
+with replicate floors, delta of means, and throughput derived as 1e6/p50
+(single serial connection, per the matrix rule):
+
+| shape | BASE p50 µs (c1/c2/c3/c4) | NEW p50 µs (c1/c3/c4) | Δ means | BASE floor | NEW floor | BASE q/s | NEW q/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pk-user | 36.8/38.4/38.6/38.1 | 38.2/38.6/37.6 | +0.4% | 4.9% | 2.7% | 26,333 | 26,224 |
+| loans-by-user | 603.3/599.5/633.3/598.3 | 594.4/599.0/594.9 | −2.1% | 5.8% | 0.8% | 1,643 | 1,678 |
+| loans-by-book | 561.7/561.1/593.7/558.9 | 556.8/561.7/557.1 | −1.8% | 6.2% | 0.9% | 1,758 | 1,790 |
+| resv-by-user | 296.8/295.8/298.7/297.0 | 286.6/295.3/292.4 | −1.9% | 1.0% | 3.0% | 3,366 | 3,431 |
+| books-by-author | 155.7/154.7/155.7/154.6 | 155.0/155.6/154.1 | −0.2% | 0.7% | 1.0% | 6,444 | 6,456 |
+| books-by-genre | 176.0/174.4/176.0/176.2 | 177.0/175.4/177.1 | +0.5% | 1.0% | 1.0% | 5,693 | 5,666 |
+| loans-by-daterange | 710.4/720.2/740.0/712.3 | 709.3/705.4/714.0 | −1.5% | 4.2% | 1.2% | 1,387 | 1,409 |
+| overdue | 768.1/770.7/796.8/768.7 | 854.3/768.1/852.7 | +6.3% | 3.7% | 11.2% | 1,289 | 1,212 |
+| join-loan-user | 607.9/596.4/631.6/600.0 | 598.7/605.5/601.5 | −1.2% | 5.9% | 1.1% | 1,642 | 1,661 |
+| count-by-user | 592.2/594.1/594.7/594.6 | 588.7/605.3/590.0 | +0.1% | 0.4% | 2.8% | 1,684 | 1,682 |
+
+**No shape resolves outside its floors; nine of ten sit within ±2.1%.**
+`overdue` is the one to look hard at, and it survives the look: its +6.3%
+sits inside an 11.2% NEW floor that is wide for a stated reason — in
+`new-1` and `new-4` the *entire* distribution shifted +80 µs (p0 774–779
+against 684–706 everywhere else) while `new-3` sits exactly on the BASE
+distribution (p0 688, p50 768, from the same binary), so the shift is a
+per-process machine mode, not a path: one binary cannot alternate code
+paths between identical cells. Mechanism agrees — `overdue` walks `loans`
+with no equality on the cabined column, so no CabinProbe and no CB14
+branch runs in it.
+
+The stronger form of "the literal probe is untouched" is in §7d.3's first
+table row: after 21,004 driver ops — 626 literal cabin probes among them,
+539 distinct keys recorded at `n = 1`, 87 repeat hits — **both engines'
+stores read 539 / 2,709 / 87 / 539 exactly**. Had any driver probe taken
+the correlated path, NEW's observed count would differ. The declaration
+still speaks for every value an operator names; CB14 changed only whom it
+speaks for.
+
+The k-sweep control (3 ops per k — a byte-identity and store-state
+control this run; §7c.6's 50-op measurement owns the serve numbers, and
+every key here is already observed by the EXISTS on both engines).
+Pooled across clean cells, 12 BASE / 9 NEW samples per k:
+
+| k | BASE p0/p25/p50/p95/p99 (n=12) | NEW p0/p25/p50/p95/p99 (n=9) |
+|---:|---|---|
+| 1 | 44.8 / 47.2 / 51.0 / 53.8 / 60.6 | 45.2 / 45.8 / 49.7 / 58.8 / 58.8 |
+| 2 | 44.1 / 45.6 / 46.8 / 54.7 / 70.4 | 45.2 / 46.0 / 46.4 / 48.8 / 48.8 |
+| 4 | 48.2 / 49.0 / 50.0 / 58.7 / 62.4 | 48.8 / 49.2 / 51.7 / 57.8 / 57.8 |
+| 8 | 53.8 / 54.8 / 55.6 / 57.8 / 59.2 | 55.2 / 55.3 / 56.8 / 66.5 / 66.5 |
+| 16 | 66.0 / 68.7 / 68.9 / 74.5 / 78.0 | 68.6 / 69.1 / 71.1 / 80.7 / 80.7 |
+
+k=16 p50 +3.2% pooled (68.9 → 71.1), inside per-cell floors of 4.8% on
+both sides; firsts
+79–93 µs on BASE against 84–86 on NEW — warm on both engines, §7c.6's
+inheritance unchanged. The serve path does not run CB14's branch to a
+different verdict and does not read differently.
+
+### 7d.5 Versus PostgreSQL — unchanged, and still no twin
+
+§7b.7 and §7c.7 stand whole: no PostgreSQL structure answers a
+value-observed authoritative store, so the Cabin column has no twin and
+none was invented; PostgreSQL's answer to these shapes is an index,
+measured against ckdbs-with-index in §9b. The named task is unchanged:
+`tools/pg_scenario3_library.py` at the no-index configuration on the
+correlated shapes — its seq-scan-per-outer-row against the walk column —
+is the cell that would complete the picture, and the twin driver
+supports the mode.
+
+### 7d.6 What §7d changes, and what it does not
+
+**Changed: the never-repeating correlated key is closed on the Cabin's
+side, and admission became evidence-scoped.** §7b.8's uncovered case and
+§7c.8's restatement of it are superseded as descriptions of HEAD: on
+`8420242` a cabined join column probed with keys that never repeat costs
+one hash insert per key — no dead set, no standing write hook, no
+`cabin_max_values` flood from a single SELECT (bounded now to
+intra-statement repeats) — and the first touch is measurably cheaper
+than the recording it declines. What remains uncovered is named
+precisely: **the *uncabined, unindexed* never-repeating join key has no
+accelerator by nature** — every observational structure earns its keep
+on the second touch, and a key with no second touch leaves nothing to
+serve, so the answer there is an index (§9b) or nothing. That is a
+statement about the shape, not a gap in the engine.
+
+**Not changed:** the steady states — §7c's 13.1× EXISTS headline and
+§7b's serve numbers describe NEW from execution 3 exactly as they
+described BASE from execution 2, one execution later and never cheaper
+or dearer; the observation charge's size (§7c.4's account, re-measured
+within replicate spread here); the literal probe's `n = 1` and every
+driver shape (this run's floors); `CABIN AUTO`'s §11 threshold question
+— narrowed, since wrong admission no longer buys dead sets, so what
+remains of it is hit-rate and eviction policy, not flood control; the
+sighting window's crude reset (`kMaxSightings` — §4a's qualifier: a key
+whose repeats are separated by more distinct keys than the window holds
+can oscillate below threshold; untested here, this run's ~570 distinct
+keys sit far under the 4,096-entry window, and it stays §8's open
+budget); §7c's sticky entry-cap mark; and the rest of this file, which
+describes its own stamped commits.
 
 `overdue` filters two columns (`due_day BETWEEN ? AND ?` and `status = ?`),
 which no single-column index satisfies — §4 shows it staying a `FilterScan`
