@@ -26,12 +26,13 @@
 // PostgreSQL's READ COMMITTED, which re-reads; it is a deliberate
 // simplification, and the whole reason there is nothing to wait on.
 //
-// **Reader registration, but no purge of undo.** RegisterReader/ReadHorizon
+// **No SnapshotTooOld.** RegisterReader/ReadHorizon
 // (docs/workplan-reader-registration.md) record which snapshots exist so a
-// purge can prove no live view still needs a version. What is *built on*
-// that today is only the catalog delete-mark purge; undo retention stays a
-// non-goal until docs/txn.md section 9's retention policy is decided, so
-// SnapshotTooOld remains structurally unreachable.
+// purge can prove no live view still needs a version, and two purges are
+// built on that: the catalog delete-mark purge, and the undo purge this
+// class arms on the log at construction (docs/workplan-undo-purge.md).
+// Both are horizon-only - they free nothing a live view can reach - so the
+// error stays structurally unreachable by decision, not by omission.
 //
 // **No cross-core protocol.** One manager, one core, one WAL stream; a
 // transaction spanning cores is not representable and `wal.md` section 3

@@ -160,9 +160,7 @@ TEST_F(UndoLogTest, AppendsShareAPageUntilItFills) {
     EXPECT_EQ(pages[0], pages[3]);
     EXPECT_NE(pages[0], pages[4]) << "the fifth record must land on a fresh page";
 
-    auto count = log_->PageCount();
-    ASSERT_TRUE(count.ok());
-    EXPECT_EQ(count.value(), 2u);
+    EXPECT_EQ(log_->LivePages(), 2u);
 
     // The page chain runs newest -> oldest through prev_page_id, and it is
     // a *reclamation* chain: nothing reads a version through it.
@@ -184,7 +182,7 @@ TEST_F(UndoLogTest, TransactionsShareTheCurrentPage) {
     ASSERT_TRUE(c.ok());
     EXPECT_EQ(UndoPtrPageId(a.value()), UndoPtrPageId(b.value()));
     EXPECT_EQ(UndoPtrPageId(a.value()), UndoPtrPageId(c.value()));
-    EXPECT_EQ(log_->PageCount().value(), 1u);
+    EXPECT_EQ(log_->LivePages(), 1u);
 
     // Sharing a page changes nothing about reading one: each record is
     // reached by its own undo_ptr, and no reader consults the page's header.
@@ -206,7 +204,7 @@ TEST_F(UndoLogTest, ManyShortTransactionsDoNotCostAPageEach) {
         ASSERT_TRUE(log_->Append(trx_id, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("image"))
                         .ok());
     }
-    EXPECT_EQ(log_->PageCount().value(), 1u)
+    EXPECT_EQ(log_->LivePages(), 1u)
         << kFits << " short records must share one " << kUndoPageCapacity << "-byte page";
 }
 
@@ -270,7 +268,7 @@ TEST_F(UndoLogTest, AnOversizeImageIsRefusedWithoutLeakingAPage) {
     const std::vector<std::byte> huge(kMaxUndoImageLen + 1, std::byte{0x01});
     auto refused = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), huge);
     EXPECT_EQ(refused.status().code(), StatusCode::kInvalidArgument);
-    EXPECT_EQ(log_->PageCount().value(), 0u);
+    EXPECT_EQ(log_->LivePages(), 0u);
 }
 
 // ---- The WAL mapping (txn.md section 3.5) --------------------------------
@@ -419,10 +417,6 @@ TEST_F(UndoLogTest, AnUnloggedLogStillAppendsAndReads) {
     EXPECT_EQ(StringOf(version.value().image), "before");
 }
 
-// A finished transaction releases nothing, and there is no longer an API
-// that could pretend otherwise: its records stay readable through any
-// tuple's undo_ptr, and the page it wrote to goes on serving the next
-// transaction (txn.md section 6).
 // ---- The purge (docs/workplan-undo-purge.md, D1-D3) -----------------------
 
 // Growth is the trigger and the recycle list feeds the allocation: once
@@ -448,7 +442,7 @@ TEST_F(UndoLogTest, GrowthRecyclesASettledPageInsteadOfAllocatingANewOne) {
     ASSERT_TRUE(first_on_b.ok());
     const PageId page_b = UndoPtrPageId(first_on_b.value());
     ASSERT_NE(page_a, page_b);
-    EXPECT_EQ(log_->PageCount().value(), 2u);
+    EXPECT_EQ(log_->LivePages(), 2u);
     EXPECT_EQ(log_->PagesRecycled(), 0u);
 
     // The horizon passes page A's newest writer (50 < 60) but not page
@@ -462,7 +456,7 @@ TEST_F(UndoLogTest, GrowthRecyclesASettledPageInsteadOfAllocatingANewOne) {
     EXPECT_EQ(UndoPtrPageId(reused.value()), page_a)
         << "growth allocated a fresh page while a settled one sat on the recycle list";
     EXPECT_EQ(log_->PagesRecycled(), 1u);
-    EXPECT_EQ(log_->PageCount().value(), 2u) << "the chain must plateau, not grow";
+    EXPECT_EQ(log_->LivePages(), 2u) << "the chain must plateau, not grow";
 
     // And the reused page serves reads of its new records.
     EXPECT_EQ(log_->Read(reused.value()).value().image.size(), image.size());
@@ -480,7 +474,7 @@ TEST_F(UndoLogTest, TheTailIsNeverRecycledEvenWhenSettled) {
     // Everything is below the horizon, but the only page is the tail - so
     // this growth allocates rather than reuses.
     ASSERT_TRUE(log_->Append(10, Overwrite(9, kNoUndoPtr, 300, 2), image).ok());
-    EXPECT_EQ(log_->PageCount().value(), 2u);
+    EXPECT_EQ(log_->LivePages(), 2u);
     EXPECT_EQ(log_->PagesRecycled(), 0u);
 }
 
@@ -494,17 +488,25 @@ TEST_F(UndoLogTest, AnUnsettledPageHoldsUntilTheHorizonPassesIt) {
     for (int i = 0; i < 9; ++i) {  // three pages: 4 + 4 + 1
         ASSERT_TRUE(log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), image).ok());
     }
-    EXPECT_EQ(log_->PageCount().value(), 3u);
+    EXPECT_EQ(log_->LivePages(), 3u);
     EXPECT_EQ(log_->PagesRecycled(), 0u) << "an unsettled page was recycled";
 
     horizon = 100;
     for (int i = 0; i < 4; ++i) {  // fill the tail; the next growth reclaims
         ASSERT_TRUE(log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), image).ok());
     }
-    EXPECT_GE(log_->PagesRecycled(), 1u);
-    EXPECT_LE(log_->PageCount().value(), 3u);
+    // Exact, not bounded (review S4): the growth reclaims both settled
+    // pages onto the recycle list and reuses exactly one of them, so a
+    // purge that took too much and one that took too little both fail.
+    EXPECT_EQ(log_->PagesRecycled(), 1u);
+    EXPECT_EQ(log_->LivePages(), 2u);
 }
 
+// A finished transaction releases nothing *itself*, and there is no longer
+// an API that could pretend otherwise: its records stay readable through
+// any tuple's undo_ptr, and the page it wrote to goes on serving the next
+// transaction (txn.md section 6). What frees that page later is the
+// horizon passing it, above - never the transaction ending.
 TEST_F(UndoLogTest, AFinishedTransactionsRecordsStayReadableAndItsPageStaysInUse) {
     auto old = log_->Append(50, Overwrite(41, kNoUndoPtr, 300, 2), BytesOf("before"));
     ASSERT_TRUE(old.ok());

@@ -125,10 +125,14 @@ their writer. The bound lives **in memory** beside this run's chain, not
 in the header — it is a 48-bit writer id and `reserved1` is 32 bits — so
 `reserved1` stays reserved.
 
-`prev_page_id` therefore chains the log's pages in creation order, for the same
-future purge pass, and no longer answers "which pages are this transaction's" —
-which sharing makes unanswerable. The on-disk layout is unchanged: same
-offsets, same widths, two fields with new meanings, so no format version moves.
+`prev_page_id` therefore chains the log's pages in creation order and no longer
+answers "which pages are this transaction's" — which sharing makes
+unanswerable. The on-disk layout is unchanged: same offsets, same widths, two
+fields with new meanings, so no format version moves. **The purge does not read
+it**: a reclaimed page is re-linked without the link that pointed at it being
+rewritten, so a device walk can revisit a reused page — the on-disk chain is
+historical once reuse starts, and `UndoLog::PageCount()` counts the in-memory
+chain instead.
 
 ### 3.3 Undo record
 

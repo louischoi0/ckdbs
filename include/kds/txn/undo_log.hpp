@@ -34,9 +34,9 @@
 // redo names each record's offset explicitly, so interleaved writers replay
 // in LSN order onto the same page correctly. The only thing exclusivity
 // would have bought is a purge that could free a transaction's pages
-// without a side table - and purge does not exist, cannot exist without
-// reader registration (§9), and would in any case need a per-page horizon
-// rather than an owner, because a page's records outlive their writer.
+// without a side table - and the purge that now exists (below) confirms
+// the analysis: it frees by a per-page bound rather than by an owner,
+// because a page's records outlive their writer.
 //
 // So there are **three** chains here and no two of them are the same chain:
 //
@@ -94,8 +94,8 @@
 // growth: TailFor reclaims settled pages from the old end before it
 // allocates, and allocation prefers the recycle list to CreateNew(). A
 // freed page's stale `undo_ptr`s are harmless by the fact above; its
-// stale `prev_page_id` links are why PageCount() now counts the
-// in-memory chain (see its comment).
+// stale `prev_page_id` links are why LivePages() counts the in-memory
+// chain and no device walk remains.
 //
 // **Disarmed by default**: with no horizon source installed the log
 // behaves exactly as before - nothing is freed. TransactionManager
@@ -183,15 +183,11 @@ public:
     // rollback and for tests that assert a whole chain.
     Status Walk(std::uint64_t ptr, const std::function<bool(const UndoVersion&)>& fn);
 
-    // How many pages this run's chain holds right now - the in-memory
-    // count, which purge made the only truthful one: a recycled page's old
-    // `prev_page_id` links persist on disk, so a device walk from the tail
-    // could revisit a reused page and read a chain that is partly
-    // historical. For tests and inspection.
-    //
-    // It replaced `PageCountFor(trx_id)`, which sharing makes unanswerable:
-    // a page holds records from many transactions and none of them owns it.
-    StatusOr<std::uint32_t> PageCount();
+    // There is no PageCount() either: it walked the on-disk prev chain,
+    // which reuse made partly historical, and its honest replacement is
+    // LivePages() below. (Its own predecessor, `PageCountFor(trx_id)`,
+    // fell to sharing - a page holds records from many transactions and
+    // none of them owns it.)
 
     // There is no Forget(). It existed to drop a finished transaction's tail
     // from a per-transaction table, and there is no such table now - one
@@ -223,7 +219,13 @@ public:
 
 private:
     StatusOr<PageId> TailFor(std::uint64_t trx_id, std::size_t need);
-    Status LogPageInit(std::uint64_t trx_id, PageId page_id);
+    // Appends the PAGE_INIT for a new or reclaimed page and returns its
+    // LSN - `wal::kNoLsn` on the unlogged path. **Stamping is separate**
+    // because FormatUndoPage memsets the frame, `page_lsn` included, so
+    // the stamp must follow the format while on a reclaimed page the
+    // format must follow the append (TailFor says why).
+    StatusOr<wal::Lsn> LogPageInit(std::uint64_t trx_id, PageId page_id);
+    Status StampInit(PageId page_id, wal::Lsn lsn);
     Status LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t offset,
                         const UndoRecordFields& fields, std::span<const std::byte> image);
     // Moves every settled page - maximum writer below the horizon - from

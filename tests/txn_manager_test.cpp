@@ -513,7 +513,7 @@ TEST_F(TxnManagerTest, UndoPagesRecycleOnceTheirWritersClearTheHorizon) {
         ASSERT_TRUE(mgr_->AppendUndo(*b, fields, /*pk=*/1, image).ok());
     }
     EXPECT_GE(undo_->PagesRecycled(), 1u);
-    EXPECT_LE(undo_->PageCount().value(), 3u) << "undo grew where it should have recycled";
+    EXPECT_LE(undo_->LivePages(), 3u) << "undo grew where it should have recycled";
     ASSERT_TRUE(mgr_->Commit(*b, wal::DurabilityClass::kRelaxed).ok());
     mgr_->Release(*b);
 }

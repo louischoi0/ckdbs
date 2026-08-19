@@ -210,7 +210,8 @@ StatusOr<wal::Lsn> TransactionManager::Commit(Transaction& txn,
     //
     // Nothing is said to the undo log. Its pages are shared by every
     // transaction (undo_log.hpp), so a transaction ending releases nothing
-    // and reserves nothing to release.
+    // and reserves nothing to release - what it does do is stop bounding
+    // the horizon, which is what lets a later growth recycle its pages.
     txn.trail_.clear();
     txn.active_ = false;
     return lsn;

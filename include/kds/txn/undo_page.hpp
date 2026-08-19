@@ -197,9 +197,10 @@ inline constexpr std::size_t kUndoRecPkOffset = 36;
 // **Grew 28 -> 44 at RV10**, and the cost is stated rather than absorbed:
 // 16 bytes per undo record, so a kOverwrite carrying a 64-byte image goes
 // from 92 to 108 bytes and a page holds ~17 % fewer of them. That is the
-// price of a chain that can be walked without the log, and it is paid on
-// undo pages, which nothing purges - so it compounds with the reclamation
-// gap rather than standing apart from it (docs/known-gaps.md).
+// price of a chain that can be walked without the log. It used to compound
+// with the reclamation gap, undo pages being unpurgeable; since
+// `docs/workplan-undo-purge.md` it costs a higher steady-state page count
+// instead, ~17 % more growths per unit of undo written.
 //
 // The two new fields are appended rather than fitted into `reserved`, which
 // is 2 bytes and holds neither. Appending also keeps every existing offset

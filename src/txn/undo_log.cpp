@@ -18,8 +18,8 @@ std::size_t UndoWriteSize(std::size_t image_len) {
 
 }  // namespace
 
-Status UndoLog::LogPageInit(std::uint64_t trx_id, PageId page_id) {
-    if (wal_ == nullptr) return Status::OK();
+StatusOr<wal::Lsn> UndoLog::LogPageInit(std::uint64_t trx_id, PageId page_id) {
+    if (wal_ == nullptr) return wal::kNoLsn;
 
     std::array<std::byte, wal::kPageInitPayloadSize> buf{};
     // min_key 0: an undo page has no key space. PageInitPayload already
@@ -36,7 +36,12 @@ Status UndoLog::LogPageInit(std::uint64_t trx_id, PageId page_id) {
 
     auto rec = wal_->Append(wal::RecordSpec{wal::RecordType::kPageInit, trx_id, page_id}, buf);
     if (!rec.ok()) return rec.status();
-    return store_.StampPageLsn(page_id, rec.value());
+    return rec.value();
+}
+
+Status UndoLog::StampInit(PageId page_id, wal::Lsn lsn) {
+    if (lsn == wal::kNoLsn) return Status::OK();  // the unlogged path
+    return store_.StampPageLsn(page_id, lsn);
 }
 
 Status UndoLog::LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t offset,
@@ -78,8 +83,8 @@ Status UndoLog::LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t
 void UndoLog::ReclaimSettledPages() {
     if (!horizon_) return;
     const std::uint64_t horizon = horizon_();
-    // `> 1`: the tail is never taken, whatever its bound - its free space
-    // is what the caller is about to write into.
+    // `settled + 1 < size`: the tail is never taken, whatever its bound -
+    // its free space is what the caller is about to write into.
     std::size_t settled = 0;
     while (settled + 1 < pages_.size() && pages_[settled].max_trx_id < horizon) {
         recycle_.push_back(pages_[settled].page_id);
@@ -110,13 +115,26 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
         const PageId page_id = recycle_.back();
         auto bytes = store_.Get(page_id);
         if (!bytes.ok()) return bytes.status();
-        // The same format-then-log order as the fresh path below, and the
-        // same PAGE_INIT record type: redo replays the page's old records,
-        // then this init wipes them, then the new ones land - the end
-        // state is right in every crash position, and the old records were
-        // unreachable before the wipe by the header's reachability fact.
+        // The same PAGE_INIT record type as the fresh path below: redo
+        // replays the page's old records, then this init wipes them, then
+        // the new ones land - the end state is right in every crash
+        // position, and the old records were unreachable before the wipe
+        // by the header's reachability fact.
+        //
+        // **Logged before the wipe**, which is the one place this arm must
+        // differ from the fresh one. FormatUndoPage memsets the frame,
+        // `page_lsn` included, and on a reclaimed page those bytes are the
+        // only copy of records a crash loser's `txn_prev_undo_ptr` chain
+        // may still name (its writer committed relaxed, so the horizon
+        // passed it while its TXN_COMMIT sat undurable). Formatting first
+        // would leave a failed append holding a wiped, dirty frame whose
+        // `page_lsn` of 0 the WAL gate waves through - the wipe reaching
+        // the device with no record describing it. Redo is unaffected: the
+        // LSN order is the same either way.
+        auto init = LogPageInit(trx_id, page_id);
+        if (!init.ok()) return init.status();
         if (Status s = FormatUndoPage(bytes.value().bytes(), trx_id, tail_); !s.ok()) return s;
-        if (Status s = LogPageInit(trx_id, page_id); !s.ok()) return s;
+        if (Status s = StampInit(page_id, init.value()); !s.ok()) return s;
         recycle_.pop_back();  // popped only on success, like tail_ below
         ++pages_recycled_;
         pages_.push_back(TrackedPage{page_id, 0});
@@ -128,8 +146,14 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
     if (!created.ok()) return created.status();
     const PageId page_id = created.value().first;
 
+    // Format first here, unlike the reclaim arm above: a page CreateNew()
+    // just handed out holds nothing a failed append could lose, and
+    // leaving it unformatted would put an allocated page with no page_type
+    // on the device.
     if (Status s = FormatUndoPage(created.value().second.bytes(), trx_id, tail_); !s.ok()) return s;
-    if (Status s = LogPageInit(trx_id, page_id); !s.ok()) return s;
+    auto init = LogPageInit(trx_id, page_id);
+    if (!init.ok()) return init.status();
+    if (Status s = StampInit(page_id, init.value()); !s.ok()) return s;
 
     // Published only once the page is formatted and its PAGE_INIT is
     // logged: a failure above leaves the log pointing at the page that was
@@ -208,14 +232,6 @@ Status UndoLog::Walk(std::uint64_t ptr, const std::function<bool(const UndoVersi
         ptr = version.value().prior_undo_ptr;
     }
     return Status::OK();
-}
-
-StatusOr<std::uint32_t> UndoLog::PageCount() {
-    // The in-memory chain, not a device walk: purge leaves a recycled
-    // page's old `prev_page_id` links standing, so a walk from the tail
-    // could revisit a reused page - the header's comment on the field
-    // says the on-disk chain is historical once reuse starts.
-    return LivePages();
 }
 
 }  // namespace kds::txn
