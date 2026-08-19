@@ -703,6 +703,43 @@ std::optional<IndexProbe> IndexProbeOf(const catalog::TableAccess& access, const
     return best;
 }
 
+// The correlated-equality shape both structure arms select on: a kEq
+// column-column conjunct with one side owned by this step and the other
+// available before it runs - an earlier slot, or an enclosing chain's row
+// (`up > 0`), which is bound before this chain opens. Both orientations
+// are examined, as the pk-probe arm does and for its reason; a
+// same-relation equality excludes itself through the availability test.
+// One home for the rule, so the index and cabin arms cannot drift.
+struct CorrelatedEquality {
+    ColumnRef own;
+    ColumnRef other;
+};
+std::optional<CorrelatedEquality> CorrelatedEqualityOf(const StepPredicate& pred,
+                                                       std::uint16_t slot) {
+    if (pred.op != parser::CompareOp::kEq) return std::nullopt;
+    if (pred.rhs.kind != OperandKind::kColumn) return std::nullopt;
+    CorrelatedEquality out;
+    if (IsOwnColumn(pred.lhs, slot)) {
+        out.own = pred.lhs;
+        out.other = pred.rhs.column;
+    } else if (IsOwnColumn(pred.rhs.column, slot)) {
+        out.own = pred.rhs.column;
+        out.other = pred.lhs;
+    } else {
+        return std::nullopt;
+    }
+    if (out.other.up == 0 && AvailableAt(out.other) >= slot) return std::nullopt;
+    return out;
+}
+
+// The descriptor guard every deferred-value form shares (equality
+// propagation states the argument): the value crossing was produced under
+// one column's descriptor, and only an identical (type_val, len) makes it
+// byte-valid under the other's.
+bool SameDescriptor(const catalog::SysColumnRow& a, const catalog::SysColumnRow& b) {
+    return a.type_val == b.type_val && a.len == b.len;
+}
+
 // The correlated index probe (docs/feat-index.md §8a), or nullopt: an index
 // whose **leading** key column is bound by equality to a column of an
 // *earlier* step or an enclosing chain - a join key - so the descent is
@@ -746,32 +783,15 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
         if (!width.ok() || width.value() > ix.key_width) continue;
 
         for (const StepPredicate& pred : step.residual) {
-            if (pred.op != parser::CompareOp::kEq) continue;
-            if (pred.rhs.kind != OperandKind::kColumn) continue;
-
-            // Equality is symmetric and an ON clause is written either way
-            // round - both orientations are examined, as the pk-probe arm
-            // does and for its reason.
-            ColumnRef other;
-            if (IsOwnColumn(pred.lhs, slot) && pred.lhs.col_pos == k0) {
-                other = pred.rhs.column;
-            } else if (IsOwnColumn(pred.rhs.column, slot) && pred.rhs.column.col_pos == k0) {
-                other = pred.lhs;
-            } else {
-                continue;
-            }
-            if (other.up == 0 && AvailableAt(other) >= slot) continue;
-
-            const catalog::SysColumnRow& other_col = ColumnAt(scope, other);
-            if (own_col.type_val != other_col.type_val || own_col.len != other_col.len) {
-                continue;
-            }
+            auto eq = CorrelatedEqualityOf(pred, slot);
+            if (!eq.has_value() || eq->own.col_pos != k0) continue;
+            if (!SameDescriptor(own_col, ColumnAt(scope, eq->other))) continue;
 
             // The templates stay as pure padding - the leading width is
             // encoded per outer row by the executor, from `key_from`.
             IndexProbe probe = ProbeOverIndex(ix);
             probe.eq_prefix = 1;
-            probe.key_from = other;
+            probe.key_from = eq->other;
             return probe;
         }
     }
@@ -819,6 +839,46 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
         probe.cabin_id = cabin.id;
         probe.col_pos = pred.lhs.col_pos;
         probe.value = pred.rhs.literal;
+        probe.declared = cabin.origin == catalog::kCabinOriginUser;
+        probe.managed = cabin.origin == catalog::kCabinOriginAuto;
+        return probe;
+    }
+    return std::nullopt;
+}
+
+// The correlated cabin probe (docs/feat-cabin.md §4a), or nullopt: a
+// cabined column bound by equality to an earlier step's or an enclosing
+// chain's column - the join shape, IX17's selection one trust class over.
+// Reached only after the literal form declined; first qualifying conjunct
+// in residual order; both ON orientations, the pk excluded on either side
+// (the pk arm already served it better). The identical-descriptor guard is
+// what makes the frame value the form the set was keyed on: the write hook
+// observes values coerced to the cabin column's type, so only a column of
+// the same (type_val, len) produces byte-identical keys.
+//
+// This is the one structure a **heap** relation's join column can carry at
+// all - IX3 refuses it an index - which is the shape this arm exists for.
+std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
+                                                 const catalog::TableAccess& access,
+                                                 const Step& step, std::uint16_t slot) {
+    if (access.cabin_mask == 0) return std::nullopt;
+    for (const StepPredicate& pred : step.residual) {
+        auto eq = CorrelatedEqualityOf(pred, slot);
+        // The pk exclusion is this arm's own: an index's leading column can
+        // never be the pk (CREATE INDEX refuses it), but a join written on
+        // the pk reaches here and is already served better by the pk arm.
+        if (!eq.has_value() || IsPrimaryKey(eq->own)) continue;
+
+        const catalog::TableAccess::CabinRef cabin = access.CabinOn(eq->own.col_pos);
+        if (cabin.id == 0) continue;
+        if (!SameDescriptor(access.schema.columns[eq->own.col_pos], ColumnAt(scope, eq->other))) {
+            continue;
+        }
+
+        CabinProbe probe;
+        probe.cabin_id = cabin.id;
+        probe.col_pos = eq->own.col_pos;
+        probe.key_from = eq->other;
         probe.declared = cabin.origin == catalog::kCabinOriginUser;
         probe.managed = cabin.origin == catalog::kCabinOriginAuto;
         return probe;
@@ -1550,6 +1610,18 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 // names, and the Cabin is the reason it need not be one.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(probe);
+            } else if (auto cp = CorrelatedCabinProbeOf(scope, *scope.relations[i].access, step,
+                                                         static_cast<std::uint16_t>(i));
+                       cp.has_value()) {
+                // The correlated form, last of the structure arms: after
+                // both index forms (an index is complete for every key
+                // value where a Cabin is authoritative only for observed
+                // ones) and after the literal cabin (a compile-time key
+                // needs no per-row read). What it replaces is the walked
+                // inner side of a join on a cabined column - the one shape
+                // a heap relation can accelerate at all.
+                step.kind = AccessKind::kCabinProbe;
+                step.cabin = std::move(cp);
             } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
                                                    static_cast<std::uint16_t>(i))) {
                 step.kind = AccessKind::kFilterScan;
@@ -1635,11 +1707,15 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // The premise is that step 0 emits in pk order. A walk or range does
     // (page-wise `min_key`, which a division preserves); an index step does
     // because IX8a sorts its pks back into that order deliberately; a
-    // lookup or probe emits one row. A Cabin probe does **not** - its
-    // entry set is insertion-ordered, not key-ordered - so it is excluded
-    // by name. That exclusion is a fix, not a precaution: the discarding
-    // version of this clause answered `ORDER BY <pk>` over a Cabin-probed
-    // relation with whatever order the entry set happened to hold.
+    // lookup or probe emits one row. A Cabin probe stays excluded by name:
+    // since 2026-08-19 a served set *is* sorted to the walk's order, but
+    // that order is pk only on an ASSIGNED relation - on EXPLICIT it is
+    // page-and-slot (heap-and-tuple.md §4.1) - so the elision's premise
+    // holds for one key mode and not the other, and an exclusion that
+    // depended on the mode would be a second copy of that rule. The
+    // exclusion is a fix, not a precaution: the discarding version of this
+    // clause answered `ORDER BY <pk>` over a Cabin-probed relation with
+    // whatever order the entry set happened to hold.
     const bool one_ascending_pk =
         chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
         chain.sort_keys[0].ref.rel_slot == 0 && IsPrimaryKey(chain.sort_keys[0].ref);

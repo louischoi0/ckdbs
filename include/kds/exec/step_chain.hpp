@@ -203,10 +203,18 @@ struct CabinProbe {
     // for re-deriving the probe value from a decoded row on the write path.
     std::uint16_t col_pos = 0;
 
-    // The value being probed for. A literal today: the compiler only assigns
-    // this kind for an equality against one. A column operand would mean a
-    // per-outer-row probe, which is a shape v1 does not emit.
+    // The value being probed for, when the equality binds a literal.
+    // Unused when `key_from` below is set.
     parser::AstValue value;
+
+    // The correlated form (docs/feat-cabin.md §4a): the probed value is an
+    // *earlier step's* or an enclosing chain's column - a join key - read
+    // from the frame per outer row. The outer row is fixed for the whole
+    // of this step's execution, so the value is stable exactly as long as
+    // a probe or a recording needs it. This is the shape v1 deliberately
+    // did not emit, and the one structure a heap relation's join column
+    // can carry at all - IX3 refuses it an index.
+    std::optional<ColumnRef> key_from;
 
     // Whether an operator declared this Cabin - `CREATE CABIN`, or a
     // `CABIN` clause on the column at CREATE TABLE - as opposed to the

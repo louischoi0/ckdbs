@@ -530,6 +530,24 @@ TEST_F(IndexCompileTest, ALiteralEqualityStillBeatsTheCorrelatedForm) {
     EXPECT_EQ(plan.substr(at, line_end - at).find("key="), std::string::npos) << plan;
 }
 
+TEST_F(IndexCompileTest, TheCorrelatedIndexBeatsTheCorrelatedCabin) {
+    // Spec §9's ordering, extended to the correlated forms: an index is
+    // complete for every key value where a Cabin is authoritative only
+    // for observed ones, so a join column carrying both is served by the
+    // index and the plan says so.
+    Ok("CREATE TABLE u (id int64, code int64) BTREE");
+    Ok("CREATE TABLE l (id int64, uid int64, v int64) BTREE");
+    Ok("CREATE INDEX ix ON l (uid)");
+    Ok("CREATE CABIN ON l(uid)");
+    Ok("INSERT INTO u VALUES (1)");
+    Ok("INSERT INTO l VALUES (1, 10)");
+
+    const std::string plan =
+        Plan("SELECT l.v FROM u JOIN l ON l.uid = u.id WHERE u.id BETWEEN 1 AND 2");
+    EXPECT_NE(plan.find("step 1 IndexProbe"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("CabinProbe"), std::string::npos) << plan;
+}
+
 TEST_F(IndexCompileTest, PropagationDeclinesAMatchingTypeWithADifferentLen) {
     // decimal(10,2) and decimal(18,2) share type_val and scale - the one
     // reachable pair that passes the column-column compare while differing

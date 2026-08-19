@@ -301,3 +301,26 @@ Decisions worth carrying forward:
 - The suite's Cabins are **declared**, so they record at n=1. A test written
   against n=2 fails on the *second* execution rather than the third, which
   is a confusing way to learn the policy: it is stated at the call site.
+
+## Phase 5 — the correlated probe
+
+**CB12 — `kCabinProbe` keyed by an earlier step's row — built 2026-08-19.**
+Spec §4a. `CorrelatedCabinProbeOf` in the step compiler, reached after both
+index forms and the literal Cabin declined; `CabinProbe::key_from` carries
+the outer column, and `RunCabinStep` reads the probed value from the frame
+per outer row - stable for the walk's duration because the outer row is
+fixed while the inner step runs. The probe value threads through
+`ServeFromCabin` / `FallBackAndReRecord` / `WalkAndRecord`, so the miss,
+serve and re-record paths are the literal form's unchanged. ANALYZE prints
+`key=` for the deferred form where the literal prints `value=`.
+
+Found while building it: the serve emitted in **entry order**, which stops
+being pk order the moment the write hook appends an earlier pk to an
+observed value (an UPDATE moving a row into the set) - a reply-reordering
+bug against I12's within-step contract, latent since v1 because the
+original contract queries always filtered the exposed set to one row. The
+serve now sorts to the walk's order before emission - pk for ASSIGNED,
+page-and-slot for EXPLICIT, per heap-and-tuple.md §4.1 (IX8a's rule, key
+modes respected; the unconditional pk sort was itself a reordering on
+EXPLICIT, caught in review). The §4a join queries and the two focused
+pins in `tests/cabin_contract_test.cpp` are what caught it and hold it.
