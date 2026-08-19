@@ -37,7 +37,11 @@ the throughput.** On the same column and the same predicate it serves **926
 statements a second against the 1,563/s of the walk it was meant to
 replace** — 0.59× of doing nothing, and 23× short of the index. This
 reproduces the inversion the previous measurement of this file found, on a
-different engine build and a cleaner noise floor.
+different engine build and a cleaner noise floor. *(2026-08-19: closed —
+the recording miss's full-row decode was the cost, the fix landed as
+`a44c5cc`, and §7a measures it by interleaved A/B: the miss falls from
+2.04× the walk to 1.06×. The hit-rate economics — when a Cabin is worth
+declaring at all — stand unchanged.)*
 
 ## 1. The run
 
@@ -262,6 +266,15 @@ indexes, so the per-index column is the comparable one.
 
 ## 7. The Cabin serves less than the walk it replaces
 
+> **2026-08-19: this inversion is closed.** The cost this section measures
+> was the recording miss walk decoding **every column of every walked row**;
+> the fix landed as `a44c5cc` (`src/exec/step_vm.cpp`) and §7a below
+> measures it by interleaved A/B against `d84fdc3`: the miss's p50 halves,
+> from 2.04× the walk it shadows to **1.06×**. This section stands as the
+> account of the pre-fix engine; its figures describe `9f762a3`, not the
+> current engine. What it says about *hit rates* — the closing paragraph —
+> is not superseded and §7a leans on it.
+
 Same column, same predicate, at 10,000 rows, statements per second:
 
 | | walk (`none`) | Cabin | index (`single`) |
@@ -283,7 +296,9 @@ charge amortised over repeats.
 That reproduces, on a different engine build and a floor an order of
 magnitude tighter, the inversion the previous measurement of this file
 reported. It is now measured twice and should be treated as the Cabin's
-behaviour on this shape rather than as an artefact. `count-by-user` is the
+behaviour on this shape rather than as an artefact *(2026-08-19: no longer —
+this was the pre-`a44c5cc` engine's behaviour, and §7a supersedes the
+sentence; quote §7a, not this)*. `count-by-user` is the
 sharper number: the same fold that runs at 25,189/s over an index runs at
 **992/s** over a Cabin, a 25× difference.
 
@@ -292,6 +307,515 @@ sharper number: the same fold that runs at 25,189/s over an index runs at
 structure — 15.3× *better* than the walk there. The variable is the hit rate:
 that workload cycles eight arguments, this one holds matches-per-key constant
 so the key space grows with the relation and a repeat becomes rare.
+
+## 7a. Addendum, 2026-08-19 — the recording miss decodes what it reads, and the inversion is gone
+
+The cost §7 measured twice was located by reading the path, not by timing
+it: `AcceptTupleAt` forced a **full row decode for every walked row while a
+Cabin recording was live** — eight columns per rejected row on `loans`,
+where the plain `FilterScan` decodes only the filter's column, on a path
+whose cost is decode-dominated. The fix landed as `a44c5cc`
+(`src/exec/step_vm.cpp`; `docs/feat-cabin.md` §4 carries the dated
+amendment): the recording walk now decodes the filter's columns per row —
+the cabined equality *is* the filter, so the key column is already in the
+mask — and the pk on demand, only for a row whose key matches, with the key
+compare reading the step's own frame slots directly. This addendum answers
+the two questions that change raises and nothing else: **how much of §7's
+inversion the fix removes, and what the changed decode path costs the plain
+`FilterScan` it also runs under.** Both by interleaved A/B, BASE `d84fdc3`
+against NEW `a44c5cc`, alternating cell by cell within seven minutes on one
+box.
+
+**The answers: the miss's p50 halves — 2.04× the walk it shadows at BASE,
+1.06× at NEW, on all three recording-miss shapes — and no walk shape moves
+outside the replicate floor.**
+
+### 7a.1 The A/B run
+
+| | |
+|---|---|
+| executed | **2026-08-19 01:17:10 → 01:23:38 UTC**, 10 ckdbs cells, alternating BASE, NEW |
+| branch / worktree | `worktree-enhence-join-perf`, in the worktree `enhence-join-perf` |
+| commit measured | **`a44c5cc`** (recorded by every cell, `dirty: false`) — the fix commit, directly on top of `d84fdc3` |
+| BASE binary | a **copy**, `sha256 4f054cbff19f23d0…`, built fresh for this run from a temporary worktree at **`d84fdc3`** (removed after the build), linked 2026-08-19 01:16:24 UTC. `d84fdc3` already carries §9a's propagation and §9b's IX17, which is why the join shape below is a Cabin shape |
+| NEW binary | a **copy**, `sha256 7d8e57d09a849058…`, from this worktree's `build-release/kds_server`, linked 01:13:26 UTC — 32 s *before* `a44c5cc` was committed at 01:13:58; the tree was clean and `cmake --build` immediately before the run was a no-op against HEAD's sources, so it is the engine at `a44c5cc` |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, **`KDS_WITH_TLS=OFF`** — the §1 run was built TLS ON; §7a.6 bridges before comparing anything across |
+| device | ext4 on `/dev/root` (checked with `df -T`; `/tmp` is ext4 on this host too); data files under `$HOME/bench-s3-cabinfix/db/`, WAL under `$HOME/bench-s3-cabinfix/wal/<cell>/` |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, port 15499. One server process and one **fresh data file** per cell, started from the run's own binary copy |
+| driver | `tools/scenario3_library.py --loans N --index-mode none [--cabin] --ops 200 --verify 25`, seed 1 — so BASE and NEW draw **identical key sequences** and do equal work. At `--loans 10000` the cabined key space is 2,000 users and 200 ops draw ~190 distinct keys: **nearly every Cabin probe is a recording miss**, which is the path under test |
+| cells | per mode and size, BASE/NEW/BASE/NEW: 4 × `--cabin` at 10,000, 4 × no-cabin at 10,000 (the walk baseline and the overhead check), 2 × `--cabin` at 1,000 (§7a.5) |
+| contention control | every cell gated on `bench/wait_quiet.sh`; `run_cell.sh` sampled `pgrep -c cc1plus` before and after each cell — **0 in all 20 samples; all 10 cells passed on the first attempt, none discarded** |
+| correctness | **175,840 operations, 0 errors**, `verify_problems` empty in all 10 cells; every cabin cell's `ANALYZE` says `CabinProbe`, every no-cabin cell's says `FilterScan` |
+
+### 7a.2 The plan did not change — the cost was never in the plan
+
+`ANALYZE`, replayed after the run by reopening two measured cells' own data
+files with the binaries that produced them, is **byte-equivalent between
+BASE and NEW** on the cabined shape:
+
+```
+step 0 CabinProbe loans cabin=1 on=col1 value=3
+step 0 CabinProbe loans opens=1 examined=10000 matched=6 sel=0% pages=86 cabin_misses=1 cabin_recorded=1
+```
+
+Same access kind, same 10,000 rows examined, same 86 pages, on both engines.
+Everything §7 priced sat *below* the plan: per-row decode work inside the
+recording walk, which no counter `ANALYZE` reports can see. The join's
+replay also confirms why it is a Cabin shape here: its outer step is
+`CabinProbe … filter 0:0.1 = 3 derived` — §9a's propagated equality landing
+on the cabined column, since `--index-mode none` gives it no index.
+
+### 7a.3 The recording miss, BASE against NEW
+
+Three shapes probe the Cabin on a miss at 10,000 loans: `loans-by-user`,
+`count-by-user` (the same probe plus the fold), and `join-loan-user` (the
+same probe as the outer step, plus six memoized pk probes). p50 µs per
+statement, 200 ops per cell, two cells per binary; statements/s derived as
+`1e6 / mean µs` (serial single-connection driver — the driver did not
+report it directly):
+
+| shape | BASE p50 (cell 1 / 2) | NEW p50 (cell 1 / 2) | NEW/BASE p50 | BASE ≈ stmts/s | NEW ≈ stmts/s |
+|---|---|---|---:|---:|---:|
+| loans-by-user | 1,134.9 / 1,134.2 | 587.0 / 588.6 | **0.52×** | 936 | 1,804 |
+| count-by-user | 1,124.3 / 1,155.1 | 581.9 / 585.8 | **0.51×** | 1,118 | 2,127 |
+| join-loan-user | 1,153.7 / 1,154.1 | 594.3 / 596.0 | **0.52×** | 968 | 1,885 |
+| loans-by-user, **walk** (no-cabin cells) | 556.4 / 556.8 | 559.6 / 550.8 | 1.00× | 1,790 | 1,797 |
+
+The within-binary replicate pairs on the cabined shapes disagree by
+**0.0–2.7%**, so the halving is ~20× the floor under it. Against the walk
+measured in the same run's no-cabin cells, same binary each side:
+
+| miss ÷ walk (p50) | BASE (`d84fdc3`) | NEW (`a44c5cc`) |
+|---|---:|---:|
+| loans-by-user | 2.04× | **1.06×** |
+| count-by-user | 2.06× | **1.05×** |
+| join-loan-user | 2.03× | **1.06×** |
+
+The chain, dated: §7 measured the inversion at **1.69×** the walk at
+`9f762a3`; by `d84fdc3` it stood at **2.04×** — the Cabin side bridges the
+two runs within 1.1% (936 against §7's 926/s), while the walk itself is
+14.5% faster here than §7's 1,563/s, inside that run's 23.6% floor at this
+size, so how much of the widening is engine and how much is run-to-run is
+not resolvable across runs and this addendum's claims rest on its own
+interleaved cells only. At `a44c5cc` the miss costs **+5.1–5.9%** over the
+walk, consistently across all three shapes — the honest residual, about one
+key comparison per walked row, the price of building the entry set rather
+than of decoding for it. (`docs/feat-cabin.md` §4's amendment quotes ~14%
+from the pre-A/B measurement chain; this run's interleaved number is the
+5–6% above, and the spec's figure should be read as superseded.)
+
+The full distributions, with the hit/miss mixture they carry:
+
+| cell | shape | ops | p0 | p25 | p50 | p95 | p99 | mean |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| cab10k-base-1 | loans-by-user | 200 | 42.8 | 1,131.1 | 1,134.9 | 1,147.6 | 1,191.5 | 1,067.8 |
+| cab10k-base-2 | loans-by-user | 200 | 41.4 | 1,130.0 | 1,134.2 | 1,165.5 | 1,208.4 | 1,069.9 |
+| cab10k-new-1 | loans-by-user | 200 | 43.1 | 579.3 | 587.0 | 599.3 | 621.8 | 554.1 |
+| cab10k-new-2 | loans-by-user | 200 | 37.6 | 581.6 | 588.6 | 603.1 | 624.0 | 554.3 |
+| cab10k-base-1 | count-by-user | 200 | 37.8 | 1,118.1 | 1,124.3 | 1,137.6 | 1,144.0 | 878.6 |
+| cab10k-base-2 | count-by-user | 200 | 37.2 | 1,146.2 | 1,155.1 | 1,179.9 | 1,411.6 | 909.6 |
+| cab10k-new-1 | count-by-user | 200 | 29.4 | 571.3 | 581.9 | 617.4 | 649.9 | 463.8 |
+| cab10k-new-2 | count-by-user | 200 | 37.4 | 572.9 | 585.8 | 727.7 | 774.9 | 476.4 |
+
+The p0 of ~37–43 µs in every row is a **hit** — the ~5% of draws that
+repeat a key within 200 ops over 2,000 users — and it is the same figure as
+`pk-user`'s p50, the fixed client round-trip floor: a Cabin hit costs the
+round trip and nothing measurable above it, on both engines. `count-by-user`
+runs last, after `loans-by-user` and the join have observed ~400 keys, so
+~21% of its probes hit — which is why its mean sits below its p25 on both
+engines and why its derived stmts/s outruns `loans-by-user`'s. On waits:
+single-connection reads, so no commit/fsync or lock wait exists in the
+unit; it is round-trip floor (~38 µs) plus walk plus, at BASE, the decode
+overhead the fix removed. No per-step timing exists to split the walk
+further (`docs/observability.md`).
+
+### 7a.4 The walk cells — the changed decode path costs nothing measurable
+
+The rewritten decode (`partial` computation) runs for **every** plain
+`FilterScan`, Cabin or not, so the overhead check is the no-cabin cells.
+p50 ratio NEW/BASE of pair means, all ten shapes, 10,000 loans; the floor
+is the widest within-binary replicate disagreement, dividing by the smaller
+of each pair:
+
+| shape | NEW/BASE | worst rep. floor |
+|---|---:|---:|
+| pk-user | −1.2% | 1.9% |
+| loans-by-user | −0.3% | 1.6% |
+| loans-by-book | −1.0% | 1.4% |
+| resv-by-user | −2.0% | 0.2% |
+| books-by-author | +6.4% | 10.0% |
+| books-by-genre | +5.9% | 8.6% |
+| loans-by-daterange | −1.6% | 0.7% |
+| overdue | −0.5% | 1.3% |
+| join-loan-user | −0.9% | 1.3% |
+| count-by-user | +0.2% | 1.6% |
+
+**No shape moves outside its floor.** The two +6% rows are one cell
+(`none10k-new-1`) disagreeing with its own NEW replicate by 8.6–10.0% on
+exactly those two shapes; the same two shapes run as plain `FilterScan`s in
+the four cabin cells too, where four more cells put them at **+1.0% and
+−0.5% against floors of ≤2.1%** — the corroboration that the +6% is that
+cell's noise, not the decode change. Every other row sits within ±2% at a
+±0.2–1.9% floor. Verdict: **the fix's cost to the plain walk is
+unmeasurable at a ~2% floor**, with the two noisy rows bounded by ~10%.
+
+### 7a.5 At 1,000 loans the ratio is the same — the residual is per-row
+
+§7 recorded the inversion growing with the relation (1.69× at 10,000, 1.21×
+at 1,000, inside the floor at 200), the signature of a per-row cost. The fix
+should therefore hold the miss ratio flat across sizes, and one interleaved
+pair at `--loans 1000` says it does. The in-cell walk yardstick is
+`loans-by-book` — the identical statement shape on the same relation at the
+same ~5 matches, cabinless — since this run carries no 1,000-row no-cabin
+cell:
+
+| `--loans 1000`, p50 µs | BASE | NEW |
+|---|---:|---:|
+| loans-by-user (CabinProbe, miss-heavy) | 147.8 | **94.2** |
+| loans-by-book (FilterScan, the yardstick) | 90.6 | 89.0 |
+| miss ÷ yardstick | 1.63× | **1.06×** |
+
+1.06× at 1,000 and 1.06× at 10,000: the residual scales with the rows
+walked, as one comparison per walked row must. At 1,000 loans the key space
+is 200 users, so 200 ops repeat heavily — `count-by-user`'s p50 there is
+37.6 µs, a *hit*, on both binaries, which is the hit-cost measurement
+§7a.3 cites. One pair only, so no within-size floor exists at this size;
+the two cells agree with the 10,000-row story rather than establishing
+their own. **200 loans was not re-run**: §7 found the pre-fix inversion
+already inside the floor there, and a fix to a per-row cost has nothing to
+show at a size where the per-row cost was invisible.
+
+### 7a.6 Versus PostgreSQL — still no twin, by design
+
+§11's statement stands: there is no PostgreSQL equivalent of a structure
+authoritative only for observed values, so the Cabin columns have no
+PostgreSQL twin and none was invented for this run (`tools/pg_scenario3_library.py`
+has no `--cabin`). The comparable pair is the walk: this run's
+`FilterScan` at 1,790–1,797 stmts/s brackets §11's `ck-none` 1,563/s within
+14.5% — inside that run's 23.6% floor at this size, TLS build difference
+included — so §11's factor-level reads (walk ≈ 1.7× `pg-none`'s 910/s on
+this shape) carry over, and nothing tighter than a factor is claimed across
+the runs.
+
+### 7a.7 What §7a changes, and what it does not
+
+**Changed: what a miss costs.** A Cabin's recording miss now prices at the
+walk plus ~6%, not the walk times two. The break-even repeat rate follows
+directly, with this run's own numbers (walk 556 µs, miss 1,135 → 588 µs,
+hit ≈ 39 µs): at BASE a key had to repeat on **~53% of probes** before the
+Cabin beat doing nothing at this size; at NEW that threshold is **~6%**.
+The run corroborates it from inside: at `loans-by-user`'s own ~5% observed
+repeat rate, NEW's derived throughput (1,804/s) already sits level with the
+walk (1,797/s, inside the floor), and at `count-by-user`'s ~21% it is
+**1.18× ahead** — the sign §7 measured is gone at repeat rates this
+workload actually produces.
+
+**Not changed: when a Cabin is worth declaring.** §7's warm-keys analysis
+stands whole — a Cabin's benefit is still a function of how often an
+argument repeats, `scenario1`'s 15.3× on eight cycling arguments and this
+workload's growing key space still bracket the answer, and the hit rate is
+still unreported by the engine (§12). The `CABIN AUTO` threshold
+(`docs/feat-cabin.md` §11, CLAUDE.md's open decision) remains open; what
+this addendum moves is only where that threshold's economics start — a
+structure that costs ~6% on a cold key and round-trip-floor on a warm one
+is cheap enough to declare at far lower repeat rates than the pre-fix
+engine justified. Also unchanged and not re-measured: the index columns
+(§4–§6), which at 21,000+ stmts/s remain ~12× beyond what any miss-side
+fix can reach; the durability matrix (§10); and everything else in this
+file, which describes `9f762a3`.
+
+## 7b. Addendum, 2026-08-19 — the join with no literal and no index: the Cabin, probed per outer row
+
+§9b closed the no-literal join for an *indexed* join column, and its §9b.7
+left the other half open by name: a join key on an unindexed non-pk column,
+where IX17 has nothing to probe and IX3 refuses a heap relation an index at
+all. **CB12** (`8f3f730`, `docs/feat-cabin.md` §4a) closes that half with
+the other structure: a cabined join column bound by equality to an earlier
+step's column probes the Cabin **per outer row**, the key read from the
+frame (`CabinProbe::key_from`) instead of a compile-time literal — the same
+shape as IX17 one trust class over, and the only acceleration an unindexed
+join column can have. This addendum measures it by interleaved A/B, BASE
+`6c5bb14` against NEW `8f3f730`, at `--index-mode none --cabin`, and
+accounts for the serve-order bug the same commit fixed.
+
+**The answers: the warm no-literal join's p50 falls from 8,570 µs to 67 µs
+at 10,000 loans and 16 outer rows — 127× — because the inner side's
+marginal cost falls from ~535 µs per outer row (one full scan of `loans`)
+to ~1.7 µs (one Cabin serve); no driver shape moves outside the replicate
+floor; and the correlated EXISTS improves only by inheriting keys other
+statements observed, never by its own recording — §4a's non-convergence,
+measured flat across 50 repetitions.**
+
+### 7b.1 The A/B run
+
+| | |
+|---|---|
+| executed | **2026-08-19 02:37:45 → 02:40:20 UTC**, 4 ckdbs cells, alternating BASE, NEW, BASE, NEW |
+| branch / worktree | `worktree-enhence-join-perf`, in the worktree `enhence-join-perf` |
+| commit measured | **`8f3f730`** (CB12), recorded by every cell, `dirty: false` |
+| BASE binary | a **copy**, `sha256 7d8e57d09a849058…`, built fresh for this run from a temporary worktree at **`6c5bb14`** (removed after), linked 02:29:32 UTC — **byte-identical to §7a's NEW binary**, so §7a's tables chain directly to this run's BASE column. `6c5bb14` carries §7a's miss-decode fix, §9a's propagation and §9b's IX17 |
+| NEW binary | a **copy**, `sha256 859ff728df5cadc5…`, from this worktree's `build-release/kds_server`, linked 02:21:33 UTC — 17 s *before* `8f3f730` was committed at 02:21:50; the tree was clean and `cmake --build` immediately before the run was a no-op against HEAD's sources |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, **`KDS_WITH_TLS=OFF`** both sides |
+| device | ext4 on `/dev/root` (`df -T`; `/tmp` is ext4 on this host too); data files under `$HOME/bench-s3-cb12ab/db/`, WAL under `$HOME/bench-s3-cb12ab/wal/<cell>/`, binary copies under `$HOME/bench-s3-cb12ab/bin/` |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, port 15499. One server and one **fresh data file** per cell, started from the run's own copy |
+| driver | `tools/scenario3_library.py --suffix s3 --loans 10000 --index-mode none --cabin --ops 200 --verify 25`, seed 1 (`users`/`books` 2,000, `reservations` 5,000) — the walk-vs-cabin configuration, no index anywhere |
+| the join shapes | driven against each cell's already-loaded server by a session scratch harness (statements below, not checked in — §9b.7's fold-into-the-driver task now covers three shapes): the correlated EXISTS (50 ops), then the k-sweep **twice** — each k pays its first statement separately (the one that records unobserved keys) and then samples 50 — then the EXISTS again. Run 2 of the sweep is fully warm |
+| contention control | every cell gated on `bench/wait_quiet.sh` (loadavg 0.54–0.58 at each start); `pgrep -c cc1plus` 0 before and after every cell. **All 4 cells passed on the first attempt; none discarded** |
+| correctness | 4 × 21,004 driver ops, 0 errors, `verify_problems` empty in all 4. After the run, both cell-1 data files were re-mounted with their own binaries: the k=16 join reply is **byte-identical** between BASE's walk and NEW's serve (79 rows), and between NEW's own recording walk and its serve — the serve-order fix holding on real data (§7b.6) |
+
+The swept statement, verbatim (k ∈ {1, 2, 4, 8, 16}; ids 1…k all exist),
+and the EXISTS:
+
+```
+SELECT l.book_id, u.member_code FROM users_s3 AS u
+  JOIN loans_s3 AS l ON l.user_id = u.id WHERE u.id BETWEEN 1 AND k
+
+SELECT id FROM users_s3 WHERE EXISTS
+  (SELECT l.id FROM loans_s3 AS l WHERE l.user_id = users_s3.id) LIMIT 20
+```
+
+**One size, deliberately.** This addendum runs at 10,000 loans only; the
+swept axis is k, the outer-row count. The walk's proportionality to the
+relation is already §9b's measured table (BASE 12.1 / 53.6 / 527 µs per
+outer row at 200 / 1,000 / 10,000), and this run's BASE reproduces its
+10,000-row point at ~535 µs; the serve side's independence of relation size
+is *asserted from the structure* (a Cabin serve reads an entry set, not the
+relation), not measured across sizes here.
+
+### 7b.2 The plan, before and after
+
+Captured by the harness at k=4 in every cell. BASE (`6c5bb14`) — no
+literal to propagate, no index to probe, so the inner side is a full scan
+per outer row:
+
+```
+step 1 Scan loans_s3 AS l   opens=4 examined=40000 matched=21 sel=0% pages=344
+  filter 0:1.1 = 0:0.0
+```
+
+NEW (`8f3f730`), the same statement cold — the probe key is the outer
+row's `u.id`, and the misses' recording walks are visible (one of keys 1–4
+was already observed by the driver's shapes; seed 1 makes this identical in
+both NEW cells):
+
+```
+step 1 CabinProbe loans_s3 AS l cabin=1 on=col1 key=0:0.0
+       opens=4 examined=30005 matched=21 cabin_hits=1 cabin_misses=3 cabin_recorded=3
+```
+
+And warm, after the sweep: `examined=21 matched=21 sel=100% cabin_hits=4`
+— 21 rows examined for 21 returned, the authoritative serve, against
+BASE's 40,000.
+
+### 7b.3 The no-literal join, BASE against NEW
+
+p50 µs per statement, both cells shown, 50 sampled ops per point; BASE's
+two sweep runs are statistically identical (it walks either way), NEW's
+**run 2** (fully warm) is tabled; stmts/s derived as 1e6/p50 of the pair
+mean (single serial connection — the harness did not report it directly):
+
+| k | BASE p50 (c1 / c2) | NEW warm p50 (c1 / c2) | BASE ≈stmts/s | NEW ≈stmts/s | speedup |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 584.5 / 583.3 | 43.5 / 44.5 | 1,713 | 22,730 | 13.3× |
+| 2 | 1,117.8 / 1,113.5 | 45.4 / 46.1 | 896 | 21,860 | 24.4× |
+| 4 | 2,185.9 / 2,171.4 | 48.5 / 50.4 | 459 | 20,220 | 44.1× |
+| 8 | 4,285.3 / 4,282.9 | 53.0 / 54.7 | 233 | 18,570 | 79.6× |
+| 16 | 8,545.5 / 8,593.9 | 67.2 / 67.3 | 117 | 14,870 | **127×** |
+
+The replicate pairs disagree by 0.1–3.9% — floors the smallest factor in
+the table clears thirtyfold. The marginal cost per outer row — the
+k=8→16 slope, which excludes the fixed part (round trip plus the outer
+range walk, ~42 µs on NEW, identical in both binaries):
+
+| | BASE µs/outer row | NEW warm µs/outer row |
+|---|---:|---:|
+| slope, k=8→16 | 532.7 / 538.9 | **1.78 / 1.58** |
+| p50 ÷ k at k=16 | 534.1 / 537.1 | 4.20 / 4.21 |
+
+BASE pays one full scan of `loans` per outer row, §9b's 527 µs
+reproduced. NEW's warm serve is **~1.7 µs per outer row, independent of
+the relation by construction** — the third conversion of a per-row cost
+into a fixed one in this file (§6 the equality, §9a/§9b the indexed join),
+and the first available to a column no index can serve.
+
+**What the first statement pays — the observation charge.** Run 1's
+unsampled first statement at each k carries the recording walks for keys
+not yet observed, and seed 1 makes it deterministic across both NEW cells:
+k=8's first statement cost 2,295.8 / 2,286.0 µs (four ~560 µs recording
+walks, keys 5–8), k=16's cost 2,316.2 / 2,307.3 µs (four more — the other
+four of 9–16 had been observed by the driver). §4a's account, visible in
+one number: a single join statement can push many keys past observation,
+each at one miss walk (~1.06× the plain walk, §7a), and every repeat
+thereafter serves at ~1.7 µs — so a key that repeats even **once** has
+already paid for itself, where the pre-CB12 engine walked 535 µs every
+time. Run 1's *sampled* p50s agree with run 2's within −6.2% to +1.5%
+across both cells, with run 1 the **faster** side wherever they differ:
+after the first statement the sweep is already warm, and the residue is
+the box, not recording.
+
+Distributions at k=16, run 2, all four cells (50 ops each):
+
+| cell | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| cab10k-base-1 | 8,443.5 | 8,466.3 | 8,545.5 | 8,902.9 | 9,274.7 |
+| cab10k-base-2 | 8,531.9 | 8,565.1 | 8,593.9 | 9,161.9 | 15,162.6 |
+| cab10k-new-1 | 65.2 | 66.5 | 67.2 | 82.4 | 705.7 |
+| cab10k-new-2 | 65.6 | 66.5 | 67.3 | 77.4 | 80.0 |
+
+On waits: single-connection reads — no commit/fsync wait, no lock or
+conflict wait exists in the unit. NEW's 67 µs decomposes as the ~42 µs
+fixed part (round trip plus the 32-row outer range, measured at k→0 by the
+intercept; `pk-user`'s p50 is 37–38 µs in the same cells) plus 16 serves
+at ~1.7 µs; no per-step timing exists to split a serve further
+(`docs/observability.md`). The two p99 outliers (one 15.2 ms BASE sample,
+one 706 µs NEW sample, each a single draw) are scheduling noise on a 2-vCPU
+box, not a path.
+
+### 7b.4 The correlated EXISTS — the recorded limitation, measured
+
+`docs/feat-cabin.md` §4a records that a correlated EXISTS over a cabined
+column **re-observes without ever recording** when every probed outer key
+has a qualifying match: the stopping sink halts the inner walk at its first
+match, a partial walk cannot commit an authoritative set, so the statement
+pays the recording setup per outer row and banks nothing. This run measures
+exactly that. The EXISTS ran *before* the join sweep (pre) and *after* it
+(post), 50 ops each; p50 µs:
+
+| cell | pre p50 | pre first-10 mean | pre last-10 mean | post p50 |
+|---|---:|---:|---:|---:|
+| cab10k-base-1 | 1,699.2 | 1,699.1 | 1,693.6 | 1,698.5 |
+| cab10k-base-2 | 1,392.5 | 1,399.8 | 1,388.4 | 1,391.4 |
+| cab10k-new-1 | 932.0 | 933.6 | 931.7 | **176.1** |
+| cab10k-new-2 | 941.4 | 1,203.7 | 935.1 | **175.2** |
+
+Full pre-join distributions (50 ops): BASE p0/p25/p95/p99 =
+1,682.6/1,693.7/1,722.4/2,062.4 (c1) and 1,381.0/1,389.9/1,408.7/1,429.6
+(c2); NEW = 916.0/930.1/1,118.5/1,667.4 (c1) and 909.5/933.6/998.0/2,850.3
+(c2). Post-join NEW: 173.3/175.0/188.7/189.0 (c1), 167.8/173.0/189.1/340.6
+(c2).
+
+Three readings, in honesty order:
+
+- **The limitation is confirmed: the EXISTS never converges on its own.**
+  On NEW the first-10 and last-10 sample means are flat across 50
+  repetitions (933.6 → 931.7), and the counters say why: every one of its
+  20 probed users has a loan, so `cabin_misses=14` walk on *every*
+  execution and `cabin_recorded` never appears. The statement cannot warm
+  itself, exactly as §4a records.
+- **The pre-join improvement it does show is inherited, not earned.** NEW
+  pre reads ~1.5–1.8× faster than BASE (pair means 936.7 vs 1,545.9;
+  inner rows examined 15,248 vs 25,050 per statement) — but `cabin_hits=6`
+  are six keys the *driver's* earlier shapes observed, serving at hit
+  cost. BASE's own two cells disagree by 22% (1,699 vs 1,392 at identical
+  `examined=25,050`, each internally replicating within 0.5% — a machine
+  mode, not different work), so the factor is quoted at factor level only.
+  It is an improvement, not a regression, and it is not the 16.5× an index
+  gave the same statement in §9b.4.
+- **Post-join, the inheritance is dramatic:** after the sweep recorded keys
+  1–16, `cabin_hits=17 cabin_misses=3` and p50 falls to **176 µs** — the
+  three remaining misses still walk every time, still flat. A cabined
+  EXISTS is fast exactly insofar as *other* statements have observed its
+  keys; alone, it stays at the walk's price forever. The narrow fix and
+  why it is not narrow are in §4a: skipping recording under a stopping
+  sink would also skip the completed walk that commits an authoritative
+  **empty** set — the one case (a key with no matches) where this
+  statement *can* record, and the case worth keeping.
+
+### 7b.5 Every other shape — the correlated arm costs the rest of the workload nothing measurable
+
+CB12 adds a selection arm to step compilation (after both index forms and
+the literal Cabin) and the `key_from` path to the executor, so the claim
+needing evidence is the null one, on the walk-and-literal-cabin
+configuration this run measures. p50 NEW/BASE of pair means, all ten driver
+shapes at 10,000 loans; the floor is the widest within-binary replicate
+disagreement for the shape:
+
+| shape | NEW/BASE | worst rep. floor |
+|---|---:|---:|
+| pk-user | −1.4% | 3.5% |
+| loans-by-user | +0.0% | 1.3% |
+| loans-by-book | +0.6% | 1.9% |
+| resv-by-user | −1.4% | 1.9% |
+| books-by-author | −5.8% | 17.2% |
+| books-by-genre | −3.3% | 19.7% |
+| loans-by-daterange | +0.2% | 0.8% |
+| overdue | −0.3% | 1.1% |
+| join-loan-user | +0.2% | 2.3% |
+| count-by-user | −0.0% | 0.2% |
+
+**No shape moves outside its floor.** Seven of ten sit within ±1.4% at
+floors of 0.2–3.5%. The two book shapes repeat §7a.4's pattern exactly —
+one BASE cell disagreeing with its own replicate by 17–20% on those two
+shapes and no others — and their deltas sit well inside those floors.
+`join-loan-user` is the row that was *required* not to move: its literal
+lands on the cabined column by §9a's propagation on **both** binaries
+(`CabinProbe … value=3`, a compile-time key, the recording-miss shape §7a
+priced), so CB12's arm never fires for it; +0.2% against a 2.3% floor says
+the added selection arm costs it nothing measurable. `loans-by-user` and
+`count-by-user`, the other two miss-heavy Cabin shapes, are +0.0% and
+−0.0% — the literal path is untouched.
+
+### 7b.6 The serve-order bug — latent since v1, fixed with the feature
+
+Found while building CB12, fixed in the same commit, and worth its own
+account because it was **reachable by plain single-relation SQL** on every
+pre-`8f3f730` engine: the Cabin serve emitted pks in **entry order**,
+which stops being the walk's order after a write-hook append. An UPDATE
+that moves an earlier pk into an observed value appends that pk at the
+set's end (the superset invariant makes every mandatory action an append);
+a subsequent serve then emitted rows in an order no walk of the relation
+could produce, violating I12's within-step contract. It went unseen
+because the original contract queries happened to filter every exposed set
+to one row. The fix sorts the serve to the walk's order before emission,
+**key-mode-conditional** per `docs/heap-and-tuple.md` §4.1: pk order for
+an `ASSIGNED` relation, page-then-slot for `EXPLICIT`, whose
+caller-supplied ids need not ascend. This run's evidence is §7b.1's replay
+check — NEW's serve byte-identical to BASE's walk on the 79-row k=16 reply
+— plus the driver's `--verify` (three invariants, 25 draws, all four
+cells clean). The correctness suite was run in the CB12 build session, not
+re-run in this measurement session.
+
+### 7b.7 Versus PostgreSQL — no twin for the structure, and the indexed twin is §9b's
+
+There is still no PostgreSQL equivalent of a value-observed authoritative
+structure (§7a.6, §11), so the Cabin column has no twin and none was
+invented. For this *statement shape* PostgreSQL's answer is an index, and
+that comparison is already measured: §9b.6 puts PostgreSQL at 769.4 µs p50
+on the identical k=16 statement (its optimizer's merge-join flip) against
+ckdbs-with-index at 90.2 µs — and this run's warm cabin serves the same
+statement at 67 µs on a column that *has* no index. What was not measured,
+and would complete the picture, is PostgreSQL at `--index-mode none` on
+this shape — its seq-scan-per-outer-row against BASE's walk; the twin
+driver supports the mode, and that cell is the named task if the number is
+ever wanted.
+
+### 7b.8 What §7b changes, and what it does not
+
+**Changed: the unindexed join key has an answer.** §9's join story closes
+its last open shape for repeating keys: the same no-literal join now costs
+~3.3 µs per outer row with an index (§9b, `4f304fd`) and ~1.7 µs marginal
+(~4.2 µs p50-per-outer-row at k=16) with a Cabin and no index (this run,
+`8f3f730`) — different runs on different days, so the two figures compare
+at factor level only, but they are the same order and both independent of
+the relation's size, against a walk that pays ~535 µs *per outer row per
+10,000 rows*. A heap relation's join column, which IX3 refuses an index,
+now has exactly one acceleration, and it works.
+
+**Not changed: the hit-rate economics, and who pays the observation.**
+§7's closing analysis and §7a.7's break-even arithmetic stand whole — a
+Cabin still profits only where values repeat, and CB12 *widens the
+exposure*: one join statement can push up to `cabin_max_values` keys past
+observation in a single execution (§4a's addition to §8's open budget),
+each imposing the write-hook cost thereafter. A join whose outer keys
+never repeat pays ~6% per key (§7a's miss surcharge) for nothing — **the
+never-repeating-key distribution on an unindexed column remains the
+uncovered case**, and it is a `CABIN AUTO` policy question
+(`docs/feat-cabin.md` §11), not an executor one. Also unchanged: the
+EXISTS non-convergence (§7b.4 above, recorded in §4a with the reason the
+narrow fix is wrong); the `correlated_scans` counter blind spot (§4a: a
+still-quadratic correlated CabinProbe reports zero); everything §7a.7
+lists as not re-measured; and the rest of this file, which describes
+`9f762a3`.
 
 ## 8. Composite is the only structure that helps `overdue`
 
@@ -551,7 +1075,8 @@ PG twin at this commit is the measurement that would retire it.
   `u.id = ?` against the pk; a join with no literal at all, or one whose
   derived equality lands on an unindexed column, is not in this driver.
   *(2026-08-18, later the same day: the literal-free case is now measured —
-  §9b below. The unindexed-column case remains open.)*
+  §9b below. 2026-08-19: the unindexed-column case is closed for repeating
+  keys by CB12's correlated Cabin probe — §7b.)*
 
 ## 9b. Addendum, 2026-08-18 — the join with no literal: the inner index, probed per outer row
 
@@ -828,8 +1353,11 @@ standard shapes was not re-run.
   BASE; that it is *still* the plan at `4f304fd` when no index exists is
   asserted by the guard tests (`tests/index_compile_test.cpp`), not by a
   cell in this run.
-- **A join key on an unindexed non-pk column** — §9a.6's other half, still
-  open.
+- **A join key on an unindexed non-pk column** — §9a.6's other half.
+  *(2026-08-19: closed for repeating keys by CB12's correlated Cabin probe,
+  measured in §7b at ~1.7 µs marginal per outer row warm; what remains
+  uncovered is the never-repeating-key distribution, a `CABIN AUTO` policy
+  question.)*
 - **Multi-core.** `cores = 1` throughout. On a multi-core instance an index
   step cannot ship, so a peer-owned join on an indexed column is *refused*
   by the affinity check — opened at `881f69a`, widened by IX17, recorded in
@@ -926,10 +1454,15 @@ is a ckdbs-only comparison against ckdbs's own alternatives.
   rewrite and prices the gap; it does not prove that propagating the equality
   would reach the 21,322 statements a second the single-relation form gets,
   because the join still has a second step to run.
-- **Why `CabinProbe` costs more than a `FilterScan` per row.** §7 measures the
-  inversion twice and locates it in the Cabin's own path via `ANALYZE`, but
-  the engine exposes no per-step timing that would say which part of that
-  path is the cost. `docs/observability.md` owns that gap and it is unbuilt.
+- **Why `CabinProbe` costs more than a `FilterScan` per row.** *(Answered
+  2026-08-19, §7a: the recording miss walk decoded every column of every
+  walked row where the plain walk decodes only the filtered ones — found by
+  reading the path, since per-step timing still does not exist. Fixed at
+  `a44c5cc`; the residual is ~5–6%, one key comparison per walked row.)*
+  §7 measures the inversion twice and locates it in the Cabin's own path via
+  `ANALYZE`, but the engine exposes no per-step timing that would say which
+  part of that path is the cost. `docs/observability.md` owns that gap and
+  it is unbuilt.
 - **The Cabin's hit rate, and the space each structure costs.** This run
   measures neither, and they are the mechanism behind §7's inversion: a Cabin
   is authoritative only for values already observed, so its benefit is a

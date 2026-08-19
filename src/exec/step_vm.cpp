@@ -558,14 +558,31 @@ private:
     // Everything else about the step is unchanged: the value is a compile-
     // time literal, the residual is the whole predicate, and downgrading
     // this step to a plain kScan returns the same rows in the same order.
+    // The value a cabin step probes for: the literal, or the correlated
+    // form's frame value (feat-cabin.md §4a). Re-read rather than threaded
+    // through the call chain - the outer row is fixed for this step's
+    // whole execution, so every call within it resolves to the same value,
+    // and the stability argument lives here once instead of alongside
+    // three parameters. The caller has already checked resolvability.
+    const parser::AstValue& ProbeValue(const Step& step) const {
+        return step.cabin->key_from.has_value() ? frame_.Get(*step.cabin->key_from)
+                                                : step.cabin->value;
+    }
+
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         // Nothing configured, or a value that must never be observed (NULL,
         // an unbound `$param`). Both take the walk, which is what the step
-        // would have compiled to had the Cabin not existed.
+        // would have compiled to had the Cabin not existed. An unresolvable
+        // correlated reference is Corruption, per KeyFromOperand's
+        // discipline; a frame value MakeCabinKey declines simply walks.
         std::optional<stats::CabinKey> key;
         if (cabins_ != nullptr && step.cabin.has_value()) {
-            key = stats::MakeCabinKey(step.cabin->cabin_id, step.cabin->value);
+            if (step.cabin->key_from.has_value() && !frame_.CanResolve(*step.cabin->key_from)) {
+                co_return Status::Corruption(
+                    "a correlated cabin probe references a column the frame cannot resolve");
+            }
+            key = stats::MakeCabinKey(step.cabin->cabin_id, ProbeValue(step));
         }
         if (!key.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
 
@@ -584,12 +601,34 @@ private:
         const bool record =
             cabins_->WouldRecord(cabins_->Observe(*key), step.cabin->declared);
         if (!record) co_return co_await RunWalkStep(steps, index, step, access);
+        co_return co_await WalkAndRecord(steps, index, step, access, *key);
+    }
+
+    // Walks `step` with a recording for `key` live, and commits the set iff
+    // the walk completed. **The only place a Recording is created** - the
+    // miss path and the heap hint-failure path both end here, which is what
+    // keeps every rule below one rule with one home.
+    sched::Coro WalkAndRecord(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                         const catalog::TableAccess& access, const stats::CabinKey& key) {
+        // The recording reads the key column out of this row's frame slots,
+        // so the partial decode must have filled it. Guaranteed by the
+        // compiler - the cabined equality is a residual conjunct, and
+        // `filter_columns` is derived from that same residual - and checked
+        // here because the failure would not be an error: it would be a
+        // stale slot recorded into a set that is then served as
+        // authoritative while missing qualifying pks, the C1 break.
+        // Declining to record is always legal (§1's corollary): this walk
+        // still answers, and the value simply stays unobserved.
+        if (step.filter_columns != Step::kAllColumns &&
+            (step.cabin->col_pos >= 64 ||
+             ((step.filter_columns >> step.cabin->col_pos) & 1) == 0)) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
 
         Recording recording;
         recording.step_id = step.step_id;
-        recording.rel_slot = static_cast<std::uint16_t>(index);
         recording.col_pos = step.cabin->col_pos;
-        recording.value = &step.cabin->value;
+        recording.value = &ProbeValue(step);
         // **Saved and restored, never cleared.** The walk below descends into
         // the next step, which may be a cabin step recording a walk of its
         // own - and clearing to null on its way out would cancel *this*
@@ -619,7 +658,7 @@ private:
                   [](const stats::CabinEntry& a, const stats::CabinEntry& b) {
                       return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
                   });
-        if (cabins_->Commit(*key, std::move(recording.entries))) {
+        if (cabins_->Commit(key, std::move(recording.entries))) {
             ++stats_.For(step.step_id).cabin_recordings;
         }
         co_return Status::OK();
@@ -941,7 +980,7 @@ private:
                 if (verified.ok()) {
                     ++step_stats.cabin_hint_hits;
                     cabins_->NoteHint(key.cabin_id, /*ok=*/true);
-                    serve_scratch_.push_back(Located{entry.page_id, entry.slot});
+                    serve_scratch_.push_back(Located{entry.pk, entry.page_id, entry.slot});
                     continue;
                 }
                 ++step_stats.cabin_hint_misses;
@@ -981,7 +1020,7 @@ private:
             entry.slot = found.value().slot;
             entry.page_epoch = CurrentRelayoutEpoch(store_, entry.page_id);
             entry.flags |= stats::kCabinHintValid;
-            serve_scratch_.push_back(Located{entry.page_id, entry.slot});
+            serve_scratch_.push_back(Located{entry.pk, entry.page_id, entry.slot});
         }
 
         // Moved out of the member for phase 2, for the reason spelled out in
@@ -991,6 +1030,39 @@ private:
         // loop so a single cabin step still reuses one allocation.
         std::vector<Located> located;
         located.swap(serve_scratch_);
+
+        // **Sorted into the walk's order before emission - IX8a's rule,
+        // and a bug until 2026-08-19.** A committed set starts in that
+        // order (WalkAndRecord sorts by page and slot) but the write hook
+        // appends at the *end*, so an UPDATE that moves an earlier row
+        // into an observed value leaves the set out of order, and serving
+        // it in entry order reordered a reply against I12's within-step
+        // contract. Found by the §4a join queries, which emit a set whole
+        // where the original list's one exposed value was always filtered
+        // down to a single row.
+        //
+        // **Which order that is depends on the key mode**, and getting it
+        // from the pk alone is wrong for one of them (heap-and-tuple.md
+        // §4.1). Under `ASSIGNED` ids ascend with insertion, so pk order
+        // *is* the walk's order - across pages by `min_key`, within a page
+        // because slots are appended - and sorting by pk is exact even
+        // after a leaf division has given a later page a lower id. Under
+        // `EXPLICIT` a caller-supplied id can be appended below the ids
+        // already in the page, so the walk emits that page out of key
+        // order and a pk sort here would make a *served* execution
+        // disagree with the recording one that preceded it. There the
+        // entry's own (page, slot) is what the walk gives, which is the
+        // order WalkAndRecord committed and the order this serve emitted
+        // before the fix above - so EXPLICIT keeps it and gains only the
+        // repositioning of an appended entry.
+        if (access.key_mode == catalog::KeyMode::kExplicit) {
+            std::sort(located.begin(), located.end(), [](const Located& a, const Located& b) {
+                return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
+            });
+        } else {
+            std::sort(located.begin(), located.end(),
+                      [](const Located& a, const Located& b) { return a.pk < b.pk; });
+        }
 
         // Phase 2. The page is fetched per entry rather than carried out of
         // phase 1: `AcceptTupleAt` descends into the next step, and anything
@@ -1032,29 +1104,7 @@ private:
                                const Step& step, const catalog::TableAccess& access,
                                const stats::CabinKey& key) {
         cabins_->Unobserve(key);
-
-        Recording recording;
-        recording.step_id = step.step_id;
-        recording.rel_slot = static_cast<std::uint16_t>(index);
-        recording.col_pos = step.cabin->col_pos;
-        recording.value = &step.cabin->value;
-        // Saved and restored rather than cleared, for RunCabinStep's reason.
-        Recording* outer_recording = recording_;
-        recording_ = &recording;
-        Status walked = co_await RunWalkStep(steps, index, step, access);
-        recording_ = outer_recording;
-
-        if (!walked.ok()) co_return walked;
-        if (stopped_) co_return Status::OK();  // a partial walk records nothing
-
-        std::sort(recording.entries.begin(), recording.entries.end(),
-                  [](const stats::CabinEntry& a, const stats::CabinEntry& b) {
-                      return a.page_id < b.page_id || (a.page_id == b.page_id && a.slot < b.slot);
-                  });
-        if (cabins_->Commit(key, std::move(recording.entries))) {
-            ++stats_.For(step.step_id).cabin_recordings;
-        }
-        co_return Status::OK();
+        co_return co_await WalkAndRecord(steps, index, step, access, key);
     }
 
     sched::Coro RunWalkStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
@@ -1397,15 +1447,16 @@ private:
         // carries kAllColumns and takes the whole row here as before.
         const std::span<parser::AstValue> slots =
             frame_.SlotsFor(static_cast<std::uint16_t>(index));
-        // **Not while recording a Cabin.** The write-hook block below reads
-        // the cabin's key column and the pk before the residual runs, and a
-        // slot this row did not decode still holds the *previous* row's
-        // value - which would record an entry for a row that does not carry
-        // the value. A miss walk is already committed to reading everything,
-        // so it decodes everything.
+        // **Recording a Cabin adds nothing to this decode.** The cabined
+        // equality *is* this step's filter, so the key column already sits
+        // in `filter_columns` (the invariant WalkAndRecord's guard checks);
+        // the pk is decoded on demand below, only for a row whose key
+        // matches. The full-decode form this replaced priced a recording
+        // walk at 2x the FilterScan it shadows
+        // (bench/results-scenario3-library.md §7a).
         const bool recording_here =
             recording_ != nullptr && recording_->step_id == step.step_id;
-        const bool partial = step.filter_columns != Step::kAllColumns && !recording_here;
+        const bool partial = step.filter_columns != Step::kAllColumns;
         if (partial) {
             if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
                                              step.filter_columns, &spills_);
@@ -1445,16 +1496,28 @@ private:
         // the rest of the residual continues to decide what this statement
         // emits - which happens below and changes nothing about what was
         // recorded.
-        if (recording_ != nullptr && recording_->step_id == step.step_id) {
-            const ColumnRef ref{0, recording_->rel_slot, recording_->col_pos};
-            if (frame_.CanResolve(ref) &&
-                CompareValues(/*type_val=*/0, frame_.Get(ref), *recording_->value,
+        if (recording_here) {
+            // `slots` is this step's own frame span and the recording is
+            // scoped to this step by its id, so the key column is read
+            // directly rather than through a per-row frame resolution. One
+            // comparison per walked row is the recording's whole per-row
+            // cost.
+            if (recording_->col_pos < slots.size() &&
+                CompareValues(/*type_val=*/0, slots[recording_->col_pos], *recording_->value,
                               parser::CompareOp::kEq)) {
-                // Column 0 is the Keystone pk, already decoded into the
-                // frame by this step - so the id costs a read, never a
-                // lookup. Same source the trail collector uses, deliberately.
-                const parser::AstValue& pk =
-                    frame_.Get(ColumnRef{0, static_cast<std::uint16_t>(index), 0});
+                // The pk, decoded **on demand and only for a matching
+                // row**: paying one extra column on every *rejected* row
+                // was most of the recording walk's residual cost over the
+                // plain one. Column 0 is fixed-width and never spills, and
+                // the nullptr enforces that rather than assuming it.
+                if (partial) {
+                    if (Status s = DecodeColumnsInto(access.schema, access.layout, version_,
+                                                     slots, /*columns=*/1, /*spills=*/nullptr);
+                        !s.ok()) {
+                        return s;
+                    }
+                }
+                const parser::AstValue& pk = slots[0];
                 stats::CabinEntry entry;
                 entry.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
                 entry.page_id = page_id;
@@ -1662,7 +1725,6 @@ private:
     // cannot outlive the call that started it.
     struct Recording {
         std::uint32_t step_id = 0;
-        std::uint16_t rel_slot = 0;
         std::uint16_t col_pos = 0;
         const parser::AstValue* value = nullptr;
         std::vector<stats::CabinEntry> entries;
@@ -1673,6 +1735,7 @@ private:
     // until every entry has been resolved so that the heap fallback can
     // still abandon without having emitted a row.
     struct Located {
+        std::uint64_t pk = 0;
         PageId page_id = kInvalidPageId;
         std::uint16_t slot = 0;
     };

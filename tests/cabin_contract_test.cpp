@@ -116,6 +116,27 @@ const std::vector<std::string>& Queries() {
         "SELECT * FROM h WHERE sym = 'ccc' AND qty = 40",
         "SELECT * FROM b WHERE id = 3",
         "SELECT * FROM b",
+
+        // ---- The correlated probe (feat-cabin.md §4a) ------------------
+        //
+        // Self-joins whose inner side is keyed by the outer row's `sym` -
+        // no literal, so the inner step is a per-outer-row CabinProbe on
+        // the cabined configurations and a walk on the reference. The
+        // rounds exercise the whole ladder per distinct key: miss, record,
+        // serve. The heap self-join is the shape this form exists for
+        // (IX3 refuses a heap relation an index), and it also exercises
+        // the hint-failure re-record path when a round's writes move rows.
+        "SELECT x.id, y.id FROM b AS x JOIN b AS y ON y.sym = x.sym "
+        "WHERE x.id = 2",
+        "SELECT x.id, y.qty FROM b AS x JOIN b AS y ON y.sym = x.sym "
+        "WHERE x.id BETWEEN 1 AND 3",
+        "SELECT x.id, y.id FROM h AS x JOIN h AS y ON y.sym = x.sym "
+        "WHERE x.id BETWEEN 1 AND 3",
+        // The correlated EXISTS, both clustering types.
+        "SELECT id FROM b AS o WHERE EXISTS "
+        "(SELECT i.id FROM b AS i WHERE i.sym = o.sym AND i.qty > 30)",
+        "SELECT id FROM h AS o WHERE EXISTS "
+        "(SELECT i.id FROM h AS i WHERE i.sym = o.sym AND i.qty > 30)",
     };
     return kQueries;
 }
@@ -713,6 +734,81 @@ TEST(CabinContractTest, TwoCabinStepsInOneChainNeitherShareBuffersNorCancelEachO
         off.Run(sql);
     }
     EXPECT_EQ(on.Run(sql), off.Run(sql));
+}
+
+TEST(CabinContractTest, AWriteHookAppendServesInPkOrder) {
+    // **The ordering rule, minimised to one relation and one write.** A
+    // walk emits a step's rows in pk order (I12), and a committed set
+    // starts that way - but the write hook appends at the set's *end*, so
+    // an UPDATE moving an earlier pk into an observed value leaves the set
+    // out of order. Serving it in entry order then reorders a reply, which
+    // is an accelerator changing a query result (§1).
+    //
+    // Reachable by plain single-relation SQL, which is why it lived
+    // undetected: the query set above never exposed a whole multi-row set
+    // for a value a write had moved into. Both clustering types, because
+    // the CB12 join queries that found this catch the heap half only.
+    Instance db(/*cabins=*/true);
+    Instance ref(/*cabins=*/false);
+    Load(db);
+    Load(ref);
+    DeclareCabins(db);
+
+    // 'ccc' is one row, pk 4. Declared, so this execution observes it.
+    const std::string sql = "SELECT id FROM b WHERE sym = 'ccc'";
+    ASSERT_EQ(db.Run(sql), ref.Run(sql));
+
+    // pk 1 moves in, and lands after pk 4 in the entry set.
+    const std::string write = "UPDATE b SET sym = 'ccc' WHERE id = 1";
+    ASSERT_EQ(db.Run(write), ref.Run(write));
+    EXPECT_EQ(db.Run(sql), ref.Run(sql)) << "btree: a served set emitted out of pk order";
+
+    // The heap twin. Same append; the serve path differs (no descent to
+    // heal a hint with), the ordering rule does not.
+    const std::string heap_sql = "SELECT id FROM h WHERE sym = 'ccc'";
+    ASSERT_EQ(db.Run(heap_sql), ref.Run(heap_sql));
+    const std::string heap_write = "UPDATE h SET sym = 'ccc' WHERE id = 1";
+    ASSERT_EQ(db.Run(heap_write), ref.Run(heap_write));
+    EXPECT_EQ(db.Run(heap_sql), ref.Run(heap_sql))
+        << "heap: a served set emitted out of pk order";
+}
+
+TEST(CabinContractTest, AnExplicitKeyRelationServesTheOrderItWalks) {
+    // The other half of the ordering rule, and the half a pk sort gets
+    // wrong. Under `EXPLICIT` (heap-and-tuple.md §4.1) a caller-supplied id
+    // need not ascend, so a page's slots - always in *insertion* order -
+    // are not in key order, and the walk emits them as they lie. A serve
+    // that sorted by pk would answer one order on the recording execution
+    // and another on every execution after it, with the cabin-free
+    // baseline agreeing with neither.
+    //
+    // Five rows, descending ids, one page: walk order is the reverse of pk
+    // order, which is what makes the two distinguishable at all.
+    Instance db(/*cabins=*/true);
+    Instance base(/*cabins=*/false);
+    for (Instance* d : {&db, &base}) {
+        ASSERT_EQ(d->Run("CREATE TABLE e (id int64, sym varchar, qty int64) BTREE EXPLICIT")
+                      .substr(0, 7),
+                  "CREATED");
+        for (int id : {50, 40, 30, 20, 10}) {
+            const std::string n = std::to_string(id);
+            ASSERT_EQ(d->Run("INSERT INTO e VALUES (" + n + ", 'aaa', " + n + ")").substr(0, 8),
+                      "INSERTED")
+                << id;
+        }
+    }
+    ASSERT_EQ(db.Run("CREATE CABIN ON e(sym)").substr(0, 7), "CREATED");
+
+    const std::string sql = "SELECT id FROM e WHERE sym = 'aaa'";
+    const std::string want = base.Run(sql);
+    EXPECT_EQ(db.Run(sql), want) << "the recording walk";
+    EXPECT_EQ(db.Run(sql), want) << "the served execution reordered the reply";
+    EXPECT_EQ(db.Run(sql), want) << "the served execution reordered the reply";
+
+    // And the clause that *does* ask for pk order still gets it, from the
+    // sink rather than from the entry set.
+    const std::string ordered = sql + " ORDER BY id";
+    EXPECT_EQ(db.Run(ordered), base.Run(ordered));
 }
 
 }  // namespace

@@ -720,6 +720,101 @@ TEST_F(StepCompileTest, AFilteredColumnStaysReadableAfterTheFilter) {
     EXPECT_TRUE(chain.steps[0].read_columns & Col(2));
 }
 
+TEST_F(StepCompileTest, ACabinStepsKeyColumnIsAlwaysInItsFilterMask) {
+    // The invariant the VM's recording path stands on (step_vm.cpp,
+    // WalkAndRecord's guard): a kCabinProbe step's key column sits in
+    // `filter_columns`, because the cabined equality is a residual conjunct
+    // and the mask is derived from that same residual. This fails the day
+    // someone reorders the mask pass past the kind assignment - which is
+    // the only way the recording could read a stale slot.
+    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    const StepChain chain = MustCompile("SELECT sym FROM trade WHERE acct_id = 7");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    EXPECT_EQ(chain.steps[0].kind, AccessKind::kCabinProbe);
+    EXPECT_TRUE(chain.steps[0].filter_columns & Col(1));
+}
+
+TEST_F(StepCompileTest, AJoinOnACabinedColumnCompilesToACorrelatedCabinProbe) {
+    // feat-cabin.md §4a: the cabined join column with no literal anywhere -
+    // the shape that walked the inner relation once per outer row, and the
+    // only accelerable shape a heap relation's join column has. Both ON
+    // orientations must give the same probe, per the pk arm's argument.
+    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    for (const char* on : {"trade.acct_id = acct.id", "acct.id = trade.acct_id"}) {
+        const StepChain chain = MustCompile(
+            std::string("SELECT trade.sym FROM acct JOIN trade ON ") + on +
+            " WHERE acct.id BETWEEN 1 AND 4");
+        ASSERT_EQ(chain.steps.size(), 2u);
+        EXPECT_EQ(chain.steps[1].kind, AccessKind::kCabinProbe) << on;
+        ASSERT_TRUE(chain.steps[1].cabin.has_value()) << on;
+        ASSERT_TRUE(chain.steps[1].cabin->key_from.has_value()) << on;
+        EXPECT_EQ(*chain.steps[1].cabin->key_from, (ColumnRef{0, 0, 0})) << on;
+    }
+}
+
+TEST_F(StepCompileTest, ALiteralCabinEqualityBeatsTheCorrelatedForm) {
+    // A compile-time key needs no per-row read, so the literal arm stays
+    // first: `trade.acct_id = 7` wins over the join equality on the same
+    // cabined column, and the plan carries a value, not a key source.
+    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id "
+        "WHERE acct.id BETWEEN 1 AND 4 AND trade.acct_id = 7");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[1].kind, AccessKind::kCabinProbe);
+    ASSERT_TRUE(chain.steps[1].cabin.has_value());
+    EXPECT_FALSE(chain.steps[1].cabin->key_from.has_value());
+    EXPECT_EQ(chain.steps[1].cabin->value.int_val, 7);
+}
+
+TEST_F(StepCompileTest, TheCorrelatedCabinDeclinesAMismatchedDescriptor) {
+    // int64 against int32: the write hook observed values coerced to the
+    // cabin column's type, and only an identical descriptor makes the
+    // outer row's decoded value the form the set was keyed on.
+    Create("CREATE TABLE narrow2 (id int64, small int32)");
+    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    const StepChain chain = MustCompile(
+        "SELECT trade.sym FROM narrow2 JOIN trade ON trade.acct_id = narrow2.small "
+        "WHERE narrow2.id BETWEEN 1 AND 4");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[1].kind, AccessKind::kScan);
+    EXPECT_FALSE(chain.steps[1].cabin.has_value());
+}
+
+TEST_F(StepCompileTest, ACorrelatedSubChainProbesTheCabinThroughTheFrame) {
+    // The other owner of the per-outer-row walk: the sub-chain's join
+    // equality reaches outward (up == 1), which is the "available before
+    // this step runs" case - the enclosing row is bound before the
+    // sub-chain opens.
+    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    const StepChain chain = MustCompile(
+        "SELECT * FROM acct WHERE EXISTS "
+        "(SELECT trade.id FROM trade WHERE trade.acct_id = acct.id)");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
+    const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
+    ASSERT_EQ(inner.size(), 1u);
+    EXPECT_EQ(inner[0].kind, AccessKind::kCabinProbe);
+    ASSERT_TRUE(inner[0].cabin.has_value());
+    ASSERT_TRUE(inner[0].cabin->key_from.has_value());
+    EXPECT_EQ(inner[0].cabin->key_from->up, 1u);
+}
+
 TEST_F(StepCompileTest, ARelationWiderThanSixtyFourColumnsGetsNoMask) {
     // **A latent correctness bug, found while building AP01 and fixed with
     // it.** A uint64 mask cannot name column 64, and DecodeColumnsInto stops

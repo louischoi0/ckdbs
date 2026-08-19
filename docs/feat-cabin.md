@@ -160,6 +160,73 @@ At execution, for key value `v`:
 
 The miss path is why the first query for a value costs nothing extra in
 big-O: it was going to scan anyway; recording is a side effect.
+`[AMENDED 2026-08-19]` — for two builds, that claim held only in big-O
+and not in the constant: the recording walk decoded **every column of
+every row** where the plain filter scan decodes only the filtered ones,
+and a walk's cost is decode-dominated on rejected rows — so a recording
+miss over an 8-column relation priced at **2× the walk it shadows**
+(`bench/results-scenario3-library.md` §7's inversion, measured twice).
+The recording walk now decodes the filter's columns, and the pk only for
+a row whose key matches — everything the recording reads and nothing
+else. What remains in the constant is **~6%** (5.1–5.9% by interleaved
+A/B, `bench/results-scenario3-library.md` §7a), one key comparison per
+walked row: the price of building the set, not of decoding for it.
+
+### 4a. The correlated probe `[ADDED 2026-08-19 — CB12]`
+
+A cabined column bound by equality to an *earlier step's* or an enclosing
+chain's column — a join key, a correlated `EXISTS` — probes the Cabin
+**per outer row**, with the value read from the frame instead of a
+compile-time literal (`CabinProbe::key_from`). Everything downstream of
+the key construction is §4's machinery unchanged: an observed value
+serves its set, a miss walks and (policy permitting) records, the
+hint-failure path re-records. This is IX17's shape one trust class over,
+and it is the only acceleration a **heap** relation's join column can
+have at all — IX3 refuses it an index.
+
+Selection is `f(shape, catalog)`, last of the structure arms: after both
+index forms (an index is complete for every key value) and after the
+literal Cabin (a compile-time key needs no per-row read), and only across
+an identical `(type_val, len)` descriptor — the write hook observes
+values coerced to the cabin column's type, so only an identical
+descriptor makes the outer row's decoded value the form the set was keyed
+on. Cross-core, the kind ships as its walk (the ship-time downgrade)
+exactly as the literal form does.
+
+The economics are §8's per key, multiplied by the outer side's key
+distribution: each distinct join value pays one recording walk for a
+**declared** Cabin (`n = 1`; an auto Cabin's `n = 2` pays a counted miss
+first, so two) and every repeat serves at hit cost. A join whose outer
+keys mostly repeat — the fan-in shape — converts its O(outer × inner)
+walk into O(distinct-keys × inner + hits); one whose keys never repeat
+pays the observation surcharge for nothing, which is the same hit-rate
+question `CABIN AUTO` (§11) is open on, unchanged by this form. **New to
+§8's open budget**: one join statement can now push many values past the
+observation threshold on its own — up to `cabin_max_values` sets from a
+single SELECT, each imposing the write-hook cost thereafter — where the
+literal form observed one value per statement.
+
+Two refinements recorded, not built: `correlated_scans` (the statistics
+counter for the quadratic join shape) does not count a correlated
+`kCabinProbe` whose misses still walk, so a still-quadratic statement can
+report zero; and a correlated `EXISTS` over a cabined column re-observes
+without ever recording when every outer key has a qualifying match — the
+stopping sink correctly refuses to commit a partial set — paying the
+recording setup per outer row for nothing. The narrow fix (skip recording
+under a stopping sink) would also skip the completed walk that commits an
+authoritative **empty** set, which is worth keeping, so the right cut
+needs a finer distinction than the sink alone.
+
+**Found while building it, and fixed with it: the serve emitted in entry
+order, which stops being the walk's order after a write-hook append.** An
+UPDATE that moves an earlier pk into an observed value appends that pk at
+the set's end, and serving entry-order then reordered a reply against
+I12's within-step contract — latent since v1 and reachable by a plain
+single-relation probe, not only by a join; the original contract queries
+happened to filter every exposed set to one row. The serve now sorts to
+the walk's order before emission — pk for an `ASSIGNED` relation, page
+and slot for `EXPLICIT`, whose caller-supplied ids need not ascend —
+IX8a's rule applied with §4.1's key modes respected.
 
 ## 5. Write path — the witness
 
