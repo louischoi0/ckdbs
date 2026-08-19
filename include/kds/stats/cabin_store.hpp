@@ -254,6 +254,12 @@ public:
 
     // Whether a value with this many sightings should record now. The policy
     // lives in one place and this is it.
+    //
+    // `declared` is "**the declaration speaks for this probe**", not "the
+    // Cabin is declared" - the two parted at CB14 (feat-cabin.md §4a): a
+    // correlated probe's key is a value no operator named, so it passes
+    // false however the Cabin was created. The caller owns that test
+    // because only the caller knows the probe's shape.
     bool WouldRecord(std::uint8_t sightings, bool declared) const noexcept {
         return sightings >= (declared ? kDeclaredRecordThreshold : kAutoRecordThreshold);
     }

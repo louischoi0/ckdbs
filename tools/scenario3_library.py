@@ -77,6 +77,11 @@ is where an index is expected to pay least.
     loans-by-daterange  WHERE loaned_day BETWEEN ? AND ?  a non-pk range
     overdue             WHERE status = ? AND due_day <= ? composite-key case
     join-loan-user      loans JOIN users ON user_id = id  Lookup + Probe
+    join-no-literal     users JOIN loans ON l.user_id = u.id, u.id BETWEEN
+                        1 AND 16 - no equality to propagate; the inner side
+                        is IX17's IndexProbe / CB12's CabinProbe / a walk
+    exists-correlated   EXISTS (... WHERE l.user_id = users.id) - the
+                        correlated subquery over the same join column
     count-by-user       SELECT COUNT(*) ... WHERE user_id = ?
 
 ---- Running it -----------------------------------------------------------
@@ -172,6 +177,16 @@ INDEX_MODES["all"] = (INDEX_MODES["single"] + INDEX_MODES["composite"]
 CABIN_RELATION = "loans"
 CABIN_COLUMN = "user_id"
 CABIN_TYPE = "int64"
+
+# The two join-family shapes folded in from bench/results-scenario3-library.md
+# §9b/§7b's session harnesses (§9b.7's task). Fixed literals on purpose:
+# they draw nothing from the seeded generator, so their insertion leaves
+# every other phase's argument stream untouched, and ASSIGNED ids issue from
+# 1 per relation (invariant 11), so `BETWEEN 1 AND k` names the first k
+# users in any data file, fresh or shared. k is fixed at 16 because the
+# phase model is ops-of-one-statement; the k-sweep stays a harness's job.
+JOIN_OUTER_K = 16       # outer rows for join-no-literal
+EXISTS_OUTER_K = 20     # outer rows for exists-correlated
 
 GENRES = 16
 BRANCHES = 8
@@ -370,6 +385,28 @@ def explain_index_failure(stmt, reply):
               f"maintain it.", reply)
 
 
+def join_no_literal_stmt(tables):
+    """The no-literal join (results §9b): `BETWEEN` gives the join its outer
+    rows and no equality any rewrite could push onto `loans`, so the inner
+    side is whatever structure the join column has — an index (IX17), a
+    Cabin (CB12), or a per-outer-row walk. Dialect-identical in PostgreSQL;
+    the twin imports this builder rather than restating it."""
+    return (f"SELECT l.book_id, u.member_code "
+            f"FROM {tables['users']} AS u JOIN {tables['loans']} AS l "
+            f"ON l.user_id = u.id "
+            f"WHERE u.id BETWEEN 1 AND {JOIN_OUTER_K}")
+
+
+def exists_correlated_stmt(tables):
+    """The correlated EXISTS over the same join column (results §7b/§9b.4).
+    The correlated reference is spelled with the relation name, as the
+    measured harnesses spelled it."""
+    return (f"SELECT id FROM {tables['users']} "
+            f"WHERE id BETWEEN 1 AND {EXISTS_OUTER_K} AND EXISTS "
+            f"(SELECT l.id FROM {tables['loans']} AS l "
+            f"WHERE l.user_id = {tables['users']}.id)")
+
+
 ANALYZE_STEP = re.compile(r"^step \d+ (\w+) ", re.M)
 
 
@@ -401,6 +438,8 @@ def analyze_shapes(exec_, tables, users, books):
          f"SELECT user_id FROM {tables['loans']} "
          f"WHERE status = {STATUS_OVERDUE} "
          f"AND due_day BETWEEN {DAY0 - 300} AND {DAY0}"),
+        ("join-no-literal", join_no_literal_stmt(tables)),
+        ("exists-correlated", exists_correlated_stmt(tables)),
     )
     out = {}
     for name, stmt in probes:
@@ -414,6 +453,13 @@ def analyze_shapes(exec_, tables, users, books):
         for kind in ANALYZE_STEP.findall(reply):
             if not kinds or kinds[-1] != kind:
                 kinds.append(kind)
+        # A multi-step chain survives the consecutive dedupe as the whole
+        # sequence twice (plan section, then statistics section:
+        # Range, Scan, Range, Scan). One listing of the chain is the plan;
+        # fold the exact repetition.
+        half = len(kinds) // 2
+        if kinds[:half] == kinds[half:]:
+            kinds = kinds[:half]
         out[name] = {
             "kinds": kinds,
             "line": " ".join(reply.split("\n")[0:1]),
@@ -425,8 +471,12 @@ def analyze_shapes(exec_, tables, users, books):
 # The shapes whose predicate column `--index-mode single` indexes. Only
 # these are expected to reach an index; the others are here as the control
 # that says a plan did not change for a reason unrelated to the index.
+# For the last two, the indexed step is the *inner* one — IX17's correlated
+# probe on loans.user_id, keyed per outer row — so `--assert-index-reads`
+# now also fails a run in which IX17 regressed to the walk.
 INDEXED_BY_SINGLE = ("loans-by-user", "loans-by-book", "resv-by-user",
-                     "books-by-author", "books-by-genre")
+                     "books-by-author", "books-by-genre",
+                     "join-no-literal", "exists-correlated")
 INDEXED_BY_COMPOSITE = ("overdue",)
 
 
@@ -624,6 +674,26 @@ def read_phases(client, tables, users, books, args, rng):
                      f"WHERE u.id = {rng.choice(users)}", p)
     phases.append(p)
 
+    # The no-literal join - the shape and its three inner-side answers are
+    # join_no_literal_stmt()'s docstring.
+    p = Phase("join-no-literal",
+              f"JOIN ON user_id, u.id BETWEEN 1 AND {JOIN_OUTER_K} - "
+              f"no literal to propagate")
+    stmt = join_no_literal_stmt(tables)
+    for _ in range(ops):
+        client.timed(stmt, p)
+    phases.append(p)
+
+    # Under --cabin the early ops pay CB14's per-key observation charge,
+    # so the mean honestly mixes the warm-up; p50 is the served cost.
+    p = Phase("exists-correlated",
+              f"EXISTS(loans.user_id = users.id), {EXISTS_OUTER_K} outer "
+              f"rows - under --cabin the mean mixes the observation charge")
+    stmt = exists_correlated_stmt(tables)
+    for _ in range(ops):
+        client.timed(stmt, p)
+    phases.append(p)
+
     # The fold over an indexed filter. AG1 puts the fold outside the
     # executor and the compiled chain is byte-identical to the same
     # statement without the aggregate, so this shape's cost above
@@ -640,7 +710,7 @@ def read_phases(client, tables, users, books, args, rng):
 # ---- verification --------------------------------------------------------
 
 def verify(client, tables, sizes, users, sample, rng):
-    """Three invariants. A throughput number over a workload that lost rows
+    """Five invariants. A throughput number over a workload that lost rows
     measures nothing, and an index that lost rows is exactly the failure
     mode this scenario is built to catch.
 
@@ -650,6 +720,19 @@ def verify(client, tables, sizes, users, sample, rng):
        index serving an incomplete set - the failure feat-cabin.md §5 calls
        invisible without a baseline, and feat-index.md §1 inherits.
     3. Every loan's user_id names a user that exists.
+    4. The no-literal join's reply equals the expectation computed from two
+       full scans client-side, compared **row for row in order**: outer
+       rows ascend the pk range, and each outer row's matches arrive in
+       loans pk order, which is also what a full scan of a BTREE relation
+       returns. An index probe resolves entries in (key, pk) order and a
+       Cabin serves its entry set in observation order - both collapse to
+       the same sequence here - so a structure serving an extra, missing
+       or reordered set fails this check, not just a smaller one. One
+       honest limit: the projection carries no key column, so a row
+       displaced across keys is caught only when its book_id differs at
+       that position - the price of keeping §9b.1's measured statement
+       verbatim.
+    5. The correlated EXISTS's id list, likewise exact and ordered.
     """
     problems = []
 
@@ -681,6 +764,36 @@ def verify(client, tables, sizes, users, sample, rng):
     for uid in list(truth)[:sample]:
         if uid not in known:
             problems.append(f"loans.user_id = {uid} names no user")
+
+    # Checks 4 and 5: the two join-family shapes, against expectations
+    # built from `truth` plus one users scan. Exact-ordered comparison -
+    # `select_rows` keeps the reply's row order and field spelling, so this
+    # is byte-level equality of the data rows.
+    members = {}
+    for row in select_rows(
+            client(f"SELECT id, member_code FROM {tables['users']}")):
+        if len(row) >= 2 and row[0].isdigit():
+            members[int(row[0])] = row[1]
+
+    def exact_match(label, got, want, unit):
+        if got == want:
+            return
+        same = (" (same count - wrong content or wrong order)"
+                if len(got) == len(want) else "")
+        problems.append(f"{label}: {len(got)} {unit}, "
+                        f"expectation {len(want)}{same}")
+
+    want = []
+    for uid in range(1, JOIN_OUTER_K + 1):
+        if uid in members:
+            want.extend([book, members[uid]] for book in truth.get(uid, []))
+    exact_match("join-no-literal",
+                select_rows(client(join_no_literal_stmt(tables))), want, "rows")
+
+    want = [[str(uid)] for uid in range(1, EXISTS_OUTER_K + 1)
+            if uid in members and truth.get(uid)]
+    exact_match("exists-correlated",
+                select_rows(client(exists_correlated_stmt(tables))), want, "ids")
 
     return problems
 
@@ -744,7 +857,7 @@ def main():
     parser.add_argument("--ops", type=int, default=200,
                         help="operations per read shape (default: 200)")
     parser.add_argument("--verify", type=int, default=25, metavar="N",
-                        help="check the three invariants over a sample of N; "
+                        help="check the five invariants over a sample of N; "
                              "0 disables (default: 25)")
     parser.add_argument("--assert-index-reads", action="store_true",
                         help="fail the run if the shapes this --index-mode "

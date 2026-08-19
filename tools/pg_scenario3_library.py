@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """PostgreSQL twin of `scenario3_library.py`.
 
-Same four relations, same row-set sizing, same ten read shapes, same
+Same four relations, same row-set sizing, same twelve read shapes, same
 arguments drawn from the same seeded generator - so the two runs are
-directly comparable and `bench_common` prints tables that line up.
+directly comparable and `bench_common` prints tables that line up. The two
+join-family shapes (`join-no-literal`, `exists-correlated`) are imported
+from the ckdbs driver verbatim - both statements are dialect-identical -
+so the twin cannot drift from the shape it is a baseline for.
 
 What it is a baseline *for* is worth stating precisely, because scenario3
 asks a question PostgreSQL answers only one way. KDS offers three
@@ -40,9 +43,10 @@ import time
 from bench_common import Phase, report, write_json
 from pg_wire import DEFAULT_HOST, PgConnection, PgError
 from scenario3_library import (
-    BRANCHES, CREATE_ORDER, DAY0, GENRES, INDEX_MODES, LOAN_WINDOW,
-    MEMBER_TYPES, STATUS_OUT, STATUS_OVERDUE, STATUS_RETURNED,
-    git_stamp, sizes_for,
+    BRANCHES, CREATE_ORDER, DAY0, EXISTS_OUTER_K, GENRES, INDEX_MODES,
+    JOIN_OUTER_K, LOAN_WINDOW, MEMBER_TYPES, STATUS_OUT, STATUS_OVERDUE,
+    STATUS_RETURNED, exists_correlated_stmt, git_stamp,
+    join_no_literal_stmt, sizes_for,
 )
 
 # The same shape as scenario3_library.SCHEMA, in PostgreSQL's dialect. Kept
@@ -251,7 +255,7 @@ def load_loans(client, table, count, users, books, rng, phase):
 # ---- the read shapes -----------------------------------------------------
 
 def read_phases(client, tables, users, books, args, rng):
-    """The same ten shapes, in the same order, with the same argument
+    """The same twelve shapes, in the same order, with the same argument
     distribution as the ckdbs driver."""
     ops = args.ops
     phases = []
@@ -325,6 +329,25 @@ def read_phases(client, tables, users, books, args, rng):
                      f"WHERE u.id = {rng.choice(users)}", p)
     phases.append(p)
 
+    # The two join-family shapes, imported statement builders - fixed
+    # literals, so they draw nothing from the seeded generator and the
+    # later phases' argument streams stay aligned with the ckdbs run.
+    p = Phase("join-no-literal",
+              f"JOIN ON l.user_id = u.id, u.id BETWEEN 1 AND "
+              f"{JOIN_OUTER_K} - no literal to propagate")
+    stmt = join_no_literal_stmt(tables)
+    for _ in range(ops):
+        client.timed(stmt, p)
+    phases.append(p)
+
+    p = Phase("exists-correlated",
+              f"EXISTS(loans WHERE user_id = users.id), "
+              f"{EXISTS_OUTER_K} outer rows")
+    stmt = exists_correlated_stmt(tables)
+    for _ in range(ops):
+        client.timed(stmt, p)
+    phases.append(p)
+
     p = Phase("count-by-user", "SELECT COUNT(*) ... WHERE user_id = ?")
     for _ in range(ops):
         client.timed(f"SELECT COUNT(*) FROM {tables['loans']} "
@@ -355,6 +378,8 @@ def explain_shapes(client, tables, users):
          f"SELECT user_id FROM {tables['loans']} "
          f"WHERE status = {STATUS_OVERDUE} AND due_day BETWEEN {DAY0 - 300} "
          f"AND {DAY0}"),
+        ("join-no-literal", join_no_literal_stmt(tables)),
+        ("exists-correlated", exists_correlated_stmt(tables)),
     )
     for name, stmt in probes:
         rows = client.rows(f"EXPLAIN {stmt}")

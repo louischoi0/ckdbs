@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -832,10 +833,16 @@ TEST(CabinContractTest, ACorrelatedExistsConvergesToObservedSets) {
         "(SELECT i.id FROM h AS i WHERE i.sym = o.sym AND i.qty > 30)";
     const std::string first = db.Run(q);
     ASSERT_EQ(first.rfind("ERR", 0), std::string::npos) << first;
+    // The correlated form earns observation per key (§4a), so the ladder
+    // is per key and not per execution: 'aaa' and 'bbb' repeat *within*
+    // one execution (outer rows 1/3/6 and 2/5/8) and record on their
+    // second outer row; 'ccc' and 'ddd' are touched once per execution
+    // and need this second one. Both record through the stops.
+    EXPECT_EQ(db.Run(q), first);
 
-    // The witness: a declared Cabin records on the first miss, and the
-    // completed-through-stop walk is what lets it commit - so after one
-    // execution the probed values are observed sets, not eternal misses.
+    // The witness: after the second execution the probed values are
+    // observed sets, not eternal misses - the completed-through-stop walk
+    // is what lets each commit.
     auto oid = db.catalog().FindTableOidByName("h", nullptr);
     ASSERT_TRUE(oid.ok());
     auto access = db.catalog().InitTableAccess(oid.value());
@@ -904,6 +911,20 @@ TEST(CabinContractTest, ACapRefusedValueKeepsTheShortCircuitedCost) {
             << "round " << r << ": the cabined side burned budget on doomed walks: " << got;
         EXPECT_EQ(got, want) << "round " << r;
     }
+
+    // The teeth (re-armed 2026-08-19 - review R1): the budget assertion
+    // above went hollow the moment completion rows stopped charging it,
+    // which is itself correct - so the bound moves to the work counter,
+    // which completion rows still honestly increment. With the gates in
+    // place a probe of a cap-refused value ends at the sub-chain's own
+    // stop; with either gate removed the doomed completions walk the
+    // relation per outer row and `examined=` says so. Measured with the
+    // gates: ~30 inner rows; with them removed: 65+.
+    const std::string plan = db.Run("ANALYZE " + q);
+    const std::size_t at = plan.find("examined=");
+    ASSERT_NE(at, std::string::npos) << plan;
+    const long examined = std::strtol(plan.c_str() + at + 9, nullptr, 10);
+    EXPECT_LT(examined, 45) << "doomed completion walks ran: " << plan;
 }
 
 TEST(CabinContractTest, CorrelatedScansCountWalksNotKinds) {
@@ -914,19 +935,20 @@ TEST(CabinContractTest, CorrelatedScansCountWalksNotKinds) {
     Load(db);
     DeclareCabins(db);
 
-    // 1. A cabined EXISTS's first execution walks per outer row - the
-    //    misses record - and the counter says so.
+    // 1. A cabined EXISTS's early executions walk per outer row - the
+    //    first sights, the second records (§4a's per-key n = 2) - and the
+    //    counter says so both times.
     const std::string q =
         "ANALYZE SELECT id FROM h AS o WHERE EXISTS "
         "(SELECT i.id FROM h AS i WHERE i.sym = o.sym)";
-    const std::string first = db.Run(q);
-    EXPECT_NE(first.find("corr_scans="), std::string::npos) << first;
+    EXPECT_NE(db.Run(q).find("corr_scans="), std::string::npos);
+    EXPECT_NE(db.Run(q).find("corr_scans="), std::string::npos);
 
     // 2. Once converged, every probe serves and nothing walks - the
     //    counter goes quiet exactly when the quadratic work does. (A zero
     //    counter is not printed.)
-    const std::string second = db.Run(q);
-    EXPECT_EQ(second.find("corr_scans="), std::string::npos) << second;
+    const std::string third = db.Run(q);
+    EXPECT_EQ(third.find("corr_scans="), std::string::npos) << third;
 
     // 3. A kFilterScan driver - a literal beside the correlation, no cabin
     //    involved - walks every evaluation and now counts, where the old
@@ -938,6 +960,59 @@ TEST(CabinContractTest, CorrelatedScansCountWalksNotKinds) {
         "(SELECT i.id FROM b AS i WHERE i.qty = 45 AND i.sym = o.sym)";
     EXPECT_NE(plain.Run(fs).find("corr_scans="), std::string::npos);
     EXPECT_NE(plain.Run(fs).find("corr_scans="), std::string::npos);  // never converges
+}
+
+TEST(CabinContractTest, ANeverRepeatingKeyObservesNothing) {
+    // §7b.8's uncovered distribution, closed on the Cabin side: a join
+    // whose outer keys never repeat used to record a set - and its
+    // forever write-hook tax - for every first touch, because a declared
+    // Cabin's n = 1 spoke for values the operator never named. The
+    // correlated form now earns observation per key: one execution of a
+    // join touching a key once leaves it unobserved, and the reply is
+    // byte-identical to the cabin-free walk.
+    Instance db(/*cabins=*/true);
+    Instance ref(/*cabins=*/false);
+    Load(db);
+    Load(ref);
+    DeclareCabins(db);
+
+    // 'ccc' has one row (id 4), so x.id = 4 probes it exactly once.
+    const std::string q =
+        "SELECT x.id, y.id FROM h AS x JOIN h AS y ON y.sym = x.sym "
+        "WHERE x.id BETWEEN 4 AND 4";
+    EXPECT_EQ(db.Run(q), ref.Run(q));
+
+    auto oid = db.catalog().FindTableOidByName("h", nullptr);
+    ASSERT_TRUE(oid.ok());
+    auto access = db.catalog().InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    const std::uint64_t cabin_id = access.value()->CabinOn(/*col_pos=*/1).id;
+    parser::AstValue v;
+    v.type = parser::ValueType::kStr;
+    v.str_val = "ccc";
+    auto key = stats::MakeCabinKey(cabin_id, v);
+    ASSERT_TRUE(key.has_value());
+    EXPECT_EQ(db.cabins().Find(*key), nullptr) << "a once-touched key must not record";
+
+    // And the literal form is untouched: the operator named this value,
+    // and the declaration's n = 1 still records it on the first miss.
+    //
+    // **'ddd', not 'ccc'** - the join above already sighted 'ccc' once, so
+    // a literal probe of it arrives at count 2 and would record even at
+    // n = 2. 'ddd' (one row, id 7) is untouched by the `x.id = 4` join, so
+    // this is a genuine first touch and the assertion is the A/B this test
+    // exists to make: same instance, same cabin, same single-row key
+    // shape, differing only in probe form.
+    parser::AstValue lit;
+    lit.type = parser::ValueType::kStr;
+    lit.str_val = "ddd";
+    auto lit_key = stats::MakeCabinKey(cabin_id, lit);
+    ASSERT_TRUE(lit_key.has_value());
+    ASSERT_EQ(db.cabins().Find(*lit_key), nullptr);
+    EXPECT_EQ(db.Run("SELECT * FROM h WHERE sym = 'ddd'"),
+              ref.Run("SELECT * FROM h WHERE sym = 'ddd'"));
+    EXPECT_NE(db.cabins().Find(*lit_key), nullptr)
+        << "the declared literal probe records first-touch";
 }
 
 }  // namespace

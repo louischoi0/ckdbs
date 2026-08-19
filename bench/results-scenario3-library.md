@@ -791,7 +791,10 @@ statement at 67 µs on a column that *has* no index. What was not measured,
 and would complete the picture, is PostgreSQL at `--index-mode none` on
 this shape — its seq-scan-per-outer-row against BASE's walk; the twin
 driver supports the mode, and that cell is the named task if the number is
-ever wanted.
+ever wanted. *(Measured 2026-08-19 — §7e: six cells at three sizes. The
+anticipated seq-scan-per-outer-row is a plan PostgreSQL never produces —
+it hash-joins over one scan per statement, 1,314/s at k=16 and 10,000
+loans against the walk's 117/s and the warm serve's 14,870/s.)*
 
 ### 7b.8 What §7b changes, and what it does not
 
@@ -814,7 +817,8 @@ each imposing the write-hook cost thereafter. A join whose outer keys
 never repeat pays ~6% per key (§7a's miss surcharge) for nothing — **the
 never-repeating-key distribution on an unindexed column remains the
 uncovered case**, and it is a `CABIN AUTO` policy question
-(`docs/feat-cabin.md` §11), not an executor one. Also unchanged: the
+(`docs/feat-cabin.md` §11), not an executor one *(closed on the Cabin's
+side later by CB14 — §7d measures it)*. Also unchanged: the
 EXISTS non-convergence (§7b.4 above, recorded in §4a with the reason the
 narrow fix is wrong) *(closed later the same day by CB13 — §7c measures
 it)*; the `correlated_scans` counter blind spot (§4a: a still-quadratic
@@ -849,7 +853,10 @@ walk-heavy shape a resolvable +2.9–4.0% (~2 ns per examined row), the
 fix moved the completion exit inside the recording block and made the row
 charge unconditional again, and at `fa1f320` all ten driver shapes read
 inside their replicate floors. CB12's headline is untouched: the warm
-no-literal join serves at 67–68 µs on both binaries.**
+no-literal join serves at 67–68 µs on both binaries.** *(CB14, later the
+same day, moves the correlated observation to a key's second touch — the
+charge lands on execution 2 and steady state on execution 3; §7d measures
+the shifted series against this engine.)*
 
 ### 7c.1 The A/B run
 
@@ -1123,7 +1130,9 @@ index (a hashed semi-join over it), measured against ckdbs-with-index in
 §9b. The named task is also unchanged: PostgreSQL at `--index-mode none`
 on the correlated shapes — its seq-scan-per-outer-row against BASE's walk
 — is the cell that would complete the picture, and the twin driver
-supports the mode.
+supports the mode. *(Measured 2026-08-19 — §7e: on the EXISTS PostgreSQL
+is flat at 681/s, behind even this run's BASE at 1,021/s, and 19.7×
+behind NEW's converged 13,423/s.)*
 
 ### 7c.8 What §7c changes, and what it does not
 
@@ -1141,7 +1150,8 @@ puts every walk shape back inside its floor at `fa1f320`.
 
 **Not changed:** §8's per-key economics — the observation is still paid,
 now once even for a stopping shape, and the never-repeating-key
-distribution remains the uncovered case (`CABIN AUTO`, §11); the
+distribution remains the uncovered case (`CABIN AUTO`, §11) *(closed on
+the Cabin's side the same day by CB14 — §7d)*; the
 `correlated_scans` blind spot (§4a — a still-quadratic correlated
 CabinProbe still reports zero, though fewer shapes now stay quadratic);
 the serve path and its §7b numbers; the indexed answers (§9a/§9b); the
@@ -1149,6 +1159,486 @@ sticky mark is per-store-lifetime with `Unobserve` and the sighting reset
 as the only clears, so a key refused at the entry cap stays refused until
 policy says otherwise — a §11 question, not measured here; and the rest
 of this file, which describes `9f762a3`.
+
+## 7d. Addendum, 2026-08-19 — the correlated probe earns observation per key: sight, then charge, then serve
+
+§7b.8 and §7c.8 both left the same case uncovered: a join whose outer
+keys never repeat paid the observation surcharge for nothing, and one
+SELECT could push up to `cabin_max_values` keys into observation — each a
+dead set carrying a standing write-hook cost for a key nobody would probe
+again. **CB14** (`8420242`, `docs/feat-cabin.md` §4a and §8.1 amended)
+closes it at the admission seam: the correlated probe now takes the
+`n = 2` threshold whatever the Cabin's declaration says, because a
+declaration is evidence about the value the operator *named* — the
+literal shape — and says nothing about a value a walk produced. Per key:
+the first touch costs one sighting insert and records nothing; a
+repeating key records on its second touch and serves from its third; the
+literal probe's `n = 1` is untouched. This addendum measures CB14 by
+interleaved A/B — BASE **`e9531ce`** (§7c's engine plus the
+`correlated_scans` counter fix) against NEW **`8420242`** — and this run
+is the file's record of it on `worktree-enhence-join-perf`.
+
+**The answers: the EXISTS convergence shifts exactly one execution —
+sight at ~969 µs (the pre-CB13 cost, paid once), charge at ~6.4 ms,
+steady from execution 3 at ~79 µs against BASE's ~77, the same steady
+state one execution later. Sixteen keys touched exactly once grow the
+store by 11 sets and 49 entries on BASE and by nothing on NEW — and NEW's
+first touch is ~9.6% *cheaper*, because declining to record 11 dead sets
+saves ~56 µs per set on the very walk that would have built them. The
+literal path is untouched at the strongest level this run can state:
+after 21,004 identical driver ops, the store's four counters are
+byte-equal across the two engines, and every captured reply — 74-row
+single-shot, EXISTS, all five sweep widths — is byte-identical across all
+eight cells.**
+
+### 7d.1 The A/B run
+
+| | |
+|---|---|
+| executed | **2026-08-19 07:34:35 → 07:40:57 UTC**, 8 ckdbs cells, alternating BASE, NEW ×3, then a replacement pair after one NEW cell was discarded for contamination (below) |
+| branch / worktree | `worktree-enhence-join-perf`, in the worktree `enhence-join-perf` |
+| commit measured | **`8420242`** (CB14), recorded by every cell, `dirty: false` |
+| BASE binary | a **copy**, `sha256 e4d96806…`, built at 07:33:27 from a temporary worktree at **`e9531ce`** (clean, removed after) — §7c's NEW engine plus the counter-only `correlated_scans` fix, so §7c's tables chain to this run's BASE column |
+| NEW binary | a **copy**, `sha256 a20d2cbf…`, from this worktree's `build-release/kds_server`, source mtime 07:26:14 — 28 s *before* `8420242` was committed at 07:26:42; a `cmake --build` at 07:29 recompiled nothing and left the hash unchanged, so the copy is HEAD's sources |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, **`KDS_WITH_TLS=OFF`** both sides |
+| device | ext4 on `/dev/root` (`df -T`); data files under `$HOME/bench-s3-cb14ab/db/`, WAL under `$HOME/bench-s3-cb14ab/wal/<cell>/`, binary copies under `$HOME/bench-s3-cb14ab/bin/` |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, port 15499. One server and one **fresh data file** per cell, started from the run's own copy |
+| driver | `tools/scenario3_library.py --suffix s3 --loans 10000 --index-mode none --cabin --ops 200 --verify 25`, seed 1 — §7b/§7c's configuration exactly |
+| the measured statements | against each cell's loaded server, in order: `SHOW CABINS`, the **single-shot never-repeating probe** (the §7b join over `u.id BETWEEN 41 AND 56` — 16 keys, each touched exactly once — executed **once**), `SHOW CABINS` again; the correlated EXISTS **8 timed executions** plus `ANALYZE`; the §7b k-sweep once at 3 sampled ops per k (a control, not this run's serve measurement — §7c.6 owns that at 50 ops); one reply capture per cell; a final `SHOW CABINS` |
+| contention control | every cell gated on `bench/wait_quiet.sh` (loadavg 0.39–0.67 at starts); `pgrep -c cc1plus` 0 before and after all 8 cells. **`new-2` is discarded**: every phase of its cell ran 2–4× wide (single-shot 12,908 µs against 5,857–5,891 on its siblings, EXISTS steady oscillating 260–1,533 µs, four driver shapes +30–50%) with nothing in the gates to show for it — sar reports no steal, the journal shows Azure's `collect-logs` scope only before its window — yet its counters, store snapshots and replies are byte-identical to the other NEW cells: a machine mode, not a path, replaced by the `base-4`/`new-4` pair. Named modes kept: `base-4` ran whole-cell high (EXISTS charge 7,743 against 6,356–6,535, single-shot 7,537), and `overdue` ran +80 µs across its whole distribution in `new-1`/`new-4` but not `new-3` (§7d.4) |
+| correctness | 8 × 21,004 driver ops, 0 errors, `verify_problems` empty in all 8; every EXISTS reply equal to its cell's first, all 64 executions; the closing `ANALYZE` identical across all clean cells of both binaries (`cabin_hits=20 cabin_entries=97 hint_hits=97`). Cross-binary: the single-shot's 74-row reply and the captured EXISTS + k=1/2/4/8/16 replies are **byte-identical across all eight cells**. The Debug test suite was **not executed in this measurement session** (no engine code changed here; CB14 landed with its own suite run) |
+
+**One size, deliberately, again.** As in §7b.1 and §7c.1 this addendum
+runs at 10,000 loans only; the swept axes are *touches per key* (one, for
+the sixteen single-shot keys; two-then-more, for the EXISTS keys) and
+*executions* (eight). What CB14 changes is which touch records — a count,
+not a row cost: the store-growth evidence below is in keys and entries
+and would read identically at 200 or 1,000 loans, while the observation
+charge's proportionality to relation size is §9b's measured walk table
+(12.1 / 53.6 / 527 µs per outer row at 200 / 1K / 10K), unchanged by
+when the charge lands. The k-sweep control sweeps the outer cardinality
+1→16 as before.
+
+### 7d.2 The convergence series — shifted one execution, to the same steady state
+
+The §7c statement, verbatim, eight executions per cell. BASE (CB13)
+charges on execution 1 and serves from 2; NEW sights on 1, charges on 2,
+serves from 3. Per-execution latency in µs, the seven clean cells:
+
+| exec | base-1 | base-2 | base-3 | base-4 | new-1 | new-3 | new-4 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 6,355.7 | 6,382.3 | 6,534.5 | 7,742.7 | **971.8** | **955.2** | **979.5** |
+| 2 | 101.1 | 103.0 | 101.5 | 121.8 | **6,394.6** | **6,390.2** | **6,359.4** |
+| 3 | 84.3 | 80.1 | 80.5 | 76.7 | 100.1 | 96.7 | 99.9 |
+| 4 | 77.7 | 77.0 | 74.8 | 68.4 | 78.3 | 79.5 | 79.2 |
+| 5 | 76.5 | 75.8 | 72.3 | 68.1 | 75.5 | 75.9 | 76.4 |
+| 6 | 74.9 | 75.9 | 73.2 | 79.3 | 74.1 | 74.5 | 74.4 |
+| 7 | 74.4 | 72.9 | 73.0 | 89.3 | 72.9 | 73.0 | 73.0 |
+| 8 | 73.1 | 72.7 | 71.4 | 93.0 | 73.0 | 74.9 | 73.4 |
+
+A convergence series, not a distribution — no percentiles over ordered
+executions. The steady state (executions 3–8, mean; stmts/s derived as
+1e6/mean, single serial connection, per this file's matrix rule):
+
+| | BASE (c1 / c2 / c3 / c4) | NEW (c1 / c3 / c4) |
+|---|---:|---:|
+| steady mean µs | 76.8 / 75.7 / 74.2 / 79.1 | 79.0 / 79.1 / 79.4 |
+| pooled mean µs | 76.5 | 79.2 |
+| ≈stmts/s (derived) | 13,072 | 12,626 |
+
+The pooled steady delta, +3.5%, sits inside BASE's own 6.6% replicate
+spread — not a finding. The shift is exact and the sum decomposes (each
+execution is ~42 µs of client/socket round trip plus the 32-row outer
+range — §7b.3's intercept — plus the probe work; no commit/fsync wait,
+these are read statements on one connection, and no lock wait exists to
+account for): **NEW's execution 1** costs 969 µs pooled — 6
+driver-inherited keys serve, 14 miss into sighting inserts with the
+short-circuited prefix kept (~1,089 inner rows per missed key, §7c.4's
+account) — which is precisely the cost the pre-CB13 engine paid on
+*every* execution (§7c.3's flat ~979 µs), paid once here. **Execution 2**
+is §7c.4's observation charge, unchanged in size (6,359–6,395 against
+BASE's 6,356–6,535 on the mode-free cells): 14 recording walks run
+through the stop. Execution 3 carries the same ~25 µs first-serve residue
+§7c.3 noted, and from there the two engines are the same machine. CB14
+delays the charge by one execution and one short-circuit pass (~890 µs);
+it never re-prices it.
+
+### 7d.3 The store after sixteen keys touched once — what BASE keeps and NEW declines
+
+The single-shot probe is the §7b join over `u.id BETWEEN 41 AND 56`,
+executed exactly once per cell against the freshly driven store: sixteen
+correlated keys, each touched once — the never-repeating distribution
+distilled. Five of the sixteen were already observed sets (the driver's
+literal phases had named them; hits 87→92 on both engines), so eleven
+keys arrive genuinely unseen. `SHOW CABINS` (`observed/entries/hits/
+misses` — counts, no percentiles), identical across **every** cell of
+its binary including the discarded one (the mode moved time, never
+state):
+
+| snapshot (after) | BASE `e9531ce` | NEW `8420242` |
+|---|---|---|
+| the driver's 21,004 ops | 539 / 2,709 / 87 / 539 | **539 / 2,709 / 87 / 539** — byte-equal |
+| + single-shot, 16 keys × 1 touch | **550 / 2,758** / 92 / 550 | **539 / 2,709** / 92 / 550 |
+| + EXISTS ×8 (keys 1–20) | 564 / 2,823 / 258 / 564 | 553 / 2,774 / 244 / 578 |
+| + k-sweep and captures (final) | 564 / 2,823 / 390 / 564 | 553 / 2,774 / 376 / 578 |
+
+**BASE records 11 sets and 49 entries for keys it will never be asked
+again; NEW records nothing** — its 11 misses are the sighting inserts,
+its store numerically unmoved. Each of BASE's 11 sets is a standing
+obligation: every future write of a `loans` row carrying one of those
+`user_id`s pays the write hook to maintain a set nobody reads (§8's
+economics), and the 49 entries count against the same `cabin_max_values`
+/ entry budgets §7b.8 warned one SELECT could flood. That flood is now
+bounded to intra-statement repeats — this statement, sixteen keys, bought
+zero. The EXISTS rows show the repeating side pays as before: both
+engines record the same 14 sets and 65 entries for keys 1–20, NEW one
+execution later and 14 sighting-misses richer, converging on stores that
+differ by exactly the once-touched keys.
+
+The single-shot's own latency makes the finer point — one execution per
+cell by design (a first touch happens once per data file), so these are
+single timings, not distributions:
+
+| cell | BASE µs | cell | NEW µs |
+|---|---:|---|---:|
+| base-1 | 6,496.3 | new-1 | 5,856.8 |
+| base-2 | 6,528.1 | new-3 | 5,864.0 |
+| base-3 | 6,449.4 | new-4 | 5,891.3 |
+| base-4 | 7,536.6 † | | |
+
+† base-4's whole-cell high mode (its EXISTS charge reads +18% the same
+way). Against the three mode-free BASE cells (spread 1.2%; NEW's 0.6%):
+**NEW is 9.6% faster on the first touch itself** — 6,491 µs against
+5,871 — because the walk no longer builds what it records: ~56 µs per
+declined set (620 µs / 11 keys) of entry inserts and set commits. CB14
+is not a trade of first-touch cost against later convergence: the
+never-repeating statement is cheaper *and* the store stays clean; the
+only price is borne by genuinely repeating keys, whose charge arrives
+one execution later (§7d.2). The 74-row reply is byte-identical across
+all eight cells — sighting against recording never changes an answer.
+
+### 7d.4 Every shape inside floors — and the literal path untouched twice over
+
+The overhead question: does the per-key threshold test (one branch and a
+`key_from` check per probe) or the sighting traffic cost the rest of the
+workload anything? Ten driver shapes, 200 timed ops each, p50 per cell
+with replicate floors, delta of means, and throughput derived as 1e6/p50
+(single serial connection, per the matrix rule):
+
+| shape | BASE p50 µs (c1/c2/c3/c4) | NEW p50 µs (c1/c3/c4) | Δ means | BASE floor | NEW floor | BASE q/s | NEW q/s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pk-user | 36.8/38.4/38.6/38.1 | 38.2/38.6/37.6 | +0.4% | 4.9% | 2.7% | 26,333 | 26,224 |
+| loans-by-user | 603.3/599.5/633.3/598.3 | 594.4/599.0/594.9 | −2.1% | 5.8% | 0.8% | 1,643 | 1,678 |
+| loans-by-book | 561.7/561.1/593.7/558.9 | 556.8/561.7/557.1 | −1.8% | 6.2% | 0.9% | 1,758 | 1,790 |
+| resv-by-user | 296.8/295.8/298.7/297.0 | 286.6/295.3/292.4 | −1.9% | 1.0% | 3.0% | 3,366 | 3,431 |
+| books-by-author | 155.7/154.7/155.7/154.6 | 155.0/155.6/154.1 | −0.2% | 0.7% | 1.0% | 6,444 | 6,456 |
+| books-by-genre | 176.0/174.4/176.0/176.2 | 177.0/175.4/177.1 | +0.5% | 1.0% | 1.0% | 5,693 | 5,666 |
+| loans-by-daterange | 710.4/720.2/740.0/712.3 | 709.3/705.4/714.0 | −1.5% | 4.2% | 1.2% | 1,387 | 1,409 |
+| overdue | 768.1/770.7/796.8/768.7 | 854.3/768.1/852.7 | +6.3% | 3.7% | 11.2% | 1,289 | 1,212 |
+| join-loan-user | 607.9/596.4/631.6/600.0 | 598.7/605.5/601.5 | −1.2% | 5.9% | 1.1% | 1,642 | 1,661 |
+| count-by-user | 592.2/594.1/594.7/594.6 | 588.7/605.3/590.0 | +0.1% | 0.4% | 2.8% | 1,684 | 1,682 |
+
+**No shape resolves outside its floors; nine of ten sit within ±2.1%.**
+`overdue` is the one to look hard at, and it survives the look: its +6.3%
+sits inside an 11.2% NEW floor that is wide for a stated reason — in
+`new-1` and `new-4` the *entire* distribution shifted +80 µs (p0 774–779
+against 684–706 everywhere else) while `new-3` sits exactly on the BASE
+distribution (p0 688, p50 768, from the same binary), so the shift is a
+per-process machine mode, not a path: one binary cannot alternate code
+paths between identical cells. Mechanism agrees — `overdue` walks `loans`
+with no equality on the cabined column, so no CabinProbe and no CB14
+branch runs in it.
+
+The stronger form of "the literal probe is untouched" is in §7d.3's first
+table row: after 21,004 driver ops — 626 literal cabin probes among them,
+539 distinct keys recorded at `n = 1`, 87 repeat hits — **both engines'
+stores read 539 / 2,709 / 87 / 539 exactly**. Had any driver probe taken
+the correlated path, NEW's observed count would differ. The declaration
+still speaks for every value an operator names; CB14 changed only whom it
+speaks for.
+
+The k-sweep control (3 ops per k — a byte-identity and store-state
+control this run; §7c.6's 50-op measurement owns the serve numbers, and
+every key here is already observed by the EXISTS on both engines).
+Pooled across clean cells, 12 BASE / 9 NEW samples per k:
+
+| k | BASE p0/p25/p50/p95/p99 (n=12) | NEW p0/p25/p50/p95/p99 (n=9) |
+|---:|---|---|
+| 1 | 44.8 / 47.2 / 51.0 / 53.8 / 60.6 | 45.2 / 45.8 / 49.7 / 58.8 / 58.8 |
+| 2 | 44.1 / 45.6 / 46.8 / 54.7 / 70.4 | 45.2 / 46.0 / 46.4 / 48.8 / 48.8 |
+| 4 | 48.2 / 49.0 / 50.0 / 58.7 / 62.4 | 48.8 / 49.2 / 51.7 / 57.8 / 57.8 |
+| 8 | 53.8 / 54.8 / 55.6 / 57.8 / 59.2 | 55.2 / 55.3 / 56.8 / 66.5 / 66.5 |
+| 16 | 66.0 / 68.7 / 68.9 / 74.5 / 78.0 | 68.6 / 69.1 / 71.1 / 80.7 / 80.7 |
+
+k=16 p50 +3.2% pooled (68.9 → 71.1), inside per-cell floors of 4.8% on
+both sides; firsts
+79–93 µs on BASE against 84–86 on NEW — warm on both engines, §7c.6's
+inheritance unchanged. The serve path does not run CB14's branch to a
+different verdict and does not read differently.
+
+### 7d.5 Versus PostgreSQL — unchanged, and still no twin
+
+§7b.7 and §7c.7 stand whole: no PostgreSQL structure answers a
+value-observed authoritative store, so the Cabin column has no twin and
+none was invented; PostgreSQL's answer to these shapes is an index,
+measured against ckdbs-with-index in §9b. The named task is unchanged:
+`tools/pg_scenario3_library.py` at the no-index configuration on the
+correlated shapes — its seq-scan-per-outer-row against the walk column —
+is the cell that would complete the picture, and the twin driver
+supports the mode. *(Measured 2026-08-19 — §7e, which also qualifies
+this addendum's "an index or nothing": PostgreSQL's per-statement hash
+build is a third answer for the never-repeating key, at a tenth of the
+banked structures' ceiling.)*
+
+### 7d.6 What §7d changes, and what it does not
+
+**Changed: the never-repeating correlated key is closed on the Cabin's
+side, and admission became evidence-scoped.** §7b.8's uncovered case and
+§7c.8's restatement of it are superseded as descriptions of HEAD: on
+`8420242` a cabined join column probed with keys that never repeat costs
+one hash insert per key — no dead set, no standing write hook, no
+`cabin_max_values` flood from a single SELECT (bounded now to
+intra-statement repeats) — and the first touch is measurably cheaper
+than the recording it declines. What remains uncovered is named
+precisely: **the *uncabined, unindexed* never-repeating join key has no
+accelerator by nature** — every observational structure earns its keep
+on the second touch, and a key with no second touch leaves nothing to
+serve, so the answer there is an index (§9b) or nothing. That is a
+statement about the shape, not a gap in the engine.
+
+**Not changed:** the steady states — §7c's 13.1× EXISTS headline and
+§7b's serve numbers describe NEW from execution 3 exactly as they
+described BASE from execution 2, one execution later and never cheaper
+or dearer; the observation charge's size (§7c.4's account, re-measured
+within replicate spread here); the literal probe's `n = 1` and every
+driver shape (this run's floors); `CABIN AUTO`'s §11 threshold question
+— narrowed, since wrong admission no longer buys dead sets, so what
+remains of it is hit-rate and eviction policy, not flood control; the
+sighting window's crude reset (`kMaxSightings` — §4a's qualifier: a key
+whose repeats are separated by more distinct keys than the window holds
+can oscillate below threshold; untested here, this run's ~570 distinct
+keys sit far under the 4,096-entry window, and it stays §8's open
+budget); §7c's sticky entry-cap mark; and the rest of this file, which
+describes its own stamped commits.
+
+## 7e. Addendum, 2026-08-19 — versus PostgreSQL at `--index-mode none`: the cells §7b.7 named, and the three-way account
+
+§7b.7 named one missing cell and §7c.7 and §7d.5 repeated it: PostgreSQL
+at the no-index configuration on the two correlated shapes, set against
+the walk column the whole §7 family measures. This addendum runs those
+cells — six of them, three sizes, two replicates, a fresh database each —
+and closes the task. No ckdbs cell was re-run: §7b/§7c/§7d's cells ran
+the same morning on the same box under the same background load, and
+their numbers are cited below with their commits. The PG cells were not
+interleaved with them, which the tightness of the PG pairs (≤2.9%
+disagreement) and factor-level reading make tolerable, as §9b.6's twin
+already was.
+
+**The answers: the plan the named task anticipated does not exist —
+PostgreSQL never produces a scan per outer row. At every k and every size
+it plans one hash join with a single seq scan of `loans` per statement,
+so its cost is nearly flat in k: 761 µs p50 at 10,000 loans and k=16
+(1,314 stmts/s derived), which beats the ckdbs walk's 117/s by 11.2× and
+loses to the warm Cabin serve's 14,870/s by 11.3×. On the correlated
+EXISTS PostgreSQL is flat at ~1,469 µs (681/s) — slower than even the
+pre-CB13 ckdbs short-circuit walk (1,021/s), and 19.7× behind CB13's
+converged 13,423/s. The floor both engines share is the pass over the
+relation: a 10,000-row pass costs ~530–550 µs on either engine; the
+engines differ only in how many passes a statement pays and whether a
+pass can be banked.**
+
+### 7e.1 The run
+
+| | |
+|---|---|
+| executed | **2026-08-19 08:00:14 → 08:00:22 UTC**, six PostgreSQL cells — 3 sizes × 2 replicates, each database created seconds before its load. A prior 200-loan smoke cell (`ops=20`) validated the harnesses and was dropped: a harness check, not a measurement, and none of its numbers appear here. **All six measured cells passed on the first attempt; none discarded** |
+| branch / worktree | `worktree-enhence-join-perf` at **`41f8dff`** (clean) — the tree the harnesses and loader ran from; no ckdbs server ran in this addendum |
+| server | **PostgreSQL 16.14**, the standing scratch cluster of `tools/pg_setup.sh` on port 15433 (the rootless dpkg-extracted tree, recipe in `bench/docs/README.md`), data directory `/home/cdkbs/pg-bench/data` on ext4 `/dev/root` (`df -T`; `/tmp` is ext4 on this host too). **Configuration at PostgreSQL defaults** — the loader's `--synchronous-commit off` is a per-session `SET` on the load connection only; every measured statement ran on a fresh connection at cluster defaults, and every measured statement is a read |
+| databases | `s3pgnone_{200,1000,10000}_{1,2}`, one per cell, `createdb`-fresh, never reused |
+| loader | `tools/pg_scenario3_library.py --host 127.0.0.1 --port 15433 --user cdkbs --database <db> --suffix s3 --loans N --matches 5 --index-mode none --ops 200 --synchronous-commit off --seed 1` — seed and row counts identical to the §7b/§7c/§7d ckdbs cells (10,000 / 2,000 / 2,000 / 5,000 rows at N=10,000, verified by `count(*)`). `--index-mode none` leaves exactly the four pk btrees (`pg_indexes` verified), the twin of ckdbs's always-present Keystone; the loader's closing `ANALYZE` ran, the driver's honest default, not tuning |
+| the measured statements | per cell, in §7c's order: the §7c correlated EXISTS (**10 timed executions**, then 50 sampled ops, reply checked byte-level before and after), then the §7b k-sweep (per k ∈ {1,2,4,8,16}: `EXPLAIN (ANALYZE, BUFFERS)`, one first statement, 50 sampled ops) — session scratch twins of the §7b/§7c harnesses over `tools/pg_wire.py`'s benchmark path; §9b.7's fold-into-the-driver task now covers these twins too |
+| contention control | every cell gated on `bench/wait_quiet.sh` (loadavg 0.15–0.36 at starts); `pgrep -c cc1plus` 0 before and after every cell. Background load, noted not killed: the resident autotrade `kds_server` on port 15432 (idle, warn-level logging) and resident agent processes — the same residents the ckdbs cells sat beside |
+| correctness | 0 errors across all six driver runs (12 phases each); every EXISTS timed reply equal to its cell's first (60/60) and the closing full fetch byte-equal to the opening one in all six; the k=16 join returns **79 / 83 / 79 rows** at 200 / 1,000 / 10,000 — equal to the ckdbs replies (§9b.1) — and the EXISTS returns 20 rows in every cell |
+| protocol asymmetry | both sides are Python clients on localhost TCP without TLS (the ckdbs cells were `KDS_WITH_TLS=OFF`); PostgreSQL replans every statement (simple-query protocol, no prepared statements) as ckdbs recompiles every statement. The client floors differ: `pk-user` p50 is ~60 µs in these cells against 37–38 µs in §7c's ckdbs cells, so ~22 µs of every PG number below is client and protocol — negligible against the 160–1,470 µs bodies |
+
+### 7e.2 The plan — one hash join at every k, and nothing to flip to
+
+Captured per k in every cell; the headline is identical across all 30
+captures (6 cells × 5 ks): a hash join whose probe side is **one seq scan
+of `loans` per statement**, with the pk btree serving the `users` range.
+At 10,000 loans, k=16:
+
+```
+Hash Join  (actual rows=79)
+  Hash Cond: (l.user_id = u.id)
+  ->  Seq Scan on loans_s3 l  (actual rows=10000)   <- once per statement, any k
+  ->  Hash  (rows=16)
+        ->  Index Scan using users_s3_pkey on users_s3 u
+              Index Cond: ((id >= 1) AND (id <= 16))
+```
+
+And the EXISTS — one seq scan feeding a `HashAggregate` over the 1,988
+distinct `user_id`s, hash-joined to the 20 outer keys, every execution:
+
+```
+Hash Join  (actual rows=20)
+  ->  HashAggregate  (rows=1988, Memory 241kB)
+        ->  Seq Scan on loans_s3 l  (actual rows=10000)
+  ->  Hash (rows=20)  <- Index Only Scan users_s3_pkey, id 1..20
+```
+
+Two readings. First, **the plan the named task anticipated — a
+seq-scan-per-outer-row — is a plan PostgreSQL will not produce** at any k
+or size measured: the nested-loop-over-scans shape that ckdbs's
+pre-CB12/CB13 engine executes (§7b.2's BASE, `examined=40000` for 21
+rows) has no PostgreSQL counterpart here, so the walk column's true twin
+is a plan PostgreSQL's optimizer refuses. Second, **no flip anywhere**:
+unlike §9b.6's indexed twin, where the optimizer left its own index at
+k=16 for a merge semi-join and lost 4×, the unindexed matrix gives it
+exactly one shape and it keeps it — flat plans, flat costs.
+`EXPLAIN ANALYZE`'s own timings (1.04 ms execution at k=16 against the
+761 µs measured statement) carry instrumentation and are used here for
+shape only, never as the cost.
+
+### 7e.3 The k-sweep: PostgreSQL pays the scan once per statement
+
+p50 µs of 50 sampled ops per point, both replicates; stmts/s derived as
+1e6/p50 of the pair mean (single serial connection — the harness reports
+latency, so throughput is derived, per this file's matrix rule). The
+ckdbs walk column is **cited**, not re-run: §9b.3 BASE (`9af3c8d`,
+median of 4 cells) at 200 and 1,000; §7b.3 BASE (`6c5bb14`) at 10,000 —
+and the warm Cabin column is §7b.3 NEW (`8f3f730`), measured at 10,000
+only, its size-independence asserted from the structure (§7b.1):
+
+| N | k | PG p50 (r1 / r2) | PG ≈stmts/s | ckdbs walk ≈stmts/s | PG ÷ walk |
+|---:|---:|---:|---:|---:|---:|
+| 200 | 1 | 124.7 / 128.3 | 7,905 | 20,680 | 0.38× |
+| 200 | 4 | 138.4 / 136.2 | 7,283 | 11,760 | 0.62× |
+| 200 | 16 | 202.7 / 198.5 | 4,985 | 4,380 | 1.14× |
+| 1,000 | 1 | 196.1 / 194.7 | 5,118 | 10,400 | 0.49× |
+| 1,000 | 4 | 204.0 / 204.4 | 4,897 | 3,880 | 1.26× |
+| 1,000 | 16 | 270.3 / 272.1 | 3,687 | 1,105 | 3.3× |
+| 10,000 | 1 | 678.4 / 680.1 | 1,472 | 1,713 | 0.86× |
+| 10,000 | 4 | 698.9 / 697.3 | 1,433 | 459 | 3.1× |
+| 10,000 | 8 | 707.4 / 707.1 | 1,414 | 233 | 6.1× |
+| 10,000 | 16 | 761.5 / 760.2 | **1,314** | 117 | **11.2×** |
+
+(k=2 and k=8 were measured at every size and sit on the same curves; the
+10,000-row k=8 row is shown because the slope below uses it. Replicate
+floors: worst pair disagreement 0.4% at 10,000, 1.4% at 1,000, 2.9% at
+200 — the k=16 factors clear them by orders.)
+
+The structure of the table is the finding. PostgreSQL's k=8→16 slope at
+10,000 loans is **6.7 µs per outer row** (4.6–5.2 at the smaller sizes) —
+output projection and hash probes, not scanning — against the ckdbs
+walk's **527–539 µs per outer row** (§9b.3, §7b.3), because PostgreSQL's
+scan happens once per statement while the walk happens k times. So the
+crossing sits exactly where one pass amortizes: **at k=1 the two engines
+pay one pass each and ckdbs is ahead** (584 µs walk against 679 µs
+scan+hash+plan+client at 10,000; 0.86× in the table), and every k beyond
+one multiplies the walk while PostgreSQL's line stays flat. Meanwhile the
+warm Cabin serve (§7b.3 NEW, 67.2/67.3 µs at k=16, 14,870/s) is **11.3×
+ahead of PostgreSQL's best unindexed plan** — it pays no pass at all.
+
+The distributions at 10,000, k=16 (50 ops each):
+
+| cell | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| s3pgnone_10000_1 | 744.1 | 757.6 | 761.5 | 786.5 | 815.4 |
+| s3pgnone_10000_2 | 739.7 | 756.6 | 760.2 | 795.3 | 809.8 |
+
+On waits: single-connection reads, no commit/fsync wait, no lock wait in
+the unit. The 761 µs decomposes at best effort as ~60 µs of client and
+round trip (the `pk-user` floor in these cells), ~70 µs of per-statement
+planning (`EXPLAIN`'s planning time at k=16, uninstrumented estimate),
+and ~630 µs of scan, hash build and 79-row projection; PostgreSQL
+publishes no finer split of an executed statement and none is invented.
+
+### 7e.4 The correlated EXISTS: flat by construction
+
+The §7c statement, verbatim, 10 timed executions then 50 sampled ops per
+cell. The series is flat — executions 2–10 spread at most 2.3% at 10,000
+(9.9% at 1,000, 15.3% at 200, a declining warm-up tail, no step anywhere)
+— because **there is nothing to converge: PostgreSQL rebuilds the
+HashAggregate every execution and banks nothing**. The first execution
+reads +3% at 10,000 and up to +29% at the smaller sizes — a fresh
+connection's cache and catalog warm-up, not structure; the sampled table
+below is taken after the series, past all of it. Sampled
+distributions and the cited ckdbs columns (§7c.3, BASE `82ff9b7` flat /
+NEW `fa1f320` steady, measured at 10,000 only):
+
+| N | PG p0 / p25 / p50 / p95 / p99 (r1) | PG p50 r2 | PG ≈stmts/s |
+|---:|---|---:|---:|
+| 200 | 156.9 / 160.0 / 161.7 / 178.1 / 203.0 | 163.0 | 6,159 |
+| 1,000 | 282.0 / 291.9 / 295.4 / 314.6 / 318.0 | 300.8 | 3,354 |
+| 10,000 | 1,437.4 / 1,454.6 / 1,464.1 / 1,516.3 / 1,538.8 | 1,473.3 | **681** |
+
+At 10,000 the three-way reads: PostgreSQL 681/s; the pre-CB13 ckdbs
+engine — **flat forever at 1,021/s** (§7c.3 BASE pooled 979.3 µs), ahead
+of PostgreSQL because its short-circuit walks ~15,248 rows per execution
+where PostgreSQL scans all 10,000 *and* builds a 1,988-group hash; and
+CB13's converged serve at **13,423/s** (§7c.3 NEW pooled 74.5 µs) —
+19.7× past PostgreSQL — after an observation charge PostgreSQL never
+pays and never banks. The ckdbs columns exist at 10,000 only (§7c.1's
+"one size, deliberately"); the 200 and 1,000 rows above stand as
+PostgreSQL's own scaling record, with no same-statement ckdbs twin
+measured.
+
+### 7e.5 The three-way account
+
+Three engines' answers to an unindexed join column, priced at 10,000
+loans (stmts/s derived from the cited p50s; observation charge from
+§7c.3/§7c.4, CB14's split from §7d.2):
+
+| | ckdbs walk (§7b/§7c BASE) | PostgreSQL, no index (this run) | ckdbs Cabin steady (§7b/§7c NEW) |
+|---|---:|---:|---:|
+| join k=16, stmts/s | 117 | 1,314 | 14,870 |
+| correlated EXISTS, stmts/s | 1,021 | 681 | 13,423 |
+| cost model | k passes per statement | one pass + hash build per statement, discarded at statement end | zero passes after observation |
+| cross-statement memory | none | none | the store: ~6.4–9.3 ms charged once (CB14: on a key's second touch) |
+
+The honest framing: **PostgreSQL's best unindexed plan is a
+per-statement build with no cross-statement memory; the Cabin amortizes
+across statements at the price of observation; and the pass over the
+relation is the floor both engines share** — PostgreSQL's k-intercept
+puts its 10,000-row pass at ~550 µs (679 µs at k=1 minus its ~125 µs
+size-independent fixed part), against ckdbs's measured 527–539 µs per
+walk of the same relation. Neither engine scans meaningfully faster;
+they differ in how often they scan. The break-even arithmetic follows:
+against PostgreSQL, the EXISTS's observation charge repays in **5–7
+executions** (6.4–9.3 ms ÷ the ~1,394 µs/execution saving) and the k=16
+join's in 9–13; against ckdbs's own walk it was 6–10 (§7c.4). A shape
+that repeats a handful of times has already beaten both per-statement
+engines.
+
+One reading cuts against a sentence this file already carries. §7d.6
+says of the uncabined, unindexed never-repeating join key that "the
+answer there is an index (§9b) or nothing." This run measures a third
+answer in the baseline: a per-statement hash build needs no repetition
+and no index, and at k=16 it beats the walk 11.2× on first touch —
+PostgreSQL's every touch is a first touch. ckdbs has no such operator;
+whether it ever should is a design question this file only prices: the
+per-statement build tops out at 1,314/s where the banked structures run
+11,000–22,000/s (§9b.3, §7b.3), so the operator would buy the
+never-repeating distribution only, at roughly a tenth of the banked
+ceiling.
+
+### 7e.6 What §7e changes, and what it does not
+
+**Changed: the §7-family's PostgreSQL column exists.** §7b.7, §7c.7 and
+§7d.5's named task is closed by this run's six cells; those sections now
+point here and stand otherwise, because their central claim — no
+PostgreSQL structure answers a value-observed authoritative store — is
+confirmed, not weakened, by the measurement: PostgreSQL's unindexed best
+is per-statement and memoryless, and the Cabin column still has no twin.
+§7d.6's "an index or nothing" is qualified as §7e.5 states.
+
+**Not changed:** every ckdbs number in the §7 family (cited here, not
+re-measured); §9b.6's indexed twin and its k=16 flip, which this run's
+flip-free unindexed matrix complements; §11, which compares the `single`
+columns and is not amended — these cells' driver phases ran at
+`pg-none` and sit in the run's JSONs, but no §11 claim rests on them;
+and the rest of this file, which describes its own stamped commits.
 
 ## 8. Composite is the only structure that helps `overdue`
 
@@ -1700,7 +2190,15 @@ standard shapes was not re-run.
   correlated EXISTS were driven by a session scratch harness (statements in
   §9b.1). The task this opens: fold both into `tools/scenario3_library.py`
   and `tools/pg_scenario3_library.py` as first-class phases so the next
-  full-matrix run measures them without ceremony.
+  full-matrix run measures them without ceremony. *(2026-08-19: closed —
+  both drivers now carry `join-no-literal` (k fixed at 16) and
+  `exists-correlated` as standard phases, under the same names and from
+  one set of statement builders. On the ckdbs side both are in the
+  `ANALYZE` block, under `--assert-index-reads`, and `--verify`-checked row
+  for row against a client-side expectation; the twin has no counterpart to
+  any of those three and prints `EXPLAIN` for both instead. The full
+  k-sweep remains a harness shape, and the phases' numbers will appear in
+  future runs, not retroactively here.)*
 
 ## 10. Durability decides the load, and nothing else here
 
