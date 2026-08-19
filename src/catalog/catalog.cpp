@@ -12,6 +12,7 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/log_page_image.hpp"
 #include "kds/storage/visit.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/varheap.hpp"
@@ -218,6 +219,15 @@ Status LogCatRow(wal::WalManager* wal, storage::PageStore& store, wal::RecordTyp
                  std::span<const std::byte> bytes, std::uint64_t hdr_trx,
                  std::uint64_t hdr_undo) {
     if (wal == nullptr) return Status::OK();
+    // The envelope is read by **analysis alone** (redo takes the writer
+    // from the payload), and analysis notes every named transaction as a
+    // loser until a TXN_COMMIT in range says otherwise - so a write that
+    // belongs to no bracketed transaction must travel under kNoTxnId,
+    // which note_txn skips by design. Naming the header's writer here was
+    // the review's B1: a next_id bump logged under the relation's creator
+    // made every mount past that creator's checkpointed commit invent a
+    // phantom crash loser and write a spurious TXN_ABORT for it.
+    if (env_trx == kBootstrapXid) env_trx = wal::kNoTxnId;
     std::vector<std::byte> payload(wal::kHeapWriteFixedSize + bytes.size());
     const wal::HeapWritePayload fields{hdr_trx, hdr_undo, slot,
                                        static_cast<std::uint16_t>(bytes.size())};
@@ -234,16 +244,11 @@ Status LogCatInsert(wal::WalManager* wal, storage::PageStore& store, std::uint64
                      trx_id, /*hdr_undo=*/0);
 }
 
-Status LogCatOverwrite(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_trx,
-                       PageId page_id, std::uint16_t slot, std::span<const std::byte> bytes,
-                       std::uint64_t hdr_trx) {
-    return LogCatRow(wal, store, wal::RecordType::kHeapOverwrite, env_trx, page_id, slot,
-                     bytes, hdr_trx, /*hdr_undo=*/0);
-}
-
 Status LogCatDeleteMark(wal::WalManager* wal, storage::PageStore& store, std::uint64_t deleter,
                         PageId page_id, std::uint16_t slot) {
     if (wal == nullptr) return Status::OK();
+    // LogCatRow's envelope rule (B1), stated there.
+    if (deleter == kBootstrapXid) deleter = wal::kNoTxnId;
     std::array<std::byte, wal::kDeleteMarkPayloadSize> buf{};
     const wal::HeapDeleteMarkPayload fields{deleter, slot};
     if (auto n = wal::EncodeHeapDeleteMark(buf, fields); !n.ok()) return n.status();
@@ -256,6 +261,8 @@ Status LogCatDeleteMark(wal::WalManager* wal, storage::PageStore& store, std::ui
 Status LogCatRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_trx,
                     PageId page_id, std::uint16_t slot) {
     if (wal == nullptr) return Status::OK();
+    // LogCatRow's envelope rule (B1), stated there.
+    if (env_trx == kBootstrapXid) env_trx = wal::kNoTxnId;
     std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
     const wal::SlotRetirePayload fields{slot};
     if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
@@ -265,13 +272,14 @@ Status LogCatRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64
 }
 
 // The write-then-log pairs the mutation sites call, so a site cannot
-// mutate without logging. The envelope transaction is the header writer:
-// that is what the DML path stamps, and what analysis expects.
+// mutate without logging. The envelope transaction is the **acting**
+// transaction when one brackets the write, and kNoTxnId otherwise -
+// never the header's writer, which LogCatRow's B1 note explains.
 Status OverwriteLogged(wal::WalManager* wal, storage::PageStore& store, heap::PageView& page,
                        PageId page_id, std::uint16_t slot, std::span<const std::byte> bytes,
-                       std::uint64_t hdr_trx, std::uint64_t hdr_undo) {
+                       std::uint64_t env_trx, std::uint64_t hdr_trx, std::uint64_t hdr_undo) {
     if (Status s = page.OverwriteTuple(slot, bytes, hdr_trx, hdr_undo); !s.ok()) return s;
-    return LogCatRow(wal, store, wal::RecordType::kHeapOverwrite, hdr_trx, page_id, slot, bytes,
+    return LogCatRow(wal, store, wal::RecordType::kHeapOverwrite, env_trx, page_id, slot, bytes,
                      hdr_trx, hdr_undo);
 }
 
@@ -295,6 +303,8 @@ Status RetireLogged(wal::WalManager* wal, storage::PageStore& store, heap::PageV
 Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id,
                       PageType type = PageType::kHeap, Oid owner_oid = 0) {
     if (wal == nullptr) return Status::OK();
+    // LogCatRow's envelope rule (B1), stated there.
+    if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
     std::array<std::byte, wal::kPageInitPayloadSize> buf{};
     const wal::PageInitPayload fields{0, static_cast<std::uint8_t>(type), {0, 0, 0},
                                       /*reserved2=*/0, owner_oid};
@@ -309,12 +319,9 @@ Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id
 Status LogCatPageImage(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
                        PageId page_id) {
     if (wal == nullptr) return Status::OK();
-    auto bytes = store.GetForRead(page_id);
-    if (!bytes.ok()) return bytes.status();
-    auto rec = wal->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, trx_id, page_id},
-                           bytes.value().bytes());
-    if (!rec.ok()) return rec.status();
-    return store.StampPageLsn(page_id, rec.value());
+    // LogCatRow's envelope rule (B1), stated there.
+    if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
+    return storage::LogFullPageImage(wal, store, trx_id, page_id);
 }
 
 // The identity a compensation re-reads (DT5's rule): the Keystone word of
@@ -1400,7 +1407,7 @@ Status Catalog::RenameTable(Oid table_oid, std::string_view new_name) {
             }
             SetName(row.name, new_name);
             const auto encoded = row.Encode();
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr);
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
                 return s;
             }
@@ -1442,7 +1449,7 @@ Status Catalog::RenameColumn(Oid table_oid, std::string_view old_name,
             if (row.rel_id != table_oid || NameView(row.name) != old_name) return false;
             SetName(row.name, new_name);
             const auto encoded = row.Encode();
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr);
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
                 return s;
             }
@@ -1508,6 +1515,7 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
             // Stamped with the dropping transaction when there is one, so
             // the retype is this transaction's to undo.
             if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded,
+                                           transactional ? trx_id : wal::kNoTxnId,
                                            transactional ? trx_id : tuple.trx_id,
                                            tuple.undo_ptr);
                 !s.ok()) {
@@ -1883,7 +1891,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowIdRange(Oid table_oid, std::uint64_t
             // (docs/workplan-t3.md T3-3).
             row.next_id = first + count;
             const auto encoded = row.Encode();
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr);
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
                 return s;
             }
@@ -1938,7 +1946,7 @@ StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
         // reverse order would reissue an id after a crash, which is not.
         row.next_id = id + 1;
         auto encoded = row.Encode();
-        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
         }
         // One line per issued id: the sequence is the tuple identity
@@ -2004,7 +2012,7 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
             // identity.
             row.next_id = id + 1;
             auto encoded = row.Encode();
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
                 return s;
             }
             if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
@@ -2029,7 +2037,7 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
         const PageId old_desc_page_id = row.desc_page_id;
         row.desc_page_id = new_desc_page_id;
         auto encoded = row.Encode();
-        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
         }
         // desc_page_id is a field of every cached TableAccess, so a relink
@@ -2204,7 +2212,7 @@ Status Catalog::MutatePatternRow(std::uint64_t pattern_id,
         // In place, never delete+insert: the row size is unchanged, and a
         // pattern that briefly does not exist is a pattern a concurrent
         // lookup misses.
-        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
         }
         return true;
@@ -2327,7 +2335,7 @@ Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column
         row.last_seen = last_seen;
         auto encoded = row.Encode();
         // In place - the row size is fixed, so there is nothing to move.
-        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
+        if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
         }
         return true;
@@ -2774,7 +2782,7 @@ Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root) {
             const Oid rel_oid = row.table_oid;
             row.root_page_id = new_root;
             const auto encoded = row.Encode();
-            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, tuple.trx_id, tuple.undo_ptr);
+            if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr);
                 !s.ok()) {
                 return s;
             }

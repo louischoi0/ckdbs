@@ -48,7 +48,15 @@ the owner's workplan.
   Recovery's promise widens to what RC09 could never say: an
   acknowledged `CREATE TABLE` is restored like any acknowledged commit.
   What stays outside the log is named in `wal.md` §11a's closing
-  paragraph (the two row-codec definition relations; ALLOC/FREE). One
+  paragraph (the two row-codec definition relations; ALLOC/FREE) — and
+  the assertion half of that remainder has a consequence the flag does
+  not carry: an acknowledged `CREATE ASSERTION` followed by a crash
+  before the next checkpoint **silently loses an enforcing constraint**,
+  because RC07 rebuilds the registry from `sys.assertions` source rows
+  that are still `ChainInsert`-unlogged. `sys.pattern_defs`' twin hole
+  costs only a re-learned pattern (invariant 8). Logging those two
+  writers is the named remainder in
+  `workplan-rv3-catalog-recovery.md`. One
   contract also got *stricter*: a torn catalog page used to boot and be
   served corrupt; redo now names it, cannot heal it (§10's FPI cadence
   is unbuilt for every page class), and refuses the mount — the rule

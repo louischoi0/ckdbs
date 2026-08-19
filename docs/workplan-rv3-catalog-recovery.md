@@ -149,6 +149,52 @@ recommendations carry the next_id carve.
   spec-ddl-transactional §7 closed, known-gaps' two entries struck,
   CLAUDE.md's WAL/DDL/Keystone rows); review and measurement pending.
 
+## The review round (critics-developer, applied on top of RV3-6)
+
+- **B1, reproduced and fixed**: catalog overwrites travelled under the
+  *header's* writer, so a `next_id` bump logged under the relation's
+  long-committed creator made every later mount invent a phantom crash
+  loser and write a spurious `TXN_ABORT` (probe: `losers=1
+  rolled_back=1` on a database where nothing was lost). The envelope is
+  now the **acting transaction or `kNoTxnId`, never the header's
+  writer** — analysis is the envelope's only reader, and `note_txn`
+  skips `kNoTxnId` by design; every `LogCat*` funnel also maps a
+  `kBootstrapXid` envelope to `kNoTxnId` (txn 1 never begins, so naming
+  it would be the same phantom).
+- **B2, half fixed**: the CREATE TABLE fkey-failure message claimed the
+  relation survived — false since D2 in autocommit, and never safely
+  claimable in either arm; it now names the refusal and claims nothing.
+  The orphan half stands: `CreateForeignKey`/`CreateCabin` report no
+  `CatalogRowRef`, so their rows never reach the trail and a failed or
+  rolled-back statement leaves `sys.fkeys`/`sys.cabins` rows behind —
+  pre-existing on the explicit path, extended to autocommit by D2, in
+  the remainder below.
+- **B3, docs sharpened, flag kept**: `catalog_recovered=1` does not
+  cover the two unlogged definition relations; the assertion consequence
+  (a crash can silently lose an *enforcing* constraint) is now stated in
+  `known-gaps.md` and at both write sites. The flag stays 1 because the
+  catalog proper *is* recovered; the remainder owns the rest.
+- **B4, documented**: failed DDL inside an explicit transaction now
+  poisons the session (spec §7 states it, with §6's rationale); the
+  `catalog_marks_finalized` comment and the `"ERR "` spelling joined
+  their siblings.
+- **B5, recorded**: a durable prefix ending exactly between an
+  `UNDO_WRITE` and its row record refuses the mount via the identity
+  check — the DML path's pre-existing shape, now also on catalog
+  inserts; owned by `workplan-wal-recovery.md` §4a's contract, not here.
+- **S1-S5 applied** (one `storage::LogFullPageImage` where four copies
+  were, the dead `DdlScopeFor(Session&)` and `LogCatOverwrite` deleted,
+  `InDdlStatement` making "no route skips `FinishDdlStatement`"
+  structural, the single-caller mark funnel folded); S6 declined — the
+  remaining restatements are contracts at their use sites.
+- The reviewer verified sound: the log-order crash matrix at all five
+  hook sites (prefix durability is what makes one stamp suffice), redo
+  byte-fidelity on all four `PAGE_INIT` shapes, recovery-undo identity
+  on catalog rows (idempotent on all three arms), the hook lifecycle,
+  the `pending_marks_` gate, and the mount's redo→undo→invalidate→
+  audit→finalize order — which is the *only* correct order now that
+  redo can restore a loser's delete-marks.
+
 ## Open remainder, named
 
 - The two **row-codec definition relations** stay unlogged
@@ -158,6 +204,10 @@ recommendations carry the next_id carve.
   survive only to the last checkpoint, as all catalog writes used to.
 - The sim workload writes no DDL, so the crash *loop* never exercises
   these paths — the five shapes above do, deterministically.
+- `CreateForeignKey`/`CreateCabin` report no `CatalogRowRef`, so their
+  rows never join the trail: a failed or rolled-back statement leaves
+  orphan `sys.fkeys`/`sys.cabins` rows (review B2's second half). The
+  fix is threading the out-param the other DDL writers already have.
 - **A hot-path cost to price before landing**: the `sys.tables.next_id`
   bump was among the ten converted overwrite sites, so **every INSERT
   now logs one extra catalog record** (~90 B). That is what closes K1's

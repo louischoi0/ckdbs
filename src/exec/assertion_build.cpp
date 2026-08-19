@@ -10,6 +10,7 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
+#include "kds/storage/log_page_image.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/visibility.hpp"
@@ -155,17 +156,8 @@ Status BoundCabinChainWriter::Grow(storage::PageStore& store, wal::WalManager* w
         auto opened = BoundCabinPage::Open(old_tail.value().bytes());
         if (!opened.ok()) return opened.status();
         opened.value().SetNextPageId(pid);
-        if (wal != nullptr) {
-            std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-            if (auto n = wal::EncodeFullPageImage(
-                    image, std::span<const std::byte, kPageSize>(old_tail.value().bytes()));
-                !n.ok()) {
-                return n.status();
-            }
-            auto rec = wal->Append(
-                wal::RecordSpec{wal::RecordType::kFullPageImage, wal::kNoTxnId, tail_}, image);
-            if (!rec.ok()) return rec.status();
-            if (Status s = store.StampPageLsn(tail_, rec.value()); !s.ok()) return s;
+        if (Status s = storage::LogFullPageImage(wal, store, wal::kNoTxnId, tail_); !s.ok()) {
+            return s;
         }
     }
     tail_ = pid;

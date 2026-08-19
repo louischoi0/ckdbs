@@ -12,6 +12,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/index/index_page.hpp"
+#include "kds/storage/log_page_image.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 #include "kds/storage/index/index_tree.hpp"
@@ -80,18 +81,7 @@ Status LogBuiltTree(wal::WalManager* wal, storage::PageStore& store, std::uint64
         if (Status s = LogBuiltTree(wal, store, trx_id, child); !s.ok()) return s;
     }
 
-    auto bytes = store.Get(page_id);
-    if (!bytes.ok()) return bytes.status();
-    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-    if (auto n = wal::EncodeFullPageImage(
-            image, std::span<const std::byte, kPageSize>(bytes.value().bytes()));
-        !n.ok()) {
-        return n.status();
-    }
-    auto fpi = wal->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, trx_id, page_id},
-                           image);
-    if (!fpi.ok()) return fpi.status();
-    return store.StampPageLsn(page_id, fpi.value());
+    return storage::LogFullPageImage(wal, store, trx_id, page_id);
 }
 
 // Appends one version's entry, decoding the key columns out of `payload`.
@@ -137,7 +127,12 @@ Status AppendVersion(storage::PageStore& store, const catalog::TableAccess& acce
 StatusOr<PageId> Backfill(storage::PageStore& store, const catalog::TableAccess& access,
                           catalog::TableAccess::IndexRef ix) {
     // Reads only, so a locally-built log is correct: Read/Walk resolve a
-    // pointer against pages and carry no allocation state.
+    // pointer against pages and carry no allocation state. And safe under
+    // the undo purge for two reasons that must both stay true: this walk
+    // appends nothing, so no growth can trigger a reclaim mid-walk on this
+    // cooperative core; and the statement's own undo appends (the DDL undo
+    // hook's) all happen after the backfill returns, inside
+    // Catalog::CreateIndex.
     txn::UndoLog undo(store);
 
     auto first = btree::BtreeLeftmostLeaf(store, access.desc_page_id);

@@ -32,6 +32,7 @@
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/exec/tuple_verify.hpp"
+#include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
@@ -561,10 +562,10 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
            << " catalog_recovered=1"
            // DT10: delete-marked catalog rows a previous mount left
-           // behind, retired before the listener bound. Zero is what a
-           // clean shutdown produces, so a non-zero here is the sign that
-           // this mount followed one that left a transactional DROP
-           // half-resolved.
+           // behind, retired before the listener bound. Since D2 every
+           // DROP is transactional, so a non-zero here means the previous
+           // mount ended - cleanly or not - with marks some reader or a
+           // crash kept the §5d purge from retiring.
            << " catalog_marks_finalized=" << recovery_->catalog_marks_finalized
            // DT7 made these transactional; RV3 (2026-08-19) made them
            // durable - a committed DDL survives a crash by redo, an
@@ -930,11 +931,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
     // under a real transaction - the session's, or an implicit one this
     // scope opens and FinishDdlStatement resolves - so a crash mid-DDL
     // has a loser recovery can roll back.
-    auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false};
-    WriteScope scope = opened.value();
-
-    DispatchOutcome out = [&]() -> DispatchOutcome {
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         if (args.empty()) {
             return {"ERR CREATE TABLE requires a name", false};
         }
@@ -963,9 +960,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
             return {"ERR " + oid.status().message(), false};
         }
         return {"CREATED oid=" + std::to_string(oid.value()), false};
-    }();
-    FinishDdlStatement(session, scope, out);
-    return out;
+    });
 }
 
 DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
@@ -1178,11 +1173,7 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
 
 DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                                Session& session) {
-    auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false};
-    WriteScope scope = opened.value();
-
-    DispatchOutcome out = [&]() -> DispatchOutcome {
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         parser::Parser parser(line);
         auto parsed = parser.Parse();
         if (!parsed.ok()) {
@@ -1272,9 +1263,7 @@ DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
             log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
         }
         return {os.str(), false};
-    }();
-    FinishDdlStatement(session, scope, out);
-    return out;
+    });
 }
 
 DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
@@ -1491,11 +1480,7 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 
 DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                                    Session& session) {
-    auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false};
-    WriteScope scope = opened.value();
-
-    DispatchOutcome out = [&]() -> DispatchOutcome {
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         auto parsed = parser::Parse(line);
         if (!parsed.ok()) {
             return {"ERR " + parsed.status().message(), false};
@@ -1586,9 +1571,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                   "); pages orphaned pending reclamation");
         }
         return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
-    }();
-    FinishDdlStatement(session, scope, out);
-    return out;
+    });
 }
 
 DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
@@ -2110,11 +2093,7 @@ DispatchOutcome CommandDispatcher::HandleShowFkeys() {
 
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                         Session& session) {
-    auto opened = BeginWrite(session);
-    if (!opened.ok()) return {ErrorReply(opened.status()), false};
-    WriteScope scope = opened.value();
-
-    DispatchOutcome out = [&]() -> DispatchOutcome {
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
         auto parsed = parser::Parse(line);
         if (!parsed.ok()) {
             return {"ERR " + parsed.status().message(), false};
@@ -2346,17 +2325,27 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
 
         // The constraints, now that there is a child relation to hang them on.
         // What can still fail here is the colocation check (F5), which needs the
-        // child's assigned owner core, and catalog I/O. Either leaves a created
-        // relation behind and is reported as an error naming that - the honest
-        // reply, since nothing can take the relation back.
+        // child's assigned owner core, and catalog I/O. Since D2 the ERR
+        // makes FinishDdlStatement abort the statement's transaction, so
+        // the relation's own rows are taken back - the message must not
+        // claim otherwise (review B2). What the abort does NOT take back
+        // is any sys.fkeys row already written in this loop:
+        // CreateForeignKey reports no CatalogRowRef, so those rows never
+        // reach the trail - the orphan the review named, pre-existing on
+        // the explicit-transaction path and recorded in
+        // workplan-rv3-catalog-recovery.md's remainder.
         for (const PendingForeignKey& fk : pending_fkeys) {
             auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
             if (!created.ok()) {
-                return {"ERR relation '" + stmt.table_name + "' was created (oid " +
-                            std::to_string(oid.value()) +
-                            ") but its foreign key on column " + std::to_string(fk.column_no) +
-                            " referencing '" + fk.parent_name +
-                            "' was not: " + created.status().message(),
+                // No survival claim in either direction: autocommit's
+                // abort takes the relation back, an explicit transaction
+                // keeps it until ROLLBACK (§6's per-transaction failure
+                // atomicity) - a message asserting either would be false
+                // in the other arm.
+                return {"ERR CREATE TABLE '" + stmt.table_name +
+                            "' failed: foreign key on column " +
+                            std::to_string(fk.column_no) + " referencing '" + fk.parent_name +
+                            "': " + created.status().message(),
                         false};
             }
         }
@@ -2404,9 +2393,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             created << "\\n" << "WARN " << warning;
         }
         return {created.str(), false};
-    }();
-    FinishDdlStatement(session, scope, out);
-    return out;
+    });
 }
 
 Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& writes,
@@ -2441,23 +2428,9 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
 }
 
 Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id) {
-    if (wal_ == nullptr) return Status::OK();
-
-    auto bytes = page_store_.Get(page_id);
-    if (!bytes.ok()) return bytes.status();
-
-    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-    if (auto n = wal::EncodeFullPageImage(image,
-                                          std::span<const std::byte, kPageSize>(bytes.value().bytes()));
-        !n.ok()) {
-        return n.status();
-    }
-    auto fpi = wal_->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id},
-                            image);
-    if (!fpi.ok()) return fpi.status();
-    // The stamp is the half a hand-copied block loses: redo gates on page_lsn,
-    // so an unstamped page replays a record whose effect it already holds.
-    return page_store_.StampPageLsn(page_id, fpi.value());
+    // The one writer (storage/log_page_image.hpp), kept as a member only
+    // for its callers' brevity.
+    return storage::LogFullPageImage(wal_, page_store_, txn_id, page_id);
 }
 
 Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spills,
@@ -3393,20 +3366,6 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
     return static_cast<std::uint64_t>(cond.val.int_val);
 }
 
-CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(Session& session) {
-    // DDL joins its transaction only inside an explicit one. In autocommit
-    // a `CREATE TABLE` commits as it always has: `kBootstrapXid`, no trail,
-    // nothing to roll back to - which is what makes DT3b invisible to
-    // every existing caller and every existing test.
-    DdlScope scope;
-    if (txn_ == nullptr || !session.in_explicit_txn()) return scope;
-    txn::Transaction* txn = session.transaction();
-    if (txn == nullptr) return scope;
-    scope.txn = txn;
-    scope.trx_id = txn->id();
-    return scope;
-}
-
 CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
     DdlScope scope;
     if (write.txn == nullptr) return scope;  // no manager: kBootstrapXid, as ever
@@ -3449,6 +3408,21 @@ CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
     return scope;
 }
 
+// Every DDL route runs inside this and only this, which is what makes "no
+// handler may skip FinishDdlStatement" structural rather than a convention
+// a fifth route forgets (review S4): the undo hook the body installs
+// through DdlScopeFor(scope) dies here, on every exit, and the implicit
+// transaction D2 opens resolves here too.
+template <typename Fn>
+DispatchOutcome CommandDispatcher::InDdlStatement(Session& session, Fn&& body) {
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return {ErrorReply(opened.status()), false};
+    WriteScope scope = opened.value();
+    DispatchOutcome out = body(scope);
+    FinishDdlStatement(session, scope, out);
+    return out;
+}
+
 void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
                                            DispatchOutcome& out) {
     // Unconditionally, every exit: the hook captures this statement's
@@ -3458,7 +3432,7 @@ void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
 
     const bool owned = scope.owned && scope.txn != nullptr;
     const std::uint64_t id = owned ? scope.txn->id() : 0;
-    const bool failed = out.response.rfind("ERR", 0) == 0;
+    const bool failed = out.response.rfind("ERR ", 0) == 0;
     const Status verdict =
         failed ? Status::InvalidArgument(out.response) : Status::OK();
     if (Status ended = EndWrite(session, scope, verdict); !ended.ok() && !failed) {

@@ -544,7 +544,19 @@ so redo alone can never resurrect what undo cannot retire. A committed
 `CREATE TABLE` whose pages never reached the device comes back by redo;
 a committed `CREATE INDEX`'s backfilled tree travels as full page images
 before the row that publishes it. `SHOW META`: `ddl_durable=1`,
-`catalog_recovered=1`. The paragraphs below stand as the design record
+`catalog_recovered=1`.
+
+Two contract changes D2 carries, stated because nothing else states
+them: **a failed DDL statement inside an explicit transaction now
+poisons the session**, exactly as a failed DML statement does — before
+RV3 the DDL handlers never reached `EndWrite`, so a syntax error left
+the session usable; §6's per-transaction failure atomicity is why the
+DML rule is the right one to inherit, and the common refusal
+(`EXISTS oid=…`) is not an `ERR` and does not poison. And **a refused
+autocommit DDL pays a `TXN_BEGIN`/`TXN_ABORT` pair**, as refused
+autocommit DML always has.
+
+The paragraphs below stand as the design record
 of why A-C were built first:
 
 This ordering is deliberate. A-C are useful on their own (a failed

@@ -158,7 +158,7 @@ Verified against the emission sites:
 | assertions | `ASSERT_BUILD` at CREATE, `ASSERT_RESERVE` / `ASSERT_COMMIT` / `ASSERT_ROLLBACK` on the write paths, `ASSERT_DROP` at teardown |
 | checkpointer | `CHECKPOINT_BEGIN` / `CHECKPOINT_END` |
 
-Ordering rules that are load-bearing and already enforced: `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/feat-index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one.
+Ordering rules that are load-bearing and already enforced: `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/feat-index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one. RV3 adds two more: a catalog write's `UNDO_WRITE` precedes its row record (redo alone must never resurrect a row the undo phase has no record to retire), and a catalog record's **envelope names the acting transaction or `kNoTxnId`, never the header's writer** — analysis notes every named envelope as a loser until a commit in range says otherwise, so a `next_id` bump logged under the relation's long-committed creator invented phantom crash losers (the RV3 review's B1). One safety note the relation-root `PAGE_INIT`s rest on: they are deliberately unstamped (the first row record stamps the page), and a root that never receives a row is protected by the **checkpointer flushing every page in its snapshot** before `CHECKPOINT_END` — the safety lives in that flush, not in a stamp.
 
 ~~**Still outside the log**: `CREATE TABLE` and every other DDL~~ —
 **closed 2026-08-19** (RV3): DDL runs under a real transaction (autocommit
