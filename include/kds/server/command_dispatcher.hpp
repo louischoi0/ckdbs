@@ -551,6 +551,10 @@ private:
     // scope runs the DDL-resolution seam - cache invalidation and the §5d
     // purge - that explicit COMMIT/ROLLBACK reaches through EndDdlScope.
     void FinishDdlStatement(Session& session, WriteScope& scope, DispatchOutcome& out);
+    // kStrict's promise for the transactionless DDL statements (pattern,
+    // assertion): their records sync before the acknowledgement - they
+    // have no commit record for the durability class to ride on.
+    Status AwaitDdlDurability();
     // EndDdlScope's core, keyed by id: the session-based wrapper serves
     // explicit COMMIT/ROLLBACK, this serves an implicit DDL transaction
     // whose resolution EndWrite performed.

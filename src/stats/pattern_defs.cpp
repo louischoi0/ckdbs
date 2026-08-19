@@ -1,5 +1,7 @@
 #include "kds/stats/pattern_defs.hpp"
 
+#include "kds/exec/wal_row_log.hpp"
+
 #include <utility>
 
 #include "kds/exec/row_codec.hpp"
@@ -148,7 +150,7 @@ StatusOr<std::optional<PatternDef>> FindPatternDefByPatternId(catalog::Catalog& 
 }
 
 Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
-                        std::uint64_t pattern_id, std::string_view name,
+                        wal::WalManager* wal, std::uint64_t pattern_id, std::string_view name,
                         std::string_view source_text, std::uint32_t param_count) {
     // Refused here, naming the limit, rather than let EncodeRow report it as
     // an anonymous over-long varchar: the caller is a client who wrote a
@@ -182,31 +184,29 @@ Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
     values[kColSourceText - 1].type = parser::ValueType::kStr;
     values[kColSourceText - 1].str_val = std::string(source_text);
 
+    std::vector<exec::AppendedSpill> spills;
     exec::VarHeapSink sink;
     sink.store = &store;
     sink.root = rel.varheap_page_id;
     sink.owner_oid = rel.oid;
+    sink.appended = &spills;
 
     auto payload = exec::EncodeRow(rel.schema, rel.layout, id.value(), values, sink);
     if (!payload.ok()) return payload.status();
 
-    // **Unlogged, and since RV3 (2026-08-19) that is a divergence rather
-    // than the house rule it used to be**: every other catalog write now
-    // goes through `catalog.cpp`'s logged funnels, so a declaration
-    // written here survives a crash only as far as the next checkpoint
-    // while a `CREATE TABLE` beside it survives by redo. This row-codec
-    // relation's `ChainInsert`/var-heap writes predate those funnels -
-    // `docs/workplan-rv3-catalog-recovery.md`'s "Open remainder, named"
-    // owns closing it. Advisory data (invariant 8), so what a crash costs
-    // here is a re-learned pattern, never an answer.
     auto placed = heap::ChainInsert(store, rel.desc_page_id, id.value(), payload.value(),
                                     catalog::kBootstrapXid, rel.oid);
     if (!placed.ok()) return placed.status();
-    return Status::OK();
+    // Logged since 2026-08-19, closing RV3's named remainder for this
+    // relation: the spills and any grown page precede the row record
+    // (exec/wal_row_log.hpp says why the order is load-bearing). A null
+    // wal is the unlogged tests' path, exactly as everywhere else.
+    return exec::LogChainInsert(wal, store, placed.value(), payload.value(),
+                                catalog::kBootstrapXid, rel.oid, spills);
 }
 
 Status DeletePatternDef(catalog::Catalog& catalog, storage::PageStore& store,
-                        std::uint64_t pattern_id) {
+                        wal::WalManager* wal, std::uint64_t pattern_id) {
     auto access = OpenPatternDefs(catalog);
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
@@ -221,7 +221,7 @@ Status DeletePatternDef(catalog::Catalog& catalog, storage::PageStore& store,
     std::vector<exec::PendingSpill> spills;
     Status walked = heap::ChainVisit(
         store, rel.desc_page_id, storage::PageAccess::kWrite,
-        [&](PageId, heap::PageView& page,
+        [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             auto tuple = page.ReadTuple(slot);
             // A retired slot reads as NotFound and is not an error: it is
@@ -250,6 +250,10 @@ Status DeletePatternDef(catalog::Catalog& catalog, storage::PageStore& store,
             // found by name and a DROP followed by a CREATE of the same name
             // would collide with a row nobody can see.
             if (Status s = page.RetireSlot(slot); !s.ok()) return s;
+            if (Status s = exec::LogSlotRetire(wal, store, wal::kNoTxnId, page_id, slot);
+                !s.ok()) {
+                return s;
+            }
             found = true;
             return storage::VisitControl::kStop;
         });

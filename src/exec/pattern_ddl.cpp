@@ -288,6 +288,7 @@ StatusOr<Options> ParseOptions(const std::vector<parser::PatternOption>& options
 }  // namespace
 
 StatusOr<PatternDdlResult> CreatePattern(catalog::Catalog& catalog, storage::PageStore& store,
+                                         wal::WalManager* wal,
                                           const parser::CreatePatternStmt& stmt) {
     PatternDdlResult result;
 
@@ -490,7 +491,7 @@ StatusOr<PatternDdlResult> CreatePattern(catalog::Catalog& catalog, storage::Pag
     // and a failure here leaves a sys.patterns row with no name. That is the
     // same exposure every other DDL path in this engine has until the
     // transaction manager exists, and it is recorded rather than hidden.
-    if (Status s = stats::InsertPatternDef(catalog, store, result.pattern_id, stmt.name,
+    if (Status s = stats::InsertPatternDef(catalog, store, wal, result.pattern_id, stmt.name,
                                             stmt.source_text, result.param_count);
         !s.ok()) {
         return s;
@@ -503,6 +504,7 @@ StatusOr<PatternDdlResult> CreatePattern(catalog::Catalog& catalog, storage::Pag
 }
 
 StatusOr<std::uint64_t> DropPattern(catalog::Catalog& catalog, storage::PageStore& store,
+                                    wal::WalManager* wal,
                                     std::string_view name) {
     auto def = stats::FindPatternDefByName(catalog, store, name);
     if (!def.ok()) return def.status();
@@ -511,7 +513,7 @@ StatusOr<std::uint64_t> DropPattern(catalog::Catalog& catalog, storage::PageStor
     }
 
     const std::uint64_t pattern_id = def.value()->pattern_id;
-    if (Status s = stats::DeletePatternDef(catalog, store, pattern_id); !s.ok()) return s;
+    if (Status s = stats::DeletePatternDef(catalog, store, wal, pattern_id); !s.ok()) return s;
 
     // The sys.patterns row goes with it. A pattern row with no definition is
     // exactly an auto-registered pattern, so leaving it would silently

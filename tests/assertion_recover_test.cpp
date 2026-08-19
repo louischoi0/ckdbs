@@ -299,13 +299,16 @@ TEST_F(AssertionRecoverTest, TheLinkageComesBackFromTheCabinsOwnPages) {
 }
 
 TEST_F(AssertionRecoverTest, RecordsWithNoSnapshotAreCountedAndTheAssertionStaysUnrecovered) {
-    // Records but no base: folding them would produce aggregates that are too
-    // small, and an admission check on those admits a violating write. So the
-    // assertion is reported unrecovered - `enforcing=0` - rather than enforcing
-    // wrongly.
-    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
-    const std::uint16_t index = Write(live, Key("x"), 5, 1);
-    LogEntry(index, Key("x"), live.Find(Key("x"))->group_id);
+    // Non-birth records with no base: folding them would produce aggregates
+    // that are too small, and an admission check on those admits a violating
+    // write. So the assertion is reported unrecovered - `enforcing=0` -
+    // rather than enforcing wrongly.
+    //
+    // A ROLLBACK rather than the BUILD this test used before 2026-08-19:
+    // a BUILD in range with no snapshot is now a legal base (the genesis
+    // arm below), so only a record that *mutates* an existing directory
+    // still carries this premise.
+    LogRollback(/*index=*/0, Key("x"), /*delta=*/5);
 
     BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
     auto report = Recover(/*from_lsn=*/0, rebuilt);
@@ -313,6 +316,26 @@ TEST_F(AssertionRecoverTest, RecordsWithNoSnapshotAreCountedAndTheAssertionStays
     EXPECT_FALSE(report.value().assertions[0].recovered);
     EXPECT_EQ(report.value().records_without_a_base, 1u);
     EXPECT_EQ(rebuilt.group_count(), 0u) << "nothing may be folded onto a base that does not exist";
+}
+
+// The genesis arm, added the day the sys.assertions row first survived a
+// crash (workplan-rv3-catalog-recovery.md's remainder round): a declaration
+// born after the last checkpoint has no ASSERT_SNAPSHOT and needs none - a
+// cabin is born empty, so its first BUILD record in range is the base and
+// the fold rebuilds the directory the build wrote.
+TEST_F(AssertionRecoverTest, ABuildRecordWithNoSnapshotIsAGenesisNotAnOrphan) {
+    BoundCabin live(BoundAggregate::kSum, /*bound=*/1000);
+    const std::uint16_t index = Write(live, Key("x"), 5, 1);
+    LogEntry(index, Key("x"), live.Find(Key("x"))->group_id);
+
+    BoundCabin rebuilt(BoundAggregate::kSum, /*bound=*/1000);
+    auto report = Recover(/*from_lsn=*/0, rebuilt);
+    ASSERT_TRUE(report.ok()) << report.status().message();
+    EXPECT_TRUE(report.value().assertions[0].recovered)
+        << "an assertion born after the last checkpoint stayed unenforcing";
+    EXPECT_EQ(report.value().records_without_a_base, 0u);
+    ASSERT_EQ(rebuilt.group_count(), 1u);
+    EXPECT_EQ(rebuilt.Find(Key("x"))->sum, 5);
 }
 
 TEST_F(AssertionRecoverTest, AnEmptyCabinStillGetsASnapshotSoItsAbsenceMeansSomething) {

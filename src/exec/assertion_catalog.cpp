@@ -1,5 +1,7 @@
 #include "kds/exec/assertion_catalog.hpp"
 
+#include "kds/exec/wal_row_log.hpp"
+
 #include <variant>
 
 #include "kds/parser/parser.hpp"
@@ -160,7 +162,8 @@ StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catal
     return out;
 }
 
-Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std::uint64_t id,
+Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
+                       wal::WalManager* wal, std::uint64_t id,
                        catalog::Oid target_oid, std::string_view name,
                        std::string_view source_text, PageId cabin_root) {
     // Refused here, naming the limit, rather than letting EncodeRow report it
@@ -207,33 +210,29 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std
     values[kColSourceText - 1].type = parser::ValueType::kStr;
     values[kColSourceText - 1].str_val = std::string(source_text);
 
+    std::vector<AppendedSpill> spills;
     VarHeapSink sink;
     sink.store = &store;
     sink.root = rel.varheap_page_id;
     sink.owner_oid = rel.oid;
+    sink.appended = &spills;
 
     auto payload = EncodeRow(rel.schema, rel.layout, id, values, sink);
     if (!payload.ok()) return payload.status();
 
-    // **Unlogged, and since RV3 (2026-08-19) that is a divergence rather
-    // than the house rule it used to be**: every other catalog write goes
-    // through `catalog.cpp`'s logged funnels, so a `CREATE TABLE` now
-    // survives a crash by redo while a declaration written here survives
-    // only as far as the next checkpoint - and unlike a pattern
-    // definition this one is *enforcing*, so what a crash costs is a
-    // constraint an operator was told existed. `SHOW META`'s
-    // `catalog_recovered=1` does not cover this row;
-    // `docs/workplan-rv3-catalog-recovery.md`'s "Open remainder, named"
-    // and `wal.md` §11a own closing it. §7's `ASSERT_BUILD` is about the
-    // Bound Cabin's contents, not this row.
     auto placed = heap::ChainInsert(store, rel.desc_page_id, id, payload.value(),
                                     catalog::kBootstrapXid, rel.oid);
     if (!placed.ok()) return placed.status();
-    return Status::OK();
+    // Logged since 2026-08-19, closing RV3's loudest remainder: this row
+    // is what RC07 rebuilds the *enforcing* registry from at mount, so an
+    // acknowledged declaration must survive a crash by redo like any
+    // other catalog write (exec/wal_row_log.hpp; the order note is there).
+    return LogChainInsert(wal, store, placed.value(), payload.value(),
+                          catalog::kBootstrapXid, rel.oid, spills);
 }
 
 Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
-                       std::string_view name) {
+                       wal::WalManager* wal, std::string_view name) {
     auto access = OpenAssertions(catalog);
     if (!access.ok()) return access.status();
     const catalog::TableAccess& rel = *access.value();
@@ -258,7 +257,7 @@ Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
     bool retired = false;
     Status walked = heap::ChainVisit(
         store, rel.desc_page_id, storage::PageAccess::kWrite,
-        [&](PageId, heap::PageView& page,
+        [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             auto tuple = page.ReadTuple(slot);
             if (!tuple.ok()) {
@@ -284,6 +283,9 @@ Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
             // found by name and a DROP followed by a CREATE of the same name
             // would collide with a row nobody can see.
             if (Status s = page.RetireSlot(slot); !s.ok()) return s;
+            if (Status s = LogSlotRetire(wal, store, wal::kNoTxnId, page_id, slot); !s.ok()) {
+                return s;
+            }
             retired = true;
             return storage::VisitControl::kStop;
         });
@@ -429,7 +431,7 @@ StatusOr<AssertionDdlResult> CreateAssertion(catalog::Catalog& catalog,
     // fact (AST07, whose check steps make a plan a function of the
     // assertion set) is the task that must make this publish invalidate
     // plans, and it owns choosing the door.
-    if (Status s = InsertAssertion(catalog, store, id.value(), oid.value(), stmt.name,
+    if (Status s = InsertAssertion(catalog, store, wal, id.value(), oid.value(), stmt.name,
                                    stmt.source_text, build.value().cabin_root);
         !s.ok()) {
         if (Status drop = EmitAssertDrop(wal, id.value(), build.value().cabin_root); !drop.ok()) {
@@ -608,7 +610,7 @@ StatusOr<std::uint64_t> DropAssertion(catalog::Catalog& catalog, storage::PageSt
     // unlogged: a stream must not end holding live-looking ASSERT records
     // for an assertion whose catalog row is already gone.
     if (Status s = EmitAssertDrop(wal, id, found.value()->cabin_root); !s.ok()) return s;
-    if (Status s = DeleteAssertion(catalog, store, stmt.name); !s.ok()) return s;
+    if (Status s = DeleteAssertion(catalog, store, wal, stmt.name); !s.ok()) return s;
     // No BumpVersion(), CreateAssertion's reasoning: nothing cached is
     // derived from these rows until AST07's check steps are.
     return id;

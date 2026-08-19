@@ -113,6 +113,7 @@ add_library(kds
     src/exec/trail_replay.cpp
     src/exec/tuple_verify.cpp
     src/exec/pattern_ddl.cpp
+    src/exec/wal_row_log.cpp
     src/exec/cabin_ddl.cpp
     src/exec/index_ddl.cpp
     src/exec/assertion_build.cpp

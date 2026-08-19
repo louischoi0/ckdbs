@@ -32,6 +32,7 @@
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/exec/tuple_verify.hpp"
+#include "kds/exec/wal_row_log.hpp"
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
@@ -1118,10 +1119,11 @@ DispatchOutcome CommandDispatcher::HandleCreatePattern(std::string_view line) {
     }
     const auto& stmt = std::get<parser::CreatePatternStmt>(parsed.value());
 
-    auto result = exec::CreatePattern(catalog_, page_store_, stmt);
+    auto result = exec::CreatePattern(catalog_, page_store_, wal_, stmt);
     if (!result.ok()) {
         return {"ERR " + result.status().message(), false};
     }
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
 
     std::ostringstream os;
     // The pattern_id in hex, because that is what ANALYZE prints for a
@@ -1157,10 +1159,11 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
     }
     const auto& stmt = std::get<parser::DropPatternStmt>(parsed.value());
 
-    auto pattern_id = exec::DropPattern(catalog_, page_store_, stmt.name);
+    auto pattern_id = exec::DropPattern(catalog_, page_store_, wal_, stmt.name);
     if (!pattern_id.ok()) {
         return {"ERR " + pattern_id.status().message(), false};
     }
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
 
     std::ostringstream os;
     os << "DROPPED PATTERN name=" << stmt.name << " pattern_id=0x" << std::hex
@@ -1590,6 +1593,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
         if (!id.ok()) {
             return {ErrorReply(id.status()), false};
         }
+        if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
         enforcer_.Evict(id.value());
         std::ostringstream os;
         os << "DROPPED ASSERTION name=" << stmt.name << " assertion_id=" << id.value();
@@ -1618,6 +1622,7 @@ DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
     if (!created.ok()) {
         return {ErrorReply(created.status()), false};
     }
+    if (Status s = AwaitDdlDurability(); !s.ok()) return {ErrorReply(s), false};
     exec::AssertionDdlResult& result = created.value();
     const bool adopted = result.live.has_value();
     if (adopted) {
@@ -2433,61 +2438,24 @@ Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id)
     return storage::LogFullPageImage(wal_, page_store_, txn_id, page_id);
 }
 
+// The durability a statement with no commit record owes its
+// acknowledgement (workplan-rv3-catalog-recovery.md's remainder round):
+// pattern and assertion DDL run under no transaction, so nothing ever
+// synced their records - at kStrict an acknowledged CREATE ASSERTION
+// could die with the WAL buffer, which is the strict promise broken.
+// kStrict syncs here; kGroup and kRelaxed keep their loss windows,
+// exactly as they do for DML.
+Status CommandDispatcher::AwaitDdlDurability() {
+    if (wal_ == nullptr || durability_ != wal::DurabilityClass::kStrict) return Status::OK();
+    return wal_->SyncAll();
+}
+
 Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spills,
                                    std::uint64_t txn_id, std::uint64_t owner_oid) {
-    if (wal_ == nullptr) return Status::OK();
-
-    for (const exec::AppendedSpill& spill : spills) {
-        // ---- The page the append created ---------------------------------
-        //
-        // `varheap::ChainAppend` grows a chain through the store's plain
-        // allocation path, and a VARHEAP_APPEND does not say its page is new -
-        // so without this record redo meets an append naming a page nothing
-        // creates, and refuses the mount. `wal::ApplyPageInit` already formats
-        // a kVarHeap page, so this is the record nobody wrote rather than an
-        // applier nobody built.
-        //
-        // Unstamped, for the reason the heap path gives for a new tuple page:
-        // the append below lands in exactly this page and stamps it.
-        if (spill.created_page_id != kInvalidPageId) {
-            std::array<std::byte, wal::kPageInitPayloadSize> init{};
-            const wal::PageInitPayload init_fields{
-                /*min_key=*/0, static_cast<std::uint8_t>(PageType::kVarHeap), {0, 0, 0},
-                /*reserved2=*/0, owner_oid};
-            if (auto n = wal::EncodePageInit(init, init_fields); !n.ok()) return n.status();
-            if (auto rec = wal_->Append(
-                    wal::RecordSpec{wal::RecordType::kPageInit, txn_id, spill.created_page_id},
-                    init);
-                !rec.ok()) {
-                return rec.status();
-            }
-        }
-
-        // ---- The link that made it reachable -----------------------------
-        //
-        // A full page image, because no record type describes a next-page
-        // link - the same answer this function's caller gives for a heap link
-        // edit. Losing it is the quieter half of the same defect: the value
-        // page survives redo and no chain walk ever reaches it.
-        if (spill.linked_page_id != kInvalidPageId) {
-            if (Status s = LogFullPageImage(spill.linked_page_id, txn_id); !s.ok()) return s;
-        }
-
-        // ---- The value itself --------------------------------------------
-        std::vector<std::byte> vh(wal::kVarHeapAppendFixedSize + spill.value.size());
-        const wal::VarHeapAppendPayload vh_fields{
-            spill.ptr.slot, 0, static_cast<std::uint32_t>(spill.value.size())};
-        if (auto n = wal::EncodeVarHeapAppend(vh, vh_fields, spill.value); !n.ok()) {
-            return n.status();
-        }
-        auto rec = wal_->Append(
-            wal::RecordSpec{wal::RecordType::kVarHeapAppend, txn_id, spill.ptr.page_id}, vh);
-        if (!rec.ok()) return rec.status();
-        if (Status s = page_store_.StampPageLsn(spill.ptr.page_id, rec.value()); !s.ok()) {
-            return s;
-        }
-    }
-    return Status::OK();
+    // The one writer (exec/wal_row_log.hpp), kept as a member for its
+    // callers' brevity - the extraction is what let the row-codec system
+    // relations (sys.pattern_defs, sys.assertions) log the same records.
+    return exec::LogSpills(wal_, page_store_, spills, txn_id, owner_oid);
 }
 
 Status CommandDispatcher::LogInsert(const storage::InsertPlacement& placed, PageType leaf_type,

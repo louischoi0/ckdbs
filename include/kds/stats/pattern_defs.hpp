@@ -53,6 +53,10 @@
 // Concurrency: core-local, like the catalog it reads through. No internal
 // synchronization (rules.md #3).
 
+namespace kds::wal {
+class WalManager;
+}  // namespace kds::wal
+
 namespace kds::stats {
 
 // One `sys.pattern_defs` row, fully resolved - `name` and `source_text`
@@ -127,8 +131,11 @@ StatusOr<std::optional<PatternDef>> FindPatternDefByPatternId(catalog::Catalog& 
 // can hold (8144 bytes). The spilled-value size cap is an open decision and
 // this does not settle it: a longer declaration is refused rather than
 // chained.
+// `wal` (null = unlogged, the tests' path): since 2026-08-19 the row, its
+// spilled body and any grown page are logged (exec/wal_row_log.hpp),
+// closing RV3's remainder for this relation.
 Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
-                        std::uint64_t pattern_id, std::string_view name,
+                        wal::WalManager* wal, std::uint64_t pattern_id, std::string_view name,
                         std::string_view source_text, std::uint32_t param_count);
 
 // Removes the definition for `pattern_id`. NotFound if there is none.
@@ -139,6 +146,6 @@ Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
 // often patterns are dropped, and it is the same leak every superseded
 // varchar value already produces.
 Status DeletePatternDef(catalog::Catalog& catalog, storage::PageStore& store,
-                        std::uint64_t pattern_id);
+                        wal::WalManager* wal, std::uint64_t pattern_id);
 
 }  // namespace kds::stats

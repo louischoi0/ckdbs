@@ -197,11 +197,20 @@ recommendations carry the next_id carve.
 
 ## Open remainder, named
 
-- The two **row-codec definition relations** stay unlogged
-  (`sys.pattern_defs` — `stats/pattern_defs.cpp` says so in place — and
-  `sys.assertions`' source rows): their `ChainInsert`/var-heap writes
-  predate the funnels. Registry rows are covered; the definitions
-  survive only to the last checkpoint, as all catalog writes used to.
+- ~~The two **row-codec definition relations** stay unlogged~~ —
+  **closed 2026-08-19** (`worktree-log-definition-rows`): both write
+  through `exec/wal_row_log.hpp` (the extracted LogSpills + a
+  ChainInsert logger, kNoTxnId envelopes), their retires log
+  `SLOT_RETIRE`, and two crash tests pin the outcome — a recovered
+  `CREATE ASSERTION` *enforces*, a recovered `CREATE PATTERN` lists.
+  Proving it end to end exposed and closed three more: `kStrict` had no
+  sync for transactionless DDL acknowledgements (`AwaitDdlDurability`);
+  redo's generic arm zeroed a `kCabinBound` body whose `next_page_id`
+  then read as page 0, walking `AdoptChain` into the superblock; and
+  assertion recovery had no genesis — a declaration born after the last
+  checkpoint had no snapshot base and stayed `enforcing=0`, so its
+  first `ASSERT_BUILD` in range is now the base. The last two were
+  pre-existing, unobservable while the row always died with the crash.
 - The sim workload writes no DDL, so the crash *loop* never exercises
   these paths — the five shapes above do, deterministically.
 - `CreateForeignKey`/`CreateCabin` report no `CatalogRowRef`, so their

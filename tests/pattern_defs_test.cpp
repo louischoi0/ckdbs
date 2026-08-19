@@ -55,7 +55,7 @@ TEST_F(PatternDefsTest, ADefinitionRoundTripsByNameAndByPatternId) {
     const std::string decl =
         "CREATE PATTERN acct($flag bool) WITH (pinned = on) "
         "OF SELECT id FROM account AS a WHERE a.flag = $flag";
-    ASSERT_TRUE(InsertPatternDef(catalog_, store_, 0xDEADBEEFCAFEF00Dull, "acct", decl, 1).ok());
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 0xDEADBEEFCAFEF00Dull, "acct", decl, 1).ok());
 
     auto by_name = FindPatternDefByName(catalog_, store_, "acct");
     ASSERT_TRUE(by_name.ok());
@@ -77,7 +77,7 @@ TEST_F(PatternDefsTest, ADefinitionRoundTripsByNameAndByPatternId) {
 }
 
 TEST_F(PatternDefsTest, NameLookupIsCaseInsensitive) {
-    ASSERT_TRUE(InsertPatternDef(catalog_, store_, 1, "AcctTrades", "SELECT * FROM t", 0).ok());
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 1, "AcctTrades", "SELECT * FROM t", 0).ok());
 
     auto found = FindPatternDefByName(catalog_, store_, "accttrades");
     ASSERT_TRUE(found.ok());
@@ -95,7 +95,7 @@ TEST_F(PatternDefsTest, ABodyLongerThanAnInlineCellSpillsAndComesBackWhole) {
     // var-heap path and the decode has to resolve two pending spills - the
     // ordering I15's R1 forces.
     const std::string body(4000, 'x');
-    ASSERT_TRUE(InsertPatternDef(catalog_, store_, 7, "big", body, 0).ok());
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 7, "big", body, 0).ok());
 
     auto found = FindPatternDefByPatternId(catalog_, store_, 7);
     ASSERT_TRUE(found.ok());
@@ -109,15 +109,15 @@ TEST_F(PatternDefsTest, ABodyLargerThanOneVarHeapPageIsRefusedRatherThanChained)
     // settle it: one var-heap page is what fits without a multi-page
     // representation, and anything larger is Unsupported.
     const std::string too_long(varheap::kMaxValueSize + 1, 'x');
-    Status s = InsertPatternDef(catalog_, store_, 9, "huge", too_long, 0);
+    Status s = InsertPatternDef(catalog_, store_, nullptr, 9, "huge", too_long, 0);
     EXPECT_EQ(s.code(), StatusCode::kUnsupported);
     EXPECT_NE(s.message().find(std::to_string(varheap::kMaxValueSize)), std::string::npos)
         << "the message has to name the limit; the client wrote the body";
 }
 
 TEST_F(PatternDefsTest, DeleteRemovesTheRowRatherThanMarkingIt) {
-    ASSERT_TRUE(InsertPatternDef(catalog_, store_, 11, "gone", "SELECT * FROM t", 0).ok());
-    ASSERT_TRUE(DeletePatternDef(catalog_, store_, 11).ok());
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 11, "gone", "SELECT * FROM t", 0).ok());
+    ASSERT_TRUE(DeletePatternDef(catalog_, store_, nullptr, 11).ok());
 
     auto found = FindPatternDefByName(catalog_, store_, "gone");
     ASSERT_TRUE(found.ok());
@@ -126,18 +126,18 @@ TEST_F(PatternDefsTest, DeleteRemovesTheRowRatherThanMarkingIt) {
     // The point of retiring rather than delete-marking: catalog reads have
     // no snapshot to filter a mark against, so re-declaring the same name
     // has to succeed.
-    EXPECT_TRUE(InsertPatternDef(catalog_, store_, 12, "gone", "SELECT * FROM u", 0).ok());
+    EXPECT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 12, "gone", "SELECT * FROM u", 0).ok());
     auto again = FindPatternDefByName(catalog_, store_, "gone");
     ASSERT_TRUE(again.ok());
     ASSERT_TRUE(again.value().has_value());
     EXPECT_EQ(again.value()->pattern_id, 12u);
 
-    EXPECT_EQ(DeletePatternDef(catalog_, store_, 999).code(), StatusCode::kNotFound);
+    EXPECT_EQ(DeletePatternDef(catalog_, store_, nullptr, 999).code(), StatusCode::kNotFound);
 }
 
 TEST_F(PatternDefsTest, ListReturnsEveryDefinitionInChainOrder) {
-    ASSERT_TRUE(InsertPatternDef(catalog_, store_, 1, "one", "SELECT * FROM a", 0).ok());
-    ASSERT_TRUE(InsertPatternDef(catalog_, store_, 2, "two", "SELECT * FROM b", 0).ok());
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 1, "one", "SELECT * FROM a", 0).ok());
+    ASSERT_TRUE(InsertPatternDef(catalog_, store_, nullptr, 2, "two", "SELECT * FROM b", 0).ok());
 
     auto all = ListPatternDefs(catalog_, store_);
     ASSERT_TRUE(all.ok());

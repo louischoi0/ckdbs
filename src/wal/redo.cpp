@@ -5,6 +5,7 @@
 #include <set>
 #include <string>
 
+#include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/page_header.hpp"
@@ -73,6 +74,15 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
     }
     if (type == PageType::kVarHeap) {
         return varheap::FormatPage(page, owner_oid);
+    }
+    if (type == PageType::kCabinBound) {
+        // Not the generic arm below: BoundCabinPage::Format writes a body -
+        // entry_count 0 and next_page_id = kInvalidPageId - and a zeroed
+        // body reads next_page_id as page 0, so AdoptChain on a redone root
+        // walked into the superblock and the assertion could not be revived
+        // (found when the sys.assertions row first survived a crash;
+        // pre-existing since the chain's PAGE_INIT was first logged).
+        return storage::cabin::BoundCabinPage::Format(page);
     }
     storage::FormatPage(page, type, /*flags=*/0, owner_oid);
     return Status::OK();

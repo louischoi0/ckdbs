@@ -145,7 +145,8 @@ StatusOr<std::vector<AssertionDef>> AssertionsOnRelation(catalog::Catalog& catal
 // Fails with `Unsupported` when `source_text` is longer than one var-heap
 // page can hold. The spilled-value size cap is an open decision and this does
 // not settle it: a longer declaration is refused rather than chained.
-Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std::uint64_t id,
+Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store,
+                       wal::WalManager* wal, std::uint64_t id,
                        catalog::Oid target_oid, std::string_view name,
                        std::string_view source_text, PageId cabin_root);
 
@@ -160,7 +161,7 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std
 // It does **not** tear down a Bound Cabin, because there is none to tear down
 // until AST04 builds one. `ASSERT_DROP` (§7, AST05) is where that lands.
 Status DeleteAssertion(catalog::Catalog& catalog, storage::PageStore& store,
-                       std::string_view name);
+                       wal::WalManager* wal, std::string_view name);
 
 // ---- The DDL entry points ------------------------------------------------
 

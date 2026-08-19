@@ -50,7 +50,7 @@ protected:
         if (!parsed.ok()) return parsed.status();
         const auto* stmt = std::get_if<parser::CreatePatternStmt>(&parsed.value());
         if (stmt == nullptr) return Status::InvalidArgument("not a CREATE PATTERN statement");
-        return CreatePattern(boot_->catalog, store_, *stmt);
+        return CreatePattern(boot_->catalog, store_, nullptr, *stmt);
     }
 
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
@@ -391,7 +391,7 @@ TEST_F(CreatePatternTest, DropRemovesBothRowsAndFreesTheName) {
     auto out = Declare("CREATE PATTERN p($a int64) OF SELECT id FROM account WHERE id = $a");
     ASSERT_TRUE(out.ok()) << out.status().message();
 
-    auto dropped = DropPattern(boot_->catalog, store_, "p");
+    auto dropped = DropPattern(boot_->catalog, store_, nullptr, "p");
     ASSERT_TRUE(dropped.ok()) << dropped.status().message();
     EXPECT_EQ(dropped.value(), out.value().pattern_id);
 
@@ -410,14 +410,14 @@ TEST_F(CreatePatternTest, DropRemovesBothRowsAndFreesTheName) {
 }
 
 TEST_F(CreatePatternTest, DroppingAnUnknownNameIsNotFound) {
-    EXPECT_EQ(DropPattern(boot_->catalog, store_, "nope").status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(DropPattern(boot_->catalog, store_, nullptr, "nope").status().code(), StatusCode::kNotFound);
 }
 
 TEST_F(CreatePatternTest, DropIsCaseInsensitiveLikeEveryOtherIdentifier) {
     ASSERT_TRUE(
         Declare("CREATE PATTERN AcctTrades($a int64) OF SELECT id FROM account WHERE id = $a")
             .ok());
-    EXPECT_TRUE(DropPattern(boot_->catalog, store_, "accttrades").ok());
+    EXPECT_TRUE(DropPattern(boot_->catalog, store_, nullptr, "accttrades").ok());
 }
 
 // ---- A declared chain is not an executable one ---------------------------

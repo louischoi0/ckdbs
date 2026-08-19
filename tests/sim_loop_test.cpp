@@ -502,6 +502,54 @@ TEST_F(Rv3CrashTest, ACommittedCreateIndexAnswersProbesAfterACrash) {
         << "the recovered index lost the backfilled row";
 }
 
+// RV3's loudest remainder, closed: the sys.assertions row is what RC07
+// rebuilds the *enforcing* registry from at mount, and it used to be
+// ChainInsert-unlogged - so an acknowledged CREATE ASSERTION followed by
+// a crash silently lost a constraint the operator was told existed.
+TEST_F(Rv3CrashTest, ACommittedCreateAssertionEnforcesAfterACrash) {
+    MakeStrict();
+    ASSERT_EQ(Run("CREATE TABLE trades (id int64, account int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK COUNT(*) <= 2")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7)").substr(0, 8), "INSERTED");
+
+    // No SYNC: the declaration's pages die with the crash, and the log
+    // alone must bring back both the row and the registry built from it.
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+
+    const std::string shown = Run("SHOW ASSERTIONS");
+    EXPECT_NE(shown.find("cap"), std::string::npos)
+        << "an acknowledged CREATE ASSERTION vanished across the crash: " << shown;
+    EXPECT_NE(shown.find("enforcing=1"), std::string::npos) << shown;
+
+    // The constraint must not merely be listed - it must refuse. Two more
+    // rows into the surviving group of one crosses the bound of 2.
+    ASSERT_EQ(Run("INSERT INTO trades VALUES (7)").substr(0, 8), "INSERTED");
+    const std::string refused = Run("INSERT INTO trades VALUES (7)");
+    EXPECT_EQ(refused.substr(0, 23), "ERR ASSERTION_VIOLATION")
+        << "the recovered assertion is listed but not enforcing: " << refused;
+}
+
+// The pattern twin: advisory (invariant 8), so what a crash used to cost
+// was a re-learned pattern - but the definition is a durable declaration
+// the operator made, and it survives like one now.
+TEST_F(Rv3CrashTest, ACommittedCreatePatternSurvivesACrash) {
+    MakeStrict();
+    ASSERT_EQ(Run("CREATE TABLE t (id int64, v int64)").substr(0, 7), "CREATED");
+    ASSERT_EQ(Run("CREATE PATTERN watch($k int64) OF SELECT v FROM t WHERE id = $k")
+                  .rfind("ERR", 0),
+              std::string::npos);
+
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_NE(Run("SHOW PATTERNS").find("watch"), std::string::npos)
+        << "an acknowledged CREATE PATTERN vanished across the crash";
+}
+
 TEST_F(Rv3CrashTest, ACommittedDropStaysDroppedAcrossACrash) {
     MakeStrict();
     ASSERT_EQ(Run("CREATE TABLE gone (id int64, v int64)").substr(0, 7), "CREATED");

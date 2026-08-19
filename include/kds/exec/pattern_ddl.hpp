@@ -36,6 +36,10 @@
 // the second would be the engine overruling an operator about their own
 // workload.
 
+namespace kds::wal {
+class WalManager;
+}  // namespace kds::wal
+
 namespace kds::exec {
 
 // What a successful `CREATE PATTERN` did.
@@ -70,6 +74,7 @@ struct PatternDdlResult {
 // the compiler declines or a declaration too long to store, and whatever the
 // catalog reports for a write that could not be made.
 StatusOr<PatternDdlResult> CreatePattern(catalog::Catalog& catalog, storage::PageStore& store,
+                                         wal::WalManager* wal,
                                           const parser::CreatePatternStmt& stmt);
 
 // Removes a declaration by name: the `sys.pattern_defs` row and the
@@ -85,6 +90,7 @@ StatusOr<PatternDdlResult> CreatePattern(catalog::Catalog& catalog, storage::Pag
 //
 // Fails with NotFound when no declaration carries `name`.
 StatusOr<std::uint64_t> DropPattern(catalog::Catalog& catalog, storage::PageStore& store,
+                                    wal::WalManager* wal,
                                      std::string_view name);
 
 }  // namespace kds::exec

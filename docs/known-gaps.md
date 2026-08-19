@@ -47,16 +47,15 @@ the owner's workplan.
   through, and `SHOW META` prints `catalog_recovered=1 ddl_durable=1`.
   Recovery's promise widens to what RC09 could never say: an
   acknowledged `CREATE TABLE` is restored like any acknowledged commit.
-  What stays outside the log is named in `wal.md` §11a's closing
-  paragraph (the two row-codec definition relations; ALLOC/FREE) — and
-  the assertion half of that remainder has a consequence the flag does
-  not carry: an acknowledged `CREATE ASSERTION` followed by a crash
-  before the next checkpoint **silently loses an enforcing constraint**,
-  because RC07 rebuilds the registry from `sys.assertions` source rows
-  that are still `ChainInsert`-unlogged. `sys.pattern_defs`' twin hole
-  costs only a re-learned pattern (invariant 8). Logging those two
-  writers is the named remainder in
-  `workplan-rv3-catalog-recovery.md`. One
+  ~~The two row-codec definition relations stayed outside the log~~ —
+  **closed 2026-08-19, the same day it was named**: `sys.pattern_defs`
+  and `sys.assertions` write through `exec/wal_row_log.hpp` now, an
+  acknowledged `CREATE ASSERTION` survives a crash and **enforces**
+  (the genesis arm in `assertion_recover.cpp` and redo's `kCabinBound`
+  arm were the two pre-existing holes proving it exposed), and
+  `kStrict` syncs at pattern/assertion DDL acknowledgement, which no
+  commit record ever did for them. What stays outside the log is
+  ALLOC/FREE alone (`wal.md` §11a). One
   contract also got *stricter*: a torn catalog page used to boot and be
   served corrupt; redo now names it, cannot heal it (§10's FPI cadence
   is unbuilt for every page class), and refuses the mount — the rule
