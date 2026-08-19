@@ -754,7 +754,7 @@ void Catalog::InvalidateAfterCompensation() {
     BumpVersion("a transaction that wrote catalog rows resolved");
 }
 
-StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
+StatusOr<std::uint64_t> Catalog::RetireDeleteMarksBelow(std::uint64_t horizon) {
     std::uint64_t retired = 0;
     for (const PageId root : kAllCatalogPages) {
         Status inner = Status::OK();
@@ -777,6 +777,10 @@ StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
                     return tuple.status();
                 }
                 if (!tuple.value().deleted) return storage::VisitControl::kContinue;
+                // A mark's trx_id is its *deleter*. At or above the
+                // horizon proves nothing - some live view may still see
+                // the row - so the mark stays for a later pass.
+                if (tuple.value().trx_id >= horizon) return storage::VisitControl::kContinue;
                 if (Status s = page.RetireSlot(slot); !s.ok()) {
                     inner = s;
                     return s;
@@ -787,6 +791,15 @@ StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
         if (!inner.ok()) return inner;
         if (!walked.ok()) return walked;
     }
+    return retired;
+}
+
+StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
+    // Every mark, unconditionally: a real id is 48 bits, so the horizon
+    // that admits everything is any value above kMaxTrxId.
+    auto swept = RetireDeleteMarksBelow(std::numeric_limits<std::uint64_t>::max());
+    if (!swept.ok()) return swept;
+    const std::uint64_t retired = swept.value();
 
     if (retired > 0) {
         // Info, not Debug: this is a structural catalog write, and it is
@@ -801,6 +814,25 @@ StatusOr<std::uint64_t> Catalog::FinalizeDeleteMarksAtMount() {
         BumpVersion("delete-marks finalized at mount");
     }
     return retired;
+}
+
+StatusOr<std::uint64_t> Catalog::PurgeSettledDeleteMarks() {
+    // No manager, no marks: DDL then writes at kBootstrapXid and retires
+    // its rows directly, so there is nothing this sweep could find.
+    if (txn_ == nullptr) return std::uint64_t{0};
+    auto swept = RetireDeleteMarksBelow(txn_->ReadHorizon());
+    if (!swept.ok()) return swept;
+    if (swept.value() > 0 && log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("catalog", "purged " + std::to_string(swept.value()) +
+                                   " settled delete-marked catalog row(s)");
+    }
+    // **No version bump**, unlike the mount sweep: every retired row was
+    // already gone to every reader - unfiltered reads settle the mark by
+    // the same comparison, and filtered readers old enough to see the row
+    // are exactly what the horizon proves absent - so no cached answer
+    // changes, and a bump would broadcast kCatalogInvalidate and stale
+    // this instance's bound statements for nothing.
+    return swept;
 }
 
 void Catalog::InvalidateFromPeer() {

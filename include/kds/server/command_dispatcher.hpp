@@ -579,6 +579,11 @@ private:
     // are removed when the transaction resolves, by `EndDdlScope`.
     std::vector<std::uint64_t> ddl_txns_;
     void EndDdlScope(const Session& session);
+    // Delete-marked catalog rows retired since mount by the horizon-gated
+    // purge EndDdlScope runs (spec-ddl-transactional.md §5d). SHOW META
+    // prints it beside `catalog_marks_finalized`, whose count is the
+    // previous mount's leftovers - this one is this mount's own.
+    std::uint64_t catalog_marks_purged_ = 0;
     // Records that this transaction now holds uncommitted catalog rows,
     // which is what turns on `ViewFor`'s filtering.
     void MarkHoldsDdl(const txn::Transaction& txn);

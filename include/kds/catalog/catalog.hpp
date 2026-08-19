@@ -251,6 +251,27 @@ public:
     // started from and what the next mount sweeps again.
     StatusOr<std::uint64_t> FinalizeDeleteMarksAtMount();
 
+    // The in-mount sibling of the sweep above
+    // (`docs/workplan-reader-registration.md` D5, spec §5d): retires every
+    // delete-marked catalog row whose deleter has cleared the core's read
+    // horizon, and answers how many. Callable while the listener is bound —
+    // the horizon is exactly the proof the mount-only rule was missing. A
+    // deleter below it is committed (an active transaction bounds the
+    // horizon at or below its own id) and visible to every live and future
+    // view, so the mark it left is what every reader already reads: the
+    // row is gone. A rollback clears its own marks synchronously, so no
+    // aborted transaction's mark survives to be asked about.
+    //
+    // Deliberately **no version bump** — the implementation says why — and
+    // unlogged like every catalog write. The caller is DDL resolution
+    // (`CommandDispatcher::EndDdlScope`): the only event that creates or
+    // settles a mark, and rare enough that a page sweep costs nothing
+    // worth measuring. A mark whose deleter has not cleared the horizon
+    // survives to the next resolution, or to the next mount's
+    // finalization — accumulation is bounded by reader lifetimes now, not
+    // by the mount.
+    StatusOr<std::uint64_t> PurgeSettledDeleteMarks();
+
     // Registers the fixed namespace/type sys-objects in the in-memory
     // registry (no disk I/O - these are well-known constants, not stored
     // as catalog rows themselves).
@@ -928,6 +949,12 @@ public:
     const CatalogCache::Stats& cache_stats() const noexcept { return cache_.stats(); }
 
 private:
+    // The one sweep both delete-mark retirers share: every mark whose
+    // deleter is below `horizon` is retired in place, and the count
+    // answered. The mount sweep passes a horizon above every possible id;
+    // the in-mount purge passes the manager's ReadHorizon().
+    StatusOr<std::uint64_t> RetireDeleteMarksBelow(std::uint64_t horizon);
+
     // Phase 5 of Bootstrap(): creates sys.pattern_defs as an ordinary
     // row-codec relation - fixed root page, var-heap chain, four
     // sys.columns rows at fixed oids. Split out because it is the one

@@ -516,7 +516,12 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
     os << "version=" << superblock_.version() << " create_time=" << superblock_.create_time()
        << " last_mount_time=" << superblock_.last_mount_time()
        << " wal_anchor_count=" << superblock_.wal_anchor_count()
-       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off");
+       << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+       // §5d: delete-marked catalog rows the horizon-gated purge retired
+       // *this* mount. Its sibling `catalog_marks_finalized` below counts a
+       // previous mount's leftovers, and is part of the recovery report;
+       // this one is live dispatcher state and prints unconditionally.
+       << " catalog_marks_purged=" << catalog_marks_purged_;
 
     // The last recovery, for the operator who has to answer "what did the
     // restart do" (RC09, `docs/wal.md` §13). Absent rather than zeroed when no
@@ -3440,7 +3445,24 @@ void CommandDispatcher::EndDdlScope(const Session& session) {
     // anything?") is one more thing to keep true, and a DDL transaction
     // ending is rare enough that a cache clear it did not strictly need
     // costs nothing worth measuring.
-    if (held_ddl) catalog_.InvalidateAfterCompensation();
+    if (held_ddl) {
+        catalog_.InvalidateAfterCompensation();
+        // The first purge consumer (workplan-reader-registration.md D5).
+        // Here and nowhere hotter: DDL resolution is the only event that
+        // creates or settles a mark, the core is between resolutions so no
+        // unregistered synchronous view is live, and the resolved
+        // transaction is already inactive so its own marks are fair game
+        // the moment no older reader holds a lease. A failed sweep is a
+        // maintenance failure, not the statement's: the marks it left are
+        // exactly as reachable as before, so it is logged and the reply
+        // stands.
+        auto purged = catalog_.PurgeSettledDeleteMarks();
+        if (purged.ok()) {
+            catalog_marks_purged_ += purged.value();
+        } else if (log_ != nullptr) {
+            log_->Warn("catalog", "delete-mark purge failed: " + purged.status().message());
+        }
+    }
 }
 
 void CommandDispatcher::MarkHoldsDdl(const txn::Transaction& txn) {
