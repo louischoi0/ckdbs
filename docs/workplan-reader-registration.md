@@ -186,6 +186,34 @@ by the mount.
   reclamation preamble and the `marks` bound), `CLAUDE.md` milestone
   rows. ☑
 
+## Measured (ck-tester, 2026-08-19, Release A/B `a10890e` vs `d84fdc3`)
+
+Interleaved per-statement A/B, `tools/catalog_read_ab_benchmark.py` with
+`--verify` green at 200/1k/10k rows; raw JSON in the session scratchpad,
+no `bench/` file by the one-document-per-scenario rule.
+
+- **The statement front door is free.** Autocommit pk point SELECT: every
+  p0/p25/p50 delta within +1.3 µs at every size, against an in-run
+  same-arm floor of 0.2–1.0 µs — the register/release is below the noise
+  floor, and server CPU deltas sat inside the 4 µs meter quantization.
+  UPDATE/DELETE likewise nothing above their fsync-bound floors.
+- **The DDL-resolution purge costs ~10 µs on a young catalog** (the
+  fsync-free DDL-rollback arm isolates it: +10.2/+10.7/+10.7 µs p50 at
+  the three sizes, invariant in relation rows), on resolutions that are
+  ~900 µs fsync-dominated. A plain DML ROLLBACK moved +0.3 µs — the
+  `held_ddl` gate confines it.
+- **The sweep's cost model is O(catalog slots ever occupied), not
+  O(marks retired)** — retired slots are never reclaimed, so every DDL
+  resolution pays for all DDL history: measured **≈39 ns per dead
+  catalog row per resolution** (+187 µs p50 after ~4,800 dead rows).
+  Accepted for now — DDL is rare — and it feeds the catalog-reclamation
+  gap `docs/known-gaps.md` already tracks.
+- **An honest surprise, recorded in §5d too**: cold catalog rebuilds ran
+  +5.6–7.3 µs p50 *slower* on the purged side — a retired (dead) slot's
+  `NotFound` path costs ~10 ns more per slot than reading the same row
+  as a settled mark costs. The purge's payoff is bounding the marks and
+  deleting the DT9 ambiguity, **not** speeding cold reads.
+
 ## Not in scope, by decision
 
 - The **undo purge** and everything behind it (retention policy,

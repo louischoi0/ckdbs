@@ -488,6 +488,25 @@ report's `catalog_marks_finalized`, which counts a previous mount's
 leftovers. The pair reads as one statement: what resolution reclaimed,
 and what a reader carried across a shutdown for the mount to take.
 
+**Measured 2026-08-19** (Release A/B `a10890e` vs `d84fdc3`,
+`docs/workplan-reader-registration.md` has the tables). The sweep costs
+~10 µs per DDL resolution on a young catalog, on resolutions that are
+~900 µs fsync-dominated; a non-DDL ROLLBACK moved +0.3 µs, so the
+`held_ddl` gate confines it. Two facts the design must carry honestly:
+
+1. **The cost model is O(catalog slots ever occupied), not O(marks
+   retired)** — retired slots are never reclaimed, so every resolution
+   sweeps all DDL history: ≈39 ns per dead catalog row per resolution.
+   Fine while DDL is rare; a DDL-heavy lifetime accumulates quadratic
+   total sweep work, which is the catalog-reclamation gap
+   `known-gaps.md` tracks, now with a number.
+2. **The purge does not speed cold catalog reads — it slightly slows
+   them** (+5.6–7.3 µs p50 at 200–10k rows): a retired slot's
+   `NotFound` path costs ~10 ns more per slot than the settled mark it
+   replaced costs as one comparison. The payoff is bounding `marks` and
+   deleting DT9's ambiguity, never read speed; do not quote this
+   section as a cold-read optimization.
+
 ## 6. Open decisions — do not assume
 
 - **The cache strategy** (§4): (a) bypass, (b) overlay, (c) snapshot-keyed.
