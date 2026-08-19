@@ -81,9 +81,13 @@ struct StepStats {
     //
     // `probe_memo_hits` counts descents skipped because the step's key
     // repeated. `correlated_scans` counts sub-chain evaluations whose
-    // first step is a Scan - the shape that makes a statement quadratic,
-    // and the one worth being able to point at when a statement is
-    // refused for its budget.
+    // driving step **actually walked** its relation - the shape that makes
+    // a statement quadratic, and the one worth being able to point at when
+    // a statement is refused for its budget. Execution-level since
+    // 2026-08-19: the compile-time kind test it replaced missed a
+    // kFilterScan driver outright and counted a cabined driver never -
+    // including on the misses that walked - while a served probe, which
+    // walks nothing, now honestly counts as nothing.
     std::uint64_t probe_memo_hits = 0;
     std::uint64_t correlated_scans = 0;
 

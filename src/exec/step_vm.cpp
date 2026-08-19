@@ -222,12 +222,11 @@ public:
         if (!sub.steps.empty()) {
             StepStats& sub_stats = stats_.For(sub.steps[0].step_id);
             ++sub_stats.sub_chain_runs;
-            // The shape that makes a statement quadratic: a sub-chain
-            // whose first step walks its relation, evaluated once per
-            // outer row. Counted rather than refused - it is legitimate
-            // over small relations, and the budget is what bounds it over
-            // large ones.
-            if (sub.steps[0].kind == AccessKind::kScan) ++sub_stats.correlated_scans;
+            // `correlated_scans` - the quadratic-shape signal - is counted
+            // at the walk itself (RunWalkStep), not from the compile-time
+            // kind here: a kFilterScan driver walks every run and a
+            // correlated CabinProbe walks on a miss, and the old kind test
+            // reported zero for both while the statement stayed quadratic.
         }
 
         const bool wants_value = sub.has_value;
@@ -1179,6 +1178,17 @@ private:
         // refilled entry while the parameter's referent is freed memory.
         const catalog::TableAccess* live_access = &access;
 
+        // The quadratic-shape signal (step_vm.hpp): a sub-chain's driving
+        // step actually walking its relation, once per evaluation. Counted
+        // here rather than from the compiled kind, so a kFilterScan driver
+        // and a cabined miss count - the statement really walked - and a
+        // served probe, which walks nothing, does not. Counted rather than
+        // refused: quadratic is legitimate over small relations, and the
+        // budget bounds it over large ones.
+        if (record_through_stops_ && index == 0) {
+            ++stats_.For(step.step_id).correlated_scans;
+        }
+
         // Whether a stop ends this walk. Normally yes (V03; the quota's
         // bounded-work property rides on it) - the one exception is
         // `completing_recording_`'s license, held by the walk whose own
@@ -1857,7 +1867,9 @@ private:
     // Sub-chain mode (EvaluateSubChain sets it on the runner it builds):
     // every stop in a sub-chain is its own short-circuit - no quota exists
     // at subquery depth (V09) - so a stop decides the answer without
-    // bounding the work a *recording* is entitled to. With this set, a
+    // bounding the work a *recording* is entitled to. Its second consumer
+    // is the `correlated_scans` counter, which uses it as the "this walk
+    // is a sub-chain's driving walk" fact. With this set, a
     // walk carrying a live recording runs to completion past a stop,
     // visiting the remaining rows for the recording block alone, and
     // WalkAndRecord may then commit the whole set. Never set on a

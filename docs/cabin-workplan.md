@@ -336,3 +336,11 @@ top-level runner never sets the mode, which is what keeps the quota's
 bounded-work property (pagination_exec_test) intact.
 `ACorrelatedExistsConvergesToObservedSets` pins convergence, the whole-set
 commit, and reply identity; it fails without the mode.
+
+**CB13a — `correlated_scans` counts walks, not kinds — built 2026-08-19.**
+The counter moved from `EvaluateSubChain`'s compile-time kind test into
+`RunWalkStep`, gated on sub-chain mode and the driving step: a
+`kFilterScan` driver (never counted before) and a cabined driver's miss
+both count, a served probe counts nothing, and ANALYZE's `corr_scans=`
+goes quiet when a cabined sub-chain converges. Pinned by the counter
+tests in `tests/cabin_contract_test.cpp`.
