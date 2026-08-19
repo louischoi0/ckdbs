@@ -241,6 +241,17 @@ recommendations carry the next_id carve.
   the base logged **zero bytes**, which is the crash exposure RV3-2
   closed stated as a number.
 
+## Deferred cleanup, named
+
+The definition-rows review's S2: `catalog.cpp`'s private `LogCat*` family
+and `exec/wal_row_log.hpp` are parallel funnels for the same records —
+`LogSlotRetire` is a verbatim retype of `LogCatRetire`, `LogChainInsert`'s
+tail is `LogCatRow` — and folding them into one home (`storage/row_log`,
+since neither `exec` nor `catalog` owns it) deletes ~90 lines. Deferred
+rather than applied in that round because it re-opens twenty reviewed
+call sites in `catalog.cpp` for a purely structural gain; it should ride
+the next change that touches those funnels anyway.
+
 ## Not in scope
 
 Per-relation grants themselves (unblocked, not built); catalog *reads*
