@@ -241,6 +241,27 @@ recommendations carry the next_id carve.
   the base logged **zero bytes**, which is the crash exposure RV3-2
   closed stated as a number.
 
+## The remainder round, measured (Release, `8b56c57` vs `e876ee7`)
+
+- **The DML spill path did not move, and the proof is exact**: for the
+  identical seeded command stream, both sides wrote **byte-position-
+  identical WAL** (11,115 records compared at 1k rows) - the LogSpills
+  extraction and the wal::LogPageInit arm emit the same bytes at the
+  same offsets; every latency delta sat inside a device-drift floor on
+  an fsync-bound (~1.05 ms) statement.
+- **Definition DDL now costs one durable acknowledgement**: +0.9-1.0 ms
+  p50 at the default kGroup, of which the bare fdatasync (863 µs p50 on
+  this device) is 87-95% - the base acknowledged these statements
+  non-durably at 40-130 µs, which was the defect. CREATE ASSERTION's
+  delta grows with rows (+1.2 → +2.6 ms at 200 → 10k) because the
+  acknowledgement's SyncAll makes the statement's whole ASSERT_BUILD
+  volume durable at once - bytes the base also wrote but left buffered
+  past the ack, deferred onto later syncs.
+- **WAL bytes**: +312 B per declaration (row + spilled text - a
+  realistic body always spills past the 61-byte inline capacity, so the
+  definition row is in practice a two-record write), +40 B per drop
+  (SLOT_RETIRE); ALTER adds no bytes, only the sync it owed.
+
 ## Deferred cleanup, named
 
 The definition-rows review's S2: `catalog.cpp`'s private `LogCat*` family
