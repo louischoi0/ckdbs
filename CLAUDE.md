@@ -46,6 +46,7 @@ statements, not style.
 | CREATE PATTERN | Built through spec §8 step 4 | `docs/spec-create-pattern-user-defined-patterns-v1.md` |
 | Cabin (value-observed authoritative store) | v1 built (CB01-CB11); CB12-CB14 2026-08-19: the correlated probe, its EXISTS convergence, per-key observation — a cabined join column probed per outer row, spec §4a, the one acceleration a heap relation's join column can have; entry sets memory-resident | `docs/feat-cabin.md`, `docs/cabin-workplan.md` |
 | Secondary indexes (multi-column, covering) | All built (IX01-IX17; IX17 2026-08-18: the correlated probe — a join key's index entered per outer row, spec §8a) | `docs/feat-index.md`, `docs/workplan-index.md` |
+| Statement-local inner build (hash-built join inner) | **Spec ratified 2026-08-19, nothing built** — the per-statement answer to the walked join `bench/results-scenario3-library.md` §7e priced; parser-v2 §5 carries the sanction. Workplan JB1-JB8 written | `docs/spec-join-inner-build.md`, `docs/workplan-join-inner-build.md` |
 | Foreign keys | Declared and enforced (FK-M1..FK-M5); CASCADE/SET NULL out of v1 | `docs/impl-foreign-keys.md` |
 | Assertions (group-level constraints) | **Complete and enforcing** (AST01-AST10). The recovery-side registry rebuild — outside the AST series — **landed 2026-08-12** as `docs/workplan-wal-recovery.md` RC07: `enforcing=1` immediately after a restart | `docs/feat-assertion.md`, `docs/workplan-assertion.md` |
 | Access statistics | Built (`SHOW ACCESS`) | `docs/heap-and-tuple.md` §7 |
@@ -220,6 +221,9 @@ interface that keeps every listed option viable.
   cap; whether `kUnclassified` is production-legal.
 - **Cabin** (`docs/feat-cabin.md` §11): budgets and caps; the `CABIN AUTO`
   threshold; pruning cadence; entry-set persistence; multi-column keys.
+- **Join inner build** (`docs/spec-join-inner-build.md` §7, §8): cap
+  scoping (statement vs step); the catalog-count decline; the peer-side
+  build.
 - **Aggregation** (`docs/feat-aggregate.md` §10): `aggregate_max_distinct`;
   `MIN`/`MAX` with `DISTINCT`; lifting `ORDER BY`/`HAVING`; pre-aggregation
   below a join is *rejected*, not open.

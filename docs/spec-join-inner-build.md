@@ -1,10 +1,13 @@
-# The statement-local inner build (spec, PROPOSED)
+# The statement-local inner build (spec, RATIFIED)
 
-Status: **PROPOSED — nothing built.** Every decision below is offered for
-ratification, none is made; the items marked `[OPEN]` are open even
-within the proposal. The measurements that motivate and bound this
-design are in `bench/results-scenario3-library.md` §7e (the cell that
-priced the gap) and §7b/§9b (the shapes it would serve).
+Status: **RATIFIED 2026-08-19 — nothing built.** §10's gate is
+discharged: §3 is accepted into `docs/parser-v2.md` §5 as the third
+sanctioned mechanism (the amendment of the same date), the `[OPEN]`
+items of §7/§8 are carried open into `CLAUDE.md`'s index rather than
+decided, and the workplan is `docs/workplan-join-inner-build.md`
+(JB1–JB8). The measurements that motivate and bound this design are in
+`bench/results-scenario3-library.md` §7e (the cell that priced the gap)
+and §7b/§9b (the shapes it would serve).
 
 Related docs: `docs/parser-v2.md` §5 (the contract this must not break),
 `docs/feat-cabin.md` §4a (the machinery this reuses), `docs/feat-index.md`
@@ -32,8 +35,8 @@ declaration and no repetition, and ckdbs has no operator in that class.
 proposes that operator, shaped to this engine's contracts.
 
 The target number follows from §7e's own decomposition: one inner pass
-(~527–539 µs at 10,000 rows, the floor both engines share) plus k cheap
-probes, so ~560–600 µs at k = 16 against the walk's ~8,500 — roughly
+(§7e's ~530–550 µs at 10,000 rows, the floor both engines share) plus k
+cheap probes, so ~560–600 µs at k = 16 against the walk's ~8,500 — roughly
 PostgreSQL's rate plus the round-trip advantage this engine already has.
 
 ## 2. What is proposed, in one paragraph
@@ -64,7 +67,7 @@ asks for them to be ratified as such:
    is first read exactly when written order says it is — when the first
    outer row reaches the inner step. The build is that walk's side
    effect, precisely the Recording pattern `feat-cabin.md` §4 ratified
-   ("it was going to walk anyway; recording is a side effect").
+   ("it was going to scan anyway; recording is a side effect").
 3. **Emission order is untouched.** The map's buckets are appended in
    walk order, so a probe replays each key's matches in exactly the
    order the walk would have emitted them — for both key modes, since
@@ -83,8 +86,10 @@ The map is not a fourth trust class. It is the statement's **own read**,
 MVCC-filtered under the statement's snapshot at the moment of the build
 — and the snapshot is fixed for the statement in every isolation level,
 so a row visible at build time is visible at every later probe of the
-same statement. There is no write hook (core-ownership dispatch runs the
-statement to completion; nothing writes between build and probe), no
+same statement. There is no write hook (a SELECT statement writes nothing between build
+and probe — and only SELECT compiles the build: a DML statement's
+`WHERE` sub-chain is excluded in §8, because its own writes between
+outer rows are exactly what would invalidate the map), no
 observation threshold, no cap-authority question, no persistence class.
 `ANALYZE` reports it honestly (`inner_built=1 build_rows=N probes=k`)
 and `IsTrailReplayable` does not move.
@@ -97,7 +102,8 @@ exactly the walked-join shape. No statistics, no cardinality estimate:
 the lazy form is what removes the need for one. At k = 1 the statement
 pays one walk plus the build's per-row constant (the Cabin recording
 fix bounds the expectation: ~6% before the same decode discipline is
-applied, less after); at k ≥ 2 every avoided walk is pure win. The
+applied, less after — and a stopping sub-chain pays it only on the
+prefix it walks anyway, §6); at k ≥ 2 every avoided walk is pure win. The
 crossover PostgreSQL's planner needs statistics to find is dissolved
 rather than estimated — the same move CB12 made.
 
@@ -105,19 +111,53 @@ Ladder order is also the economics: a converged Cabin serve (~67 µs)
 beats any per-statement rebuild (~560 µs), so banked structures stay
 ahead of the build, and the build stays ahead of the walk.
 
-## 6. The sub-chain case reuses CB13's license
+## 6. The stopping sub-chain: a prefix map, positive-first
 
-A correlated `EXISTS` sub-chain's inner walk **stops at the first
-qualifying row**, so the first outer row's walk would build a partial
-map — the exact problem CB13 solved for Cabin recordings. The same
-mechanism applies verbatim: in sub-chain mode (`record_through_stops_`,
-whose comment already generalizes), a live build walks through the stop
-to completion, and only a completed walk publishes the map. The caps
-lesson transfers too: a build that cannot complete (the cap below)
-reverts to per-row walks, and — per CB13's budget rule — completion
-rows past the stop must not charge the statement's row budget, for the
-§1-class reason ratified there: an accelerator must not turn a
-within-budget statement into a refusal.
+A correlated `EXISTS`-class sub-chain's inner walk **stops at the first
+qualifying row**, so the first outer row's walk yields a partial map.
+The ratified design does not complete it — it makes partiality safe:
+
+- **The map is a walk-order prefix.** Rows are bucketed up to a
+  high-water mark, and every walk traverses the engine's one walk
+  order, so what the map covers is a position, not a guess.
+- **A hit is conclusive.** A bucketed row, re-checked against the full
+  residual, proves the row exists — the positive-only rule
+  `docs/parser-v2.md` §6 already ratifies for `Exists` replay: a
+  partial structure can prove presence, never absence.
+- **A miss resumes the walk at the mark.** Rows before the mark are
+  exactly the bucketed ones and the probe already answered them for
+  this key, so the resumed walk starts where the last one stopped,
+  extends the map, and advances the mark. A walk that reaches the end
+  completes the map, and later misses become conclusive absences.
+
+The economics that ratified this form: **every inner row is visited at
+most once per statement**, so the statement pays at most one full pass
+plus probes — at or below the plain walk's cost at every k, with no
+earn gate, no publication gate, and no budget carve-out (every charged
+row is a row the statement's own walk visits). The plain join of §2 is
+the degenerate case: its first walk never stops, so the mark reaches
+the end immediately and the map is total from the second outer row on.
+
+The class is what compiles to an `Exists`-kind stopping walk —
+`EXISTS`, `NOT EXISTS` (its hit proves existence, its completed miss
+proves absence; both conclusive), and `IN (subquery)`'s per-row form
+(parser-v2 §2: `IN` compiles to `Exists`). A scalar sub-chain also
+stops early, but its cardinality check is conclusive only against a
+*complete* map; it stays excluded (§8).
+
+Under the cap (§7) a frozen map stops extending but keeps serving its
+prefix: hits stay conclusive, misses walk from the frozen mark — still
+never worse than the plain walk.
+
+History, because the first proposed form was reviewed out on
+ratification day: the CB13-license design (walk through the stop,
+publish only completed maps) prices at ~13 partial walks per completion
+on `bench/results-scenario3-library.md` §7c.4's data (~762 rows/key
+against a 10,000-row pass) — a data-dependent break-even of k ≈ 13 and
+a ~2.4× regression at k = 4 — and CB14 is the same-day precedent
+against paying an unearned recording walk. The prefix form deletes the
+completion walk, the publication gate and the CB13 budget carve-out in
+one move.
 
 ## 7. Memory, and the cap
 
@@ -125,7 +165,7 @@ The map holds one entry per inner row: the join-column value (bucketed),
 the pk, and a location hint — the Cabin's 24-byte entry is the natural
 unit, reused rather than redesigned. Bounded by a config knob:
 
-- `join_build_max_rows` `[PROPOSED default: 65536]` — rows, not bytes,
+- `join_build_max_rows` `[RATIFIED default: 65536]` — rows, not bytes,
   following `aggregate_max_groups`' argument. **Refusal semantics are
   the Cabin's, not the aggregate's**: past the cap the step reverts to
   per-row walks for the rest of the statement — always legal, never an
@@ -151,11 +191,16 @@ the same executor, so the machinery would work unmodified); deferred
 with the rest of the re-derivation question in `feat-index.md` §8a.
 
 Out of scope in v1, by decision: multi-column join keys (CB12's scope
-rule), non-equality joins, spill-to-disk, building for a `kFilterScan`
-whose literal already bounds it, and any reuse of a map across
-statements — that last one is what the Cabin *is*, and building a
-second, unauthoritative cache of the same shape would be two structures
-answering one question.
+rule); non-equality joins; spill-to-disk; building for a `kFilterScan`
+whose literal already bounds it (it still walks per outer row, so the
+same win is forgone — a decision, not an impossibility); **any
+sub-chain compiled through `CompileWhere`** — v1 is a SELECT feature,
+because a DML statement's own writes between outer rows invalidate a
+map its first outer row built (§4's no-write argument is a SELECT
+argument); **scalar sub-chains** (§6's conclusiveness needs `Exists`
+semantics); and any reuse of a map across statements — that last one is
+what the Cabin *is*, and building a second, unauthoritative cache of
+the same shape would be two structures answering one question.
 
 ## 9. Validation plan, already in place
 
@@ -164,8 +209,12 @@ shape: `join-no-literal` and `exists-correlated` under
 `--index-mode none` (no `--cabin`) are the build's cells, with
 `--verify`'s ordered row-for-row checks as the correctness gate and
 §7e's PostgreSQL numbers as the standing comparison. Acceptance: the
-`none` cells move from ~8.5 ms / ~1.4 ms to the ~600 µs class without
-any other cell moving outside its floor.
+join cell moves from ~8.5 ms (§7e.5's 117 stmts/s) to the ~600 µs
+class, and the EXISTS cell from ~979 µs (§7c.3's pooled walk — §7e.4's
+1.4 ms is PostgreSQL's row, not this engine's baseline) toward the same
+class, without any other cell moving outside its floor. Neither driver
+phase has a published ckdbs number yet (§9b.7), so JB8 establishes the
+baselines it is then judged against.
 
 ## 10. What ratification requires
 
@@ -176,3 +225,8 @@ any other cell moving outside its floor.
    `CLAUDE.md`'s index.
 3. A workplan (`docs/workplan-join-inner-build.md`) written only after
    1 and 2 — per the project's spec-first rule.
+
+All three discharged 2026-08-19, in that order; the status line at the
+top carries where each landed. §6's first form (the CB13 license) was
+replaced the same day by the review that priced it — the history is in
+§6 itself.
