@@ -608,8 +608,19 @@ private:
         // is paid for: a value Commit could never accept must not start
         // one - under the sub-chain completion license each doomed attempt
         // was a full relation walk, re-armed on every probe.
+        //
+        // **The correlated form earns observation per key** (§4a, amended):
+        // a declaration's n = 1 speaks for the literal shape, where the
+        // operator named the one value the statement probes - a join
+        // probes a value per outer row that nobody named, and under a
+        // never-repeating key distribution n = 1 recorded a dead set and
+        // its forever write-hook tax for every first touch. At n = 2 a
+        // never-repeating key costs one sighting insert and records
+        // nothing; a genuinely repeating key records on its second touch
+        // and serves from its third.
+        const bool declared_here = step.cabin->declared && !step.cabin->key_from.has_value();
         const bool record =
-            cabins_->WouldRecord(cabins_->Observe(*key), step.cabin->declared) &&
+            cabins_->WouldRecord(cabins_->Observe(*key), declared_here) &&
             [&] {
                 if (cabins_->MayObserve(*key)) return true;
                 cabins_->NoteCapRefusal();

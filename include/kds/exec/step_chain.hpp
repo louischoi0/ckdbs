@@ -225,6 +225,12 @@ struct CabinProbe {
     // applies to patterns, and the same argument - a declaration *is* the
     // evidence that waiting exists to gather, so asking traffic to prove it
     // again asks a question that was answered.
+    //
+    // **Only for the literal shape** (feat-cabin.md §4a, amended CB14). The
+    // argument above is about a value the operator *named*; the correlated
+    // form above probes a value per outer row that nobody named, so it takes
+    // `n = 2` whatever this says. `key_from.has_value()` is the test, and
+    // `RunCabinStep` is the one place that makes it.
     bool declared = false;
 
     // Whether the cabin optimizer owns this Cabin (`kCabinOriginAuto` -

@@ -344,3 +344,15 @@ The counter moved from `EvaluateSubChain`'s compile-time kind test into
 both count, a served probe counts nothing, and ANALYZE's `corr_scans=`
 goes quiet when a cabined sub-chain converges. Pinned by the counter
 tests in `tests/cabin_contract_test.cpp`.
+
+**CB14 — the correlated form earns observation per key — built 2026-08-19.**
+Spec §4a's amended economics. One call-site argument: `RunCabinStep` passes
+`declared && !key_from` to `WouldRecord`, so the deferred form always takes
+the `n = 2` threshold - the declaration speaks for the literal value the
+operator named, not for a join's key distribution. A never-repeating key
+(bench §7b.8's uncovered case) now costs one sighting insert instead of a
+recording walk plus a permanent write-hook tax; convergence for repeating
+keys moves one counted miss later. Pinned by
+`ANeverRepeatingKeyObservesNothing` (once-touched key unobserved, the
+literal form's first-touch recording untouched), with the convergence and
+counter pins updated to the extra round.

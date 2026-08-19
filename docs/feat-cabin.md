@@ -27,7 +27,8 @@ Decisions fixed by this spec:
   carries a Cabin: `NO CABIN` (never, by any route), `CABIN AUTO` (the
   engine may, at a threshold — *specified, not built*), or `CABIN`
   (created now, and its values observed on first selection rather than
-  second). See §8.1.
+  second — **the literal probe's first selection only**, narrowed by
+  §4a's CB14 amendment). See §8.1.
 
 ---
 
@@ -194,17 +195,27 @@ on. Cross-core, the kind ships as its walk (the ship-time downgrade)
 exactly as the literal form does.
 
 The economics are §8's per key, multiplied by the outer side's key
-distribution: each distinct join value pays one recording walk for a
-**declared** Cabin (`n = 1`; an auto Cabin's `n = 2` pays a counted miss
-first, so two) and every repeat serves at hit cost. A join whose outer
-keys mostly repeat — the fan-in shape — converts its O(outer × inner)
-walk into O(distinct-keys × inner + hits); one whose keys never repeat
-pays the observation surcharge for nothing, which is the same hit-rate
-question `CABIN AUTO` (§11) is open on, unchanged by this form. **New to
-§8's open budget**: one join statement can now push many values past the
-observation threshold on its own — up to `cabin_max_values` sets from a
-single SELECT, each imposing the write-hook cost thereafter — where the
-literal form observed one value per statement.
+distribution. `[AMENDED 2026-08-19 — CB14]` **The correlated form earns
+observation per key at `n = 2`, declaration or not.** C7's "declared
+records on first selection" is an argument about the literal shape,
+where the operator named the one value the statement probes; a join
+probes a value per outer row that nobody named, and under a
+never-repeating key distribution the first-touch rule recorded a dead
+set — and its forever write-hook tax — for every key it would never see
+again, with one SELECT able to flood `cabin_max_values` on its own. Per
+key now: the first touch costs one sighting insert and records nothing;
+a genuinely repeating key — across statements, or within one join's
+fan-in — records on its second touch and serves from its third. A join
+whose keys mostly repeat still converts its O(outer × inner) walk into
+O(distinct-keys × inner + hits), one counted miss later — provided the
+two touches land inside one sighting window: the table's wholesale reset
+(`kMaxSightings`, the store's one crude eviction, §8's open budget) can
+keep a key oscillating below threshold when repeats are separated by more
+distinct keys than the window holds; one whose keys
+never repeat pays a hash insert per key and nothing else, which closes
+`bench/results-scenario3-library.md` §7b.8's uncovered case on the
+Cabin's side. The literal probe's `n = 1` is untouched. What one
+statement can flood is now bounded to its intra-statement repeats.
 
 `correlated_scans` counts honestly. `[CLOSED 2026-08-19]` — the
 compile-time kind test counted only a `kScan` driver, so a correlated
@@ -224,9 +235,12 @@ tail at subquery depth), so every stop is the sub-chain's own
 short-circuit, whose answer is already decided — and a walk carrying a
 live recording therefore runs on *through* the stop, visiting the
 remaining rows for the recording block alone, and commits a whole set.
-The first probe of a key pays a full walk instead of the short-circuited
-prefix — the observation charge, once — and every repeat serves at hit
-cost with the short-circuit landing on the set's first entry. **The caps
+The probe that records a key pays a full walk instead of the
+short-circuited prefix — the observation charge, once — and every repeat
+after it serves at hit cost with the short-circuit landing on the set's
+first entry. *Which* probe that is moved with CB14 above: the first touch
+now only sights and keeps the short-circuited prefix, the second carries
+the charge, the third serves. **The caps
 bound the license**: a value the per-cabin value cap could never admit is
 refused *before* the walk (`MayObserve`) and keeps the short-circuited
 cost outright, and a set that outgrows the per-value entry cap mid-walk
@@ -363,6 +377,14 @@ one) and it rests on the same argument — *a declaration is the evidence
 that waiting exists to gather*. An operator who wrote `CABIN` on a column
 has already said it is probed by value; asking traffic to prove it again
 asks a question that was answered.
+
+`[AMENDED 2026-08-19 — CB14]` **n=1 covers the literal probe and not the
+correlated one.** The argument above is about a value the *statement
+named*; §4a's correlated form probes a value per outer row that nobody
+named, so a declaration is no evidence about it and it takes `n = 2`
+whatever this column says. Read §4a's economics paragraph for why — it is
+the same sentence `fk_check`'s reverse check already reasons by, that a
+value asked once must not buy a standing write-hook cost.
 
 **`auto` is a name, not a behaviour** — *as written 2026-08-03; amended
 2026-08-10, when it became one.* The promotion pipeline exists now: the
