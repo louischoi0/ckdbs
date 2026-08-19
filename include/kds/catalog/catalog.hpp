@@ -26,6 +26,12 @@ namespace kds::txn {
 class TransactionManager;
 }  // namespace kds::txn
 
+namespace kds::wal {
+// Forward-declared for the same reason: the catalog only stores the
+// pointer here; the record encoding lives in catalog.cpp.
+class WalManager;
+}  // namespace kds::wal
+
 // SQL catalog: sys.objects, sys.tables, sys.columns, sys.types,
 // sys.indexes, sys.patterns. Four things to know before touching it:
 //
@@ -141,6 +147,49 @@ public:
     // after the catalog, and bootstrap has none at all. What null means is
     // on the member.
     void SetTransactionManager(const txn::TransactionManager* txn) noexcept { txn_ = txn; }
+
+    // The WAL, for RV3 (`docs/workplan-rv3-catalog-recovery.md`): every
+    // catalog page mutation logs the ordinary record types - kHeapInsert,
+    // kHeapOverwrite, kHeapDeleteMark, kSlotRetire, kPageInit, plus a
+    // full page image for a chain-link edit - exactly as wal.md's
+    // "Catalog" line always planned. Set rather than constructed with,
+    // for SetLogger's reason; null (bootstrap, socket-free tests) means
+    // catalog writes are unlogged, which is the pre-RV3 engine exactly.
+    void SetWal(wal::WalManager* wal) noexcept { wal_ = wal; }
+
+    // One catalog write a crash loser would need rolled back, reported
+    // **before the write's own record is logged** - which is the entire
+    // reason this is a hook inside the write points rather than a list
+    // the caller reads afterwards: the undo record the hook appends must
+    // precede the row record in the log, or redo alone can resurrect a
+    // loser's row that recovery's undo phase has no record to retire
+    // (the DML path's UNDO_WRITE-before-HEAP_INSERT order, mirrored).
+    //
+    // `bytes` is the encoded row for an insert, the **prior image** for
+    // an overwrite, and empty for a delete-mark. `prior_trx`/`prior_undo`
+    // are the header being replaced (meaningless for an insert).
+    struct DdlUndoEvent {
+        enum class Kind : std::uint8_t { kInsert, kOverwrite, kDeleteMark };
+        Kind kind = Kind::kInsert;
+        PageId page_id = kInvalidPageId;
+        std::uint16_t slot = 0;
+        std::span<const std::byte> bytes;
+        std::uint64_t prior_trx = 0;
+        std::uint64_t prior_undo = 0;
+        // The identity the compensation will re-read - the Keystone word
+        // of the row's payload, never a `.oid` member (DT5's rule, which
+        // not every catalog row has).
+        std::uint64_t pk = 0;
+    };
+    using DdlUndoHook = std::function<Status(const DdlUndoEvent&)>;
+
+    // Installed by the dispatcher for the duration of one DDL statement
+    // that runs under a transaction, cleared right after; empty means no
+    // undo record is wanted (bootstrap, a manager-less dispatcher). The
+    // hook deliberately does NOT fire for the non-DDL catalog writes -
+    // the row-id carve and bump, heat - which are never rolled back by
+    // design (an abort burns ids, K3).
+    void SetDdlUndoHook(DdlUndoHook hook) { ddl_undo_hook_ = std::move(hook); }
 
     // Called after every DDL that invalidates cached facts - i.e. from
     // BumpVersion(), the single choke point, and from nowhere else
@@ -941,7 +990,11 @@ private:
     // deleter is below `horizon` is retired in place, and the count
     // answered. The mount sweep passes a horizon above every possible id;
     // the in-mount purge passes the manager's ReadHorizon().
-    StatusOr<std::uint64_t> RetireDeleteMarksBelow(std::uint64_t horizon);
+    // `remaining_out`, when given, receives how many marks the sweep saw
+    // and left (deleter at or above the horizon) - what resettles
+    // `pending_marks_` after a purge.
+    StatusOr<std::uint64_t> RetireDeleteMarksBelow(std::uint64_t horizon,
+                                                   std::uint64_t* remaining_out = nullptr);
 
     // Phase 5 of Bootstrap(): creates sys.pattern_defs as an ordinary
     // row-codec relation - fixed root page, var-heap chain, four
@@ -1020,6 +1073,20 @@ private:
     // side). Null is the pre-DT9 answer: a mark counts the moment it is
     // written.
     const txn::TransactionManager* txn_ = nullptr;
+    // RV3: null means unlogged catalog writes, the pre-RV3 engine.
+    wal::WalManager* wal_ = nullptr;
+    // RV3-3: per-DDL-statement, dispatcher-installed; empty = no undo.
+    DdlUndoHook ddl_undo_hook_;
+    // Delete-marks written this run and possibly still on a page - the
+    // gate that keeps PurgeSettledDeleteMarks() from Get()-dirtying every
+    // catalog page after a DDL that marked nothing (found when D2 made
+    // every autocommit DDL reach the purge and the sweep's kWrite fetches
+    // turned the whole catalog dirty per statement). Grows on each mark,
+    // resettled to the sweep's remaining count when one runs; a rollback
+    // clears its marks behind the catalog's back, so the counter may
+    // overshoot - costing at most one sweep that finds less than it
+    // expected, never a missed mark.
+    std::uint64_t pending_marks_ = 0;
     InvalidationHook on_invalidate_;
     RelationPublishHook on_publish_;
     PlacementPolicy placement_ = PlacementPolicy::kCreatingCore;

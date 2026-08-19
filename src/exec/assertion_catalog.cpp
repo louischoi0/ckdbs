@@ -215,10 +215,17 @@ Status InsertAssertion(catalog::Catalog& catalog, storage::PageStore& store, std
     auto payload = EncodeRow(rel.schema, rel.layout, id, values, sink);
     if (!payload.ok()) return payload.status();
 
-    // Unlogged, like every other catalog write. A declaration therefore
-    // survives a crash only as far as the next SYNC, which is the guarantee
-    // CREATE TABLE already gives and is not made worse here. §7's
-    // `ASSERT_BUILD` is about the Bound Cabin's contents, not this row.
+    // **Unlogged, and since RV3 (2026-08-19) that is a divergence rather
+    // than the house rule it used to be**: every other catalog write goes
+    // through `catalog.cpp`'s logged funnels, so a `CREATE TABLE` now
+    // survives a crash by redo while a declaration written here survives
+    // only as far as the next checkpoint - and unlike a pattern
+    // definition this one is *enforcing*, so what a crash costs is a
+    // constraint an operator was told existed. `SHOW META`'s
+    // `catalog_recovered=1` does not cover this row;
+    // `docs/workplan-rv3-catalog-recovery.md`'s "Open remainder, named"
+    // and `wal.md` §11a own closing it. §7's `ASSERT_BUILD` is about the
+    // Bound Cabin's contents, not this row.
     auto placed = heap::ChainInsert(store, rel.desc_page_id, id, payload.value(),
                                     catalog::kBootstrapXid, rel.oid);
     if (!placed.ok()) return placed.status();

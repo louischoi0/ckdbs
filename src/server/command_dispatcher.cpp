@@ -32,6 +32,7 @@
 #include "kds/exec/step_compiler.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/exec/tuple_verify.hpp"
+#include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/parser.hpp"
@@ -552,26 +553,25 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
                << " recovery_undo_us=" << recovery_->timings.undo_ns / 1000
                << " recovery_checkpoint_us=" << recovery_->checkpoint_ns / 1000;
         }
-        // RV3's report, both halves. `relations_missing_pages` is the one that
-        // is computable; `catalog_recovered=0` is the standing statement that
-        // the converse - rows whose relation the crash erased - is **not
-        // detectable**, because no page names its relation
-        // (mount_recovery.hpp). Printed as a flag rather than left unsaid, so
-        // "recovery succeeded" is never read as "nothing was lost".
+        // RV3 closed 2026-08-19: catalog mutations log the ordinary record
+        // types, DDL runs under a real transaction, and redo/undo restore
+        // catalog pages like any page - so `catalog_recovered` flips to 1.
+        // `relations_missing_pages` stays as the audit: it counted the gap
+        // while it existed, and a zero from here on is the proof it closed.
         os << " recovery_relations_checked=" << recovery_->relations_checked
            << " recovery_relations_missing_pages=" << recovery_->relations_missing_pages
-           << " catalog_recovered=0"
+           << " catalog_recovered=1"
            // DT10: delete-marked catalog rows a previous mount left
-           // behind, retired before the listener bound. Zero is what a
-           // clean shutdown produces, so a non-zero here is the sign that
-           // this mount followed one that left a transactional DROP
-           // half-resolved.
+           // behind, retired before the listener bound. Since D2 every
+           // DROP is transactional, so a non-zero here means the previous
+           // mount ended - cleanly or not - with marks some reader or a
+           // crash kept the §5d purge from retiring.
            << " catalog_marks_finalized=" << recovery_->catalog_marks_finalized
-           // DT7: `CREATE TABLE` became atomic and isolated on 2026-08-16,
-           // and a reader of `ddl_transactional=1` will assume that
-           // includes surviving a crash. It does not, and the two flags
-           // sit together so the pair reads as one statement: transactional
-           // within a running instance, not durable across a restart.
+           // DT7 made these transactional; RV3 (2026-08-19) made them
+           // durable - a committed DDL survives a crash by redo, an
+           // uncommitted one is rolled back by the undo records the
+           // catalog's hook appends. The pair finally reads as one true
+           // statement.
            //
            // `drop-index` rejoined the list on 2026-08-18 (DT9). It was in
            // it, came out when the statement was refused inside a
@@ -579,7 +579,7 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            // which is the whole reason this is a list of statement names
            // and not a bare `=1`.
            << " ddl_transactional=create-table,drop-table,create-index,drop-index"
-           << " ddl_durable=0";
+           << " ddl_durable=1";
         // RC07: what the mount could resume enforcing, and the honest
         // remainder. A surviving declaration whose directory could not be
         // rebuilt is counted here and left *out* of the registry, so
@@ -927,34 +927,40 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
 
 DispatchOutcome CommandDispatcher::HandleCreateTable(std::string_view args,
                                                      Session& session) {
-    if (args.empty()) {
-        return {"ERR CREATE TABLE requires a name", false};
-    }
+    // D2 (workplan-rv3-catalog-recovery.md): every DDL statement runs
+    // under a real transaction - the session's, or an implicit one this
+    // scope opens and FinishDdlStatement resolves - so a crash mid-DDL
+    // has a loser recovery can roll back.
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        if (args.empty()) {
+            return {"ERR CREATE TABLE requires a name", false};
+        }
 
-    auto existing = catalog_.FindTableOidByName(args);
-    if (existing.ok()) {
-        return {"EXISTS oid=" + std::to_string(existing.value()), false};
-    }
-    if (existing.status().code() != StatusCode::kNotFound) {
-        return {"ERR " + existing.status().message(), false};
-    }
-    if (auto refused = RefuseIfNameHeldByPendingDrop(args, session); refused.has_value()) {
-        return *refused;
-    }
+        auto existing = catalog_.FindTableOidByName(args);
+        if (existing.ok()) {
+            return {"EXISTS oid=" + std::to_string(existing.value()), false};
+        }
+        if (existing.status().code() != StatusCode::kNotFound) {
+            return {"ERR " + existing.status().message(), false};
+        }
+        if (auto refused = RefuseIfNameHeldByPendingDrop(args, session); refused.has_value()) {
+            return *refused;
+        }
 
-    catalog::Schema schema;
-    // kAssigned by name: this legacy command has no syntax for a key mode
-    // and is not gaining one (the SQL path owns DDL surface), so the
-    // relation it makes is engine-keyed and says so.
-    DdlScope ddl = DdlScopeFor(session);
-    auto oid = catalog_.CreateTable(catalog::kNamespacePublic, args, schema,
-                                     catalog::ClusteredType::kHeap,
-                                     catalog::KeyMode::kAssigned, ddl.trx_id, ddl.sink());
-    NoteDdlRows(ddl);  // before the status, for the partial-write reason above
-    if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
-    }
-    return {"CREATED oid=" + std::to_string(oid.value()), false};
+        catalog::Schema schema;
+        // kAssigned by name: this legacy command has no syntax for a key mode
+        // and is not gaining one (the SQL path owns DDL surface), so the
+        // relation it makes is engine-keyed and says so.
+        DdlScope ddl = DdlScopeFor(scope);
+        auto oid = catalog_.CreateTable(catalog::kNamespacePublic, args, schema,
+                                         catalog::ClusteredType::kHeap,
+                                         catalog::KeyMode::kAssigned, ddl.trx_id, ddl.sink());
+        NoteDdlRows(ddl);  // before the status, for the partial-write reason above
+        if (!oid.ok()) {
+            return {"ERR " + oid.status().message(), false};
+        }
+        return {"CREATED oid=" + std::to_string(oid.value()), false};
+    });
 }
 
 DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
@@ -1167,95 +1173,97 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
 
 DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                                Session& session) {
-    parser::Parser parser(line);
-    auto parsed = parser.Parse();
-    if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
-    }
-    if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
-        return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
-    }
-    const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        parser::Parser parser(line);
+        auto parsed = parser.Parse();
+        if (!parsed.ok()) {
+            return {"ERR " + parsed.status().message(), false};
+        }
+        if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
+            return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
+        }
+        const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
 
-    if (stmt.drop) {
-        // **Allowed inside an explicit transaction again as of DT9, and
-        // the history is the point.** DT5 shipped this as atomic *and
-        // isolated* on the strength of `SHOW INDEXES` filtering; that was
-        // wrong, because `InitTableAccess` builds a relation's index list
-        // through `ListIndexes()` with a **null view**, so index
-        // maintenance treated the delete-mark as done the moment it was
-        // written - another session's INSERT wrote no index entry, and a
-        // rollback restored the index missing that row. It was then
-        // refused rather than answered wrongly.
-        //
-        // DT9 closes it at the read instead of at the statement: an
-        // unfiltered catalog read now counts a delete-mark only once its
-        // deleter is no longer in flight (`catalog.cpp`'s `ScanAll`), so
-        // maintenance keeps writing entries for an index whose drop has
-        // not committed. If the drop commits the entries go with the
-        // index; if it rolls back the index is whole.
-        //
-        // **The claim this may carry is core-0-scoped**, not "isolated"
-        // outright: `IsInFlight` answers about one core's transactions,
-        // and it is every writer's core only while CC3 refuses
-        // cross-core writes (`docs/spec-ddl-transactional.md` §5a).
-        DdlScope ddl = DdlScopeFor(session);
-        catalog::CatalogRowChange change;
-        auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
-                                         ddl.txn != nullptr ? &change : nullptr);
-        if (ddl.txn != nullptr && change.page_id != kInvalidPageId) {
-            txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(change.rel_oid),
-                                 change.page_id, change.slot, change.oid,
-                                 change.prior_trx_id, change.prior_undo_ptr);
-            MarkHoldsDdl(*ddl.txn);
+        if (stmt.drop) {
+            // **Allowed inside an explicit transaction again as of DT9, and
+            // the history is the point.** DT5 shipped this as atomic *and
+            // isolated* on the strength of `SHOW INDEXES` filtering; that was
+            // wrong, because `InitTableAccess` builds a relation's index list
+            // through `ListIndexes()` with a **null view**, so index
+            // maintenance treated the delete-mark as done the moment it was
+            // written - another session's INSERT wrote no index entry, and a
+            // rollback restored the index missing that row. It was then
+            // refused rather than answered wrongly.
+            //
+            // DT9 closes it at the read instead of at the statement: an
+            // unfiltered catalog read now counts a delete-mark only once its
+            // deleter is no longer in flight (`catalog.cpp`'s `ScanAll`), so
+            // maintenance keeps writing entries for an index whose drop has
+            // not committed. If the drop commits the entries go with the
+            // index; if it rolls back the index is whole.
+            //
+            // **The claim this may carry is core-0-scoped**, not "isolated"
+            // outright: `IsInFlight` answers about one core's transactions,
+            // and it is every writer's core only while CC3 refuses
+            // cross-core writes (`docs/spec-ddl-transactional.md` §5a).
+            DdlScope ddl = DdlScopeFor(scope);
+            catalog::CatalogRowChange change;
+            auto index_oid = exec::DropIndex(catalog_, stmt, ddl.trx_id,
+                                             ddl.txn != nullptr ? &change : nullptr);
+            if (ddl.txn != nullptr && change.page_id != kInvalidPageId) {
+                txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(change.rel_oid),
+                                     change.page_id, change.slot, change.oid,
+                                     change.prior_trx_id, change.prior_undo_ptr);
+                MarkHoldsDdl(*ddl.txn);
+            }
+            if (!index_oid.ok()) {
+                return {"ERR " + index_oid.status().message(), false};
+            }
+            std::ostringstream os;
+            os << "DROPPED INDEX name=" << stmt.index_name << " index_oid=" << index_oid.value();
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("ddl", "dropped index '" + stmt.index_name + "'");
+            }
+            return {os.str(), false};
         }
-        if (!index_oid.ok()) {
-            return {"ERR " + index_oid.status().message(), false};
+
+        DdlScope create_ddl = DdlScopeFor(scope);
+        catalog::CatalogRowRef created_row;
+        // Resolved under the session's view (spec §5's rule: an index is a
+        // schema object and CREATE INDEX is a resolution route). An index
+        // must not be built against a relation the caller cannot see.
+        const std::optional<txn::ReadView> create_view = ViewFor(session);
+        auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
+                                        create_ddl.txn != nullptr ? &created_row : nullptr,
+                                        create_view.has_value() ? &*create_view : nullptr, wal_);
+        // Before the status is read: a create that failed after the catalog
+        // row went down still left it there.
+        if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
+            create_ddl.written.push_back(created_row);
+            NoteDdlRows(create_ddl);
         }
+        if (!result.ok()) {
+            return {"ERR " + result.status().message(), false};
+        }
+
         std::ostringstream os;
-        os << "DROPPED INDEX name=" << stmt.index_name << " index_oid=" << index_oid.value();
+        // `entries=0` is printed for the reason `observed=0` is on a fresh
+        // Cabin: it is the thing most likely to be misunderstood. Creating an
+        // index over an empty relation indexes nothing, and only the rows
+        // written after it exist in it.
+        os << "CREATED INDEX name=" << stmt.index_name << " on=" << stmt.table_name
+           << " index_oid=" << result.value().index_oid
+           << " root_page=" << result.value().root_page_id
+           << " key_width=" << result.value().key_width
+           << " entry_width=" << result.value().entry_width << " entries=0";
+        for (const std::string& warning : result.value().warnings) {
+            os << "\\n" << "WARN " << warning;
+        }
         if (logging(LogLevel::kInfo)) {
-            log_->Info("ddl", "dropped index '" + stmt.index_name + "'");
+            log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
         }
         return {os.str(), false};
-    }
-
-    DdlScope create_ddl = DdlScopeFor(session);
-    catalog::CatalogRowRef created_row;
-    // Resolved under the session's view (spec §5's rule: an index is a
-    // schema object and CREATE INDEX is a resolution route). An index
-    // must not be built against a relation the caller cannot see.
-    const std::optional<txn::ReadView> create_view = ViewFor(session);
-    auto result = exec::CreateIndex(catalog_, page_store_, stmt, create_ddl.trx_id,
-                                    create_ddl.txn != nullptr ? &created_row : nullptr,
-                                    create_view.has_value() ? &*create_view : nullptr);
-    // Before the status is read: a create that failed after the catalog
-    // row went down still left it there.
-    if (create_ddl.txn != nullptr && created_row.page_id != kInvalidPageId) {
-        create_ddl.written.push_back(created_row);
-        NoteDdlRows(create_ddl);
-    }
-    if (!result.ok()) {
-        return {"ERR " + result.status().message(), false};
-    }
-
-    std::ostringstream os;
-    // `entries=0` is printed for the reason `observed=0` is on a fresh
-    // Cabin: it is the thing most likely to be misunderstood. Creating an
-    // index over an empty relation indexes nothing, and only the rows
-    // written after it exist in it.
-    os << "CREATED INDEX name=" << stmt.index_name << " on=" << stmt.table_name
-       << " index_oid=" << result.value().index_oid
-       << " root_page=" << result.value().root_page_id
-       << " key_width=" << result.value().key_width
-       << " entry_width=" << result.value().entry_width << " entries=0";
-    for (const std::string& warning : result.value().warnings) {
-        os << "\\n" << "WARN " << warning;
-    }
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "created index '" + stmt.index_name + "' on " + stmt.table_name);
-    }
-    return {os.str(), false};
+    });
 }
 
 DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
@@ -1472,96 +1480,98 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
 
 DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
                                                    Session& session) {
-    auto parsed = parser::Parse(line);
-    if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
-    }
-    if (!std::holds_alternative<parser::DropTableStmt>(parsed.value())) {
-        return {"ERR expected a DROP TABLE statement", false};
-    }
-    const auto& stmt = std::get<parser::DropTableStmt>(parsed.value());
-
-    // Nor drop one (DT3c).
-    const std::optional<txn::ReadView> drop_view = ViewFor(session);
-    auto oid = catalog_.FindTableOidByName(
-        stmt.table_name, drop_view.has_value() ? &*drop_view : nullptr);
-    if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
-    }
-
-    // DT3's RESTRICT, both blockers named. A referencing foreign key
-    // blocks at the *declared* level - the constraint exists whether or
-    // not rows do - which is the check known-gaps.md said was waiting for
-    // exactly this caller.
-    auto fkeys = catalog_.ListForeignKeys();
-    if (!fkeys.ok()) {
-        return {"ERR " + fkeys.status().message(), false};
-    }
-    for (const catalog::SysFkeyRow& fk : fkeys.value()) {
-        if (fk.parent_rel_oid != oid.value()) continue;
-        return {"ERR relation '" + stmt.table_name + "' is referenced by a foreign key on '" +
-                    RelationNameOf(fk.child_rel_oid) + "'; drop the referencing relation first",
-                false};
-    }
-
-    // An enforcing constraint is not allowed to die quietly - ALTER's AL4
-    // argument, same predicate, third caller.
-    auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
-    if (!restricting.ok()) {
-        return {"ERR " + restricting.status().message(), false};
-    }
-    if (!restricting.value().empty()) {
-        return {"ERR assertion '" + restricting.value().front().name +
-                    "' is declared on this relation; DROP ASSERTION first",
-                false};
-    }
-
-    std::vector<std::uint64_t> dropped_cabins;
-    // Transactional when inside an explicit transaction (DT5): the
-    // dependents are delete-marked instead of retired, and every change -
-    // the marks and the `sys.objects` retype - goes on the trail so
-    // `Abort` undoes it. Registered before the status is read, for the
-    // same reason CREATE's rows are: a drop that failed partway still
-    // changed rows.
-    DdlScope ddl = DdlScopeFor(session);
-    std::vector<catalog::CatalogRowChange> changed;
-    Status dropped =
-        catalog_.DropTable(oid.value(), dropped_cabins, ddl.trx_id,
-                           ddl.txn != nullptr ? &changed : nullptr);
-    if (ddl.txn != nullptr) {
-        for (const catalog::CatalogRowChange& c : changed) {
-            if (c.deleted) {
-                txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
-                                     c.page_id, c.slot, c.oid, c.prior_trx_id,
-                                     c.prior_undo_ptr);
-            } else {
-                txn_->NoteOverwrite(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
-                                    c.page_id, c.slot, c.oid, c.prior_trx_id,
-                                    c.prior_undo_ptr, c.prior_image);
-            }
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        auto parsed = parser::Parse(line);
+        if (!parsed.ok()) {
+            return {"ERR " + parsed.status().message(), false};
         }
-        // Mark the transaction as holding DDL so `ViewFor` starts
-        // filtering - **not** by pushing a fake row into `written`, which
-        // would put an insert with an invalid page on the trail and have
-        // the abort try to retire it.
-        if (!changed.empty()) MarkHoldsDdl(*ddl.txn);
-    }
-    if (Status s = dropped; !s.ok()) {
-        return {"ERR " + s.message(), false};
-    }
-    // The catalog rows are gone and the compiler stops emitting probes;
-    // the in-memory sets would only leak, so they are forgotten, not
-    // protected (feat-cabin.md - un-observing is always legal).
-    if (cabins_ != nullptr) {
-        for (const std::uint64_t cabin_id : dropped_cabins) cabins_->Forget(cabin_id);
-    }
+        if (!std::holds_alternative<parser::DropTableStmt>(parsed.value())) {
+            return {"ERR expected a DROP TABLE statement", false};
+        }
+        const auto& stmt = std::get<parser::DropTableStmt>(parsed.value());
 
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "dropped table " + stmt.table_name + " (oid " +
-                              std::to_string(oid.value()) +
-                              "); pages orphaned pending reclamation");
-    }
-    return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
+        // Nor drop one (DT3c).
+        const std::optional<txn::ReadView> drop_view = ViewFor(session);
+        auto oid = catalog_.FindTableOidByName(
+            stmt.table_name, drop_view.has_value() ? &*drop_view : nullptr);
+        if (!oid.ok()) {
+            return {"ERR " + oid.status().message(), false};
+        }
+
+        // DT3's RESTRICT, both blockers named. A referencing foreign key
+        // blocks at the *declared* level - the constraint exists whether or
+        // not rows do - which is the check known-gaps.md said was waiting for
+        // exactly this caller.
+        auto fkeys = catalog_.ListForeignKeys();
+        if (!fkeys.ok()) {
+            return {"ERR " + fkeys.status().message(), false};
+        }
+        for (const catalog::SysFkeyRow& fk : fkeys.value()) {
+            if (fk.parent_rel_oid != oid.value()) continue;
+            return {"ERR relation '" + stmt.table_name + "' is referenced by a foreign key on '" +
+                        RelationNameOf(fk.child_rel_oid) + "'; drop the referencing relation first",
+                    false};
+        }
+
+        // An enforcing constraint is not allowed to die quietly - ALTER's AL4
+        // argument, same predicate, third caller.
+        auto restricting = exec::AssertionsOnRelation(catalog_, page_store_, oid.value());
+        if (!restricting.ok()) {
+            return {"ERR " + restricting.status().message(), false};
+        }
+        if (!restricting.value().empty()) {
+            return {"ERR assertion '" + restricting.value().front().name +
+                        "' is declared on this relation; DROP ASSERTION first",
+                    false};
+        }
+
+        std::vector<std::uint64_t> dropped_cabins;
+        // Transactional when inside an explicit transaction (DT5): the
+        // dependents are delete-marked instead of retired, and every change -
+        // the marks and the `sys.objects` retype - goes on the trail so
+        // `Abort` undoes it. Registered before the status is read, for the
+        // same reason CREATE's rows are: a drop that failed partway still
+        // changed rows.
+        DdlScope ddl = DdlScopeFor(scope);
+        std::vector<catalog::CatalogRowChange> changed;
+        Status dropped =
+            catalog_.DropTable(oid.value(), dropped_cabins, ddl.trx_id,
+                               ddl.txn != nullptr ? &changed : nullptr);
+        if (ddl.txn != nullptr) {
+            for (const catalog::CatalogRowChange& c : changed) {
+                if (c.deleted) {
+                    txn_->NoteDeleteMark(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
+                                         c.page_id, c.slot, c.oid, c.prior_trx_id,
+                                         c.prior_undo_ptr);
+                } else {
+                    txn_->NoteOverwrite(*ddl.txn, static_cast<std::uint32_t>(c.rel_oid),
+                                        c.page_id, c.slot, c.oid, c.prior_trx_id,
+                                        c.prior_undo_ptr, c.prior_image);
+                }
+            }
+            // Mark the transaction as holding DDL so `ViewFor` starts
+            // filtering - **not** by pushing a fake row into `written`, which
+            // would put an insert with an invalid page on the trail and have
+            // the abort try to retire it.
+            if (!changed.empty()) MarkHoldsDdl(*ddl.txn);
+        }
+        if (Status s = dropped; !s.ok()) {
+            return {"ERR " + s.message(), false};
+        }
+        // The catalog rows are gone and the compiler stops emitting probes;
+        // the in-memory sets would only leak, so they are forgotten, not
+        // protected (feat-cabin.md - un-observing is always legal).
+        if (cabins_ != nullptr) {
+            for (const std::uint64_t cabin_id : dropped_cabins) cabins_->Forget(cabin_id);
+        }
+
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "dropped table " + stmt.table_name + " (oid " +
+                                  std::to_string(oid.value()) +
+                                  "); pages orphaned pending reclamation");
+        }
+        return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
+    });
 }
 
 DispatchOutcome CommandDispatcher::HandleAssertion(std::string_view line) {
@@ -2083,295 +2093,307 @@ DispatchOutcome CommandDispatcher::HandleShowFkeys() {
 
 DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                                                         Session& session) {
-    auto parsed = parser::Parse(line);
-    if (!parsed.ok()) {
-        return {"ERR " + parsed.status().message(), false};
-    }
-    if (!std::holds_alternative<parser::CreateTableStmt>(parsed.value())) {
-        return {"ERR expected a CREATE TABLE statement", false};
-    }
-    auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        auto parsed = parser::Parse(line);
+        if (!parsed.ok()) {
+            return {"ERR " + parsed.status().message(), false};
+        }
+        if (!std::holds_alternative<parser::CreateTableStmt>(parsed.value())) {
+            return {"ERR expected a CREATE TABLE statement", false};
+        }
+        auto& stmt = std::get<parser::CreateTableStmt>(parsed.value());
 
-    // **Deliberately unfiltered, and this is a decision rather than an
-    // omission** (spec-ddl-transactional.md §6's second open item: what two
-    // transactions creating the same name should do).
-    //
-    // Resolving this under the session's view would hide another
-    // transaction's uncommitted relation of the same name, both creates
-    // would succeed, and the catalog would end up with two rows claiming
-    // one name - the last-writer-wins outcome the spec declines. Seeing
-    // everything means the second create is **refused** while the first is
-    // still open, which is the conservative half of that decision and the
-    // one that cannot corrupt anything.
-    //
-    // The cost, stated because a user will hit it: the refusal can be
-    // spurious - if the first transaction rolls back, the name was never
-    // taken - and it names a relation the asker cannot see. Improving that
-    // message, or holding the second create instead of refusing it, is
-    // what the spec still has open.
-    auto existing = catalog_.FindTableOidByName(stmt.table_name);
-    if (existing.ok()) {
-        return {"EXISTS oid=" + std::to_string(existing.value()), false};
-    }
-    if (existing.status().code() != StatusCode::kNotFound) {
-        return {"ERR " + existing.status().message(), false};
-    }
-    if (auto refused = RefuseIfNameHeldByPendingDrop(stmt.table_name, session);
-        refused.has_value()) {
-        return *refused;
-    }
-
-    // Resolve each column's parsed type_name against sys.types - the
-    // stand-in type registry (Catalog::ResolveTypeByName(), see its
-    // comment) - before touching storage, so a bad type name fails clean
-    // with nothing created.
-    catalog::Schema schema;
-    std::uint32_t pos = 0;
-    for (const auto& col : stmt.columns) {
-        auto type_row = catalog_.ResolveTypeByName(col.type_name);
-        if (!type_row.ok()) {
-            return {"ERR " + type_row.status().message(), false};
+        // **Deliberately unfiltered, and this is a decision rather than an
+        // omission** (spec-ddl-transactional.md §6's second open item: what two
+        // transactions creating the same name should do).
+        //
+        // Resolving this under the session's view would hide another
+        // transaction's uncommitted relation of the same name, both creates
+        // would succeed, and the catalog would end up with two rows claiming
+        // one name - the last-writer-wins outcome the spec declines. Seeing
+        // everything means the second create is **refused** while the first is
+        // still open, which is the conservative half of that decision and the
+        // one that cannot corrupt anything.
+        //
+        // The cost, stated because a user will hit it: the refusal can be
+        // spurious - if the first transaction rolls back, the name was never
+        // taken - and it names a relation the asker cannot see. Improving that
+        // message, or holding the second create instead of refusing it, is
+        // what the spec still has open.
+        auto existing = catalog_.FindTableOidByName(stmt.table_name);
+        if (existing.ok()) {
+            return {"EXISTS oid=" + std::to_string(existing.value()), false};
+        }
+        if (existing.status().code() != StatusCode::kNotFound) {
+            return {"ERR " + existing.status().message(), false};
+        }
+        if (auto refused = RefuseIfNameHeldByPendingDrop(stmt.table_name, session);
+            refused.has_value()) {
+            return *refused;
         }
 
-        // A cabin policy on the primary key is refused rather than ignored.
-        // The pk's cabin is the clustered tree (spec §2), so any of the
-        // three answers would be a statement about something that cannot
-        // exist - and silently dropping the clause would leave an operator
-        // believing they had said something.
-        if (pos == 0 && col.cabin_policy != catalog::kCabinPolicyUnset) {
-            return {"ERR the primary-key column '" + col.name +
-                        "' takes no cabin policy - the clustered tree is its cabin (byte " +
-                        std::to_string(col.cabin_byte_offset) + ")",
-                    false};
-        }
+        // Resolve each column's parsed type_name against sys.types - the
+        // stand-in type registry (Catalog::ResolveTypeByName(), see its
+        // comment) - before touching storage, so a bad type name fails clean
+        // with nothing created.
+        catalog::Schema schema;
+        std::uint32_t pos = 0;
+        for (const auto& col : stmt.columns) {
+            auto type_row = catalog_.ResolveTypeByName(col.type_name);
+            if (!type_row.ok()) {
+                return {"ERR " + type_row.status().message(), false};
+            }
 
-        catalog::SysColumnRow row{};
-        row.pos = pos++;
-        catalog::SetName(row.name, col.name);
-        row.type_val = type_row.value().type_val;
-        row.len = type_row.value().len;
-        row.notnull = true;  // no NULL support yet - see row_codec.hpp
-        row.cabin_policy = col.cabin_policy;
-
-        // ---- decimal(p, s) (docs/spec-types.md TY2, TY9) ----------------
-        //
-        // The pair replaces the type's default `len`, which for a decimal
-        // was never read as a width - `RowLayout::ColumnWidth` gives every
-        // decimal its bytes from its `type_val` alone (catalog/rows.hpp
-        // says why the field was free).
-        //
-        // **The declared precision selects the width, here and only here.**
-        // `decimal(p, s)` with p <= 18 is the 8-byte type and with p >= 19
-        // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
-        // not a widening, so the promotion is a different type_val and a
-        // different schema constant, chosen from the one fact the client
-        // declared. Writing `decimal128(p, s)` names the wide type
-        // directly and its bounds refuse p <= 18 toward the narrow
-        // spelling, so either way one declaration selects exactly one type.
-        if (row.type_val == catalog::kTypeValDecimal ||
-            row.type_val == catalog::kTypeValDecimalWide) {
-            if (!col.has_precision) {
-                // Unreachable through the parser, which refuses a bare
-                // `decimal`. Checked anyway: a schema can be built without
-                // one, and a decimal with no scale stored is a column whose
-                // values have no defined meaning.
-                return {"ERR column '" + col.name + "' is decimal with no precision or scale",
+            // A cabin policy on the primary key is refused rather than ignored.
+            // The pk's cabin is the clustered tree (spec §2), so any of the
+            // three answers would be a statement about something that cannot
+            // exist - and silently dropping the clause would leave an operator
+            // believing they had said something.
+            if (pos == 0 && col.cabin_policy != catalog::kCabinPolicyUnset) {
+                return {"ERR the primary-key column '" + col.name +
+                            "' takes no cabin policy - the clustered tree is its cabin (byte " +
+                            std::to_string(col.cabin_byte_offset) + ")",
                         false};
             }
-            if (row.type_val == catalog::kTypeValDecimal &&
-                col.precision >= exec::kMinDecimalPrecisionWide) {
-                row.type_val = catalog::kTypeValDecimalWide;
-            }
-            Status bounds = row.type_val == catalog::kTypeValDecimalWide
-                                ? exec::CheckDecimalWidePrecisionScale(col.precision, col.scale)
-                                : exec::CheckDecimalPrecisionScale(col.precision, col.scale);
-            if (!bounds.ok()) {
-                return {"ERR " + bounds.message() + " (byte " +
+
+            catalog::SysColumnRow row{};
+            row.pos = pos++;
+            catalog::SetName(row.name, col.name);
+            row.type_val = type_row.value().type_val;
+            row.len = type_row.value().len;
+            row.notnull = true;  // no NULL support yet - see row_codec.hpp
+            row.cabin_policy = col.cabin_policy;
+
+            // ---- decimal(p, s) (docs/spec-types.md TY2, TY9) ----------------
+            //
+            // The pair replaces the type's default `len`, which for a decimal
+            // was never read as a width - `RowLayout::ColumnWidth` gives every
+            // decimal its bytes from its `type_val` alone (catalog/rows.hpp
+            // says why the field was free).
+            //
+            // **The declared precision selects the width, here and only here.**
+            // `decimal(p, s)` with p <= 18 is the 8-byte type and with p >= 19
+            // the 16-byte one (`kTypeValDecimalWide`) - TY2's separate type,
+            // not a widening, so the promotion is a different type_val and a
+            // different schema constant, chosen from the one fact the client
+            // declared. Writing `decimal128(p, s)` names the wide type
+            // directly and its bounds refuse p <= 18 toward the narrow
+            // spelling, so either way one declaration selects exactly one type.
+            if (row.type_val == catalog::kTypeValDecimal ||
+                row.type_val == catalog::kTypeValDecimalWide) {
+                if (!col.has_precision) {
+                    // Unreachable through the parser, which refuses a bare
+                    // `decimal`. Checked anyway: a schema can be built without
+                    // one, and a decimal with no scale stored is a column whose
+                    // values have no defined meaning.
+                    return {"ERR column '" + col.name + "' is decimal with no precision or scale",
+                            false};
+                }
+                if (row.type_val == catalog::kTypeValDecimal &&
+                    col.precision >= exec::kMinDecimalPrecisionWide) {
+                    row.type_val = catalog::kTypeValDecimalWide;
+                }
+                Status bounds = row.type_val == catalog::kTypeValDecimalWide
+                                    ? exec::CheckDecimalWidePrecisionScale(col.precision, col.scale)
+                                    : exec::CheckDecimalPrecisionScale(col.precision, col.scale);
+                if (!bounds.ok()) {
+                    return {"ERR " + bounds.message() + " (byte " +
+                                std::to_string(col.type_byte_offset) + ")",
+                            false};
+                }
+                row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
+                                                  static_cast<std::uint8_t>(col.scale));
+            } else if (col.has_precision) {
+                // Unreachable through the parser too, and refused rather than
+                // ignored: silently dropping the arguments would leave an
+                // operator believing they had said something.
+                return {"ERR type '" + col.type_name + "' takes no precision or scale (byte " +
                             std::to_string(col.type_byte_offset) + ")",
                         false};
             }
-            row.len = catalog::PackDecimalLen(static_cast<std::uint8_t>(col.precision),
-                                              static_cast<std::uint8_t>(col.scale));
-        } else if (col.has_precision) {
-            // Unreachable through the parser too, and refused rather than
-            // ignored: silently dropping the arguments would leave an
-            // operator believing they had said something.
-            return {"ERR type '" + col.type_name + "' takes no precision or scale (byte " +
-                        std::to_string(col.type_byte_offset) + ")",
+
+            schema.columns.push_back(row);
+        }
+
+        // ---- REFERENCES, checked before anything is created -----------------
+        //
+        // A foreign key is a **constraint**, so it does not get the Cabin's
+        // treatment below, where a failure is reported as a warning and the
+        // table is created anyway: a relation that says REFERENCES and enforces
+        // nothing is worse than a refused CREATE TABLE, and there is no DROP
+        // TABLE to undo one with. Everything decidable without the child
+        // relation existing is therefore decided here, with nothing written.
+        struct PendingForeignKey {
+            std::uint16_t column_no;
+            catalog::Oid parent_oid;
+            std::string parent_name;
+        };
+        std::vector<PendingForeignKey> pending_fkeys;
+
+        for (std::size_t i = 0; i < stmt.columns.size(); ++i) {
+            const parser::ColumnDef& col = stmt.columns[i];
+            if (col.references_table.empty()) continue;
+
+            // Under the session's view (DT3c): a child may reference a parent
+            // its own transaction created, and may not reference one another
+            // transaction has not committed.
+            const std::optional<txn::ReadView> parent_view = ViewFor(session);
+            auto parent_oid = catalog_.FindTableOidByName(
+                col.references_table, parent_view.has_value() ? &*parent_view : nullptr);
+            if (!parent_oid.ok()) {
+                return {"ERR column '" + col.name + "' references unknown relation '" +
+                            col.references_table + "' (byte " +
+                            std::to_string(col.references_byte_offset) + ")",
+                        false};
+            }
+            auto parent = catalog_.InitTableAccess(parent_oid.value());
+            if (!parent.ok()) {
+                return {"ERR " + parent.status().message(), false};
+            }
+
+            // The shared declaration checks (catalog/foreign_key.hpp) - the same
+            // ones Catalog::CreateForeignKey() applies at the door, so a
+            // declaration cannot pass here and fail there.
+            if (Status s = catalog::CheckForeignKeyDeclaration(
+                    *parent.value(), schema.columns[i], static_cast<std::uint16_t>(i));
+                !s.ok()) {
+                return {"ERR " + s.message() + " (byte " +
+                            std::to_string(col.references_byte_offset) + ")",
+                        false};
+            }
+            pending_fkeys.push_back(PendingForeignKey{static_cast<std::uint16_t>(i),
+                                                      parent_oid.value(), col.references_table});
+        }
+
+        // ---- Resolving the two trailing words (docs/heap-and-tuple.md §4.1) --
+        //
+        // A written word always wins; `default_key_mode` decides only what
+        // silence means. The instance-wide setting exists so a database whose
+        // keys come from outside says so once instead of on every statement,
+        // and it must never be able to change what a statement that *did* name
+        // a mode does.
+        const catalog::KeyMode key_mode =
+            stmt.key_mode_given ? stmt.key_mode : default_key_mode_;
+
+        // Storage follows the resolved mode when the statement named neither.
+        // An explicit relation must be btree-clustered, so under an explicit
+        // default a bare `CREATE TABLE t (...)` has to mean BTREE EXPLICIT -
+        // otherwise the default would be a configuration whose every
+        // unqualified statement is refused, which is not a default at all.
+        // A written storage word still wins, including one that contradicts the
+        // mode: that is the refusal below, and it belongs to the writer.
+        const catalog::ClusteredType clustered =
+            stmt.clustered_given ? stmt.clustered
+            : (key_mode == catalog::KeyMode::kExplicit ? catalog::ClusteredType::kBtree
+                                                       : catalog::ClusteredType::kHeap);
+
+        // **An EXPLICIT relation must be BTREE-clustered**, and the refusal is
+        // here rather than in the parser because it is a statement about where
+        // rows can be put, not about how the words go together: the grammar
+        // takes the two trailing words in either order and neither one's
+        // meaning depends on the other. Unsupported, not InvalidArgument - the
+        // combination is understood and declined.
+        //
+        // Only reachable now when the writer named the storage themselves,
+        // since the resolution above never pairs an explicit mode with a heap
+        // it chose. The byte points at the key-mode word when there is one and
+        // at the statement's start when the mode came from configuration - a
+        // refusal about a word nobody wrote has no byte of its own to name.
+        if (key_mode == catalog::KeyMode::kExplicit &&
+            clustered != catalog::ClusteredType::kBtree) {
+            return {ErrorReply(Status::Unsupported(
+                        "an EXPLICIT relation must be BTREE (byte " +
+                        std::to_string(stmt.key_mode_byte_offset) +
+                        ") - a supplied id is not drawn from the cursor, so placing it and proving "
+                        "it unique both need a descent, and a heap chain grows only at its tail")),
                     false};
         }
 
-        schema.columns.push_back(row);
-    }
-
-    // ---- REFERENCES, checked before anything is created -----------------
-    //
-    // A foreign key is a **constraint**, so it does not get the Cabin's
-    // treatment below, where a failure is reported as a warning and the
-    // table is created anyway: a relation that says REFERENCES and enforces
-    // nothing is worse than a refused CREATE TABLE, and there is no DROP
-    // TABLE to undo one with. Everything decidable without the child
-    // relation existing is therefore decided here, with nothing written.
-    struct PendingForeignKey {
-        std::uint16_t column_no;
-        catalog::Oid parent_oid;
-        std::string parent_name;
-    };
-    std::vector<PendingForeignKey> pending_fkeys;
-
-    for (std::size_t i = 0; i < stmt.columns.size(); ++i) {
-        const parser::ColumnDef& col = stmt.columns[i];
-        if (col.references_table.empty()) continue;
-
-        // Under the session's view (DT3c): a child may reference a parent
-        // its own transaction created, and may not reference one another
-        // transaction has not committed.
-        const std::optional<txn::ReadView> parent_view = ViewFor(session);
-        auto parent_oid = catalog_.FindTableOidByName(
-            col.references_table, parent_view.has_value() ? &*parent_view : nullptr);
-        if (!parent_oid.ok()) {
-            return {"ERR column '" + col.name + "' references unknown relation '" +
-                        col.references_table + "' (byte " +
-                        std::to_string(col.references_byte_offset) + ")",
-                    false};
-        }
-        auto parent = catalog_.InitTableAccess(parent_oid.value());
-        if (!parent.ok()) {
-            return {"ERR " + parent.status().message(), false};
+        // Passed by name rather than defaulted, per PK01's rule: a defaulted
+        // mode is how the wrong one reaches a relation without anyone reading
+        // the line.
+        DdlScope ddl = DdlScopeFor(scope);
+        auto oid = catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema,
+                                         clustered, key_mode, ddl.trx_id, ddl.sink());
+        // Registered before the status is read: a create that failed partway
+        // still left rows on the page, and those are exactly the rows a
+        // rollback has to retire.
+        NoteDdlRows(ddl);
+        if (!oid.ok()) {
+            return {"ERR " + oid.status().message(), false};
         }
 
-        // The shared declaration checks (catalog/foreign_key.hpp) - the same
-        // ones Catalog::CreateForeignKey() applies at the door, so a
-        // declaration cannot pass here and fail there.
-        if (Status s = catalog::CheckForeignKeyDeclaration(
-                *parent.value(), schema.columns[i], static_cast<std::uint16_t>(i));
-            !s.ok()) {
-            return {"ERR " + s.message() + " (byte " +
-                        std::to_string(col.references_byte_offset) + ")",
-                    false};
+        // The constraints, now that there is a child relation to hang them on.
+        // What can still fail here is the colocation check (F5), which needs the
+        // child's assigned owner core, and catalog I/O. Since D2 the ERR
+        // makes FinishDdlStatement abort the statement's transaction, so
+        // the relation's own rows are taken back - the message must not
+        // claim otherwise (review B2). What the abort does NOT take back
+        // is any sys.fkeys row already written in this loop:
+        // CreateForeignKey reports no CatalogRowRef, so those rows never
+        // reach the trail - the orphan the review named, pre-existing on
+        // the explicit-transaction path and recorded in
+        // workplan-rv3-catalog-recovery.md's remainder.
+        for (const PendingForeignKey& fk : pending_fkeys) {
+            auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
+            if (!created.ok()) {
+                // No survival claim in either direction: autocommit's
+                // abort takes the relation back, an explicit transaction
+                // keeps it until ROLLBACK (§6's per-transaction failure
+                // atomicity) - a message asserting either would be false
+                // in the other arm.
+                return {"ERR CREATE TABLE '" + stmt.table_name +
+                            "' failed: foreign key on column " +
+                            std::to_string(fk.column_no) + " referencing '" + fk.parent_name +
+                            "': " + created.status().message(),
+                        false};
+            }
         }
-        pending_fkeys.push_back(PendingForeignKey{static_cast<std::uint16_t>(i),
-                                                  parent_oid.value(), col.references_table});
-    }
 
-    // ---- Resolving the two trailing words (docs/heap-and-tuple.md §4.1) --
-    //
-    // A written word always wins; `default_key_mode` decides only what
-    // silence means. The instance-wide setting exists so a database whose
-    // keys come from outside says so once instead of on every statement,
-    // and it must never be able to change what a statement that *did* name
-    // a mode does.
-    const catalog::KeyMode key_mode =
-        stmt.key_mode_given ? stmt.key_mode : default_key_mode_;
-
-    // Storage follows the resolved mode when the statement named neither.
-    // An explicit relation must be btree-clustered, so under an explicit
-    // default a bare `CREATE TABLE t (...)` has to mean BTREE EXPLICIT -
-    // otherwise the default would be a configuration whose every
-    // unqualified statement is refused, which is not a default at all.
-    // A written storage word still wins, including one that contradicts the
-    // mode: that is the refusal below, and it belongs to the writer.
-    const catalog::ClusteredType clustered =
-        stmt.clustered_given ? stmt.clustered
-        : (key_mode == catalog::KeyMode::kExplicit ? catalog::ClusteredType::kBtree
-                                                   : catalog::ClusteredType::kHeap);
-
-    // **An EXPLICIT relation must be BTREE-clustered**, and the refusal is
-    // here rather than in the parser because it is a statement about where
-    // rows can be put, not about how the words go together: the grammar
-    // takes the two trailing words in either order and neither one's
-    // meaning depends on the other. Unsupported, not InvalidArgument - the
-    // combination is understood and declined.
-    //
-    // Only reachable now when the writer named the storage themselves,
-    // since the resolution above never pairs an explicit mode with a heap
-    // it chose. The byte points at the key-mode word when there is one and
-    // at the statement's start when the mode came from configuration - a
-    // refusal about a word nobody wrote has no byte of its own to name.
-    if (key_mode == catalog::KeyMode::kExplicit &&
-        clustered != catalog::ClusteredType::kBtree) {
-        return {ErrorReply(Status::Unsupported(
-                    "an EXPLICIT relation must be BTREE (byte " +
-                    std::to_string(stmt.key_mode_byte_offset) +
-                    ") - a supplied id is not drawn from the cursor, so placing it and proving "
-                    "it unique both need a descent, and a heap chain grows only at its tail")),
-                false};
-    }
-
-    // Passed by name rather than defaulted, per PK01's rule: a defaulted
-    // mode is how the wrong one reaches a relation without anyone reading
-    // the line.
-    DdlScope ddl = DdlScopeFor(session);
-    auto oid = catalog_.CreateTable(catalog::kNamespacePublic, stmt.table_name, schema,
-                                     clustered, key_mode, ddl.trx_id, ddl.sink());
-    // Registered before the status is read: a create that failed partway
-    // still left rows on the page, and those are exactly the rows a
-    // rollback has to retire.
-    NoteDdlRows(ddl);
-    if (!oid.ok()) {
-        return {"ERR " + oid.status().message(), false};
-    }
-
-    // The constraints, now that there is a child relation to hang them on.
-    // What can still fail here is the colocation check (F5), which needs the
-    // child's assigned owner core, and catalog I/O. Either leaves a created
-    // relation behind and is reported as an error naming that - the honest
-    // reply, since nothing can take the relation back.
-    for (const PendingForeignKey& fk : pending_fkeys) {
-        auto created = catalog_.CreateForeignKey(oid.value(), fk.column_no, fk.parent_oid);
-        if (!created.ok()) {
-            return {"ERR relation '" + stmt.table_name + "' was created (oid " +
-                        std::to_string(oid.value()) +
-                        ") but its foreign key on column " + std::to_string(fk.column_no) +
-                        " referencing '" + fk.parent_name +
-                        "' was not: " + created.status().message(),
-                    false};
+        // ---- `CABIN` on a column creates one now (docs/feat-cabin.md) -------
+        //
+        // The policy is enforced at exactly two moments, and this is the first:
+        // an *enabled* column gets its Cabin as part of the CREATE TABLE that
+        // declared it. The second is `Catalog::CreateCabin`, which refuses a
+        // *disabled* column whoever asks.
+        //
+        // `kCabinPolicyAuto` does nothing here, by design: no code creates a
+        // Cabin on that policy, because the promotion pipeline that would judge
+        // it does not exist (§7). The value is stored so the decision has a name
+        // before the machinery that consumes it - not so that it quietly behaves
+        // like `enabled`.
+        //
+        // A failure here does not fail the CREATE TABLE. The relation exists and
+        // is correct; what is missing is an accelerator, and reporting it as a
+        // warning beats leaving a half-created table behind - there is no
+        // transaction to roll one back into.
+        std::vector<std::string> warnings;
+        for (const catalog::SysColumnRow& col : schema.columns) {
+            if (catalog::EffectiveCabinPolicy(col.cabin_policy) != catalog::kCabinPolicyEnabled) {
+                continue;
+            }
+            auto cabin = catalog_.CreateCabin(oid.value(), static_cast<std::uint16_t>(col.pos),
+                                               catalog::kCabinOriginUser);
+            if (!cabin.ok()) {
+                warnings.push_back("column '" + std::string(catalog::NameView(col.name)) +
+                                   "' asked for a cabin and did not get one: " +
+                                   cabin.status().message());
+            }
         }
-    }
-
-    // ---- `CABIN` on a column creates one now (docs/feat-cabin.md) -------
-    //
-    // The policy is enforced at exactly two moments, and this is the first:
-    // an *enabled* column gets its Cabin as part of the CREATE TABLE that
-    // declared it. The second is `Catalog::CreateCabin`, which refuses a
-    // *disabled* column whoever asks.
-    //
-    // `kCabinPolicyAuto` does nothing here, by design: no code creates a
-    // Cabin on that policy, because the promotion pipeline that would judge
-    // it does not exist (§7). The value is stored so the decision has a name
-    // before the machinery that consumes it - not so that it quietly behaves
-    // like `enabled`.
-    //
-    // A failure here does not fail the CREATE TABLE. The relation exists and
-    // is correct; what is missing is an accelerator, and reporting it as a
-    // warning beats leaving a half-created table behind - there is no
-    // transaction to roll one back into.
-    std::vector<std::string> warnings;
-    for (const catalog::SysColumnRow& col : schema.columns) {
-        if (catalog::EffectiveCabinPolicy(col.cabin_policy) != catalog::kCabinPolicyEnabled) {
-            continue;
+        // Info: DDL is rare and changes the shape of everything after it, so
+        // it belongs in a default-level log even though ordinary writes do not.
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "created table '" + std::string(stmt.table_name) +
+                                  "' oid=" + std::to_string(oid.value()) +
+                                  " columns=" + std::to_string(schema.columns.size()));
         }
-        auto cabin = catalog_.CreateCabin(oid.value(), static_cast<std::uint16_t>(col.pos),
-                                           catalog::kCabinOriginUser);
-        if (!cabin.ok()) {
-            warnings.push_back("column '" + std::string(catalog::NameView(col.name)) +
-                               "' asked for a cabin and did not get one: " +
-                               cabin.status().message());
+        std::ostringstream created;
+        created << "CREATED oid=" << oid.value();
+        for (const std::string& warning : warnings) {
+            created << "\\n" << "WARN " << warning;
         }
-    }
-    // Info: DDL is rare and changes the shape of everything after it, so
-    // it belongs in a default-level log even though ordinary writes do not.
-    if (logging(LogLevel::kInfo)) {
-        log_->Info("ddl", "created table '" + std::string(stmt.table_name) +
-                              "' oid=" + std::to_string(oid.value()) +
-                              " columns=" + std::to_string(schema.columns.size()));
-    }
-    std::ostringstream created;
-    created << "CREATED oid=" << oid.value();
-    for (const std::string& warning : warnings) {
-        created << "\\n" << "WARN " << warning;
-    }
-    return {created.str(), false};
+        return {created.str(), false};
+    });
 }
 
 Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& writes,
@@ -2406,23 +2428,9 @@ Status CommandDispatcher::LogIndexWrites(const std::vector<exec::IndexWrite>& wr
 }
 
 Status CommandDispatcher::LogFullPageImage(PageId page_id, std::uint64_t txn_id) {
-    if (wal_ == nullptr) return Status::OK();
-
-    auto bytes = page_store_.Get(page_id);
-    if (!bytes.ok()) return bytes.status();
-
-    std::vector<std::byte> image(wal::kFullPageImagePayloadSize);
-    if (auto n = wal::EncodeFullPageImage(image,
-                                          std::span<const std::byte, kPageSize>(bytes.value().bytes()));
-        !n.ok()) {
-        return n.status();
-    }
-    auto fpi = wal_->Append(wal::RecordSpec{wal::RecordType::kFullPageImage, txn_id, page_id},
-                            image);
-    if (!fpi.ok()) return fpi.status();
-    // The stamp is the half a hand-copied block loses: redo gates on page_lsn,
-    // so an unstamped page replays a record whose effect it already holds.
-    return page_store_.StampPageLsn(page_id, fpi.value());
+    // The one writer (storage/log_page_image.hpp), kept as a member only
+    // for its callers' brevity.
+    return storage::LogFullPageImage(wal_, page_store_, txn_id, page_id);
 }
 
 Status CommandDispatcher::LogSpills(const std::vector<exec::AppendedSpill>& spills,
@@ -3358,18 +3366,85 @@ std::optional<std::uint64_t> CommandDispatcher::PkEqualityTarget(
     return static_cast<std::uint64_t>(cond.val.int_val);
 }
 
-CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(Session& session) {
-    // DDL joins its transaction only inside an explicit one. In autocommit
-    // a `CREATE TABLE` commits as it always has: `kBootstrapXid`, no trail,
-    // nothing to roll back to - which is what makes DT3b invisible to
-    // every existing caller and every existing test.
+CommandDispatcher::DdlScope CommandDispatcher::DdlScopeFor(WriteScope& write) {
     DdlScope scope;
-    if (txn_ == nullptr || !session.in_explicit_txn()) return scope;
-    txn::Transaction* txn = session.transaction();
-    if (txn == nullptr) return scope;
-    scope.txn = txn;
-    scope.trx_id = txn->id();
+    if (write.txn == nullptr) return scope;  // no manager: kBootstrapXid, as ever
+    scope.txn = write.txn;
+    scope.trx_id = write.txn->id();
+
+    // RV3-3: the undo record for each catalog write, appended **inside**
+    // the catalog's write points so it precedes the row's own record in
+    // the log - redo alone must never be able to resurrect a loser's row
+    // that the undo phase has no record to retire. Captures the raw
+    // transaction pointer; FinishDdlStatement uninstalls before the scope
+    // resolves, so the capture cannot outlive its transaction - and the
+    // dispatcher is core-local, so no other session's statement can run
+    // between install and uninstall.
+    catalog_.SetDdlUndoHook([this, t = write.txn](
+                                const catalog::Catalog::DdlUndoEvent& e) -> Status {
+        txn::UndoRecordFields rec{};
+        rec.target_page_id = e.page_id;
+        rec.target_slot = e.slot;
+        rec.prior_trx_id = e.prior_trx;
+        rec.prior_undo_ptr = e.prior_undo;
+        std::span<const std::byte> image{};
+        switch (e.kind) {
+            case catalog::Catalog::DdlUndoEvent::Kind::kInsert:
+                rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
+                rec.prior_trx_id = txn::kNoTrxId;
+                rec.prior_undo_ptr = txn::kNoUndoPtr;
+                break;
+            case catalog::Catalog::DdlUndoEvent::Kind::kOverwrite:
+                rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kOverwrite);
+                image = e.bytes;  // the prior image - the only copy a crash leaves
+                break;
+            case catalog::Catalog::DdlUndoEvent::Kind::kDeleteMark:
+                rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kDeleteMark);
+                break;
+        }
+        auto ptr = txn_->AppendUndo(*t, rec, e.pk, image);
+        return ptr.ok() ? Status::OK() : ptr.status();
+    });
     return scope;
+}
+
+// Every DDL route runs inside this and only this, which is what makes "no
+// handler may skip FinishDdlStatement" structural rather than a convention
+// a fifth route forgets (review S4): the undo hook the body installs
+// through DdlScopeFor(scope) dies here, on every exit, and the implicit
+// transaction D2 opens resolves here too.
+template <typename Fn>
+DispatchOutcome CommandDispatcher::InDdlStatement(Session& session, Fn&& body) {
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return {ErrorReply(opened.status()), false};
+    WriteScope scope = opened.value();
+    DispatchOutcome out = body(scope);
+    FinishDdlStatement(session, scope, out);
+    return out;
+}
+
+void CommandDispatcher::FinishDdlStatement(Session& session, WriteScope& scope,
+                                           DispatchOutcome& out) {
+    // Unconditionally, every exit: the hook captures this statement's
+    // transaction, and the next statement on this shared dispatcher may
+    // belong to another session.
+    catalog_.SetDdlUndoHook(nullptr);
+
+    const bool owned = scope.owned && scope.txn != nullptr;
+    const std::uint64_t id = owned ? scope.txn->id() : 0;
+    const bool failed = out.response.rfind("ERR ", 0) == 0;
+    const Status verdict =
+        failed ? Status::InvalidArgument(out.response) : Status::OK();
+    if (Status ended = EndWrite(session, scope, verdict); !ended.ok() && !failed) {
+        // The DDL succeeded and its commit did not - the commit failure is
+        // the client's answer, exactly as the DML handlers report it.
+        out = {ErrorReply(ended), false};
+    }
+    // The implicit transaction resolved inside EndWrite, so the seam that
+    // explicit COMMIT/ROLLBACK reaches through EndDdlScope runs here: the
+    // cache the open DDL filtered is stale either way, and settled marks
+    // are worth one sweep (§5d).
+    if (owned) EndDdlScopeById(id);
 }
 
 Status CommandDispatcher::EnsureStatementBoundary(Session& session) {
@@ -3433,7 +3508,11 @@ std::optional<DispatchOutcome> CommandDispatcher::RefuseIfNameHeldByPendingDrop(
 void CommandDispatcher::EndDdlScope(const Session& session) {
     const txn::Transaction* txn = session.transaction();
     if (txn == nullptr) return;
-    const bool held_ddl = std::erase(ddl_txns_, txn->id()) > 0;
+    EndDdlScopeById(txn->id());
+}
+
+void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
+    const bool held_ddl = std::erase(ddl_txns_, txn_id) > 0;
     // **Both endings need this, and only the rollback half used to.** A
     // rollback compensates through the page, retiring rows behind the
     // catalog's back, so anything cached about them while the transaction

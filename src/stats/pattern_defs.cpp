@@ -190,10 +190,15 @@ Status InsertPatternDef(catalog::Catalog& catalog, storage::PageStore& store,
     auto payload = exec::EncodeRow(rel.schema, rel.layout, id.value(), values, sink);
     if (!payload.ok()) return payload.status();
 
-    // Unlogged, like every other catalog write (command_dispatcher.hpp:
-    // INSERT is the one logged statement). A declaration therefore survives
-    // a crash only as far as the next SYNC, which is the same guarantee
-    // CREATE TABLE gives and is not made worse here.
+    // **Unlogged, and since RV3 (2026-08-19) that is a divergence rather
+    // than the house rule it used to be**: every other catalog write now
+    // goes through `catalog.cpp`'s logged funnels, so a declaration
+    // written here survives a crash only as far as the next checkpoint
+    // while a `CREATE TABLE` beside it survives by redo. This row-codec
+    // relation's `ChainInsert`/var-heap writes predate those funnels -
+    // `docs/workplan-rv3-catalog-recovery.md`'s "Open remainder, named"
+    // owns closing it. Advisory data (invariant 8), so what a crash costs
+    // here is a re-learned pattern, never an answer.
     auto placed = heap::ChainInsert(store, rel.desc_page_id, id.value(), payload.value(),
                                     catalog::kBootstrapXid, rel.oid);
     if (!placed.ok()) return placed.status();

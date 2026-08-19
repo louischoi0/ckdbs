@@ -136,22 +136,46 @@ Cadence is the RTO knob: more frequent ⇒ shorter recovery + more FPI volume.
 
 ## 11a. What logs today
 
-**Every data mutation; no catalog mutation.** *(Corrected 2026-08-10 — this section read "`INSERT` and nothing else", which was true before `docs/txn.md`'s work and has not been since.)*
+**Every data mutation, and — since 2026-08-19 (RV3,
+`docs/workplan-rv3-catalog-recovery.md`) — every catalog mutation too**,
+as the ordinary record types the "Catalog" line above always planned:
+`kHeapInsert`/`kHeapOverwrite`/`kHeapDeleteMark`/`kSlotRetire` per row,
+`PAGE_INIT` for a catalog overflow page, a relation's root and its
+var-heap root, a `FULL_PAGE_IMAGE` for a chain-link edit and for each
+page of a backfilled index tree. No new record type, no format bump.
+*(Corrected 2026-08-10 — this section read "`INSERT` and nothing else",
+which was true before `docs/txn.md`'s work and has not been since;
+corrected again 2026-08-19 when "no catalog mutation" fell.)*
 
 Verified against the emission sites:
 
 | Path | Records |
 |---|---|
-| `INSERT` | `TXN_BEGIN` → (`FULL_PAGE_IMAGE` + `PAGE_INIT` when the heap chain grows) → `VARHEAP_APPEND` per spilled cell → `INDEX_INSERT` per index → `HEAP_INSERT` → `TXN_COMMIT` |
+| `INSERT` | `TXN_BEGIN` → (`FULL_PAGE_IMAGE` + `PAGE_INIT` when the heap chain grows) → `VARHEAP_APPEND` per spilled cell → `INDEX_INSERT` per index → `HEAP_OVERWRITE` of the `sys.tables` id bump (RV3 — the record that makes K1's ceiling durable, and a per-INSERT cost the measurement prices) → `HEAP_INSERT` → `TXN_COMMIT` |
 | `UPDATE` | `UNDO_WRITE` (before-image) → `INDEX_INSERT` per touched index → `HEAP_OVERWRITE` |
 | `DELETE` | `UNDO_WRITE` → `HEAP_DELETE_MARK` |
 | rollback | the compensations of `docs/txn.md` §6 — `SLOT_RETIRE` / `HEAP_OVERWRITE` / `HEAP_DELETE_MARK` — then `TXN_ABORT` |
 | assertions | `ASSERT_BUILD` at CREATE, `ASSERT_RESERVE` / `ASSERT_COMMIT` / `ASSERT_ROLLBACK` on the write paths, `ASSERT_DROP` at teardown |
 | checkpointer | `CHECKPOINT_BEGIN` / `CHECKPOINT_END` |
 
-Ordering rules that are load-bearing and already enforced: `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/feat-index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one.
+Ordering rules that are load-bearing and already enforced: `VARHEAP_APPEND` and `INDEX_INSERT` both precede the heap record whose cell or entry points at them (§5.2, `docs/feat-index.md` §12.1), for opposite pointer directions and the same reason — the surviving direction is the harmless one. RV3 adds two more: a catalog write's `UNDO_WRITE` precedes its row record (redo alone must never resurrect a row the undo phase has no record to retire), and a catalog record's **envelope names the acting transaction or `kNoTxnId`, never the header's writer** — analysis notes every named envelope as a loser until a commit in range says otherwise, so a `next_id` bump logged under the relation's long-committed creator invented phantom crash losers (the RV3 review's B1). One safety note the relation-root `PAGE_INIT`s rest on: they are deliberately unstamped (the first row record stamps the page), and a root that never receives a row is protected by the **checkpointer flushing every page in its snapshot** before `CHECKPOINT_END` — the safety lives in that flush, not in a stamp.
 
-**Still outside the log**, and this is the gap that matters: `CREATE TABLE` and every other DDL, and every catalog row underneath them, mutate pages unlogged and reach the platter only at a checkpoint. That is what makes `docs/keystoneid-k0-findings.md` §4's K1 crash exposure reachable, and closing it is K-M2a's prerequisite. `ALLOC`/`FREE` are likewise reserved in the record enum and emitted by nothing — the SpaceManager of `docs/page.md` §5 is unbuilt.
+~~**Still outside the log**: `CREATE TABLE` and every other DDL~~ —
+**closed 2026-08-19** (RV3): DDL runs under a real transaction (autocommit
+included), its catalog writes log the ordinary types with undo records a
+crash loser's mount rolls back through, and `SHOW META` prints
+`ddl_durable=1 catalog_recovered=1`. The `sys.tables.next_id` bump logs
+with everything else, which closes the unlogged-ceiling half of
+`docs/keystoneid-k0-findings.md` §4's K1 exposure. Still outside the log,
+precisely: `ALLOC`/`FREE`, reserved in the record enum and emitted by
+nothing (the SpaceManager of `docs/page.md` §5 is unbuilt); and the two
+**row-codec definition relations** — `sys.pattern_defs`
+(`stats/pattern_defs.cpp`, which says so in place) and `sys.assertions`'
+source rows — whose `ChainInsert`/var-heap writes predate RV3's funnels
+and still reach the platter only at a checkpoint. Their *registry* rows
+(`sys.patterns`, `sys.cabins`, `sys.assertions` oids, fkeys) go through
+the catalog's logged funnels and do survive; the remainder is
+`workplan-rv3-catalog-recovery.md`'s named open item.
 
 Three properties of the INSERT path are worth stating, because they are the shape the remaining paths should copy or deliberately not copy:
 

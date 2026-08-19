@@ -45,6 +45,9 @@ Status SimInstance::Boot() {
     auto boot = bootstrap::BootstrapDatabase(*store_, kMountTime);
     if (!boot.ok()) return boot.status();
     boot_.emplace(std::move(boot.value()));
+    // RV3, exactly where the expeditor arms it: after bootstrap (which is
+    // entitled to run unlogged), before recovery and everything else.
+    boot_->catalog.SetWal(wal_.get());
 
     // **Recovery, exactly where the expeditor runs it** (RV1,
     // server/mount_recovery.hpp). The harness is a full instance, and a
@@ -66,6 +69,9 @@ Status SimInstance::Boot() {
                                                     /*log=*/nullptr);
         if (!recovered.ok()) return recovered.status();
         recovery_ = recovered.value();
+        // RV3 D3a, exactly as the expeditor does it: redo mutated catalog
+        // pages, so whatever the cache holds predates them.
+        boot_->catalog.InvalidateFromPeer();
         if (recovered.value().next_trx_id > boot_->superblock.next_trx_id()) {
             if (Status s = boot_->superblock.SetNextTrxId(recovered.value().next_trx_id); !s.ok()) {
                 return s;

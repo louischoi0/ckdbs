@@ -534,7 +534,27 @@ private:
             return txn != nullptr ? &written : nullptr;
         }
     };
-    DdlScope DdlScopeFor(Session& session);
+    // RV3-3: the scope-based sibling every DDL handler now uses. The
+    // transaction comes from the WriteScope - explicit or the implicit
+    // one BeginWrite opened (D2: autocommit DDL is a real transaction) -
+    // and installing the catalog's undo hook happens here, so a handler
+    // cannot write catalog rows a crash loser could not roll back. The
+    // hook is uninstalled by FinishDdlStatement, every exit.
+    DdlScope DdlScopeFor(WriteScope& scope);
+    // The one shape a DDL route may have: BeginWrite, the body, then
+    // FinishDdlStatement on every exit - structural, so no route can
+    // install the undo hook and leave it armed (review S4).
+    template <typename Fn>
+    DispatchOutcome InDdlStatement(Session& session, Fn&& body);
+    // The tail every DDL route runs: uninstalls the undo hook, resolves
+    // the write scope (commit/abort for an owned one), and for an owned
+    // scope runs the DDL-resolution seam - cache invalidation and the §5d
+    // purge - that explicit COMMIT/ROLLBACK reaches through EndDdlScope.
+    void FinishDdlStatement(Session& session, WriteScope& scope, DispatchOutcome& out);
+    // EndDdlScope's core, keyed by id: the session-based wrapper serves
+    // explicit COMMIT/ROLLBACK, this serves an implicit DDL transaction
+    // whose resolution EndWrite performed.
+    void EndDdlScopeById(std::uint64_t txn_id);
 
     // The view a statement resolves relation names under
     // (workplan-ddl-transactional.md DT3c), or `nullopt` for "see

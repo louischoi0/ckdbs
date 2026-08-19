@@ -509,10 +509,11 @@ TEST_F(RecoveryAuditTest, ShowMetaCarriesTheRecoveryBlockOnlyWhenAReportIsInstal
     EXPECT_NE(meta.find("recovery_rolled_back=2"), std::string::npos) << meta;
     EXPECT_NE(meta.find("recovery_redo_us=5"), std::string::npos) << meta;
     EXPECT_NE(meta.find("recovery_relations_checked=7"), std::string::npos) << meta;
-    // RV3's standing statement, printed rather than implied: recovery does not
-    // restore the catalog, so "it succeeded" must never read as "nothing was
-    // lost" (mount_recovery.hpp says why the converse is undetectable).
-    EXPECT_NE(meta.find("catalog_recovered=0"), std::string::npos) << meta;
+    // RV3 closed 2026-08-19: catalog mutations are logged and DDL is a
+    // real transaction, so the flags flip together - durable and recovered,
+    // stated in the same breath they were disclaimed in for a week.
+    EXPECT_NE(meta.find("catalog_recovered=1"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("ddl_durable=1"), std::string::npos) << meta;
 }
 
 TEST_F(RecoveryAuditTest, AnUntimedRecoveryPrintsNoDurations) {

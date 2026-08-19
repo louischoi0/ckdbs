@@ -652,6 +652,13 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // the device ahead of the records describing it.
     expeditor->store_->SetWalGate(expeditor->wal_.get());
 
+    // RV3: from here on every catalog mutation logs the ordinary record
+    // types (workplan-rv3-catalog-recovery.md). Before recovery and the
+    // mount sweeps below, so what they retire is logged too; bootstrap
+    // above ran unlogged, which fresh-create is entitled to - it ends in
+    // a flush and precedes every acknowledgement.
+    expeditor->database_->catalog.SetWal(expeditor->wal_.get());
+
     if (expeditor->config_.cabins) {
         expeditor->cabin_store_.emplace(
             stats::CabinLimits{expeditor->config_.cabin_max_values,
@@ -696,10 +703,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     if (!recovered.ok()) return recovered.status();
     expeditor->recovery_ = recovered.value();
 
-    // RV3's audit (RC09): the catalog survived unlogged, so ask it whether the
-    // relations it still describes can actually be opened. O(relations), one
-    // page read each, and it reports rather than refuses - an unopenable
-    // relation is the finding, not an error hit while producing it.
+    // RV3 D3a: redo just mutated catalog pages under a catalog constructed
+    // above it. Nothing reads a catalog row between construction and here
+    // (bootstrap on an existing database reads only the superblock), so
+    // dropping whatever the cache holds is the whole ordering fix - the
+    // stated rule is that nothing may start.
+    expeditor->database_->catalog.InvalidateFromPeer();
+
+    // RV3's audit (RC09): with catalog mutations logged (2026-08-19) this
+    // asks whether the relations the *recovered* catalog describes can be
+    // opened. O(relations), one page read each, and it reports rather than
+    // refuses - an unopenable relation is the finding, not an error hit
+    // while producing it. Zero from here on is RV3's proof.
     expeditor->recovery_ = AuditCatalogAfterRecovery(
         expeditor->database_->catalog, *expeditor->store_, expeditor->recovery_,
         &*expeditor->logger_);
