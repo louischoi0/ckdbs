@@ -206,10 +206,13 @@ observation threshold on its own — up to `cabin_max_values` sets from a
 single SELECT, each imposing the write-hook cost thereafter — where the
 literal form observed one value per statement.
 
-One refinement recorded, not built: `correlated_scans` (the statistics
-counter for the quadratic join shape) does not count a correlated
-`kCabinProbe` whose misses still walk, so a still-quadratic statement can
-report zero.
+`correlated_scans` counts honestly. `[CLOSED 2026-08-19]` — the
+compile-time kind test counted only a `kScan` driver, so a correlated
+`kCabinProbe` whose misses walked reported zero, and a `kFilterScan`
+driver had never counted at all. The counter now increments at the
+sub-chain driving step's **actual walk**: a miss counts, a serve does
+not, and a converged EXISTS's counter goes quiet exactly when the
+quadratic work does.
 
 **The correlated `EXISTS` converges. `[CLOSED 2026-08-19 — CB13]`** It
 did not at first: an EXISTS whose outer key had a qualifying match

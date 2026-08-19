@@ -906,6 +906,40 @@ TEST(CabinContractTest, ACapRefusedValueKeepsTheShortCircuitedCost) {
     }
 }
 
+TEST(CabinContractTest, CorrelatedScansCountWalksNotKinds) {
+    // The counter's execution-level definition (step_vm.hpp): a sub-chain
+    // driving step that actually walked. Three facts pinned, each a gap of
+    // the old compile-time kind test:
+    Instance db(/*cabins=*/true);
+    Load(db);
+    DeclareCabins(db);
+
+    // 1. A cabined EXISTS's first execution walks per outer row - the
+    //    misses record - and the counter says so.
+    const std::string q =
+        "ANALYZE SELECT id FROM h AS o WHERE EXISTS "
+        "(SELECT i.id FROM h AS i WHERE i.sym = o.sym)";
+    const std::string first = db.Run(q);
+    EXPECT_NE(first.find("corr_scans="), std::string::npos) << first;
+
+    // 2. Once converged, every probe serves and nothing walks - the
+    //    counter goes quiet exactly when the quadratic work does. (A zero
+    //    counter is not printed.)
+    const std::string second = db.Run(q);
+    EXPECT_EQ(second.find("corr_scans="), std::string::npos) << second;
+
+    // 3. A kFilterScan driver - a literal beside the correlation, no cabin
+    //    involved - walks every evaluation and now counts, where the old
+    //    kind test never counted it at all.
+    Instance plain(/*cabins=*/true);
+    Load(plain);
+    const std::string fs =
+        "ANALYZE SELECT id FROM b AS o WHERE EXISTS "
+        "(SELECT i.id FROM b AS i WHERE i.qty = 45 AND i.sym = o.sym)";
+    EXPECT_NE(plain.Run(fs).find("corr_scans="), std::string::npos);
+    EXPECT_NE(plain.Run(fs).find("corr_scans="), std::string::npos);  // never converges
+}
+
 }  // namespace
 }  // namespace kds::server
 

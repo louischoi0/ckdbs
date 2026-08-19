@@ -421,15 +421,30 @@ TEST_F(ExecBudgetTest, TheCorrelatedScanCounterNamesTheExpensiveShape) {
                     .ok());
     EXPECT_EQ(scanning.Total().correlated_scans, 5u);
 
-    // Correlated on the pk: the inner step is a Probe, so it is not a
-    // correlated *scan* and is not counted. That distinction is the point
-    // of the counter - it names the quadratic shape, not correlation.
+    // Correlated on the pk of a BTREE inner: a real descent per outer row,
+    // not a walk - not counted. That distinction is the point of the
+    // counter: it names the quadratic shape, not correlation.
+    Create("CREATE TABLE i3 (id int64, tag int64) BTREE");
+    for (int i = 0; i < 5; ++i) Insert("i3", {Int(i)});
     ExecStats probing;
     ASSERT_TRUE(TryRun("SELECT o2.id FROM o2 WHERE EXISTS "
-                       "(SELECT i2.id FROM i2 WHERE i2.id = o2.tag)",
+                       "(SELECT i3.id FROM i3 WHERE i3.id = o2.tag)",
                        Budget(), &probing)
                     .ok());
     EXPECT_EQ(probing.Total().correlated_scans, 0u);
+
+    // The same shape over the HEAP inner is a different execution: a heap
+    // pk probe has no descent and falls through to the walk, so it *is*
+    // the quadratic shape - and the walk-level counting (2026-08-19,
+    // step_vm.hpp) says so, where the old compile-time kind test called it
+    // a Probe and reported zero for a statement that walked the relation
+    // once per outer row.
+    ExecStats heap_probing;
+    ASSERT_TRUE(TryRun("SELECT o2.id FROM o2 WHERE EXISTS "
+                       "(SELECT i2.id FROM i2 WHERE i2.id = o2.tag)",
+                       Budget(), &heap_probing)
+                    .ok());
+    EXPECT_EQ(heap_probing.Total().correlated_scans, 5u);
 }
 
 }  // namespace
