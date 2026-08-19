@@ -1,10 +1,17 @@
 # Workplan — Reader Registration and the First Purge Consumer
 
-Status: in progress. Owning specs once landed: `docs/txn.md` §4.1 (the
-registration mechanism), `docs/spec-ddl-transactional.md` §5d (the catalog
-delete-mark purge, the first consumer). This file records the decisions and
-the task breakdown; when the work lands, the specs own the design and this
-file becomes history.
+Status: **complete 2026-08-19** (RR1-RR5). Owning specs: `docs/txn.md`
+§4.1 (the registration mechanism), `docs/spec-ddl-transactional.md` §5d
+(the catalog delete-mark purge, the first consumer). The specs own the
+design now; this file is the history and the decision record.
+
+One decision moved during the build, recorded where the next reader
+trips on it: D2's "no mintable view produces a zero bound" was wrong on
+a **peer core**, whose id sequence has never issued an id and whose
+views therefore carry a zero high-water mark — semantically "sees no
+real-id version at all". `RegisterReader` stores such a view at bound 1
+(below every real id, conservative and exact) rather than refusing the
+statement, which is what the first full-suite run caught.
 
 ## Why
 
@@ -127,22 +134,24 @@ by the mount.
   `TransactionManager`; unit tests in `txn_manager_test.cpp` (lease RAII
   and move, slot exhaustion is `OutOfSpace` and release reopens it,
   horizon over live transactions / leases / both / neither, the
-  in-flight-bounded case).
+  in-flight-bounded case). ☑
 - **RR3** — `LeasedSnapshot` through `AutocommitSnapshot`; thread the
   type through `CommandDispatcher::SnapshotFor` and the three
-  `RemoteStepService` stage sites. Behaviour-neutral; the suite proves it.
+  `RemoteStepService` stage sites. Behaviour-neutral; the suite proves
+  it. ☑ (with the zero-bound peer finding above)
 - **RR4** — `Catalog::PurgeSettledDeleteMarks()` + the `EndDdlScope`
-  trigger + the `SHOW META` line. Tests in `catalog_test.cpp` /
-  `txn_session_test.cpp`: a committed transactional `DROP INDEX`'s marks
-  purge at resolution with no readers; a registered older lease holds
-  them and its release frees them; an open older transaction holds them;
-  a rolled-back drop leaves nothing to purge; DT10's mount test is
-  untouched.
+  trigger + the `SHOW META` line. Tests in `txn_session_test.cpp`: a
+  committed transactional `DROP INDEX`'s marks purge at its own
+  resolution; a registered older lease holds them and its release frees
+  them; an open older transaction holds them; a rolled-back drop leaves
+  nothing to purge; DT10's mount test amended to lease a reader, which
+  is the state a mount realistically inherits. ☑
 - **RR5** — doc amendments: `docs/txn.md` §4.1 (registration exists;
   §9's undo-retention entry loses its "needs registration" clause but
   stays open), `read_view.hpp`'s header note,
   `docs/spec-ddl-transactional.md` §5d, `docs/known-gaps.md` (the
-  reclamation preamble and the `marks` bound), `CLAUDE.md` milestone row.
+  reclamation preamble and the `marks` bound), `CLAUDE.md` milestone
+  rows. ☑
 
 ## Not in scope, by decision
 

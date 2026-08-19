@@ -383,20 +383,21 @@ the owner's workplan.
   `IsInFlight` walks one core's live list and CC3 refuses cross-core
   writes.
   Delete-marked catalog rows no longer accumulate across mounts (DT10,
-  §5c); **within a mount they still do, and nothing purges them until the
-  next restart** — measured, and it has a price: DT9's cold-catalog cost
-  was `marks × (0.4 ns + 0.45 ns × live)`
-  (`bench/results-ddl-catalog-read-ab.md`); the `live` factor left the
-  per-mark term on 2026-08-18 (`ScanAll` settles a mark by comparison
-  against `OldestActiveTrxId()` instead of walking the live list), so
-  what remains is one comparison per mark per cold read.
-  **`marks` itself cannot be bounded within a mount**, and the reason is
-  a stated prerequisite rather than a missing patch: a purge must not
-  retire a mark a reader's view still needs, and `live_` does not name
-  every reader — a cross-core stage holds an `AutocommitSnapshot` across
-  its parks (`remote_step_service.hpp`). That is the reader registration
-  `txn.md` §4.1 omits and §9 lists, the same prerequisite blocking the
-  MVCC undo purge.
+  §5c), ~~and within a mount they still do~~ — **closed 2026-08-19 by
+  §5d**: DDL resolution now runs a horizon-gated purge, so a mark
+  survives only as long as some reader's view could still need the row.
+  The price a surviving mark carries is unchanged and small: one
+  comparison per mark per cold read (DT9's `live` factor left the
+  per-mark term on 2026-08-18; `bench/results-ddl-catalog-read-ab.md`
+  has the derivation).
+  The prerequisite that closed it is **reader registration**
+  (`docs/workplan-reader-registration.md`, `txn.md` §4.1): `live_` does
+  not name every reader — a cross-core stage holds an
+  `AutocommitSnapshot` across its parks (`remote_step_service.hpp`) —
+  so every such snapshot now carries a `ReaderLease`, and
+  `TransactionManager::ReadHorizon()` is the bound a purge retires
+  below. The same prerequisite used to block the MVCC undo purge; what
+  blocks that now is only its own §9-open retention policy.
   Also measured there and **not** DT9's: a transactional `DROP TABLE`
   costs ~517 µs against `CREATE TABLE`'s 48 and `DROP INDEX`'s 36,
   identical on both binaries — `Catalog::DropTable`'s five
@@ -460,13 +461,17 @@ the owner's workplan.
 - **Waystone sighting counts** restart (a performance event, never a
   correctness one — invariant 8).
 
-## Reclamation — nothing purges, anywhere
+## Reclamation — one purge exists, everything else still does not
 
-There is no purge pass, and readers are deliberately unregistered
-(`docs/txn.md` §9), so:
+Readers are **registered** as of 2026-08-19 (`txn.md` §4.1,
+`docs/workplan-reader-registration.md`): `ReadHorizon()` answers the one
+question every purge must ask, and the catalog delete-mark purge
+(`spec-ddl-transactional.md` §5d) is its first and only consumer. Every
+other reclamation still waits on its own §9-open policy, so:
 
 - undo pages grow monotonically; `SnapshotTooOld` is structurally
-  unreachable;
+  unreachable (the retention policy, not the registration, is what is
+  missing now — `txn.md` §9);
 - delete-marked tuples keep their slots; var-heap bytes of superseded
   values stay; superseded index and Cabin entries stay
   (`docs/feat-index.md` §13);
@@ -475,8 +480,9 @@ There is no purge pass, and readers are deliberately unregistered
 - `DROP TABLE` exists (`docs/spec-drop-table.md`) but is **catalog-scoped**:
   the relation's pages, var-heap chain and index pages orphan — leaked
   space, deliberately, because free-map reuse is gated (a reallocated page
-  breaks trail validation, `feat-physical-optimizer.md` §6 gate 3) and no
-  reader horizon exists. The oid is tombstoned in `sys.objects` and never
+  breaks trail validation, `feat-physical-optimizer.md` §6 gate 3; a
+  reader horizon exists now, but that gate is its own). The oid is
+  tombstoned in `sys.objects` and never
   reissued, which is what keeps dead-oid advisory structures harmless.
   `ALTER TABLE` is catalog-only renames (`docs/spec-alter.md` AL1). Both
   RESTRICT on assertions; DROP also RESTRICTs on referencing foreign keys.

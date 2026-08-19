@@ -421,20 +421,16 @@ Only a mark whose deleter is at or above the oldest active transaction
 still pays the walk, and there is at most one such drop per open
 transaction.
 
-**`marks` itself needs a purge, and a purge cannot be built.** `txn.md`
-says it twice by name — *"purge does not exist, cannot without reader
-registration"* (§4.1's note on undo pages) and §9's undo-retention entry.
-It binds here specifically, not just in general: a purge must not retire
-a mark some reader's view still needs, and consulting `live_` is not
-enough, because a cross-core stage mints its snapshot through
-`AutocommitSnapshot` and holds it **across its parks**
-(`remote_step_service.hpp`) — a reader that is nowhere in `live_`. So
-the sound condition is undecidable with what the engine records today,
-and the prerequisite is the same one that blocks the MVCC undo purge.
-
-What that leaves, stated so it is not rediscovered as a surprise: a
-long-lived server doing many transactional drops grows its catalog pages
-and pays a bounded per-mark comparison on cold reads, until it restarts.
+~~**`marks` itself needs a purge, and a purge cannot be built.**~~ This
+paragraph was true when written (2026-08-18) and the prerequisite it
+named fell the next day: a purge must not retire a mark some reader's
+view still needs, consulting `live_` was not enough (a cross-core stage
+holds its `AutocommitSnapshot` **across its parks**,
+`remote_step_service.hpp` — a reader nowhere in `live_`), and that
+missing record is exactly the reader registration
+`docs/workplan-reader-registration.md` built. §5d below is the purge.
+Within-a-mount accumulation is now bounded by reader lifetimes rather
+than by the mount.
 
 **What it costs.** One forward pass over the catalog root chains.
 `RetireSlot` sets the dead flag in place and never renumbers slots behind
@@ -442,6 +438,50 @@ the walk, so one pass suffices. Unlogged, like every catalog write — a
 crash mid-sweep leaves exactly the state it started from, which the next
 mount sweeps again. `SHOW META` reports `catalog_marks_finalized`; zero
 is what a clean shutdown produces.
+
+### 5d. Delete-marks purge at DDL resolution, horizon-gated
+
+**Built 2026-08-19** (`docs/workplan-reader-registration.md` RR4). The
+in-mount sibling of §5c's sweep: `Catalog::PurgeSettledDeleteMarks()`
+retires every delete-marked row whose deleter has cleared the core's
+**read horizon** (`TransactionManager::ReadHorizon()`, `txn.md` §4.1),
+and `CommandDispatcher::EndDdlScope` runs it at every DDL resolution —
+both endings, right after the cache invalidation.
+
+**Why the horizon licenses what §5c's mount-only rule forbade.** §5c may
+retire only at mount because afterwards a mark may belong to a
+transaction that is still open — or to a committed drop an old live view
+still cannot see, which would resurrect the row for that reader's
+filtered reads. The horizon is precisely the missing proof: a deleter
+below it is committed (an active transaction bounds the horizon at or
+below its own id) and visible to every live and future view, so the row
+it marked is gone by every route — filtered reads see the drop,
+unfiltered reads settle the mark by the same comparison. A rollback
+clears its own marks synchronously, so no aborted transaction's mark
+survives to be asked about.
+
+**Why at DDL resolution and nowhere hotter.** DDL resolution is the only
+event that creates or settles a mark (autocommit DDL writes at
+`kBootstrapXid` and retires directly, leaving none), it is rare enough
+that a catalog page sweep costs nothing worth measuring, and the core is
+between resolutions there — so no unregistered synchronous view is live,
+which is the exemption `txn.md` §4.1's registration rule leans on. A
+mark whose deleter has not cleared the horizon survives to the next
+resolution or to §5c at the next mount; there is deliberately **no**
+background cadence — that is a `maintenance`-group decision that belongs
+with the undo purge (`txn.md` §9).
+
+**No version bump, deliberately.** Every retired row was already gone to
+every reader — that is what the horizon proves — so no cached answer
+changes, and a bump would broadcast `kCatalogInvalidate` to peers and
+stale this instance's bound statements for nothing. Unlogged like every
+catalog write (RV3): a crash mid-sweep leaves the state it started from.
+
+**Observability.** `SHOW META` prints `catalog_marks_purged` — this
+mount's own retirements, live dispatcher state — beside the recovery
+report's `catalog_marks_finalized`, which counts a previous mount's
+leftovers. The pair reads as one statement: what resolution reclaimed,
+and what a reader carried across a shutdown for the mount to take.
 
 ## 6. Open decisions — do not assume
 

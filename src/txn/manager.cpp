@@ -60,7 +60,7 @@ StatusOr<IsolationLevel> ParseIsolationLevel(std::string_view text) {
         // the refusal says why rather than "unknown level".
         return Status::Unsupported(
             "SERIALIZABLE is out of scope: it needs predicate locking or read-tracking, and "
-            "this engine has neither a lock manager nor reader registration");
+            "this engine has neither a lock manager nor row-level read tracking");
     }
     return Status::InvalidArgument("unknown isolation level '" + std::string(text) +
                                    "'; expected 'read committed' or 'repeatable read'");
