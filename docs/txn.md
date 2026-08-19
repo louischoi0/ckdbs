@@ -511,12 +511,15 @@ isolation and consistency for DDL are specified in
 `docs/spec-ddl-transactional.md` and built per
 `docs/workplan-ddl-transactional.md` — by stamping catalog rows with the
 real transaction id and filtering catalog reads through the same
-visibility predicate user reads use, which is why rollback needs no undo
-record. **Durability is not part of that** and this paragraph stays true
-of it: catalog writes remain unlogged and unrecovered (RV3). Until the
-spec's §7 lands, a committed `CREATE TABLE` is exactly as durable as any
-catalog write, which is to say it depends on the page reaching the
-device. Read the spec's §1 table before quoting either half.
+visibility predicate user reads use, which is why *live* rollback needs
+no undo record. **Durability joined 2026-08-19** (RV3,
+`docs/workplan-rv3-catalog-recovery.md`): catalog writes log the
+ordinary record types, every DDL statement — autocommit included — runs
+under a real transaction, and a crash loser's catalog writes *do* carry
+undo records now, appended inside the write points so they precede the
+row records in the log; recovery's ordinary undo phase rolls them back.
+`SHOW META` prints `ddl_durable=1 catalog_recovered=1`. What stays
+unlogged is named in `wal.md` §11a's closing paragraph.
 
 ## 8. MVCC ships before recovery — a known correctness gap
 

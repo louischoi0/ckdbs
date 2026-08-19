@@ -40,10 +40,20 @@ the owner's workplan.
   *produced* — three defects in code that predates it, all fixed, and one
   measured cost.
 
-- **The catalog is still not recovered, and `catalog_recovered=0` says so on
-  every `SHOW META`** (RV3, RC09). A crash can still lose a `CREATE TABLE`, so
-  recovery's promise is *"every acknowledged commit to a relation that survived
-  is restored"* and never "nothing was lost". Half of that gap is now counted:
+- ~~**The catalog is still not recovered**~~ — **closed 2026-08-19**
+  (RV3, `docs/workplan-rv3-catalog-recovery.md`): catalog mutations log
+  the ordinary record types, every DDL statement runs under a real
+  transaction with undo records a crash loser's mount rolls back
+  through, and `SHOW META` prints `catalog_recovered=1 ddl_durable=1`.
+  Recovery's promise widens to what RC09 could never say: an
+  acknowledged `CREATE TABLE` is restored like any acknowledged commit.
+  What stays outside the log is named in `wal.md` §11a's closing
+  paragraph (the two row-codec definition relations; ALLOC/FREE). One
+  contract also got *stricter*: a torn catalog page used to boot and be
+  served corrupt; redo now names it, cannot heal it (§10's FPI cadence
+  is unbuilt for every page class), and refuses the mount — the rule
+  torn heap pages already lived under. The paragraphs below stand as
+  the record of the gap while it existed. Half of it was counted:
   `recovery_relations_missing_pages` reports user relations the catalog still
   describes whose descriptor or var-heap root page the crash took, in
   O(relations). **The other half cannot be counted at all** — rows whose
@@ -356,10 +366,10 @@ the owner's workplan.
   which is how the durability assertion is proved able to fail
   (`tests/sim_loop_test.cpp`). `docs/txn.md` §8 needs amending at the source
   (RC10).
-- **DDL and catalog writes are unlogged** (`docs/txn.md` §7), so a
-  committed `CREATE TABLE` survives a crash only if its page reached the
-  device — the catalog is not recovered (RV3). **Still true and not
-  scheduled.**
+- ~~**DDL and catalog writes are unlogged**~~ — **closed 2026-08-19**
+  (RV3): logged as ordinary records, replayed, and rolled back for
+  losers; the durability entry above carries the details and the named
+  remainder.
   The *other* half of that old entry — "DDL is not transactional,
   `CREATE TABLE` inside a transaction is not rolled back" — is **false
   for `CREATE TABLE` as of 2026-08-16** (`docs/spec-ddl-transactional.md`,

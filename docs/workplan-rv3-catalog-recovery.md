@@ -113,24 +113,65 @@ recommendations carry the next_id carve.
 
 ## Task sketch (firm after ratification)
 
-- **RV3-1** — ratify D1-D3; this file becomes the workplan.
-- **RV3-2** — the write side: `Catalog::SetWal`, log helpers, the ~ten
-  sites emit records + `StampPageLsn`; `AllocateCatalogPage` logs
-  `PAGE_INIT`; the next_id carve logs its overwrite.
-- **RV3-3** — the loser side: transactional DDL writes append undo
-  records (D1a); autocommit DDL joins the implicit transaction (D2a).
-- **RV3-4** — mount: post-redo invalidation (D3a); `ddl_durable=1`;
-  RV3 audit update.
-- **RV3-5** — tests: crash sim with a DDL-bearing workload (the sim
-  workload writes no DDL today — extend it); unit tests per shape
-  (create/drop table/index, committed and crash-lost, across a mount);
-  the DT-series suites stay green.
-- **RV3-6** — critics-developer review; ck-tester (DDL statement cost
-  A/B — the WAL appends are new bytes on a rare path; INSERT/UPDATE
-  paths must not move); docs.
+- **RV3-1** — ratify D1-D3. ☑
+- **RV3-2** — the write side. ☑ — write-then-log funnels
+  (`OverwriteLogged`/`DeleteMarkLogged`/`RetireLogged`, `LogCat*`),
+  `ForFirstRow` passing the page id to its fourteen lambdas, chain
+  growth logging `PAGE_INIT` plus the old tail's image. **Two gaps the
+  crash tests exposed and this series closed**: a relation's root and
+  var-heap root now log `PAGE_INIT` at `CREATE TABLE` (redo refused the
+  first `HEAP_INSERT` naming a page nothing created), and a backfilled
+  index tree travels as **full page images** before the row that
+  publishes it (`LogBuiltTree` — an FPI both creates and fills a page
+  at redo, so no per-entry stream is needed; cost is tree bytes on a
+  statement already O(relation)).
+- **RV3-3** — the loser side. ☑ — the catalog's `DdlUndoHook`, fired
+  inside the write points so the undo record precedes the row record in
+  the log (redo alone must never resurrect a row undo cannot retire —
+  the DML path's order, and the reason a passive written-list could not
+  work); the four DDL handlers wrapped in `BeginWrite`/`FinishDdlStatement`
+  with `EndDdlScopeById` for the implicit transaction; the identity per
+  record is the Keystone word of the payload (DT5's rule). **Found and
+  fixed underneath**: the §5d purge — which D2 made every autocommit
+  DDL reach — kWrite-swept every catalog page even with no mark
+  outstanding, dirtying the whole catalog per DDL statement; a
+  `pending_marks_` gate keeps the sweep off the common path.
+- **RV3-4** — mount. ☑ — post-redo cache drop (D3a);
+  `catalog_recovered=1`, `ddl_durable=1`.
+- **RV3-5** — tests. ☑ — five `Rv3CrashTest` shapes: committed CREATE
+  back by redo alone (pages never flushed); uncommitted CREATE and DROP
+  rolled back at mount after a **hostile page flush** (the kOverwrite
+  undo record carrying the retype's only surviving image); committed
+  DROP stays dropped; committed CREATE INDEX answers probes. The torn-
+  page pair pins the stricter mount contract. The sim workload still
+  writes no DDL — extending it stays open with UP-style ownership.
+- **RV3-6** — docs ☑ (wal.md §11a rewritten, txn.md §7,
+  spec-ddl-transactional §7 closed, known-gaps' two entries struck,
+  CLAUDE.md's WAL/DDL/Keystone rows); review and measurement pending.
+
+## Open remainder, named
+
+- The two **row-codec definition relations** stay unlogged
+  (`sys.pattern_defs` — `stats/pattern_defs.cpp` says so in place — and
+  `sys.assertions`' source rows): their `ChainInsert`/var-heap writes
+  predate the funnels. Registry rows are covered; the definitions
+  survive only to the last checkpoint, as all catalog writes used to.
+- The sim workload writes no DDL, so the crash *loop* never exercises
+  these paths — the five shapes above do, deterministically.
+- **A hot-path cost to price before landing**: the `sys.tables.next_id`
+  bump was among the ten converted overwrite sites, so **every INSERT
+  now logs one extra catalog record** (~90 B). That is what closes K1's
+  unlogged-ceiling half — a stale recovered ceiling over recovered rows
+  would reissue live ids — so it is correctness, not accounting; but the
+  per-INSERT price must be measured, and if it clears the floor the
+  batching lever is the row-id lease (`catalog/row_id_lease.hpp`),
+  which already amortizes carves and would take the bump off the
+  statement path.
 
 ## Not in scope
 
 Per-relation grants themselves (unblocked, not built); catalog *reads*
 under MVCC (unchanged); `DROP TABLE` isolation (§5a's separate gap);
-page reclamation of any kind.
+page reclamation of any kind; wal.md §10's first-write-per-checkpoint
+FPI cadence (whose absence is why a torn catalog page now refuses the
+mount rather than healing).

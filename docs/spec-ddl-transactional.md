@@ -532,16 +532,20 @@ and what a reader carried across a shutdown for the mount to take.
   shipping lands, a peer's index maintenance can meet a deleter it
   cannot see. Not a defect today, and not something to quietly inherit.
 
-## 7. Durability, deferred and named
+## 7. Durability, ~~deferred and named~~ — **landed 2026-08-19**
 
-A committed `CREATE TABLE` survives a crash only when catalog writes are
-WAL-logged and replayed. That is RV3 in `docs/known-gaps.md` and is not
-scheduled here. Until it lands:
-
-- a committed DDL is exactly as durable as any catalog write today —
-  which is to say, it depends on the page reaching the device;
-- the *transactional* properties A-C hold within a running instance,
-  which is what §1 claims and all it claims.
+RV3 built what this section deferred
+(`docs/workplan-rv3-catalog-recovery.md`): catalog writes are WAL-logged
+as the ordinary record types and replayed; every DDL statement runs
+under a real transaction (D2 — autocommit DDL takes the implicit one
+`BeginWrite` opens); a loser's catalog writes carry undo records the
+mount rolls back through, appended *inside* the catalog's write points
+so redo alone can never resurrect what undo cannot retire. A committed
+`CREATE TABLE` whose pages never reached the device comes back by redo;
+a committed `CREATE INDEX`'s backfilled tree travels as full page images
+before the row that publishes it. `SHOW META`: `ddl_durable=1`,
+`catalog_recovered=1`. The paragraphs below stand as the design record
+of why A-C were built first:
 
 This ordering is deliberate. A-C are useful on their own (a failed
 migration script leaves no half-built schema), they are cheap, and they
