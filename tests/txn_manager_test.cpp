@@ -358,6 +358,106 @@ TEST_F(TxnManagerTest, AnEndedButUnreleasedTransactionIsNotInFlight) {
     mgr_->Release(*ended);
 }
 
+// ---- Reader registration (docs/workplan-reader-registration.md) -----------
+
+TEST_F(TxnManagerTest, TheHorizonIsUnboundedWithNoReaders) {
+    EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+}
+
+TEST_F(TxnManagerTest, AnActiveTransactionBoundsTheHorizonAtItsOwnId) {
+    Transaction* txn = Begin();
+    ASSERT_NE(txn, nullptr);
+    // Its view's high-water mark is one past its id, so the binding term is
+    // the id itself - the versions its rollback may still need.
+    EXPECT_EQ(mgr_->ReadHorizon(), txn->id());
+
+    ASSERT_TRUE(mgr_->Commit(*txn, wal::DurabilityClass::kRelaxed).ok());
+    // Ended-but-unreleased already binds nothing: no rollback is coming
+    // and no further statement reads through it.
+    EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+    mgr_->Release(*txn);
+}
+
+TEST_F(TxnManagerTest, ALeasedReaderBoundsTheHorizonUntilItsLeaseDies) {
+    auto view = mgr_->MintReadView(kNoTrxId);
+    ASSERT_TRUE(view.ok());
+    const std::uint64_t bound = view.value().MinVisibleBound();
+
+    auto lease = mgr_->RegisterReader(view.value());
+    ASSERT_TRUE(lease.ok());
+    EXPECT_TRUE(lease.value().held());
+    EXPECT_EQ(mgr_->ReadHorizon(), bound);
+
+    lease.value().Release();
+    EXPECT_FALSE(lease.value().held());
+    EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+    // Idempotent: a second release withdraws nothing twice.
+    lease.value().Release();
+    EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+}
+
+TEST_F(TxnManagerTest, AnInFlightWriterKeepsBindingThroughAViewThatSawIt) {
+    Transaction* writer = Begin();
+    ASSERT_NE(writer, nullptr);
+    const std::uint64_t writer_id = writer->id();
+
+    // An autocommit view minted while the writer runs carries it in its
+    // in-flight set, so the view's bound is the writer's id.
+    auto view = mgr_->MintReadView(kNoTrxId);
+    ASSERT_TRUE(view.ok());
+    auto lease = mgr_->RegisterReader(view.value());
+    ASSERT_TRUE(lease.ok());
+
+    ASSERT_TRUE(mgr_->Commit(*writer, wal::DurabilityClass::kRelaxed).ok());
+    mgr_->Release(*writer);
+
+    // The writer is gone from live_, but the leased view still cannot see
+    // it - the lease is what keeps the horizon honest about that.
+    EXPECT_EQ(mgr_->ReadHorizon(), writer_id);
+    lease.value().Release();
+    EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+}
+
+TEST_F(TxnManagerTest, AMovedLeaseKeepsTheRegistrationAndTheHuskDropsNothing) {
+    auto view = mgr_->MintReadView(kNoTrxId);
+    ASSERT_TRUE(view.ok());
+    const std::uint64_t bound = view.value().MinVisibleBound();
+
+    ReaderLease moved;
+    {
+        auto lease = mgr_->RegisterReader(view.value());
+        ASSERT_TRUE(lease.ok());
+        moved = std::move(lease.value());
+        // The moved-from husk dies here; the registration must survive it.
+    }
+    EXPECT_TRUE(moved.held());
+    EXPECT_EQ(mgr_->ReadHorizon(), bound);
+
+    moved.Release();
+    EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+}
+
+TEST_F(TxnManagerTest, SlotExhaustionIsOutOfSpaceAndAReleaseReopensIt) {
+    auto view = mgr_->MintReadView(kNoTrxId);
+    ASSERT_TRUE(view.ok());
+
+    std::vector<ReaderLease> held;
+    held.reserve(kMaxRegisteredReaders);
+    for (std::size_t i = 0; i < kMaxRegisteredReaders; ++i) {
+        auto lease = mgr_->RegisterReader(view.value());
+        ASSERT_TRUE(lease.ok()) << "slot " << i;
+        held.push_back(std::move(lease.value()));
+    }
+
+    auto refused = mgr_->RegisterReader(view.value());
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kOutOfSpace);
+
+    held.pop_back();
+    auto reopened = mgr_->RegisterReader(view.value());
+    EXPECT_TRUE(reopened.ok());
+}
+
 // ---- Isolation-level parsing ----------------------------------------------
 
 TEST(IsolationLevelTest, ParsesTheSpellingsAConfigFileInvites) {

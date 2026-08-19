@@ -454,4 +454,43 @@ bool TransactionManager::IsInFlight(std::uint64_t trx_id) const noexcept {
     return false;
 }
 
+StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
+    if (reader_free_top_ == 0) {
+        return Status::OutOfSpace("more than " + std::to_string(kMaxRegisteredReaders) +
+                                  " registered readers on this core");
+    }
+    const std::uint64_t bound = view.MinVisibleBound();
+    // 0 is the free-slot sentinel. No mintable view produces it - the
+    // high-water mark is at least kFirstUserTrxId - so a zero bound is a
+    // hand-built view this registry has no slot encoding for.
+    if (bound == 0) {
+        return Status::InvalidArgument(
+            "a read view with a zero visibility bound cannot be registered");
+    }
+    const std::uint16_t slot = reader_free_[--reader_free_top_];
+    reader_slots_[slot] = bound;
+    return ReaderLease(this, slot);
+}
+
+void TransactionManager::UnregisterReader(std::uint32_t slot) noexcept {
+    reader_slots_[slot] = 0;
+    reader_free_[reader_free_top_++] = static_cast<std::uint16_t>(slot);
+}
+
+std::uint64_t TransactionManager::ReadHorizon() const noexcept {
+    std::uint64_t horizon = std::numeric_limits<std::uint64_t>::max();
+    for (const std::unique_ptr<Transaction>& t : live_) {
+        if (!t->active_) continue;
+        // Both terms: the transaction's own versions (its rollback may
+        // still need them) and everything its current view can reach.
+        if (t->id_ < horizon) horizon = t->id_;
+        const std::uint64_t bound = t->view_.MinVisibleBound();
+        if (bound < horizon) horizon = bound;
+    }
+    for (const std::uint64_t bound : reader_slots_) {
+        if (bound != 0 && bound < horizon) horizon = bound;
+    }
+    return horizon;
+}
+
 }  // namespace kds::txn
