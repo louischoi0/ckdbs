@@ -75,6 +75,19 @@ Status UndoLog::LogUndoWrite(std::uint64_t trx_id, PageId page_id, std::uint16_t
     return store_.StampPageLsn(page_id, rec.value());
 }
 
+void UndoLog::ReclaimSettledPages() {
+    if (!horizon_) return;
+    const std::uint64_t horizon = horizon_();
+    // `> 1`: the tail is never taken, whatever its bound - its free space
+    // is what the caller is about to write into.
+    std::size_t settled = 0;
+    while (settled + 1 < pages_.size() && pages_[settled].max_trx_id < horizon) {
+        recycle_.push_back(pages_[settled].page_id);
+        ++settled;
+    }
+    if (settled > 0) pages_.erase(pages_.begin(), pages_.begin() + settled);
+}
+
 StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
     // The current page, whoever last wrote to it. `trx_id` decides nothing
     // about *which* page is used - only what goes in the new page's
@@ -87,7 +100,30 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
         }
     }
 
-    // No page yet, or the current one cannot hold this record. Grow.
+    // No page yet, or the current one cannot hold this record. Grow - and
+    // growth is the purge trigger (D3): reclaim settled pages first, then
+    // prefer a reclaimed page to a new one. Work lands exactly where the
+    // resource is consumed, and a workload writing no undo pays nothing.
+    ReclaimSettledPages();
+
+    if (!recycle_.empty()) {
+        const PageId page_id = recycle_.back();
+        auto bytes = store_.Get(page_id);
+        if (!bytes.ok()) return bytes.status();
+        // The same format-then-log order as the fresh path below, and the
+        // same PAGE_INIT record type: redo replays the page's old records,
+        // then this init wipes them, then the new ones land - the end
+        // state is right in every crash position, and the old records were
+        // unreachable before the wipe by the header's reachability fact.
+        if (Status s = FormatUndoPage(bytes.value().bytes(), trx_id, tail_); !s.ok()) return s;
+        if (Status s = LogPageInit(trx_id, page_id); !s.ok()) return s;
+        recycle_.pop_back();  // popped only on success, like tail_ below
+        ++pages_recycled_;
+        pages_.push_back(TrackedPage{page_id, 0});
+        tail_ = page_id;
+        return page_id;
+    }
+
     auto created = store_.CreateNew();
     if (!created.ok()) return created.status();
     const PageId page_id = created.value().first;
@@ -98,6 +134,7 @@ StatusOr<PageId> UndoLog::TailFor(std::uint64_t trx_id, std::size_t need) {
     // Published only once the page is formatted and its PAGE_INIT is
     // logged: a failure above leaves the log pointing at the page that was
     // working before, never at one recovery has not been told about.
+    pages_.push_back(TrackedPage{page_id, 0});
     tail_ = page_id;
     return page_id;
 }
@@ -115,6 +152,11 @@ StatusOr<std::uint64_t> UndoLog::Append(std::uint64_t trx_id, const UndoRecordFi
 
     auto page_id = TailFor(trx_id, kUndoRecordHeaderSize + image.size());
     if (!page_id.ok()) return page_id.status();
+
+    // The purge bound, raised before the record lands: a failure below
+    // leaves the bound conservatively high, never a record above the
+    // bound. TailFor guarantees the tail is tracked.
+    if (pages_.back().max_trx_id < trx_id) pages_.back().max_trx_id = trx_id;
 
     auto bytes = store_.Get(page_id.value());
     if (!bytes.ok()) return bytes.status();
@@ -169,18 +211,11 @@ Status UndoLog::Walk(std::uint64_t ptr, const std::function<bool(const UndoVersi
 }
 
 StatusOr<std::uint32_t> UndoLog::PageCount() {
-    PageId page_id = tail_;
-    std::uint32_t count = 0;
-    while (page_id != kInvalidPageId) {
-        if (++count > kMaxUndoChainLength) {
-            return Status::Corruption("the undo page chain does not terminate");
-        }
-        auto bytes = store_.GetForRead(page_id);
-        if (!bytes.ok()) return bytes.status();
-        page_id = ReadUndoPageHeader(std::span<const std::byte, kPageSize>(bytes.value().bytes()))
-                      .prev_page_id;
-    }
-    return count;
+    // The in-memory chain, not a device walk: purge leaves a recycled
+    // page's old `prev_page_id` links standing, so a walk from the tail
+    // could revisit a reused page - the header's comment on the field
+    // says the on-disk chain is historical once reuse starts.
+    return LivePages();
 }
 
 }  // namespace kds::txn
