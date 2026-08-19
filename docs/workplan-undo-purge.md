@@ -135,8 +135,28 @@ stays reserved and `nr_records == 0` remains the fast skip.
   list is memory-resident, a previous run's pages leak exactly as they
   always have, and `known-gaps.md` states it. The mount-time rebuild
   (`nr_records` exists to make its scan cheap) is the open remainder.
-- **UP5** — ck-tester: the growth-path cost A/B, and the end-to-end
-  proof that a write-heavy loop's undo footprint plateaus.
+- **UP5** — ck-tester. ☑ **Measured 2026-08-19** (Release, interleaved,
+  `d479f1f` vs base `a0c18cd`; raw JSON in the session scratchpad, no
+  `bench/` file by the one-document rule):
+  - **Per-statement: nothing.** Autocommit pk UPDATE p50 deltas of
+    −0.2/+0.1/+0.1 µs at 200/1k/10k rows against a 0.2–0.5 µs in-run
+    floor; p99 deltas flip sign across sizes, so the growth arm (one
+    reclaim walk + reuse per ~119 statements — exactly p99 territory)
+    resolves to nothing either.
+  - **Footprint: total.** Over 30k UPDATEs, HEAD held `undo_pages_live`
+    at exactly 2 through all 16 samples with `undo_pages_recycled`
+    climbing 1 per ~119, and the data file **byte-for-byte flat** at
+    1,572,864; the base grew +2.0 MiB (256 pages, one per ~117
+    updates, ~67 MiB per million updates, unbounded in loop length).
+    Same growth demand on both sides (252 recycles + 2 ≈ 256 new
+    pages); opposite disposition.
+  - **The caveat that must travel with the plateau number**: with no
+    concurrent readers the steady state is a two-page ping-pong **by
+    construction** — every writer clears the horizon immediately. A
+    long-running reader grows `live` for its lifetime, which is D1's
+    accepted cost, not a defect the run could see.
+  - PostgreSQL twin skipped by decision: the analogue is VACUUM, a
+    different mechanism on a different schedule; no shared definition.
 - **UP6** — docs: `txn.md` §3/§4.1/§9, `undo_log.hpp`'s header,
   `undo_page.hpp`'s field notes, `known-gaps.md`'s reclamation section,
   `CLAUDE.md` row and Open Decisions index. ☑
