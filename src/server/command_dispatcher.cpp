@@ -4132,7 +4132,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // parse, same compile, same executor - and a diagnostic that skipped
     // replay would report descents a real execution does not perform, which
     // is the one thing it must not do.
-    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value());
+    if (analyze) return RunAnalyze(compiled, trail, replay_ptr, instance, snapshot.value().snap);
 
     // ---- AG1: the fold wraps the sink, and nothing else moves -----------
     //
@@ -4143,7 +4143,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // and access statistics hold unchanged" a structural fact rather than a
     // list of things that were remembered.
     if (compiled.aggregated()) {
-        return RunAggregated(compiled, os, trail, replay_ptr, instance, snapshot.value());
+        return RunAggregated(compiled, os, trail, replay_ptr, instance, snapshot.value().snap);
     }
 
     // ---- V09: the emission quota wraps the sink, and nothing else moves --
@@ -4228,7 +4228,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
                        ? storage::VisitControl::kStop
                        : storage::VisitControl::kContinue;
         },
-        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value(), indexes_enabled_);
+        &exec_stats_, budget_, trail, replay_ptr, cabins_, &snapshot.value().snap, indexes_enabled_);
     if (!ran.ok()) {
         // **No trail on the failure path.** A statement that errored part
         // way through touched some tuples and then stopped; a trail
@@ -4424,7 +4424,7 @@ DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& 
     auto snapshot = SnapshotFor(session);
     if (!snapshot.ok()) return {"ERR " + snapshot.status().message(), false};
 
-    DispatchOutcome out = UpdateInner(line, scope, snapshot.value());
+    DispatchOutcome out = UpdateInner(line, scope, snapshot.value().snap);
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
@@ -5020,8 +5020,8 @@ DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Ses
 
 // ---- Snapshots and the write scope ---------------------------------------
 
-StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
-    if (txn_ == nullptr) return txn::Snapshot{};  // sees everything, as before
+StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
+    if (txn_ == nullptr) return txn::LeasedSnapshot{};  // sees everything, as before
 
     if (session.in_explicit_txn()) {
         txn::Transaction* txn = session.transaction();
@@ -5029,11 +5029,17 @@ StatusOr<txn::Snapshot> CommandDispatcher::SnapshotFor(Session& session) {
         // under REPEATABLE READ it is a no-op, and that one branch is the
         // whole difference between the levels.
         if (Status s = EnsureStatementBoundary(session); !s.ok()) return s;
-        return txn_->SnapshotFor(*txn);
+        // No lease: the transaction is its own registration - `live_` is
+        // what ReadHorizon() walks, and it holds this view until the
+        // transaction resolves.
+        txn::LeasedSnapshot out;
+        out.snap = txn_->SnapshotFor(*txn);
+        return out;
     }
 
     // Autocommit: a view over the committed state, owned by no
-    // transaction - the same one every shipped pipeline stage mints.
+    // transaction - the same one every shipped pipeline stage mints, and
+    // leased like theirs, because the statement holding it can park.
     return txn::AutocommitSnapshot(txn_);
 }
 
@@ -5129,7 +5135,7 @@ DispatchOutcome CommandDispatcher::HandleDelete(std::string_view line, Session& 
     auto snapshot = SnapshotFor(session);
     if (!snapshot.ok()) return {ErrorReply(snapshot.status()), false};
 
-    DispatchOutcome out = DeleteInner(line, scope, snapshot.value());
+    DispatchOutcome out = DeleteInner(line, scope, snapshot.value().snap);
 
     const bool failed = out.response.rfind("ERR ", 0) == 0;
     Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();

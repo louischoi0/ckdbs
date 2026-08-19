@@ -452,7 +452,7 @@ private:
     //
     // Returns a snapshot that sees everything when no TransactionManager
     // was given - the pre-MVCC engine, exactly.
-    StatusOr<txn::Snapshot> SnapshotFor(Session& session);
+    StatusOr<txn::LeasedSnapshot> SnapshotFor(Session& session);
 
     // ---- The write scope (section 6's failure atomicity) ----------------
     //

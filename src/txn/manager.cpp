@@ -459,14 +459,14 @@ StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
         return Status::OutOfSpace("more than " + std::to_string(kMaxRegisteredReaders) +
                                   " registered readers on this core");
     }
-    const std::uint64_t bound = view.MinVisibleBound();
-    // 0 is the free-slot sentinel. No mintable view produces it - the
-    // high-water mark is at least kFirstUserTrxId - so a zero bound is a
-    // hand-built view this registry has no slot encoding for.
-    if (bound == 0) {
-        return Status::InvalidArgument(
-            "a read view with a zero visibility bound cannot be registered");
-    }
+    std::uint64_t bound = view.MinVisibleBound();
+    // A core that has never issued a transaction id mints views whose
+    // high-water mark is 0 - a peer's sequence reads an unwritable
+    // superblock - and such a view can see no real-id version at all, so
+    // its bound sits below every real id. Stored as 1 rather than 0
+    // because 0 is the free-slot sentinel, and kAlwaysVisibleTrxId's
+    // versions need no retention anyway.
+    if (bound == 0) bound = 1;
     const std::uint16_t slot = reader_free_[--reader_free_top_];
     reader_slots_[slot] = bound;
     return ReaderLease(this, slot);

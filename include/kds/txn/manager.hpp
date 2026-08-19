@@ -462,6 +462,15 @@ inline void ReaderLease::Release() noexcept {
     mgr_ = nullptr;
 }
 
+// A snapshot plus the registration that keeps a purge honest about it.
+// The snapshot half stays the same POD as ever - copy `snap` freely into
+// whatever the executor wants; what the lease tracks is the *holding*,
+// and it ends with this object. Move-only because the lease is.
+struct LeasedSnapshot {
+    Snapshot snap;
+    ReaderLease lease;
+};
+
 // The view a statement outside any transaction reads at: everything
 // committed on this manager's core, nothing in flight. The free-function
 // sibling of `SnapshotFor(const Transaction&)` above, and it lives here
@@ -469,17 +478,27 @@ inline void ReaderLease::Release() noexcept {
 // dispatcher's autocommit arm and every cross-core pipeline stage), and
 // spelling six lines twice is how the two drift.
 //
-// A null manager answers the default snapshot: every writer visible, no
-// undo log, which is the pre-MVCC engine exactly and what a caller
-// without a manager got before.
-inline StatusOr<Snapshot> AutocommitSnapshot(TransactionManager* manager) {
-    if (manager == nullptr) return Snapshot{};
+// Registered by construction: every autocommit snapshot can be held
+// across a park (a session-side statement awaiting remote batches, a
+// shipped stage between credit grants), which is exactly the reader
+// `live_` cannot name - so the lease rides along here, where no call
+// site can forget it. Transactions need none: `live_` is their record.
+//
+// A null manager answers the default snapshot with an empty lease: every
+// writer visible, no undo log, which is the pre-MVCC engine exactly and
+// what a caller without a manager got before - and nothing to register,
+// because with no manager there is no purge either.
+inline StatusOr<LeasedSnapshot> AutocommitSnapshot(TransactionManager* manager) {
+    if (manager == nullptr) return LeasedSnapshot{};
     auto view = manager->MintReadView(kNoTrxId);
     if (!view.ok()) return view.status();
-    Snapshot snap;
-    snap.view = view.value();
-    snap.undo = &manager->undo();
-    return snap;
+    auto lease = manager->RegisterReader(view.value());
+    if (!lease.ok()) return lease.status();
+    LeasedSnapshot out;
+    out.snap.view = view.value();
+    out.snap.undo = &manager->undo();
+    out.lease = std::move(lease.value());
+    return out;
 }
 
 }  // namespace kds::txn
