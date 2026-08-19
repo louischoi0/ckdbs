@@ -2190,7 +2190,15 @@ standard shapes was not re-run.
   correlated EXISTS were driven by a session scratch harness (statements in
   §9b.1). The task this opens: fold both into `tools/scenario3_library.py`
   and `tools/pg_scenario3_library.py` as first-class phases so the next
-  full-matrix run measures them without ceremony.
+  full-matrix run measures them without ceremony. *(2026-08-19: closed —
+  both drivers now carry `join-no-literal` (k fixed at 16) and
+  `exists-correlated` as standard phases, under the same names and from
+  one set of statement builders. On the ckdbs side both are in the
+  `ANALYZE` block, under `--assert-index-reads`, and `--verify`-checked row
+  for row against a client-side expectation; the twin has no counterpart to
+  any of those three and prints `EXPLAIN` for both instead. The full
+  k-sweep remains a harness shape, and the phases' numbers will appear in
+  future runs, not retroactively here.)*
 
 ## 10. Durability decides the load, and nothing else here
 

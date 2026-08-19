@@ -205,7 +205,7 @@ The twin takes the same flags plus `--synchronous-commit`, and connects with
 ### `scenario3_library.py` — a read workload against a secondary index
 
 A library circulation system: four relations (`users`, `books`,
-`reservations`, `loans`) and ten read shapes, built to ask one narrow
+`reservations`, `loans`) and twelve read shapes, built to ask one narrow
 question — **what does a non-primary-key equality cost, and what can be done
 about it?** KDS answers it three ways, in three different trust classes: a
 `FilterScan` walks the chain, a **Cabin** is authoritative only for values
@@ -243,6 +243,26 @@ sounds: at 200 rows PostgreSQL **declines its own index** and picks a
 descends an index whenever one is declared. A latency table without the plan
 next to it cannot tell "the index was slower" from "the index was not used".
 
+Two of the twelve shapes are the join-family regression cover, folded in
+2026-08-19 from the session harnesses `bench/results-scenario3-library.md`'s
+§7/§9b addenda measured (closing §9b.7's fold-into-the-driver task):
+
+* `join-no-literal` — `users AS u JOIN loans AS l ON l.user_id = u.id WHERE
+  u.id BETWEEN 1 AND 16`: no equality to propagate, so the inner side is
+  IX17's `IndexProbe` under `--index-mode single`, CB12's `CabinProbe` under
+  `--cabin`, and a per-outer-row walk under neither; k is fixed at 16 — the
+  full k-sweep stays a harness job, not a driver phase.
+* `exists-correlated` — `SELECT id FROM users WHERE id BETWEEN 1 AND 20 AND
+  EXISTS (SELECT l.id FROM loans AS l WHERE l.user_id = users.id)`: under
+  `--cabin` the first ops pay CB14's per-key observation charge before the
+  entry set serves, so the phase mean mixes the warm-up in — read p50 for
+  the served cost.
+
+Both are in the `ANALYZE` block and under `--assert-index-reads` (the inner
+step must be an index step in `single`/`all` mode), `--verify` compares both
+replies row for row against a client-side-computed expectation, and the twin
+runs both under the same names.
+
 ```bash
 # the row-set sweep the documentation rules require
 for n in 200 1000 10000; do
@@ -268,7 +288,7 @@ done
 | `--index-when` | `after` | `after` declares the indexes on loaded relations, exercising and timing the `IX09` backfill; `before` declares them empty so the `IX06` write hook maintains them, moving the cost into the load phase |
 | `--cabin` | off | declare a Cabin on `loans.user_id` — the other accelerator for a non-pk equality, and the one with no PostgreSQL twin |
 | `--ops N` | 200 | operations per read shape |
-| `--verify N` | 25 | three invariants, including that a `WHERE user_id = ?` answer equals a client-side-filtered full scan — the check that would catch an index serving an incomplete set |
+| `--verify N` | 25 | five invariants, including that a `WHERE user_id = ?` answer equals a client-side-filtered full scan and that the two join-family replies match a client-side expectation row for row — the checks that would catch an index or Cabin serving an incomplete, wrong or reordered set |
 | `--assert-index-reads` | off | fail if `--index-mode` did not improve the equality shapes |
 | `--suffix`, `--seed`, `--json`, `--echo` | | as the other scenarios |
 
@@ -283,7 +303,7 @@ deliberate counter-case: genre cardinality is fixed at 16, so its match count
 The twin adds `--synchronous-commit` and `--no-analyze`. **`ANALYZE` is on by
 default and is not tuning**: without statistics PostgreSQL may not choose its
 index at all, which would make the baseline a coin toss rather than a
-baseline. The twin also runs `EXPLAIN` on three shapes and prints the plans,
+baseline. The twin also runs `EXPLAIN` on five shapes and prints the plans,
 because a declared index is not necessarily a used one — KDS has no `EXPLAIN`,
 which is itself worth recording. There is **no Cabin equivalent** on the
 PostgreSQL side and the twin does not invent one; a `--cabin` run simply has
