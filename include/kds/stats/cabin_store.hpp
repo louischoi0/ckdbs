@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "kds/base/common.hpp"
@@ -257,6 +258,47 @@ public:
         return sightings >= (declared ? kDeclaredRecordThreshold : kAutoRecordThreshold);
     }
 
+    // Whether Commit could possibly accept a set for `key` today - the
+    // per-cabin value cap, asked **before** a recording walk is paid for.
+    // Without this gate a cap-refused value re-armed on every probe, and
+    // under CB13's completion license each doomed attempt was a full
+    // relation walk (the bug feat-cabin.md §4a's cap paragraph records).
+    // The entry cap cannot be asked here - a set's size is only known
+    // mid-walk - so the recording path bounds that one itself. A false is
+    // never an error: the value simply stays unobserved (rule 2).
+    bool MayObserve(const CabinKey& key) const {
+        if (observed_.contains(key)) return true;  // a heal replaces in place
+        if (entry_capped_.contains(key)) return false;
+        auto info = info_.find(key.cabin_id);
+        return info == info_.end() || info->second.values < limits_.max_values;
+    }
+
+    // Counts a value refused ahead of its walk (MayObserve's value-cap
+    // half) - the same `cap_refusals` Commit counts, so `SHOW CABINS`'
+    // signal does not go dark because the refusal moved earlier.
+    void NoteCapRefusal() { ++stats_.cap_refusals; }
+
+    // A key whose set outgrew the per-value entry cap mid-recording. The
+    // mark is **sticky**: sets only grow under append-only maintenance, so
+    // re-attempting on the next probe was doomed work re-armed forever -
+    // the completion-license bug feat-cabin.md §4a's cap paragraph records.
+    // What clears it: `Unobserve` (the heal path - the world provably
+    // changed) and the sighting table's wholesale reset (the store's one
+    // crude eviction). An UPDATE moving rows *away* from the value can
+    // shrink a future set below the cap with no hook firing for the old
+    // value - the mark outliving that is a performance conservatism §8's
+    // open budget policy owns, never a wrong answer.
+    void NoteEntryCapRefusal(const CabinKey& key) {
+        entry_capped_.insert(key);
+        sightings_.erase(key);
+        ++stats_.cap_refusals;
+    }
+
+    // The per-value entry cap, for the recording path's mid-walk bound.
+    std::size_t max_entries_per_value() const noexcept {
+        return limits_.max_entries_per_value;
+    }
+
     // Marks `key` observed with `entries` as its set. Returns false when the
     // value was **not** observed - a cap was in the way - which is a
     // complete answer and never an error.
@@ -319,6 +361,8 @@ private:
 
     std::unordered_map<CabinKey, std::vector<CabinEntry>, CabinKeyHash> observed_;
     std::unordered_map<CabinKey, std::uint8_t, CabinKeyHash> sightings_;
+    // Keys past the per-value entry cap - see NoteEntryCapRefusal.
+    std::unordered_set<CabinKey, CabinKeyHash> entry_capped_;
     std::unordered_map<std::uint64_t, CabinInfo> info_;
     Stats stats_;
     OptimizerSignals* signals_ = nullptr;

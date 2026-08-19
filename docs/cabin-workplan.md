@@ -324,3 +324,15 @@ page-and-slot for EXPLICIT, per heap-and-tuple.md §4.1 (IX8a's rule, key
 modes respected; the unconditional pk sort was itself a reordering on
 EXPLICIT, caught in review). The §4a join queries and the two focused
 pins in `tests/cabin_contract_test.cpp` are what caught it and hold it.
+
+**CB13 — the correlated EXISTS converges — built 2026-08-19.** Spec §4a's
+closed paragraph. `ChainRunner::RecordThroughStops()`, set only by
+`EvaluateSubChain` on the runner it builds: in a sub-chain every stop is
+the sub-chain's own short-circuit (V09 refuses LIMIT at subquery depth),
+so a walk carrying a live cabin recording runs on through the stop -
+`AcceptTupleAt` short-circuits to the recording block once stopped, so
+nothing emits twice - and `WalkAndRecord` commits the whole set. A
+top-level runner never sets the mode, which is what keeps the quota's
+bounded-work property (pagination_exec_test) intact.
+`ACorrelatedExistsConvergesToObservedSets` pins convergence, the whole-set
+commit, and reply identity; it fails without the mode.

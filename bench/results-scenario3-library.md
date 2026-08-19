@@ -673,6 +673,10 @@ box, not a path.
 
 ### 7b.4 The correlated EXISTS — the recorded limitation, measured
 
+*(2026-08-19, later the same day: CB13 — `fa1f320` — closes this
+limitation; §7c measures the convergence. This section stands as the BASE
+side of that A/B and as the record of the pre-CB13 engine.)*
+
 `docs/feat-cabin.md` §4a records that a correlated EXISTS over a cabined
 column **re-observes without ever recording** when every probed outer key
 has a qualifying match: the stopping sink halts the inner walk at its first
@@ -812,10 +816,339 @@ never-repeating-key distribution on an unindexed column remains the
 uncovered case**, and it is a `CABIN AUTO` policy question
 (`docs/feat-cabin.md` §11), not an executor one. Also unchanged: the
 EXISTS non-convergence (§7b.4 above, recorded in §4a with the reason the
-narrow fix is wrong); the `correlated_scans` counter blind spot (§4a: a
-still-quadratic correlated CabinProbe reports zero); everything §7a.7
-lists as not re-measured; and the rest of this file, which describes
-`9f762a3`.
+narrow fix is wrong) *(closed later the same day by CB13 — §7c measures
+it)*; the `correlated_scans` counter blind spot (§4a: a still-quadratic
+correlated CabinProbe reports zero); everything §7a.7 lists as not
+re-measured; and the rest of this file, which describes `9f762a3`.
+
+## 7c. Addendum, 2026-08-19 — the correlated EXISTS converges: sub-chain mode commits whole sets, and the caps bound the license
+
+§7b.4 measured the limitation `docs/feat-cabin.md` §4a recorded: a
+correlated EXISTS over a cabined column re-observed forever, because the
+stopping sink halted every recording walk at its first match and a partial
+walk may never commit a set (C1). **CB13** (`fa1f320`, §4a's closed
+paragraph) removes the limitation without touching C1: inside a **sub-chain**
+every stop is the sub-chain's own short-circuit — V09 refuses `LIMIT` at
+subquery depth, so no stop there can be a quota — and a walk carrying a
+live recording therefore runs on *through* the stop, visiting the remaining
+rows for the recording block alone, and commits a whole set. Top-level
+runners never get the mode, which is what keeps the quota's bounded-work
+property. This addendum measures CB13 by interleaved A/B, BASE `82ff9b7`
+(CB12, §7b's engine) against NEW `fa1f320`, eight cells at
+`--index-mode none --cabin`, 10,000 loans. CB13's first candidate carried
+a per-row cost §7c.5 records; the fix was amended into the commit before
+it landed, and this run measures the commit as landed.
+
+**The answers: the correlated EXISTS now converges — one observation-charge
+execution at 6.4–9.3 ms, then a steady state of ~74 µs against BASE's flat
+~979 µs, a 13.1× steady-state win with byte-identical replies; the
+observation charge no longer bills the statement's row budget, and the caps
+bound what the license can spend. The cost question §7c.5 owns closed the
+other way at the landed commit: CB13's first candidate taxed every
+walk-heavy shape a resolvable +2.9–4.0% (~2 ns per examined row), the
+fix moved the completion exit inside the recording block and made the row
+charge unconditional again, and at `fa1f320` all ten driver shapes read
+inside their replicate floors. CB12's headline is untouched: the warm
+no-literal join serves at 67–68 µs on both binaries.**
+
+### 7c.1 The A/B run
+
+| | |
+|---|---|
+| executed | **2026-08-19 05:18:48 → 05:38:52 UTC**, 8 ckdbs cells, alternating BASE, NEW ×3, then a fourth pair to pin two machine-mode replicates; replay checks by 05:41 UTC. Supersedes (rule 1a) the same morning's 6-cell sitting (04:54–04:59 UTC) against CB13's pre-amend candidate, whose one divergent finding §7c.5 records |
+| branch / worktree | `worktree-enhence-join-perf`, in the worktree `enhence-join-perf` |
+| commit measured | **`fa1f320`** (CB13 as landed, the §7c.5 fix amended in), recorded by every cell, `dirty: false` |
+| BASE binary | a **copy**, `sha256 859ff728df5cadc5…`, built from a temporary worktree at **`82ff9b7`** (removed after) at 04:51 UTC, sha re-verified before this run — **byte-identical to §7b's NEW binary**, so §7b's tables chain directly to this run's BASE column |
+| NEW binary | a **copy**, `sha256 93a35d33efdf64b9…`, from this worktree's `build-release/kds_server`, source mtime 05:10:56 — 25 s *before* `fa1f320` was committed at 05:11:21; a `cmake --build` at 05:12 recompiled nothing and left the hash unchanged, so the copy is HEAD's sources |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, **`KDS_WITH_TLS=OFF`** both sides |
+| device | ext4 on `/dev/root` (`df -T`); data files under `$HOME/bench-s3-cb13ab/db/`, WAL under `$HOME/bench-s3-cb13ab/wal/<cell>/`, binary copies under `$HOME/bench-s3-cb13ab/bin/` |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, port 15499. One server and one **fresh data file** per cell, started from the run's own copy |
+| driver | `tools/scenario3_library.py --suffix s3 --loans 10000 --index-mode none --cabin --ops 200 --verify 25`, seed 1 — §7b's configuration exactly |
+| the measured statements | driven against each cell's already-loaded server by session scratch harnesses (statements below, not checked in — §9b.7's fold-into-the-driver task now covers them): the correlated EXISTS, **10 timed executions in a row** plus a closing `ANALYZE` (the convergence series), then the §7b k-sweep once, 50 sampled ops per k (the CB12 no-regression check) |
+| contention control | every cell gated on `bench/wait_quiet.sh` (loadavg 0.18–0.68 at each start); `pgrep -c cc1plus` 0 before and after every cell. **All 8 cells passed on the first attempt; none discarded.** Three replicates ran in a shifted machine mode and are kept and named: `base-1` and `new-4` whole-cell fast, `new-3`'s loans phases ~3–20% high |
+| correctness | 8 × 21,004 driver ops, 0 errors, `verify_problems` empty in all 8; every EXISTS execution's reply equal to its cell's first, all 80 executions; the closing `ANALYZE` counters identical across all four cells per binary. After the run, both cell-1 data files were re-mounted with their own binaries: the EXISTS reply (20 rows) and the k=16 join reply (79 rows) are **byte-identical** between BASE's walk and NEW's serve. The full Debug suite is 2384/2384 green at `fa1f320` from the CB13 build session; it was not re-run in this measurement session |
+
+The measured statement, verbatim (every id 1…20 has at least one loan, so
+on the pre-CB13 engine no probed key can ever record):
+
+```
+SELECT id FROM users_s3 WHERE id BETWEEN 1 AND 20 AND EXISTS
+  (SELECT l.id FROM loans_s3 AS l WHERE l.user_id = users_s3.id)
+```
+
+**One size, deliberately, again.** As in §7b.1, this addendum runs at
+10,000 loans only; the swept axis is the execution count. Convergence is a
+per-key property — at 200 or 1,000 loans the same series would differ only
+in the size of the observation charge, whose proportionality to the
+relation is §9b's measured table (the walk at 12.1 / 53.6 / 527 µs per
+outer row at 200 / 1,000 / 10,000) — and the steady state's independence
+of relation size is the Cabin serve's, asserted from the structure as in
+§7b.1.
+
+### 7c.2 The plan, before and after
+
+The closing `ANALYZE` of each series, identical across all four cells per
+binary (seed 1). BASE (`82ff9b7`), the 10th execution — six keys inherited
+from the driver's shapes serve, the other fourteen walk to first match and
+bank nothing, forever:
+
+```
+step 0 Range users_s3 opens=1 examined=32 matched=20 sel=62% pages=2 range_stopped_early=1
+step 1 CabinProbe loans_s3 AS l opens=20 examined=15248 matched=20 sel=0% pages=173
+       sub_runs=20 cabin_hits=6 cabin_misses=14 cabin_entries=32 hint_hits=32
+```
+
+NEW (`fa1f320`), the 10th execution — every key serves, the short-circuit
+landing on each set's first entry:
+
+```
+step 0 Range users_s3 opens=1 examined=32 matched=20 sel=62% pages=2 range_stopped_early=1
+step 1 CabinProbe loans_s3 AS l opens=20 examined=20 matched=20 sel=100% pages=117
+       sub_runs=20 cabin_hits=20 cabin_entries=97 hint_hits=97
+```
+
+15,248 inner rows per execution against 20. `cabin_entries` 32 → 97 is the
+fix visible in the store: the fourteen keys the EXISTS could never commit
+on BASE hold their ~4.6-row sets on NEW (65 entries committed by
+execution 1).
+
+### 7c.3 The convergence series, BASE against NEW
+
+Per-execution latency in µs, all eight cells; every reply equal to its
+cell's first:
+
+| exec | base-1 | base-2 | base-3 | base-4 | new-1 | new-2 | new-3 | new-4 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1,109.8 | 1,061.7 | 1,192.4 | 1,060.0 | **6,408.5** | **6,461.4** | **7,235.0** | **9,324.8** |
+| 2 | 988.4 | 970.5 | 976.6 | 967.3 | 99.2 | 103.4 | 106.6 | 104.8 |
+| 3 | 968.0 | 1,126.0 | 967.1 | 967.7 | 92.6 | 82.7 | 99.3 | 74.6 |
+| 4 | 972.4 | 958.8 | 965.7 | 951.1 | 77.1 | 76.7 | 81.4 | 81.4 |
+| 5 | 971.5 | 959.5 | 964.8 | 957.5 | 74.9 | 73.7 | 78.0 | 67.8 |
+| 6 | 970.6 | 1,136.4 | 962.1 | 964.6 | 73.7 | 73.9 | 76.1 | 65.7 |
+| 7 | 959.9 | 959.5 | 963.7 | 955.0 | 73.1 | 72.6 | 74.2 | 65.0 |
+| 8 | 951.6 | 960.0 | 948.4 | 956.1 | 73.3 | 73.0 | 74.4 | 63.2 |
+| 9 | 949.7 | 1,124.3 | 967.2 | 959.9 | 71.9 | 72.8 | 74.3 | 65.3 |
+| 10 | 1,024.3 | 961.6 | 968.8 | 964.2 | 71.9 | 72.6 | 74.6 | 62.6 |
+
+This is a convergence series, not a distribution — ten ordered executions
+per cell is the unit of evidence, so no percentiles are tabled over it.
+The steady state (executions 3–10, mean; ≈stmts/s derived as 1e6/mean,
+single serial connection — the harness reports latency, so the throughput
+is derived, per this file's matrix rule):
+
+| | BASE (c1 / c2 / c3 / c4) | NEW (c1 / c2 / c3 / c4) |
+|---|---:|---:|
+| steady mean µs | 971.0 / 1,023.3 / 963.5 / 959.5 | 76.1 / 74.8 / 79.0 / 68.2 |
+| pooled mean µs | 979.3 | 74.5 |
+| ≈stmts/s (derived) | 1,021 | 13,423 |
+
+**Steady-state ratio: 13.1× pooled, 12.2–14.1× per cell.** BASE is flat —
+execution 10 is statistically execution 2, and the counters say why
+(`cabin_misses=14` on every execution, `cabin_recorded` never appears);
+base-2 alone shows a periodic ~165 µs bump on executions 3/6/9, a machine
+mode, not a path. NEW pays execution 1, takes one intermediate execution
+(~99–107 µs — the first serve of the fresh sets; the residue over steady
+is a single ~25 µs step, present in all four cells, unattributed beyond
+first-serve hint and page-cache warming), and is steady from execution 3
+at ~74 µs. Cells 1–3 replicate within 5.6%; new-4 runs its whole cell
+fast (68.2 µs steady, and its k-sweep in §7c.6 shows the same mode), so
+the spread across all four is 15.8% — modes, not the path, since every
+cell's counters are identical. The NEW floor of the statement is the fixed
+part: ~42 µs of round trip plus the 32-row outer range (§7b.3's
+intercept), plus 20 serves.
+
+### 7c.4 The observation charge, and who pays it
+
+Execution 1 on NEW costs 6,408–9,325 µs — **14 recording walks of the
+whole relation**, ~460–670 µs per newly observed key (the spread is
+new-4's one high draw; its steady state is the run's fastest), run
+*through* each sub-chain's stop: ~140,000 inner rows visited against
+BASE's 15,248, the difference (~125,000 rows) being completion rows the
+license alone visits. It is §7b.3's observation-charge account with the
+sign §4a wanted: per key, ~500 µs once against ~65 µs saved on every
+subsequent execution (BASE's short-circuit walks ~1,089 rows per
+unobserved key on average), so this statement repays its own charge
+inside six to ten repetitions (per cell: 5.9 / 5.7 / 6.8 / 9.3) — and a
+*join* probing the same keys repays it faster still, since §7b's shape
+saves a full ~535 µs walk per key per statement. The charge is priced at
+the walk it licenses, not at the short-circuit it replaces.
+
+**Completion rows do not charge the statement's row budget.** The rows a
+licensed walk visits past the stop are the Cabin's work, not the
+statement's answer: charging them made the cabined side of the review's
+reproduction answer `ResourceExhausted` where the cabin-free side answered
+rows — an accelerator changing a result, which `docs/feat-cabin.md` §1
+forbids. The uncharged work is bounded per key: a commitable set completes
+once ever, and the caps stop the doomed forms before they walk.
+
+The caps bound the license on both sides: a value the per-cabin value cap
+could never admit is refused by `MayObserve` *before* a walk is paid for,
+counted in `cap_refusals`. A set that outgrows the per-value entry cap
+mid-walk revokes the license there — the walk ends at the next stop, the
+commit guard refuses the partial set, and the key is marked sticky so an
+append-only set that can only grow is never re-attempted (`Unobserve` and
+the sighting table's reset are the clears).
+
+### 7c.5 The candidate's per-walk tax — found, fixed by ordering, re-measured to the floor *(amended 2026-08-19)*
+
+The expectation going in was §7b.5's: no driver shape moves outside its
+floor, because the driver's shapes are literal probes and scans on paths
+CB13 "does not touch". **The first candidate broke that expectation, and
+the fix restored it before the commit landed.** This section records both
+halves, because the finding is what the landed ordering is *for*.
+
+**The finding (2026-08-19, morning, against the pre-amend candidate).**
+Six shapes resolved outside their floors — exactly the six whose measured
+statement walks the 10,000-row `loans` relation — at +2.9–4.0%, a
+consistent **1.8–2.4 ns per examined row** (+17 to +24 µs over 10,000
+rows). The uncabined `overdue`, a plain `FilterScan` with no Cabin on
+either column, read +2.9% against a 0.8% floor: the walk loop itself, not
+the Cabin arm. The shift was a body shift — p0 through p95 moving
+together — which is what a per-row cost looks like.
+
+**The cause.** The candidate exempted completion rows from the statement's
+row budget by *branching before the charge*: `ChargeRow` in
+`AcceptTupleAt` sat behind an `if (!stopped_)` test on the generic
+per-examined-row path. Every walking statement in the engine paid that
+predicate on every row, cabined or not, to buy an exemption only a
+licensed completion walk ever uses.
+
+**The fix, an ordering and nothing more.** The completion exit moved
+*inside* the `recording_here` block — sound because `stopped_` can only be
+true in `AcceptTupleAt` while this step's own recording is live: the walk
+visitor and both phase-2 loops gate on `stopped_` otherwise, and a stopped
+recording walk never descends, so no other step's `AcceptTupleAt` runs at
+all. `ChargeRow` sits below that exit, unconditional again on the plain
+walk. Completion rows stay uncharged (the exit still precedes the charge),
+the EXISTS convergence semantics are untouched, and the fix was amended
+into the CB13 commit — `fa1f320` is the landed form, and the full Debug
+suite is 2384/2384 green on it.
+
+**The re-measurement, this run's eight cells.** p50 µs over four
+replicates per binary, delta of means against the widest within-binary
+replicate spread:
+
+| shape | BASE p50 ×4 | NEW p50 ×4 | Δ% | BASE floor | NEW floor | outside? |
+|---|---:|---:|---:|---:|---:|---|
+| pk-user | 27.7/37.6/38.4/37.5 | 37.7/37.4/38.9/38.1 | +7.7% | 38.6% | 4.0% | no |
+| loans-by-user | 595.8/599.1/597.2/597.1 | 603.7/596.8/732.9/601.1 | +6.1% | 0.6% | 22.8% | no |
+| loans-by-book | 560.2/564.2/560.5/564.0 | 564.5/564.0/610.0/564.8 | +2.4% | 0.7% | 8.2% | no |
+| resv-by-user | 295.9/296.6/346.1/300.0 | 297.2/297.2/314.3/296.9 | −2.7% | 17.0% | 5.9% | no |
+| books-by-author | 146.9/156.4/156.9/162.4 | 156.7/158.2/159.6/157.1 | +1.4% | 10.6% | 1.9% | no |
+| books-by-genre | 168.3/176.5/176.2/183.1 | 176.1/177.7/181.9/178.9 | +1.5% | 8.8% | 3.3% | no |
+| loans-by-daterange | 708.2/714.9/708.0/714.8 | 707.3/708.1/732.1/712.1 | +0.5% | 1.0% | 3.5% | no |
+| overdue | 772.8/772.2/767.0/763.3 | 781.6/773.8/778.0/770.4 | +0.9% | 1.2% | 1.5% | no |
+| join-loan-user | 603.7/599.4/602.9/604.5 | 608.4/600.7/622.8/606.5 | +1.2% | 0.9% | 3.7% | no |
+| count-by-user | 603.2/587.8/597.0/591.0 | 590.5/597.1/596.6/601.3 | +0.3% | 2.6% | 1.8% | no |
+
+**All ten shapes read inside their floors, the six walk-heavy ones
+included.** Two rows need their floors explained rather than trusted:
+`loans-by-user` and `loans-by-book` carry a NEW floor inflated by new-3,
+whose loans phases ran ~3–20% high whole-phase (the recurring
+single-replicate machine mode §7a.4 and §7c.3 both see; its `overdue` and
+`count-by-user` are normal, and pair 4 was added to pin it). Excluding
+that one replicate, the loans rows read **+0.5% and +0.4% against
+0.6–1.2% floors** — the candidate's +4.0%/+3.2% on the same rows is gone,
+not hidden under a wide floor. The tightest witnesses need no exclusion:
+`overdue` +0.9% (floors 1.2/1.5%), `loans-by-daterange` +0.5% (1.0/3.5%),
+`count-by-user` +0.3% (2.6/1.8%). `overdue`'s paired per-cell deltas are
+consistently positive (+1.6 to +11.0 µs), so a residual of order 0.5 ns
+per examined row may survive the fix — but at 0.9% under a 1.2% floor it
+does not resolve, and per this file's rules it is not claimed. The full
+shape of the two heaviest rows, since a delta table hides it (ops = 200
+per cell per shape):
+
+| cell | shape | p0 | p25 | p50 | p95 | p99 |
+|---|---|---:|---:|---:|---:|---:|
+| base-1/2/3/4 | overdue | 684.7/688.1/688.6/680.8 | 759.8/760.6/756.9/753.8 | 772.8/772.2/767.0/763.3 | 846.6/794.9/788.1/787.2 | 1,050.8/1,047.3/804.4/1,179.7 |
+| new-1/2/3/4 | overdue | 677.5/691.6/694.2/684.1 | 767.9/760.2/763.3/759.8 | 781.6/773.8/778.0/770.4 | 809.3/791.0/801.2/804.1 | 819.3/817.1/897.1/1,385.5 |
+| base-1/2/3/4 | loans-by-user | 33.9/43.1/42.8/39.8 | 587.1/590.1/589.8/590.1 | 595.8/599.1/597.2/597.1 | 624.4/665.7/613.5/626.3 | 1,200.3/963.4/659.7/668.7 |
+| new-1/2/3/4 | loans-by-user | 42.5/41.9/44.1/41.5 | 595.4/588.7/724.4/594.6 | 603.7/596.8/732.9/601.1 | 626.8/616.5/778.1/623.3 | 668.0/874.4/907.8/668.1 |
+
+new-3's p25/p50/p95 move together at ~+130 µs while its p0 and its other
+shapes do not — the whole body of one replicate shifted, which is what a
+machine mode looks like; the candidate's tax was a +15–25 µs body shift
+*in every replicate*, and no replicate of this run shows that signature.
+The load phase (19,000 inserts) reads +0.3% at 11–13% floors — nothing.
+Wait accounting for the walk shapes is §3's unchanged: single-connection
+reads, no commit or lock wait in the unit; any delta is server CPU inside
+the walk.
+
+**The trade, restated for the landed commit: convergence for the
+correlated shapes costs the plain walk nothing this run can resolve.**
+The candidate's ~2 ns/row tax was real, measured, and is the reason the
+completion exit lives where it does; the hoisting question the earlier
+version of this section raised is answered by the ordering itself.
+
+### 7c.6 The CB12 headline stands, and inheritance now flows both ways
+
+The §7b k-sweep, run once per cell after the EXISTS series. Warm k=16,
+all eight cells, 50 ops each:
+
+| cell | first µs | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| base-1 | 2,452.5 | 54.0 | 55.2 | 55.9 | 79.3 | 145.2 |
+| base-2 | 2,426.0 | 56.2 | 58.7 | 65.3 | 85.3 | 742.9 |
+| base-3 | 2,363.7 | 63.4 | 67.3 | 68.4 | 79.7 | 83.1 |
+| base-4 | 2,345.5 | 62.7 | 67.1 | 68.1 | 78.4 | 95.4 |
+| new-1 | 79.3 | 63.4 | 66.9 | 67.6 | 76.9 | 83.5 |
+| new-2 | 78.4 | 64.7 | 66.4 | 67.2 | 77.1 | 80.4 |
+| new-3 | 85.8 | 69.2 | 70.9 | 71.6 | 82.0 | 85.1 |
+| new-4 | 105.0 | 56.8 | 58.2 | 59.1 | 79.5 | 86.0 |
+
+Warm p50 means 64.4 (BASE) against 66.4 (NEW): **+3.0% inside 21–22%
+floors — §7b's 67 µs serve and its 127× headline stand.** The wide floors
+are the two whole-cell fast modes this run's stamp names — base-1 and
+new-4 ran their entire sweeps ~15% fast at every k (base-1's k=1 p50 is
+34.9 against 44–46 on every other cell, new-4's 35.5 the same), one per
+binary, so they cancel in the mean; the four mode-free cells cluster at
+65.3–68.4 (BASE) against 67.2–71.6 (NEW). The marginal cost per outer
+row (k=8→16 slope of p50) is 1.53–1.86 µs on BASE against 1.56–1.95 µs
+on NEW — the same number within a spread the modes set. The serve does
+not walk, so no §7c.5 ordering can reach it. The *first* statements are
+the standing evidence: BASE's k=8 and k=16 firsts pay ~2.3–2.5 ms of
+top-level recording walks, §7b.3's observation charge reproduced — NEW's
+firsts are already warm (53.8–105.1 µs at every k), because the EXISTS
+ran first and committed keys 1–20. §7b.4 measured inheritance flowing one
+way only (the EXISTS served keys other statements observed, earning
+nothing itself); CB13 closes the asymmetry — a sub-chain's own walks now
+stock the store for the join that follows.
+
+### 7c.7 Versus PostgreSQL — unchanged, and still no twin
+
+§7b.7's position stands whole: no PostgreSQL structure answers a
+value-observed authoritative store, so the Cabin column has no twin and
+none was invented; PostgreSQL's answer to this statement shape is an
+index (a hashed semi-join over it), measured against ckdbs-with-index in
+§9b. The named task is also unchanged: PostgreSQL at `--index-mode none`
+on the correlated shapes — its seq-scan-per-outer-row against BASE's walk
+— is the cell that would complete the picture, and the twin driver
+supports the mode.
+
+### 7c.8 What §7c changes, and what it does not
+
+**Changed: the last non-converging cabined shape converges, and C1 was
+never bent to get it.** The commit guard still refuses every partial set;
+what changed is that a sub-chain's licensed walk no longer *produces*
+partial sets, because it finishes the relation before the guard asks. The
+EXISTS paragraph of §7b.4, and §7b.8's "EXISTS non-convergence" line,
+describe the BASE side of this table and are superseded as descriptions
+of HEAD. Nearly changed, and caught: CB13's first candidate priced every
+walking statement ~2 ns per examined row — the first CB-series change to
+resolve above this workload's floor — and §7c.5 records the finding, the
+one-ordering fix amended into the commit, and the re-measurement that
+puts every walk shape back inside its floor at `fa1f320`.
+
+**Not changed:** §8's per-key economics — the observation is still paid,
+now once even for a stopping shape, and the never-repeating-key
+distribution remains the uncovered case (`CABIN AUTO`, §11); the
+`correlated_scans` blind spot (§4a — a still-quadratic correlated
+CabinProbe still reports zero, though fewer shapes now stay quadratic);
+the serve path and its §7b numbers; the indexed answers (§9a/§9b); the
+sticky mark is per-store-lifetime with `Unobserve` and the sighting reset
+as the only clears, so a key refused at the entry cap stays refused until
+policy says otherwise — a §11 question, not measured here; and the rest
+of this file, which describes `9f762a3`.
 
 ## 8. Composite is the only structure that helps `overdue`
 

@@ -108,6 +108,9 @@ std::uint8_t CabinStore::Observe(const CabinKey& key) {
         // restarts counting and nothing else, so the crudest policy is the
         // right one until something measures otherwise.
         sightings_.clear();
+        // The entry-cap marks ride the same crude eviction: a wholesale
+        // reset is the store's one "the world may have changed" signal.
+        entry_capped_.clear();
         ++stats_.sighting_clears;
     }
     std::uint8_t& count = sightings_[key];
@@ -160,7 +163,10 @@ void CabinStore::Unobserve(const CabinKey& key) {
     // The sighting count goes too. A value that was just un-observed for a
     // failure should have to earn its way back through the same n=2 the
     // first recording paid, rather than re-recording on the next execution.
+    // The entry-cap mark goes with it: the heal path is the one signal the
+    // world changed under this key.
     sightings_.erase(key);
+    entry_capped_.erase(key);
     ++stats_.unobserved;
 }
 
