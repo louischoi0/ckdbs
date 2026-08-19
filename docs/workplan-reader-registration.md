@@ -9,9 +9,36 @@ One decision moved during the build, recorded where the next reader
 trips on it: D2's "no mintable view produces a zero bound" was wrong on
 a **peer core**, whose id sequence has never issued an id and whose
 views therefore carry a zero high-water mark — semantically "sees no
-real-id version at all". `RegisterReader` stores such a view at bound 1
-(below every real id, conservative and exact) rather than refusing the
-statement, which is what the first full-suite run caught.
+real-id version at all". The first full-suite run caught it as a refused
+statement; the final shape (post-review, D2) stores the zero bound
+as-is under an occupancy bitmap, no sentinel and no clamp.
+
+**The review round** (`critics-developer`, applied on top of RR5):
+- **B1, the real bug**: a peer-core teardown use-after-free — RR3 put
+  the first non-trivial destructor (`ReaderLease`) onto coroutine
+  frames the scheduler destroys *after* the manager; fixed by
+  `~CoreRuntime` dropping the scheduler first. D2 above carries it.
+- **B3, a false comment**: three sites claimed the dispatcher's
+  statement lease is held across the remote-read wait; it is not (the
+  readers table row now tells the truth).
+- **S1, rejected by decision**: the review recommended deleting the
+  dispatcher-side lease as provably unnecessary today. Kept, because
+  P4d-3's page-boundary awaits are the named watch item that turns
+  these handler locals into across-park holders, and re-adding the
+  lease then is exactly the disciplinary step D3 exists to remove —
+  the reviewer's own counterargument (it dies at the `pending_remote`
+  return) applies to the shipped-read path, not to a suspension inside
+  local execution. Revisit if ck-tester prices the register/release
+  above noise.
+- **S2/S3/S4 applied**: the bitmap registry; `ReadHorizon` drops the
+  redundant own-id term (the view's bound folds it in by
+  construction); the purge's proof now lives once, in §5d.
+- **R1/R2 applied**: the purge is gated to the system core by name at
+  the call site, and runs *before* `InvalidateAfterCompensation` so the
+  one flush carries the retirements.
+- **R3, accepted and recorded**: past 256 concurrently-leased readers,
+  an autocommit statement fails `OutOfSpace` — the same surfaced-bound
+  policy as `kMaxTrackedLiveTxns`, new on the read path.
 
 ## Why
 
@@ -44,7 +71,7 @@ Every path that mints a read view today, and whether it must register:
 | Reader | Where minted | Lifetime | Registers? |
 |---|---|---|---|
 | Explicit transaction | `TransactionManager::Begin` / `StartStatement` | until Commit/Abort | **already tracked** — `live_` holds it; the horizon walks `live_` |
-| Autocommit statement snapshot | `CommandDispatcher::SnapshotFor` → `txn::AutocommitSnapshot` | the statement, **including parks** (a session-side statement awaiting remote batches) | **yes** — via the lease `AutocommitSnapshot` now returns |
+| Autocommit statement snapshot | `CommandDispatcher::SnapshotFor` → `txn::AutocommitSnapshot` | the statement's synchronous span — **not** across a shipped read's wait: the park happens one frame above (`DispatchAsync`'s `WaitUntil`), after the handler returned `pending_remote` and this object died with its frame | **yes**, via the lease `AutocommitSnapshot` returns — today insurance, not load-bearing (the review's B3): it becomes load-bearing the day P4d-3 puts a suspension point inside local execution, where these handler locals genuinely span the park |
 | Cross-core pipeline stage | `RemoteStepService` (serve / producer / consumer), `txn::AutocommitSnapshot(txns_)` | the stage, held across every credit/boundary park | **yes** — same lease, on the stage's own core's manager |
 | FK / assertion-build check view | `MintReadView(kNoTrxId)` at check time | one synchronous span | **no** — latest-state semantics; `CheckVisibility` never walks the undo chain and never reads a superseded version |
 | DDL-open name-resolution view | `CommandDispatcher::ViewFor` | one synchronous resolution | **no** — synchronous on the core's one thread; the purge runs only at a dispatch seam, so no such view can be live when it runs |
@@ -76,12 +103,18 @@ oracle (`docs/workplan-ddl-transactional.md`'s DT9 scope note).
 
 **D2 — a lease, not a flag.** `RegisterReader(view)` returns a move-only
 RAII `ReaderLease`; destruction unregisters. Slots are a fixed array
-(`kMaxRegisteredReaders = 256`) with an O(1) free-list, value 0 = free —
-no allocation on the statement front door, per `read_view.hpp`'s POD
-rule. Exhaustion is `OutOfSpace`, the same surfaced-bound policy as
-`kMaxTrackedLiveTxns`. The manager must outlive every lease, which the
-ownership order already guarantees (core runtime owns the manager;
-dispatcher and stages die first).
+(`kMaxRegisteredReaders = 256`) beside a four-word occupancy bitmap — no
+allocation on the statement front door, per `read_view.hpp`'s POD rule.
+(First built as a free-list stack with value-0-as-free, which forced a
+clamp for the peer-core zero-bound view; the review's S2 replaced it —
+the bitmap deletes the sentinel, the clamp, the constructor loop and 512
+bytes at the same O(1).) Exhaustion is `OutOfSpace`, the same
+surfaced-bound policy as `kMaxTrackedLiveTxns`. The manager must outlive
+every lease — the ownership order guarantees it, and the review's B1
+found the one place it silently did not: `CoreRuntime` declares the
+scheduler first, so reverse-order destruction killed the manager before
+the parked coroutine frames whose leases release into it; a one-line
+`~CoreRuntime` dropping the scheduler first restores the order.
 
 **D3 — registration is structural, not disciplinary.**
 `txn::AutocommitSnapshot` changes its return type to a move-only

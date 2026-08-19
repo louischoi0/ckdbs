@@ -148,6 +148,19 @@ public:
     CoreRuntime(const CoreRuntime&) = delete;
     CoreRuntime& operator=(const CoreRuntime&) = delete;
 
+    // **The reactor is dropped first, ahead of everything it borrows.**
+    // `scheduler_` is declared first because every member below borrows it,
+    // which by the reverse-order rule would destroy it *last* - and the
+    // scheduler owns coroutine frames (`sched::CoroTask` destroys a
+    // suspended one), whose locals reach back into those members. A
+    // pipeline stage parked at a credit gate when `kShutdown` arrives holds
+    // a `txn::ReaderLease` on its frame, and that lease's destructor calls
+    // `txn_manager_->UnregisterReader()` - on a manager the reverse order
+    // has already destroyed. Safe here because nothing destroyed below
+    // submits or polls; only the frames' own destructors run, and every
+    // member they touch is still alive.
+    ~CoreRuntime();
+
     // Attaches this core to the ring matrix and installs the handlers every
     // core needs - today just `kShutdown`, which is what lets core 0 stop
     // this one without touching its memory. `transport` must outlive this.

@@ -826,12 +826,9 @@ StatusOr<std::uint64_t> Catalog::PurgeSettledDeleteMarks() {
         log_->Debug("catalog", "purged " + std::to_string(swept.value()) +
                                    " settled delete-marked catalog row(s)");
     }
-    // **No version bump**, unlike the mount sweep: every retired row was
-    // already gone to every reader - unfiltered reads settle the mark by
-    // the same comparison, and filtered readers old enough to see the row
-    // are exactly what the horizon proves absent - so no cached answer
-    // changes, and a bump would broadcast kCatalogInvalidate and stale
-    // this instance's bound statements for nothing.
+    // No version bump, unlike the mount sweep: every retired row was
+    // already gone to every reader, so no cached answer changes. The
+    // proof lives once, in spec-ddl-transactional.md §5d.
     return swept;
 }
 

@@ -3446,22 +3446,32 @@ void CommandDispatcher::EndDdlScope(const Session& session) {
     // ending is rare enough that a cache clear it did not strictly need
     // costs nothing worth measuring.
     if (held_ddl) {
-        catalog_.InvalidateAfterCompensation();
         // The first purge consumer (workplan-reader-registration.md D5).
         // Here and nowhere hotter: DDL resolution is the only event that
         // creates or settles a mark, the core is between resolutions so no
         // unregistered synchronous view is live, and the resolved
         // transaction is already inactive so its own marks are fair game
-        // the moment no older reader holds a lease. A failed sweep is a
-        // maintenance failure, not the statement's: the marks it left are
-        // exactly as reachable as before, so it is logged and the reply
-        // stands.
-        auto purged = catalog_.PurgeSettledDeleteMarks();
-        if (purged.ok()) {
-            catalog_marks_purged_ += purged.value();
-        } else if (log_ != nullptr) {
-            log_->Warn("catalog", "delete-mark purge failed: " + purged.status().message());
+        // the moment no older reader holds a lease. **Before** the
+        // invalidation below, so its flush carries the retirements too.
+        // A failed sweep is a maintenance failure, not the statement's:
+        // the marks it left are exactly as reachable as before, so it is
+        // logged and the reply stands.
+        //
+        // **System core only.** This core's ReadHorizon() is blind to
+        // every other core's readers, and a peer's - no transactions, no
+        // leases - answers UINT64_MAX, which would retire a mark whose
+        // deleter is live on core 0. Unreachable while peers take no DDL,
+        // but that property is enforced nowhere, and this gate is what
+        // makes the soundness argument local (spec §5d, workplan D1).
+        if (core_id_ == catalog::kSystemCore) {
+            auto purged = catalog_.PurgeSettledDeleteMarks();
+            if (purged.ok()) {
+                catalog_marks_purged_ += purged.value();
+            } else if (log_ != nullptr) {
+                log_->Warn("catalog", "delete-mark purge failed: " + purged.status().message());
+            }
         }
+        catalog_.InvalidateAfterCompensation();
     }
 }
 
@@ -5061,7 +5071,10 @@ StatusOr<txn::LeasedSnapshot> CommandDispatcher::SnapshotFor(Session& session) {
 
     // Autocommit: a view over the committed state, owned by no
     // transaction - the same one every shipped pipeline stage mints, and
-    // leased like theirs, because the statement holding it can park.
+    // leased because that seam leases (manager.hpp says why, and says
+    // plainly that *this* holder's statement never parks with it: the
+    // dispatch path is synchronous, and a statement that ships a read
+    // drops this object at its `pending_remote` return, before the wait).
     return txn::AutocommitSnapshot(txn_);
 }
 

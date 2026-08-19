@@ -437,6 +437,25 @@ TEST_F(TxnManagerTest, AMovedLeaseKeepsTheRegistrationAndTheHuskDropsNothing) {
     EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
 }
 
+TEST_F(TxnManagerTest, MoveAssigningOverAHeldLeaseReleasesTheOverwrittenSlot) {
+    auto view = mgr_->MintReadView(kNoTrxId);
+    ASSERT_TRUE(view.ok());
+
+    auto first = mgr_->RegisterReader(view.value());
+    auto second = mgr_->RegisterReader(view.value());
+    ASSERT_TRUE(first.ok());
+    ASSERT_TRUE(second.ok());
+
+    // The overwritten registration must be withdrawn, not leaked - a leak
+    // here is invisible until slot exhaustion, which is why this is pinned.
+    first.value() = std::move(second.value());
+    EXPECT_TRUE(first.value().held());
+    EXPECT_FALSE(second.value().held());
+
+    first.value().Release();
+    EXPECT_EQ(mgr_->ReadHorizon(), UINT64_MAX);
+}
+
 TEST_F(TxnManagerTest, SlotExhaustionIsOutOfSpaceAndAReleaseReopensIt) {
     auto view = mgr_->MintReadView(kNoTrxId);
     ASSERT_TRUE(view.ok());

@@ -385,7 +385,9 @@ the owner's workplan.
   Delete-marked catalog rows no longer accumulate across mounts (DT10,
   §5c), ~~and within a mount they still do~~ — **closed 2026-08-19 by
   §5d**: DDL resolution now runs a horizon-gated purge, so a mark
-  survives only as long as some reader's view could still need the row.
+  survives as long as some reader's view could still need the row, plus
+  the wait for the *next* DDL resolution after that reader releases —
+  nothing else triggers the sweep, and the mount takes any remainder.
   The price a surviving mark carries is unchanged and small: one
   comparison per mark per cold read (DT9's `live` factor left the
   per-mark term on 2026-08-18; `bench/results-ddl-catalog-read-ab.md`

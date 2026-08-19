@@ -429,8 +429,8 @@ holds its `AutocommitSnapshot` **across its parks**,
 `remote_step_service.hpp` — a reader nowhere in `live_`), and that
 missing record is exactly the reader registration
 `docs/workplan-reader-registration.md` built. §5d below is the purge.
-Within-a-mount accumulation is now bounded by reader lifetimes rather
-than by the mount.
+A mark now waits at most for its last older reader plus the next DDL
+resolution, rather than for the mount.
 
 **What it costs.** One forward pass over the catalog root chains.
 `RetireSlot` sets the dead flag in place and never renumbers slots behind
@@ -469,7 +469,12 @@ which is the exemption `txn.md` §4.1's registration rule leans on. A
 mark whose deleter has not cleared the horizon survives to the next
 resolution or to §5c at the next mount; there is deliberately **no**
 background cadence — that is a `maintenance`-group decision that belongs
-with the undo purge (`txn.md` §9).
+with the undo purge (`txn.md` §9). **System core only**, by an explicit
+gate at the call site: the horizon is per-core and blind to every other
+core's readers, so a peer's — no transactions, no leases — answers
+`UINT64_MAX` and would retire a mark whose deleter is live on core 0.
+Unreachable while peers take no DDL, but the gate is what makes the
+argument local instead of global.
 
 **No version bump, deliberately.** Every retired row was already gone to
 every reader — that is what the horizon proves — so no cached answer

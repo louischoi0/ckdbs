@@ -149,9 +149,10 @@ private:
 };
 
 // Readers a purge must not purge under, beyond the live transactions the
-// manager already holds: autocommit snapshots held across a park - a
-// session-side statement awaiting remote batches, a shipped pipeline
-// stage. Bounded and fixed like kMaxTrackedLiveTxns, for the same reason:
+// manager already holds: autocommit snapshots held across a park, which
+// today means the shipped pipeline stages alone - `RunProducer` and
+// `RunConsumer` keep theirs on a coroutine frame across every credit gate.
+// Bounded and fixed like kMaxTrackedLiveTxns, for the same reason:
 // a reader the registry could not admit would be a reader a purge cannot
 // see, so exhaustion refuses the reader rather than unsoundly proceeding.
 inline constexpr std::size_t kMaxRegisteredReaders = 256;
@@ -212,12 +213,7 @@ public:
     // `wal` may be null - the unlogged path the socket-free tests run on.
     TransactionManager(TrxIdSequence& ids, UndoLog& undo, storage::PageStore& store,
                        wal::WalManager* wal = nullptr) noexcept
-        : ids_(ids), undo_(undo), store_(store), wal_(wal) {
-        for (std::size_t i = 0; i < kMaxRegisteredReaders; ++i) {
-            reader_free_[i] = static_cast<std::uint16_t>(i);
-        }
-        reader_free_top_ = kMaxRegisteredReaders;
-    }
+        : ids_(ids), undo_(undo), store_(store), wal_(wal) {}
 
     // Starts a transaction and takes its first read view. Fails with
     // OutOfSpace past kMaxTrackedLiveTxns live transactions - the bound
@@ -446,14 +442,16 @@ private:
     // statement.
     std::vector<std::unique_ptr<Transaction>> live_;
 
-    // Leased readers: slot value is the view's MinVisibleBound(), 0 = free
-    // (no mintable view can produce 0 - its high-water mark is at least
-    // kFirstUserTrxId). A fixed array plus an index stack keeps register
-    // and release O(1) with no allocation, per read_view.hpp's POD rule;
-    // ReadHorizon() walks all slots, and runs only at a purge.
+    // Leased readers: slot value is the view's MinVisibleBound(), and the
+    // bitmap beside it says which slots are held - the value itself
+    // carries no free/held meaning, because **a view can genuinely bound
+    // at 0** (a core whose id sequence has issued nothing mints
+    // `up_to_trx_id == 0`; a full-suite run on a peer core found it).
+    // Register scans four words for a zero bit, release clears one: O(1),
+    // no allocation, per read_view.hpp's POD rule. ReadHorizon() visits
+    // only set bits, and runs only at a purge.
     std::array<std::uint64_t, kMaxRegisteredReaders> reader_slots_{};
-    std::array<std::uint16_t, kMaxRegisteredReaders> reader_free_{};
-    std::size_t reader_free_top_ = 0;  // filled by the constructor
+    std::array<std::uint64_t, kMaxRegisteredReaders / 64> reader_used_{};
 };
 
 inline void ReaderLease::Release() noexcept {
@@ -478,11 +476,23 @@ struct LeasedSnapshot {
 // dispatcher's autocommit arm and every cross-core pipeline stage), and
 // spelling six lines twice is how the two drift.
 //
-// Registered by construction: every autocommit snapshot can be held
-// across a park (a session-side statement awaiting remote batches, a
-// shipped stage between credit grants), which is exactly the reader
-// `live_` cannot name - so the lease rides along here, where no call
-// site can forget it. Transactions need none: `live_` is their record.
+// Registered by construction, on the seam and not at the call sites: a
+// shipped stage holds its snapshot on a coroutine frame across every
+// credit grant, which is exactly the reader `live_` cannot name, and
+// putting the lease here is what keeps a stage from forgetting one.
+// Transactions need none: `live_` is their record.
+//
+// **The dispatcher's autocommit snapshot does not currently outlive its
+// statement**, and its lease is structural rather than load-bearing:
+// `DispatchInner` is synchronous throughout (`exec::Execute`, not
+// `ExecuteAsync`), and a statement that ships a read returns its
+// `pending_remote` outcome - dropping this object - *before*
+// `DispatchAsync` awaits anything. So that reader is today the
+// synchronous one txn.md section 4.1 exempts by proof. Kept leased
+// anyway because the exemption is an invariant to re-check whenever the
+// session-side executor gains a suspension point (P4d-3's page-boundary
+// awaits are the named watch item), and one slot store per statement is
+// cheaper than rediscovering that.
 //
 // A null manager answers the default snapshot with an empty lease: every
 // writer visible, no undo log, which is the pre-MVCC engine exactly and
