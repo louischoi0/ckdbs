@@ -410,5 +410,104 @@ TEST(RowCodecTypesTest, ADecimalWithTheWrongScaleIsRefusedRatherThanRescaled) {
     EXPECT_NE(s.message().find("rescale"), std::string::npos) << s.message();
 }
 
+// ---- NULL round trips (docs/spec-null.md §2, §3, §6) -----------------------
+
+catalog::SysColumnRow NullableCol(std::uint32_t pos, std::string_view name,
+                                  std::uint32_t type_val, std::uint32_t len = 0) {
+    catalog::SysColumnRow col = Col(pos, name, type_val, len);
+    col.notnull = false;
+    return col;
+}
+
+parser::AstValue Null() {
+    parser::AstValue v{};
+    v.type = parser::ValueType::kNull;
+    return v;
+}
+
+// Every nullable type round-trips NULL, in the first and last nullable
+// position, and a present neighbour is untouched by it.
+TEST(RowCodecNullTest, NullRoundTripsPerTypeAndPosition) {
+    catalog::Schema schema;
+    schema.columns.push_back(Col(0, "id", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(NullableCol(1, "i", catalog::kTypeValInt32, 4));
+    schema.columns.push_back(Col(2, "mid", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(NullableCol(3, "s", catalog::kTypeValVarchar));
+    const catalog::RowLayout layout = LayoutFor(schema);
+
+    VarHeapSink sink;  // no store: an inline-only row needs none
+    auto row = EncodeRow(schema, layout, /*id=*/7, {Null(), Int(42), Null()}, sink);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    ASSERT_EQ(row.value().size(), layout.row_size);
+
+    auto decoded = DecodeRow(schema, layout, row.value(), nullptr);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value()[1].type, parser::ValueType::kNull);
+    EXPECT_EQ(decoded.value()[2].type, parser::ValueType::kInt);
+    EXPECT_EQ(decoded.value()[2].int_val, 42);
+    EXPECT_EQ(decoded.value()[3].type, parser::ValueType::kNull);
+
+    // And the same row with both present decodes both - the bit is per
+    // row, not per relation.
+    auto full = EncodeRow(schema, layout, 8, {Int(1), Int(2), Str("x")}, sink);
+    ASSERT_TRUE(full.ok()) << full.status().message();
+    auto full_dec = DecodeRow(schema, layout, full.value(), nullptr);
+    ASSERT_TRUE(full_dec.ok());
+    EXPECT_EQ(full_dec.value()[1].int_val, 1);
+    EXPECT_EQ(full_dec.value()[3].str_val, "x");
+}
+
+TEST(RowCodecNullTest, ANullIntoANotNullColumnIsRefusedByName) {
+    catalog::Schema schema = TwoColumnSchema();
+    const catalog::RowLayout layout = LayoutFor(schema);
+    VarHeapSink sink;
+    auto row = EncodeRow(schema, layout, 7, {Null()}, sink);
+    ASSERT_FALSE(row.ok());
+    EXPECT_EQ(row.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(row.status().message().find("name"), std::string::npos);
+}
+
+// §3's disagreement is Corruption: a varchar cell hand-tagged kNull while
+// the bitmap says present must fail loudly, never read as NULL.
+TEST(RowCodecNullTest, ATagBitmapDisagreementIsCorruption) {
+    catalog::Schema schema;
+    schema.columns.push_back(Col(0, "id", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(NullableCol(1, "s", catalog::kTypeValVarchar));
+    const catalog::RowLayout layout = LayoutFor(schema);
+
+    VarHeapSink sink;
+    auto row = EncodeRow(schema, layout, 7, {Str("x")}, sink);
+    ASSERT_TRUE(row.ok());
+    // Corrupt: overwrite the cell with the kNull filler, leave the bit clear.
+    ASSERT_TRUE(storage::EncodeNullCell(
+        std::span<std::byte>(row.value().data() + layout.offsets[1], layout.inline_cell_width)).ok());
+
+    auto decoded = DecodeRow(schema, layout, row.value(), nullptr);
+    ASSERT_FALSE(decoded.ok());
+    EXPECT_EQ(decoded.status().code(), StatusCode::kCorruption);
+}
+
+// The bitmap is after the columns: a NULL row and its all-present twin
+// differ only in the bitmap byte, which is the appended-layout property.
+TEST(RowCodecNullTest, OnlyTheBitmapByteDistinguishesANullRowFromItsTwin) {
+    catalog::Schema schema;
+    schema.columns.push_back(Col(0, "id", catalog::kTypeValInt64, 8));
+    schema.columns.push_back(NullableCol(1, "i", catalog::kTypeValInt32, 4));
+    const catalog::RowLayout layout = LayoutFor(schema);
+
+    VarHeapSink sink;
+    auto with_null = EncodeRow(schema, layout, 7, {Null()}, sink);
+    auto with_zero = EncodeRow(schema, layout, 7, {Int(0)}, sink);
+    ASSERT_TRUE(with_null.ok());
+    ASSERT_TRUE(with_zero.ok());
+    ASSERT_EQ(with_null.value().size(), with_zero.value().size());
+    // Identical everywhere but the bitmap - which is also the proof that
+    // NULL and 0 are different rows on disk.
+    for (std::size_t i = 0; i + 1 < with_null.value().size(); ++i) {
+        EXPECT_EQ(with_null.value()[i], with_zero.value()[i]) << "byte " << i;
+    }
+    EXPECT_NE(with_null.value().back(), with_zero.value().back());
+}
+
 }  // namespace
 }  // namespace kds::exec

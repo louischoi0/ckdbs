@@ -113,8 +113,12 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
     const auto NameOf = [&col] { return std::string(catalog::NameView(col.name)); };
 
     if (val.type == parser::ValueType::kNull) {
-        return Status::InvalidArgument("column '" + NameOf() +
-                                        "' is NULL - NULL values are not supported yet");
+        // Unreachable: EncodeRow's driver intercepts NULL before the cell
+        // is written (the bitmap is the authority, spec-null.md §3), so a
+        // NULL arriving here bypassed it - a caller bug, not a user error.
+        return Status::Corruption("column '" + NameOf() +
+                                  "': a NULL reached the cell encoder; EncodeRow's driver owns "
+                                  "NULL handling");
     }
     // A declared pattern's `$param` has no value to encode, and never will:
     // a declaration is not an execution. Refused by name rather than left to
@@ -357,20 +361,25 @@ Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayou
 }
 
 // The span of `payload` column `i` occupies: from its offset to the next
-// column's, or to the end of the row for the last one.
+// column's, or - for the last one - to where the null bitmap begins
+// (spec-null.md §2.1: the bitmap is appended after the columns, so the
+// last column's cell must not run to the end of the row; a write there
+// would wipe every null bit. Zero bitmap bytes reduces to the old rule).
 std::span<const std::byte> CellOf(const catalog::RowLayout& layout,
                                    std::span<const std::byte> payload, std::size_t i) {
     const std::size_t begin = layout.offsets[i];
-    const std::size_t end =
-        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
+    const std::size_t end = (i + 1 < layout.offsets.size())
+                                ? layout.offsets[i + 1]
+                                : layout.row_size - layout.null_bitmap_bytes;
     return payload.subspan(begin, end - begin);
 }
 
 std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<std::byte> payload,
                                     std::size_t i) {
     const std::size_t begin = layout.offsets[i];
-    const std::size_t end =
-        (i + 1 < layout.offsets.size()) ? layout.offsets[i + 1] : layout.row_size;
+    const std::size_t end = (i + 1 < layout.offsets.size())
+                                ? layout.offsets[i + 1]
+                                : layout.row_size - layout.null_bitmap_bytes;
     return payload.subspan(begin, end - begin);
 }
 
@@ -487,10 +496,15 @@ Status DecodeOneValueInto(const catalog::SysColumnRow& col, std::span<const std:
                 return decoded.status().WithContext("column '" + NameOf() + "'");
             }
             if (decoded.value().tag == storage::CellTag::kNull) {
-                out.type = parser::ValueType::kNull;
-                out.str_val.clear();
-                out.raw_int_text.clear();
-                return Status::OK();
+                // The bitmap said present (the driver checked it before
+                // this cell was read), so a kNull tag here is the §3
+                // disagreement: two authorities answering differently, on
+                // the same footing as a payload whose length disagrees
+                // with the schema constant.
+                return Status::Corruption(
+                    "column '" + std::string(catalog::NameView(col.name)) +
+                    "' cell is tagged kNull while the null bitmap says present "
+                    "(docs/spec-null.md §3)");
             }
             if (decoded.value().tag == storage::CellTag::kSpilled) {
                 // Recorded, not fetched: R1 forbids a page fetch while the
@@ -791,6 +805,25 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
     StoreLe64(out.data(), word.value());
 
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
+        if (values[i - 1].type == parser::ValueType::kNull) {
+            // The bitmap is the sole authority (spec-null.md §3): the bit
+            // is set here, a fixed cell keeps its deterministic zeros, and
+            // a tagged cell takes the kNull filler so its bytes are
+            // defined rather than stale - but no reader ever consults it.
+            if (schema.columns[i].notnull) {
+                return Status::InvalidArgument(
+                    "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
+                    "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
+                    "opt in - docs/spec-null.md)");
+            }
+            catalog::SetNullBit(out, layout, i);
+            if (schema.columns[i].type_val == kTypeValVarchar) {
+                if (Status s = storage::EncodeNullCell(MutableCellOf(layout, out, i)); !s.ok()) {
+                    return s;
+                }
+            }
+            continue;
+        }
         if (Status s = EncodeOneValue(schema.columns[i], values[i - 1],
                                        MutableCellOf(layout, out, i), varheap);
             !s.ok()) {
@@ -937,6 +970,15 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     out[0].str_val.clear();
 
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
+        if (catalog::NullBitIsSet(payload, layout, i)) {
+            // The bitmap decides (spec-null.md §3); the cell is the defined
+            // filler and is not read.
+            out[i].type = parser::ValueType::kNull;
+            out[i].str_val.clear();
+            out[i].raw_int_text.clear();
+            out[i].int_val = 0;
+            continue;
+        }
         if (Status s = DecodeOneValueInto(schema.columns[i], CellOf(layout, payload, i), i, out[i],
                                            spills);
             !s.ok()) {
