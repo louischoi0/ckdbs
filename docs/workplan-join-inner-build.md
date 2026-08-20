@@ -315,11 +315,11 @@ shape: the prefix trades **the sum of the per-outer-row walks for the
 longest single walk, plus the build constant charged on every row of
 that longest walk**. At k = 16 the sum is many times the max and the
 trade is overwhelming; at k = 4 the sum is barely above the max, and
-43–48 ns per bucketed row (the constant, unchanged from the join form)
-is more than the difference. The sparse row is worse for a reason worth
-naming: with 2,000 keys over 10,000 rows the first outer row's walk
-already covers two thirds of the relation before its own match, so the
-build pays for the whole prefix while the walks it saves are short.
+the constant is more than the difference. The sparse row is worse for a
+reason worth naming: with 2,000 keys over 10,000 rows the first outer
+row's walk already covers two thirds of the relation before its own
+match, so the build pays for the whole prefix while the walks it saves
+are short.
 
 Spec §6's "at or below the plain walk's cost at every k, with no earn
 gate" is therefore **false as measured**, in the same way §5's "at
@@ -327,12 +327,65 @@ k ≥ 2 every avoided walk is pure win" was: both counted rows visited
 and neither counted the nanoseconds of visiting them. §6 is amended
 with the crossover rather than the claim.
 
-What would move it, neither taken here: cutting the constant again (the
-map still costs one hash-map node per distinct key — an open-addressed
-table keyed by the same `CabinKey` would remove that allocation without
-touching the identity JB2 chose), or gating the stopping class behind
-its own default. Both are decisions, and the second is a second knob
-where spec §7 ratified one.
+## The build constant, third cut (2026-08-20, `jb6-prefix-map` at `3b5aa9b`)
+
+The map's last allocation, removed: keys now live in an append-only
+vector found through an **open-addressed table of 8-byte slots**, so a
+distinct key costs no allocation at all — not the bucket vector a
+`vector`-per-key cost, not the node `std::unordered_map` cost — and the
+per-lookup integer division libstdc++ does (`hash % prime`) becomes a
+power-of-two mask. The key stays the Cabin's whole value identity,
+compared in full behind an 8-byte tag; a hash-only key would be faster
+still and would rest its correctness on the probe's re-check, which a
+container has no business doing (JB2's decision).
+
+**The constant: 43.2 → 37.2 ns/row**, read off the same join-at-k=1
+cell as before (`--shape join --loans 10000`, same-binary A/B: 651.9 µs
+off, 1,023.7 on, 371.8 µs over 10,000 bucketed rows). Break-even on the
+walked join is k ≈ 1.7.
+
+**One thing measured and rejected, recorded because it looks obvious:**
+finalizing the hash with a murmur3 mix. `CabinKeyHash` maps a small
+integer key to a near-consecutive value, so consecutive keys take
+consecutive slots and the fill writes the table sequentially with
+almost no collisions; mixing scatters them and measured *worse on every
+cell* — 15.1 → 16.3 ns/row at 10,000 rows over 2,000 keys, 22.9 → 43.8
+on all-distinct keys. The locality is worth more than the tag's
+filtering. The note lives at `TagOf` so the next reader does not
+re-derive it.
+
+(A caution for anyone re-running the map micro-benchmark: its
+all-distinct cells are dominated by an allocator artefact, not by the
+container. Each repetition frees and re-allocates the whole table and
+key arena, and glibc's dynamic mmap threshold makes that cost jump
+around by hundreds of microseconds per pass — which is why the 10,000
+and 65,536 all-distinct cells disagree in *sign*. The server pays it
+once per process, not once per statement, and the end-to-end cells
+above are what the constant is quoted from.)
+
+### What the cut moved
+
+| shape | cell | before | after |
+|---|---|---|---|
+| join | build constant | 43.2 ns/row | **37.2** |
+| exists, 100/key | k=1 | +3% | **−4%** |
+| exists, 100/key | k=4 | +13% | **+8%** |
+| exists, 100/key | k=16 | −15% | **−18%** |
+| exists, 5/key | k=1 | +76% | **+58%** |
+| exists, 5/key | k=2 | +33% | **+18%** |
+| exists, 5/key | k=4 | +25% | **+11%** |
+| exists, 5/key | k=16 | −52% | **−59%** |
+
+The acceptance cell with it: the driver's `exists-correlated` phase
+**1,681.3 → 547.2 µs, ×3.07** (from ×2.43), `verify_problems: []` on
+both sides. The crossover moves from k ≈ 6–8 to **k ≈ 5**.
+
+**The k = 4 done-condition still fails**, at +8% (dense) and +11%
+(sparse) rather than +13% and +25%. What is left of it is the constant
+itself, and the remaining candidates each cost something the map has so
+far refused to spend: a hash-only key (correctness resting on the
+re-check), or an earn gate (spec §6 ratified against one, and it would
+give back the k ≥ 8 wins in proportion).
 
 ## JB7 — observability, trails, shipping
 

@@ -175,9 +175,10 @@ visited and not the nanoseconds of visiting them. What the prefix
 actually trades is **the sum of the per-outer-row walks for the longest
 single walk, plus the build constant on every row of that walk**, so
 the crossover is where the sum exceeds the max by more than the
-constant — measured at **k ≈ 6–8**, with k = 4 at +13% (100 rows per
-key) to +25% (5 rows per key) and k = 16 at −15% to −52%. The
-acceptance cell of §9 passes at k = 20 (1,569.9 → 612.9 µs, ×2.56).
+constant — measured at **k ≈ 5** once the constant was cut a third time
+(37.2 ns/row), with k = 4 at +8% (100 rows per key) to +11% (5 rows per
+key) and k = 16 at −18% to −59%. The acceptance cell of §9 passes at
+k = 20 (1,681.3 → 547.2 µs, ×3.07).
 The rule stands as ratified; what changed is the claim about its cost
 at small k, which no longer says "every".
 

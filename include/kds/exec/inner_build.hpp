@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 #include "kds/stats/cabin_store.hpp"
@@ -20,19 +19,30 @@
 // matching an authoritative entry set. Entries are the Cabin's 24-byte
 // `CabinEntry` (C6), reused rather than redesigned.
 //
-// ---- Storage: one arena, chained per key ----------------------------------
+// ---- Storage: one arena, chained per key, in an open-addressed table -------
 //
 // Entries live in **one append-only vector** and a key's rows are linked
 // through a parallel index vector, head and tail per key. A bucket is
-// therefore a chain walk, not a contiguous span, and the price of a
-// distinct key is one hash-map node — where a vector per key cost a second
-// allocation and a growth realloc per bucket besides.
+// therefore a chain walk, not a contiguous span. Keys live in a second
+// append-only vector, found through an open-addressed table of 8-byte
+// slots — so **a distinct key costs no allocation at all**: not the
+// bucket vector a `vector`-per-key cost, and not the node a
+// `std::unordered_map` cost. It also drops that map's per-lookup integer
+// division (libstdc++ indexes buckets with `hash % prime`), which a
+// power-of-two mask replaces.
 //
 // This is not a free-standing preference: the build is paid **per inner
-// row, on the walk the statement was going to run anyway**, so its constant
-// is what decides at which k the build beats the per-row walk (the JB5
-// gate measured 83.7 ns/row and a break-even of k ≈ 2.6 with a vector per
-// key; the arena is the largest single term of that constant).
+// row, on the walk the statement was going to run anyway**, so its
+// constant is what decides at which k the build beats the per-row walk.
+// The measured history, all in `docs/workplan-join-inner-build.md`: 83.7
+// ns/row with a vector per key (break-even k ≈ 2.6), 43.2 with the arena
+// and a Keystone-word pk (k ≈ 1.8), and this table is the third cut.
+//
+// What is deliberately *not* traded away for speed: the key is still the
+// Cabin's whole value identity (`stats::MakeValueKey`), compared in full
+// on a tag match. A map keyed on a hash alone would be faster still and
+// would be safe only by the probe's re-check — a correctness argument
+// this container has no business resting on (JB2's identity decision).
 //
 // ---- Concurrency and lifetime protocol -------------------------------------
 //
@@ -131,24 +141,33 @@ public:
     // form claims to be the entire relation.
     [[nodiscard]] bool Add(const stats::CabinKey& key, const stats::CabinEntry& entry) {
         if (entries_.size() >= kMaxEntries) return false;
+        const std::uint64_t hash = stats::CabinKeyHash{}(key);
+        const std::uint32_t k = KeyFor(key, hash);
         const auto idx = static_cast<std::uint32_t>(entries_.size());
         entries_.push_back(entry);
         next_.push_back(kNoEntry);
-        Chain& chain = chains_[key];
-        if (chain.head == kNoEntry) {
-            chain.head = idx;
+        Key& rec = keys_[k];
+        if (rec.head == kNoEntry) {
+            rec.head = idx;
         } else {
-            next_[chain.tail] = idx;
+            next_[rec.tail] = idx;
         }
-        chain.tail = idx;
+        rec.tail = idx;
         return true;
     }
 
     // The entries bucketed under `key`, in walk order; empty when the walk
     // bucketed none.
     Bucket Find(const stats::CabinKey& key) const {
-        auto it = chains_.find(key);
-        return it == chains_.end() ? Bucket() : Bucket(this, it->second.head);
+        if (table_.empty()) return Bucket();
+        const std::uint64_t hash = stats::CabinKeyHash{}(key);
+        for (std::size_t i = hash & mask_;; i = (i + 1) & mask_) {
+            const Slot& slot = table_[i];
+            if (slot.key == kNoEntry) return Bucket();
+            if (slot.tag == TagOf(hash) && keys_[slot.key].key == key) {
+                return Bucket(this, keys_[slot.key].head);
+            }
+        }
     }
 
     // Entries across all buckets — what JB5's `join_build_max_rows` cap is
@@ -159,15 +178,94 @@ public:
 private:
     // One below the terminator: an entry at kNoEntry could not be linked.
     static constexpr std::size_t kMaxEntries = kNoEntry;
+    // Slots in the first table. Large enough that a small map never
+    // rehashes, small enough that a statement with a dozen keys is not
+    // paying for a page of them.
+    static constexpr std::size_t kInitialSlots = 64;
 
-    struct Chain {
+    // One distinct join-column value: the key itself (the Cabin's value
+    // identity, unchanged), its hash kept so a growth rehashes without
+    // re-hashing, and the head and tail of its walk-order chain.
+    struct Key {
+        stats::CabinKey key;
+        std::uint64_t hash = 0;
         std::uint32_t head = kNoEntry;
         std::uint32_t tail = kNoEntry;
     };
 
+    // Eight bytes, and the reason the table is its own thing rather than a
+    // `std::unordered_map`: `tag` is the hash's high half, so a probe
+    // rejects a wrong slot without touching the 48-byte key it names, and
+    // a whole table fits in a fraction of the cache lines a node-per-key
+    // map would touch. `key == kNoEntry` is empty; nothing is ever erased,
+    // so there are no tombstones to reason about.
+    struct Slot {
+        std::uint32_t tag = 0;
+        std::uint32_t key = kNoEntry;
+    };
+
+    static std::uint32_t TagOf(std::uint64_t hash) noexcept {
+        // The high half, because the low bits already chose the slot - a
+        // tag taken from them would agree with the index and filter
+        // nothing.
+        //
+        // **The hash is used as `CabinKeyHash` produced it, unmixed**, and
+        // that is measured rather than assumed. `CabinKeyHash` maps a
+        // small integer key to a near-consecutive value, so consecutive
+        // keys take consecutive slots: the fill writes the table
+        // sequentially and collides almost never. A finalizing mix
+        // (murmur3's) scatters them instead and measured *worse* on every
+        // cell of the map micro-benchmark - 15.1 to 16.3 ns/row on the
+        // 10,000-rows-over-2,000-keys shape, 22.9 to 43.8 on all-distinct
+        // keys. The locality is worth more than the tag's filtering, and
+        // a full key compare stands behind the tag in any case.
+        return static_cast<std::uint32_t>(hash >> 32);
+    }
+
+    // The index of `key`'s record, inserting one if this is its first row.
+    // Returns an index rather than a reference on purpose: an insertion
+    // can grow `keys_`, and a reference handed back across that growth is
+    // exactly the dangling the caller would never see fail.
+    std::uint32_t KeyFor(const stats::CabinKey& key, std::uint64_t hash) {
+        if (table_.empty()) Rehash(kInitialSlots);
+        for (std::size_t i = hash & mask_;; i = (i + 1) & mask_) {
+            Slot& slot = table_[i];
+            if (slot.key == kNoEntry) {
+                keys_.push_back(Key{key, hash, kNoEntry, kNoEntry});
+                const auto k = static_cast<std::uint32_t>(keys_.size() - 1);
+                slot.tag = TagOf(hash);
+                slot.key = k;
+                // Kept at or below three quarters full: linear probing
+                // degrades sharply past that, and a build's table is
+                // written once per row and read once per outer row.
+                if (keys_.size() * 4 > table_.size() * 3) Rehash(table_.size() * 2);
+                return k;
+            }
+            if (slot.tag == TagOf(hash) && keys_[slot.key].key == key) return slot.key;
+        }
+    }
+
+    // Rebuilds the table at `slots` (a power of two). Only the 8-byte
+    // slots move; the keys and every chain stay exactly where they are,
+    // which is what makes growth cheap enough to start small.
+    void Rehash(std::size_t slots) {
+        table_.assign(slots, Slot{});
+        mask_ = slots - 1;
+        for (std::uint32_t k = 0; k < keys_.size(); ++k) {
+            for (std::size_t i = keys_[k].hash & mask_;; i = (i + 1) & mask_) {
+                if (table_[i].key == kNoEntry) {
+                    table_[i] = Slot{TagOf(keys_[k].hash), k};
+                    break;
+                }
+            }
+        }
+    }
+
     std::vector<stats::CabinEntry> entries_;
     std::vector<std::uint32_t> next_;
-    std::unordered_map<stats::CabinKey, Chain, stats::CabinKeyHash> chains_;
+    std::vector<Key> keys_;
+    std::vector<Slot> table_;
+    std::size_t mask_ = 0;
 };
 
 }  // namespace kds::exec
