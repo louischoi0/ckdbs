@@ -189,9 +189,13 @@ TEST_F(ExecBudgetTest, ARunawayCorrelatedScanFailsInsteadOfRunningToCompletion) 
         "SELECT outer_t.id FROM outer_t WHERE EXISTS "
         "(SELECT inner_t.id FROM inner_t WHERE inner_t.tag = outer_t.tag)";
 
-    // Unbounded, it completes and the meters show why it was expensive.
+    // **With the inner build off**, which is what this shape cost before
+    // JB6 and what it costs whenever the map declines: unbounded, it
+    // completes and the meters show why it was expensive.
+    Budget unbuilt(kUnlimitedRowTouchBudget);
+    unbuilt.set_join_build_max_rows(0);
     ExecStats unbounded;
-    auto full = TryRun(sql, Budget(kUnlimitedRowTouchBudget), &unbounded);
+    auto full = TryRun(sql, unbuilt, &unbounded);
     ASSERT_TRUE(full.ok()) << full.status().message();
     EXPECT_EQ(full.value().size(), 40u);
     EXPECT_EQ(unbounded.Total().correlated_scans, 40u)
@@ -207,14 +211,29 @@ TEST_F(ExecBudgetTest, ARunawayCorrelatedScanFailsInsteadOfRunningToCompletion) 
     EXPECT_EQ(unbounded.Total().rows_examined, 860u);
 
     // Bounded well below that, it is refused rather than run.
+    Budget capped_budget(100);
+    capped_budget.set_join_build_max_rows(0);
     ExecStats bounded;
-    auto capped = TryRun(sql, Budget(100), &bounded);
+    auto capped = TryRun(sql, capped_budget, &bounded);
     ASSERT_FALSE(capped.ok());
     EXPECT_EQ(capped.status().code(), StatusCode::kResourceExhausted);
     // And it stopped near the ceiling rather than after doing the work: a
     // budget checked only at the end would bound nothing.
     EXPECT_LE(bounded.Total().rows_examined, 110u)
         << "the statement kept reading past its budget: " << bounded.Total().rows_examined;
+
+    // **With the build on (the default), the same statement is no longer
+    // this shape at all** (workplan JB6): the prefix map visits each inner
+    // row at most once across the whole statement, so 820 inner decodes
+    // become 40 and the budget that refused the walk now completes the
+    // work. The budget is unchanged and still bounds what is left - the
+    // statement got cheaper, not exempt.
+    ExecStats built;
+    auto with_build = TryRun(sql, Budget(100), &built);
+    ASSERT_TRUE(with_build.ok()) << with_build.status().message();
+    EXPECT_EQ(with_build.value().size(), 40u) << "same answer, fewer rows read";
+    EXPECT_EQ(built.Total().rows_examined, 80u)
+        << "40 outer plus 40 inner, each inner row visited once (spec §6)";
 }
 
 TEST_F(ExecBudgetTest, TheBudgetIsPerStatementNotPerChain) {

@@ -169,17 +169,95 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
     return coro.result();
 }
 
+// ---- The resumable walk (docs/spec-join-inner-build.md §6, JB6) ---------
+//
+// A stopping sub-chain's walk is cut short by its own sink, so the map it
+// filled covers a *prefix* of the relation. Making that partiality safe
+// needs one thing the executor did not have: a position a later walk can
+// resume from. That is this mark - a page, and how many of that page's
+// rows the walk covered in the page's own emission order.
+//
+// **Rows, not slots.** The emission order is the page's, and it is not
+// always slot order (`Step::emit_in_key_order` sorts a page by Keystone id
+// first), so the ordinal counts accepted rows in whatever order the walk
+// emits them. Within one statement that sequence is fixed - nothing writes
+// to the relation between the outer rows of a SELECT (spec §4, the same
+// argument JB4's location hints rest on) - so an ordinal taken by one walk
+// names the same row to the next.
+//
+// `page == kInvalidPageId` is "from the head", which is where a first walk
+// starts and what an unset mark means.
+struct WalkMark {
+    PageId page = kInvalidPageId;
+    std::uint32_t visited = 0;
+};
+
+// What a resumable walk reads and writes: where to start, how far it got,
+// and whether it reached the relation's end - which is what turns a bucket
+// miss from "walk from the mark" into a conclusive absence.
+struct WalkPrefix {
+    WalkMark resume;
+    WalkMark mark;
+    bool complete = false;
+};
+
+// ---- The statement-local inner build's state (JB3/JB5/JB6) --------------
+//
+// kDeclined is the cap's verdict for the *join* form and it is per
+// statement (JB5): a capped build re-attempted on every later outer row
+// would bucket to the cap and discard each time - strictly worse than the
+// walk the fall-back protects - so a declined step walks plain for the
+// rest. **The stopping form never declines** (spec §6): its map is a
+// prefix, so a capped one keeps serving what it covers while the mark
+// stops advancing, which is what `frozen` records.
+//
+// kBuilt means the map covers the whole relation: published by a completed
+// unstopped walk (join, JB3) or reached by a prefix walk that ran to the
+// relation's end (JB6). Both make a bucket miss a conclusive absence,
+// which is the one thing a partial map may not conclude.
+enum class BuildPhase : std::uint8_t { kUnbuilt, kBuilt, kDeclined };
+
+struct InnerBuildState {
+    InnerBuild map;
+    BuildPhase phase = BuildPhase::kUnbuilt;
+    // JB6: how far the prefix reaches, and whether the cap stopped it
+    // reaching further. Unused by the join form, whose map is total or
+    // nothing.
+    WalkMark mark;
+    bool frozen = false;
+};
+
+// One map per annotated step, statement-lifetime. **Statement, not
+// runner**: a sub-chain runner is rebuilt per outer row, so a map living
+// in the runner would be built and thrown away once per outer row - the
+// store is owned by the top-level runner and every nested runner shares it
+// by pointer, the way `stats_` and `budget_` are shared. Step ids are
+// global across a statement (step_chain.hpp), so one map per id needs no
+// scoping beyond that.
+//
+// Node-based on purpose, like the map's own buckets (inner_build.hpp): a
+// build holds `InnerBuildState&` across its co_await, during which a
+// deeper annotated step's entry may rehash this container - nodes relink,
+// references hold.
+using InnerBuildStore = std::unordered_map<std::uint32_t, InnerBuildState>;
+
 class ChainRunner {
 public:
+    // `builds` is the statement's inner-build store, shared the way
+    // `stats` and `budget` are: a nested runner is rebuilt per outer row,
+    // and a map rebuilt per outer row is not a map (JB6). Null means "this
+    // runner is the statement" and it owns one.
     ChainRunner(catalog::Catalog& catalog, storage::PageStore& store, const RowSink& sink,
                 std::uint32_t depth, const ChainFrame* parent, ExecStats& stats, Budget& budget,
                 TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
                 const txn::Snapshot* snapshot, bool indexes,
-                const std::function<bool()>* resume_gate = nullptr)
+                const std::function<bool()>* resume_gate = nullptr,
+                InnerBuildStore* builds = nullptr)
         : catalog_(catalog), store_(store), sink_(sink), depth_(depth), parent_(parent),
           stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins),
           snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes),
-          resume_gate_(resume_gate) {}
+          resume_gate_(resume_gate),
+          builds_(builds != nullptr ? builds : &owned_builds_) {}
 
     // Sub-chain mode - see `record_through_stops_`'s comment for what it
     // licenses and why only a sub-chain may have it.
@@ -313,8 +391,14 @@ public:
         // collector is: a subquery is part of one statement, and a nested
         // step reading a relation through a different view than its outer
         // step would make one statement see two databases.
+        // The inner-build store is shared for the reason the collector and
+        // the snapshot are, and one more of its own: this runner is built
+        // per outer row, so a map it owned would be filled and destroyed
+        // once per outer row - which is the whole cost the map exists to
+        // remove (JB6).
         ChainRunner inner(catalog_, store_, collect, depth_ + 1, &outer, stats_, budget_,
-                          trail_, replay_, cabins_, &snapshot_, indexes_);
+                          trail_, replay_, cabins_, &snapshot_, indexes_,
+                          /*resume_gate=*/nullptr, builds_);
         // Sub-chain mode - `record_through_stops_`'s comment carries the
         // argument.
         inner.RecordThroughStops();
@@ -407,10 +491,15 @@ private:
         if (step.kind == AccessKind::kIndexProbe || step.kind == AccessKind::kIndexRange) {
             co_return co_await RunIndexStep(steps, index, step, access);
         }
-        // The build annotation's arm (workplan JB3), gated off in sub-chain
-        // mode: the stopping walk's prefix map is JB6's unbuilt work.
-        // WalkAndBuild's publish site owns the rest of the argument.
-        if (step.build.has_value() && !record_through_stops_) {
+        // The build annotation's arm, in its two forms. The test is the
+        // *walk's* class and not the predicate that spelled it
+        // (`record_through_stops_` is set for every sub-chain runner): a
+        // walk a sink can cut needs the prefix rule, and one that always
+        // runs to the end does not.
+        if (step.build.has_value()) {
+            if (record_through_stops_) {
+                co_return co_await WalkPrefixAndProbe(steps, index, step, access);
+            }
             co_return co_await WalkAndBuild(steps, index, step, access);
         }
         // A kFilterScan walks exactly as a kScan does - the kind is a
@@ -710,6 +799,32 @@ private:
         co_return Status::OK();
     }
 
+    // Whether an annotated step may build at all - a property of the step
+    // and its relation, not of the run, so both build forms ask it once
+    // and in the same words.
+    //
+    // WalkAndRecord's guard, for its reason: the bucketing reads the join
+    // column out of this row's frame slots, so the partial decode must
+    // have filled it. The compiler guarantees it - the correlated conjunct
+    // is a residual conjunct and `filter_columns` derives from that same
+    // residual - and declining to build is always legal: the walk still
+    // answers, per row, as it always did. The range and bounds checks are
+    // for a Step built by something other than the compiler (the ladder
+    // never pairs `build` with a kind or a range): a pruned walk ends
+    // early with `stopped_` false, so building under one would publish a
+    // partial map as the whole relation - declined here so "a published
+    // map is a full relation" is structural, not an else-if two files
+    // away. A range would also give the prefix mark a second meaning, the
+    // pruned tail being a position no resume could tell from the end.
+    bool BuildIsArmable(const Step& step, const catalog::TableAccess& access) const {
+        return !step.range.has_value() && step.build.has_value() &&
+               step.build->residual_pos < step.residual.size() &&
+               step.build->col_pos < access.schema.columns.size() &&
+               (step.filter_columns == Step::kAllColumns ||
+                (step.build->col_pos < 64 &&
+                 ((step.filter_columns >> step.build->col_pos) & 1) != 0));
+    }
+
     // The walked join's lazy build (docs/spec-join-inner-build.md §2,
     // workplan JB3): the annotated step's first walk runs exactly as
     // written and buckets, as a side effect, every row passing the step's
@@ -721,27 +836,11 @@ private:
     // built step still walks - JB4 replaces that branch with the probe.
     sched::Coro WalkAndBuild(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
-        // WalkAndRecord's guard, for its reason: the bucketing reads the
-        // join column out of this row's frame slots, so the partial decode
-        // must have filled it. The compiler guarantees it - the correlated
-        // conjunct is a residual conjunct and `filter_columns` derives
-        // from that same residual - and declining to build is always
-        // legal: this walk still answers, per row, as it always did. The
-        // range and bounds checks are for a Step built by something other
-        // than the compiler (the ladder never pairs `build` with a kind or
-        // a range): a pruned walk ends early with `stopped_` false, so
-        // building under one would publish a partial map as the whole
-        // relation - declined here so "a published map is a full relation"
-        // is structural, not an else-if two files away.
-        if (step.range.has_value() || step.build->residual_pos >= step.residual.size() ||
-            step.build->col_pos >= access.schema.columns.size() ||
-            (step.filter_columns != Step::kAllColumns &&
-             (step.build->col_pos >= 64 ||
-              ((step.filter_columns >> step.build->col_pos) & 1) == 0))) {
+        if (!BuildIsArmable(step, access)) {
             co_return co_await RunWalkStep(steps, index, step, access);
         }
 
-        InnerBuildState& state = inner_builds_[step.step_id];
+        InnerBuildState& state = (*builds_)[step.step_id];
         // The off-switch and the cap's standing verdict (workplan JB5):
         // `join_build_max_rows == 0` disables the build outright - no map
         // can hold a row - and a declined step already took the Cabin's
@@ -781,6 +880,103 @@ private:
         co_return walked;
     }
 
+    // The stopping sub-chain's prefix map (docs/spec-join-inner-build.md
+    // §6, workplan JB6). An `EXISTS`-class sub-chain's walk is cut by its
+    // own sink at the first qualifying row, so the map it filled covers a
+    // *prefix* of the relation. This does not complete the map - it makes
+    // partiality safe, in three steps that are each one property:
+    //
+    //  1. **Replay the prefix.** The bucket for this outer row's key holds
+    //     exactly the rows before the mark that passed the non-correlated
+    //     residual and carry this value. Rows before the mark that are
+    //     *not* in the bucket either failed that residual or carry another
+    //     value, and the walk would have emitted neither - so the replay
+    //     reproduces the prefix's emissions exactly, in walk order, for
+    //     every sub-chain kind. That is what makes this safe for `IN`'s
+    //     per-row form too, whose sink walks past a non-matching row
+    //     rather than stopping at it: the answer is the sink's, and the
+    //     replay only has to hand it the same rows in the same order.
+    //  2. **A covered relation has answered.** With `kBuilt` the map holds
+    //     every row, so a bucket the replay exhausted without a stop is a
+    //     conclusive absence - the one thing a partial map may never
+    //     conclude, which is why it is gated on the phase and not on the
+    //     bucket being empty.
+    //  3. **Otherwise resume at the mark**, extending the map with every
+    //     row the walk visits. The rows before the mark were answered by
+    //     step 1, so the walk starts where the last one stopped, and every
+    //     inner row is visited at most once per statement - spec §6's
+    //     economics, and the reason this needs no earn gate, no
+    //     publication gate and no budget carve-out.
+    //
+    // The plain join of §2 is the degenerate case of the same rule and is
+    // *not* routed here: its first walk never stops, so its map is total
+    // from the second outer row on, and WalkAndBuild's simpler form says
+    // so in fewer moving parts.
+    sched::Coro WalkPrefixAndProbe(const std::vector<Step>& steps, std::size_t index,
+                                   const Step& step, const catalog::TableAccess& access) {
+        if (!BuildIsArmable(step, access) || budget_.join_build_max_rows() == 0) {
+            // The off-switch is the A/B lever (JB5) and it gates here, at
+            // the arm: nothing maps, nothing marks, and the walk is the
+            // walk this statement always ran.
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+
+        InnerBuildState& state = (*builds_)[step.step_id];
+
+        // 1. The prefix, replayed for this key.
+        if (state.map.rows() > 0) {
+            if (Status probed = co_await ProbeBuild(steps, index, step, access, state.map);
+                !probed.ok()) {
+                co_return probed;
+            }
+            if (stopped_) co_return Status::OK();
+        }
+
+        // 2. A map that covers the relation has said everything there is.
+        if (state.phase == BuildPhase::kBuilt) co_return Status::OK();
+
+        // 3. Resume, and extend.
+        WalkPrefix prefix;
+        prefix.resume = state.mark;
+        BuildRecording build;
+        build.step_id = step.step_id;
+        build.col_pos = step.build->col_pos;
+        build.residual_pos = step.build->residual_pos;
+        build.max_rows = budget_.join_build_max_rows();
+        build.map = &state.map;
+        // A frozen map starts the walk already over its cap, which is how
+        // "keeps serving its prefix, never extends it" needs no second
+        // switch: the bucketing site declines every row and the mark stays
+        // where the cap left it (spec §6's capped form).
+        build.over_cap = state.frozen;
+        BuildRecording* outer = building_;
+        building_ = &build;
+        Status walked = co_await RunWalkStep(steps, index, step, access, &prefix);
+        building_ = outer;
+
+        if (!walked.ok()) {
+            // A walk that failed mid-row may have bucketed a row the mark
+            // does not cover, and a map and a mark that disagree would
+            // emit that row twice - once from the bucket, once from the
+            // resumed walk. The statement is over either way (the status
+            // propagates out of the sub-chain), so this costs nothing and
+            // is state rather than luck: the next use starts from the head.
+            state = InnerBuildState{};
+            co_return walked;
+        }
+
+        state.mark = prefix.mark;
+        if (build.over_cap) state.frozen = true;
+        if (prefix.complete) {
+            // The map now covers the relation, by walking to its end
+            // rather than by a publish - and from here it answers like any
+            // built map, misses included.
+            state.phase = BuildPhase::kBuilt;
+            ++stats_.For(step.step_id).inner_builds;
+        }
+        co_return walked;
+    }
+
     // The probe (workplan JB4): a later outer row of a built step replays
     // its key's bucket instead of walking the relation. Three deliberate
     // differences from ServeFromCabin, each a correctness statement:
@@ -798,23 +994,33 @@ private:
     //    exactly that reason, which is what `VerifyTupleAt` checks on the
     //    Cabin's behalf. It cannot reach a probe because nothing can write
     //    to the inner relation in between: the statement is a SELECT (spec
-    //    §4; a DML `WHERE` sub-chain is excluded by §8 and again by
-    //    RunStep's `record_through_stops_` gate), and an annotated step has
-    //    no park at all - `BuildKey` is never encoded by the descriptor
-    //    codec (step_chain.hpp), so a built step never runs under a
+    //    §8 excludes a DML `WHERE` sub-chain at *compile* - `inner_build`
+    //    is false from `CompileWhere` down, JB1 - so no such step is ever
+    //    annotated; the runtime gate that used to say so a second time is
+    //    JB6's prefix arm now), and an annotated step has no park at all -
+    //    `BuildKey` is never encoded by the descriptor codec
+    //    (step_chain.hpp), so a built step never runs under a
     //    `resume_gate_`, which is the executor's only suspension point.
-    //    **Give a built step a park - JB6's resumed walk, JB8's peer-side
-    //    build, P4d-4c's multi-step gate - and this arm owes VerifyTupleAt
-    //    with a pk fallback**, because the in-place-update and
+    //    **JB6's resumed walk does not change that**: a sub-chain runner
+    //    is constructed without a resume gate, so the walk it resumes has
+    //    no more suspension point than the walk it continues - which is
+    //    also what lets a physical mark name the same row twice.
+    //    **Give a built step a park - JB8's peer-side build, P4d-4c's
+    //    multi-step gate - and this arm owes VerifyTupleAt with a pk
+    //    fallback**, because the in-place-update and
     //    slots-never-compact cases are not the only way a location dies.
     //    What stands in for both checks meanwhile: every entry goes through
     //    `AcceptTupleAt`, which re-applies MVCC under the statement's
     //    fixed snapshot and re-evaluates the **full** residual - the
     //    superset-plus-recheck idiom, so correctness never rests on build
     //    bookkeeping, only cost does (spec §4).
-    //  - **A missing bucket is conclusive.** The map published only off a
-    //    walk that reached the relation's end (WalkAndBuild's publish
-    //    rule), so "no bucket" means the full relation held no such row.
+    //  - **A missing bucket concludes nothing here.** Whether it means
+    //    "the relation holds no such row" belongs to the caller and to
+    //    the map's phase: WalkAndBuild probes only a published map, which
+    //    walked to the relation's end, and JB6's prefix form probes a
+    //    partial one and walks on from the mark unless the phase says the
+    //    map is total. This function replays a bucket; it never decides
+    //    what an empty one means.
     sched::Coro ProbeBuild(const std::vector<Step>& steps, std::size_t index, const Step& step,
                       const catalog::TableAccess& access, const InnerBuild& map) {
         if (!frame_.CanResolve(step.build->key_from)) {
@@ -1308,9 +1514,35 @@ private:
         co_return co_await WalkAndRecord(steps, index, step, access, key);
     }
 
+    // `prefix` is JB6's resumable form and is null for every other walk:
+    // the walk then starts at the head, counts nothing, and is the walk it
+    // has always been. When set, it says where to resume, and the walk
+    // reports back where it stopped and whether it reached the end.
     sched::Coro RunWalkStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
-                       const catalog::TableAccess& access) {
+                       const catalog::TableAccess& access, WalkPrefix* prefix = nullptr) {
         Status inner = Status::OK();
+
+        // ---- The resumable prefix (spec §6, workplan JB6) ----------------
+        //
+        // A mark is a page and a count of that page's rows already covered.
+        // The mark starts where the last walk left it, so a walk that
+        // visits nothing leaves it untouched.
+        const bool prefixed = prefix != nullptr;
+        const PageId resume_page = prefixed ? prefix->resume.page : kInvalidPageId;
+        const std::uint32_t resume_visited = prefixed ? prefix->resume.visited : 0;
+        if (prefixed) prefix->mark = prefix->resume;
+        // The build this walk extends, when it is this step's own: read
+        // after each accepted row, because the cap trips inside one - and
+        // the row that trips it is visited without being bucketed, so the
+        // mark may not advance past it.
+        const bool extending =
+            prefixed && building_ != nullptr && building_->step_id == step.step_id;
+        std::uint32_t visited_on_page = 0;
+        bool mark_frozen = false;
+        // Whether the walk ended on a stop rather than on the relation's
+        // end - the two are one return value from the page primitives
+        // (kInvalidPageId either way), and only the walk knows which.
+        bool cut = false;
 
         // ---- Range pruning (kRange) --------------------------------------
         //
@@ -1373,9 +1605,17 @@ private:
                                  recording_->step_id == step.step_id);
         };
 
+        // A stop the walk itself decided, recorded as it is taken: every
+        // stop return goes through here so `cut` cannot fall out of step
+        // with the mark it qualifies.
+        const auto stop_here = [&] {
+            cut = true;
+            return storage::VisitControl::kStop;
+        };
+
         auto visitor = [&](PageId page_id, heap::PageView& page,
                            std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            if (walk_ends_on_stop()) return storage::VisitControl::kStop;
+            if (walk_ends_on_stop()) return stop_here();
 
             // The walk's page count, exact by construction: the chain hands
             // the visitor one page's slots consecutively, so a transition
@@ -1383,6 +1623,7 @@ private:
             if (page_id != walk_last_page) {
                 ++stats_.For(step.step_id).pages_fetched;
                 walk_last_page = page_id;
+                visited_on_page = 0;
             }
 
             // Checked per slot rather than per page because the walk has no
@@ -1391,8 +1632,44 @@ private:
             // page past the range.
             if (pruning && page.min_key() > range_high) {
                 ++stats_.For(step.step_id).range_pages_pruned;
-                return storage::VisitControl::kStop;
+                return stop_here();
             }
+
+            // One row of this page, in the page's own emission order, with
+            // JB6's skip and mark applied. **Every accepted tuple of a walk
+            // goes through here**, so the ordinal a resume skips cannot
+            // drift from the ordinal a mark recorded - that drift would
+            // silently drop rows or emit them twice, and no test of a
+            // completed walk would see it.
+            const auto accept = [&](std::uint16_t at) -> Status {
+                // One branch, loop-invariant, for every walk in the engine
+                // that is not a prefix: the ordinal is not even counted.
+                // The walk is the hottest path there is, and JB5's gate
+                // priced a two-nanosecond per-row guard as visible.
+                if (!prefixed) {
+                    return AcceptTupleAt(steps, index, step, *live_access, page_id, page, at);
+                }
+                const std::uint32_t ordinal = visited_on_page++;
+                if (page_id == resume_page && ordinal < resume_visited) {
+                    // Covered by an earlier walk of this step: the map holds
+                    // whatever it qualified for, and re-examining it is the
+                    // double visit spec §6's economics forbids.
+                    return Status::OK();
+                }
+                Status s = AcceptTupleAt(steps, index, step, *live_access, page_id, page, at);
+                if (!s.ok() || mark_frozen) return s;
+                if (extending && building_->over_cap) {
+                    // The cap stopped the map *at* this row, which was
+                    // visited and not bucketed - so the mark may not claim
+                    // it, and stops here for the statement. Spec §6's
+                    // capped form: the prefix keeps serving, and every
+                    // later miss walks from this point.
+                    mark_frozen = true;
+                    return s;
+                }
+                prefix->mark = WalkMark{page_id, visited_on_page};
+                return s;
+            };
 
             // ---- Emitting a page in key order (step_chain.hpp) -----------
             //
@@ -1424,24 +1701,22 @@ private:
                 // unmarked would be re-emitted from its next slot.
                 ordered_page = page_id;
                 for (const auto& [key, ordered_slot] : by_key) {
-                    auto ok = AcceptTupleAt(steps, index, step, *live_access, page_id, page,
-                                            ordered_slot);
+                    auto ok = accept(ordered_slot);
                     if (!ok.ok()) {
                         inner = ok;
                         return ok;
                     }
-                    if (walk_ends_on_stop()) return storage::VisitControl::kStop;
+                    if (walk_ends_on_stop()) return stop_here();
                 }
                 return storage::VisitControl::kContinue;
             }
 
-            auto accepted = AcceptTupleAt(steps, index, step, *live_access, page_id, page, slot);
+            auto accepted = accept(slot);
             if (!accepted.ok()) {
                 inner = accepted;
                 return accepted;
             }
-            return walk_ends_on_stop() ? storage::VisitControl::kStop
-                                       : storage::VisitControl::kContinue;
+            return walk_ends_on_stop() ? stop_here() : storage::VisitControl::kContinue;
         };
 
         NoteFetch();
@@ -1470,7 +1745,14 @@ private:
         // answer - the same property tail pruning rests on.
         const bool is_btree = access.clustered_type == catalog::ClusteredType::kBtree;
         PageId cur = kInvalidPageId;
-        if (is_btree) {
+        if (resume_page != kInvalidPageId) {
+            // Resuming (JB6): the mark names the page and the skip above
+            // names the row within it, so there is no seek and no leftmost
+            // descent - the walk order is the one the mark was taken in,
+            // and re-deriving a start would be a second answer to a
+            // question already answered.
+            cur = resume_page;
+        } else if (is_btree) {
             if (pruning) {
                 auto first = btree::BtreeSeekLeaf(store_, access.desc_page_id, step.range->low);
                 // A descent that failed is a reason to walk, not to fail:
@@ -1516,7 +1798,16 @@ private:
                                                            storage::PageAccess::kRead, visit_fn);
             if (!inner.ok()) co_return inner;
             if (!next.ok()) co_return next.status();
-            if (next.value() == kInvalidPageId) co_return Status::OK();
+            if (next.value() == kInvalidPageId) {
+                // Both endings arrive here - the page primitives answer a
+                // visitor stop and a chain end with the same id - and only
+                // `cut` tells them apart. A walk that ran out of relation
+                // covered all of it, which is what lets a later bucket miss
+                // conclude absence; a frozen mark withholds that, because
+                // the rows past the cap were visited and never bucketed.
+                if (prefixed && !cut && !mark_frozen) prefix->complete = true;
+                co_return Status::OK();
+            }
             cur = next.value();
 
             // ---- The page boundary: no pin, no span (P4d-3) --------------
@@ -2073,32 +2364,6 @@ private:
     // "may walk past a stop" and "may commit a stopped walk" one fact.
     bool completing_recording_ = false;
 
-    // ---- The statement-local inner build (workplan JB3/JB5) --------------
-    //
-    // One map per annotated step, statement-lifetime: the top-level runner
-    // IS the statement (a sub-chain runner is gated out at the dispatch
-    // and rebuilt per outer row anyway). WalkAndBuild's publish site owns
-    // every phase transition.
-    //
-    // kDeclined is the cap's verdict and it is per *statement* (JB5): a
-    // capped build re-attempted on every later outer row would bucket to
-    // the cap and discard each time - strictly worse than the walk the
-    // fall-back protects - so a declined step walks plain for the rest.
-    // (JB6 amends this for the stopping class: spec §6's frozen prefix
-    // keeps serving its hits and misses walk from the mark - a rule
-    // scheduled to arrive with the sub-chain mode, not one to build on
-    // here.)
-    enum class BuildPhase : std::uint8_t { kUnbuilt, kBuilt, kDeclined };
-    struct InnerBuildState {
-        InnerBuild map;
-        BuildPhase phase = BuildPhase::kUnbuilt;
-    };
-    // Node-based on purpose, like the map's own buckets (inner_build.hpp):
-    // WalkAndBuild holds `InnerBuildState&` across its co_await, during
-    // which a deeper annotated step's `inner_builds_[id]` may rehash this
-    // container - nodes relink, references hold.
-    std::unordered_map<std::uint32_t, InnerBuildState> inner_builds_;
-
     // The build in progress - WalkAndBuild's stack state, exactly as
     // `Recording` is WalkAndRecord's: non-null only for the duration of
     // one building walk, checked against `step_id` at every accepted
@@ -2172,6 +2437,15 @@ private:
     // caller-owned predicate for WaitFor's lifetime reason: the poller
     // re-reads it while this runner sits suspended in its frame.
     const std::function<bool()>* resume_gate_ = nullptr;
+
+    // ---- The statement-local inner build (workplan JB3/JB5/JB6) ----------
+    //
+    // The store and its state types are above the class, because the
+    // constructor takes one: the statement owns it, every nested runner
+    // borrows it. Owned only by a top-level runner; a nested one leaves
+    // `owned_builds_` empty and points `builds_` at its parent's.
+    InnerBuildStore owned_builds_;
+    InnerBuildStore* builds_ = nullptr;
 };
 
 // The highest step_id anywhere under `step`/`chain`, sub-chains included.
