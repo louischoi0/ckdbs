@@ -426,7 +426,10 @@ parser::AstValue Null() {
 }
 
 // Every nullable type round-trips NULL, in the first and last nullable
-// position, and a present neighbour is untouched by it.
+// position, and a present neighbour is untouched by it. The varchar being
+// the *last* column is load-bearing: its cell is the one whose span would
+// have run into the bitmap under the old to-the-end-of-the-row rule, so
+// this test fails if CellOf/MutableCellOf ever regress to `row_size`.
 TEST(RowCodecNullTest, NullRoundTripsPerTypeAndPosition) {
     catalog::Schema schema;
     schema.columns.push_back(Col(0, "id", catalog::kTypeValInt64, 8));
@@ -464,7 +467,42 @@ TEST(RowCodecNullTest, ANullIntoANotNullColumnIsRefusedByName) {
     auto row = EncodeRow(schema, layout, 7, {Null()}, sink);
     ASSERT_FALSE(row.ok());
     EXPECT_EQ(row.status().code(), StatusCode::kInvalidArgument);
-    EXPECT_NE(row.status().message().find("name"), std::string::npos);
+    // Quoted, so this pins "the message names the column" and not merely
+    // "the message contains the substring" - the column is literally
+    // called `name`, which the unquoted find could never tell apart.
+    EXPECT_NE(row.status().message().find("'name'"), std::string::npos)
+        << row.status().message();
+}
+
+// Spec §6's 8/9 boundary, through the codec and not only the layout: the
+// ninth nullable column's bit lives in the second bitmap byte, and both
+// bytes must survive the last cell being written.
+TEST(RowCodecNullTest, TheNinthNullableColumnRoundTripsFromTheSecondBitmapByte) {
+    catalog::Schema schema;
+    schema.columns.push_back(Col(0, "id", catalog::kTypeValInt64, 8));
+    for (std::uint32_t i = 1; i <= 9; ++i) {
+        schema.columns.push_back(
+            NullableCol(i, "n" + std::to_string(i), catalog::kTypeValInt32, 4));
+    }
+    const catalog::RowLayout layout = LayoutFor(schema);
+    ASSERT_EQ(layout.null_bitmap_bytes, 2u);
+
+    // Columns 1 and 9 NULL - one bit per bitmap byte - the rest present.
+    std::vector<parser::AstValue> values(9, Int(5));
+    values[0] = Null();
+    values[8] = Null();
+
+    VarHeapSink sink;
+    auto row = EncodeRow(schema, layout, 7, values, sink);
+    ASSERT_TRUE(row.ok()) << row.status().message();
+    auto decoded = DecodeRow(schema, layout, row.value(), nullptr);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value()[1].type, parser::ValueType::kNull);
+    EXPECT_EQ(decoded.value()[9].type, parser::ValueType::kNull);
+    for (std::size_t i = 2; i <= 8; ++i) {
+        EXPECT_EQ(decoded.value()[i].type, parser::ValueType::kInt) << i;
+        EXPECT_EQ(decoded.value()[i].int_val, 5) << i;
+    }
 }
 
 // §3's disagreement is Corruption: a varchar cell hand-tagged kNull while

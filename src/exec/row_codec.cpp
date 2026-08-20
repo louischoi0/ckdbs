@@ -351,10 +351,12 @@ Status EncodeOneValue(const catalog::SysColumnRow& col, const parser::AstValue& 
 // mismatched pair is not an error but a *wrong row*: offsets that address
 // the right bytes for a different relation.
 Status CheckLayoutMatches(const catalog::Schema& schema, const catalog::RowLayout& layout) {
-    if (layout.offsets.size() != schema.columns.size() || layout.row_size == 0) {
+    if (layout.offsets.size() != schema.columns.size() ||
+        layout.null_bits.size() != schema.columns.size() || layout.row_size == 0) {
         return Status::InvalidArgument(
             "row layout has " + std::to_string(layout.offsets.size()) +
-            " column offset(s) for a schema of " + std::to_string(schema.columns.size()) +
+            " column offset(s) and " + std::to_string(layout.null_bits.size()) +
+            " null bit(s) for a schema of " + std::to_string(schema.columns.size()) +
             " column(s)");
     }
     return Status::OK();
@@ -383,7 +385,13 @@ std::span<std::byte> MutableCellOf(const catalog::RowLayout& layout, std::span<s
     return payload.subspan(begin, end - begin);
 }
 
-bool CompareInt(std::int64_t a, std::int64_t b, parser::CompareOp op) {
+// The one relational switch, for every operand type CompareValues
+// dispatches: int64, uint64, Int128 and string all order by the same six
+// arms. The IS forms are answered by CompareValues before any operand pair
+// is formed (spec-null.md), so their arms here are the guard for a bug,
+// not an answer anyone reads.
+template <typename T>
+bool ApplyCompare(const T& a, const T& b, parser::CompareOp op) {
     switch (op) {
         case parser::CompareOp::kEq: return a == b;
         case parser::CompareOp::kNeq: return a != b;
@@ -393,37 +401,7 @@ bool CompareInt(std::int64_t a, std::int64_t b, parser::CompareOp op) {
         case parser::CompareOp::kGte: return a >= b;
         case parser::CompareOp::kIsNull:
         case parser::CompareOp::kIsNotNull:
-            return false;  // answered by CompareValues before dispatch (spec-null.md)
-    }
-    return false;
-}
-
-bool CompareUint(std::uint64_t a, std::uint64_t b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
-        case parser::CompareOp::kIsNull:
-        case parser::CompareOp::kIsNotNull:
-            return false;  // answered by CompareValues before dispatch (spec-null.md)
-    }
-    return false;
-}
-
-bool CompareStr(std::string_view a, std::string_view b, parser::CompareOp op) {
-    switch (op) {
-        case parser::CompareOp::kEq: return a == b;
-        case parser::CompareOp::kNeq: return a != b;
-        case parser::CompareOp::kLt: return a < b;
-        case parser::CompareOp::kLte: return a <= b;
-        case parser::CompareOp::kGt: return a > b;
-        case parser::CompareOp::kGte: return a >= b;
-        case parser::CompareOp::kIsNull:
-        case parser::CompareOp::kIsNotNull:
-            return false;  // answered by CompareValues before dispatch (spec-null.md)
+            return false;
     }
     return false;
 }
@@ -819,11 +797,16 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
             // is set here, a fixed cell keeps its deterministic zeros, and
             // a tagged cell takes the kNull filler so its bytes are
             // defined rather than stale - but no reader ever consults it.
-            if (schema.columns[i].notnull) {
+            //
+            // Branched on the layout's own null_bits - the field SetNullBit
+            // reads - not on the schema's notnull, so the writer and the
+            // layout cannot disagree about which columns have a bit.
+            if (layout.null_bits[i] == catalog::kNoNullBit) {
                 return Status::InvalidArgument(
                     "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
                     "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
-                    "opt in - docs/spec-null.md)");
+                    "opt in - docs/spec-null.md) (byte " +
+                    std::to_string(values[i - 1].byte_offset) + ")");
             }
             catalog::SetNullBit(out, layout, i);
             if (schema.columns[i].type_val == kTypeValVarchar) {
@@ -897,6 +880,19 @@ Status CheckDecodeInputs(const catalog::Schema& schema, const catalog::RowLayout
     return Status::OK();
 }
 
+// A decoded NULL slot, whole: type decides, and every value field is
+// cleared - int_val, scale and dec_hi included - so no consumer that
+// dispatches on type first can ever read a stale half (the half-clear is
+// exactly the hazard SumContribution's comment names).
+void SetNullSlot(parser::AstValue& out) {
+    out.type = parser::ValueType::kNull;
+    out.str_val.clear();
+    out.raw_int_text.clear();
+    out.int_val = 0;
+    out.scale = 0;
+    out.dec_hi = 0;
+}
+
 // Column 0 is not in the body: it lives in the Keystone word.
 Status DecodeKeystoneInto(std::span<const std::byte> payload, parser::AstValue& out) {
     auto id = RowKeystoneId(payload);
@@ -923,6 +919,12 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
     // its own - the mask cannot name a column past 63, which is why the
     // compiler answers kAllColumns for a relation that wide (step_compiler
     // section 4) and why this can no longer silently skip a tail.
+    // NU8's zero-cost gate: every relation with no nullable column skips
+    // the bitmap read entirely - null_bitmap_bytes is on the cache line the
+    // decoders already read row_size from, where null_bits is a separate
+    // heap allocation.
+    const bool has_nulls = layout.null_bitmap_bytes != 0;
+
     std::uint64_t remaining = columns;
     if (schema.columns.size() < 64) {
         // Never look at a bit the schema has no column for.
@@ -935,14 +937,11 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
             if (Status s = DecodeKeystoneInto(payload, out[0]); !s.ok()) return s;
             continue;
         }
-        if (catalog::NullBitIsSet(payload, layout, i)) {
+        if (has_nulls && catalog::NullBitIsSet(payload, layout, i)) {
             // The bitmap decides here exactly as in DecodeRowInto below -
             // this is the executor's per-column path, and it was the
             // bypass the first NULL E2E test caught.
-            out[i].type = parser::ValueType::kNull;
-            out[i].str_val.clear();
-            out[i].raw_int_text.clear();
-            out[i].int_val = 0;
+            SetNullSlot(out[i]);
             continue;
         }
         if (Status s = DecodeOneValueInto(schema.columns[i], CellOf(layout, payload, i), i, out[i],
@@ -988,14 +987,14 @@ Status DecodeRowInto(const catalog::Schema& schema, const catalog::RowLayout& la
     out[0].raw_int_text.clear();
     out[0].str_val.clear();
 
+    // The same zero-cost gate as DecodeColumnsInto.
+    const bool has_nulls = layout.null_bitmap_bytes != 0;
+
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
-        if (catalog::NullBitIsSet(payload, layout, i)) {
+        if (has_nulls && catalog::NullBitIsSet(payload, layout, i)) {
             // The bitmap decides (spec-null.md §3); the cell is the defined
             // filler and is not read.
-            out[i].type = parser::ValueType::kNull;
-            out[i].str_val.clear();
-            out[i].raw_int_text.clear();
-            out[i].int_val = 0;
+            SetNullSlot(out[i]);
             continue;
         }
         if (Status s = DecodeOneValueInto(schema.columns[i], CellOf(layout, payload, i), i, out[i],
@@ -1146,7 +1145,7 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
         // A negative operand is not a uint64 and so is a non-match, which
         // is the answer every other type mismatch here gets.
         if (!a.ok() || !b.ok()) return false;
-        return CompareUint(a.value(), b.value(), op);
+        return ApplyCompare(a.value(), b.value(), op);
     }
     // ---- DECIMAL (docs/spec-types.md §3.1, TY05) -----------------------
     //
@@ -1162,7 +1161,7 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     // per-row inside a predicate is the worst possible place to decide it.
     if (lhs.type == parser::ValueType::kDecimal || rhs.type == parser::ValueType::kDecimal) {
         if (lhs.type != rhs.type || lhs.scale != rhs.scale) return false;
-        return CompareInt(lhs.int_val, rhs.int_val, op);
+        return ApplyCompare(lhs.int_val, rhs.int_val, op);
     }
     // The wide decimal: the same equal-kind, equal-scale contract - and
     // since a narrow and a wide column can never share a (p, s), a
@@ -1171,20 +1170,8 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     if (lhs.type == parser::ValueType::kDecimalWide ||
         rhs.type == parser::ValueType::kDecimalWide) {
         if (lhs.type != rhs.type || lhs.scale != rhs.scale) return false;
-        const Int128 a = Int128FromHalves(lhs.dec_hi, lhs.int_val);
-        const Int128 b = Int128FromHalves(rhs.dec_hi, rhs.int_val);
-        switch (op) {
-            case parser::CompareOp::kEq: return a == b;
-            case parser::CompareOp::kNeq: return a != b;
-            case parser::CompareOp::kLt: return a < b;
-            case parser::CompareOp::kLte: return a <= b;
-            case parser::CompareOp::kGt: return a > b;
-            case parser::CompareOp::kGte: return a >= b;
-            case parser::CompareOp::kIsNull:
-            case parser::CompareOp::kIsNotNull:
-                return false;  // answered by CompareValues before dispatch
-        }
-        return false;
+        return ApplyCompare(Int128FromHalves(lhs.dec_hi, lhs.int_val),
+                            Int128FromHalves(rhs.dec_hi, rhs.int_val), op);
     }
     // DATE and TIMESTAMP arrive here as the integers they are - epoch days
     // and epoch microseconds - so they need no arm of their own. That is
@@ -1192,10 +1179,10 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
     // ValueType: an ordering on the encoded integer *is* the ordering on
     // the value, for both.
     if (lhs.type == parser::ValueType::kInt && rhs.type == parser::ValueType::kInt) {
-        return CompareInt(lhs.int_val, rhs.int_val, op);
+        return ApplyCompare(lhs.int_val, rhs.int_val, op);
     }
     if (lhs.type == parser::ValueType::kStr && rhs.type == parser::ValueType::kStr) {
-        return CompareStr(lhs.str_val, rhs.str_val, op);
+        return ApplyCompare<std::string_view>(lhs.str_val, rhs.str_val, op);
     }
     return false;  // incompatible value kinds
 }

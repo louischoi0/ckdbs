@@ -1133,6 +1133,9 @@ TEST_F(TxnSessionTest, AnIndexOnANullableColumnIsRefusedByName) {
     const std::string out = Run(s, "CREATE INDEX by_v ON t (v)");
     ASSERT_EQ(out.rfind("ERR", 0), 0u);
     EXPECT_NE(out.find("nullable"), std::string::npos) << out;
+    // D2 promises the byte position, delivered by index_ddl's resolve -
+    // the layer that still holds the column token's offset.
+    EXPECT_NE(out.find("byte"), std::string::npos) << out;
     // Covered columns are refused by the same rule: an entry encodes
     // their values with no bitmap of its own.
     ASSERT_EQ(Run(s, "CREATE TABLE w (id int64, k int64, v int64 NULL) BTREE").substr(0, 7),

@@ -680,11 +680,14 @@ TEST(NullE2eTest, TheWireRendersNullDistinguishablyFromTheEmptyString) {
 
     const std::string out = db.Run("SELECT id, s FROM t");
     EXPECT_NE(out.find("1,NULL"), std::string::npos) << out;
-    // Row 2's field is empty: the row ends right after the comma.
-    const std::size_t row2 = out.find("2,");
+    // Row 2 is exactly "2," - the field is empty, not the token NULL.
+    const std::size_t row2 = out.find("\\n2,");
     ASSERT_NE(row2, std::string::npos) << out;
-    const std::string after = out.substr(row2 + 2, 2);
-    EXPECT_TRUE(after.empty() || after == "\\n" || after[0] == '\\') << out;
+    const std::size_t start = row2 + 2;
+    const std::size_t next = out.find("\\n", start);
+    const std::string row2_text =
+        out.substr(start, next == std::string::npos ? std::string::npos : next - start);
+    EXPECT_EQ(row2_text, "2,") << out;
 }
 
 }  // namespace

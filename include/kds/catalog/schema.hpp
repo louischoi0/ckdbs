@@ -45,6 +45,10 @@ Status CheckKeystoneColumn(const Schema& schema);
 // the build that created it.
 Status CheckDeclarableColumnTypes(const Schema& schema);
 
+// A column with no null bit - every `NOT NULL` column, which is every
+// column of a relation that declared nothing (spec-null.md §2.2).
+inline constexpr std::uint16_t kNoNullBit = 0xFFFF;
+
 // ---- RowLayout -----------------------------------------------------------
 //
 // The per-relation row-size constant and its column offsets - invariant 13
@@ -79,10 +83,6 @@ Status CheckDeclarableColumnTypes(const Schema& schema);
 // Concurrency: a plain value, built on the catalog path under whatever
 // discipline the caller already has, then read-only for the life of the
 // TableAccess holding it.
-// A column with no null bit - every `NOT NULL` column, which today is
-// every column of every relation in existence (spec-null.md §2.2).
-inline constexpr std::uint16_t kNoNullBit = 0xFFFF;
-
 struct RowLayout {
     // The schema constant. Every payload this relation's codec produces is
     // exactly this many bytes, and a stored tuple whose length disagrees is
@@ -132,21 +132,26 @@ struct RowLayout {
 
 // The bitmap is the sole authority on nullness (spec-null.md §3), and these
 // two are its only readers and writer - explicit shift and mask, invariant
-// 6. `payload` is the whole tuple payload of exactly `layout.row_size`
-// bytes; a column with kNoNullBit is never NULL by construction.
+// 6, with the byte's address computed in exactly one place. `payload` is
+// the whole tuple payload of exactly `layout.row_size` bytes; a column with
+// kNoNullBit is never NULL by construction, and callers of SetNullBit
+// branch on `null_bits[col] != kNoNullBit` before calling - the same field
+// the helper reads, so writer and layout cannot disagree.
+inline std::size_t NullByteOf(const RowLayout& layout, std::uint16_t bit) noexcept {
+    return layout.row_size - layout.null_bitmap_bytes + bit / 8;
+}
+
 inline bool NullBitIsSet(std::span<const std::byte> payload, const RowLayout& layout,
                          std::size_t col) noexcept {
     const std::uint16_t bit = layout.null_bits[col];
     if (bit == kNoNullBit) return false;
-    const std::size_t at = layout.row_size - layout.null_bitmap_bytes + bit / 8;
-    return (std::to_integer<std::uint8_t>(payload[at]) >> (bit % 8)) & 1u;
+    return (std::to_integer<std::uint8_t>(payload[NullByteOf(layout, bit)]) >> (bit % 8)) & 1u;
 }
 
 inline void SetNullBit(std::span<std::byte> payload, const RowLayout& layout,
                        std::size_t col) noexcept {
     const std::uint16_t bit = layout.null_bits[col];
-    const std::size_t at = layout.row_size - layout.null_bitmap_bytes + bit / 8;
-    payload[at] |= std::byte{static_cast<unsigned char>(1u << (bit % 8))};
+    payload[NullByteOf(layout, bit)] |= std::byte{static_cast<unsigned char>(1u << (bit % 8))};
 }
 
 // True if any column of `schema` can produce a spilled value - i.e. any

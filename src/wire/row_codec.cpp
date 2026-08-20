@@ -149,10 +149,10 @@ Status EncodeValue(const catalog::SysColumnRow& col, const parser::AstValue& val
                    std::vector<std::byte>& out) {
     const std::uint32_t type_val = col.type_val;
     if (value.type == parser::ValueType::kNull) {
-        // -1, the one NULL convention (protocol.md §6). The engine cannot
-        // store a NULL yet, so nothing produces this today - it is here
-        // because the format has to have decided, and deciding later would
-        // be a wire break.
+        // -1, the one NULL convention (protocol.md §6). Decided before the
+        // engine could store a NULL, which is why NULL storage landing
+        // (spec-null.md) was no wire break: a stored NULL ships as the
+        // length this format always reserved for it.
         PutLE(out, static_cast<std::uint32_t>(0xFFFFFFFFu), 4);
         return Status::OK();
     }
