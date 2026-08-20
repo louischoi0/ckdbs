@@ -11,6 +11,7 @@
 #include <string>
 
 #include "kds/exec/index_key.hpp"
+#include "kds/exec/inner_build.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/tuple_verify.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -406,6 +407,12 @@ private:
         if (step.kind == AccessKind::kIndexProbe || step.kind == AccessKind::kIndexRange) {
             co_return co_await RunIndexStep(steps, index, step, access);
         }
+        // The build annotation's arm (workplan JB3), gated off in sub-chain
+        // mode: the stopping walk's prefix map is JB6's unbuilt work.
+        // WalkAndBuild's publish site owns the rest of the argument.
+        if (step.build.has_value() && !record_through_stops_) {
+            co_return co_await WalkAndBuild(steps, index, step, access);
+        }
         // A kFilterScan walks exactly as a kScan does - the kind is a
         // statistics distinction, not an execution one, and there is
         // deliberately no branch for it here. If one ever appears, the
@@ -701,6 +708,68 @@ private:
             ++stats_.For(step.step_id).cabin_recordings;
         }
         co_return Status::OK();
+    }
+
+    // The walked join's lazy build (docs/spec-join-inner-build.md §2,
+    // workplan JB3): the annotated step's first walk runs exactly as
+    // written and buckets, as a side effect, every row passing the step's
+    // non-correlated residual - including rows failing the current outer
+    // key's equality, which emit nothing and enter the map under their own
+    // value. WalkAndRecord's pattern with the one difference stated up
+    // front: the Cabin records the probed key's set, this records the
+    // whole map, because one full pass is the point. A later walk of a
+    // built step still walks - JB4 replaces that branch with the probe.
+    sched::Coro WalkAndBuild(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                        const catalog::TableAccess& access) {
+        // WalkAndRecord's guard, for its reason: the bucketing reads the
+        // join column out of this row's frame slots, so the partial decode
+        // must have filled it. The compiler guarantees it - the correlated
+        // conjunct is a residual conjunct and `filter_columns` derives
+        // from that same residual - and declining to build is always
+        // legal: this walk still answers, per row, as it always did. The
+        // range and bounds checks are for a Step built by something other
+        // than the compiler (the ladder never pairs `build` with a kind or
+        // a range): a pruned walk ends early with `stopped_` false, so
+        // building under one would publish a partial map as the whole
+        // relation - declined here so "a published map is a full relation"
+        // is structural, not an else-if two files away.
+        if (step.range.has_value() || step.build->residual_pos >= step.residual.size() ||
+            step.build->col_pos >= access.schema.columns.size() ||
+            (step.filter_columns != Step::kAllColumns &&
+             (step.build->col_pos >= 64 ||
+              ((step.filter_columns >> step.build->col_pos) & 1) == 0))) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+
+        InnerBuildState& state = inner_builds_[step.step_id];
+        if (state.built) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+
+        BuildRecording build;
+        build.step_id = step.step_id;
+        build.col_pos = step.build->col_pos;
+        build.residual_pos = step.build->residual_pos;
+        build.map = &state.map;
+        BuildRecording* outer = building_;
+        building_ = &build;
+        Status walked = co_await RunWalkStep(steps, index, step, access);
+        building_ = outer;
+
+        // The publish site, and the one home of its rule: only a walk that
+        // reached the relation's end unstopped publishes - WalkAndRecord's
+        // completed-walk argument, since a cut walk bucketed the rows it
+        // reached and not the rows it did not, and a probe would serve
+        // that map as the whole relation. Every non-publishing exit
+        // resets, so "a cut build is never served" is a fact about state
+        // on the error path too.
+        if (walked.ok() && !stopped_) {
+            state.built = true;
+            ++stats_.For(step.step_id).inner_builds;
+        } else {
+            state.map = InnerBuild();
+        }
+        co_return walked;
     }
 
     // A secondary-index probe or range (docs/feat-index.md §§1, 7).
@@ -1388,6 +1457,36 @@ private:
         }
     }
 
+    // The location-and-pk half of a recorded entry, shared by the Cabin
+    // recording and the build's bucketing - both feed the same 24-byte
+    // struct, and the *gate* (a key comparison there, MakeValueKey here)
+    // stays at each call site. The pk decodes **on demand, only for a row
+    // being recorded**: paying one extra column on every rejected row was
+    // most of the recording walk's cost over the plain one
+    // (bench/results-scenario3-library.md §7a). Column 0 is fixed-width
+    // and never spills; the nullptr enforces that rather than assuming
+    // it. The epoch was captured under this row's span - the hint names
+    // the page as it was at observation (R4).
+    StatusOr<stats::CabinEntry> EntryForRow(const catalog::TableAccess& access, bool partial,
+                                            std::span<parser::AstValue> slots, PageId page_id,
+                                            std::uint16_t slot, std::uint64_t observed_epoch) {
+        if (partial) {
+            if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
+                                             /*columns=*/1, /*spills=*/nullptr);
+                !s.ok()) {
+                return s;
+            }
+        }
+        const parser::AstValue& pk = slots[0];
+        stats::CabinEntry entry;
+        entry.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
+        entry.page_id = page_id;
+        entry.page_epoch = static_cast<std::uint32_t>(observed_epoch);
+        entry.slot = slot;
+        entry.flags = stats::kCabinHintValid;
+        return entry;
+    }
+
     // Decodes one tuple into this step's frame slots, evaluates the
     // predicates attached to the step, and descends if they hold.
     //
@@ -1563,28 +1662,9 @@ private:
             if (recording_->col_pos < slots.size() &&
                 CompareValues(/*type_val=*/0, slots[recording_->col_pos], *recording_->value,
                               parser::CompareOp::kEq)) {
-                // The pk, decoded **on demand and only for a matching
-                // row**: paying one extra column on every *rejected* row
-                // was most of the recording walk's residual cost over the
-                // plain one. Column 0 is fixed-width and never spills, and
-                // the nullptr enforces that rather than assuming it.
-                if (partial) {
-                    if (Status s = DecodeColumnsInto(access.schema, access.layout, version_,
-                                                     slots, /*columns=*/1, /*spills=*/nullptr);
-                        !s.ok()) {
-                        return s;
-                    }
-                }
-                const parser::AstValue& pk = slots[0];
-                stats::CabinEntry entry;
-                entry.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
-                entry.page_id = page_id;
-                // The epoch captured under this row's span, above - the
-                // hint names the page as it was at observation (R4).
-                entry.page_epoch = static_cast<std::uint32_t>(observed_epoch);
-                entry.slot = slot;
-                entry.flags = stats::kCabinHintValid;
-                recording_->entries.push_back(entry);
+                auto entry = EntryForRow(access, partial, slots, page_id, slot, observed_epoch);
+                if (!entry.ok()) return entry.status();
+                recording_->entries.push_back(entry.value());
                 // The entry-cap lapse: once the set is past what Commit can
                 // accept, walking on for it is doomed work, so the
                 // completion license is revoked - the next stop check ends
@@ -1629,9 +1709,43 @@ private:
         // walk in the engine (bench/results-scenario3-library.md §7c.5).
         if (Status s = budget_.ChargeRow(); !s.ok()) return s;
 
-        auto matched = EvaluateAll(schemas_, step.residual, frame_);
+        // ---- The inner build's bucketing (workplan JB3) -----------------
+        //
+        // Split evaluation while this step's build is live: the
+        // non-correlated conjuncts decide *bucketing*, the correlated one
+        // then decides *emission*. On a well-formed chain the two forms
+        // give one verdict - AND over total predicates commutes, and both
+        // run the same EvaluateConjunct body, so the split cannot drift
+        // from the whole. (On a malformed chain they may name *different*
+        // Corruption sites, as any short-circuiting conjunction already
+        // may.) The map holds every row passing the non-correlated
+        // residual (spec §2): a row failing the current outer key's
+        // equality emits nothing today and is precisely what a later
+        // outer row's probe will ask for.
+        const bool building_here = building_ != nullptr && building_->step_id == step.step_id;
+        auto matched = building_here
+                           ? EvaluateAllExcept(schemas_, step.residual, frame_,
+                                               building_->residual_pos)
+                           : EvaluateAll(schemas_, step.residual, frame_);
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
+        if (building_here) {
+            // The key is this row's own join-column value. A NULL keys
+            // nothing - no equality matches it - and is skipped, not
+            // erred (MakeValueKey's contract).
+            if (auto key = stats::MakeValueKey(slots[building_->col_pos]); key.has_value()) {
+                auto entry = EntryForRow(access, partial, slots, page_id, slot, observed_epoch);
+                if (!entry.ok()) return entry.status();
+                building_->map->Add(*key, entry.value());
+                ++step_stats.build_rows;
+            }
+
+            // The correlated conjunct alone decides emission from here on.
+            auto emit =
+                EvaluateConjunct(schemas_, step.residual[building_->residual_pos], frame_);
+            if (!emit.ok()) return emit.status();
+            if (!emit.value()) return Status::OK();
+        }
 
         // ---- The row survived: build the rest of what is read ------------
         //
@@ -1842,6 +1956,31 @@ private:
     // "may walk past a stop" and "may commit a stopped walk" one fact.
     bool completing_recording_ = false;
 
+    // ---- The statement-local inner build (workplan JB3) ------------------
+    //
+    // One map per annotated step, statement-lifetime: the top-level runner
+    // IS the statement (a sub-chain runner is gated out at the dispatch
+    // and rebuilt per outer row anyway). WalkAndBuild's publish site owns
+    // the completed-walk rule `built` records.
+    struct InnerBuildState {
+        InnerBuild map;
+        bool built = false;  // set only by WalkAndBuild's publish site
+    };
+    std::unordered_map<std::uint32_t, InnerBuildState> inner_builds_;
+
+    // The build in progress - WalkAndBuild's stack state, exactly as
+    // `Recording` is WalkAndRecord's: non-null only for the duration of
+    // one building walk, checked against `step_id` at every accepted
+    // tuple, saved and restored around the walk because a deeper
+    // annotated step may build while an outer one is.
+    struct BuildRecording {
+        std::uint32_t step_id = 0;
+        std::uint16_t col_pos = 0;       // the join column the map keys on
+        std::uint16_t residual_pos = 0;  // the correlated conjunct, excluded
+        InnerBuild* map = nullptr;
+    };
+    BuildRecording* building_ = nullptr;
+
     // Phase 1's output (see ServeFromCabin): the verified locations, held
     // until every entry has been resolved so that the heap fallback can
     // still abandon without having emitted a row.
@@ -1947,6 +2086,8 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     cabin_hint_hits += other.cabin_hint_hits;
     cabin_hint_misses += other.cabin_hint_misses;
     cabin_recordings += other.cabin_recordings;
+    inner_builds += other.inner_builds;
+    build_rows += other.build_rows;
     return *this;
 }
 

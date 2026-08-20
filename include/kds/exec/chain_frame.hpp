@@ -114,8 +114,24 @@ private:
 StatusOr<bool> EvaluatePredicate(const catalog::Schema& lhs_schema, const StepPredicate& pred,
                                  const ChainFrame& frame);
 
+// One conjunct through the full residual discipline - the `$param` refusal
+// and the outward-lhs fallback included. This is EvaluateAll's loop body,
+// exposed because the inner build (workplan JB3) evaluates a step's
+// correlated conjunct separately from the rest; one body, so the split
+// evaluation cannot drift from the whole one.
+StatusOr<bool> EvaluateConjunct(const std::vector<const catalog::Schema*>& schemas,
+                                const StepPredicate& pred, const ChainFrame& frame);
+
 // Every conjunct attached to one step. Empty always matches.
 StatusOr<bool> EvaluateAll(const std::vector<const catalog::Schema*>& schemas,
                            const std::vector<StepPredicate>& predicates, const ChainFrame& frame);
+
+// Every conjunct but the one at `skip` - the inner build's bucketing
+// predicate (spec-join-inner-build.md §2: the map holds every row passing
+// the *non-correlated* residual). Together with the skipped conjunct this
+// is exactly EvaluateAll, which is what keeps emission untouched.
+StatusOr<bool> EvaluateAllExcept(const std::vector<const catalog::Schema*>& schemas,
+                                 const std::vector<StepPredicate>& predicates,
+                                 const ChainFrame& frame, std::size_t skip);
 
 }  // namespace kds::exec

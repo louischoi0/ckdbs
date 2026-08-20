@@ -3,7 +3,7 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-**JB1 and JB2 are built (2026-08-20); JB3–JB8 are not.** The sanction is
+**JB1–JB3 are built (2026-08-20); JB4–JB8 are not.** The sanction is
 `docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
 having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
 against PostgreSQL's 1,314 on the shape neither engine can index away).
@@ -95,6 +95,23 @@ covered (`ASSIGNED` pk order, `EXPLICIT` page-slot order — build order
 *is* walk order, whichever that is).
 
 ## JB3 — the lazy build
+
+**Built 2026-08-20.** The dispatch's scan arm routes an annotated step
+through `WalkAndBuild` — `WalkAndRecord`'s shape: arm, walk, publish only
+a completed walk (a sink-stopped first walk resets the map; the reset
+makes "a cut build is never served" state, not control-flow luck).
+Bucketing splits the residual around `BuildKey::residual_pos` with the
+loop body extracted as `EvaluateConjunct`, so the split and the whole
+evaluation cannot drift; emission still passes the full list. The
+sub-chain gate is `!record_through_stops_` at the dispatch — the plan's
+forbidden state has one enforcement point. `StepStats` carries
+`inner_builds`/`build_rows` from here (JB7 prints them), and the
+done-condition's map pin is discharged at count level plus the reply
+pins; the content-level pin is JB4's probe made observable, and lands
+with it. **Note: JB3 alone is a deliberate interim state** — the first
+walk pays the bucketing and nothing probes yet, so no measurement runs
+until JB4/JB5 land (this workplan's own rule: the off-switch exists
+before any measurement).
 
 `src/exec/step_vm.cpp`, the walked-join site in the scan arm.
 
