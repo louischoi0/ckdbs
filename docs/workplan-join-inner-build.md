@@ -3,7 +3,7 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-**JB1 is built (2026-08-20); JB2–JB8 are not.** The sanction is
+**JB1 and JB2 are built (2026-08-20); JB3–JB8 are not.** The sanction is
 `docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
 having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
 against PostgreSQL's 1,314 on the shape neither engine can index away).
@@ -59,7 +59,22 @@ above declines here with a test naming it.
 
 ## JB2 — the map
 
-`include/kds/exec/inner_build.hpp`, `src/exec/inner_build.cpp` (new).
+**Built 2026-08-20.** Two deviations from the letter, both toward the
+plan's own spirit. The key reuses the *whole* Cabin value identity, not
+just the 24-byte entry: `stats::MakeValueKey` (extracted from
+`MakeCabinKey` in the review round) builds a `CabinKey` with `cabin_id`
+0 — which `MakeCabinKey` refuses, so a build key handed to a CabinStore
+by mistake fails closed as a miss instead of matching an authoritative
+set; the encoding switch keeps its one home in `cabin_store.cpp`. And
+the class is header-only — no `src/exec/inner_build.cpp` — because
+`Find` is JB4's per-outer-row probe and inlines. The header states the
+invalidation contract JB4/JB6 rely on (hold the bucket `vector*`, never
+an iterator, across anything that can extend the map). The walk-order
+pin includes the discriminating case: a map that sorted by pk the way
+the Cabin's recording does would pass every other test and change
+replies on an `EXPLICIT` relation.
+
+`include/kds/exec/inner_build.hpp` (new; header-only).
 
 `exec::InnerBuild`: statement-lifetime, owned by the executor frame,
 destroyed with it. One entry per inner row — join-column value
