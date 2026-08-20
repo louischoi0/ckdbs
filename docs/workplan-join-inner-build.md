@@ -74,7 +74,13 @@ pin includes the discriminating case: a map that sorted by pk the way
 the Cabin's recording does would pass every other test and change
 replies on an `EXPLICIT` relation.
 
-`include/kds/exec/inner_build.hpp` (new; header-only).
+`include/kds/exec/inner_build.hpp` (new; header-only). The landing A/B
+measured +2.2–2.7% on the two walked correlated cells and the finding
+was investigated rather than shipped or reverted blind: the server
+binary's only delta is `cabin_store.o`, the refactored path measures
+flat, and with placement equalized both commits sit at the floor — the
+cost was link-layout displacement of a loop this change never touches
+(JB8's measurement note owns the consequence).
 
 `exec::InnerBuild`: statement-lifetime, owned by the executor frame,
 destroyed with it. One entry per inner row — join-column value
@@ -229,6 +235,22 @@ per cell — the standing discipline. Cells:
 addendum with the commit, both binary sha256s, full percentile tables,
 and the §7e follow-up; the workplan's rows above flip to done with their
 commits.
+
+**Measurement note (2026-08-20, the JB1/JB2 landing rounds):** the walked
+correlated-inner loop is placement-sensitive at ±2–3% wall on the
+measurement box — three consecutive rounds moved it without touching its
+code (fc44ac6's mid-`Step` field via data layout, reverted at 772a524;
+9f67833's `cabin_store` TU via link layout, investigated and disproven as
+a code cost: with placement equalized, both commits measure at the
+floor). Two consequences JB8 inherits: an effect claim on
+`join-no-literal` / `exists-correlated` needs replicated fresh-instance
+pairs adjudicated against same-binary floor draws, and a cross-commit
+verdict that matters should be confirmed with placement equalized — both
+sides built `-falign-functions=32` in scratch dirs, measured 2026-08-20
+to collapse the band while sitting ~1.5–2.3% above the best placement
+draw. The flag is therefore a measurement instrument, not a shipped
+setting; adopting it in Release is a toolchain proposal awaiting
+ratification (CLAUDE.md Open Decisions, Project).
 
 ## Build order
 
