@@ -3,10 +3,10 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-Nothing here is built. The sanction is `docs/parser-v2.md` §5's
-amendment of 2026-08-19; the price of not having it is
-`bench/results-scenario3-library.md` §7e (117 stmts/s against
-PostgreSQL's 1,314 on the shape neither engine can index away).
+**JB1 and JB2 are built (2026-08-20); JB3–JB8 are not.** The sanction is
+`docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
+having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
+against PostgreSQL's 1,314 on the shape neither engine can index away).
 
 ## What JB1 declines — the reasons are spec §8's
 
@@ -19,6 +19,16 @@ scope too but are not compile declines — the first is JB5's runtime
 cap, the second is not a form anyone can write.
 
 ## JB1 — the compile half: the last ladder arm, as an annotation
+
+**Built 2026-08-20.** As planned, with one seam the plan had not named:
+the SELECT-only exclusion is not free — `CompileWhere` compiles its DML
+sub-chains through the same recursive `CompileBlock` the SELECT path
+uses, so eligibility is a `bool inner_build` threaded through
+`CompileBlock`, false from `CompileWhere` down and false from a scalar
+sub-chain down (off stays off for everything nested). The multi-column
+decline is implemented as "a second correlated equality on the step
+declines the arm outright", pk conjuncts excluded as the Cabin arm
+excludes them.
 
 `src/exec/step_compiler.cpp` (the structure ladder around
 `CorrelatedIndexProbeOf` / `CorrelatedCabinProbeOf`),
@@ -49,7 +59,28 @@ above declines here with a test naming it.
 
 ## JB2 — the map
 
-`include/kds/exec/inner_build.hpp`, `src/exec/inner_build.cpp` (new).
+**Built 2026-08-20.** Two deviations from the letter, both toward the
+plan's own spirit. The key reuses the *whole* Cabin value identity, not
+just the 24-byte entry: `stats::MakeValueKey` (extracted from
+`MakeCabinKey` in the review round) builds a `CabinKey` with `cabin_id`
+0 — which `MakeCabinKey` refuses, so a build key handed to a CabinStore
+by mistake fails closed as a miss instead of matching an authoritative
+set; the encoding switch keeps its one home in `cabin_store.cpp`. And
+the class is header-only — no `src/exec/inner_build.cpp` — because
+`Find` is JB4's per-outer-row probe and inlines. The header states the
+invalidation contract JB4/JB6 rely on (hold the bucket `vector*`, never
+an iterator, across anything that can extend the map). The walk-order
+pin includes the discriminating case: a map that sorted by pk the way
+the Cabin's recording does would pass every other test and change
+replies on an `EXPLICIT` relation.
+
+`include/kds/exec/inner_build.hpp` (new; header-only). The landing A/B
+measured +2.2–2.7% on the two walked correlated cells and the finding
+was investigated rather than shipped or reverted blind: the server
+binary's only delta is `cabin_store.o`, the refactored path measures
+flat, and with placement equalized both commits sit at the floor — the
+cost was link-layout displacement of a loop this change never touches
+(JB8's measurement note owns the consequence).
 
 `exec::InnerBuild`: statement-lifetime, owned by the executor frame,
 destroyed with it. One entry per inner row — join-column value
@@ -168,7 +199,12 @@ below the pure walk.
   acceleration a heap relation's join column can have at all" (and
   `CLAUDE.md`'s Cabin row echoing it, and `src/exec/step_compiler.cpp`'s
   "the one shape a heap relation can accelerate at all" / "last of the
-  structure arms" comments, which JB1 displaces).
+  structure arms" comments, which JB1 displaces). **The two
+  `step_compiler.cpp` comments were amended by JB1 itself (2026-08-20)**
+  — JB1's commit made them false at compile time; the doc and manual
+  passages stay JB7's, since they become false only when the executor
+  consumes the annotation. JB1 also already clears the annotation in
+  `ShippedForm` — JB7's cross-core bullet asserts, it need not add.
 
 *Done when:* the shipping-equivalence harness
 (`EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers`) stays
@@ -199,6 +235,22 @@ per cell — the standing discipline. Cells:
 addendum with the commit, both binary sha256s, full percentile tables,
 and the §7e follow-up; the workplan's rows above flip to done with their
 commits.
+
+**Measurement note (2026-08-20, the JB1/JB2 landing rounds):** the walked
+correlated-inner loop is placement-sensitive at ±2–3% wall on the
+measurement box — three consecutive rounds moved it without touching its
+code (fc44ac6's mid-`Step` field via data layout, reverted at 772a524;
+9f67833's `cabin_store` TU via link layout, investigated and disproven as
+a code cost: with placement equalized, both commits measure at the
+floor). Two consequences JB8 inherits: an effect claim on
+`join-no-literal` / `exists-correlated` needs replicated fresh-instance
+pairs adjudicated against same-binary floor draws, and a cross-commit
+verdict that matters should be confirmed with placement equalized — both
+sides built `-falign-functions=32` in scratch dirs, measured 2026-08-20
+to collapse the band while sitting ~1.5–2.3% above the best placement
+draw. The flag is therefore a measurement instrument, not a shipped
+setting; adopting it in Release is a toolchain proposal awaiting
+ratification (CLAUDE.md Open Decisions, Project).
 
 ## Build order
 

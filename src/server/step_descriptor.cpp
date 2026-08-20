@@ -178,6 +178,11 @@ bool ShipsAsWalk(exec::AccessKind kind) {
 }
 
 exec::Step ShippedForm(exec::Step step) {
+    // The build annotation is compiled, core-local state (workplan JB1):
+    // cleared for every shipped step, so "the descriptor never carries it"
+    // is the downgrade's property rather than the codec's silence - and no
+    // wrong-frame `key_from` survives the session's residual rewrite.
+    step.build.reset();
     if (!ShipsAsWalk(step.kind)) return step;
     step.kind = exec::AccessKind::kScan;
     step.index.reset();

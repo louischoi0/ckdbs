@@ -815,6 +815,249 @@ TEST_F(StepCompileTest, ACorrelatedSubChainProbesTheCabinThroughTheFrame) {
     EXPECT_EQ(inner[0].cabin->key_from->up, 1u);
 }
 
+// ---- The walked-join build annotation (workplan JB1) ----------------------
+//
+// The compile half of the statement-local inner build
+// (docs/spec-join-inner-build.md). Two contracts, and every test here pins
+// one of them: **exactly** the walked-join shape carries the annotation, and
+// an annotated step is a kScan by every other measure - kinds, residuals,
+// read_columns and class are what they were before the arm existed, by
+// construction and not by audit.
+
+TEST_F(StepCompileTest, TheWalkedJoinCarriesTheBuildAnnotation) {
+    // The shape nothing serves: a join on a non-pk column with no index and
+    // no Cabin. Before JB1 this compiled to a bare kScan walked once per
+    // outer row; it still compiles to that kScan, now carrying the one
+    // piece of state the executor needs to build once instead (JB3).
+    for (const char* on : {"trade.acct_id = acct.id", "acct.id = trade.acct_id"}) {
+        const StepChain chain =
+            MustCompile(std::string("SELECT COUNT(*) FROM acct JOIN trade ON ") + on);
+        ASSERT_EQ(chain.steps.size(), 2u);
+        const Step& inner = chain.steps[1];
+        EXPECT_EQ(inner.kind, AccessKind::kScan) << on;
+        ASSERT_TRUE(inner.build.has_value()) << on;
+        EXPECT_EQ(inner.build->col_pos, 1u) << on;
+        EXPECT_EQ(inner.build->key_from, (ColumnRef{0, 0, 0})) << on;
+        // The residual position names a conjunct that really is the join
+        // equality, so JB3 can partition the residual around it.
+        ASSERT_LT(inner.build->residual_pos, inner.residual.size()) << on;
+        EXPECT_EQ(inner.residual[inner.build->residual_pos].op, parser::CompareOp::kEq) << on;
+    }
+}
+
+TEST_F(StepCompileTest, TheAnnotatedStepIsAScanByEveryOtherMeasure) {
+    // The chain-identity half of JB1's done-condition, on the main chain:
+    // kind, every per-kind payload, the statistics shape, the masks and the
+    // class are exactly the bare walk's - the annotation is the single
+    // delta. The masks are hand-computed the way every AP01 test above is.
+    const StepChain chain =
+        MustCompile("SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    const Step& inner = chain.steps[1];
+    ASSERT_TRUE(inner.build.has_value());
+    EXPECT_EQ(inner.kind, AccessKind::kScan);
+    EXPECT_FALSE(inner.key.has_value());
+    EXPECT_FALSE(inner.range.has_value());
+    EXPECT_FALSE(inner.cabin.has_value());
+    EXPECT_FALSE(inner.index.has_value());
+    EXPECT_TRUE(inner.access_columns.empty()) << "kScan's statistics shape stays empty";
+    EXPECT_FALSE(IsTrailReplayable(inner.kind));
+    EXPECT_EQ(chain.klass, StatementClass::kJoinSelect);
+    EXPECT_EQ(inner.filter_columns, Col(1)) << "the join conjunct's own column";
+    EXPECT_EQ(inner.read_columns, Col(1) | Col(2)) << "the conjunct plus the projection";
+}
+
+TEST_F(StepCompileTest, OnlyTheWalkedJoinShapeIsAnnotated) {
+    // Each row here reaches the build arm and must leave it empty-handed;
+    // shapes decided before the arm (lookups, filter scans) are pinned by
+    // the priority tests below, not repeated here.
+    for (const char* sql : {
+             "SELECT * FROM trade",  // bare scan, nothing correlated
+             // The pk-probe join: the correlated equality binds the inner
+             // relation's pk, which the probe arm serves outright.
+             "SELECT a.name FROM trade AS t JOIN acct AS a ON t.acct_id = a.id",
+             // An uncorrelated inner set: no equality reaches outward, so
+             // there is no key to build a map on.
+             "SELECT * FROM acct WHERE id IN (SELECT acct_id FROM trade)",
+         }) {
+        const StepChain chain = MustCompile(sql);
+        for (const Step& step : chain.steps) {
+            EXPECT_FALSE(step.build.has_value()) << sql;
+            for (const SubChain& sub : step.sub_chains) {
+                for (const Step& s : sub.steps) EXPECT_FALSE(s.build.has_value()) << sql;
+            }
+        }
+        for (const SubChain& sub : chain.hoisted) {
+            for (const Step& s : sub.steps) EXPECT_FALSE(s.build.has_value()) << sql;
+        }
+    }
+}
+
+TEST_F(StepCompileTest, AnExistsSubChainsWalkedInnerIsAnnotatedThroughTheFrame) {
+    // The other owner of the per-outer-row walk (JB6's class): the
+    // sub-chain's join equality reaches outward, up == 1, same as the
+    // correlated cabin test above - but with no Cabin declared, the build
+    // annotation is what the shape gets.
+    const StepChain chain = MustCompile(
+        "SELECT * FROM acct WHERE EXISTS "
+        "(SELECT trade.id FROM trade WHERE trade.acct_id = acct.id)");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
+    const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
+    ASSERT_EQ(inner.size(), 1u);
+    EXPECT_EQ(inner[0].kind, AccessKind::kScan);
+    ASSERT_TRUE(inner[0].build.has_value());
+    EXPECT_EQ(inner[0].build->col_pos, 1u);
+    EXPECT_EQ(inner[0].build->key_from.up, 1u);
+}
+
+TEST_F(StepCompileTest, TheResidualPositionNamesTheConjunctAmongOthers) {
+    // The one field JB3 partitions the residual around, pinned where it
+    // can actually fail: the correlated equality sits *second* in written
+    // order, behind a non-equality literal that keeps the step a kScan. A
+    // BuildKeyOf that hardcoded position 0 passes every other test here.
+    const StepChain chain = MustCompile(
+        "SELECT * FROM acct WHERE EXISTS "
+        "(SELECT trade.id FROM trade WHERE trade.acct_id > 0 AND trade.acct_id = acct.id)");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
+    const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
+    ASSERT_EQ(inner.size(), 1u);
+    EXPECT_EQ(inner[0].kind, AccessKind::kScan);
+    ASSERT_TRUE(inner[0].build.has_value());
+    ASSERT_EQ(inner[0].residual.size(), 2u);
+    EXPECT_EQ(inner[0].build->residual_pos, 1u);
+    EXPECT_EQ(inner[0].build->col_pos, 1u);
+}
+
+TEST_F(StepCompileTest, TheBuildDeclinesAMultiColumnJoinKey) {
+    // Spec §8, CB12's scope rule: two correlated equalities on one step are
+    // a key the statement wrote as two columns, and v1 declines rather than
+    // keying a map on half of it.
+    const StepChain chain = MustCompile(
+        "SELECT COUNT(*) FROM acct JOIN trade ON trade.acct_id = acct.id "
+        "WHERE trade.sym = acct.name");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[1].kind, AccessKind::kScan);
+    EXPECT_FALSE(chain.steps[1].build.has_value());
+}
+
+TEST_F(StepCompileTest, TheBuildDeclinesANonEqualityCorrelation) {
+    // Spec §8: only an equality buckets. ON is equality-only by grammar, so
+    // the sub-chain form is where a non-equality correlation can be written.
+    const StepChain chain = MustCompile(
+        "SELECT * FROM acct WHERE EXISTS "
+        "(SELECT trade.id FROM trade WHERE trade.acct_id > acct.id)");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
+    const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
+    ASSERT_EQ(inner.size(), 1u);
+    EXPECT_EQ(inner[0].kind, AccessKind::kScan);
+    EXPECT_FALSE(inner[0].build.has_value());
+}
+
+TEST_F(StepCompileTest, TheBuildDeclinesAMismatchedDescriptor) {
+    // int64 against int32, the correlated cabin's decline read the same
+    // way: the frame value must be byte-valid under the map column's
+    // descriptor, and only an identical (type_val, len) makes it so.
+    Create("CREATE TABLE narrow3 (id int64, small int32)");
+    const StepChain chain = MustCompile(
+        "SELECT COUNT(*) FROM narrow3 JOIN trade ON trade.acct_id = narrow3.small");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[1].kind, AccessKind::kScan);
+    EXPECT_FALSE(chain.steps[1].build.has_value());
+}
+
+TEST_F(StepCompileTest, AFilterScanStillWinsOverTheBuild) {
+    // Spec §8, a decision rather than an impossibility: the step's own
+    // literal already bounds what a walk visits, and v1 declines to also
+    // build for it. The kind arm order is the test.
+    const StepChain chain = MustCompile(
+        "SELECT COUNT(*) FROM acct JOIN trade ON trade.acct_id = acct.id "
+        "WHERE trade.sym = 'AAPL'");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[1].kind, AccessKind::kFilterScan);
+    EXPECT_FALSE(chain.steps[1].build.has_value());
+}
+
+TEST_F(StepCompileTest, ABankedStructureStillWinsOverTheBuild) {
+    // Ladder order is the economics (spec §5): a converged Cabin serve
+    // beats any per-statement rebuild, so the banked arm stays ahead.
+    auto trade_oid = boot_->catalog.FindTableOidByName("trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    const StepChain chain =
+        MustCompile("SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id");
+    ASSERT_EQ(chain.steps.size(), 2u);
+    EXPECT_EQ(chain.steps[1].kind, AccessKind::kCabinProbe);
+    EXPECT_FALSE(chain.steps[1].build.has_value());
+}
+
+TEST_F(StepCompileTest, ADmlSubChainDeclinesAndIsOtherwiseByteIdentical) {
+    // Two refusal rows and the identity contract in one shape. v1 is
+    // SELECT-only (spec §4: a DML statement's own writes between outer rows
+    // are what would invalidate a map), so the same subquery text compiles
+    // annotated under SELECT and bare under CompileWhere - which is also
+    // the with/without-the-arm comparison JB1's done-condition asks for:
+    // every field the identity contract names is byte-identical, and the
+    // annotation is the single delta.
+    const char* subquery = "EXISTS (SELECT trade.id FROM trade WHERE trade.acct_id = acct.id)";
+
+    const StepChain with = MustCompile(std::string("SELECT * FROM acct WHERE ") + subquery);
+    ASSERT_EQ(with.steps.size(), 1u);
+    ASSERT_EQ(with.steps[0].sub_chains.size(), 1u);
+    ASSERT_EQ(with.steps[0].sub_chains[0].steps.size(), 1u);
+    const Step& annotated = with.steps[0].sub_chains[0].steps[0];
+    ASSERT_TRUE(annotated.build.has_value());
+
+    auto parsed =
+        parser::Parse(std::string("UPDATE acct SET name = 'x' WHERE ") + subquery);
+    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+    const auto& update = std::get<parser::UpdateStmt>(parsed.value());
+    auto oid = boot_->catalog.FindTableOidByName("acct", nullptr);
+    ASSERT_TRUE(oid.ok());
+    auto access = boot_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    auto where_step = CompileWhere(boot_->catalog, *access.value(), "acct", update.where);
+    ASSERT_TRUE(where_step.ok()) << where_step.status().message();
+    ASSERT_EQ(where_step.value().sub_chains.size(), 1u);
+    ASSERT_EQ(where_step.value().sub_chains[0].steps.size(), 1u);
+    const Step& bare = where_step.value().sub_chains[0].steps[0];
+    EXPECT_FALSE(bare.build.has_value());
+
+    EXPECT_EQ(annotated.step_id, bare.step_id);
+    EXPECT_EQ(annotated.rel_oid, bare.rel_oid);
+    EXPECT_EQ(annotated.rel_name, bare.rel_name);
+    EXPECT_EQ(annotated.kind, bare.kind);
+    EXPECT_EQ(annotated.filter_columns, bare.filter_columns);
+    EXPECT_EQ(annotated.read_columns, bare.read_columns);
+    EXPECT_EQ(annotated.access_columns, bare.access_columns);
+    ASSERT_EQ(annotated.residual.size(), bare.residual.size());
+    for (std::size_t p = 0; p < annotated.residual.size(); ++p) {
+        EXPECT_EQ(annotated.residual[p].lhs, bare.residual[p].lhs);
+        EXPECT_EQ(annotated.residual[p].op, bare.residual[p].op);
+        EXPECT_EQ(annotated.residual[p].rhs.kind, bare.residual[p].rhs.kind);
+    }
+}
+
+TEST_F(StepCompileTest, AScalarSubChainIsNeverAnnotated) {
+    // Spec §6: a hit in a prefix map is conclusive only under `Exists`
+    // semantics; a scalar sub-chain's cardinality check has none, so its
+    // steps never take the annotation - and neither does anything nested
+    // under one.
+    const StepChain chain = MustCompile(
+        "SELECT * FROM acct WHERE name = "
+        "(SELECT trade.sym FROM trade WHERE trade.acct_id = acct.id)");
+    ASSERT_EQ(chain.steps.size(), 1u);
+    ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
+    EXPECT_EQ(chain.steps[0].sub_chains[0].kind, parser::PredicateKind::kCompareSubquery);
+    const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
+    ASSERT_EQ(inner.size(), 1u);
+    EXPECT_EQ(inner[0].kind, AccessKind::kScan);
+    EXPECT_FALSE(inner[0].build.has_value());
+}
+
 TEST_F(StepCompileTest, ARelationWiderThanSixtyFourColumnsGetsNoMask) {
     // **A latent correctness bug, found while building AP01 and fixed with
     // it.** A uint64 mask cannot name column 64, and DecodeColumnsInto stops

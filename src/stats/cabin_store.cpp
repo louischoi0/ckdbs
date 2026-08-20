@@ -27,19 +27,16 @@ std::size_t CabinKeyHash::operator()(const CabinKey& key) const noexcept {
     return static_cast<std::size_t>(h);
 }
 
-std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstValue& value) {
-    if (cabin_id == 0) return std::nullopt;
+std::optional<CabinKey> MakeValueKey(const parser::AstValue& value) {
     switch (value.type) {
         case parser::ValueType::kInt: {
             CabinKey key;
-            key.cabin_id = cabin_id;
             key.type = value.type;
             key.int_val = value.int_val;
             return key;
         }
         case parser::ValueType::kStr: {
             CabinKey key;
-            key.cabin_id = cabin_id;
             key.type = value.type;
             key.str_val = value.str_val;
             return key;
@@ -52,7 +49,6 @@ std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstVa
             // scale cannot share a Cabin anyway (a Cabin is per column), so
             // this is belt and braces - and cheap.
             CabinKey key;
-            key.cabin_id = cabin_id;
             key.type = value.type;
             key.int_val = value.int_val;
             key.str_val = std::to_string(value.scale);
@@ -64,7 +60,6 @@ std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstVa
             // both. The kind is part of the key, so a wide value can never
             // collide with a narrow one whatever the strings say.
             CabinKey key;
-            key.cabin_id = cabin_id;
             key.type = value.type;
             key.int_val = value.int_val;
             key.str_val = std::to_string(value.scale) + "," + std::to_string(value.dec_hi);
@@ -79,6 +74,13 @@ std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstVa
             return std::nullopt;
     }
     return std::nullopt;
+}
+
+std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstValue& value) {
+    if (cabin_id == 0) return std::nullopt;
+    std::optional<CabinKey> key = MakeValueKey(value);
+    if (key.has_value()) key->cabin_id = cabin_id;
+    return key;
 }
 
 std::vector<CabinEntry>* CabinStore::Find(const CabinKey& key) {

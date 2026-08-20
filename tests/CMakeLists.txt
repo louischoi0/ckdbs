@@ -116,6 +116,7 @@ add_executable(kds_tests
     parser_subquery_test.cpp
     parser_fuzz_test.cpp
     step_compile_test.cpp
+    inner_build_test.cpp
     step_correlation_test.cpp
     exec_chain_test.cpp
     exec_subquery_test.cpp

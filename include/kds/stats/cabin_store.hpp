@@ -142,14 +142,23 @@ struct CabinKeyHash {
     std::size_t operator()(const CabinKey& key) const noexcept;
 };
 
-// The key for `value` in `cabin_id`, or nullopt for a value that must never
-// be observed.
+// The value half of a key, `cabin_id` left 0 - the Cabin's value identity
+// for anything that needs it without being a Cabin (the statement-local
+// inner build, workplan JB2, is the first). A zero cabin_id is not a cabin
+// and MakeCabinKey below refuses it, so a value-only key handed to a
+// CabinStore by mistake can never match a stored entry set: it fails
+// closed, as a miss, instead of serving an authoritative set it does not
+// name.
 //
 // Two kinds are refused, for one reason each. **kNull**: `WHERE c = NULL` is
 // not an equality any SQL evaluates to true, so a set keyed on NULL would
 // answer a predicate that never matches - and NULLs are not storable today
 // regardless. **kParam**: a declared pattern's `$x` is a value *position*
 // with no value in it, and nothing ever binds one on an execute path.
+std::optional<CabinKey> MakeValueKey(const parser::AstValue& value);
+
+// The key for `value` in `cabin_id`, or nullopt for a zero cabin_id or a
+// value MakeValueKey refuses - the refusal reasons are its.
 std::optional<CabinKey> MakeCabinKey(std::uint64_t cabin_id, const parser::AstValue& value);
 
 // §8's budget is `[OPEN]` - per-cabin page budget, per-value set caps,
