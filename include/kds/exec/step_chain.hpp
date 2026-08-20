@@ -440,11 +440,6 @@ struct Step {
     // every other kind.
     std::optional<IndexProbe> index;
 
-    // The walked-join annotation (workplan JB1). Unlike the four fields
-    // above it marks no kind - the step stays kScan. `BuildKey` owns the
-    // whole contract.
-    std::optional<BuildKey> build;
-
     // Emit each page's rows in pk order rather than in slot order.
     //
     // A walk hands the executor a page's slots in slot order, which *is* pk
@@ -552,6 +547,18 @@ struct Step {
     // the same way `filter_columns` has it: a Step built by anything other
     // than the compiler decodes everything and is merely slow.
     std::uint64_t read_columns = kAllColumns;
+
+    // The walked-join annotation (workplan JB1). Unlike the per-kind
+    // fields above it marks no kind - the step stays kScan. `BuildKey`
+    // owns the whole contract.
+    //
+    // **Deliberately last.** Inserting this field mid-struct measured a
+    // real ~1.7% wall regression on the correlated-inner shapes by moving
+    // `residual` onto a different cache line (the JB1 A/B round, fc44ac6
+    // vs 080f73a) - the arm's own cost was unmeasurable. Cold compiled
+    // state sits below the hot execution fields; JB3 adds its reader here,
+    // not above.
+    std::optional<BuildKey> build;
 };
 
 // Execution shape, dispatched on by a `switch` - there is no plan
