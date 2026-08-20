@@ -327,7 +327,7 @@ k ≥ 2 every avoided walk is pure win" was: both counted rows visited
 and neither counted the nanoseconds of visiting them. §6 is amended
 with the crossover rather than the claim.
 
-## The build constant, third cut (2026-08-20, `jb6-prefix-map` at `3b5aa9b`)
+## The build constant, third cut (2026-08-20, `jb6-prefix-map` at `c8126cf`)
 
 The map's last allocation, removed: keys now live in an append-only
 vector found through an **open-addressed table of 8-byte slots**, so a
