@@ -4,7 +4,10 @@ How a KDS tuple records the absence of a value, and what that absence means
 everywhere it is read. `[PROPOSED]` marks a default to confirm or amend before
 the affected part is built; `[OPEN]` must not be assumed.
 
-**Status: proposal. Nothing here is built.** Today `NULL` parses as a literal
+**Status: ratified 2026-08-20, build in progress**
+(`docs/workplan-null.md` NU1-NU8 owns the tasks; §5's opens are decided
+there - NOT NULL default with `NULL` opt-in, nullable index keys refused
+in v1, NULLs sort largest). Today `NULL` parses as a literal
 and `exec::EncodeRow()` refuses it, so no row can hold one
 (`docs/known-gaps.md`, "No NULL storage"). This document is the owning spec for
 closing that; it **amends `docs/rule-fixed-length-tuple.md` §2** with one
@@ -121,7 +124,7 @@ the bitmap by nullable columns rather than by all columns:
   its codec are already there. What is missing is a grammar that can set it
   false and a row codec that honours it.
 
-### 2.3 The `NOT NULL` grammar, and the default `[OPEN]`
+### 2.3 The `NOT NULL` grammar, and the default — **decided 2026-08-20: KDS-current** (`workplan-null.md` D1)
 
 Setting `notnull = false` needs a spelling, and choosing it is a decision this
 document does **not** take:
@@ -208,7 +211,7 @@ belongs to the doc named — a workplan should not discover them one at a time.
 
 ---
 
-## 5. Open decisions — do not assume
+## 5. Open decisions — ratified 2026-08-20 (`workplan-null.md`), kept as the option record
 
 - The nullability default and its grammar (§2.3).
 - Whether a NULL key enters a secondary index, and its sort position (§4).
