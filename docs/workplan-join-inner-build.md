@@ -308,6 +308,38 @@ draw. The flag is therefore a measurement instrument, not a shipped
 setting; adopting it in Release is a toolchain proposal awaiting
 ratification (CLAUDE.md Open Decisions, Project).
 
+## The JB5 gate's measurement (2026-08-20, at 1b28c9f exactly)
+
+Config-levered A/B on one binary (`join_build_max_rows` 0 vs 65536),
+which the placement band cannot confound; every pair's `--verify` passed
+row-for-row (JB4's done-when, 26/26 pairs). Verdicts:
+
+- **The acceptance cell: pass with a named miss.** join-no-literal at
+  10000/k=16 moves 113.8 → 675.3 stmts/s (×6.0; §7e's walk baseline 117
+  reproduced by the off side) — from 11.2× behind PostgreSQL to 1.9×
+  behind, 22× short of the converged Cabin, the ladder-order economics
+  §5 predicted. The ~600 µs class is missed: on-side p50 is 1466 µs, and
+  the miss is exactly the build constant below (walk 603 + build ~840 +
+  16 probes ~26).
+- **The finding, with its number: the build costs ~80–84 ns per
+  bucketed inner row** — join-k1 regresses +26%/+80%/+139% at
+  200/1000/10000, break-even k ≈ 2.6 (10k) to 5.3 (200). Spec §5's
+  "k ≥ 2 every avoided walk is pure win" is quantitatively wrong on this
+  box (k=2 loses at 10k), and nothing today can decline a build by k —
+  the cap gates rows. This is the open cap-scoping decision's first real
+  datum; the Cabin's ratified n=2 observation rule
+  (`kAutoRecordThreshold`: the first miss counts, the second records) is
+  the spec-consistent candidate answer — defer the build to the second
+  outer row's walk, making k=1 free and moving break-even to ~3.6.
+  Decision not taken here; it amends spec §5.
+- **exists-correlated: unchanged within floors** (the JB6 gate holds).
+  **Floor sweep: pass** (pk, filter-scan, cabin; the Cabin keeps ladder
+  priority — plans identical under both configs).
+- **Unresolved-leaning, recheck at JB6:** with the build *off*, aligned
+  cross-commit draws put exists +1.7% (4/4 rank-perfect but only 4
+  draws) — a possible ~3–6 ns/row executor-plumbing cost riding even
+  when disabled.
+
 ## Build order
 
 JB1 → JB2 → JB3 → JB4 → JB5 (the off-switch exists before any
