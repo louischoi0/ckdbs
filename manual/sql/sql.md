@@ -729,10 +729,26 @@ waits on"; `InvalidArgument` means "simply wrong".
   shift if they ever land.
 - **The join rule.** KDS supports inner equi-join chains, executed in
   written order, probing by primary key where the ON allows it. There is no
-  hash join and no merge join **because there is no plan search to choose
-  between algorithms — the query is the plan.** Written order is a client
-  contract; decorrelation rewrites are forbidden, not merely unimplemented.
-  A stable plan is what lets `pattern_id` name a plan and Waystone trust it.
+  merge join and no plan search **— the query is the plan.** Written order
+  is a client contract; decorrelation rewrites are forbidden, not merely
+  unimplemented. A stable plan is what lets `pattern_id` name a plan and
+  Waystone trust it.
+
+  Since 2026-08-20 one join *does* hash, and the distinction is worth
+  stating precisely because the sentence above used to deny it outright.
+  When a join's inner side has no index, no Cabin, and no filter of its
+  own that already narrows it, the executor builds an in-memory map of
+  the inner rows the statement's own filters admit — **once per
+  statement**, on the first outer row's read — and every later outer row
+  looks its key up instead of reading again. That is a hash build in
+  mechanism. It is **not** a plan choice: which relation drives, which
+  joins what, and the order rows come back in are all exactly what they
+  were, the map is discarded when the statement ends, and nothing is
+  declared, persisted or reused. `ANALYZE` marks the step `build` and
+  reports `inner_built`, and `join_build_max_rows = 0` turns it off
+  without changing a single reply. What stays forbidden is what the rule
+  was always about: no algorithm gets *chosen*, and no statement is
+  rewritten.
 - **No `HAVING`, and no `ORDER BY` over aggregated output.** `HAVING`
   answers with "filter before the fold with WHERE, or filter the result
   client-side". Ordering *aggregated* output stays refused deliberately:

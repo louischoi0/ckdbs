@@ -182,10 +182,22 @@ compile-time literal (`CabinProbe::key_from`). Everything downstream of
 the key construction is §4's machinery unchanged: an observed value
 serves its set, a miss walks and (policy permitting) records, the
 hint-failure path re-records. This is IX17's shape one trust class over,
-and it is the only acceleration a **heap** relation's join column can
-have at all — IX3 refuses it an index.
+and it is the only **banked** acceleration a **heap** relation's join
+column can have — IX3 refuses it an index. (Amended 2026-08-20: it was
+"the only acceleration at all" until the statement-local inner build
+landed, `docs/spec-join-inner-build.md`. The two do not compete for the
+same claim — a Cabin is declared, authoritative and survives the
+statement; the build is undeclared, unauthoritative and dies with it —
+and ladder order encodes the economics: a converged Cabin serve
+(~67 µs) beats any per-statement rebuild (~560 µs), the spec's own §5
+ladder line at the **halved** build constant, so the Cabin keeps
+priority and the build takes only what nothing banked can serve. Do not
+quote `bench/results-scenario3-library.md` §7f.7's 20× for this — that
+table was measured before the constant fell 83.7 → 43.2 ns/row, and the
+gap it shows is no longer the current one.)
 
-Selection is `f(shape, catalog)`, last of the structure arms: after both
+Selection is `f(shape, catalog)`, last of the **banked**-structure arms:
+after both
 index forms (an index is complete for every key value) and after the
 literal Cabin (a compile-time key needs no per-row read), and only across
 an identical `(type_val, len)` descriptor — the write hook observes

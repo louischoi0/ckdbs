@@ -54,6 +54,16 @@ protected:
         return d.Dispatch(sql).response;
     }
 
+    // The same, with the statement-local inner build switched off
+    // (workplan JB5/JB7): `join_build_max_rows = 0` is how the
+    // fallen-back reading of `inner_built=0` is produced without
+    // contriving a relation larger than the default 65536.
+    std::string RunWithoutTheBuild(const std::string& sql) {
+        CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+        d.set_join_build_max_rows(0);
+        return d.Dispatch(sql).response;
+    }
+
     // The reply with the wire's "\n" escapes turned back into newlines,
     // which is what tools/ckdbs_cli.py does for display.
     std::string Unescaped(const std::string& reply) {
@@ -86,6 +96,73 @@ TEST_F(AnalyzeTest, APkJoinReportsScanThenProbe) {
     EXPECT_NE(plan.find("step 0 Scan trade"), std::string::npos) << plan;
     EXPECT_NE(plan.find("step 1 Probe acct"), std::string::npos) << plan;
     EXPECT_NE(plan.find("class=JoinSelect"), std::string::npos) << plan;
+}
+
+// ---- The statement-local inner build (workplan JB7) ----------------------
+//
+// `acct JOIN trade ON trade.acct_id = acct.id` is the walked-join shape,
+// the pk join above read the other way round: the inner step is `trade`,
+// keyed on `trade.acct_id`, which is not `trade`'s pk and carries no index
+// and no Cabin - so every arm of the structure ladder declines and the
+// step takes the build annotation.
+
+TEST_F(AnalyzeTest, AWalkedJoinsPlanMarksTheStepThatMayBuild) {
+    // Visible **before execution**: the annotation is compile-time state,
+    // so the marker rides the plan line the way `derived` marks a conjunct
+    // the client never wrote. The inner stays a Scan - the whole design is
+    // that no kind moved.
+    const std::string plan = Unescaped(
+        Run("ANALYZE SELECT acct.name, trade.sym FROM acct JOIN trade "
+            "ON trade.acct_id = acct.id"));
+    EXPECT_NE(plan.find("step 0 Scan acct"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("step 1 Scan trade"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("build on=col1"), std::string::npos) << plan;
+
+    // The pk join of the test above takes no annotation: its inner step is
+    // served by the probe arm, which declines the build arm by ladder
+    // order. Same two relations, so this isolates the shape.
+    const std::string pk_plan = Unescaped(
+        Run("ANALYZE SELECT acct.name FROM trade JOIN acct ON trade.acct_id = acct.id"));
+    EXPECT_EQ(pk_plan.find("build"), std::string::npos) << pk_plan;
+}
+
+TEST_F(AnalyzeTest, ABuiltStatementReportsItsMapAndItsProbes) {
+    // Three accounts and three trades: alice's walk builds the map (all
+    // three trade rows pass the non-correlated residual, which is empty),
+    // then bob and carol are served from it - two probes, no second walk.
+    // `build_rows` exceeding `matched` is the honest shape: the map holds
+    // rows this outer key rejected, which is exactly what the next key
+    // asks for.
+    const std::string plan = Unescaped(
+        Run("ANALYZE SELECT acct.name, trade.sym FROM acct JOIN trade "
+            "ON trade.acct_id = acct.id"));
+    EXPECT_NE(plan.find("inner_built=1"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("build_rows=3"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("build_probes=2"), std::string::npos) << plan;
+    // `replays=` is absent, but read what that is worth: **this fixture
+    // records and replays nothing** (the dispatcher takes the default null
+    // recorder), so the line is a shape check on the rendering, not a pin
+    // of spec §3's "the build feeds no trail". The pin that would bite
+    // belongs where a recorder is live - `waystone_contract_test.cpp` -
+    // and the argument meanwhile is the `Scan` asserted above:
+    // recording is gated on `IsTrailReplayable(step.kind)` and the
+    // annotation moves no kind.
+    EXPECT_EQ(plan.find("replays="), std::string::npos) << plan;
+}
+
+TEST_F(AnalyzeTest, AFallenBackStatementSaysSoRatherThanGoingQuiet) {
+    // `inner_built=0` is printed, not omitted. A step that carries the
+    // annotation and did not publish paid per-row walks for the whole
+    // statement, and no other counter distinguishes that from a step that
+    // was never eligible - which is the reading an operator chasing a slow
+    // join needs. The plan still marks the step, because eligibility is a
+    // compile-time fact the cap does not change.
+    const std::string plan = Unescaped(
+        RunWithoutTheBuild("ANALYZE SELECT acct.name, trade.sym FROM acct JOIN trade "
+                           "ON trade.acct_id = acct.id"));
+    EXPECT_NE(plan.find("build on=col1"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("inner_built=0"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("build_probes="), std::string::npos) << plan;
 }
 
 TEST_F(AnalyzeTest, ALiteralPkEqualityReportsALookup) {
