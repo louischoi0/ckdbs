@@ -1,6 +1,8 @@
 # Workplan — NULL storage and semantics (NU series)
 
-Status: **ratified 2026-08-20, build in progress.** The owning spec is
+Status: **complete 2026-08-20** (NU1 `0d3e246` through the review pass at
+`6e1f4f6`; the slice-to-commit map is in each commit message). The owning
+spec is
 `docs/spec-null.md`, whose design was already decided (the tail null
 bitmap sized to nullable columns, preserving invariant 13; the bitmap as
 sole authority with `kNull` as defined filler). This file records the
@@ -51,34 +53,34 @@ ratified `[OPEN]`s and the task slices.
 ## Task slices
 
 - **NU1** — this ratification; spec §2.3/§5 amended to decided. ☑
-- **NU2** — layout: `RowLayout` gains the per-column null-bit index
+- **NU2** ☑ (`0aea27b`) — layout: `RowLayout` gains the per-column null-bit index
   (`kNoNullBit` for `NOT NULL`), `null_bitmap_bytes`, `row_size` growth;
   the §6 layout property tests (0 bytes and byte-identical `row_size`
   for every all-`NOT NULL` schema; the 8/9-column byte boundary).
-- **NU3** — grammar + catalog: the `NULL` column modifier (and no-op
+- **NU3** ☑ (`959fd19`) — grammar + catalog: the `NULL` column modifier (and no-op
   `NOT NULL`) in both CREATE TABLE paths; `notnull=false` written;
   refuse a nullable **first column** (invariant 11: the pk has no NULL
   encoding); refuse `CREATE INDEX` whose key includes a nullable column
   (D2); `DESCRIBE` already displays the flag.
-- **NU4** — codec: `EncodeRow` accepts `kNull` for a nullable column
+- **NU4** ☑ (`7871dad`) — codec: `EncodeRow` accepts `kNull` for a nullable column
   (bit set, fixed cells zeroed, varchar cells written as `kNull` tag),
   refuses it for `NOT NULL` with the column named; `DecodeRow` reads the
   bitmap as sole authority; tag/bitmap disagreement is `Corruption`;
   round-trip tests per type and position.
-- **NU5** — statements and predicates: INSERT/UPDATE with NULL;
+- **NU5** ☑ (`810cd86`) — statements and predicates: INSERT/UPDATE with NULL;
   `IS NULL` / `IS NOT NULL`; three-valued comparison at every predicate
   site with `WHERE` keeping true only; the truth-table tests driven
   through the statement surface.
-- **NU6** — aggregation and grouping: `COUNT(col)` skips, `COUNT(*)`
+- **NU6** ☑ (`b61e1e6`) — aggregation and grouping: `COUNT(col)` skips, `COUNT(*)`
   does not; `SUM`/`MIN`/`MAX` skip; `AVG`'s denominator is the non-NULL
   count; an all-NULL group's `SUM` is NULL; `EncodeGroupKey`'s NULL
   encoding; assertions inherit it and a NULL `SUM` column contributes
   nothing.
-- **NU7** — ordering, wire, foreign keys: `ORDER BY` under D3 (including
+- **NU7** ☑ (`e2b3db7`) — ordering, wire, foreign keys: `ORDER BY` under D3 (including
   the top-N heap and the pk-elided path's non-interaction — a pk is
   never NULL); the text protocol renders NULL distinguishably from `''`;
   a NULL child key satisfies its fkey vacuously (`kFkNullable`).
-- **NU8** — the gates: contract suites byte-unchanged for all-`NOT NULL`
+- **NU8** ☑ (`23972a1`, `6e1f4f6`, and the doc pass) — the gates: contract suites byte-unchanged for all-`NOT NULL`
   relations; critics-developer per slice; ck-tester with the overhead
   question — the decode path's bitmap read must cost nothing when
   `null_bitmap_bytes == 0`, priced by interleaved A/B on the existing

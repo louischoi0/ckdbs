@@ -4,14 +4,15 @@ How a KDS tuple records the absence of a value, and what that absence means
 everywhere it is read. `[PROPOSED]` marks a default to confirm or amend before
 the affected part is built; `[OPEN]` must not be assumed.
 
-**Status: ratified 2026-08-20, build in progress**
-(`docs/workplan-null.md` NU1-NU8 owns the tasks; §5's opens are decided
-there - NOT NULL default with `NULL` opt-in, nullable index keys refused
-in v1, NULLs sort largest). Today `NULL` parses as a literal
-and `exec::EncodeRow()` refuses it, so no row can hold one
-(`docs/known-gaps.md`, "No NULL storage"). This document is the owning spec for
-closing that; it **amends `docs/rule-fixed-length-tuple.md` §2** with one
-addition to the row layout and leaves the rest of that rule untouched.
+**Status: built 2026-08-20** (`docs/workplan-null.md` NU1-NU8 carries the
+task record and the ratified decisions - NOT NULL default with `NULL`
+opt-in, nullable index keys refused in v1 covered columns included, NULLs
+sort largest). A relation may now declare nullable columns and store NULLs
+in them; every all-`NOT NULL` relation keeps a byte-identical row layout
+(zero bitmap bytes), which is what made the feature land with no format
+bump and no migration. This document is the owning spec; it **amends
+`docs/rule-fixed-length-tuple.md` §2** with one addition to the row layout
+and leaves the rest of that rule untouched.
 
 Companion specs: `docs/rule-fixed-length-tuple.md` (the tagged cell and the
 fixed-length rule), `docs/heap-and-tuple.md` §3.3 (row layout),

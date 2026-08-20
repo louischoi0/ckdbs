@@ -43,7 +43,8 @@ CREATE TABLE trades   (id int64, sym varchar, qty int64) BTREE EXPLICIT;
 Grammar (verified):
 
 ```
-CREATE TABLE <name> ( <col> <type> [REFERENCES <parent>] [CABIN | CABIN AUTO | NO CABIN]
+CREATE TABLE <name> ( <col> <type> [NULL | NOT NULL] [REFERENCES <parent>]
+                     [CABIN | CABIN AUTO | NO CABIN]
                      [, ...] ) [HEAP | BTREE] [ASSIGNED | EXPLICIT];
 ```
 
@@ -68,9 +69,19 @@ CREATE TABLE <name> ( <col> <type> [REFERENCES <parent>] [CABIN | CABIN AUTO | N
   because an explicit relation must be btree-clustered. `DESCRIBE <table>`
   reports which mode a relation actually got.
 - At least one column is required.
-- The optional per-column suffixes come in a **fixed order**: `REFERENCES`
-  before the cabin policy. Two optional suffixes in either order would be a
-  grammar with two spellings of one declaration.
+- The optional per-column suffixes come in a **fixed order**: nullability,
+  then `REFERENCES`, then the cabin policy. Two optional suffixes in either
+  order would be a grammar with two spellings of one declaration.
+- **Columns are `NOT NULL` by default — the opposite of standard SQL.**
+  A column that says nothing refuses `NULL`; writing `NULL` after the type
+  opts it in, and writing `NOT NULL` spells the default out loud for
+  standard-minded schemas. This is deliberate (spec-null.md D1): a
+  nullable-by-default rule would have silently reinterpreted every
+  `CREATE TABLE` written before the feature existed. Consequences: the
+  first column (the primary key) may not be `NULL`; neither may any index
+  key or covered column (D2 — `IS NULL` answers by scan); a nullable
+  column costs its relation a tail bitmap byte per 8 nullable columns,
+  and a relation with none costs nothing.
 
 **The Keystone contract (primary key).** The first column *is* the primary
 key:
@@ -372,7 +383,11 @@ INSERT INTO trades VALUES (900, 'MSFT', 3), (4200, 'NVDA', 7);
 - Row count is not part of the pattern (BI5): a 500-row insert
   fingerprints as the 1-row insert on the same relation.
 - Values are integers, strings (`'...'`, no quote escaping), bare numerics
-  and `NULL`.
+  and `NULL` — which stores only into a column declared `NULL` and is
+  refused by name (with the byte) for the default `NOT NULL`. A stored
+  NULL is distinct from `0` and from `''`, renders as the token `NULL`,
+  is skipped by aggregates, satisfies a foreign key vacuously, and is
+  found by `IS NULL`, never by `=`.
 - INSERT is the one fully WAL-logged statement path; durability class comes
   from the `durability` config key (see §5). For bulk load, `relaxed` is
   the documented recommendation (BI8).
@@ -470,12 +485,17 @@ over expressions, no parenthesized nesting. Each conjunct is one of
 | `EXISTS (SELECT ...)` | kExists | no column on the left |
 | `NOT EXISTS (SELECT ...)` | kNotExists | |
 | `col BETWEEN low AND high` | kBetween | inclusive both ends; lowers to `>= low AND <= high`, the range on the step is only a hint |
+| `col IS NULL` / `col IS NOT NULL` | kCompareValue | the one spelling that finds NULLs — answered from the stored bitmap |
 
 - Subqueries are **predicate-position only**, correlated included, nested to
   at most `kMaxSubqueryDepth = 4` below the outermost block. The fifth level
   is refused with a position.
 - `IN (1, 2, 3)` — a value list — does **not** exist yet (the open half of
   workplan V08). It is reported as "expected a subquery".
+- **Comparisons are three-valued** (spec-null.md §4): a relational operator
+  with a NULL operand is unknown, and `WHERE` keeps only true — so
+  `col = NULL` matches nothing, ever (the standard's trap, kept on
+  purpose); `IS NULL` is the spelling that finds them.
 - A pk equality (`WHERE id = 42`) executes as a keyed descent; a pk
   `BETWEEN` as a range walk with tail pruning; a non-pk equality is served
   by a secondary index, then a Cabin, then a filter scan, in that fixed
@@ -526,6 +546,9 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   refuses rather than wraps; `LIMIT 0` is legal and answers no rows.
 - The counts are **slots**: `LIMIT 10` and `LIMIT 20` are one pattern,
   two instances, so a limited statement fingerprints like any other.
+- **NULLs sort largest** (spec-null.md D3): `ASC` puts them last, `DESC`
+  first — PostgreSQL's rule, one fixed default per direction. There is no
+  `NULLS FIRST` / `NULLS LAST` grammar to override it.
 - `ORDER BY` takes **any column or columns**, of any relation the
   statement names, each `ASC` (the default) or `DESC`, up to eight keys.
   Earlier keys decide; later keys break their ties. A key need not be
