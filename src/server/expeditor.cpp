@@ -65,6 +65,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "indexes",
             "cabin_max_entries_per_value", "cores", "placement",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
+            "join_build_max_rows",
             "decay_half_life",       "physical_optimizer",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -267,6 +268,14 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         // row may be held, which refuses every statement that needs a sort
         // while leaving the grammar in place.
         sort_max_rows = static_cast<std::size_t>(v.value());
+    }
+    if (file.Has("join_build_max_rows")) {
+        auto v = file.GetUint("join_build_max_rows");
+        if (!v.ok()) return v.status();
+        // 0 is the off-switch, not a refusal: no statement is refused by
+        // this knob at any value. The semantics have one home, at
+        // `kDefaultJoinBuildMaxRows` (exec/budget.hpp).
+        join_build_max_rows = static_cast<std::size_t>(v.value());
     }
     if (file.Has("physical_optimizer")) {
         auto v = file.GetString("physical_optimizer");
@@ -773,6 +782,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         exec::AggregateLimits{expeditor->config_.aggregate_max_groups,
                               expeditor->config_.aggregate_max_distinct});
     expeditor->dispatcher_->set_sort_max_rows(expeditor->config_.sort_max_rows);
+    expeditor->dispatcher_->set_join_build_max_rows(expeditor->config_.join_build_max_rows);
     // SHOW META's recovery block (RC09). A pointer into the member rather than
     // a copy, so the block reports the mount's own report and cannot drift from
     // it; `recovery_` is declared above the dispatcher and so outlives it.

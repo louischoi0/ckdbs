@@ -15,6 +15,7 @@
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/core_runtime.hpp"
+#include "kds/exec/budget.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
 #include "kds/stats/cabin_optimizer.hpp"
 #include "kds/stats/optimizer_signals.hpp"
@@ -377,6 +378,12 @@ public:
         // the unlimited case, which is the one that can grow with the
         // relation.
         std::size_t sort_max_rows = exec::kDefaultSortMaxRows;
+
+        // How many rows one statement-local inner build may hold (workplan
+        // JB5; the semantics - the Cabin's fall-back refusal, 0 as the
+        // outright off-switch - live at the constant's declaration,
+        // exec/budget.hpp).
+        std::size_t join_build_max_rows = exec::kDefaultJoinBuildMaxRows;
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a

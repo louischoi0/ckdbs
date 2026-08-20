@@ -742,7 +742,14 @@ private:
         }
 
         InnerBuildState& state = inner_builds_[step.step_id];
-        if (state.built) {
+        // The off-switch and the cap's standing verdict (workplan JB5):
+        // `join_build_max_rows == 0` disables the build outright - no map
+        // can hold a row - and a declined step already took the Cabin's
+        // fall-back refusal. Both walk plain, never error.
+        if (budget_.join_build_max_rows() == 0 || state.phase == BuildPhase::kDeclined) {
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+        if (state.phase == BuildPhase::kBuilt) {
             co_return co_await ProbeBuild(steps, index, step, access, state.map);
         }
 
@@ -750,6 +757,7 @@ private:
         build.step_id = step.step_id;
         build.col_pos = step.build->col_pos;
         build.residual_pos = step.build->residual_pos;
+        build.max_rows = budget_.join_build_max_rows();
         build.map = &state.map;
         BuildRecording* outer = building_;
         building_ = &build;
@@ -757,17 +765,18 @@ private:
         building_ = outer;
 
         // The publish site, and the one home of its rule: only a walk that
-        // reached the relation's end unstopped publishes - WalkAndRecord's
-        // completed-walk argument, since a cut walk bucketed the rows it
-        // reached and not the rows it did not, and a probe would serve
-        // that map as the whole relation. Every non-publishing exit
-        // resets, so "a cut build is never served" is a fact about state
-        // on the error path too.
-        if (walked.ok() && !stopped_) {
-            state.built = true;
+        // reached the relation's end unstopped and under the cap publishes
+        // - WalkAndRecord's completed-walk argument, since a cut or capped
+        // walk bucketed the rows it reached and not the rows it did not,
+        // and a probe would serve that map as the whole relation. Every
+        // non-publishing exit resets, so "a cut build is never served" is
+        // a fact about state on the error path too.
+        if (walked.ok() && !stopped_ && !build.over_cap) {
+            state.phase = BuildPhase::kBuilt;
             ++stats_.For(step.step_id).inner_builds;
         } else {
             state.map = InnerBuild();
+            if (build.over_cap) state.phase = BuildPhase::kDeclined;
         }
         co_return walked;
     }
@@ -1813,14 +1822,29 @@ private:
         if (!matched.ok()) return matched.status();
         if (!matched.value()) return Status::OK();
         if (building_here) {
-            // The key is this row's own join-column value. A NULL keys
-            // nothing - no equality matches it - and is skipped, not
-            // erred (MakeValueKey's contract).
-            if (auto key = stats::MakeValueKey(slots[building_->col_pos]); key.has_value()) {
-                auto entry = EntryForRow(access, partial, slots, page_id, slot, observed_epoch);
-                if (!entry.ok()) return entry.status();
-                building_->map->Add(*key, entry.value());
-                ++step_stats.build_rows;
+            // The cap (workplan JB5): a row that would push the map past
+            // `max_rows` trips `over_cap` instead of entering - the rest
+            // of this walk stops bucketing and the publish site declines
+            // the step. Emission is untouched: this row, and every later
+            // one, still answers through the conjuncts below. The key is
+            // made *before* the cap is consulted, so an unkeyable row - a
+            // NULL keys nothing, no equality matches it (MakeValueKey's
+            // contract) - neither consumes a slot nor trips a cap it
+            // never pressed. Unreachable today, real the day spec-null.md
+            // lands.
+            if (!building_->over_cap) {
+                if (auto key = stats::MakeValueKey(slots[building_->col_pos]);
+                    key.has_value()) {
+                    if (building_->map->rows() >= building_->max_rows) {
+                        building_->over_cap = true;
+                    } else {
+                        auto entry =
+                            EntryForRow(access, partial, slots, page_id, slot, observed_epoch);
+                        if (!entry.ok()) return entry.status();
+                        building_->map->Add(*key, entry.value());
+                        ++step_stats.build_rows;
+                    }
+                }
             }
 
             // The correlated conjunct alone decides emission from here on.
@@ -2039,16 +2063,30 @@ private:
     // "may walk past a stop" and "may commit a stopped walk" one fact.
     bool completing_recording_ = false;
 
-    // ---- The statement-local inner build (workplan JB3) ------------------
+    // ---- The statement-local inner build (workplan JB3/JB5) --------------
     //
     // One map per annotated step, statement-lifetime: the top-level runner
     // IS the statement (a sub-chain runner is gated out at the dispatch
     // and rebuilt per outer row anyway). WalkAndBuild's publish site owns
-    // the completed-walk rule `built` records.
+    // every phase transition.
+    //
+    // kDeclined is the cap's verdict and it is per *statement* (JB5): a
+    // capped build re-attempted on every later outer row would bucket to
+    // the cap and discard each time - strictly worse than the walk the
+    // fall-back protects - so a declined step walks plain for the rest.
+    // (JB6 amends this for the stopping class: spec §6's frozen prefix
+    // keeps serving its hits and misses walk from the mark - a rule
+    // scheduled to arrive with the sub-chain mode, not one to build on
+    // here.)
+    enum class BuildPhase : std::uint8_t { kUnbuilt, kBuilt, kDeclined };
     struct InnerBuildState {
         InnerBuild map;
-        bool built = false;  // set only by WalkAndBuild's publish site
+        BuildPhase phase = BuildPhase::kUnbuilt;
     };
+    // Node-based on purpose, like the map's own buckets (inner_build.hpp):
+    // WalkAndBuild holds `InnerBuildState&` across its co_await, during
+    // which a deeper annotated step's `inner_builds_[id]` may rehash this
+    // container - nodes relink, references hold.
     std::unordered_map<std::uint32_t, InnerBuildState> inner_builds_;
 
     // The build in progress - WalkAndBuild's stack state, exactly as
@@ -2056,10 +2094,17 @@ private:
     // one building walk, checked against `step_id` at every accepted
     // tuple, saved and restored around the walk because a deeper
     // annotated step may build while an outer one is.
+    //
+    // `over_cap` is how the cap crosses AcceptTupleAt's Status boundary
+    // (JB5): set at the bucketing site, read beside the publish rule.
+    // Never signalled by clearing `building_` - that pointer also drives
+    // the split evaluation and must stay stable for the walk's lifetime.
     struct BuildRecording {
         std::uint32_t step_id = 0;
         std::uint16_t col_pos = 0;       // the join column the map keys on
         std::uint16_t residual_pos = 0;  // the correlated conjunct, excluded
+        std::size_t max_rows = 0;        // the statement's join_build_max_rows
+        bool over_cap = false;
         InnerBuild* map = nullptr;
     };
     BuildRecording* building_ = nullptr;
@@ -2243,7 +2288,7 @@ StatusOr<bool> EvaluateConjuncts(catalog::Catalog& catalog, storage::PageStore& 
     ExecStats local;
     ExecStats& counters = stats != nullptr ? *stats : local;
     counters.For(MaxStepId(step));  // see Execute() for why this is pre-sized
-    Budget spend(budget.limit());
+    Budget spend = budget.Fresh();
     // A runner with no sink of its own: it exists only to lend its
     // sub-chain evaluation, which builds its own sink per sub-chain.
     static const RowSink kUnused = nullptr;
@@ -2285,11 +2330,10 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
     // construction rather than by reviewing every call site.
     counters.For(MaxStepId(chain));
 
-    // One mutable budget for this statement, seeded from the caller's
-    // limit. Taking the parameter by const reference and copying here is
-    // what keeps a Budget reusable across statements without a caller
-    // having to remember to reset it.
-    Budget spend(budget.limit());
+    // One mutable budget for this statement: the caller's limits and
+    // knobs, the spend counter at zero. `Fresh()` owns what survives the
+    // copy, so no entry point can drop a field.
+    Budget spend = budget.Fresh();
 
     ChainRunner runner(catalog, store, sink, /*depth=*/parent != nullptr ? 1u : 0u, parent,
                        counters, spend, trail, replay, cabins, snapshot, indexes, resume_gate);

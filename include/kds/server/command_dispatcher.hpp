@@ -847,6 +847,12 @@ public:
 
     // `sort_max_rows`, from the config. A setter for the same reason.
     void set_sort_max_rows(std::size_t rows) noexcept { sort_max_rows_ = rows; }
+    // Set on the statement budget template directly: the knob rides
+    // `Budget` into every runner and sub-chain (exec/budget.hpp), so the
+    // dispatcher needs no member of its own for it.
+    void set_join_build_max_rows(std::size_t rows) noexcept {
+        budget_.set_join_build_max_rows(rows);
+    }
 
     // Arms the remote-read path (workplan P4c): a single-step star SELECT
     // of a relation another core owns ships to that core instead of taking

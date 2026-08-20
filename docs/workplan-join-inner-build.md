@@ -3,7 +3,7 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-**JB1–JB4 are built (2026-08-20); JB5–JB8 are not.** The sanction is
+**JB1–JB5 are built (2026-08-20); JB6–JB8 are not.** The sanction is
 `docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
 having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
 against PostgreSQL's 1,314 on the shape neither engine can index away).
@@ -163,6 +163,33 @@ under `--verify`'s ordered row-for-row check with the build on and off;
 ANALYZE's `examined=` drops from k·N-class to N-plus-matches-class.
 
 ## JB5 — the cap, and the off-switch
+
+**Built 2026-08-20.** The knob rides `Budget` rather than a 13th
+`Execute` parameter (the JB4 review's seam call): it is the statement's
+resource envelope, already threaded to every runner and sub-chain, and
+the entry points' fresh-counter copy now carries it across explicitly.
+The cap signals through `BuildRecording::over_cap` — never by clearing
+`building_`, which also drives the split evaluation — and the refused
+step goes `kDeclined`, a per-statement verdict (re-attempting per outer
+row would bucket to the cap and discard each time, strictly worse than
+the walk the fall-back protects). `0` gates at the arm: nothing arms,
+nothing buckets. The contract suite
+(`tests/inner_build_contract_test.cpp`) sweeps caps 0/1/2/5/default
+byte-for-byte over the join, filtered, nested and EXISTS shapes, and
+pins the mid-build decline, the pure-walk off-switch, and the exact-fit
+boundary (`rows() >= max` trips only past the cap, so a map equal to it
+still publishes).
+
+Two facts the JB5 review recorded for later tasks. **The peer-dispatcher
+knob gap**: `set_join_build_max_rows` reaches core 0's dispatcher only,
+like every knob before it (`sort_max_rows`, the aggregate limits, the
+optimizer thetas) — latent because peers are driven by nothing in
+production and `ShippedForm` strips the annotation anyway, but JB5's off
+position is a *measurement lever*, and a peer that ignored
+`join_build_max_rows = 0` would silently spoil an A/B the day peers
+execute statements. **The sub-runner shares the `Budget` by reference**
+(`EvaluateSubChain`), so JB6's prefix map inherits the cap with no new
+plumbing.
 
 Config beside `sort_max_rows` in the dispatcher's knob block.
 

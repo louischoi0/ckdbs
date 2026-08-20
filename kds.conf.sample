@@ -472,6 +472,18 @@ aggregate_max_distinct = 1048576
 # key ascending are unaffected either way: they are elided, not sorted.
 sort_max_rows = 1048576
 
+# How many rows one statement-local inner build may hold - the per-statement
+# map that serves a join on a column with no index and no Cabin
+# (docs/spec-join-inner-build.md). Counted in rows for sort_max_rows'
+# reason; each entry is 24 bytes.
+#
+# Unlike the sort's cap this never refuses a statement at any value: past
+# the cap the step reverts to per-row walks for the rest of the statement -
+# the map is a shortcut and the walk is always there. `join_build_max_rows
+# = 0` disables the build outright, which is also the A/B lever for
+# measuring it.
+join_build_max_rows = 65536
+
 # ---- Logging ---------------------------------------------------------------
 
 # Diagnostic log destination. `log_dir` is prepended to `log_file` unless

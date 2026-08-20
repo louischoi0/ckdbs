@@ -60,9 +60,42 @@ inline constexpr std::uint64_t kDefaultRowTouchBudget = 100'000'000;
 // would refuse.
 inline constexpr std::uint64_t kUnlimitedRowTouchBudget = 0;
 
+// `join_build_max_rows`' ratified default (spec-join-inner-build.md §7,
+// workplan JB5). Rows, not bytes, following `aggregate_max_groups`'
+// argument: an entry count is the number an operator can reason about
+// against an entry width they know (24 bytes, C6). **Refusal semantics
+// are the Cabin's, not the aggregate's**: past the cap the step reverts
+// to per-row walks for the rest of the statement - always legal, never an
+// error, because the map is a shortcut and the walk is always there. 0
+// disables the build outright: no map can hold a row - **the opposite of
+// the row-touch limit's zero above, deliberately**, because "unlimited
+// map" has a number (the relation's size) where "unlimited work" does
+// not. Scoping across a chain with two walked inners is `[OPEN]`
+// (CLAUDE.md) - one knob, checked per build, which keeps both readings
+// implementable.
+inline constexpr std::size_t kDefaultJoinBuildMaxRows = 65536;
+
 class Budget {
 public:
     explicit Budget(std::uint64_t limit = kDefaultRowTouchBudget) noexcept : limit_(limit) {}
+
+    // The statement-local inner build's cap (workplan JB5). Semantics at
+    // `kDefaultJoinBuildMaxRows` above - the one home three sites point at.
+    std::size_t join_build_max_rows() const noexcept { return join_build_max_rows_; }
+    void set_join_build_max_rows(std::size_t rows) noexcept { join_build_max_rows_ = rows; }
+
+    // A copy of the limits and knobs with the spend counter at zero - what
+    // an entry point takes, so a Budget stays reusable across statements
+    // without a caller resetting it. A new field is carried by being a
+    // member; no entry point can forget one (one already did: the
+    // limit-only copy this replaced silently dropped `join_build_max_rows`
+    // until a contract test caught it). Deliberately not the copy
+    // constructor - a copy that silently zeroes a counter is a lie.
+    Budget Fresh() const noexcept {
+        Budget out = *this;
+        out.touched_ = 0;
+        return out;
+    }
 
     // Charges one decoded tuple. Fails once the statement has spent its
     // budget, and keeps failing - the caller stops at the first refusal,
@@ -85,6 +118,7 @@ private:
 
     std::uint64_t limit_;
     std::uint64_t touched_ = 0;
+    std::size_t join_build_max_rows_ = kDefaultJoinBuildMaxRows;
 };
 
 }  // namespace kds::exec
