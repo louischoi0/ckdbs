@@ -162,11 +162,24 @@ The ratified design does not complete it — it makes partiality safe:
 
 The economics that ratified this form: **every inner row is visited at
 most once per statement**, so the statement pays at most one full pass
-plus probes — at or below the plain walk's cost at every k, with no
-earn gate, no publication gate, and no budget carve-out (every charged
-row is a row the statement's own walk visits). The plain join of §2 is
-the degenerate case: its first walk never stops, so the mark reaches
-the end immediately and the map is total from the second outer row on.
+plus probes, with no earn gate, no publication gate, and no budget
+carve-out (every charged row is a row the statement's own walk visits).
+The plain join of §2 is the degenerate case: its first walk never
+stops, so the mark reaches the end immediately and the map is total
+from the second outer row on.
+
+**Amended 2026-08-20, by measurement** (workplan JB6). This paragraph
+also said "at or below the plain walk's cost at every k", and that is
+false for the same reason §5's "pure win at k ≥ 2" was: it counts rows
+visited and not the nanoseconds of visiting them. What the prefix
+actually trades is **the sum of the per-outer-row walks for the longest
+single walk, plus the build constant on every row of that walk**, so
+the crossover is where the sum exceeds the max by more than the
+constant — measured at **k ≈ 6–8**, with k = 4 at +13% (100 rows per
+key) to +25% (5 rows per key) and k = 16 at −15% to −52%. The
+acceptance cell of §9 passes at k = 20 (1,569.9 → 612.9 µs, ×2.56).
+The rule stands as ratified; what changed is the claim about its cost
+at small k, which no longer says "every".
 
 The class is what compiles to an `Exists`-kind stopping walk —
 `EXISTS`, `NOT EXISTS` (its hit proves existence, its completed miss

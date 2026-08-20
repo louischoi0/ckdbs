@@ -3,7 +3,7 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-**JB1–JB5 are built (2026-08-20); JB6–JB8 are not.** The sanction is
+**JB1–JB6 are built (2026-08-20); JB7–JB8 are not.** The sanction is
 `docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
 having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
 against PostgreSQL's 1,314 on the shape neither engine can index away).
@@ -214,6 +214,11 @@ contract suite compares the two configurations byte-for-byte.
 
 ## JB6 — the stopping sub-chain: the prefix map
 
+**Built 2026-08-20** on `jb6-prefix-map` from `c379d7f`, with two seams
+the plan had not named and one done-condition it does not meet — both
+below, the second in its own subsection because it is a finding, not a
+footnote.
+
 `src/exec/step_vm.cpp`, the sub-chain mode.
 
 Spec §6's ratified form, after review priced the completion-walk design
@@ -233,12 +238,101 @@ and `IN (subquery)`'s per-row form — not one member: the sub-chain mode
 implementation keys on the walk's kind, not on which predicate spelled
 it. Scalar sub-chains are JB1's decline.
 
-*Done when:* the driver's `exists-correlated` phase answers
-byte-identical under `--verify`; ANALYZE across one statement shows
-each inner row examined at most once (`examined=` in the
-N-plus-matches class, not k·partial-walks); a k = 4-shaped statement —
-the shape the completion design measurably regressed — measures at or
-below the pure walk.
+### The two seams the plan had not named
+
+**The map had to leave the runner.** `EvaluateSubChain` builds a fresh
+`ChainRunner` per outer row, so a map living in the runner — where
+JB3/JB5 put it, correctly, for a top-level chain — would be filled and
+destroyed once per outer row, which is the entire cost the map exists
+to remove. The store is now owned by the top-level runner and shared
+down by pointer, the way `stats_` and `budget_` already are, and step
+ids being global across a statement (step_chain.hpp) is what makes one
+map per id need no further scoping.
+
+**The mark is a position, and a position needs a unit.** A resumable
+walk needs to start mid-relation, so `RunWalkStep` takes an optional
+`WalkPrefix`: a page plus the count of that page's rows already
+covered, **in the page's own emission order**. Rows, not slots, because
+`emit_in_key_order` sorts a page by Keystone id before emitting it —
+counting slots would resume in the wrong place on exactly the relations
+(`EXPLICIT` key mode) whose order the sort exists to fix. Every
+accepted tuple of every walk now goes through one `accept` lambda that
+owns the ordinal, so the count a resume skips cannot drift from the
+count a mark recorded. The mark's soundness rests on the same
+no-writes-between-outer-rows argument JB4's location hints rest on,
+and it is stated at both sites.
+
+**The cap freezes the mark where the map stopped taking rows**, not
+where the walk stopped: the row that trips the cap is visited and not
+bucketed, so a mark past it would claim coverage the map does not
+have, and a later miss would resume past rows it never replayed — a
+dropped row, not a slow one. The trip is detected in the walk (the
+build's `over_cap` transition across one accepted row) and freezes the
+mark there for the statement.
+
+### Why the n = 2 deferral is not available here
+
+Worth recording because the join form's constant made it the obvious
+question (spec §5, declined there on arithmetic): for the prefix form
+it is not a trade-off but an unsound state. The map and the mark must
+advance together — a walk that advanced the mark without bucketing
+would leave rows before the mark unreachable by any probe and skipped
+by every later resume, which is a false absence rather than a slow
+answer. Deferring the map means deferring the mark, and deferring the
+mark means the second outer row walks from the head: the prefix, and
+the whole design, only exists once the first walk pays.
+
+### The measurement, and the done-condition it misses
+
+`build-release`, config-levered A/B on one binary
+(`join_build_max_rows` 0 vs 65536, which is immune to the placement
+band), fresh server and data file per cell, 10,000 loans.
+
+**The acceptance cell passes.** The driver's own `exists-correlated`
+phase (k = 20, `--index-mode none`, no `--cabin`, 30 ops):
+**1,569.9 µs → 612.9 µs, ×2.56**, which lands in spec §9's "~600 µs
+class" — the target the JB5 gate's join cell missed by its build
+constant. `--verify 50` reports `verify_problems: []` on both sides,
+and every other phase of the sweep sits inside its floor (pk-user 39.9
+→ 40.4, loans-by-user 622.2 → 622.2, overdue 838.7 → 840.2).
+
+**The examined class collapses**, which is JB6's own done-condition and
+the thing the design is for: at k = 16 the same statement examines
+**27,888 rows walked → 6,736**, one visit per inner row across the
+statement rather than one partial walk per outer row.
+
+**A k = 4-shaped statement does not measure at or below the pure
+walk.** It is +13% at 100 rows per key and +25% at 5, and the crossover
+sits at **k ≈ 6–8**, not below 4:
+
+| rows/key | k=1 | k=2 | k=4 | k=8 | k=16 |
+|---|---|---|---|---|---|
+| 100 (dense) | +3% | +4% | **+13%** | −8% | −15% |
+| 5 (sparse) | **+76%** | +33% | +25% | — | −52% |
+
+The cause is arithmetic, and it is the JB5 gate's finding in a second
+shape: the prefix trades **the sum of the per-outer-row walks for the
+longest single walk, plus the build constant charged on every row of
+that longest walk**. At k = 16 the sum is many times the max and the
+trade is overwhelming; at k = 4 the sum is barely above the max, and
+43–48 ns per bucketed row (the constant, unchanged from the join form)
+is more than the difference. The sparse row is worse for a reason worth
+naming: with 2,000 keys over 10,000 rows the first outer row's walk
+already covers two thirds of the relation before its own match, so the
+build pays for the whole prefix while the walks it saves are short.
+
+Spec §6's "at or below the plain walk's cost at every k, with no earn
+gate" is therefore **false as measured**, in the same way §5's "at
+k ≥ 2 every avoided walk is pure win" was: both counted rows visited
+and neither counted the nanoseconds of visiting them. §6 is amended
+with the crossover rather than the claim.
+
+What would move it, neither taken here: cutting the constant again (the
+map still costs one hash-map node per distinct key — an open-addressed
+table keyed by the same `CabinKey` would remove that allocation without
+touching the identity JB2 chose), or gating the stopping class behind
+its own default. Both are decisions, and the second is a second knob
+where spec §7 ratified one.
 
 ## JB7 — observability, trails, shipping
 
