@@ -687,3 +687,480 @@ been vacuumed, so both carry slack this run did not try to remove.
 - **Anything about recovery.** Every cell shuts down cleanly. What a booking
   workload costs when it crashes mid-matrix is `tools/mount_cost_benchmark.py`'s
   question, against `docs/workplan-wal-recovery.md`.
+
+## 16. Addendum, 2026-08-20 — one WAL segment roll is worth the whole cross-engine result, and the undo purge is visible in the file
+
+Re-measured at **`2755045`**, the commit that carries the statement-local
+inner build (JB1–JB5) and NULL storage (NU1–NU8). Twenty-two ckdbs cells and
+five PostgreSQL cells, three of the ckdbs cells being probes built to
+discriminate between causes rather than to fill a matrix row.
+
+**Neither landing moves a single cell of this workload, and the reason is
+structural rather than statistical: the booking issues no shape either one
+can reach.** What did move is two things neither of them owns.
+
+**A booking workload on a 100,000-cargo file crosses a 64 MiB WAL segment
+boundary exactly once, and crossing it stalls the whole server for
+0.47–0.79 s.** `WalStream::Append` seals and rolls inline, and
+`FileLogDevice::CreateSegment` then `posix_fallocate`s 64 MiB, zero-fills all
+of it in 64 × 1 MiB `pwrite`s and `fsync`s — on the appending statement's
+own path, which on a single-threaded dispatcher is every connection's path.
+In 16 of this run's 20 hundred-thousand-cargo cells that crossing landed
+*inside* the measured booking phase, where it costs a fifth of the run's
+throughput; in the other four it landed in the load and the booking phase is
+clean. **That one
+event is the entire difference between ckdbs measuring 0.94× PostgreSQL's
+booking rate on this workload and measuring 1.18×.**
+
+**The data file is smaller than the rows in it would suggest, and
+`SHOW META` names why:** after a full load and 1,500 bookings the undo chain
+holds **2 live pages against 1,256 recycled**. `docs/workplan-undo-purge.md`'s
+UP1–UP3 plateau claim is met on a real workload here for the first time, and
+the consequence is that ckdbs's data pages now hold this workload in **19%
+fewer bytes than PostgreSQL spends on it**.
+
+### 16.1 The run
+
+| | |
+|---|---|
+| executed | **2026-08-20 08:38:47 → 10:15:24 UTC** — the matrix and the ladder to 09:25:11, the checkpointer probe and the interleaved cross-engine window 09:25:25–09:58:02, the load/measure split probe 09:58:29–10:08:59, the `SHOW META` probe to 10:15:24 |
+| branch / worktree | **no worktree** — the primary checkout `/home/cdkbs/ckdbs` on branch `main` |
+| commit measured | **`2755045`**, recorded by every cell. Tree clean; the only untracked path is `.claude/worktrees/`, which contains no source |
+| **binary measured** | a **copy**, `sha256 5afe5373dde5366c3cea3054c7a4bcf4e15f88021f3485f410e6096a469907be`, taken from `build-release/kds_server` before the first cell and never rewritten. Every server below started from that copy |
+| binary provenance | `build-release/kds_server` was **relinked at 2026-08-20 08:35:06 UTC by this session's own `cmake --build`**, which was *not* a no-op: the tree's previous binary was linked 00:12 and predated `dcb2ce8` (a `src/exec/step_vm.cpp` change committed 07:19). Its sha256 was `fee06830…`; measuring it would have measured an engine two commits behind HEAD. The copy's mtime is therefore *after* every commit in `2755045` |
+| build | `-DCMAKE_BUILD_TYPE=Release` (`-O3 -DNDEBUG`), gcc 13.3.0, `KDS_WITH_TLS=ON` (OpenSSL 3.0.13 from a rootless `dpkg -x` tree) |
+| test suite | **2,513 of 2,513 passing** at this commit, run from the same build immediately before the first cell |
+| device | `/dev/root` — Azure, **ext4** (`df -T`, checked in this session), 247 GB with 201 GB free. **Not tmpfs**; every data file under `$HOME/bench-s2-jb8/cells/<cell>/`, every WAL under `<cell>/s2.db.wal/` |
+| kernel / host | 6.17.0-1022-azure, Ubuntu 24.04, AMD EPYC 9V74, **2 vCPUs** |
+| KDS server | `cores = 1`, `durability = group`, `placement = creating`, `log_level = info`, everything else default — including `buffer_pool_frames = 0` and `join_build_max_rows = 65536` |
+| ports | 15501, and 15502 for the `SHOW META` probe. Not 15432: an unrelated resident `kds_server` from another project binds it, and was left alone |
+| scale | 2,000 organizations, 200 ships, 2,000 voyages, **100,000 cargos**, except the ladder (§16.6) |
+| work | `--bookings 1500 --seed 1 --verify 25` in every cell. Equal work, not equal time |
+| isolation | fresh server **and** fresh data file per cell |
+| machine quiet | every cell gates on `bench/wait_quiet.sh` and samples the load for its own life; `pgrep cc1plus` was 0 before and after every cell in the run. No cell was discarded |
+| PostgreSQL | **16.14** (Ubuntu 16.14-0ubuntu0.24.04.1), the standing scratch cluster on port 15433, `$HOME/pg-bench/data` on the same ext4 device, **PostgreSQL's own defaults** — `synchronous_commit = on`, `fsync = on`, `shared_buffers = 128 MB`, nothing tuned |
+
+Every cell committed exactly 1,500 bookings and passed `--verify 25` at 100
+invariant checks with **0 failures** — ckdbs and PostgreSQL alike. Drivers,
+flags and invocations: `bench/docs/README.md`, entry `scenario2_freight.py`.
+
+### 16.2 The floor has one mechanism and it is not the fsync: it is the segment roll
+
+Three baseline cells, fresh file each, and then three cells of the same
+configuration in which the segment crossing fell outside the booking phase:
+
+| cell group | bookings/s | spread | where the segment roll landed |
+|---|---:|---:|---|
+| `base1` / `base2` / `base3` | 464.8 / 424.2 / **407.4** | **14.1%** | inside the booking phase, all three |
+| `metaprobe` / `settle0` / `settle90` | 510.5 / **523.2** / 517.3 | **2.5%** | inside the load phase, all three |
+
+*(the second group runs `--load-only` first and the measured invocation
+after it, so the file has absorbed two full loads by the time the bookings
+start and the 64 MiB boundary is behind them. The measured statements, the
+scale, the seed, the isolation and the 1,500-commit target are identical;
+these are not faster cells, they are cells whose stall fell somewhere the
+booking phase does not measure)*
+
+**The floor this run adopts is therefore two numbers.** On the raw basis the
+widest same-configuration disagreement is **14.1%**; with the roll's single
+booking excluded — the cell's elapsed time reduced by
+`booking_max − booking_p50` — the widest is **5.4%** (`ckptoff2` against
+`ckptoff1`). Every verdict below is given on both bases and nothing is
+claimed on a difference smaller than 14.1% raw or 5.4% roll-excluded.
+
+The mechanism is not inference. Four controls were run to eliminate the
+alternatives, and the code names itself:
+
+| probe | result | what it eliminates |
+|---|---|---|
+| `checkpoint_interval_ms = 600000`, two cells | booking max **779.6 ms / 687.5 ms** — unchanged | not the checkpointer (which §13 showed owns a quarter of the *commit tail*) |
+| `--no-manifest`, three cells | booking max **668.6 / 764.2 / 610.6 ms** — unchanged | not the analytic reporter contending on the dispatcher |
+| the 2,000- and 10,000-cargo rungs | booking max **43.0 ms / 8.9 ms**, and `ls` shows **one** WAL segment ever created | the workload that never crosses 64 MiB never stalls |
+| PostgreSQL, three interleaved cells | booking max **9.5 / 11.5 / 16.6 ms** | not the host, the device or the page cache |
+
+And the log agrees: every 100,000-cargo cell's WAL directory holds
+`wal-0-0.log` **and** `wal-0-1.log`, both 67,108,864 bytes; the two ladder
+rungs hold only `wal-0-0.log`. In `src/wal/file_log_device.cpp`, `Prewrite`
+writes 64 MiB of zeros and `fsync`s, and its own comment says why — the
+extent conversion is being paid once here instead of inside a commit's
+fsync, "what PostgreSQL's `wal_init_zero` does and for the same reason". The
+trade is sound and this file's §14 is where the commit-side benefit shows.
+**What this addendum adds is the other half of the price: it is paid
+synchronously, by whatever statement is in flight, and this engine creates
+each segment where PostgreSQL recycles one.** The scratch cluster beside it
+runs `wal_init_zero = on`, `wal_recycle = on` and `wal_segment_size = 16 MB`
+— it zero-fills for the same reason, over a quarter of the file, and then
+renames spent segments instead of creating new ones, which is why its
+`pg_wal` directory holds a stable set of 16 MiB files and its booking maximum
+never exceeds 17 ms. ckdbs already zero-fills; what it does not do is
+recycle, and `docs/wal.md` owns whether it should.
+
+Where it landed, per cell, is deterministic rather than random. `base1`'s
+own checkpoint anchors put the LSN at **60,762,680** five seconds before the
+run ended and **67,608,272** at the end, so 67,108,864 was crossed inside the
+window that contains the booking phase: the load leaves the log just short of
+the boundary and the bookings step over it. A configuration that writes more
+WAL per row crosses earlier, which is exactly why `--fk` is the one
+100,000-cargo cell of the matrix whose booking phase is clean — its crossing
+fell in `load-cargos`, at 670.0 ms.
+
+### 16.3 The options matrix
+
+One knob at a time, 1,500 committed bookings and 8,430 charge rows in every
+row. **TPS raw** is what the driver measured; **TPS roll-excluded** removes
+the single booking that absorbed the segment crossing, and is the basis on
+which knobs are compared, because the crossing belongs to the file rather
+than to the knob. "vs base" is against the roll-excluded baseline mean of
+**529.6 TPS**.
+
+| # | configuration | TPS raw | TPS roll-excl. | vs base | outside the 5.4% floor? | verify |
+|---|---|---:|---:|---:|---|---|
+| 1 | **baseline** — `BEGIN`/`COMMIT`, `--capacity-mode cached` | 464.8 | 543.6 | +2.6% | no — it *is* the floor | 100/0 |
+| 2 | baseline, repeated (fresh file) | 424.2 | 526.5 | −0.6% | no — it *is* the floor | 100/0 |
+| 3 | baseline, repeated (fresh file) | 407.4 | 518.6 | −2.1% | no — it *is* the floor | 100/0 |
+| 4 | `--capacity-mode scan` | 399.5 | 495.3 | −6.5% | **marginal** — see below | 100/0 |
+| 5 | `--fk` — three foreign keys declared | 495.6 | 500.5 | −5.5% | **marginal** | 100/0 |
+| 6 | `--cabin` — Cabin on `recipes.cargo_type` | 461.9 | 544.4 | +2.8% | **no** | 100/0 |
+| 7 | `--isolation repeatable-read` *(control)* | 474.2 | 560.8 | +5.9% | **no** — it *defines* the floor | 100/0 |
+| 8 | `waystone_recording = off` | 468.1 | 554.6 | +4.7% | **no** | 100/0 |
+| 9 | `cores = 2` | 421.2 | 509.7 | −3.8% | **no** | 100/0 |
+| 10 | `checkpoint_interval_ms = 600000` | 401.8 / 429.9 | 507.6 / 535.1 | −4.2% / +1.0% | **no** | 100/0 |
+| 11 | **`--no-txn`** — eight autocommitted statements | **90.0** | **94.3** | **−82.2%** | **yes** | 100/0 |
+
+Rows 4 and 5 are the two that land within a point of the floor, and both are
+resolved by the twinned window of §16.8, where they were re-run beside a
+baseline taken minutes earlier: `--capacity-mode scan` measures 504.2
+roll-excluded against that window's baseline median of 526.4, **−4.2%,
+inside**. `--fk` has no PostgreSQL flag and no second cell, so it stays
+"marginal and not claimed". Row 7's control behaves as a control should.
+
+**Row 11 is the only result in the matrix, and it reproduces §7 exactly.**
+Autocommit costs 5.6× on ckdbs and 4.9× on PostgreSQL in the same window,
+for the same reason: every write becomes its own fsync.
+
+| statement | ckdbs base /s | ckdbs `--no-txn` /s | ratio | PostgreSQL ratio |
+|---|---:|---:|---:|---:|
+| cargo-lookup | 18,797 | 15,552 | 0.83× | 0.90× |
+| credit-lookup | 22,989 | 21,834 | 0.95× | 0.93× |
+| capacity-read | 24,038 | 23,419 | 0.97× | 0.93× |
+| recipe-read | 19,841 | 19,268 | 0.97× | 0.95× |
+| **freight-insert** | **24,272** | **908** | **0.037×** | 0.070× |
+| **charge-insert** | **29,326** | **928** | **0.032×** | 0.048× |
+| **operation-update** | **25,381** | **923** | **0.036×** | 0.065× |
+| **org-update** | **26,810** | **919** | **0.034×** | 0.063× |
+| whole booking | 560 | 100 | **0.179×** | 0.205× |
+
+*(statements a second, derived as `1,000,000 / p50 µs` — the driver is a
+serial single-connection loop per booker, so that is its `ops / elapsed`;
+p50 rather than mean because the segment roll contaminates one mean per cell)*
+
+Every ckdbs write under autocommit lands within 3% of that cell's own
+commit rate. A write under autocommit is a commit, on both engines.
+
+### 16.4 Per-statement distributions
+
+`settle0`, whose booking phase carries no segment roll and whose means are
+therefore readable. `charge-insert` runs 5.62 times per booking; every other
+row is once.
+
+| statement | ops | mean | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| cargo-lookup | 1,500 | 54.8 | 45.5 | 52.4 | 53.7 | 63.2 | 68.9 |
+| credit-lookup | 1,500 | 45.6 | 32.4 | 42.5 | 43.8 | 54.9 | 63.9 |
+| capacity-read | 1,500 | 44.4 | 30.6 | 40.5 | 41.9 | 53.5 | 66.3 |
+| recipe-read | 1,500 | 59.9 | 47.6 | 57.7 | 58.9 | 70.4 | 76.3 |
+| freight-insert | 1,500 | 42.0 | 31.7 | 40.3 | 41.2 | 49.3 | 54.6 |
+| charge-insert | 8,430 | 35.0 | 23.2 | 32.9 | 33.8 | 42.8 | 49.5 |
+| operation-update | 1,500 | 40.0 | 29.9 | 38.5 | 39.3 | 49.3 | 53.5 |
+| org-update | 1,500 | 37.8 | 27.1 | 36.2 | 37.2 | 45.7 | 50.3 |
+| **commit** | 1,500 | **1,262.5** | **1,057.2** | 1,162.4 | 1,198.1 | 1,502.9 | **2,517.9** |
+| whole booking | 1,500 | 1,886.1 | 1,571.0 | 1,767.5 | 1,816.4 | 2,154.1 | 3,232.4 |
+
+*(µs, one connection, latencies include the client's socket cost)*
+
+One row of that table is not comparable with §5's and says so here rather
+than being quietly read as one: `recipe-read` at 58.9 µs against §5's 49.9.
+It is elevated in all three of the roll-free cells (58.9 / 59.3 / 58.9) and
+in none of the sixteen single-invocation ones (44.2–51.0), because the
+two-invocation arrangement drops and re-creates the eight relations, and a
+`FilterScan` over the 93-row `recipes` then runs against a relation placed
+after a whole orphaned generation of pages. It is an artefact of the probe,
+not of the engine at this commit; §16.9 uses a single-invocation cell for the
+comparison against §5 for exactly that reason.
+
+And the same table for a cell that *does* carry the roll (`base1`), which is
+what a p99-only reading would miss entirely:
+
+| base1 | ops | mean | p0 | p25 | p50 | p95 | p99 | **max** |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| credit-lookup | 1,500 | **357.8** | 32.3 | 42.1 | 43.7 | 56.0 | 89.7 | **466,401** |
+| whole booking | 1,500 | 2,123.8 | 1,425.9 | 1,582.9 | 1,636.7 | 2,261.3 | 4,182.7 | **469,222** |
+
+One sample in 1,500 is 10,600× the p50 of its own phase. It moves the mean by
+7.8× and does not touch p99 — which is why this addendum tables the maximum
+and the file's earlier sections, which do not, could not have seen it.
+
+### 16.5 Where the time goes: the wait breakdown
+
+`settle0`, means, one booking. Every wait is a client-measured round trip, so
+each carries the socket and the Python driver; that cannot be subtracted, only
+acknowledged. **Lock wait does not exist in this engine** — no lock manager,
+no waiting, a write conflict is an immediate retryable error
+(`docs/txn.md`) — so conflict wait is structurally zero on a single booker
+and non-zero only in §11's contended cells. Within a statement, the split
+between page I/O, latch and CPU is **not measurable**: there is no
+server-side wait-event instrumentation. `docs/observability.md` owns that gap
+and it is unbuilt.
+
+| wait type | µs | share |
+|---|---:|---:|
+| **durability wait** (`COMMIT`, one fsync) | **1,262.5** | **66.9%** |
+| write-statement wait (1 freight + 5.62 charges, 2 updates) | 316.5 | 16.8% |
+| read wait (4 statements) | 204.7 | 10.9% |
+| client, framing and `BEGIN` (residual) | 102.4 | 5.4% |
+| **whole booking** | **1,886.1** | 100% |
+
+*(the read line carries the ~9 µs of `recipe-read` artefact §16.4 describes —
+0.5% of the booking, and it inflates the read share rather than deflating it)*
+
+There is a fifth wait in 16 of this run's 20 hundred-thousand-cargo cells and
+it belongs to the run rather than to the booking: **the segment roll, 0.47 s
+to 0.79 s, once**. Spread over 1,500 bookings it is 310–530 µs each — the
+size of the entire write-statement wait — which is why it is reported as its
+own line rather than folded into an average nobody experiences.
+
+### 16.6 The row-set ladder: 2,000 / 10,000 / 100,000 cargos
+
+`--organizations`, `--ships`, `--operations` and the work are held at
+2,000 / 200 / 2,000 and `--bookings 1500`; only `--cargos` moves, and
+`--cargos N` is the row count of `cargos` exactly. The ladder starts at 2,000
+because a cargo ships once and 1,500 bookings need at least 1,500 cargos.
+
+| cargos | TPS raw | TPS roll-excl. | cargo-lookup /s | commit p50 µs | WAL segments | data file |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2,000 | 542.0 | 550.2 | 19,493 | 1,143.4 | **1** | 8,388,608 B |
+| 10,000 | 530.1 | 531.4 | 19,157 | 1,156.3 | **1** | 8,912,896 B |
+| 100,000 *(mean of 3)* | 432.1 | 529.6 | 18,823 | 1,121.9 | **2** | 16,252,928 B |
+
+**A fiftyfold larger cargo book still changes nothing the booking does** —
+the pk lookup into `cargos` serves 19,493, 19,157 and 18,823 statements a
+second across the range, a spread of 3.6%, and the commit's median moves by
+3.1%. Both are inside the 5.4% floor. What it changes is whether the run crosses a WAL segment boundary, and
+that is worth 18% of raw throughput. The size axis of this workload is not
+the cargo book; it is the WAL.
+
+### 16.7 What the file holds, and the undo purge's first workload datum
+
+Pages persisted at clean shutdown and file bytes, at 100,000 cargos with
+identical writes in every row — 1,500 freights, 8,430 charges, 3,000 updates:
+
+| configuration | data file | pages persisted | vs recording off |
+|---|---:|---:|---:|
+| baseline (`cached`) | 16,252,928 B | 1,871 | **+671** |
+| `--capacity-mode scan` | 13,631,488 B | 1,513 | **+313** |
+| `waystone_recording = off` | 11,010,048 B | 1,200 | — |
+
+Waystone's cost is **671 pages** on the baseline and **313** in `scan` mode —
+5.2 MB and 2.4 MB, reproducing §10's mechanism exactly (`scan` mode's
+`WHERE operation_id = ?` is search-class and never recorded, so it carries
+half). `SHOW PATTERNS` on a live baseline file reports **exactly two**
+auto-origin patterns, `class=1`, with **441 and 475 uses** — the same two
+counts §10 records — and `SHOW ACCESS` reports 1,526 uses on `operations`,
+1,525 on `organizations` and 1,500 on `cargos`, the third recorded not at all
+because no cargo id is ever drawn twice. The cost axis is repetition, not
+traffic, and it has not moved.
+
+**What has moved is the rest of the file, and `SHOW META` says why.** Taken
+on a live server at the two points of one 100,000-cargo cell:
+
+| | `undo_pages_live` | `undo_pages_recycled` |
+|---|---:|---:|
+| empty file, at mount | 0 | 0 |
+| after the load (104,305 rows, autocommit) | **2** | 566 |
+| after 1,500 bookings | **2** | **1,256** |
+
+The chain **plateaus at two live pages** while 1,256 pages are recycled into
+the log's next growth — 10.3 MB of undo that a non-purging engine would be
+carrying. This is the first measurement of `docs/workplan-undo-purge.md`'s
+UP1–UP3 on a real workload rather than a unit test, and it is what makes the
+space comparison in §16.8 come out the way it does.
+
+### 16.8 Versus PostgreSQL
+
+Three cells a side, **interleaved** — ckdbs, PostgreSQL, ckdbs, PostgreSQL,
+ckdbs, PostgreSQL — 2026-08-20 09:30:40 → 09:46:57 UTC, same host, same
+device, same quiet gate, `--no-manifest` on both sides. Fresh data file per
+ckdbs cell and a **fresh database** per PostgreSQL cell.
+
+The two engines wrote 8,430 and 8,446 charge rows for 1,500 bookings — 0.2%
+apart, from a different draw order in the two drivers, and it runs against
+ckdbs.
+
+| | ckdbs raw | ckdbs roll-excluded | PostgreSQL |
+|---|---:|---:|---:|
+| TPS (median of three) | 416.9 | **526.4** | **444.1** |
+| the three cells | 413.5 / 416.9 / 433.7 | 506.6 / 529.0 / 526.4 | 444.1 / 439.1 / 453.8 |
+| ckdbs ÷ PostgreSQL | **0.94×** | **1.18×** | — |
+| committed / charge rows | 1,500 / 8,430 | | 1,500 / 8,446 |
+| invariant checks | 100, 0 failures | | 100, 0 failures |
+
+**Both rows are true and the second is the engine comparison.** PostgreSQL
+never pays a segment roll in these cells — its own equivalent, `wal_init_zero`
+over a 16 MB segment, is four times smaller and its cluster recycles
+segments rather than creating them — so a raw-TPS comparison is comparing
+one engine's file-lifetime event against another's absence of one. The
+per-statement medians, which no single event can move, say the same thing as
+the roll-excluded column:
+
+| statement | ops | ckdbs /s | PostgreSQL /s | ratio |
+|---|---:|---:|---:|---:|
+| cargo-lookup | 1,500 | **18,797** | 12,165 | 1.55× |
+| credit-lookup | 1,500 | **22,989** | 14,085 | 1.63× |
+| capacity-read | 1,500 | **24,038** | 14,706 | 1.63× |
+| recipe-read | 1,500 | **19,841** | 10,823 | 1.83× |
+| freight-insert | 1,500 | **24,272** | 12,531 | 1.94× |
+| charge-insert | 8,430 / 8,446 | **29,326** | 18,832 | 1.56× |
+| operation-update | 1,500 | **25,381** | 13,699 | 1.85× |
+| org-update | 1,500 | **26,810** | 14,205 | 1.89× |
+| **commit** | 1,500 | **849** | 850 | **1.00×** |
+| whole booking | 1,500 | **560** | 468 | 1.20× |
+
+*(statements a second, derived from the median p50 across the three cells a
+side)*
+
+**The commit row is now exact.** 1,177.9 µs against 1,177.1 µs at the
+median — a 0.07% difference, where §14 measured 3%. Two engines fsyncing a
+write-ahead log to the same ext4 filesystem under the same promise are, on
+the durability path, one engine. Read the other eight rows with §14's
+caution: at 34–92 µs a round trip they are substantially protocol, and
+§16.9's `scan` row is the demonstration.
+
+| percentiles, whole booking | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| ckdbs | 1,541.8 | 1,726.6 | 1,784.7 | 2,191.2 | 3,764.7 |
+| PostgreSQL | 1,819.2 | 2,059.6 | 2,136.2 | 2,732.2 | 4,823.9 |
+
+| percentiles, commit | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| ckdbs | 1,021.0 | 1,135.3 | 1,177.9 | 1,541.0 | 2,706.6 |
+| PostgreSQL | 1,009.5 | 1,122.2 | 1,177.1 | 1,778.3 | 3,778.9 |
+
+*(µs, medians of the three cells a side. ckdbs's advantage over PostgreSQL is
+in the commit's tail — 2,707 µs against 3,779 at p99 — and §13 places a
+quarter of ckdbs's own tail in its checkpointer)*
+
+**The derived column, both engines.** `operations.booked_cbm` is a running
+total so the capacity check can be a pk lookup instead of a `SUM` over the
+freight ledger:
+
+| capacity-read, statements/s | `cached` | `scan` | what the derived column buys |
+|---|---:|---:|---:|
+| **ckdbs** | **24,038** | 11,614 | **2.07×** |
+| **PostgreSQL** | 14,706 | 12,706 | **1.16×** |
+| ckdbs ÷ PostgreSQL | **1.63×** | **0.91×** | |
+
+| capacity-read distributions | mean | p0 | p25 | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| ckdbs `cached` | 44.7 | 30.6 | 40.8 | 42.3 | 54.9 | 64.8 |
+| ckdbs `scan` | 100.2 | 34.5 | 64.2 | 86.1 | 126.5 | 135.6 |
+| PostgreSQL `cached` | 70.1 | 57.1 | 66.6 | 68.0 | 81.6 | 99.4 |
+| PostgreSQL `scan` | 81.3 | 69.4 | 76.8 | 78.7 | 95.5 | 113.2 |
+
+*(µs)* §8's finding holds in its strong form and slightly harder: change one
+statement from a pk lookup to an aggregate over a non-pk column and ckdbs's
+1.63× advantage becomes **0.91×** — it goes from ahead to marginally behind,
+because PostgreSQL's `SUM` is an index scan on `freights(operation_id)` and
+ckdbs's is a `FilterScan` over the whole ledger. The derived column is
+compensating for the absence of a secondary access path, not of an aggregate,
+and the compensation is worth 2.07× here. (The 0.91× against §8's 1.00× is
+one cell a side and is inside neither engine's floor; the *direction* is what
+reproduces, not the point.)
+
+**Space.**
+
+| | bytes | of which |
+|---|---:|---|
+| ckdbs data file | 16,252,928 | 11,010,048 data pages + 5,242,880 Waystone trail (§16.7) |
+| PostgreSQL database | 21,380,119 | 7,748,631 is an empty database on this cluster, so **13,631,488** is the workload |
+
+**ckdbs's data pages hold this workload in 19% fewer bytes than
+PostgreSQL spends on it**, and even counting the Waystone trail the whole
+file is 1.19× PostgreSQL's — while PostgreSQL carries two btree indexes
+ckdbs does not have. §16.7's `undo_pages_recycled = 1,256` is the mechanism.
+Neither number is tuned: ckdbs allocates in extents and PostgreSQL has not
+been vacuumed.
+
+### 16.9 What the two landings at this commit did to this workload: nothing, and why
+
+The task this addendum was run for was to find which of `2755045`'s two
+landings — the statement-local inner build (JB1–JB5) and NULL storage
+(NU1–NU8) — moves a cell of this workload. **Neither does, and in both cases
+the reason is structural, so it is a statement about the workload rather
+than a measurement that came out flat.**
+
+**The inner build cannot fire here.** The booking is eight statements and
+none of them is a join. The workload issues exactly one join shape, in the
+analytic reporter and in `--verify`'s I3 check, and `ANALYZE` on a live
+server shows what it compiles to:
+
+```
+SELECT c.org_id, SUM(f.cbm) FROM freights AS f
+  JOIN cargos AS c ON f.cargo_id = c.id WHERE c.org_id = 7 GROUP BY c.org_id
+
+step 0 Scan  freights AS f
+step 1 Probe cargos   AS c key=0:0.3
+```
+
+The inner side binds to `cargos.id`, which is the Keystone primary key, so
+the structure ladder stops at its **first** arm — the pk probe. The build is
+the ladder's *last* arm (`docs/spec-join-inner-build.md` §5), reached only
+when the pk, both index and both Cabin arms decline. Nothing in this schema
+can reach it. `bench/results-scenario3-library.md` is where that arm is
+measured.
+
+**The NULL bitmap is zero-width in every relation here.** `NU1`–`NU8` size
+the tail bitmap to the *nullable* columns, and `tools/scenario2_freight.py`
+declares none — all eight relations are entirely `NOT NULL`. The row layout
+is therefore byte-identical to a pre-NU engine's by construction, and the
+matrix agrees. `base1`, the first cell of this run, against §5's baseline,
+p50 µs, all eight statements — the widest disagreement is **1.6%**, which is
+the round trip's own drift:
+
+| | cargo | credit | capacity | recipe | freight-ins | charge-ins | op-upd | org-upd |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| §5, at `92c76dd` | 53.6 | 43.8 | 41.8 | 49.9 | 41.4 | 34.1 | 39.6 | 37.6 |
+| §16, at `2755045` | 53.6 | 43.7 | 41.9 | 50.7 | 41.2 | 34.2 | 39.7 | 37.7 |
+| Δ | 0.0% | −0.2% | +0.2% | **+1.6%** | −0.5% | +0.3% | +0.3% | +0.3% |
+
+Encode and decode both run in every one of these statements, and neither
+moved.
+
+**What did move from the file's standing sections, and why:**
+
+| standing section | standing number | this run | why |
+|---|---:|---:|---|
+| §2, baseline TPS | 511.7 (mean of 3) | 432.1 raw, **529.6 roll-excluded** | the segment roll fell inside the booking phase in all three cells here, and §2 does not table a maximum, so where it fell in that run is unrecorded |
+| §14, ckdbs ÷ PostgreSQL | 1.22× | 0.94× raw, **1.18× roll-excluded** | the same one event |
+| §14, commit median | 1,171.7 vs 1,210.8 µs (3% apart) | **1,177.9 vs 1,177.1 µs (0.07%)** | tighter interleaving; the finding is unchanged and sharper |
+| §14, space | ckdbs data pages 18% *more* than PostgreSQL's workload | ckdbs data pages **19% fewer** | `undo_pages_recycled = 1,256`, `undo_pages_live = 2` — the undo purge (UP1–UP3, `docs/workplan-undo-purge.md`) |
+| §10, Waystone's cost | +640 / +320 pages | +671 / +313 pages | unchanged |
+| §8, derived column | 1.84× ckdbs, 1.18× PostgreSQL | 2.07× / 1.16× | one cell a side both times; direction reproduces |
+
+No cell moved for either of the commit's two features.
+
+### 16.10 What this addendum does not answer
+
+- **Whether recycling a WAL segment would remove the stall.** §16.2 locates
+  it and names the code, and points out that PostgreSQL recycles where this
+  engine creates. It does not measure a recycling implementation, because
+  none exists — that is `docs/wal.md`'s decision to take.
+- **Where inside the 0.47–0.79 s the time goes.** `Prewrite` is 64 `pwrite`s
+  and an `fsync`; splitting those needs instrumentation the engine does not
+  have (`docs/observability.md`).
+- **Whether the undo purge costs anything.** §16.7 measures what it
+  *recovers*. The purge's own CPU is inside statements whose medians are
+  unchanged, which bounds it below this driver's resolution but does not
+  price it.
+- **The contention cells.** §11's finding — READ COMMITTED loses updates and
+  REPEATABLE READ removes them — was not re-run here; this addendum is one
+  booker throughout, and §11's cells stand at their own commit.
