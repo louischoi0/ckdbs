@@ -69,7 +69,10 @@ set; the encoding switch keeps its one home in `cabin_store.cpp`. And
 the class is header-only — no `src/exec/inner_build.cpp` — because
 `Find` is JB4's per-outer-row probe and inlines. The header states the
 invalidation contract JB4/JB6 rely on (hold the bucket `vector*`, never
-an iterator, across anything that can extend the map). The walk-order
+an iterator, across anything that can extend the map — **superseded
+2026-08-20 by "The build constant" below**: the storage is an arena with
+per-key chains, `Find` returns a `Bucket` by value, and an index-held
+Bucket survives every `Add`, its own key's included). The walk-order
 pin includes the discriminating case: a map that sorted by pk the way
 the Cabin's recording does would pass every other test and change
 replies on an `EXPLICIT` relation.
@@ -126,8 +129,11 @@ build records the whole map, because one full pass is the point.
 
 Two disciplines carried over from the Cabin recording fix, applied from
 the start rather than re-learned: the build decodes only the join column
-plus what the non-correlated residual reads (and the pk on demand),
-never the full row; and build rows charge the row budget normally —
+plus what the non-correlated residual reads (and the pk on demand — read
+straight out of the Keystone word since "The build constant" below,
+which is cheaper than the on-demand decode it replaced and is the same
+saving on the Cabin's recording walk), never the full row; and build
+rows charge the row budget normally —
 this *is* the walk the statement was going to run.
 
 *Done when:* the first outer row's reply is byte-identical to the
@@ -331,7 +337,9 @@ row-for-row (JB4's done-when, 26/26 pairs). Verdicts:
   (`kAutoRecordThreshold`: the first miss counts, the second records) is
   the spec-consistent candidate answer — defer the build to the second
   outer row's walk, making k=1 free and moving break-even to ~3.6.
-  Decision not taken here; it amends spec §5.
+  Decision not taken here; it amends spec §5. **Taken 2026-08-20 in
+  "The build constant" below, and against the candidate**: the constant
+  was the defect, not the arming rule, and half of it was removable.
 - **exists-correlated: unchanged within floors** (the JB6 gate holds).
   **Floor sweep: pass** (pk, filter-scan, cabin; the Cabin keeps ladder
   priority — plans identical under both configs).
@@ -339,6 +347,139 @@ row-for-row (JB4's done-when, 26/26 pairs). Verdicts:
   cross-commit draws put exists +1.7% (4/4 rank-perfect but only 4
   draws) — a possible ~3–6 ns/row executor-plumbing cost riding even
   when disabled.
+
+## The build constant (2026-08-20, on `jb-k1-deferral`: the baseline at `2755045`, the result at `74c1a3a`)
+
+The JB5 gate ended on a finding and a candidate answer: 83.7 ns per
+bucketed inner row, k=1 at +137%, and the Cabin's n=2 rule as the
+spec-consistent way to make k=1 free. The candidate was not taken.
+**Re-measuring the premise first (CLAUDE.md's rule) showed the constant
+was not irreducible, and that no arming rule can beat removing it.**
+
+### Attribution — where 83.7 ns/row went
+
+Config-levered A/B on one binary (`join_build_max_rows` 0 vs 65536),
+10,000 loans over 2,000 users, k ∈ {1,2,4,16}, fresh server and data
+file per cell (`bench/run_cell.sh`), 40 ops per k. The harness is
+**`tools/join_ksweep.py`, added here** — the driver's relations, seeding
+and statement with k lifted out of the module, which is the sweep
+`scenario3_library.py`'s own comment says is a harness's job, and which
+JB8 needs too. The build constant is read off k=1, where the map is paid
+in full and probed once:
+
+| binary | k=1 p50 | constant | break-even |
+|---|---|---|---|
+| `2755045` (JB5 as landed) | 1,445 µs | 83.7 ns/row | k ≈ 2.6 |
+| + arena-chained map | 1,155 µs | 54.6 ns/row | k ≈ 2.0 |
+| + Keystone-word pk | 1,062 µs | 45.3 ns/row | k ≈ 1.9 |
+
+A hot-loop micro-benchmark of the map alone (scratch, not in tree) put
+`MakeValueKey` at 4.6 ns and the vector-per-key insert at ~27 ns on the
+10,000-rows-over-2,000-keys shape; in situ the map cost about twice
+that, which is the cache pressure of a 10,000-entry map interleaved
+with a 163-page walk. Nothing else in the bucketing site is material:
+the split evaluation (`EvaluateAllExcept` plus the correlated conjunct)
+re-runs exactly the conjuncts the plain walk ran, and on this shape the
+non-correlated half is empty.
+
+### The two changes
+
+**The map is an arena with per-key chains** (`inner_build.hpp`,
+JB2's class, rewritten). Entries append to one vector, a parallel
+`next_` vector links each key's rows head-to-tail, and the hash map
+holds a 8-byte `{head, tail}` per key. A distinct key cost two
+allocations (map node plus the bucket vector) and a growth realloc per
+bucket besides; it now costs one. Walk order is preserved by appending
+at the *tail* — a head-insert list is one instruction cheaper and would
+reverse every reply, so the tail append is a correctness line, not a
+style one.
+
+`Find` returns a `Bucket` value rather than a `std::vector*`, which
+makes two things structural. An empty Bucket is the only "no rows"
+answer, so there is no null to forget. And a Bucket holds an *index*,
+so it survives any `Add` — including one under its own key, whose
+appended row a walk that has not passed the tail then sees. That is
+strictly stronger than the pointer contract it replaces (a `push_back`
+could reallocate the buffer a probe was iterating), and it is what
+JB6's resumed walk wants: extending the map under a live probe is the
+prefix rule's normal case. `inner_build_test.cpp` pins it.
+
+`Add` returns `bool`. The only refusal is the index type's own limit
+(2^32-1 entries), reachable only through a `join_build_max_rows` above
+it — the config accepts any unsigned value — and the caller takes the
+cap's verdict for it. A silently dropped row would be the one state
+the publish rule forbids: a map claiming to be the whole relation
+while missing rows from it.
+
+**The pk comes out of the Keystone word** (`EntryForRow`,
+`step_vm.cpp`). Building an entry decoded column 0 through
+`DecodeColumnsInto` — a schema walk and an AstValue per bucketed row —
+where `RowKeystoneId` reads the id at its fixed offset. Measured at
+11.6 ns/row on this shape. It also drops a `int_val < 0 ? 0` guard that
+could only ever have masked a corrupt decode (a Keystone id is 40 bits
+and unsigned), and it removes the decode's side effect of filling frame
+slot 0 — which nothing read: the trail's pk comes from `read_columns`,
+where `ReadColumnsOf` puts column 0 for every trail-replayable step.
+**The Cabin's recording walk shares this function** and pays the same
+11.6 ns per recorded row; that path was not separately benchmarked, and
+the change can only remove work from it.
+
+### The result, and the deferral declined
+
+The final binary at all three row-set sizes the JB5 gate reported, one
+fresh cell per config position, p50 of 40 ops (the 10,000 row is also
+the median of the two earlier interleaved rounds, which agreed within
+2%):
+
+| rows | k | walk (off) | build (on) | verdict | JB5 |
+|---|---|---|---|---|---|
+| 200 | 1 | 55.2 µs | 66.5 µs | **+20%** | +26% |
+| 200 | 2 | 68.9 | 68.6 | −0.4% | |
+| 200 | 16 | 237.0 | 84.3 | **2.8×** | |
+| 1,000 | 1 | 103.7 | 145.8 | **+41%** | +80% |
+| 1,000 | 2 | 152.8 | 143.9 | −6% | |
+| 1,000 | 16 | 957.1 | 161.4 | **5.9×** | |
+| 10,000 | 1 | 618.5 | 1,050.7 | **+70%** | +139% |
+| 10,000 | 2 | 1,175.0 | 1,048.5 | −11% | +26% |
+| 10,000 | 4 | 2,288.1 | 1,050.2 | −54% | |
+| 10,000 | 16 | 9,098.2 | 1,064.7 | **8.5×** | ×6.0 |
+
+Constant 43.2 ns/row at 10,000 and 42.1 at 1,000 (56.5 at 200, where 40
+keys over 200 rows and a ~53 µs per-statement floor make the per-row
+figure the least meaningful of the three). **Break-even is under k = 2
+at every size**, where JB5's range was 2.6 to 5.3, so the shape that
+used to need three outer rows to pay for itself now needs two. The
+acceptance cell's miss against spec §9's ~600 µs class shrinks from
+866 µs to 432 (walk 565 + build 432 + 16 probes ~16 = 1,048 measured).
+
+**The n=2 deferral is declined**, and spec §5 now carries the
+arithmetic on the measured parts (walk 565 µs per outer row, build
+432 µs, probe ~1 µs at 10,000 rows): deferring to the second outer row
+would cost k = 2 **+36%** where the eager build wins 11%, and leave
+k = 3 at −8% where the eager build wins 40%. It moves the loss from
+k = 1 to k = 2 and gives back most of the win above it, on a shape
+whose reason to exist is k ≫ 1. Nothing was built to measure it — the
+decline is arithmetic on measured parts, and reopening it means
+building one and measuring that.
+
+### The floor sweep, and the order effect it exposed
+
+The full scenario3 phase set under both config positions, twice, with
+the orders reversed. **Read the second pass, not the first**: off-then-on
+put five unrelated phases 5–18% up on the on side (`overdue` +18%,
+`books-by-author` +16%, `books-by-genre` +14%), and on-then-off put the
+same phases within ±4% with the sign flipped. The effect follows the
+*position*, not the config, which no single-order sweep could have told
+apart — the placement band this workplan already documents, in its
+whole-cell form. Within-pair, `join-no-literal` is 8,972 → 1,101 µs in
+one order and 8,978 → 1,102 in the other, and `exists-correlated` does
+not move (1,480 both ways, the JB6 gate holding).
+
+Suite: 2,514/2,514 green in `build-release` at this state, the
+`inner_build_contract_test.cpp` cap sweep included — the byte-for-byte
+comparison across `join_build_max_rows` 0/1/2/5/default is what says
+the map rewrite did not change a reply. The Debug suite was **not**
+executed in this session.
 
 ## Build order
 

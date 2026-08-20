@@ -100,12 +100,42 @@ The build is the **last arm of the structure ladder**, tried only when
 the pk arms, both index arms, and both Cabin arms declined — i.e. for
 exactly the walked-join shape. No statistics, no cardinality estimate:
 the lazy form is what removes the need for one. At k = 1 the statement
-pays one walk plus the build's per-row constant (the Cabin recording
-fix bounds the expectation: ~6% before the same decode discipline is
-applied, less after — and a stopping sub-chain pays it only on the
-prefix it walks anyway, §6); at k ≥ 2 every avoided walk is pure win. The
+pays one walk plus the build's per-row constant, and a stopping
+sub-chain pays it only on the prefix it walks anyway (§6). The
 crossover PostgreSQL's planner needs statistics to find is dissolved
 rather than estimated — the same move CB12 made.
+
+**Amended 2026-08-20, by measurement.** This paragraph used to read "at
+k ≥ 2 every avoided walk is pure win", and bounded the k = 1 cost at
+"~6%" from the Cabin recording fix. Both were wrong, and the JB5 gate
+priced them: the constant is **paid on every bucketed inner row of the
+first walk**, which at 10,000 inner rows was 83.7 ns/row — 866 µs
+against a 600 µs walk, so k = 1 cost +137% and break-even sat at
+k ≈ 2.6, not 2. The constant is a real quantity and belongs in this
+rule, so the rule now names it rather than an expectation:
+
+- **The build's own cost is the constant, and driving it down is the
+  design work** — not deciding *when* to pay it. Halving it moves
+  break-even and shrinks the k = 1 loss in one motion, where any arming
+  policy can only move the loss from one k to another. The
+  post-JB5 follow-up (workplan §"The build constant") took it to
+  **43.2 ns/row**, break-even **under k = 2 at every row-set size**,
+  k = 1 at +20%/+41%/+70% (200/1,000/10,000 inner rows, from
+  +26%/+80%/+139%) and k = 2 a 0.4%/6%/11% win.
+- **k = 1 pays the constant with no payback, and no arming rule this
+  engine can afford avoids it.** Deferring the build to the second
+  outer row (the Cabin's ratified `kAutoRecordThreshold` n = 2) makes
+  k = 1 free. What it costs is arithmetic on the measured parts — at
+  10,000 inner rows a walk of 565 µs per outer row, a build of 432 µs,
+  a probe of ~1 µs: k = 2 would pay 565 + (565 + 432) = 1,562 µs
+  against the walk's 1,131 (**+36%**, where the eager build wins 11%),
+  and k = 3 would win 8% where the eager build wins 40%. It moves the
+  loss from k = 1 to k = 2 and gives back most of the win above it, for
+  a shape whose entire reason to exist is k ≫ 1. **Declined on that
+  arithmetic**, not
+  on a measured configuration: a deferring build was never built, and
+  reopening this means building one and measuring it, not re-reading
+  this paragraph.
 
 Ladder order is also the economics: a converged Cabin serve (~67 µs)
 beats any per-statement rebuild (~560 µs), so banked structures stay
