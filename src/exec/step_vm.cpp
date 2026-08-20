@@ -831,21 +831,22 @@ private:
         auto key = stats::MakeValueKey(frame_.Get(step.build->key_from));
         if (!key.has_value()) co_return Status::OK();
 
-        const std::vector<stats::CabinEntry>* bucket = map.Find(*key);
-        if (bucket == nullptr) co_return Status::OK();
+        const InnerBuild::Bucket bucket = map.Find(*key);
+        if (bucket.empty()) co_return Status::OK();
 
-        // Bucket order, front to back. The bucket pointer is stable across
-        // the descent (inner_build.hpp's contract: a deeper step's build
-        // adds under *other* maps; nothing adds to a built one), and the
-        // page is fetched per entry rather than held - AcceptTupleAt
-        // descends, and anything below it may fetch (R1).
+        // Bucket order, front to back. The Bucket is stable across the
+        // descent by construction (inner_build.hpp's contract: it holds an
+        // index into the arena, not a pointer, so not even an Add under
+        // its own key could invalidate it - and nothing adds to a built
+        // map anyway), and the page is fetched per entry rather than held
+        // - AcceptTupleAt descends, and anything below it may fetch (R1).
         //
         // `pages_fetched` counts page *transitions*, as the walk it
         // replaced counted them - bucket order is walk order, so
         // consecutive same-page entries are the common case, and a
         // per-entry count would price the probe above the walk it beat.
         PageId last_page = kInvalidPageId;
-        for (const stats::CabinEntry& entry : *bucket) {
+        for (const stats::CabinEntry& entry : bucket) {
             if (stopped_) break;
             NoteFetch();
             if (entry.page_id != last_page) {
@@ -1552,26 +1553,27 @@ private:
     // The location-and-pk half of a recorded entry, shared by the Cabin
     // recording and the build's bucketing - both feed the same 24-byte
     // struct, and the *gate* (a key comparison there, MakeValueKey here)
-    // stays at each call site. The pk decodes **on demand, only for a row
-    // being recorded**: paying one extra column on every rejected row was
-    // most of the recording walk's cost over the plain one
-    // (bench/results-scenario3-library.md §7a). Column 0 is fixed-width
-    // and never spills; the nullptr enforces that rather than assuming
-    // it. The epoch was captured under this row's span - the hint names
-    // the page as it was at observation (R4).
-    StatusOr<stats::CabinEntry> EntryForRow(const catalog::TableAccess& access, bool partial,
-                                            std::span<parser::AstValue> slots, PageId page_id,
-                                            std::uint16_t slot, std::uint64_t observed_epoch) {
-        if (partial) {
-            if (Status s = DecodeColumnsInto(access.schema, access.layout, version_, slots,
-                                             /*columns=*/1, /*spills=*/nullptr);
-                !s.ok()) {
-                return s;
-            }
-        }
-        const parser::AstValue& pk = slots[0];
+    // stays at each call site.
+    //
+    // **The pk comes out of the Keystone word, not out of a column
+    // decode.** The id sits at a fixed offset precisely so finding it
+    // costs no schema walk (`RowKeystoneId`, row_codec.hpp), and an entry
+    // wants the id - not an AstValue holding it. The decode this replaced
+    // measured **11.6 ns of the build's 83.7 ns/row constant** on the
+    // walked join at 10,000 inner rows (the JB5 gate's follow-up), which
+    // is what the recording walk paid per recorded row too. It also drops
+    // a signed-to-unsigned guard that could only ever have hidden a
+    // corrupt decode: a Keystone id is 40 bits and unsigned by
+    // construction.
+    //
+    // The epoch was captured under this row's span - the hint names the
+    // page as it was at observation (R4).
+    StatusOr<stats::CabinEntry> EntryForRow(PageId page_id, std::uint16_t slot,
+                                            std::uint64_t observed_epoch) {
+        auto pk = RowKeystoneId(version_);
+        if (!pk.ok()) return pk.status();
         stats::CabinEntry entry;
-        entry.pk = pk.int_val < 0 ? 0 : static_cast<std::uint64_t>(pk.int_val);
+        entry.pk = pk.value();
         entry.page_id = page_id;
         entry.page_epoch = static_cast<std::uint32_t>(observed_epoch);
         entry.slot = slot;
@@ -1754,7 +1756,7 @@ private:
             if (recording_->col_pos < slots.size() &&
                 CompareValues(/*type_val=*/0, slots[recording_->col_pos], *recording_->value,
                               parser::CompareOp::kEq)) {
-                auto entry = EntryForRow(access, partial, slots, page_id, slot, observed_epoch);
+                auto entry = EntryForRow(page_id, slot, observed_epoch);
                 if (!entry.ok()) return entry.status();
                 recording_->entries.push_back(entry.value());
                 // The entry-cap lapse: once the set is past what Commit can
@@ -1838,11 +1840,19 @@ private:
                     if (building_->map->rows() >= building_->max_rows) {
                         building_->over_cap = true;
                     } else {
-                        auto entry =
-                            EntryForRow(access, partial, slots, page_id, slot, observed_epoch);
+                        auto entry = EntryForRow(page_id, slot, observed_epoch);
                         if (!entry.ok()) return entry.status();
-                        building_->map->Add(*key, entry.value());
-                        ++step_stats.build_rows;
+                        // A refused Add is the map's own index limit
+                        // (inner_build.hpp), reached only by a
+                        // `join_build_max_rows` above 2^32-1. It takes the
+                        // cap's verdict rather than a private one: a row
+                        // the map could not store must never leave a
+                        // published map claiming to hold the relation.
+                        if (building_->map->Add(*key, entry.value())) {
+                            ++step_stats.build_rows;
+                        } else {
+                            building_->over_cap = true;
+                        }
                     }
                 }
             }
