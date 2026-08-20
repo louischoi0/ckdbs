@@ -700,17 +700,20 @@ still waits on its own gate, so:
 
 ## SQL surface and protocol
 
-- **No NULL storage**: `NULL` parses as a literal and `exec::EncodeRow()`
-  refuses it, so rows holding one are not storable today
-  (`docs/client-manual.md`). **Now owned by `docs/spec-null.md`** (proposal,
-  2026-08-13): a fixed null bitmap at the tuple tail, sized to the relation's
-  *nullable* columns. Two facts from writing it are worth having here even if
-  the proposal is amended — `SysColumnRow::notnull` already exists and is
-  hardcoded `true` on every creation path, so every relation today has a
-  zero-byte bitmap and the change costs no format break and no migration; and
-  Oracle's representation cannot be adopted, because omitting trailing NULLs
-  makes the row variable-length and retracts invariant 13, on which stable
-  `(page_id, slot)` addressing and therefore every trail and hint depends.
+- ~~**No NULL storage**~~ — **closed 2026-08-20** by `docs/spec-null.md`
+  (NU1-NU8, `docs/workplan-null.md`): a tail null bitmap sized to the
+  relation's *nullable* columns, the bitmap as sole authority with the
+  `kNull` tag as defined filler. Columns are **NOT NULL by default** and
+  `NULL` is the opt-in (D1 — the deliberate divergence from standard SQL,
+  loudly noted in `manual/sql/sql.md`), so every pre-existing relation kept
+  a byte-identical row layout and the feature landed with no format bump
+  and no migration — the property the old entry predicted from
+  `SysColumnRow::notnull` having always existed. What remains true from the
+  old entry: Oracle's representation was rejected by name, because omitting
+  trailing NULLs makes the row variable-length and retracts invariant 13.
+  Still refused, by decision: nullable index keys (D2, covered columns
+  included; `IS NULL` answers by scan), `NULLS FIRST/LAST` grammar (D3
+  fixed NULLs-largest), and `ALTER TABLE ADD COLUMN` of any kind.
 - ~~**Pagination is LIMIT/OFFSET only**~~ — **closed 2026-08-11** by the
   output sort (`docs/workplan-order-by.md`). `ORDER BY` now takes any
   column or columns, pk or not, of any relation in a non-aggregated

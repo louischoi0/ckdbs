@@ -317,6 +317,27 @@ StatusOr<Condition> Parser::ParseOneCondition(std::uint32_t depth) {
         return cond;
     }
 
+    // `col IS [NOT] NULL` (docs/spec-null.md; NU5). `IS` is contextual -
+    // an unreserved word like REFERENCES, so it still names a column
+    // everywhere else and the fingerprint hashes it as the identifier it
+    // lexes as. No right-hand side: the op is the whole predicate.
+    if (const Token& is_tok = lexer_.Peek();
+        is_tok.type == TokenType::kIdent && IEquals(is_tok.text, "IS")) {
+        lexer_.Next();
+        bool negated = false;
+        if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kNot) {
+            lexer_.Next();
+            negated = true;
+        }
+        if (lexer_.Peek().type != TokenType::kNullLit) {
+            return Status::InvalidArgument("expected NULL after IS (byte " +
+                                            std::to_string(lexer_.Peek().byte_offset) + ")");
+        }
+        lexer_.Next();
+        cond.op = negated ? CompareOp::kIsNotNull : CompareOp::kIsNull;
+        return cond;
+    }
+
     auto op = ParseCompareOp();
     if (!op.ok()) return op.status();
     cond.op = op.value();
@@ -442,6 +463,27 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
                 "at byte " + std::to_string(col.type_byte_offset) +
                 "; there is no default scale, because one would be a silent decision about "
                 "what a stored value means");
+        }
+
+        // Optional nullability, directly after the type and before every
+        // other suffix (docs/spec-null.md §2.3, D1): `NULL` opts a column
+        // into nullability; `NOT NULL` spells the default for
+        // standard-minded schemas and changes nothing. First in the suffix
+        // chain because it modifies the type, not the column's relations.
+        if (lexer_.Peek().type == TokenType::kNullLit) {
+            col.null_byte_offset = lexer_.Peek().byte_offset;
+            lexer_.Next();
+            col.notnull = false;
+        } else if (lexer_.Peek().type == TokenType::kKeyword &&
+                   lexer_.Peek().kw == Keyword::kNot) {
+            lexer_.Next();
+            if (lexer_.Peek().type != TokenType::kNullLit) {
+                return Status::InvalidArgument(
+                    "expected NULL after NOT in a column declaration (byte " +
+                    std::to_string(lexer_.Peek().byte_offset) + ")");
+            }
+            lexer_.Next();
+            col.notnull = true;  // the default, said out loud
         }
 
         // Optional `REFERENCES <table>` (docs/impl-foreign-keys.md §1).
@@ -1069,6 +1111,13 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
         case CompareOp::kLt:
         case CompareOp::kLte:
             break;
+        case CompareOp::kIsNull:
+        case CompareOp::kIsNotNull:
+            // Unreachable through ParseCompareOp, which never produces the
+            // IS forms - they parse in ParseCondition only. Refused rather
+            // than defaulted, so a grammar change here has to decide.
+            return Status::Unsupported("an assertion bound takes a relational operator (byte " +
+                                       std::to_string(op_at) + ")");
         case CompareOp::kEq:
             // **AS11 as revised 2026-08-08.** `=` was briefly accepted and
             // documented as meaning `aggregate <= N`. That is refused now,

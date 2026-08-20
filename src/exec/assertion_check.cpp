@@ -38,9 +38,12 @@ std::string KeyFor(const LiveAssertion& a, std::span<const parser::AstValue> val
 
 std::int64_t ContributionOf(const LiveAssertion& a, std::span<const parser::AstValue> values,
                             std::size_t first_col_pos) {
-    return a.aggregate == BoundAggregate::kSum
-               ? ValueAt(values, first_col_pos, a.sum_col).int_val
-               : std::int64_t{1};
+    // `sum_col` names a column only for a SUM assertion, so the value is
+    // read only then. What it contributes - including that a NULL
+    // contributes nothing - is bound_cabin.hpp's one rule, which CREATE
+    // ASSERTION's backfill folds by too.
+    if (a.aggregate != BoundAggregate::kSum) return 1;  // COUNT(*) counts rows
+    return SumContribution(ValueAt(values, first_col_pos, a.sum_col));
 }
 
 // The §4.4 refusal, from the one place the format lives.

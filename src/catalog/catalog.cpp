@@ -2515,6 +2515,15 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     row.parent_rel_oid = parent_rel_oid;
     row.child_column_no = child_column_no;
     row.flags = flags;
+    // kFkNullable's one writer, stamped from the column's declaration - the
+    // moment the fact is known and the only moment it can change (no ALTER
+    // touches nullability). Enforcement never reads it: a NULL fk value
+    // skips the probe by being a NULL, and a NOT NULL column refuses the
+    // NULL in the codec before any row lands. The bit records the
+    // declaration for display.
+    if (!child.value()->schema.columns[child_column_no].notnull) {
+        row.flags |= kFkNullable;
+    }
 
     if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageFkeys, row, kBootstrapXid); !s.ok()) {
         return s;
@@ -2613,6 +2622,18 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
             return Status::InvalidArgument(
                 "catalog: the primary key already has an index - the clustered tree is it");
         }
+        // D2 (`docs/workplan-null.md`): a nullable key column is refused in
+        // v1, so the entry format, maintenance and backfill keep the
+        // property that every row has exactly one entry of a key that
+        // always exists. IS NULL answers by scan; revisit with a measured
+        // need, like feat-index.md §13's other opens.
+        if (!schema.columns[def.key_cols[i]].notnull) {
+            return Status::Unsupported(
+                "catalog: column '" +
+                std::string(NameView(schema.columns[def.key_cols[i]].name)) +
+                "' is nullable, and an index key must always exist (docs/spec-null.md D2; "
+                "declare the column NOT NULL or leave it unindexed)");
+        }
         for (std::size_t j = 0; j < i; ++j) {
             if (def.key_cols[j] == def.key_cols[i]) {
                 return Status::InvalidArgument("catalog: column " +
@@ -2623,6 +2644,14 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
     }
     for (std::uint16_t pos : def.covered_cols) {
         if (Status s = check_column(pos, "covered"); !s.ok()) return s;
+        // D2 covers covered columns too: an entry encodes their values
+        // with no null bitmap of its own, so a NULL has no representation
+        // there either.
+        if (!schema.columns[pos].notnull) {
+            return Status::Unsupported(
+                "catalog: covered column '" + std::string(NameView(schema.columns[pos].name)) +
+                "' is nullable, and an index entry has no NULL encoding (docs/spec-null.md D2)");
+        }
     }
 
     if (FindIndexByName(def.name).ok()) {

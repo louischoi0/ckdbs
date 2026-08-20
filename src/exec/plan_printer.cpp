@@ -119,7 +119,15 @@ std::string FormatOperand(const Operand& operand) {
 }
 
 std::string FormatPredicate(const StepPredicate& pred) {
-    return FormatColumnRef(pred.lhs) + " " + CompareOpName(pred.op) + " " + FormatOperand(pred.rhs);
+    // `IS [NOT] NULL` is the whole predicate: its `rhs` is the kNull filler
+    // the shared carrier needs (ast.hpp), never an operand, so printing it
+    // would read `IS NULL NULL` - a plan describing a predicate nobody
+    // wrote, on the surface whose whole job is showing what will run.
+    const std::string head = FormatColumnRef(pred.lhs) + " " + CompareOpName(pred.op);
+    if (pred.op == parser::CompareOp::kIsNull || pred.op == parser::CompareOp::kIsNotNull) {
+        return head;
+    }
+    return head + " " + FormatOperand(pred.rhs);
 }
 
 std::string Indent(int depth) { return std::string(static_cast<std::size_t>(depth) * 2, ' '); }

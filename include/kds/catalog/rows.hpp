@@ -185,7 +185,13 @@ struct SysColumnRow {
     // render the type instead.
     std::uint32_t len;
 
-    bool notnull;
+    // Defaulted true, which is D1's ratified semantics (`workplan-null.md`):
+    // a column is NOT NULL unless declared otherwise - so a hand-built row
+    // that never thinks about nullness means what every column meant before
+    // the feature existed, instead of silently growing a bitmap. A member
+    // default changes no layout and no offset; the static_asserts below
+    // still hold.
+    bool notnull = true;
 
     // Whether this column may carry a Cabin, and on whose initiative
     // (docs/feat-cabin.md). One of the kCabinPolicy* values below.
@@ -832,12 +838,13 @@ static_assert(SysFkeyRow::kOnDiskSize == 28);
 
 // MATCH SIMPLE: a NULL fk value skips the check (§2).
 //
-// **No writer sets it in v1**, because no column can hold a NULL - every
-// sys.columns row is written `notnull = true` and the row codec has no NULL
-// encoding. It is defined now so that the bit has a meaning fixed before
-// there is data to reinterpret, and because the alternative - deciding what
-// an unset flag means once NULLs exist - is how a stored 0 acquires a
-// second reading.
+// Written by `Catalog::CreateForeignKey` from the child column's declared
+// nullability - the one writer, at the one moment the fact is known.
+// Enforcement never consults it: a NULL value skips the forward probe by
+// being a NULL, a NULL child cell matches no parent pk on the reverse walk,
+// and a NOT NULL column refuses the NULL in the row codec before any row
+// lands. The bit records the declaration so `SHOW` prints it without a
+// second catalog read, and a stored 0 keeps its one reading: the check runs.
 inline constexpr std::uint16_t kFkNullable = 1u << 0;
 
 // Deepest directory a pattern's waystones can need, and therefore the

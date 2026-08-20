@@ -41,10 +41,13 @@ parser::AstValue PkValue(std::uint64_t pk) {
 
 // Reads the foreign-key column of one tuple as an id.
 //
-// Returns nullopt for a column that is not an integer in this row, which is
-// a row that cannot match an id whatever else is true of it. **No spill is
-// resolved**: the fk column is an integer and therefore always inline, so
-// this makes no page fetch and is safe under the walk's own page span.
+// Returns nullopt for a column that is not an integer in this row - which
+// since NULL storage includes a stored NULL, decoded as kNull by the bitmap.
+// Either way it is a row that cannot match an id whatever else is true of
+// it, so a NULL child never blocks its parent's delete: MATCH SIMPLE's
+// vacuous direction, falling out of the same bail. **No spill is resolved**:
+// the fk column is an integer and therefore always inline, so this makes no
+// page fetch and is safe under the walk's own page span.
 StatusOr<std::optional<std::uint64_t>> ForeignKeyValue(const catalog::TableAccess& child,
                                                        std::uint16_t column_no,
                                                        std::span<const std::byte> payload,

@@ -87,9 +87,11 @@ absences are decisions: **no parent column**, because F1 fixes the
 parent side to the Keystone id for every foreign key there can be, and
 **no action field**, because F2 leaves v1 with exactly one action and a
 field with one legal value is a field that only records that a decision
-was deferred. `kFkNullable` has no writer while no column can hold a
-NULL; it is defined now so a stored 0 has one reading, and that reading
-is "the check runs".
+was deferred. `kFkNullable` gained its writer with NULL storage
+(2026-08-20, `docs/spec-null.md`): `Catalog::CreateForeignKey` stamps it
+from the child column's declared nullability. A stored 0 keeps its one
+reading — "the check runs" — and enforcement never consults the bit (see
+§3's semantics note); it records the declaration for display.
 
 Adding the relation cost a **superblock format bump, 10 → 11**, so every
 pre-existing data file stops mounting. That is the fourth repeat of the
@@ -177,7 +179,12 @@ check-visibility mode through `AcceptTupleAt`.
 
 **Semantics.**
 
-- NULL fk value → check skipped (MATCH SIMPLE), gated by `kFkNullable`.
+- NULL fk value → check skipped (MATCH SIMPLE). Realized without reading
+  `kFkNullable`: the forward check's non-integer bail passes a NULL
+  through, and the row codec then stores it (column declared `NULL`) or
+  refuses it by name (`NOT NULL`) — so the NOT NULL refusal is the gate.
+  On the reverse side a NULL child cell matches no parent pk, so a NULL
+  child never blocks its parent's delete.
 - Probe finds a version → apply **check visibility** (§4): visible
   committed parent → pass; delete-marked by an in-flight foreign trx →
   `kConstraintBusy` (F3); deleted-committed or not found →

@@ -532,5 +532,163 @@ TEST(TypesEndToEnd, MixedWidthDecimalColumnsRefuseToCompare) {
     EXPECT_NE(reply.find("width"), std::string::npos) << reply;
 }
 
+// ---- NULL end to end (docs/spec-null.md, workplan-null.md NU5) -------------
+
+TEST(NullE2eTest, ANullInsertsReadsBackAndIsNotZeroOrEmpty) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL, s varchar NULL)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (0, '')").substr(0, 8), "INSERTED");
+
+    // NULL is not 0 and not '' - the distinction §1 keeps in storage,
+    // held through the predicate surface.
+    const std::string zeros = db.Run("SELECT id, n FROM t WHERE n = 0");
+    EXPECT_EQ(zeros.find("\\n1,"), std::string::npos) << zeros;
+    EXPECT_NE(zeros.find("2,0"), std::string::npos) << zeros;
+    const std::string empties = db.Run("SELECT id, s FROM t WHERE s = ''");
+    EXPECT_EQ(empties.find("\\n1,"), std::string::npos) << empties;
+}
+
+TEST(NullE2eTest, IsNullAndIsNotNullPartitionTheRows) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (7)").substr(0, 8), "INSERTED");
+
+    const std::string nulls = db.Run("SELECT id FROM t WHERE n IS NULL");
+    EXPECT_NE(nulls.find("1"), std::string::npos) << nulls;
+    EXPECT_EQ(nulls.find("2"), std::string::npos) << nulls;
+
+    const std::string present = db.Run("SELECT id FROM t WHERE n IS NOT NULL");
+    EXPECT_EQ(present.find("\\n1"), std::string::npos) << present;
+    EXPECT_NE(present.find("2"), std::string::npos) << present;
+}
+
+// The §6 truth table, driven through statements: every relational operator
+// with a NULL operand is unknown, and WHERE keeps only true.
+TEST(NullE2eTest, EveryRelationalOperatorWithANullOperandKeepsNoRow) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+
+    for (const std::string op : {"=", "!=", "<", "<=", ">", ">="}) {
+        const std::string out = db.Run("SELECT id FROM t WHERE n " + op + " 5");
+        EXPECT_EQ(out.find("\\n"), std::string::npos)
+            << "operator " << op << " matched a NULL: " << out;
+    }
+    // And the literal-NULL side: `n = NULL` is unknown for every row -
+    // the standard's trap, kept on purpose; IS NULL is the spelling.
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (5)").substr(0, 8), "INSERTED");
+    const std::string out = db.Run("SELECT id FROM t WHERE n = NULL");
+    EXPECT_EQ(out.find("\\n"), std::string::npos) << out;
+}
+
+TEST(NullE2eTest, AnUpdateCanSetNullAndClearItAgain) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (7)").substr(0, 8), "INSERTED");
+
+    ASSERT_EQ(db.Run("UPDATE t SET n = NULL WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    EXPECT_NE(db.Run("SELECT id FROM t WHERE n IS NULL").find("1"), std::string::npos);
+
+    ASSERT_EQ(db.Run("UPDATE t SET n = 9 WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    EXPECT_NE(db.Run("SELECT id FROM t WHERE n = 9").find("1"), std::string::npos);
+    EXPECT_EQ(db.Run("SELECT id FROM t WHERE n IS NULL").find("1,"), std::string::npos);
+}
+
+// spec-null.md §4's aggregate semantics, driven through statements.
+TEST(NullE2eTest, AggregatesSkipNullsAndAnAllNullGroupSumsToNull) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, g int64, n int64 NULL, d decimal(10,2) NULL)")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (1, 10, '10.00')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (1, NULL, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (2, NULL, NULL)").substr(0, 8), "INSERTED");
+
+    // COUNT(*) counts rows; COUNT(col) counts non-NULLs.
+    EXPECT_NE(db.Run("SELECT COUNT(*) FROM t").find("3"), std::string::npos);
+    EXPECT_NE(db.Run("SELECT COUNT(n) FROM t").find("1"), std::string::npos);
+    // SUM/MIN/MAX skip; AVG's denominator is the non-NULL count (AVG takes
+    // a decimal column by the engine's own rule, so the NULL-skip proof
+    // rides one: 10.00 over one non-NULL value, never 10/3).
+    EXPECT_NE(db.Run("SELECT SUM(n) FROM t").find("10"), std::string::npos);
+    EXPECT_NE(db.Run("SELECT AVG(d) FROM t").find("10.00"), std::string::npos)
+        << "AVG must divide by the non-NULL count, not the row count: "
+        << db.Run("SELECT AVG(d) FROM t");
+
+    // Per group: group 1 sums 10; group 2 - all NULL - answers NULL,
+    // never 0 (0 is a sum a real value could produce).
+    const std::string grouped = db.Run("SELECT g, SUM(n) FROM t GROUP BY g");
+    EXPECT_NE(grouped.find("1,10"), std::string::npos) << grouped;
+    EXPECT_NE(grouped.find("2,NULL"), std::string::npos) << grouped;
+}
+
+// NULL groups with NULL (the standard's "not distinct" rule) - one group,
+// not one per row, and not merged with any real value's group.
+TEST(NullE2eTest, NullGroupsWithNullUnderGroupBy) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, g int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (0)").substr(0, 8), "INSERTED");
+
+    const std::string grouped = db.Run("SELECT g, COUNT(*) FROM t GROUP BY g");
+    EXPECT_NE(grouped.find("NULL,2"), std::string::npos)
+        << "two NULLs must be one group of two: " << grouped;
+    EXPECT_NE(grouped.find("0,1"), std::string::npos)
+        << "NULL must not merge with 0: " << grouped;
+}
+
+// An assertion's SUM ignores a NULL contribution: two NULL-qty rows spend
+// none of the bound, and a real row still counts.
+TEST(NullE2eTest, ANullSumColumnContributesNothingToAnAssertion) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE trades (id int64, account int64, qty int64 NULL)")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 10")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO trades VALUES (7, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO trades VALUES (7, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO trades VALUES (7, 10)").substr(0, 8), "INSERTED");
+    // The bound is exactly spent by the one real value; one more unit trips.
+    const std::string out = db.Run("INSERT INTO trades VALUES (7, 1)");
+    EXPECT_EQ(out.substr(0, 23), "ERR ASSERTION_VIOLATION") << out;
+}
+
+TEST(NullE2eTest, ANullIntoANotNullColumnIsRefusedThroughTheStatement) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64)").substr(0, 7), "CREATED");
+    const std::string out = db.Run("INSERT INTO t VALUES (NULL)");
+    ASSERT_EQ(out.rfind("ERR", 0), 0u);
+    EXPECT_NE(out.find("NOT NULL"), std::string::npos) << out;
+}
+
+// The wire keeps §1's distinction on the way out (spec-null.md §4, NU7):
+// a NULL renders as the token NULL and an empty string as an empty field.
+// (A *stored* string 'NULL' is wire-ambiguous with it, as any string with a
+// comma already is - the text protocol renders values unquoted, and typed
+// frames are KWP/1's to fix, not a rendering rule's.)
+TEST(NullE2eTest, TheWireRendersNullDistinguishablyFromTheEmptyString) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, s varchar NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES ('')").substr(0, 8), "INSERTED");
+
+    const std::string out = db.Run("SELECT id, s FROM t");
+    EXPECT_NE(out.find("1,NULL"), std::string::npos) << out;
+    // Row 2 is exactly "2," - the field is empty, not the token NULL.
+    const std::size_t row2 = out.find("\\n2,");
+    ASSERT_NE(row2, std::string::npos) << out;
+    const std::size_t start = row2 + 2;
+    const std::size_t next = out.find("\\n", start);
+    const std::string row2_text =
+        out.substr(start, next == std::string::npos ? std::string::npos : next - start);
+    EXPECT_EQ(row2_text, "2,") << out;
+}
+
 }  // namespace
 }  // namespace kds::server

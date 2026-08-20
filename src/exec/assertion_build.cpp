@@ -240,8 +240,12 @@ StatusOr<BoundCabinBuild> BuildBoundCabin(storage::PageStore& store,
                 group_values[i] = decoded.value()[group_cols[i]];
             }
             const std::string key = EncodeGroupKey(group_values);
+            // Through the one contribution rule (bound_cabin.hpp), not a
+            // second reading of `int_val`: a backfill that folded a NULL as
+            // 0-by-accident would build a total the write path's admission
+            // does not reproduce the day the decoder leaves a stale one.
             const std::int64_t delta = aggregate == BoundAggregate::kSum
-                                           ? decoded.value()[sum_col].int_val
+                                           ? SumContribution(decoded.value()[sum_col])
                                            : std::int64_t{1};
 
             BoundCabinEntry entry;

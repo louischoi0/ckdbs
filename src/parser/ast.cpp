@@ -47,6 +47,8 @@ const char* CompareOpName(CompareOp op) {
         case CompareOp::kLte: return "<=";
         case CompareOp::kGt: return ">";
         case CompareOp::kGte: return ">=";
+        case CompareOp::kIsNull: return "IS NULL";
+        case CompareOp::kIsNotNull: return "IS NOT NULL";
     }
     return "?";
 }

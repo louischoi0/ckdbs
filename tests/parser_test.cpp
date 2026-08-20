@@ -336,5 +336,35 @@ TEST(ParserTest, StatementTypeNameMatchesVariant) {
     EXPECT_STREQ(StatementTypeName(Parse("CREATE TABLE t (a int64)").value()), "CREATE TABLE");
 }
 
+// ---- Nullability (docs/spec-null.md §2.3, D1) ------------------------------
+
+TEST(ParserTest, AColumnIsNotNullUnlessDeclaredNull) {
+    auto stmt = Parse("CREATE TABLE t (id int64, a int64 NULL, b int64 NOT NULL, c varchar)");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
+    ASSERT_NE(ct, nullptr);
+    ASSERT_EQ(ct->columns.size(), 4u);
+    EXPECT_TRUE(ct->columns[0].notnull) << "saying nothing means NOT NULL (D1)";
+    EXPECT_FALSE(ct->columns[1].notnull);
+    EXPECT_GT(ct->columns[1].null_byte_offset, 0u);
+    EXPECT_TRUE(ct->columns[2].notnull) << "NOT NULL spells the default and parses";
+    EXPECT_TRUE(ct->columns[3].notnull);
+}
+
+TEST(ParserTest, NullabilityPrecedesTheOtherColumnSuffixes) {
+    auto stmt = Parse("CREATE TABLE t (id int64, p int64 NULL REFERENCES parent)");
+    ASSERT_TRUE(stmt.ok()) << stmt.status().message();
+    auto* ct = std::get_if<CreateTableStmt>(&stmt.value());
+    ASSERT_NE(ct, nullptr);
+    EXPECT_FALSE(ct->columns[1].notnull);
+    EXPECT_EQ(ct->columns[1].references_table, "parent");
+}
+
+TEST(ParserTest, NotWithoutNullInAColumnIsRefusedWithTheByte) {
+    auto stmt = Parse("CREATE TABLE t (id int64, a int64 NOT)");
+    ASSERT_FALSE(stmt.ok());
+    EXPECT_NE(stmt.status().message().find("byte"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace kds::parser
