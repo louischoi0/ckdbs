@@ -667,5 +667,25 @@ TEST(NullE2eTest, ANullIntoANotNullColumnIsRefusedThroughTheStatement) {
     EXPECT_NE(out.find("NOT NULL"), std::string::npos) << out;
 }
 
+// The wire keeps §1's distinction on the way out (spec-null.md §4, NU7):
+// a NULL renders as the token NULL and an empty string as an empty field.
+// (A *stored* string 'NULL' is wire-ambiguous with it, as any string with a
+// comma already is - the text protocol renders values unquoted, and typed
+// frames are KWP/1's to fix, not a rendering rule's.)
+TEST(NullE2eTest, TheWireRendersNullDistinguishablyFromTheEmptyString) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, s varchar NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES ('')").substr(0, 8), "INSERTED");
+
+    const std::string out = db.Run("SELECT id, s FROM t");
+    EXPECT_NE(out.find("1,NULL"), std::string::npos) << out;
+    // Row 2's field is empty: the row ends right after the comma.
+    const std::size_t row2 = out.find("2,");
+    ASSERT_NE(row2, std::string::npos) << out;
+    const std::string after = out.substr(row2 + 2, 2);
+    EXPECT_TRUE(after.empty() || after == "\\n" || after[0] == '\\') << out;
+}
+
 }  // namespace
 }  // namespace kds::server

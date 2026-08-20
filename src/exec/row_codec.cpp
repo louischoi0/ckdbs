@@ -1201,6 +1201,13 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
 }
 
 int OrderKey::Compare(const OrderKey& rhs) const noexcept {
+    // D3: NULL orders above every value of its column, and two NULLs tie
+    // (the sort's `seq` key makes the order total). Checked before the
+    // str/num split because a NULL key carries neither.
+    if (is_null || rhs.is_null) {
+        if (is_null == rhs.is_null) return 0;
+        return is_null ? 1 : -1;
+    }
     // A string key and a numeric one never meet: both come from one column,
     // whose type decided which arm `OrderKeyOf` took. The check is here
     // because the alternative is comparing a string's `num` (always 0)
@@ -1215,11 +1222,13 @@ int OrderKey::Compare(const OrderKey& rhs) const noexcept {
 }
 
 StatusOr<OrderKey> OrderKeyOf(std::uint32_t type_val, const parser::AstValue& value) {
-    if (value.type == parser::ValueType::kNull) {
-        return Status::Corruption(
-            "cannot order a NULL: none is storable, and where one would sort is undecided");
-    }
     OrderKey key;
+    if (value.type == parser::ValueType::kNull) {
+        // D3: a NULL is a legal sort operand and orders largest - ASC last,
+        // and the ordinary descending flip puts it first.
+        key.is_null = true;
+        return key;
+    }
     if (type_val == kTypeValUint64) {
         // Through ValueAsUint64 and not through int_val, for the reason
         // CompareValues spells out above: int_val cannot hold the upper half

@@ -104,7 +104,8 @@ TEST_F(ForeignKeyTest, ReferencesDeclaresAForeignKey) {
     EXPECT_EQ(fk.child_rel_oid, trades.value());
     EXPECT_EQ(fk.parent_rel_oid, accounts.value());
     EXPECT_EQ(fk.child_column_no, 1u);
-    // No writer sets kFkNullable while no column can hold a NULL.
+    // account_id is NOT NULL by default (spec-null.md D1), so the
+    // declaration stamps no kFkNullable.
     EXPECT_EQ(fk.flags, 0u);
     EXPECT_NE(fk.fk_id, 0u);
 }
@@ -617,6 +618,47 @@ TEST_F(ForeignKeyCheckTest, ACabinSurplusEntryDoesNotBlockADelete) {
     // Account 1 is now unreferenced, and the stale entry must not say
     // otherwise.
     EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1"), "DELETED 1");
+}
+
+// ---- NULL fk values: MATCH SIMPLE, both directions (spec-null.md §4) ------
+
+// A NULL child key satisfies the constraint vacuously: the insert probes no
+// parent, and the stored NULL never blocks the parent side of anything.
+TEST_F(ForeignKeyCheckTest, ANullForeignKeySatisfiesVacuouslyInBothDirections) {
+    ASSERT_EQ(Run("CREATE TABLE orders (id int64, account_id int64 NULL "
+                  "REFERENCES accounts) BTREE")
+                  .substr(0, 7),
+              "CREATED");
+
+    // Forward: a NULL fk inserts with no parent existence to prove -
+    // account 999 does not exist and is not asked about.
+    ASSERT_EQ(Run("INSERT INTO orders VALUES (NULL)").substr(0, 8), "INSERTED");
+    // A real value on the same column still enforces.
+    const std::string missing = Run("INSERT INTO orders VALUES (999)");
+    EXPECT_EQ(missing.substr(0, 16), "ERR FK_VIOLATION") << missing;
+    ASSERT_EQ(Run("INSERT INTO orders VALUES (1)").substr(0, 8), "INSERTED");
+
+    // Reverse: account 2 is referenced only by NULLs (that is, by nothing),
+    // so its delete passes; account 1 has a real child and refuses.
+    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 2"), "DELETED 1");
+    const std::string blocked = Run("DELETE FROM accounts WHERE id = 1");
+    EXPECT_EQ(blocked.substr(0, 16), "ERR FK_VIOLATION") << blocked;
+
+    // An UPDATE to NULL releases the reference; the delete then passes.
+    ASSERT_EQ(Run("UPDATE orders SET account_id = NULL WHERE account_id = 1"), "UPDATED 1");
+    EXPECT_EQ(Run("DELETE FROM accounts WHERE id = 1"), "DELETED 1");
+}
+
+// The declaration stamps kFkNullable from the column, and SHOW prints it.
+TEST_F(ForeignKeyCheckTest, ANullableForeignKeyColumnShowsNullableYes) {
+    ASSERT_EQ(Run("CREATE TABLE orders (id int64, account_id int64 NULL "
+                  "REFERENCES accounts) BTREE")
+                  .substr(0, 7),
+              "CREATED");
+    const std::string out = Run("SHOW FKEYS");
+    EXPECT_NE(out.find("nullable=yes"), std::string::npos) << out;
+    // The fixture's NOT NULL fk on trades keeps printing nullable=no beside it.
+    EXPECT_NE(out.find("nullable=no"), std::string::npos) << out;
 }
 
 }  // namespace

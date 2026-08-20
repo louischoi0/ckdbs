@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -442,12 +443,68 @@ TEST(OrderKeyTest, StringOrderIsByteOrderOverTheWholeValue) {
     EXPECT_EQ(a.value().Compare(a.value()), 0);
 }
 
-// A NULL is refused rather than placed: where one sorts is an open
-// decision, and defaulting here would settle it by accident.
-TEST(OrderKeyTest, ANullIsRefusedRatherThanPlaced) {
+// D3 (docs/spec-null.md): a NULL orders above every value - ASC puts it
+// last and the ordinary descending flip puts it first - and two NULLs tie.
+TEST(OrderKeyTest, ANullOrdersAboveEveryValueAndTiesWithItself) {
     parser::AstValue null_value;
     null_value.type = parser::ValueType::kNull;
-    EXPECT_FALSE(exec::OrderKeyOf(0, null_value).ok());
+    auto null_key = exec::OrderKeyOf(0, null_value);
+    ASSERT_TRUE(null_key.ok()) << null_key.status().message();
+
+    parser::AstValue big;
+    big.type = parser::ValueType::kInt;
+    big.int_val = std::numeric_limits<std::int64_t>::max();
+    auto big_key = exec::OrderKeyOf(0, big);
+    ASSERT_TRUE(big_key.ok());
+    EXPECT_GT(null_key.value().Compare(big_key.value()), 0);
+    EXPECT_LT(big_key.value().Compare(null_key.value()), 0);
+
+    auto str_key = exec::OrderKeyOf(0, Str("zzz"));
+    ASSERT_TRUE(str_key.ok());
+    EXPECT_GT(null_key.value().Compare(str_key.value()), 0);
+
+    EXPECT_EQ(null_key.value().Compare(null_key.value()), 0);
+}
+
+// ---- 10. NULL under ORDER BY, end to end (spec-null.md D3, NU7) ------------
+
+TEST_F(OrderByExecTest, NullsSortLastAscendingAndFirstDescending) {
+    Run("CREATE TABLE t (id int64, n int64 NULL)");
+    for (const char* v : {"3", "NULL", "1", "NULL", "2"}) {
+        Run(std::string("INSERT INTO t VALUES (") + v + ")");
+    }
+    EXPECT_EQ(Rows("SELECT n FROM t ORDER BY n"),
+              (std::vector<std::string>{"1", "2", "3", "NULL", "NULL"}));
+    EXPECT_EQ(Rows("SELECT n FROM t ORDER BY n DESC"),
+              (std::vector<std::string>{"NULL", "NULL", "3", "2", "1"}));
+}
+
+// The top-N heap (OB5) places NULLs by the same order: an ascending LIMIT
+// never surfaces a NULL while enough real values exist, and a descending
+// one surfaces exactly the NULLs.
+TEST_F(OrderByExecTest, TheTopNHeapKeepsD3sNullPosition) {
+    Run("CREATE TABLE t (id int64, n int64 NULL)");
+    for (const char* v : {"3", "NULL", "1", "NULL", "2"}) {
+        Run(std::string("INSERT INTO t VALUES (") + v + ")");
+    }
+    EXPECT_EQ(Rows("SELECT n FROM t ORDER BY n LIMIT 3"),
+              (std::vector<std::string>{"1", "2", "3"}));
+    EXPECT_EQ(Rows("SELECT n FROM t ORDER BY n DESC LIMIT 2"),
+              (std::vector<std::string>{"NULL", "NULL"}));
+}
+
+// A NULL in the second key orders within its group, and ties between two
+// NULLs keep the chain's emission order (seq is the final key).
+TEST_F(OrderByExecTest, ANullSecondaryKeyOrdersWithinItsGroup) {
+    Run("CREATE TABLE t (id int64, grp int64, n int64 NULL)");
+    Run("INSERT INTO t VALUES (1, NULL)");
+    Run("INSERT INTO t VALUES (1, 5)");
+    Run("INSERT INTO t VALUES (2, NULL)");
+    Run("INSERT INTO t VALUES (2, 4)");
+    EXPECT_EQ(Rows("SELECT grp, n FROM t ORDER BY grp, n"),
+              (std::vector<std::string>{"1,5", "1,NULL", "2,4", "2,NULL"}));
+    EXPECT_EQ(Rows("SELECT grp, n FROM t ORDER BY grp, n DESC"),
+              (std::vector<std::string>{"1,NULL", "1,5", "2,NULL", "2,4"}));
 }
 
 }  // namespace

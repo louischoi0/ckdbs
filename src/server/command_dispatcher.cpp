@@ -1977,10 +1977,14 @@ Status CommandDispatcher::CheckForeignKeyOnWrite(const catalog::TableAccess& chi
                                                  const parser::AstValue& value,
                                                  const txn::ReadView& check_view) {
     // A value that is not an id cannot reference one. Left alone rather than
-    // failed here: the row codec refuses it a moment later with a message
-    // about the column's declared type, which is the better error - a type
-    // mistake reported as a constraint violation sends the reader looking at
-    // the wrong table.
+    // failed here, and the same bail carries two different outcomes:
+    //   - a NULL is MATCH SIMPLE's vacuous pass - the codec stores it if the
+    //     column was declared NULL, and refuses it by name if not, so the
+    //     NOT NULL refusal is the gate and no kFkNullable read is needed;
+    //   - a wrong-typed value is refused by the codec a moment later with a
+    //     message about the column's declared type, which is the better
+    //     error - a type mistake reported as a constraint violation sends
+    //     the reader looking at the wrong table.
     if (value.type != parser::ValueType::kInt || value.int_val < 0) return Status::OK();
 
     auto parent = catalog_.InitTableAccess(fk.rel_oid);

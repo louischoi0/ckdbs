@@ -2515,6 +2515,15 @@ StatusOr<std::uint64_t> Catalog::CreateForeignKey(Oid child_rel_oid, std::uint16
     row.parent_rel_oid = parent_rel_oid;
     row.child_column_no = child_column_no;
     row.flags = flags;
+    // kFkNullable's one writer, stamped from the column's declaration - the
+    // moment the fact is known and the only moment it can change (no ALTER
+    // touches nullability). Enforcement never reads it: a NULL fk value
+    // skips the probe by being a NULL, and a NOT NULL column refuses the
+    // NULL in the codec before any row lands. The bit records the
+    // declaration for display.
+    if (!child.value()->schema.columns[child_column_no].notnull) {
+        row.flags |= kFkNullable;
+    }
 
     if (Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageFkeys, row, kBootstrapXid); !s.ok()) {
         return s;

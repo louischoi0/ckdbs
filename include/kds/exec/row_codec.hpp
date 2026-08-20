@@ -341,6 +341,11 @@ struct OrderKey {
     Int128 num = 0;
     std::string str;
     bool is_str = false;
+    // D3 (`docs/spec-null.md`): NULL orders above every value, so ASC puts
+    // NULLs last and the ordinary descending flip puts them first - no
+    // NULLS FIRST/LAST grammar exists to override it. Two NULLs compare
+    // equal, and the sort's `seq` tiebreak keeps the order total.
+    bool is_null = false;
 
     // Negative, zero, positive - the `strcmp` convention. Total and
     // infallible: everything that could fail was refused by `OrderKeyOf`.
@@ -349,16 +354,16 @@ struct OrderKey {
 
 // Normalizes one decoded value of a column of type `type_val`, or refuses.
 //
-// Refuses rather than defaults in three cases, each of which is a decode or
+// Refuses rather than defaults in two cases, each of which is a decode or
 // compile bug reaching a comparator - and a comparator that answers "equal"
 // to a value it could not read produces a plausible order out of a bug:
 //
-//   - a NULL. None is storable today, and *where* a NULL sorts - first or
-//     last - is an open decision, the same one `EncodeIndexKeyColumn`
-//     declines to prejudge. Defaulting here would settle it by accident.
 //   - a uint64 whose digits do not read (the `raw_int_text` rule, which
 //     `ValueAsUint64` is the single owner of).
 //   - a value kind that has no order.
+//
+// A NULL is not one of them: D3 ratified where it sorts (largest), so it
+// normalizes to an `is_null` key instead of being refused.
 //
 // Note what this is *not*: the index key's order, which compares a 32-byte
 // truncation of a string and so is a prefix order rather than a total one
