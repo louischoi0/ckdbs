@@ -51,12 +51,23 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
     RowLayout layout;
     layout.inline_cell_width = inline_cell_width;
     layout.offsets.reserve(schema.columns.size());
+    layout.null_bits.reserve(schema.columns.size());
 
     // The Keystone word leads every tuple and the pk is carried *only*
     // there, never also as a body column (invariant 11), so column 0
-    // occupies the word and the body starts after it.
+    // occupies the word and the body starts after it - and it can never
+    // be nullable, because the word has no NULL encoding. CREATE TABLE
+    // refuses the declaration with its byte position; this is the layout's
+    // own defense for a schema that arrives by another door.
+    if (!schema.columns.empty() && !schema.columns[0].notnull) {
+        return Status::InvalidArgument(
+            "the first column is the primary key and cannot be nullable (invariant 11: the "
+            "Keystone word has no NULL encoding)");
+    }
     layout.offsets.push_back(0);
+    layout.null_bits.push_back(kNoNullBit);
     std::uint32_t offset = kKeystoneWordSize;
+    std::uint16_t next_bit = 0;
 
     for (std::size_t i = 1; i < schema.columns.size(); ++i) {
         auto width = ColumnWidth(schema.columns[i], inline_cell_width);
@@ -73,7 +84,16 @@ StatusOr<RowLayout> RowLayout::Build(const Schema& schema, std::uint32_t inline_
 
         layout.offsets.push_back(offset);
         offset += width.value();
+        // One bit per nullable column, in ascending schema position
+        // (spec-null.md §2); NOT NULL columns consume no bit, which is
+        // what keeps every existing relation's bitmap at zero bytes.
+        layout.null_bits.push_back(schema.columns[i].notnull ? kNoNullBit : next_bit++);
     }
+
+    // Appended after the last column, so every offset above is unchanged
+    // and a zero-filled payload still means "nothing is NULL".
+    layout.null_bitmap_bytes = (static_cast<std::uint32_t>(next_bit) + 7) / 8;
+    offset += layout.null_bitmap_bytes;
 
     if (offset > heap::kMaxTuplePayloadSize) {
         return Status::Unsupported(

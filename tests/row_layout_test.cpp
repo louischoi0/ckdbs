@@ -189,5 +189,94 @@ TEST(RowLayoutTest, AnOutOfRangeCellWidthIsRefused) {
     EXPECT_FALSE(RowLayout::Build(schema, storage::kMaxInlineCellWidth + 1).ok());
 }
 
+// ---- The null bitmap (spec-null.md §2, §6) --------------------------------
+
+SysColumnRow Nullable(std::uint32_t pos, std::string_view name, std::uint32_t type_val,
+                      std::uint32_t len = 0) {
+    SysColumnRow col = Col(pos, name, type_val, len);
+    col.notnull = false;
+    return col;
+}
+
+// §2.2's whole claim, asserted rather than believed: an all-NOT NULL schema
+// pays zero bitmap bytes and a byte-identical row_size - which is every
+// relation in existence, and why no data file needs rewriting.
+TEST(RowLayoutTest, AnAllNotNullSchemaPaysNoBitmapAndItsRowSizeIsUnmoved) {
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "n", kTypeValInt32),
+                              Col(2, "s", kTypeValVarchar)});
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok());
+    EXPECT_EQ(layout.value().null_bitmap_bytes, 0u);
+    EXPECT_EQ(layout.value().row_size, 8u + 4u + kW);
+    for (const std::uint16_t bit : layout.value().null_bits) {
+        EXPECT_EQ(bit, kNoNullBit);
+    }
+}
+
+TEST(RowLayoutTest, NullableColumnsTakeAscendingBitsAndNotNullColumnsTakeNone) {
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Nullable(1, "a", kTypeValInt32),
+                              Col(2, "b", kTypeValInt32), Nullable(3, "c", kTypeValVarchar)});
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok());
+    EXPECT_EQ(layout.value().null_bitmap_bytes, 1u);
+    EXPECT_EQ(layout.value().null_bits[0], kNoNullBit);
+    EXPECT_EQ(layout.value().null_bits[1], 0u);
+    EXPECT_EQ(layout.value().null_bits[2], kNoNullBit);
+    EXPECT_EQ(layout.value().null_bits[3], 1u);
+    // The bitmap is appended: every column offset matches the all-NOT NULL
+    // twin's, and row_size grows by exactly the bitmap.
+    Schema twin = SchemaOf({Col(0, "id", kTypeValInt64), Col(1, "a", kTypeValInt32),
+                            Col(2, "b", kTypeValInt32), Col(3, "c", kTypeValVarchar)});
+    auto twin_layout = RowLayout::Build(twin, kW);
+    ASSERT_TRUE(twin_layout.ok());
+    EXPECT_EQ(layout.value().offsets, twin_layout.value().offsets);
+    EXPECT_EQ(layout.value().row_size, twin_layout.value().row_size + 1u);
+}
+
+// The byte boundary §6 names: 8 nullable columns fit one byte, 9 take two.
+TEST(RowLayoutTest, TheBitmapGrowsAByteAtTheNinthNullableColumn) {
+    auto with_nullable = [](std::size_t n) {
+        Schema schema;
+        schema.columns.push_back(Col(0, "id", kTypeValInt64));
+        for (std::size_t i = 0; i < n; ++i) {
+            schema.columns.push_back(
+                Nullable(static_cast<std::uint32_t>(i + 1), "c" + std::to_string(i),
+                         kTypeValInt32));
+        }
+        return schema;
+    };
+    auto eight = RowLayout::Build(with_nullable(8), kW);
+    auto nine = RowLayout::Build(with_nullable(9), kW);
+    ASSERT_TRUE(eight.ok());
+    ASSERT_TRUE(nine.ok());
+    EXPECT_EQ(eight.value().null_bitmap_bytes, 1u);
+    EXPECT_EQ(nine.value().null_bitmap_bytes, 2u);
+}
+
+// Invariant 11's layout-level defense: the first column carries the
+// Keystone word, which has no NULL encoding.
+TEST(RowLayoutTest, ANullableFirstColumnIsRefused) {
+    Schema schema = SchemaOf({Nullable(0, "id", kTypeValInt64), Col(1, "v", kTypeValInt32)});
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_FALSE(layout.ok());
+    EXPECT_EQ(layout.status().code(), StatusCode::kInvalidArgument);
+}
+
+// The two bit helpers, against a hand-built payload: set and test agree,
+// and a zero-filled payload reads all-present.
+TEST(RowLayoutTest, TheBitHelpersRoundTripAndZeroMeansPresent) {
+    Schema schema = SchemaOf({Col(0, "id", kTypeValInt64), Nullable(1, "a", kTypeValInt32),
+                              Nullable(2, "b", kTypeValInt32)});
+    auto layout = RowLayout::Build(schema, kW);
+    ASSERT_TRUE(layout.ok());
+    std::vector<std::byte> payload(layout.value().row_size, std::byte{0});
+    EXPECT_FALSE(NullBitIsSet(payload, layout.value(), 1));
+    EXPECT_FALSE(NullBitIsSet(payload, layout.value(), 2));
+    SetNullBit(payload, layout.value(), 2);
+    EXPECT_FALSE(NullBitIsSet(payload, layout.value(), 1));
+    EXPECT_TRUE(NullBitIsSet(payload, layout.value(), 2));
+    EXPECT_FALSE(NullBitIsSet(payload, layout.value(), 0)) << "kNoNullBit is never NULL";
+}
+
 }  // namespace
 }  // namespace kds::catalog

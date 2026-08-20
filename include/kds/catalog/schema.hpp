@@ -79,16 +79,37 @@ Status CheckDeclarableColumnTypes(const Schema& schema);
 // Concurrency: a plain value, built on the catalog path under whatever
 // discipline the caller already has, then read-only for the life of the
 // TableAccess holding it.
+// A column with no null bit - every `NOT NULL` column, which today is
+// every column of every relation in existence (spec-null.md §2.2).
+inline constexpr std::uint16_t kNoNullBit = 0xFFFF;
+
 struct RowLayout {
     // The schema constant. Every payload this relation's codec produces is
     // exactly this many bytes, and a stored tuple whose length disagrees is
     // Corruption, never interpreted (invariant 13's "checked redundancy").
+    // Includes `null_bitmap_bytes`, which is 0 for an all-NOT NULL schema -
+    // the property that makes this feature free for every relation that
+    // never asks for it (spec-null.md §2.2's no-migration argument).
     std::uint32_t row_size = 0;
 
     // Byte offset of each column within the payload, one per schema column
     // and positionally aligned with Schema::columns. offsets[0] is always 0:
-    // the Keystone word leads every tuple.
+    // the Keystone word leads every tuple. **Unchanged by the null bitmap**,
+    // which is appended after the last column (spec-null.md §2.1).
     std::vector<std::uint32_t> offsets;
+
+    // The null-bit index of each column, positionally aligned with
+    // Schema::columns; kNoNullBit for a NOT NULL column. Bit i lives in
+    // bitmap byte i/8 at bit i%8 from the least significant end - explicit
+    // shift/mask per invariant 6, in the two helpers below and nowhere
+    // else. Derived in Build() from the schema alone, so no execute path
+    // ever computes a second, disagreeing notion of "which bit is mine".
+    std::vector<std::uint16_t> null_bits;
+
+    // ceil(nullable columns / 8); 0 when none is nullable. The bitmap sits
+    // at `row_size - null_bitmap_bytes`, zero-filled meaning all-present -
+    // which is exactly what a row written before this feature means.
+    std::uint32_t null_bitmap_bytes = 0;
 
     // The instance-pinned kds.inline_cell_width this layout was built for.
     // Carried so the codec never has to be told twice.
@@ -108,6 +129,25 @@ struct RowLayout {
     static StatusOr<std::uint32_t> ColumnWidth(const SysColumnRow& col,
                                                 std::uint32_t inline_cell_width);
 };
+
+// The bitmap is the sole authority on nullness (spec-null.md §3), and these
+// two are its only readers and writer - explicit shift and mask, invariant
+// 6. `payload` is the whole tuple payload of exactly `layout.row_size`
+// bytes; a column with kNoNullBit is never NULL by construction.
+inline bool NullBitIsSet(std::span<const std::byte> payload, const RowLayout& layout,
+                         std::size_t col) noexcept {
+    const std::uint16_t bit = layout.null_bits[col];
+    if (bit == kNoNullBit) return false;
+    const std::size_t at = layout.row_size - layout.null_bitmap_bytes + bit / 8;
+    return (std::to_integer<std::uint8_t>(payload[at]) >> (bit % 8)) & 1u;
+}
+
+inline void SetNullBit(std::span<std::byte> payload, const RowLayout& layout,
+                       std::size_t col) noexcept {
+    const std::uint16_t bit = layout.null_bits[col];
+    const std::size_t at = layout.row_size - layout.null_bitmap_bytes + bit / 8;
+    payload[at] |= std::byte{static_cast<unsigned char>(1u << (bit % 8))};
+}
 
 // True if any column of `schema` can produce a spilled value - i.e. any
 // column occupies a tagged cell. Decides whether CREATE TABLE allocates the

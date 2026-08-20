@@ -185,7 +185,13 @@ struct SysColumnRow {
     // render the type instead.
     std::uint32_t len;
 
-    bool notnull;
+    // Defaulted true, which is D1's ratified semantics (`workplan-null.md`):
+    // a column is NOT NULL unless declared otherwise - so a hand-built row
+    // that never thinks about nullness means what every column meant before
+    // the feature existed, instead of silently growing a bitmap. A member
+    // default changes no layout and no offset; the static_asserts below
+    // still hold.
+    bool notnull = true;
 
     // Whether this column may carry a Cabin, and on whose initiative
     // (docs/feat-cabin.md). One of the kCabinPolicy* values below.
