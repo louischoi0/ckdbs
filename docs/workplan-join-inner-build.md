@@ -3,10 +3,10 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-Nothing here is built. The sanction is `docs/parser-v2.md` §5's
-amendment of 2026-08-19; the price of not having it is
-`bench/results-scenario3-library.md` §7e (117 stmts/s against
-PostgreSQL's 1,314 on the shape neither engine can index away).
+**JB1 is built (2026-08-20); JB2–JB8 are not.** The sanction is
+`docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
+having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
+against PostgreSQL's 1,314 on the shape neither engine can index away).
 
 ## What JB1 declines — the reasons are spec §8's
 
@@ -19,6 +19,16 @@ scope too but are not compile declines — the first is JB5's runtime
 cap, the second is not a form anyone can write.
 
 ## JB1 — the compile half: the last ladder arm, as an annotation
+
+**Built 2026-08-20.** As planned, with one seam the plan had not named:
+the SELECT-only exclusion is not free — `CompileWhere` compiles its DML
+sub-chains through the same recursive `CompileBlock` the SELECT path
+uses, so eligibility is a `bool inner_build` threaded through
+`CompileBlock`, false from `CompileWhere` down and false from a scalar
+sub-chain down (off stays off for everything nested). The multi-column
+decline is implemented as "a second correlated equality on the step
+declines the arm outright", pk conjuncts excluded as the Cabin arm
+excludes them.
 
 `src/exec/step_compiler.cpp` (the structure ladder around
 `CorrelatedIndexProbeOf` / `CorrelatedCabinProbeOf`),
@@ -168,7 +178,12 @@ below the pure walk.
   acceleration a heap relation's join column can have at all" (and
   `CLAUDE.md`'s Cabin row echoing it, and `src/exec/step_compiler.cpp`'s
   "the one shape a heap relation can accelerate at all" / "last of the
-  structure arms" comments, which JB1 displaces).
+  structure arms" comments, which JB1 displaces). **The two
+  `step_compiler.cpp` comments were amended by JB1 itself (2026-08-20)**
+  — JB1's commit made them false at compile time; the doc and manual
+  passages stay JB7's, since they become false only when the executor
+  consumes the annotation. JB1 also already clears the annotation in
+  `ShippedForm` — JB7's cross-core bullet asserts, it need not add.
 
 *Done when:* the shipping-equivalence harness
 (`EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswers`) stays

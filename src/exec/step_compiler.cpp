@@ -856,8 +856,12 @@ std::optional<CabinProbe> CabinProbeOf(const catalog::TableAccess& access, const
 // observes values coerced to the cabin column's type, so only a column of
 // the same (type_val, len) produces byte-identical keys.
 //
-// This is the one structure a **heap** relation's join column can carry at
-// all - IX3 refuses it an index - which is the shape this arm exists for.
+// This is the one *banked* structure a **heap** relation's join column can
+// carry at all - IX3 refuses it an index - which is the shape this arm
+// exists for. Since JB1 the same shape without a Cabin takes the build
+// annotation one arm later (a per-statement map, not a banked structure);
+// ladder order is the economics, spec-join-inner-build.md §5: a converged
+// serve beats any per-statement rebuild.
 std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
                                                  const Step& step, std::uint16_t slot) {
@@ -884,6 +888,50 @@ std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
         return probe;
     }
     return std::nullopt;
+}
+
+// The walked-join annotation (docs/spec-join-inner-build.md §5, workplan
+// JB1), or nullopt. Still `f(shape, catalog)` - the residual and two schema
+// descriptors are all it reads - and declining is never a wrong answer,
+// only a forgone build. Two declines are this loop's own, spec §8's by
+// name:
+//  - **Multi-column join keys** (CB12's scope rule): a second correlated
+//    equality declines the arm outright rather than keying a map on one
+//    column of a key the statement wrote as two.
+//  - The pk skip is defensive: a pk correlated equality became kProbe in
+//    the kind pass, so this arm never sees one unless the ladder is ever
+//    reordered.
+// The kFilterScan, CompileWhere and scalar-sub-chain declines are the call
+// site's - they gate whether this arm runs at all.
+std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAccess& access,
+                                   const Step& step, std::uint16_t slot) {
+    std::optional<BuildKey> out;
+    bool correlated_seen = false;
+    for (std::size_t i = 0; i < step.residual.size(); ++i) {
+        auto eq = CorrelatedEqualityOf(step.residual[i], slot);
+        if (!eq.has_value() || IsPrimaryKey(eq->own)) continue;
+        if (correlated_seen) return std::nullopt;  // multi-column join key
+        correlated_seen = true;
+        // Nothing bounds a statement's conjunct count - the parser's WHERE
+        // loop appends while `AND` follows and stops at no cap - so a
+        // position past the field's width is expressible. A truncated
+        // `residual_pos` would name a *different* conjunct, and JB3 would
+        // then partition the residual around the wrong one: the build
+        // would bucket only the first outer row's matches and every later
+        // probe would miss rows the walk returns. Declining is always
+        // legal, so the arm declines rather than narrowing.
+        constexpr std::size_t kMaxResidualPos = 0xFFFF;  // BuildKey::residual_pos is uint16_t
+        if (i > kMaxResidualPos) return std::nullopt;
+        if (!SameDescriptor(access.schema.columns[eq->own.col_pos], ColumnAt(scope, eq->other))) {
+            continue;  // mixed-descriptor: this conjunct cannot key a map
+        }
+        BuildKey key;
+        key.col_pos = eq->own.col_pos;
+        key.key_from = eq->other;
+        key.residual_pos = static_cast<std::uint16_t>(i);
+        out = key;
+    }
+    return out;
 }
 
 // The columns a step's access is keyed or filtered on, ascending and
@@ -1098,9 +1146,17 @@ std::uint64_t ReadColumnsOf(const StepChain& chain, const Step& step, std::uint1
     return all ? Step::kAllColumns : mask;
 }
 
+// `inner_build`: whether steps of this block may take the walked-join
+// annotation (workplan JB1). True from `Compile` down; false from
+// `CompileWhere` down (v1 is SELECT-only - a DML statement's own writes
+// between outer rows are exactly what would invalidate a map, spec §4) and
+// from a scalar sub-chain down (conclusiveness needs `Exists` semantics,
+// spec §6). Once off it stays off for everything nested, which is the
+// conservative reading and costs only a forgone build.
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
-                                 std::uint32_t depth, const txn::ReadView* view);
+                                 std::uint32_t depth, const txn::ReadView* view,
+                                 bool inner_build);
 
 }  // namespace
 
@@ -1108,7 +1164,7 @@ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt&
                             const txn::ReadView* view) {
     std::uint32_t next_step_id = 0;
     return CompileBlock(catalog, stmt, /*parent=*/nullptr, next_step_id, /*depth=*/0,
-                        view);
+                        view, /*inner_build=*/true);
 }
 
 Status CompileAssignments(const catalog::TableAccess& access,
@@ -1168,8 +1224,12 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
                 sub.lhs = lhs.value();
             }
 
-            auto inner =
-                CompileBlock(catalog, *cond.subquery, &scope, next_step_id, /*depth=*/1, view);
+            // `inner_build=false`, v1's SELECT-only rule (workplan JB1):
+            // this sub-chain runs per row of a statement that *writes*, and
+            // its own writes between outer rows are what would invalidate a
+            // map the first row built (spec-join-inner-build.md §4).
+            auto inner = CompileBlock(catalog, *cond.subquery, &scope, next_step_id, /*depth=*/1,
+                                      view, /*inner_build=*/false);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
 
@@ -1270,7 +1330,8 @@ std::uint64_t FilterColumnsOf(const Step& step, std::uint16_t index) {
 
 StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
-                                 std::uint32_t depth, const txn::ReadView* view) {
+                                 std::uint32_t depth, const txn::ReadView* view,
+                                 bool inner_build) {
     // The execute-time half of spec I15 R3: recursion is bounded at both
     // ends. The parser caps nesting too, but a chain can also be built by
     // something other than a parse, and a bound that only one producer
@@ -1361,11 +1422,19 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                 sub.lhs = lhs.value();
             }
 
+            // A scalar sub-chain's steps never take the build annotation
+            // (workplan JB1): its stopping walk has no `Exists` semantics
+            // for a prefix map to be conclusive under (spec §6). Off stays
+            // off for everything nested.
+            const bool sub_inner_build =
+                inner_build && cond.kind != parser::PredicateKind::kCompareSubquery;
+
             // Compiled against a scope whose parent is *this* one, which
             // is what turns an inner reference to an outer column into
             // `up == 1` rather than a resolution failure.
             auto inner =
-                CompileBlock(catalog, *cond.subquery, &scope, next_step_id, depth + 1, view);
+                CompileBlock(catalog, *cond.subquery, &scope, next_step_id, depth + 1, view,
+                             sub_inner_build);
             if (!inner.ok()) return inner.status();
             sub.steps = std::move(inner.value().steps);
 
@@ -1613,18 +1682,31 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
             } else if (auto cp = CorrelatedCabinProbeOf(scope, *scope.relations[i].access, step,
                                                          static_cast<std::uint16_t>(i));
                        cp.has_value()) {
-                // The correlated form, last of the structure arms: after
-                // both index forms (an index is complete for every key
-                // value where a Cabin is authoritative only for observed
-                // ones) and after the literal cabin (a compile-time key
-                // needs no per-row read). What it replaces is the walked
-                // inner side of a join on a cabined column - the one shape
-                // a heap relation can accelerate at all.
+                // The correlated form, last of the *banked*-structure arms:
+                // after both index forms (an index is complete for every
+                // key value where a Cabin is authoritative only for
+                // observed ones) and after the literal cabin (a
+                // compile-time key needs no per-row read). What it replaces
+                // is the walked inner side of a join on a cabined column;
+                // ahead of the build annotation below because a converged
+                // serve beats any per-statement rebuild (spec §5).
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cp);
             } else if (HasUnindexedEqualityFilter(*scope.relations[i].access, step,
                                                    static_cast<std::uint16_t>(i))) {
+                // Ahead of the build annotation by decision, not
+                // impossibility (spec §8): the step's own literal already
+                // bounds what a walk visits, and v1 declines to also build
+                // for it.
                 step.kind = AccessKind::kFilterScan;
+            } else if (inner_build) {
+                // The last ladder arm (workplan JB1): every arm above
+                // declined, so a correlated equality still on the step is
+                // the walked join. An annotation, never a kind - `kind`
+                // stays kScan, and `BuildKey` (step_chain.hpp) owns the
+                // contract.
+                step.build = BuildKeyOf(scope, *scope.relations[i].access, step,
+                                        static_cast<std::uint16_t>(i));
             }
         }
 

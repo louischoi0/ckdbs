@@ -302,6 +302,39 @@ struct IndexProbe {
     std::optional<ColumnRef> key_from;
 };
 
+// The walked-join annotation (docs/spec-join-inner-build.md §5, workplan
+// JB1): the statement-local inner build's compile half.
+//
+// **An annotation on a kScan, never a kind.** Set when every structure arm
+// declined and the step's residual still binds an own column by equality to
+// an earlier step's or an enclosing chain's column - the walked-join shape,
+// the one the ladder had no answer for. The step stays kScan, so trails,
+// access statistics, `ShippedForm` and every kind-switch downstream are
+// untouched by construction; the descriptor codec never encodes this field,
+// so a shipped step never carries it. An executor that ignores it wholesale
+// answers identically: the correlated conjunct stays in `Step::residual`,
+// which is the same downgrade-safety every other access hint has.
+//
+// What makes one build serve every outer row: `PkBound` accepts literals
+// only, so no scan bound varies per outer row - a kScan inner is always the
+// full relation, and one walk's map answers every later key (spec §5).
+// Consumed by the executor from JB3 on; until then it is compiled state
+// with no reader.
+struct BuildKey {
+    // The own join column's schema position - what the map is keyed on.
+    std::uint16_t col_pos = 0;
+
+    // The outer source, read from the frame per outer row: an earlier
+    // step's or an enclosing chain's column - the same `key_from` shape
+    // both correlated probes carry.
+    ColumnRef key_from;
+
+    // Where in `Step::residual` the correlated conjunct sits, so the build
+    // can bucket rows on every *other* conjunct (the non-correlated
+    // residual) and the probe can re-evaluate the full list (JB3/JB4).
+    std::uint16_t residual_pos = 0;
+};
+
 // The right-hand side of a compiled predicate: a value the statement
 // wrote, or another column.
 enum class OperandKind : std::uint8_t { kLiteral, kColumn };
@@ -406,6 +439,11 @@ struct Step {
     // The index and its bounds, for kIndexProbe and kIndexRange. Empty for
     // every other kind.
     std::optional<IndexProbe> index;
+
+    // The walked-join annotation (workplan JB1). Unlike the four fields
+    // above it marks no kind - the step stays kScan. `BuildKey` owns the
+    // whole contract.
+    std::optional<BuildKey> build;
 
     // Emit each page's rows in pk order rather than in slot order.
     //
