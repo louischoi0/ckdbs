@@ -1117,6 +1117,28 @@ TEST_F(TxnSessionTest, ARolledBackDropLeavesNothingForThePurge) {
     EXPECT_NE(Run(s, "SHOW INDEXES").find("by_owner"), std::string::npos);
 }
 
+// ---- NULL storage's surface refusals (docs/workplan-null.md NU3) --------
+
+TEST_F(TxnSessionTest, ANullablePrimaryKeyIsRefusedWithItsByte) {
+    Session s;
+    const std::string out = Run(s, "CREATE TABLE t (id int64 NULL, v int64)");
+    ASSERT_EQ(out.rfind("ERR", 0), 0u);
+    EXPECT_NE(out.find("Keystone"), std::string::npos) << out;
+    EXPECT_NE(out.find("byte"), std::string::npos) << out;
+}
+
+TEST_F(TxnSessionTest, AnIndexOnANullableColumnIsRefusedByName) {
+    Session s;
+    ASSERT_EQ(Run(s, "CREATE TABLE t (id int64, v int64 NULL) BTREE").substr(0, 7), "CREATED");
+    const std::string out = Run(s, "CREATE INDEX by_v ON t (v)");
+    ASSERT_EQ(out.rfind("ERR", 0), 0u);
+    EXPECT_NE(out.find("nullable"), std::string::npos) << out;
+    // And the NOT NULL twin indexes fine - the refusal is the column's,
+    // not the feature's.
+    ASSERT_EQ(Run(s, "CREATE TABLE u (id int64, v int64) BTREE").substr(0, 7), "CREATED");
+    EXPECT_EQ(Run(s, "CREATE INDEX by_uv ON u (v)").rfind("ERR", 0), std::string::npos);
+}
+
 // ---- C4: every route takes the statement boundary ---------------------
 
 TEST_F(TxnSessionTest, EveryRouteSeesARelationCommittedSinceTheTransactionBegan) {

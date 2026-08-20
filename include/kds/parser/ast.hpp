@@ -265,6 +265,16 @@ struct ColumnDef {
     // Where the type name was written, for a refusal that can point at it.
     std::uint32_t type_byte_offset = 0;
 
+    // Nullability, D1 of `docs/workplan-null.md`: NOT NULL unless the
+    // column says `NULL` - so a statement that says nothing means exactly
+    // what it meant before the feature existed. `NOT NULL` also parses and
+    // is the same as saying nothing. Written directly after the type,
+    // before REFERENCES - the fixed suffix order the fingerprint needs.
+    bool notnull = true;
+    // Where the `NULL` word was written, for the first-column refusal
+    // (invariant 11) to point at. 0 when nothing was said.
+    std::uint32_t null_byte_offset = 0;
+
     // The column's cabin policy (docs/feat-cabin.md), one of
     // `catalog::kCabinPolicy*`. Written as an optional suffix on the column:
     //

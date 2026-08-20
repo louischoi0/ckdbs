@@ -2613,6 +2613,18 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
             return Status::InvalidArgument(
                 "catalog: the primary key already has an index - the clustered tree is it");
         }
+        // D2 (`docs/workplan-null.md`): a nullable key column is refused in
+        // v1, so the entry format, maintenance and backfill keep the
+        // property that every row has exactly one entry of a key that
+        // always exists. IS NULL answers by scan; revisit with a measured
+        // need, like feat-index.md §13's other opens.
+        if (!schema.columns[def.key_cols[i]].notnull) {
+            return Status::Unsupported(
+                "catalog: column '" +
+                std::string(NameView(schema.columns[def.key_cols[i]].name)) +
+                "' is nullable, and an index key must always exist (docs/spec-null.md D2; "
+                "declare the column NOT NULL or leave it unindexed)");
+        }
         for (std::size_t j = 0; j < i; ++j) {
             if (def.key_cols[j] == def.key_cols[i]) {
                 return Status::InvalidArgument("catalog: column " +

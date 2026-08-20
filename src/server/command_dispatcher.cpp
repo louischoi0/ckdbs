@@ -2173,13 +2173,23 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                             std::to_string(col.cabin_byte_offset) + ")",
                         false};
             }
+            // Invariant 11 at the surface, with the byte the layout's own
+            // defense cannot know: the first column is the pk, carried by
+            // the Keystone word, which has no NULL encoding.
+            if (pos == 0 && !col.notnull) {
+                return {"ERR the primary-key column '" + col.name +
+                            "' cannot be declared NULL - the pk is carried by the Keystone "
+                            "word, which has no NULL encoding (byte " +
+                            std::to_string(col.null_byte_offset) + ")",
+                        false};
+            }
 
             catalog::SysColumnRow row{};
             row.pos = pos++;
             catalog::SetName(row.name, col.name);
             row.type_val = type_row.value().type_val;
             row.len = type_row.value().len;
-            row.notnull = true;  // no NULL support yet - see row_codec.hpp
+            row.notnull = col.notnull;  // D1: NOT NULL unless declared NULL
             row.cabin_policy = col.cabin_policy;
 
             // ---- decimal(p, s) (docs/spec-types.md TY2, TY9) ----------------

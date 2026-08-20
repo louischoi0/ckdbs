@@ -444,6 +444,27 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
                 "what a stored value means");
         }
 
+        // Optional nullability, directly after the type and before every
+        // other suffix (docs/spec-null.md §2.3, D1): `NULL` opts a column
+        // into nullability; `NOT NULL` spells the default for
+        // standard-minded schemas and changes nothing. First in the suffix
+        // chain because it modifies the type, not the column's relations.
+        if (lexer_.Peek().type == TokenType::kNullLit) {
+            col.null_byte_offset = lexer_.Peek().byte_offset;
+            lexer_.Next();
+            col.notnull = false;
+        } else if (lexer_.Peek().type == TokenType::kKeyword &&
+                   lexer_.Peek().kw == Keyword::kNot) {
+            lexer_.Next();
+            if (lexer_.Peek().type != TokenType::kNullLit) {
+                return Status::InvalidArgument(
+                    "expected NULL after NOT in a column declaration (byte " +
+                    std::to_string(lexer_.Peek().byte_offset) + ")");
+            }
+            lexer_.Next();
+            col.notnull = true;  // the default, said out loud
+        }
+
         // Optional `REFERENCES <table>` (docs/impl-foreign-keys.md §1).
         // Peeked like the cabin clause below it, and written *before* it
         // when both appear - a fixed order, because two optional suffixes
