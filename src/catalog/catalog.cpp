@@ -2635,6 +2635,14 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
     }
     for (std::uint16_t pos : def.covered_cols) {
         if (Status s = check_column(pos, "covered"); !s.ok()) return s;
+        // D2 covers covered columns too: an entry encodes their values
+        // with no null bitmap of its own, so a NULL has no representation
+        // there either.
+        if (!schema.columns[pos].notnull) {
+            return Status::Unsupported(
+                "catalog: covered column '" + std::string(NameView(schema.columns[pos].name)) +
+                "' is nullable, and an index entry has no NULL encoding (docs/spec-null.md D2)");
+        }
     }
 
     if (FindIndexByName(def.name).ok()) {

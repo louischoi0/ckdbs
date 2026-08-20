@@ -171,7 +171,11 @@ struct SortKey {
 // refuses rather than sorting by a prefix and calling it the answer.
 inline constexpr std::size_t kMaxSortKeys = 8;
 
-enum class CompareOp { kEq, kNeq, kLt, kLte, kGt, kGte };
+// kIsNull/kIsNotNull take no right-hand side; they are CompareOps rather
+// than a separate predicate kind so every carrier - step predicates, the
+// evaluator, the fingerprint - takes them through the one op field it
+// already has (docs/spec-null.md, workplan-null.md NU5).
+enum class CompareOp { kEq, kNeq, kLt, kLte, kGt, kGte, kIsNull, kIsNotNull };
 
 struct SelectStmt;  // a predicate may carry one - see Condition below
 

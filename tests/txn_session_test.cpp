@@ -1133,6 +1133,11 @@ TEST_F(TxnSessionTest, AnIndexOnANullableColumnIsRefusedByName) {
     const std::string out = Run(s, "CREATE INDEX by_v ON t (v)");
     ASSERT_EQ(out.rfind("ERR", 0), 0u);
     EXPECT_NE(out.find("nullable"), std::string::npos) << out;
+    // Covered columns are refused by the same rule: an entry encodes
+    // their values with no bitmap of its own.
+    ASSERT_EQ(Run(s, "CREATE TABLE w (id int64, k int64, v int64 NULL) BTREE").substr(0, 7),
+              "CREATED");
+    EXPECT_EQ(Run(s, "CREATE INDEX by_k ON w (k) COVERING (v)").rfind("ERR", 0), 0u);
     // And the NOT NULL twin indexes fine - the refusal is the column's,
     // not the feature's.
     ASSERT_EQ(Run(s, "CREATE TABLE u (id int64, v int64) BTREE").substr(0, 7), "CREATED");

@@ -532,5 +532,78 @@ TEST(TypesEndToEnd, MixedWidthDecimalColumnsRefuseToCompare) {
     EXPECT_NE(reply.find("width"), std::string::npos) << reply;
 }
 
+// ---- NULL end to end (docs/spec-null.md, workplan-null.md NU5) -------------
+
+TEST(NullE2eTest, ANullInsertsReadsBackAndIsNotZeroOrEmpty) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL, s varchar NULL)").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (0, '')").substr(0, 8), "INSERTED");
+
+    // NULL is not 0 and not '' - the distinction §1 keeps in storage,
+    // held through the predicate surface.
+    const std::string zeros = db.Run("SELECT id, n FROM t WHERE n = 0");
+    EXPECT_EQ(zeros.find("\\n1,"), std::string::npos) << zeros;
+    EXPECT_NE(zeros.find("2,0"), std::string::npos) << zeros;
+    const std::string empties = db.Run("SELECT id, s FROM t WHERE s = ''");
+    EXPECT_EQ(empties.find("\\n1,"), std::string::npos) << empties;
+}
+
+TEST(NullE2eTest, IsNullAndIsNotNullPartitionTheRows) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (7)").substr(0, 8), "INSERTED");
+
+    const std::string nulls = db.Run("SELECT id FROM t WHERE n IS NULL");
+    EXPECT_NE(nulls.find("1"), std::string::npos) << nulls;
+    EXPECT_EQ(nulls.find("2"), std::string::npos) << nulls;
+
+    const std::string present = db.Run("SELECT id FROM t WHERE n IS NOT NULL");
+    EXPECT_EQ(present.find("\\n1"), std::string::npos) << present;
+    EXPECT_NE(present.find("2"), std::string::npos) << present;
+}
+
+// The §6 truth table, driven through statements: every relational operator
+// with a NULL operand is unknown, and WHERE keeps only true.
+TEST(NullE2eTest, EveryRelationalOperatorWithANullOperandKeepsNoRow) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+
+    for (const std::string op : {"=", "!=", "<", "<=", ">", ">="}) {
+        const std::string out = db.Run("SELECT id FROM t WHERE n " + op + " 5");
+        EXPECT_EQ(out.find("\\n"), std::string::npos)
+            << "operator " << op << " matched a NULL: " << out;
+    }
+    // And the literal-NULL side: `n = NULL` is unknown for every row -
+    // the standard's trap, kept on purpose; IS NULL is the spelling.
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (5)").substr(0, 8), "INSERTED");
+    const std::string out = db.Run("SELECT id FROM t WHERE n = NULL");
+    EXPECT_EQ(out.find("\\n"), std::string::npos) << out;
+}
+
+TEST(NullE2eTest, AnUpdateCanSetNullAndClearItAgain) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (7)").substr(0, 8), "INSERTED");
+
+    ASSERT_EQ(db.Run("UPDATE t SET n = NULL WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    EXPECT_NE(db.Run("SELECT id FROM t WHERE n IS NULL").find("1"), std::string::npos);
+
+    ASSERT_EQ(db.Run("UPDATE t SET n = 9 WHERE id = 1").rfind("ERR", 0), std::string::npos);
+    EXPECT_NE(db.Run("SELECT id FROM t WHERE n = 9").find("1"), std::string::npos);
+    EXPECT_EQ(db.Run("SELECT id FROM t WHERE n IS NULL").find("1,"), std::string::npos);
+}
+
+TEST(NullE2eTest, ANullIntoANotNullColumnIsRefusedThroughTheStatement) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64)").substr(0, 7), "CREATED");
+    const std::string out = db.Run("INSERT INTO t VALUES (NULL)");
+    ASSERT_EQ(out.rfind("ERR", 0), 0u);
+    EXPECT_NE(out.find("NOT NULL"), std::string::npos) << out;
+}
+
 }  // namespace
 }  // namespace kds::server

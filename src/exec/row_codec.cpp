@@ -391,6 +391,9 @@ bool CompareInt(std::int64_t a, std::int64_t b, parser::CompareOp op) {
         case parser::CompareOp::kLte: return a <= b;
         case parser::CompareOp::kGt: return a > b;
         case parser::CompareOp::kGte: return a >= b;
+        case parser::CompareOp::kIsNull:
+        case parser::CompareOp::kIsNotNull:
+            return false;  // answered by CompareValues before dispatch (spec-null.md)
     }
     return false;
 }
@@ -403,6 +406,9 @@ bool CompareUint(std::uint64_t a, std::uint64_t b, parser::CompareOp op) {
         case parser::CompareOp::kLte: return a <= b;
         case parser::CompareOp::kGt: return a > b;
         case parser::CompareOp::kGte: return a >= b;
+        case parser::CompareOp::kIsNull:
+        case parser::CompareOp::kIsNotNull:
+            return false;  // answered by CompareValues before dispatch (spec-null.md)
     }
     return false;
 }
@@ -415,6 +421,9 @@ bool CompareStr(std::string_view a, std::string_view b, parser::CompareOp op) {
         case parser::CompareOp::kLte: return a <= b;
         case parser::CompareOp::kGt: return a > b;
         case parser::CompareOp::kGte: return a >= b;
+        case parser::CompareOp::kIsNull:
+        case parser::CompareOp::kIsNotNull:
+            return false;  // answered by CompareValues before dispatch (spec-null.md)
     }
     return false;
 }
@@ -926,6 +935,16 @@ Status DecodeColumnsInto(const catalog::Schema& schema, const catalog::RowLayout
             if (Status s = DecodeKeystoneInto(payload, out[0]); !s.ok()) return s;
             continue;
         }
+        if (catalog::NullBitIsSet(payload, layout, i)) {
+            // The bitmap decides here exactly as in DecodeRowInto below -
+            // this is the executor's per-column path, and it was the
+            // bypass the first NULL E2E test caught.
+            out[i].type = parser::ValueType::kNull;
+            out[i].str_val.clear();
+            out[i].raw_int_text.clear();
+            out[i].int_val = 0;
+            continue;
+        }
         if (Status s = DecodeOneValueInto(schema.columns[i], CellOf(layout, payload, i), i, out[i],
                                            spills);
             !s.ok()) {
@@ -1093,8 +1112,19 @@ std::string FormatValue(std::uint32_t type_val, const parser::AstValue& value) {
 
 bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
                    const parser::AstValue& rhs, parser::CompareOp op) {
+    // IS NULL / IS NOT NULL are answered from the lhs alone - the rhs is
+    // unused by construction (ast.hpp) - and before the collapse below,
+    // which would otherwise answer false for exactly the rows they exist
+    // to find.
+    if (op == parser::CompareOp::kIsNull) return lhs.type == parser::ValueType::kNull;
+    if (op == parser::CompareOp::kIsNotNull) return lhs.type != parser::ValueType::kNull;
+    // Three-valued logic's collapse for a boolean caller (spec-null.md §4):
+    // a comparison with a NULL operand is unknown, and WHERE keeps only
+    // true - so every relational op with a NULL side is a non-match. The
+    // sort path does not come through here (its comparator orders NULLs
+    // largest, D3); aggregates skip NULLs before comparing.
     if (lhs.type == parser::ValueType::kNull || rhs.type == parser::ValueType::kNull) {
-        return false;  // no NULL support; NULL never matches (see file comment)
+        return false;
     }
     if (type_val == kTypeValUint64) {
         // Unsigned, because int_val is signed and cannot represent the
@@ -1150,6 +1180,9 @@ bool CompareValues(std::uint32_t type_val, const parser::AstValue& lhs,
             case parser::CompareOp::kLte: return a <= b;
             case parser::CompareOp::kGt: return a > b;
             case parser::CompareOp::kGte: return a >= b;
+            case parser::CompareOp::kIsNull:
+            case parser::CompareOp::kIsNotNull:
+                return false;  // answered by CompareValues before dispatch
         }
         return false;
     }
