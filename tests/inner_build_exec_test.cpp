@@ -148,13 +148,20 @@ protected:
     std::optional<bootstrap::BootstrapResult> boot_;
 };
 
-TEST_F(InnerBuildExecTest, TheWalkedJoinAnswersIdenticallyAndBuildsOnce) {
-    // Done-condition 1: hand-computed, walk order — per outer row (au 1,
-    // 2, 3), the inner relation in insertion order, full residual applied.
-    // The pre-JB3 executor's answer verbatim.
-    // Done-condition 2, count form: no non-correlated residual, so every
-    // visible tr row enters the map — including (au_id=9), which matches
-    // no outer row ever — and three outer rows build once: 5, not 15.
+TEST_F(InnerBuildExecTest, TheWalkedJoinAnswersIdenticallyBuildsOnceAndProbes) {
+    // JB3's done-condition 1: hand-computed, walk order — per outer row
+    // (au 1, 2, 3), the inner relation in insertion order, full residual
+    // applied. The pre-build executor's answer verbatim, which the probe
+    // (JB4) now produces for every outer row after the first.
+    // JB3's done-condition 2, count form: no non-correlated residual, so
+    // every visible tr row enters the map — including (au_id=9), which
+    // matches no outer row ever — and three outer rows build once: 5,
+    // not 15.
+    // JB4's done-condition, the examined class, on the same execution
+    // that produced the pinned reply: alice's walk builds (5 examined),
+    // bob probes his bucket (2), carol probes a missing bucket (0,
+    // conclusive) — 7, where the per-row walk examined 15. N-plus-
+    // matches, not k·N.
     ExecStats stats;
     const std::vector<std::string> rows =
         Run("SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id", stats);
@@ -162,6 +169,9 @@ TEST_F(InnerBuildExecTest, TheWalkedJoinAnswersIdenticallyAndBuildsOnce) {
     const StepStats total = stats.Total();
     EXPECT_EQ(total.inner_builds, 1u);
     EXPECT_EQ(total.build_rows, 5u);
+    ASSERT_GE(stats.steps.size(), 2u);
+    EXPECT_EQ(stats.steps[1].rows_examined, 7u);
+    EXPECT_EQ(stats.steps[1].build_probes, 2u) << "bob and carol; alice's walk was the build";
 }
 
 TEST_F(InnerBuildExecTest, ANestedAnnotatedStepBuildsUnderALiveOuterBuild) {
@@ -202,6 +212,18 @@ TEST_F(InnerBuildExecTest, TheMapHoldsExactlyTheRowsPassingTheNonCorrelatedResid
     const StepStats total = stats.Total();
     EXPECT_EQ(total.inner_builds, 1u);
     EXPECT_EQ(total.build_rows, 4u);
+}
+
+TEST_F(InnerBuildExecTest, AStopMidProbeEndsTheStatementCleanly) {
+    // The probe's own stop branch — the LIMIT interaction. The sink stops
+    // after three rows, which lands between bob's two bucket entries:
+    // the reply is the walk's prefix, and nothing re-probes after a stop
+    // (there is no resumable cursor to duplicate from).
+    ExecStats stats;
+    const std::vector<std::string> rows =
+        Run("SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id", stats,
+            /*stop_after=*/3);
+    EXPECT_EQ(rows, (std::vector<std::string>{"alice|10", "alice|30", "bob|20"}));
 }
 
 TEST_F(InnerBuildExecTest, AStoppedFirstWalkPublishesNoMap) {

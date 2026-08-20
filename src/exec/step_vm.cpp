@@ -743,7 +743,7 @@ private:
 
         InnerBuildState& state = inner_builds_[step.step_id];
         if (state.built) {
-            co_return co_await RunWalkStep(steps, index, step, access);
+            co_return co_await ProbeBuild(steps, index, step, access, state.map);
         }
 
         BuildRecording build;
@@ -770,6 +770,89 @@ private:
             state.map = InnerBuild();
         }
         co_return walked;
+    }
+
+    // The probe (workplan JB4): a later outer row of a built step replays
+    // its key's bucket instead of walking the relation. Three deliberate
+    // differences from ServeFromCabin, each a correctness statement:
+    //
+    //  - **No sort.** Bucket order is walk order (the map's one
+    //    load-bearing property, inner_build.hpp), which is exactly what
+    //    the per-row walk emitted for this key - sorting is what would
+    //    change a reply.
+    //  - **No dedup, no hint verification.** One entry per walked row by
+    //    construction, and no location moves between the build and the
+    //    probe. That second half is a fact about *this statement*, not
+    //    about the engine: a btree leaf division does move tuples -
+    //    SplitLeafAndInsert (storage/btree/btree.cpp) calls itself a
+    //    relayout in everything but name and bumps `relayout_epoch` for
+    //    exactly that reason, which is what `VerifyTupleAt` checks on the
+    //    Cabin's behalf. It cannot reach a probe because nothing can write
+    //    to the inner relation in between: the statement is a SELECT (spec
+    //    §4; a DML `WHERE` sub-chain is excluded by §8 and again by
+    //    RunStep's `record_through_stops_` gate), and an annotated step has
+    //    no park at all - `BuildKey` is never encoded by the descriptor
+    //    codec (step_chain.hpp), so a built step never runs under a
+    //    `resume_gate_`, which is the executor's only suspension point.
+    //    **Give a built step a park - JB6's resumed walk, JB8's peer-side
+    //    build, P4d-4c's multi-step gate - and this arm owes VerifyTupleAt
+    //    with a pk fallback**, because the in-place-update and
+    //    slots-never-compact cases are not the only way a location dies.
+    //    What stands in for both checks meanwhile: every entry goes through
+    //    `AcceptTupleAt`, which re-applies MVCC under the statement's
+    //    fixed snapshot and re-evaluates the **full** residual - the
+    //    superset-plus-recheck idiom, so correctness never rests on build
+    //    bookkeeping, only cost does (spec §4).
+    //  - **A missing bucket is conclusive.** The map published only off a
+    //    walk that reached the relation's end (WalkAndBuild's publish
+    //    rule), so "no bucket" means the full relation held no such row.
+    sched::Coro ProbeBuild(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                      const catalog::TableAccess& access, const InnerBuild& map) {
+        if (!frame_.CanResolve(step.build->key_from)) {
+            co_return Status::Corruption(
+                "a build annotation's outer column is unresolvable; the chain is malformed");
+        }
+        // Stable across the descent: every entry point pre-sizes the stats
+        // vector, which is what ServeFromCabin already relies on.
+        StepStats& step_stats = stats_.For(step.step_id);
+        ++step_stats.build_probes;
+
+        // A NULL outer key matches no equality; emitting nothing is the
+        // walk's answer too (every comparison against it is false).
+        auto key = stats::MakeValueKey(frame_.Get(step.build->key_from));
+        if (!key.has_value()) co_return Status::OK();
+
+        const std::vector<stats::CabinEntry>* bucket = map.Find(*key);
+        if (bucket == nullptr) co_return Status::OK();
+
+        // Bucket order, front to back. The bucket pointer is stable across
+        // the descent (inner_build.hpp's contract: a deeper step's build
+        // adds under *other* maps; nothing adds to a built one), and the
+        // page is fetched per entry rather than held - AcceptTupleAt
+        // descends, and anything below it may fetch (R1).
+        //
+        // `pages_fetched` counts page *transitions*, as the walk it
+        // replaced counted them - bucket order is walk order, so
+        // consecutive same-page entries are the common case, and a
+        // per-entry count would price the probe above the walk it beat.
+        PageId last_page = kInvalidPageId;
+        for (const stats::CabinEntry& entry : *bucket) {
+            if (stopped_) break;
+            NoteFetch();
+            if (entry.page_id != last_page) {
+                ++step_stats.pages_fetched;
+                last_page = entry.page_id;
+            }
+            auto bytes = store_.GetForRead(entry.page_id);
+            if (!bytes.ok()) co_return bytes.status();
+            heap::PageView page(bytes.value().bytes());
+            if (Status s =
+                    AcceptTupleAt(steps, index, step, access, entry.page_id, page, entry.slot);
+                !s.ok()) {
+                co_return s;
+            }
+        }
+        co_return Status::OK();
     }
 
     // A secondary-index probe or range (docs/feat-index.md §§1, 7).
@@ -2088,6 +2171,7 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     cabin_recordings += other.cabin_recordings;
     inner_builds += other.inner_builds;
     build_rows += other.build_rows;
+    build_probes += other.build_probes;
     return *this;
 }
 

@@ -3,7 +3,7 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-**JB1–JB3 are built (2026-08-20); JB4–JB8 are not.** The sanction is
+**JB1–JB4 are built (2026-08-20); JB5–JB8 are not.** The sanction is
 `docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
 having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
 against PostgreSQL's 1,314 on the shape neither engine can index away).
@@ -136,6 +136,18 @@ passing the non-correlated residual, pinned against a hand-computed
 relation.
 
 ## JB4 — the probe
+
+**Built 2026-08-20.** `ProbeBuild` replaces the built step's walk, with
+three deliberate differences from `ServeFromCabin`, each stated as a
+correctness line at the site: no sort (bucket order is the emission
+contract), no dedup and no hint verification (one entry per walked row
+by construction; a same-statement location cannot move, and every entry
+still goes through `AcceptTupleAt`'s MVCC and full-residual re-check),
+and a missing bucket conclusive (the map published only off a completed
+walk). `build_probes` joins the counters. The driver-level `--verify`
+gate runs at JB8; the in-tree byte-identity pin is the exec tests' hand-
+computed walk replies, which the probe now answers, plus the examined
+drop (7 versus the walk's 15 on the fixture join).
 
 Same site. With the map published, every later outer row probes its
 bucket instead of walking: fetch each entry by pk through the location

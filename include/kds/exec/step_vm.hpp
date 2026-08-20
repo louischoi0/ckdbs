@@ -178,7 +178,7 @@ struct StepStats {
     std::uint64_t cabin_recordings = 0;
 
     // The statement-local inner build (spec-join-inner-build.md §4's
-    // honesty clause; workplan JB3 collects, JB7 prints).
+    // honesty clause; workplan JB3/JB4 collect, JB7 prints).
     //
     // `inner_builds` counts maps this step *published* - a completed first
     // walk on an annotated step, so 0 or 1 per step. Per *statement* it is
@@ -189,8 +189,12 @@ struct StepStats {
     // the step's non-correlated residual, matching or not, which is why it
     // can exceed `rows_matched` and is the number that pins "the map holds
     // the whole relation's match sets" (JB3's done-condition).
+    // `build_probes` counts the outer rows served from a built map instead
+    // of walking - spec §4's `probes=k` minus the first row, whose walk
+    // was the build.
     std::uint64_t inner_builds = 0;
     std::uint64_t build_rows = 0;
+    std::uint64_t build_probes = 0;
 
     StepStats& operator+=(const StepStats& other) noexcept;
 };
