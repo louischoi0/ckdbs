@@ -3,7 +3,13 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-**JB1–JB6 are built (2026-08-20); JB7–JB8 are not.** The sanction is
+**JB1–JB7 are built (2026-08-20); JB8 is paperwork.** JB6 and JB7 were
+built in separate worktrees on the same day and are independent — JB7
+reads counters JB3/JB4 already collect and adds no executor state, and
+JB6 adds state no counter's meaning depends on. JB8's measurement is
+discharged by `bench/results-scenario3-library.md` §7f; its workplan row
+below is the remaining paperwork, and the JB6 numbers in "the stopping
+sub-chain" below are not in that file yet. The sanction is
 `docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
 having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
 against PostgreSQL's 1,314 on the shape neither engine can index away).
@@ -388,6 +394,43 @@ re-check), or an earn gate (spec §6 ratified against one, and it would
 give back the k ≥ 8 wins in proportion).
 
 ## JB7 — observability, trails, shipping
+
+**Built 2026-08-20** on `jb7-observability`. Two renderings differ from
+the sketch in the bullets below, each for a stated reason.
+**`probes=k` is printed `build_probes=`**: the counter is the outer rows
+*served from* the map, which is k−1 for a k-row outer side because the
+first row's walk was the build — labelling it §4's `probes=k` would make
+the number read as one larger than it is, and a bare `probes=` in that
+flat token namespace would be read against the `Probe` *kind* the plan
+line above it prints. `docs/spec-join-inner-build.md` §4 still carries
+the `probes=k` sketch and wants the same one-line amendment. And **`inner_built=` keys off the compiled
+annotation, not off a non-zero counter**, so a fallen-back step prints
+`inner_built=0` rather than being omitted by the zero-suppression every
+other counter uses; no other number distinguishes "annotated and did not
+publish" from "never eligible", which is exactly the reading an operator
+chasing a slow join needs.
+
+The two harness done-conditions were discharged by *strengthening*
+existing suites rather than adding parallel ones. The walked-join shape
+was already in the shipping-equivalence harness — JB7 adds the assertion
+that the local side really builds, so those rows compare build against
+shipped walk rather than walk against walk (the same non-vacuity
+argument its own `stages_opened` guard makes). And the trail-model pin
+is one statement added to `waystone_contract_test.cpp`'s shared query
+set, which runs it through all five configurations at once — including
+the corrupted and the deleted trail — so no trail state moves a built
+join's reply.
+
+**What that does not reach, since the bullet below says "pinned".** The
+converse — *a build feeds no trail* — is an argument, not yet a test:
+recording is gated on `IsTrailReplayable(step.kind)` and consultation
+happens only in `RunPointStep`, so an entry wrongly recorded for the
+annotated kScan step would be written and never read, and every reply in
+that suite would stay byte-identical. The pin that would bite inspects
+the trail rather than the reply: a statement that recorded nothing has
+no pattern row, so asserting the walked join's `pattern_id` is absent
+from `ListPatterns()` after N recorded runs is the direct statement.
+Ten lines, `waystone_contract_test.cpp`, not built here.
 
 - ANALYZE reports `inner_built=1 build_rows=N probes=k` (spec §4); a
   fallen-back statement reports `inner_built=0` with the walks it paid.

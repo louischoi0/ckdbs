@@ -162,6 +162,18 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
         // probe is one the engine may drop on its own judgement.
         if (step.cabin->managed) os << " cabin_optimizer=true";
     }
+    // The walked join's build annotation (docs/spec-join-inner-build.md,
+    // workplan JB7), rendered in the Cabin line's own vocabulary because
+    // it names the same two things: the own column the map is keyed on,
+    // and the outer column each key is read from. **Visible before
+    // execution** - the annotation is compile-time state, so a reader
+    // sees which step *may* build without running the statement, the way
+    // `derived` marks a conjunct nobody wrote. Whether it did build is
+    // FormatStepStats' `inner_built`.
+    if (step.build.has_value()) {
+        os << " build on=col" << step.build->col_pos
+           << " key=" << FormatColumnRef(step.build->key_from);
+    }
     os << '\n';
 
     for (const StepPredicate& pred : step.residual) {
@@ -454,6 +466,30 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         }
         if (counters.index_rows_resolved > 0) {
             os << " index_resolved=" << counters.index_rows_resolved;
+        }
+
+        // The statement-local inner build (spec-join-inner-build.md §4's
+        // honesty clause). Printed for **every annotated step, including
+        // `inner_built=0`**: a step carrying the annotation that did not
+        // publish paid per-row walks for the statement, and that is
+        // precisely what a reader chasing a slow join needs to see - the
+        // other counters cannot distinguish it from a step that was never
+        // eligible. Keyed off the compiled annotation rather than off a
+        // non-zero counter, for that reason.
+        //
+        // `build_rows` is rows **bucketed**, not rows held: it is the
+        // published map's size when `inner_built=1`, and how far a
+        // discarded build got when it is 0 - a tripped cap, or a `LIMIT`
+        // that stopped the first walk, both of which reset the map and
+        // leave the count standing. `build_probes` is the outer rows
+        // **served from** the map, k-1 for a k-row outer side because the
+        // first row's walk *was* the build - which, with the `Probe` kind
+        // printed on the plan line above, is why neither is spelled §4's
+        // `probes=k` (workplan JB7 carries the argument).
+        if (step != nullptr && step->build.has_value()) {
+            os << " inner_built=" << counters.inner_builds;
+            if (counters.build_rows > 0) os << " build_rows=" << counters.build_rows;
+            if (counters.build_probes > 0) os << " build_probes=" << counters.build_probes;
         }
     }
     return os.str();

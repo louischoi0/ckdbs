@@ -108,6 +108,31 @@ const std::vector<std::string>& Queries() {
         "SELECT a.label, c.w FROM b AS a JOIN j AS c ON a.id = c.id WHERE a.id = 4",
         "SELECT a.label, c.w FROM h AS a JOIN j AS c ON a.id = c.id WHERE a.id = 6",
 
+        // ---- The walked join (docs/spec-join-inner-build.md, JB7) ------
+        //
+        // The inner is `h` keyed on `h.v`: not a pk, no index (only
+        // `b(v)` has one), no Cabin - so every arm of the structure
+        // ladder declines and the step builds a statement-local map,
+        // then serves seven of the eight outer rows from it.
+        //
+        // It belongs in *this* set for the aggregates' reason one step
+        // further on: the build is a **search-class** structure, so "can
+        // a trail change a built join's reply?" is answered by the five
+        // configurations already compared here rather than by a suite of
+        // its own - including the corrupted and deleted trails, under
+        // which this reply must not move either.
+        //
+        // **What it does not pin, stated so nobody quotes it for that.**
+        // The converse - "a build feeds no trail" (spec §3's hard rule) -
+        // is *not* tested by these comparisons: recording is gated on
+        // `IsTrailReplayable(step.kind)` and consultation happens only in
+        // `RunPointStep`, so entries wrongly recorded for this kScan step
+        // would be written and never read, and every reply here would
+        // stay byte-identical. Pinning that needs the trail itself
+        // inspected - no pattern row exists for a statement that recorded
+        // nothing - not a reply compared.
+        "SELECT a.label, d.label FROM b AS a JOIN h AS d ON d.v = a.v",
+
         // ---- Aggregated statements (docs/feat-aggregate.md §9 item 8) --
         //
         // They belong in *this* set rather than in a suite of their own,
@@ -461,6 +486,57 @@ TEST(WaystoneContractTest, AKeyedStepDoesReplaySoTheContrastIsReal) {
     const std::string analyzed = db.Run("ANALYZE " + keyed);
     EXPECT_NE(analyzed.find("replays="), std::string::npos)
         << "replay never fired, so the scan test above proves nothing: " << analyzed;
+}
+
+TEST(WaystoneContractTest, ABuiltJoinFeedsNoTrail) {
+    // Spec-join-inner-build.md §3's hard rule, pinned where it can
+    // actually fail. The query-set comparisons above cannot reach it: a
+    // trail wrongly recorded for the annotated kScan step would be
+    // *written and never read* - consultation happens only inside
+    // `RunPointStep` - so every reply in this file would stay
+    // byte-identical while the rule was broken.
+    //
+    // The observable that does move: a statement whose execution
+    // recorded nothing gets **no pattern row at all** (`RecordTrail`
+    // returns early on an empty collector), so the walked join's
+    // fingerprint must be absent from `sys.patterns` however many times
+    // it runs. This is the test that fails if someone drops the
+    // `IsTrailReplayable(step.kind)` gate at the recording site.
+    Instance db(/*record=*/true, /*replay=*/true);
+    Load(db);
+
+    const std::string built = "SELECT a.label, d.label FROM b AS a JOIN h AS d ON d.v = a.v";
+    for (int i = 0; i < 4; ++i) db.Run(built);
+
+    // The build really engaged - otherwise this asserts nothing about a
+    // build, only about a walk.
+    const std::string analyzed = db.Run("ANALYZE " + built);
+    EXPECT_NE(analyzed.find("inner_built=1"), std::string::npos) << analyzed;
+
+    auto fingerprint = parser::FingerprintOf(built);
+    ASSERT_TRUE(fingerprint.has_value());
+    auto patterns = db.catalog().ListPatterns();
+    ASSERT_TRUE(patterns.ok()) << patterns.status().message();
+    for (const catalog::SysPatternRow& row : patterns.value()) {
+        EXPECT_NE(row.pattern_id, fingerprint->pattern_id)
+            << "the built join has a pattern row, so a build fed a trail";
+    }
+
+    // The control, for `AKeyedStepDoesReplaySoTheContrastIsReal`'s
+    // reason: a keyed statement in the same database *does* get one, so
+    // the absence above is the build's doing and not a recorder that
+    // never ran.
+    const std::string keyed = "SELECT * FROM b WHERE id = 3";
+    for (int i = 0; i < 3; ++i) db.Run(keyed);
+    auto keyed_fp = parser::FingerprintOf(keyed);
+    ASSERT_TRUE(keyed_fp.has_value());
+    auto after = db.catalog().ListPatterns();
+    ASSERT_TRUE(after.ok()) << after.status().message();
+    bool keyed_present = false;
+    for (const catalog::SysPatternRow& row : after.value()) {
+        if (row.pattern_id == keyed_fp->pattern_id) keyed_present = true;
+    }
+    EXPECT_TRUE(keyed_present) << "nothing recorded at all, so the absence above proves nothing";
 }
 
 }  // namespace

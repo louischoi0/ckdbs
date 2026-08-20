@@ -978,6 +978,27 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
                   .response,
               "a.id,c.id\\n1,1\\n1,4\\n2,2\\n5,2");
 
+    // ---- And the local side of that shape really does build (JB7) -------
+    //
+    // The three `tc.tag` statements above are the walked join, which is
+    // the shape the statement-local inner build serves
+    // (docs/spec-join-inner-build.md): locally the inner step builds a map
+    // on its first outer row and probes it thereafter, while the shipped
+    // side gets `ShippedForm`'s walk with the annotation cleared. So the
+    // equivalence those rows assert is **build against shipped walk**, not
+    // walk against walk - and it is worth exactly as much as that claim is
+    // true, which is why it is checked here rather than assumed. Same
+    // argument as `stages_opened` above: an equivalence test that quietly
+    // stopped comparing two different things would still pass.
+    {
+        const std::string plan =
+            local.Dispatch("ANALYZE SELECT a.id, c.id FROM ta AS a JOIN tc AS c "
+                           "ON c.tag = a.b_id")
+                .response;
+        EXPECT_NE(plan.find("build on=col1"), std::string::npos) << plan;
+        EXPECT_NE(plan.find("inner_built=1"), std::string::npos) << plan;
+    }
+
     // ---- The structure-served shapes ship as their walk -----------------
     //
     // docs/known-gaps.md's closed entry named its own blind spot: "no

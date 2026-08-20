@@ -91,7 +91,14 @@ and probe — and only SELECT compiles the build: a DML statement's
 `WHERE` sub-chain is excluded in §8, because its own writes between
 outer rows are exactly what would invalidate the map), no
 observation threshold, no cap-authority question, no persistence class.
-`ANALYZE` reports it honestly (`inner_built=1 build_rows=N probes=k`)
+`ANALYZE` reports it honestly (`inner_built=1 build_rows=N
+build_probes=k−1` as built — JB7 renamed this sketch's `probes=k` twice
+over: the counter is the outer rows *served from* the map, which is k−1
+because the first row's walk was the build, and a bare `probes=` on a
+line whose second token is the access kind would read as pk `Probe`s on
+a `Scan` step. `build_rows` counts rows *bucketed*, which a discarded
+map keeps — `inner_built=0 build_rows=N` is the honest rendering of "it
+got N rows in and threw them away")
 and `IsTrailReplayable` does not move.
 
 ## 5. The selection rule stays `f(shape, catalog)`

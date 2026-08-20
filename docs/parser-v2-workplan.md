@@ -172,7 +172,7 @@ Needs: V18.
 **V20 — Written-order contract, documented and tested.**
 Files: `docs/client-manual.md`, `tests/exec_order_test.cpp`.
 The client manual gains the written-order contract, the subquery forms, the depth cap, `NOT IN`'s NULL semantics and the `Unsupported` surfaces (spec §10 items 5).
-Done when: reordering the FROM list provably reorders execution; no decorrelation rewrite exists (grep + test).
+Done when: reordering the FROM list provably reorders execution; no decorrelation rewrite exists (grep + test). **Amended 2026-08-20** (`docs/spec-join-inner-build.md`, sanctioned in `docs/parser-v2.md` §5): the statement-local inner build hashes a walked join's inner side once per statement, which is a *structure* the same correlated probe reaches — the outer relation still drives, emission order is unchanged, and no statement is rewritten. The test's subject is therefore "no statement is rewritten and no algorithm is chosen", not "nothing hashes".
 Needs: V17.
 
 *Gate:* the language runs; results identical across storage forms and across probe strategies; no statement is unbounded.
