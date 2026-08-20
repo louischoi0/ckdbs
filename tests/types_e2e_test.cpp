@@ -597,6 +597,68 @@ TEST(NullE2eTest, AnUpdateCanSetNullAndClearItAgain) {
     EXPECT_EQ(db.Run("SELECT id FROM t WHERE n IS NULL").find("1,"), std::string::npos);
 }
 
+// spec-null.md §4's aggregate semantics, driven through statements.
+TEST(NullE2eTest, AggregatesSkipNullsAndAnAllNullGroupSumsToNull) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, g int64, n int64 NULL, d decimal(10,2) NULL)")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (1, 10, '10.00')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (1, NULL, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (2, NULL, NULL)").substr(0, 8), "INSERTED");
+
+    // COUNT(*) counts rows; COUNT(col) counts non-NULLs.
+    EXPECT_NE(db.Run("SELECT COUNT(*) FROM t").find("3"), std::string::npos);
+    EXPECT_NE(db.Run("SELECT COUNT(n) FROM t").find("1"), std::string::npos);
+    // SUM/MIN/MAX skip; AVG's denominator is the non-NULL count (AVG takes
+    // a decimal column by the engine's own rule, so the NULL-skip proof
+    // rides one: 10.00 over one non-NULL value, never 10/3).
+    EXPECT_NE(db.Run("SELECT SUM(n) FROM t").find("10"), std::string::npos);
+    EXPECT_NE(db.Run("SELECT AVG(d) FROM t").find("10.00"), std::string::npos)
+        << "AVG must divide by the non-NULL count, not the row count: "
+        << db.Run("SELECT AVG(d) FROM t");
+
+    // Per group: group 1 sums 10; group 2 - all NULL - answers NULL,
+    // never 0 (0 is a sum a real value could produce).
+    const std::string grouped = db.Run("SELECT g, SUM(n) FROM t GROUP BY g");
+    EXPECT_NE(grouped.find("1,10"), std::string::npos) << grouped;
+    EXPECT_NE(grouped.find("2,NULL"), std::string::npos) << grouped;
+}
+
+// NULL groups with NULL (the standard's "not distinct" rule) - one group,
+// not one per row, and not merged with any real value's group.
+TEST(NullE2eTest, NullGroupsWithNullUnderGroupBy) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, g int64 NULL)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (0)").substr(0, 8), "INSERTED");
+
+    const std::string grouped = db.Run("SELECT g, COUNT(*) FROM t GROUP BY g");
+    EXPECT_NE(grouped.find("NULL,2"), std::string::npos)
+        << "two NULLs must be one group of two: " << grouped;
+    EXPECT_NE(grouped.find("0,1"), std::string::npos)
+        << "NULL must not merge with 0: " << grouped;
+}
+
+// An assertion's SUM ignores a NULL contribution: two NULL-qty rows spend
+// none of the bound, and a real row still counts.
+TEST(NullE2eTest, ANullSumColumnContributesNothingToAnAssertion) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE trades (id int64, account int64, qty int64 NULL)")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("CREATE ASSERTION cap ON trades GROUP BY (account) CHECK SUM(qty) <= 10")
+                  .substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO trades VALUES (7, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO trades VALUES (7, NULL)").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Run("INSERT INTO trades VALUES (7, 10)").substr(0, 8), "INSERTED");
+    // The bound is exactly spent by the one real value; one more unit trips.
+    const std::string out = db.Run("INSERT INTO trades VALUES (7, 1)");
+    EXPECT_EQ(out.substr(0, 23), "ERR ASSERTION_VIOLATION") << out;
+}
+
 TEST(NullE2eTest, ANullIntoANotNullColumnIsRefusedThroughTheStatement) {
     Instance db;
     ASSERT_EQ(db.Run("CREATE TABLE t (id int64, n int64)").substr(0, 7), "CREATED");

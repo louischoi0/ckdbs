@@ -38,9 +38,13 @@ std::string KeyFor(const LiveAssertion& a, std::span<const parser::AstValue> val
 
 std::int64_t ContributionOf(const LiveAssertion& a, std::span<const parser::AstValue> values,
                             std::size_t first_col_pos) {
-    return a.aggregate == BoundAggregate::kSum
-               ? ValueAt(values, first_col_pos, a.sum_col).int_val
-               : std::int64_t{1};
+    if (a.aggregate != BoundAggregate::kSum) return 1;  // COUNT(*) counts rows
+    const parser::AstValue& v = ValueAt(values, first_col_pos, a.sum_col);
+    // A NULL contributes nothing to a SUM (spec-null.md §4) - explicit
+    // rather than inherited from the decoder zeroing int_val, because the
+    // day a kNull value carries a stale int_val this must still be 0.
+    if (v.type == parser::ValueType::kNull) return 0;
+    return v.int_val;
 }
 
 // The §4.4 refusal, from the one place the format lives.
