@@ -94,6 +94,21 @@ TEST_F(AnalyzeTest, ALiteralPkEqualityReportsALookup) {
     EXPECT_NE(plan.find("class=PointSelect"), std::string::npos) << plan;
 }
 
+// `IS [NOT] NULL` is the whole predicate (docs/spec-null.md NU5): the kNull
+// its carrier holds in `rhs` is filler, so a plan that printed it would read
+// `IS NULL NULL` and describe a predicate nobody wrote.
+TEST_F(AnalyzeTest, AnIsNullResidualPrintsWithoutItsFillerOperand) {
+    Run("CREATE TABLE n (id int64, v int64 NULL) BTREE");
+    const std::string plan = Unescaped(Run("ANALYZE SELECT n.id FROM n WHERE n.v IS NULL"));
+    EXPECT_NE(plan.find("IS NULL"), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("IS NULL NULL"), std::string::npos) << plan;
+
+    const std::string not_null =
+        Unescaped(Run("ANALYZE SELECT n.id FROM n WHERE n.v IS NOT NULL"));
+    EXPECT_NE(not_null.find("IS NOT NULL"), std::string::npos) << not_null;
+    EXPECT_EQ(not_null.find("IS NOT NULL NULL"), std::string::npos) << not_null;
+}
+
 TEST_F(AnalyzeTest, AnAliasIsReportedBesideItsTable) {
     const std::string plan =
         Unescaped(Run("ANALYZE SELECT a.name FROM acct AS a WHERE a.id = 1"));

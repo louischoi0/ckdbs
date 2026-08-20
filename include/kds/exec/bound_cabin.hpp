@@ -91,6 +91,21 @@ struct GroupHeader {
     }
 };
 
+// What one row's SUM column contributes to its group.
+//
+// **One rule, both callers**: the write path's admission
+// (`exec/assertion_check.cpp`) and CREATE ASSERTION's backfill
+// (`exec/assertion_build.cpp`) have to agree, or a cabin is built from a
+// total the enforcement would never have produced - and the two would then
+// differ only on the rows nobody looked at.
+//
+// A NULL contributes nothing (`docs/spec-null.md` §4). Stated here rather
+// than inherited from the decoder zeroing `int_val`, because a slot reused
+// across rows can carry a stale one and the answer must still be 0.
+inline std::int64_t SumContribution(const parser::AstValue& value) noexcept {
+    return value.type == parser::ValueType::kNull ? 0 : value.int_val;
+}
+
 // The canonical encoding of one group key (§5.2, "a canonical encoding").
 //
 // Tags each value's kind and length-prefixes strings, so `('a','bc')` and

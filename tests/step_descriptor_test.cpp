@@ -119,6 +119,42 @@ TEST(StepDescriptorTest, TheRefusedClassesAreRefusedByName) {
     EXPECT_EQ(param.status().code(), StatusCode::kUnsupported);
 }
 
+// `IS [NOT] NULL` is a CompareOp like any other (docs/spec-null.md NU5),
+// so it ships: a peer-owned relation's `WHERE col IS NULL` is evaluated
+// remotely, not refused by a bound written against the old last enumerator.
+TEST(StepDescriptorTest, TheIsNullOpsShipLikeEveryOtherComparison) {
+    exec::Step step;
+    step.kind = exec::AccessKind::kScan;
+    step.rel_oid = 1019;
+    for (const parser::CompareOp op :
+         {parser::CompareOp::kIsNull, parser::CompareOp::kIsNotNull}) {
+        exec::StepPredicate pred;
+        pred.lhs = exec::ColumnRef{0, 0, 2};
+        pred.op = op;
+        pred.rhs.kind = exec::OperandKind::kLiteral;  // the kNull filler
+        step.residual.push_back(pred);
+    }
+
+    auto bytes = EncodeStepDescriptor(step);
+    ASSERT_TRUE(bytes.ok()) << bytes.status().message();
+    auto back = DecodeStepDescriptor(bytes.value());
+    ASSERT_TRUE(back.ok()) << back.status().message();
+    ASSERT_EQ(back.value().residual.size(), 2u);
+    EXPECT_EQ(back.value().residual[0].op, parser::CompareOp::kIsNull);
+    EXPECT_EQ(back.value().residual[1].op, parser::CompareOp::kIsNotNull);
+    EXPECT_EQ(back.value().residual[0].rhs.literal.type, parser::ValueType::kNull);
+
+    // One past the last enumerator is still a refusal, not a cast.
+    auto bad = bytes.value();
+    for (std::byte& b : bad) {
+        if (b == std::byte{static_cast<std::uint8_t>(parser::CompareOp::kIsNull)}) {
+            b = std::byte{static_cast<std::uint8_t>(parser::CompareOp::kIsNotNull) + 1};
+            break;
+        }
+    }
+    EXPECT_FALSE(DecodeStepDescriptor(bad).ok());
+}
+
 TEST(StepDescriptorTest, CorruptBytesAreErrorsNeverEnums) {
     auto bytes = EncodeStepDescriptor(LookupStep());
     ASSERT_TRUE(bytes.ok());

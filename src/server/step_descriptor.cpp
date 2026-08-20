@@ -311,7 +311,12 @@ StatusOr<exec::Step> DecodeStepDescriptor(std::span<const std::byte> bytes) {
         pred.lhs = lhs.value();
         auto op = r.U8();
         if (!op.ok()) return op.status();
-        if (op.value() > static_cast<std::uint8_t>(parser::CompareOp::kGte)) {
+        // Bounded by the **last enumerator**, not by the last relational
+        // operator: `kIsNull`/`kIsNotNull` encode and evaluate like every
+        // other op (their rhs is the kNull literal `EncodeValue` already
+        // ships), so refusing them here would fail `WHERE col IS NULL`
+        // against a peer-owned relation for no reason the format has.
+        if (op.value() > static_cast<std::uint8_t>(parser::CompareOp::kIsNotNull)) {
             return Status::InvalidArgument("step descriptor holds comparison op " +
                                             std::to_string(op.value()));
         }
