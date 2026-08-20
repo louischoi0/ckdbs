@@ -89,7 +89,7 @@ TEST_F(InnerBuildContractTest, TheExactFitCapStillPublishes) {
 // template - the same path an expeditor-parsed kds.conf key takes - and
 // the template rides into every Execute. The VM-level tests above cannot
 // see this plumbing; this one drives it end to end.
-std::string RunThroughDispatcher(bool knob_off) {
+std::string RunThroughDispatcher(bool knob_off, bool with_null_row) {
     storage::InMemoryPageStore store{server::kFirstUserPageId};
     auto boot = bootstrap::BootstrapDatabase(store, 1000);
     EXPECT_TRUE(boot.ok()) << boot.status().message();
@@ -103,7 +103,7 @@ std::string RunThroughDispatcher(bool knob_off) {
     EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE au (id int64, name varchar)")
                   .response.substr(0, 7),
               "CREATED");
-    EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE tr (id int64, au_id int64, qty int64)")
+    EXPECT_EQ(dispatcher.Dispatch("CREATE TABLE tr (id int64, au_id int64 NULL, qty int64)")
                   .response.substr(0, 7),
               "CREATED");
     // Single-row inserts: the bare dispatcher here has no transaction
@@ -113,15 +113,34 @@ std::string RunThroughDispatcher(bool knob_off) {
                                "INSERT INTO tr VALUES (1, 30)"}) {
         EXPECT_EQ(dispatcher.Dispatch(insert).response.substr(0, 8), "INSERTED") << insert;
     }
+    if (with_null_row) {
+        EXPECT_EQ(dispatcher.Dispatch("INSERT INTO tr VALUES (NULL, 40)").response.substr(0, 8),
+                  "INSERTED");
+    }
     return dispatcher.Dispatch("SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id")
         .response;
 }
 
 TEST_F(InnerBuildContractTest, TheDispatcherKnobReachesTheExecutor) {
-    const std::string built = RunThroughDispatcher(/*knob_off=*/false);
-    const std::string walked = RunThroughDispatcher(/*knob_off=*/true);
+    const std::string built = RunThroughDispatcher(/*knob_off=*/false, /*with_null_row=*/false);
+    const std::string walked = RunThroughDispatcher(/*knob_off=*/true, /*with_null_row=*/false);
     EXPECT_EQ(built, walked);
     EXPECT_NE(built.find("alice"), std::string::npos) << built;
+}
+
+TEST_F(InnerBuildContractTest, ANullJoinValueAnswersTheSameBuiltOrWalked) {
+    // NULL storage landed upstream (NU1-NU8) the same day as the build,
+    // which makes the once-unreachable paths real: a NULL inner join
+    // value enters no bucket (MakeValueKey refuses kNull) and matches no
+    // equality on the walk - three-valued WHERE filters it either way -
+    // so the built and walked replies must agree byte for byte, and the
+    // NULL row's qty must appear in neither.
+    const std::string built = RunThroughDispatcher(/*knob_off=*/false, /*with_null_row=*/true);
+    const std::string walked = RunThroughDispatcher(/*knob_off=*/true, /*with_null_row=*/true);
+    EXPECT_EQ(built, walked);
+    EXPECT_NE(built.find("alice"), std::string::npos) << built;
+    EXPECT_EQ(built.find("40"), std::string::npos)
+        << "a NULL key matches no equality: " << built;
 }
 
 TEST_F(InnerBuildContractTest, OneCappedStepDoesNotDeclineItsSibling) {

@@ -1830,8 +1830,8 @@ private:
             // made *before* the cap is consulted, so an unkeyable row - a
             // NULL keys nothing, no equality matches it (MakeValueKey's
             // contract) - neither consumes a slot nor trips a cap it
-            // never pressed. Unreachable today, real the day spec-null.md
-            // lands.
+            // never pressed. Real since spec-null.md landed (NU1-NU8,
+            // 2026-08-20); the contract suite's NULL case pins it.
             if (!building_->over_cap) {
                 if (auto key = stats::MakeValueKey(slots[building_->col_pos]);
                     key.has_value()) {
