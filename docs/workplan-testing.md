@@ -519,9 +519,9 @@ way it must not block S-1..S-3.
 - `[OPEN: generated joins]` SIM06's grammar stops short of joins and
   predicate-position subqueries: the oracle would need a join model to
   have an opinion about them. The shapes are reachable and unclaimed.
-- `[GATED: recovery]` SIM04/SIM11's full durability assertions. The gate
-  flips when WAL replay lands; no partial mitigation (per `docs/txn.md`
-  §8's own instruction).
+- ~~`[GATED: recovery]` SIM04/SIM11's full durability assertions~~ —
+  **the gate flipped 2026-08-12**, when WAL replay landed (RV1/RC10).
+  SIM04's assertion is armed; SIM11 is unbuilt and inherits it armed.
 - `[GATED: crosscore pipeline]` SIM08's multi-core driver. Blocked on the
   same open decision `docs/workplan-crosscore.md` P6 names (relation vs
   page ownership); the acceptance criteria are written above so the
