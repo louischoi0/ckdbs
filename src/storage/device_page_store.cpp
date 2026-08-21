@@ -115,6 +115,26 @@ DevicePageStore::CreateNewHeaderlessUnpinned() {
 Status DevicePageStore::FlushMaps() {
     if (!maps_dirty_) return Status::OK();
 
+    // **A leased store never writes the maps** - SetCoreOwnership's rule in
+    // as many words, and MayWrite's too: both map pages sit below
+    // `system_page_limit_`, which a peer may read and may never write. This
+    // is the one write path that reaches `device_.WritePage` without asking
+    // MayWrite, so the check has to be here.
+    //
+    // The bit that gets here is redo's: `CreateAt` marks the map at mount,
+    // *before* the lease is installed (core_runtime.cpp orders it that way
+    // deliberately), and until a peer had a checkpointer nothing on a peer
+    // ever called FlushMaps. Publishing this core's copy would write back
+    // the map as it stood when this store opened - reverting every
+    // allocation and every extent reservation core 0 has made since, which
+    // is silent reuse of live pages rather than a lost bit. Dropped instead:
+    // the id redo re-created came out of an extent core 0 reserved, so core
+    // 0's map already carries it and core 0's own flush makes it durable.
+    if (lease_ != nullptr) {
+        maps_dirty_ = false;
+        return Status::OK();
+    }
+
     // The headerless map first, the free map second. Both orderings are
     // safe, but this one is safe for a reason worth writing down: the free
     // map is what makes a page id *exist*, so a crash between the two
