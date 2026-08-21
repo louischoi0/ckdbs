@@ -19,3 +19,10 @@ kds_server
 
 # Drafts for outside audiences (posts, talks) - working notes, not a spec.
 .article/
+
+# The simulation harness's triage output (bench/workplan-teststrategy
+# SIM07): scripts/sim.sh appends failures here, and `--minimize --out`
+# writes a case file. A case worth keeping is committed by hand under
+# tests/testdata/, never by being left lying in the tree.
+sim-artifacts.txt
+*.sim

@@ -7,8 +7,10 @@
 
 #include <gtest/gtest.h>
 
+#include "sim/faults.hpp"
 #include "sim/instance.hpp"
 #include "sim/integrity.hpp"
+#include "sim/minimize.hpp"
 #include "sim/oracle.hpp"
 #include "sim/reply.hpp"
 #include "sim/rng.hpp"
@@ -589,6 +591,452 @@ TEST_F(Rv3CrashTest, ACommittedDropStaysDroppedAcrossACrash) {
     EXPECT_EQ(Run("DESCRIBE gone").rfind("ERR", 0), 0u)
         << "a committed DROP TABLE resurrected across the crash";
     EXPECT_EQ(Run("CREATE TABLE gone (id int64, v int64)").substr(0, 7), "CREATED");
+}
+
+
+
+// ---- SIM05: the fault schedule -------------------------------------------
+
+std::vector<std::string> ScheduleOf(std::uint64_t seed, std::size_t ops) {
+    const FaultSchedule schedule(Rng(seed).Fork("faults"), ops, FaultProfile::kIo, 40);
+    std::vector<std::string> out;
+    for (const ScheduledFault& fault : schedule.all()) out.push_back(fault.Describe());
+    return out;
+}
+
+TEST(SimFaults, TheScheduleIsAPureFunctionOfTheSeed) {
+    EXPECT_EQ(ScheduleOf(7, 2000), ScheduleOf(7, 2000));
+    EXPECT_NE(ScheduleOf(7, 2000), ScheduleOf(8, 2000));
+    EXPECT_FALSE(ScheduleOf(7, 2000).empty());
+    // kNone injects nothing, which is what makes it the free default.
+    EXPECT_TRUE(FaultSchedule(Rng(7), 2000, FaultProfile::kNone, 40).empty());
+    // And a run too short to round up to one fault still gets one: a
+    // profile that silently injected nothing would be a fault run that
+    // proved nothing.
+    EXPECT_EQ(FaultSchedule(Rng(7), 10, FaultProfile::kIo, 40).size(), 1u);
+}
+
+// The contract SIM05 exists to assert: under injected device errors every
+// statement either succeeds or answers truthfully, the instance is healthy
+// once the schedule runs out (the quiescence probe), and the restart still
+// owes everything the engine acknowledged.
+TEST(SimFaults, EveryModeSurvivesInjectedDeviceErrorsOnEveryCommittedSeed) {
+    for (const std::uint64_t seed : CommittedSeeds()) {
+        for (const SimMode mode : {SimMode::kClean, SimMode::kSyncCrash, SimMode::kCrash}) {
+            SimConfig config;
+            config.seed = seed;
+            config.ops = 800;
+            config.mode = mode;
+            config.iterations = 2;
+            config.faults = FaultProfile::kIo;
+            config.fault_rate = 40;
+            const SimVerdict verdict = RunSimulation(config);
+            EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+            EXPECT_GT(verdict.faults_armed, 0u) << verdict.Summary(config);
+        }
+    }
+}
+
+// A fault run whose injections never fired proves nothing, so the corpus
+// has to be shown to really disturb the engine — and the disturbance has to
+// reach the *statement*, not just the device.
+TEST(SimFaults, TheCorpusReallyFiresInjectionsAndErrorsStatements) {
+    SimConfig config;
+    config.seed = 1;
+    config.ops = 1500;
+    config.mode = SimMode::kClean;
+    config.iterations = 3;
+    config.faults = FaultProfile::kIo;
+    config.fault_rate = 40;
+    const SimVerdict verdict = RunSimulation(config);
+    ASSERT_TRUE(verdict.ok) << verdict.Summary(config);
+    EXPECT_GT(verdict.faults_fired, 0u) << verdict.Summary(config);
+    EXPECT_GT(verdict.errored_ops, 0u) << verdict.Summary(config);
+}
+
+// The quiescence probe must be able to fail: an engine that survives a
+// fault run by refusing everything afterwards would pass every other check
+// in the loop. Hand-fed here by dropping a relation behind the oracle's
+// back, which is the shape of "the instance stopped answering for something
+// the client was promised".
+TEST(SimFaults, TheQuiescenceProbeFiresOnAnInstanceThatStoppedAnswering) {
+    auto made = SimInstance::Create();
+    ASSERT_TRUE(made.ok()) << made.status().message();
+    SimInstance& db = *made.value();
+
+    Oracle oracle;
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+              "CREATED");
+    oracle.CreateTable("t");
+    for (int i = 0; i < 5; ++i) {
+        const std::string reply =
+            db.Execute("INSERT INTO t VALUES (" + std::to_string(i) + ", 'x')");
+        const std::optional<std::uint64_t> id = ParseInsertedId(reply);
+        ASSERT_TRUE(id.has_value()) << reply;
+        oracle.ApplyInsert("t", *id, OracleRow{i, "x"});
+    }
+
+    std::string why;
+    ASSERT_TRUE(ScanAgreesWithOracle(db, oracle, why)) << why;
+
+    ASSERT_EQ(db.Execute("DROP TABLE t").rfind("ERR", 0), std::string::npos);
+    EXPECT_FALSE(ScanAgreesWithOracle(db, oracle, why))
+        << "the probe accepted an instance that cannot answer for a relation the client "
+           "was promised";
+    EXPECT_NE(why.find("'t'"), std::string::npos) << why;
+}
+
+// ---- SIM06: mutations, transactions, and the advisory toggles -------------
+
+TEST(SimWorkload, TheGeneratedStreamCoversEveryV2Shape) {
+    Workload workload(Rng(11).Fork("workload"), Profile::kUniform);
+    std::map<Op::Kind, int> seen;
+    for (int i = 0; i < 4000; ++i) ++seen[workload.Next().kind];
+
+    for (const Op::Kind kind :
+         {Op::Kind::kInsert, Op::Kind::kUpdate, Op::Kind::kDelete, Op::Kind::kSelectPk,
+          Op::Kind::kSelectRange, Op::Kind::kFilterScan, Op::Kind::kSync, Op::Kind::kBegin,
+          Op::Kind::kCommit, Op::Kind::kRollback, Op::Kind::kCreateCabin,
+          Op::Kind::kCreatePattern}) {
+        EXPECT_GT(seen[kind], 0) << "the stream never generates " << OpKindName(kind);
+    }
+
+    // Both mutation shapes, since the engine's rules differ across the line
+    // (sim/workload.hpp): a SET on the column a Cabin and an index are
+    // keyed on, and one on the varchar that may spill.
+    Workload again(Rng(11).Fork("workload"), Profile::kUniform);
+    bool set_v = false, set_name = false, by_pk = false, by_value = false;
+    for (int i = 0; i < 4000; ++i) {
+        const Op op = again.Next();
+        if (op.kind != Op::Kind::kUpdate) continue;
+        (op.set_name ? set_name : set_v) = true;
+        (op.by_pk ? by_pk : by_value) = true;
+    }
+    EXPECT_TRUE(set_v);
+    EXPECT_TRUE(set_name);
+    EXPECT_TRUE(by_pk);
+    EXPECT_TRUE(by_value);
+}
+
+// The count a mutation reports is compared against the oracle's own count
+// of the rows the predicate matches — the sharpest single assertion the
+// harness makes. This pins that the corpus actually reaches it.
+TEST(SimLoop, MutationCountsAndTransactionsAreCheckedOnEveryCommittedSeed) {
+    for (const std::uint64_t seed : CommittedSeeds()) {
+        SimConfig config;
+        config.seed = seed;
+        config.ops = 1500;
+        config.mode = SimMode::kClean;
+        const SimVerdict verdict = RunSimulation(config);
+        EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+        EXPECT_GT(verdict.writes_checked, 0u) << verdict.Summary(config);
+        EXPECT_GT(verdict.transactions, 0u) << verdict.Summary(config);
+    }
+}
+
+// Invariant 8's promise, generalized to all three advisory switches and to
+// a generated workload: two instances differing only in them answer the
+// same op stream identically.
+TEST(SimLoop, TheAdvisoryFeaturesChangeNoAnswerOnEveryCommittedSeed) {
+    for (const std::uint64_t seed : CommittedSeeds()) {
+        SimConfig config;
+        config.seed = seed;
+        config.ops = 1200;
+        const SimVerdict verdict = RunTogglePairing(config);
+        EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+        EXPECT_GT(verdict.ops_run, 0u);
+    }
+}
+
+// The pairing's comparison has three tiers and its exceptions are where the
+// risk is, so they are pinned directly rather than only through runs that
+// happen to pass.
+TEST(SimLoop, ThePairingComparatorDiscriminates) {
+    Op read;
+    read.kind = Op::Kind::kSelectPk;
+    EXPECT_TRUE(SameOutcome(read, "id,v,name\\n1,2,a", "id,v,name\\n1,2,a"));
+    EXPECT_FALSE(SameOutcome(read, "id,v,name\\n1,2,a", "id,v,name\\n1,3,a"))
+        << "a differing row passed as the same answer";
+
+    Op insert;
+    insert.kind = Op::Kind::kInsert;
+    EXPECT_TRUE(SameOutcome(insert, "INSERTED oid=4000 id=7 page=134 slot=0",
+                            "INSERTED oid=4000 id=7 page=137 slot=2"))
+        << "placement is not an answer";
+    EXPECT_FALSE(SameOutcome(insert, "INSERTED oid=4000 id=7 page=134 slot=0",
+                             "INSERTED oid=4000 id=8 page=134 slot=0"))
+        << "a differing id passed as the same answer";
+
+    Op pattern;
+    pattern.kind = Op::Kind::kCreatePattern;
+    EXPECT_TRUE(SameOutcome(pattern, "CREATED PATTERN name=p0 pattern_id=0x1 dir_depth=1",
+                            "ADOPTED PATTERN name=p0 pattern_id=0x1 dir_depth=1"));
+    EXPECT_FALSE(SameOutcome(pattern, "CREATED PATTERN name=p0", "ERR nope"));
+}
+
+// ---- SIM07: the plan, the case file, the minimizer ------------------------
+
+TEST(SimPlanTest, APlanIsAPureFunctionOfTheSeedAndTheIteration) {
+    SimConfig config;
+    config.seed = 5;
+    config.ops = 500;
+    config.mode = SimMode::kCrash;
+    config.faults = FaultProfile::kIo;
+
+    const SimPlan a = BuildPlan(config, 0);
+    const SimPlan b = BuildPlan(config, 0);
+    ASSERT_EQ(a.entries.size(), b.entries.size());
+    for (std::size_t i = 0; i < a.entries.size(); ++i) {
+        EXPECT_EQ(a.entries[i].op.sql, b.entries[i].op.sql);
+        EXPECT_EQ(a.entries[i].faults, b.entries[i].faults);
+    }
+
+    // The crash point is inside the plan, not applied to it: a crash-mode
+    // plan is at most the op budget, a clean one is exactly it.
+    EXPECT_LE(a.entries.size(), config.ops);
+    SimConfig clean = config;
+    clean.mode = SimMode::kClean;
+    EXPECT_EQ(BuildPlan(clean, 0).entries.size(), clean.ops);
+}
+
+TEST(SimCase, ACaseFileRoundTripsAndReplays) {
+    SimConfig config;
+    config.seed = 2;
+    config.ops = 300;
+    config.mode = SimMode::kCrash;
+    config.profile = Profile::kColliding;
+    config.faults = FaultProfile::kIo;
+
+    const SimPlan plan = BuildPlan(config, 0);
+    const std::string path = std::string(KDS_BINARY_DIR) + "/roundtrip.sim";
+    ASSERT_TRUE(WriteCase(path, config, plan, "a signature").ok());
+
+    auto loaded = ReadCase(path);
+    ASSERT_TRUE(loaded.ok()) << loaded.status().message();
+    ASSERT_EQ(loaded.value().plan.entries.size(), plan.entries.size());
+    for (std::size_t i = 0; i < plan.entries.size(); ++i) {
+        const SimPlan::Entry& want = plan.entries[i];
+        const SimPlan::Entry& got = loaded.value().plan.entries[i];
+        ASSERT_EQ(got.op.sql, want.op.sql) << "op " << i;
+        EXPECT_EQ(got.op.kind, want.op.kind);
+        EXPECT_EQ(got.op.table, want.op.table);
+        EXPECT_EQ(got.op.name, want.op.name);
+        EXPECT_EQ(got.op.key, want.op.key);
+        EXPECT_EQ(got.op.v, want.op.v);
+        EXPECT_EQ(got.op.pred_v, want.op.pred_v);
+        EXPECT_EQ(got.op.by_pk, want.op.by_pk);
+        EXPECT_EQ(got.op.set_name, want.op.set_name);
+        EXPECT_EQ(got.faults, want.faults);
+    }
+    EXPECT_EQ(loaded.value().config.seed, config.seed);
+    EXPECT_EQ(loaded.value().plan.toggles.Describe(), plan.toggles.Describe());
+
+    // And the reloaded case runs, which is the property that makes it a
+    // case rather than a log.
+    const SimVerdict replayed = RunPlan(loaded.value().config, loaded.value().plan);
+    EXPECT_TRUE(replayed.ok) << replayed.Summary(loaded.value().config);
+    EXPECT_EQ(replayed.ops_run, plan.entries.size());
+}
+
+TEST(SimCase, AMalformedCaseFileIsRefusedRatherThanGuessedAt) {
+    const std::string path = std::string(KDS_BINARY_DIR) + "/broken.sim";
+    {
+        std::ofstream out(path);
+        out << "config\tseed=1\tmode=clean\tprofile=uniform\tfaults=none\ttoggles=000\n";
+        out << "op\tno-such-kind\tt0\t0\t0\t0\t0\t0\t0\t0\t0\t\tSELECT 1\n";
+    }
+    EXPECT_FALSE(ReadCase(path).ok());
+}
+
+TEST(SimMinimizeTest, TheSignatureKeepsTheShapeAndDropsTheRun) {
+    SimVerdict a;
+    a.ok = false;
+    a.detail = "seed=2 iteration=0: op 41 [SELECT * FROM t0] returned a row the oracle "
+               "never accepted: '17,3,abc' [faults: armed op 3 page-fail-read]";
+    SimVerdict b;
+    b.ok = false;
+    b.detail = "seed=9 iteration=2: op 8003 [SELECT * FROM t1] returned a row the oracle "
+               "never accepted: '4,9,zz' [faults: armed op 900 log-fail-sync]";
+    EXPECT_EQ(FailureSignature(a), FailureSignature(b));
+
+    SimVerdict other;
+    other.ok = false;
+    other.detail = "seed=2 iteration=0: reboot failed: recovery of core 0";
+    EXPECT_NE(FailureSignature(a), FailureSignature(other));
+
+    SimVerdict clean;
+    EXPECT_EQ(FailureSignature(clean), "");
+}
+
+// The minimizer, on a failure the harness can produce on demand: booting
+// the crashed devices *without* recovery loses acknowledged rows (RC10's
+// injection), and the shrunk case must still fail the same way. What this
+// pins is that shrinking preserves the failure rather than wandering to
+// another one — the property that makes a minimized case worth reading.
+TEST(SimMinimizeTest, AFailureShrinksAndTheShrunkCaseStillFailsTheSameWay) {
+    SimConfig config;
+    config.seed = 4;
+    config.ops = 400;
+    config.mode = SimMode::kCrash;
+    config.iterations = 1;
+    config.skip_recovery = true;
+
+    const MinimizeOutcome outcome = MinimizeFailure(config, /*max_replays=*/200);
+    ASSERT_TRUE(outcome.found_failure) << outcome.Summary();
+    EXPECT_LT(outcome.ops_after, outcome.ops_before) << outcome.Summary();
+    EXPECT_GT(outcome.replays, 0u);
+
+    const SimVerdict replayed = RunPlan(config, outcome.plan, outcome.iteration);
+    ASSERT_FALSE(replayed.ok) << "the shrunk case no longer fails: " << outcome.Summary();
+    EXPECT_EQ(FailureSignature(replayed), outcome.signature) << replayed.detail;
+
+    // And through the file, which is the artifact anyone else gets. The
+    // run-level gates (`skip_recovery` here) have to travel with it: a case
+    // file that says it fails and replays green is worse than no file.
+    const std::string path = std::string(KDS_BINARY_DIR) + "/minimized.sim";
+    ASSERT_TRUE(WriteCase(path, config, outcome.plan, outcome.signature).ok());
+    auto loaded = ReadCase(path);
+    ASSERT_TRUE(loaded.ok()) << loaded.status().message();
+    const SimVerdict from_file = RunPlan(loaded.value().config, loaded.value().plan);
+    EXPECT_FALSE(from_file.ok) << "the case file replays green: " << path;
+    EXPECT_EQ(FailureSignature(from_file), outcome.signature) << from_file.detail;
+}
+
+// Every enum that crosses a command line or a case file goes both ways in
+// one place. The direction that was open-coded twice is the one that
+// drifts, so it is the one pinned.
+TEST(SimCase, EveryNamedEnumRoundTrips) {
+    for (const SimMode mode : {SimMode::kClean, SimMode::kSyncCrash, SimMode::kCrash}) {
+        EXPECT_EQ(ParseSimMode(SimModeName(mode)), mode);
+    }
+    for (const Profile profile : {Profile::kUniform, Profile::kZipfian, Profile::kColliding}) {
+        EXPECT_EQ(ParseProfile(ProfileName(profile)), profile);
+    }
+    for (const FaultProfile faults : {FaultProfile::kNone, FaultProfile::kIo}) {
+        EXPECT_EQ(ParseFaultProfile(FaultProfileName(faults)), faults);
+    }
+    for (const FaultKind kind :
+         {FaultKind::kPageFailRead, FaultKind::kPageFailWrite, FaultKind::kPageFailSync,
+          FaultKind::kPageFailGrow, FaultKind::kLogFailWrite, FaultKind::kLogFailSync}) {
+        EXPECT_EQ(ParseFaultKind(FaultKindName(kind)), kind);
+    }
+    EXPECT_FALSE(ParseSimMode("no-such-mode").has_value());
+    EXPECT_FALSE(ParseProfile("").has_value());
+    EXPECT_FALSE(ParseFaultProfile("torn").has_value());
+}
+
+// The count assertion is the sharpest one the harness makes, and an
+// unknown must cost it as little as it truthfully has to: a predicate on
+// the pk names one row, so it stays checkable while *that* row is known.
+TEST(SimOracleTest, AnUnknownRowCostsOnlyTheCountsItCouldChange) {
+    Oracle oracle;
+    oracle.CreateTable("t");
+    oracle.ApplyInsert("t", 1, OracleRow{10, "a"});
+    oracle.ApplyInsert("t", 2, OracleRow{10, "b"});
+
+    const Oracle::Predicate by_pk_known{true, 1, 0};
+    const Oracle::Predicate by_pk_unknown{true, 2, 0};
+    const Oracle::Predicate by_value{false, 0, 10};
+    EXPECT_TRUE(oracle.CountCheckable("t", by_pk_known));
+    EXPECT_TRUE(oracle.CountCheckable("t", by_value));
+
+    // An errored UPDATE on id 2: its own count is gone, id 1's is not, and
+    // a value predicate that might match id 2 is.
+    oracle.NoteUnchecked("t", 2);
+    EXPECT_TRUE(oracle.CountCheckable("t", by_pk_known));
+    EXPECT_FALSE(oracle.CountCheckable("t", by_pk_unknown));
+    EXPECT_FALSE(oracle.CountCheckable("t", by_value));
+
+    // An errored INSERT: the relation may hold rows it never named, so a
+    // value predicate is gone — but a pk the engine *did* name is still
+    // the oracle's to assert on.
+    Oracle second;
+    second.CreateTable("t");
+    second.ApplyInsert("t", 1, OracleRow{10, "a"});
+    second.NoteIndeterminate("t");
+    EXPECT_TRUE(second.CountCheckable("t", Oracle::Predicate{true, 1, 0}));
+    EXPECT_FALSE(second.CountCheckable("t", Oracle::Predicate{true, 99, 0}));
+    EXPECT_FALSE(second.CountCheckable("t", by_value));
+}
+
+
+
+// ---- What this harness found: the Cabin's rolled-back set ----------------
+//
+// **[GATED: cabin rollback]**, `docs/known-gaps.md`. Found by SIM06's first
+// fault-free sweep (seed 2, profile colliding, mode clean) and shrunk to
+// these six statements by SIM07's minimizer, 1200 ops -> 9 in 933 replays.
+//
+// `cabin_store.hpp` states the authority rule: "Observed => complete,
+// superset form, per snapshot ... Missing a qualifying pk violates
+// authority." The header then argues the build-by-observation hazard is
+// structurally dead because statements run to completion on the owning
+// core - which answers a *concurrent* writer and not this:
+//
+//   the recording walk runs under **the recording transaction's snapshot**,
+//   so a row that transaction has delete-marked is invisible to it and
+//   never enters the set; the set is memory-resident, cross-transaction and
+//   authoritative; and a ROLLBACK restores the row but not the entry.
+//
+// From then on every probe of that value answers from a set that is missing
+// a live row - a wrong answer, not a slower one. The same shape reaches
+// across sessions: any in-flight transaction's uncommitted delete can be
+// baked into another session's banked set.
+//
+// The assertion below is the acceptance test for the fix: flip the constant
+// when it lands. Skipped rather than deleted while it stands, because a
+// gap that costs a test is a gap that stops being visible.
+inline constexpr bool kCabinRollbackFixed = false;
+
+TEST(SimFindings, ACabinSetBankedInsideARolledBackTransactionServesEveryLiveRow) {
+    if (!kCabinRollbackFixed) {
+        GTEST_SKIP() << "[GATED: cabin rollback] docs/known-gaps.md - an entry set banked "
+                        "under an uncommitted DELETE outlives the ROLLBACK that restores "
+                        "the row, and is then served as authoritative";
+    }
+    SimInstance::Options options;
+    options.cabins = true;
+    auto made = SimInstance::Create(options);
+    ASSERT_TRUE(made.ok());
+    SimInstance& db = *made.value();
+
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Execute("CREATE CABIN ON t(v)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'a')").substr(0, 8), "INSERTED");
+
+    ASSERT_EQ(db.Execute("BEGIN").rfind("BEGIN ", 0), 0u);
+    ASSERT_EQ(db.Execute("DELETE FROM t WHERE v = 0"), "DELETED 1");
+    // The probe that banks the value's entry set — from inside the
+    // transaction, where the deleted row is invisible.
+    ASSERT_EQ(SplitEscapedLines(db.Execute("SELECT * FROM t WHERE v = 0")).size(), 1u);
+    ASSERT_EQ(db.Execute("ROLLBACK").rfind("ROLLBACK ", 0), 0u);
+
+    ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'b')").substr(0, 8), "INSERTED");
+    const std::string after = db.Execute("SELECT * FROM t WHERE v = 0");
+    EXPECT_EQ(SplitEscapedLines(after).size(), 3u)
+        << "the rolled-back row is missing from an authoritative set: " << after;
+}
+
+// The control, and it passes today: the same shape with the DELETE
+// committed banks a set that is right, so what the case above isolates is
+// the *rollback*, not deletion or recording.
+TEST(SimFindings, ACabinSetBankedAfterACommittedDeleteIsCorrect) {
+    SimInstance::Options options;
+    options.cabins = true;
+    auto made = SimInstance::Create(options);
+    ASSERT_TRUE(made.ok());
+    SimInstance& db = *made.value();
+
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Execute("CREATE CABIN ON t(v)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'a')").substr(0, 8), "INSERTED");
+    ASSERT_EQ(db.Execute("DELETE FROM t WHERE v = 0"), "DELETED 1");
+    db.Execute("SELECT * FROM t WHERE v = 0");
+    ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'b')").substr(0, 8), "INSERTED");
+    const std::string after = db.Execute("SELECT * FROM t WHERE v = 0");
+    EXPECT_EQ(SplitEscapedLines(after).size(), 2u) << after;  // header + the live row
 }
 
 }  // namespace

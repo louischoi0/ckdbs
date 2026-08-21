@@ -93,10 +93,18 @@ Status SimInstance::Boot() {
     trx_ids_.emplace(boot_->superblock, [this] { return PersistSuperBlock(); });
     txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get());
 
+    // The advisory features, wired exactly as Expeditor::Open wires them
+    // and gated by the same three switches (SIM06).
+    if (options_.cabins) cabin_store_.emplace(stats::CabinLimits{});
+    if (options_.waystone) trail_recorder_.emplace(boot_->catalog, *store_, &clock_);
+
     dispatcher_.emplace(boot_->superblock, boot_->catalog, *store_, /*log=*/nullptr,
                         /*clock=*/nullptr, wal_.get(), options_.durability,
-                        exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
-                        /*access_statistics=*/true, /*cabins=*/nullptr, &*txn_);
+                        exec::Budget(),
+                        trail_recorder_ ? &*trail_recorder_ : nullptr,
+                        /*replay_enabled=*/options_.waystone,
+                        options_.access_statistics,
+                        cabin_store_ ? &*cabin_store_ : nullptr, &*txn_);
     session_ = server::Session();
 
     // Assertion enforcement and the completion checkpoint, in the expeditor's
@@ -127,6 +135,8 @@ void SimInstance::TearDown() {
     // transaction manager it sits above.
     session_ = server::Session();
     dispatcher_.reset();
+    trail_recorder_.reset();
+    cabin_store_.reset();
     txn_.reset();
     undo_.reset();
     trx_ids_.reset();
