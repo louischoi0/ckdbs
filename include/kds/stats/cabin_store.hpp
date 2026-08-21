@@ -296,7 +296,9 @@ public:
 
     // Counts a value refused ahead of its walk (MayObserve's value-cap
     // half) - the same `cap_refusals` Commit counts, so `SHOW CABINS`'
-    // signal does not go dark because the refusal moved earlier.
+    // signal does not go dark because the refusal moved earlier. It is
+    // printed there beside `unbankable_views`, the store-wide pair that
+    // answers "why is this Cabin not filling".
     void NoteCapRefusal() { ++stats_.cap_refusals; }
 
     // A recording walk declined because its view is not one a set may be

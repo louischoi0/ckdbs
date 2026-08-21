@@ -1803,14 +1803,19 @@ DispatchOutcome CommandDispatcher::HandleShowCabins() {
 
     std::ostringstream os;
     os << "cabins=" << rows.value().size();
-    // Store-wide rather than per-cabin, because the reason is: a walk
+    // The store-wide half, which no per-cabin row can carry: a walk
     // declines to bank a set when its view could still be contradicted
     // (§6a), and that is a property of the transaction in flight, not of
-    // the Cabin being probed. It is the one number that separates "nobody
-    // probed this column by equality" from "every probe that would have
-    // recorded ran inside a transaction", which `observed=0 hits=0` cannot.
-    if (cabins_ != nullptr && cabins_->stats().unbankable_views != 0) {
-        os << " unbankable_views=" << cabins_->stats().unbankable_views;
+    // the Cabin being probed. Together with `cap_refusals` these are what
+    // separate "nobody probed this column by equality" from "every probe
+    // that would have recorded was refused", which `observed=0 hits=0`
+    // cannot. Printed as zeros rather than suppressed, for the reason the
+    // per-row branch below gives: absent must mean *unknown*, and a
+    // suppressed zero reads as absent.
+
+    if (cabins_ != nullptr) {
+        os << " unbankable_views=" << cabins_->stats().unbankable_views
+           << " cap_refusals=" << cabins_->stats().cap_refusals;
     }
 
     for (const catalog::SysCabinRow& row : rows.value()) {

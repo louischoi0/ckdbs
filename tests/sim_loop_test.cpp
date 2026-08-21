@@ -1072,6 +1072,11 @@ TEST(SimFindings, ACabinSetIsNotBankedWhileAnotherTransactionIsInFlight) {
 
     const std::string after = db.Execute("SELECT * FROM t WHERE v = 0");
     EXPECT_EQ(SplitEscapedLines(after).size(), 3u) << after;  // header + both rows
+
+    // And for the stated reason: the guard fired rather than the answer
+    // happening to be right for some other cause.
+    const std::string cabins = db.Execute("SHOW CABINS");
+    EXPECT_EQ(cabins.find("unbankable_views=0"), std::string::npos) << cabins;
 }
 
 

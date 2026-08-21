@@ -748,32 +748,19 @@ private:
         }
 
         // **A set may only be banked from a view nothing can later
-        // contradict** (feat-cabin.md §6a). The completeness promise this
-        // store makes is not per-snapshot in the end: the set outlives the
-        // statement, is shared by every later reader, and is authoritative
-        // for all of them. So it may only be recorded from a walk whose
-        // visibility no other transaction can still change, and exactly two
-        // things can change it:
+        // contradict** (feat-cabin.md §6a, which carries the argument and
+        // the assumption it rests on). The set outlives this statement and
+        // is authoritative for every later reader, so two things forbid
+        // recording: an **in-flight** transaction, whose write this walk
+        // cannot see and which is live the moment it commits, and the
+        // walk's **own** transaction, which may have hidden a row from
+        // itself with an uncommitted DELETE or a value-changing UPDATE that
+        // its ROLLBACK restores. Either leaves the set missing a live pk,
+        // which is the C1 break cabin_store.hpp's header forbids.
         //
-        //   - an **in-flight** transaction, whose insert or update into
-        //     this value is invisible to this walk and live the moment it
-        //     commits. Its rows would be missing from the set forever, and
-        //     no event exists to repair them — nothing rolls back;
-        //   - the walk's **own** transaction, whose uncommitted DELETE
-        //     hides a row from itself that its ROLLBACK then restores.
-        //
-        // Both are the C1 break the file's header forbids, and the second
-        // is the one a simulation run found (docs/known-gaps.md). The
-        // header's argument that "scan + record + mark-observed is atomic
-        // against every other statement" answers a *concurrent* writer and
-        // not either of these: the hazard is not a write racing the scan,
-        // it is a write the scan could not see resolving afterwards.
-        //
-        // Declining is free by §1's corollary — an unobserved value is
-        // answered by the authoritative scan, which is a performance event
-        // and never a wrong one. Under autocommit with no transaction open
-        // this is two comparisons and no behaviour change, which is the
-        // shape every measured Cabin workload has.
+        // Declining is free by §1's corollary - the value stays unobserved
+        // and the authoritative scan answers it - and under autocommit with
+        // nothing in flight this is two comparisons and no change.
         if (snapshot_.view.in_flight_count != 0 ||
             snapshot_.view.own_trx_id != txn::kNoTrxId) {
             cabins_->NoteUnbankableView();

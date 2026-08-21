@@ -815,7 +815,6 @@ still waits on its own gate, so:
   that commits rows the recorder could not see never rolls back, so there
   is no moment at which to drop the value.
 
-
 - **The physical optimizer is shadow-only as a finding**
   (`docs/feat-physical-optimizer.md` §6): every candidate move is blocked
   by a named gate; `physical_optimizer = on` is refused at startup naming
