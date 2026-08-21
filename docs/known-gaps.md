@@ -594,8 +594,19 @@ still waits on its own gate, so:
   reports rather than erroring per row. Until one of the three lands,
   every cross-core number in `bench/` is a *cost* measured with the
   parallelism removed, never a speedup.
-  **Scoped 2026-08-21** — `docs/workplan-peer-writer.md` owns the series
-  (PW1-PW6) and names what actually blocks it, which is not the listener:
+  **Scoped 2026-08-21, and three of its blockers closed the same day** —
+  `docs/workplan-peer-writer.md` owns the series and names what actually
+  blocks it, which is not the listener. PW1 (transaction-id leases), PW1b
+  (row-id leases) and PW3 (a peer checkpointer) are built; **a peer still
+  cannot INSERT**, and the reason is now a probed error rather than a
+  prediction: `core 1 may not write page 130`. `MayWrite` allows a peer only
+  the pages its own extent lease owns, and CC7's grant is fault rights only
+  by an explicit decision, because a grant is extent-granular and a superset
+  is safe to fault and not to write. That is **PW1c**, and it needs a
+  decision between per-relation write grants, allocating a peer-owned
+  relation's pages from the owner's lease at DDL, or shipping the DML
+  statement to the owner core so no peer ever writes a page core 0
+  allocated. The original scoping note follows:
   a peer cannot issue a **transaction id** at all (`TrxIdSequence`
   constructs spent, and a peer's persist callback refuses), two catalog
   write points ride the ordinary INSERT (a clustered root growing a level,

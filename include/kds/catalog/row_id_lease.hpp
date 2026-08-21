@@ -1,8 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
+#include <optional>
 #include <string>
-#include <unordered_map>
 
 #include "kds/base/status.hpp"
 #include "kds/catalog/well_known.hpp"
@@ -35,9 +36,21 @@ namespace kds::catalog {
 struct RowIdLease {
     std::uint64_t next = 0;  // the id Next() hands out
     std::uint64_t end = 0;   // one past the last leased id
+    // The size of the run this one came from, so `low_water()` measures
+    // against what was granted rather than against a constant a smaller
+    // grant would sit permanently below. Zero on an entry that has never
+    // held a grant - which is what "asked for and not yet answered" looks
+    // like, and why it reads as low.
+    std::uint64_t window = 0;
 
     bool spent() const noexcept { return next >= end; }
     std::uint64_t remaining() const noexcept { return spent() ? 0 : end - next; }
+
+    // Whether it is time to ask for another run. A leased core must ask
+    // **before** the run is spent: `AllocateRowId()` is called from inside
+    // an INSERT and cannot await a grant, which is
+    // `storage/extent_lease.hpp`'s rule and its quarter-window threshold.
+    bool low_water() const noexcept { return window == 0 || remaining() <= window / 4; }
 };
 
 // Per-relation leases for one core: oid -> lease.
@@ -49,13 +62,31 @@ public:
     // lands" - the extent lease's contract, and never OutOfRange, which
     // means the 40-bit space itself is gone and retrying is a lie.
     StatusOr<std::uint64_t> Next(Oid table_oid) {
-        auto it = leases_.find(table_oid);
-        if (it == leases_.end() || it->second.spent()) {
+        // **A miss records the demand rather than only reporting it** (PW1b).
+        // A row-id lease is per relation, so unlike the per-instance
+        // transaction-id lease it has no standing subject to pre-empt for -
+        // nothing on this core knows an oid needs ids until a statement asks
+        // for one. Inserting the spent entry here is what turns the failure
+        // into a request the refill tick can act on, so the retry this
+        // message promises is one that can succeed rather than a loop.
+        RowIdLease& lease = leases_[table_oid];
+        if (lease.spent()) {
             return Status::ResourceExhausted(
                 "row-id lease for relation oid " + std::to_string(table_oid) +
                 " is spent; retry after the refill grant lands");
         }
-        return it->second.next++;
+        return lease.next++;
+    }
+
+    // The relation most in need of a run, or none. Ordered by oid so the
+    // answer is stable run to run - sched.md section 8's determinism rule for
+    // anything observable, and here also what keeps two needy relations from
+    // starving each other by map-iteration order.
+    std::optional<Oid> NeediestRelation() const {
+        for (const auto& [oid, lease] : leases_) {
+            if (lease.low_water()) return oid;
+        }
+        return std::nullopt;
     }
 
     // Applies a grant. A grant that begins exactly where the current lease
@@ -66,10 +97,12 @@ public:
         RowIdLease& lease = leases_[table_oid];
         if (!lease.spent() && lease.end == first) {
             lease.end = first + count;
+            lease.window += count;
             return;
         }
         lease.next = first;
         lease.end = first + count;
+        lease.window = count;
     }
 
     std::uint64_t remaining(Oid table_oid) const {
@@ -78,7 +111,8 @@ public:
     }
 
 private:
-    std::unordered_map<Oid, RowIdLease> leases_;
+    // Ordered, for `NeediestRelation`'s stability.
+    std::map<Oid, RowIdLease> leases_;
 };
 
 }  // namespace kds::catalog
