@@ -421,16 +421,19 @@ set, which runs it through all five configurations at once — including
 the corrupted and the deleted trail — so no trail state moves a built
 join's reply.
 
-**What that does not reach, since the bullet below says "pinned".** The
-converse — *a build feeds no trail* — is an argument, not yet a test:
+**What the query-set comparison does not reach, and what does.** The
+converse — *a build feeds no trail* — is invisible to those replies:
 recording is gated on `IsTrailReplayable(step.kind)` and consultation
 happens only in `RunPointStep`, so an entry wrongly recorded for the
 annotated kScan step would be written and never read, and every reply in
-that suite would stay byte-identical. The pin that would bite inspects
-the trail rather than the reply: a statement that recorded nothing has
-no pattern row, so asserting the walked join's `pattern_id` is absent
-from `ListPatterns()` after N recorded runs is the direct statement.
-Ten lines, `waystone_contract_test.cpp`, not built here.
+that suite would stay byte-identical. The pin that bites inspects the
+trail rather than the reply, and **is built** as
+`WaystoneContractTest.ABuiltJoinFeedsNoTrail`: a statement that recorded
+nothing has no pattern row, so the walked join's `pattern_id` must be
+absent from `ListPatterns()` after four recorded runs — with a keyed
+statement in the same database asserted *present*, so the absence cannot
+be a recorder that never ran. That test is what fails if someone drops
+the `IsTrailReplayable` gate at the recording site.
 
 - ANALYZE reports `inner_built=1 build_rows=N probes=k` (spec §4); a
   fallen-back statement reports `inner_built=0` with the walks it paid.
