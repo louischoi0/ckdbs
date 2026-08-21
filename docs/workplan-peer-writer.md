@@ -186,7 +186,39 @@ A peer can therefore write a heap relation with no secondary index the
 moment PW-B1 falls, and nothing else until PW2 decides how a root move
 reaches core 0.
 
-### PW-B3. A peer has no checkpointer
+### PW-B3. A peer has no checkpointer — **built 2026-08-21**
+
+**Closed.** `CoreRuntime` now owns a `PageStoreCheckpointTarget`, a
+`RemoteCheckpointAnchor` and a `wal::Checkpointer`, built at
+`AttachTransport()` rather than `Open()` for the one reason that placement
+has: the anchor publishes over the ring, so it cannot exist before the ring
+does. Two things run off it — the **completion checkpoint** (RC08's half for
+a peer, at `AttachTransport`, so a mount bounds the next crash) and the
+**cadence** (`wal.md` §11, in `Run()`, gated on `checkpoint_interval_ns`).
+Peers only: core 0's checkpointer is `Expeditor`'s, and a core-0
+`CoreRuntime` — which exists only in tests — would send its anchor to itself.
+
+`APeersCheckpointAnchorReachesCoreZerosSuperblock` asserts the end of the
+path rather than the send: core 0's superblock carries core 1's anchor, and
+a second checkpoint advances it rather than republishing the first. Verified
+to fail with the checkpointer removed.
+
+Two decisions inside it:
+
+- **The assertion snapshot source is wired even though it writes nothing.**
+  A peer's registry is empty — `ResumeAssertionsAfterRecovery` runs only on
+  core 0 — so no group snapshots are written today. Omitting the wiring
+  would be the silent kind of gap: a peer that later enforces would
+  checkpoint without snapshots, and the next mount would find no base to
+  fold from, which is exactly the failure RC07 exists to prevent.
+- **`StartWriter()` is *not* called for a peer**, and that was checked
+  rather than assumed. `WalManager::Sync()` runs on the calling thread
+  always, writer or not, by an explicit decision in its own header — so the
+  paths a checkpoint and a commit gate on behave identically on a peer and
+  on core 0. The writer thread would change something else, and PW3 is not
+  where that is decided.
+
+### The original statement of PW-B3, for the record
 
 `CoreRuntime` submits a WAL drain cadence and a lease refill
 (`src/server/core_runtime.cpp:377`, `:385`) and **no checkpointer** —
@@ -257,7 +289,7 @@ per-core instance is a `SO_REUSEPORT` setsockopt beside the existing
 | PW1 | **Built 2026-08-21.** Trx-id lease over the ring (`kTrxIdLease`), mirroring `row_id_lease_service`. Core 0 persists the ceiling before granting; the reserve arithmetic and the mount check's zero bound corrected with it | none |
 | PW1b | Make a peer *ask* for row-id blocks. `RequestRowIdLease` exists and has no callers, so a peer INSERT still dies at its row id. **Needs a decision**: a per-relation lease has no pre-emptive tick to ride, so something must choose which relations a peer leases for — on first exhaustion with a retry, at first write to a relation, or at the CC7 fault grant | PW1 |
 | PW2 | Route the two root-move catalog writes. **Needs a decision — §7** | PW1, PW1b |
-| PW3 | Wire a peer checkpointer through `RemoteCheckpointAnchor` | PW1 |
+| PW3 | **Built 2026-08-21.** A peer checkpointer through `RemoteCheckpointAnchor`: the completion checkpoint at `AttachTransport`, the `wal.md` §11 cadence in `Run()` | PW1 |
 | PW4 | Name the peer DDL refusal, and hang §5d's purge gate off it | none |
 | PW5 | `SO_REUSEPORT` per-core listeners; share the credential store and TLS context without sharing them mutably | PW1, PW4 |
 | PW6 | The benchmark: `placement = rotate`, one writer connection per core, per-core relations. The first cross-core number that is a speedup and not a cost | PW1-PW5 |

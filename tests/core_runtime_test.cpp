@@ -14,6 +14,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/server/remote_step_service.hpp"
+#include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/session_step_client.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/catalog/well_known.hpp"
@@ -585,6 +586,74 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblo
     auto next_on_core0 = core0_ids.Next();
     ASSERT_TRUE(next_on_core0.ok()) << next_on_core0.status().message();
     EXPECT_GE(next_on_core0.value(), block.value().first + block.value().count);
+}
+
+TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
+    // PW3. A peer cannot write page 0, so its completed checkpoint sends the
+    // anchor and core 0 writes it (remote_checkpoint_anchor.hpp). Before
+    // this, a peer had no checkpointer at all: it published nothing, its
+    // anchor slot never advanced, and every later mount rescanned its whole
+    // stream - free while a peer could not write, and not free since PW1.
+    //
+    // The property asserted is the end of that path, not the send: core 0's
+    // superblock carries core 1's anchor. `SuperBlockCheckpointAnchor` is
+    // the receiving half here exactly as it is in `Expeditor::Serve`.
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    core0.AttachTransport(&transport.value(), 0);
+
+    SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
+    ASSERT_TRUE(core0
+                    .RegisterMessageHandler(
+                        sched::RingMessageKind::kAnchorWrite,
+                        [&](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                            ASSERT_EQ(payload.size(), sizeof(AnchorWritePayload));
+                            AnchorWritePayload fields{};
+                            std::memcpy(&fields, payload.data(), sizeof(fields));
+                            wal::CheckpointAnchorRecord record;
+                            record.core_id = fields.core_id;
+                            record.checkpoint_lsn = fields.checkpoint_lsn;
+                            record.redo_start_lsn = fields.redo_start_lsn;
+                            record.durable_lsn = fields.durable_lsn;
+                            record.segment_no = fields.segment_no;
+                            EXPECT_TRUE(receiver.Publish(record).ok());
+                        })
+                    .ok());
+
+    ASSERT_EQ(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u)
+        << "core 1 should have no anchor before it checkpoints";
+
+    CoreRuntime::Config config = ConfigFor(1);
+    config.next_trx_id = core0_->superblock.next_trx_id();
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // AttachTransport runs the completion checkpoint (RC08's half for a
+    // peer) and queues the send on this core's own reactor.
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+
+    for (int i = 0; i < 20; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+
+    EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u)
+        << "the peer's completion checkpoint never reached core 0's superblock";
+    EXPECT_EQ(receiver.publishes(), 1u);
+
+    // And a second checkpoint advances it rather than republishing the
+    // first - the cadence's whole purpose.
+    const std::uint64_t first = core0_->superblock.wal_anchor(1).checkpoint_lsn;
+    ASSERT_TRUE(peer.value()->Checkpoint().ok());
+    for (int i = 0; i < 20; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn, first);
+    EXPECT_EQ(receiver.publishes(), 2u);
 }
 
 // ---- P4c: a SELECT against a rotated relation executes remotely ---------
