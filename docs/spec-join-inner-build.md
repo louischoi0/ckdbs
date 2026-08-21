@@ -267,6 +267,28 @@ class, without any other cell moving outside its floor. Neither driver
 phase has a published ckdbs number yet (§9b.7), so JB8 establishes the
 baselines it is then judged against.
 
+**Amended 2026-08-21 by JB8's closing measurement**
+(`bench/results-scenario3-library.md` §7g, at `aa3e26c`). The EXISTS
+half was met — 1,598.8 → 534.3 µs, ×2.99, inside the class. **The join
+half's target was arithmetically unreachable, and this section is where
+the error was.** The ~600 µs class was derived from §7e's measurement of
+*one pass of the inner relation*; on the box JB8 ran, that same pass
+costs 668 µs, so the target sits below the cost of the work the design
+explicitly cannot remove. §7g.2 shows the difference is a whole-run
+offset, not a regression. Make the build free and the cell still lands
+at ~682 µs.
+
+So the join cell's honest acceptance is **not** a wall-clock class but a
+ratio: at `aa3e26c` it runs ×9.60 against the walk (103 → 989 stmts/s,
+closing the gap to PostgreSQL from 1.92× to 1.28×), and the build's own
+cost is **33% of the statement** against 57% at `2755045`. The other 66%
+is the k = 1 walk statement — client, socket, the outer range, and the
+one pass — which no arming rule and no cheaper map reaches. This is the
+third ratified claim in this spec that measurement retracted: §5's "at
+k ≥ 2 every avoided walk is pure win", §6's "at or below the plain walk
+at every k", and now §9's class. All three were reasoned from rows
+visited; none of them priced the nanoseconds of visiting one.
+
 ## 10. What ratification requires
 
 1. This spec's §3 accepted into `docs/parser-v2.md` §5 as the third

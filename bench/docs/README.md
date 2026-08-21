@@ -61,10 +61,12 @@ PostgreSQL twin beside it that drives the same work through `pg_wire.py`. The
 twins import their schema and their business logic from the ckdbs driver, so
 the two cannot drift into measuring different questions.
 
-The four `scenarioN_*.py` drivers are workloads. `index_benchmark.py` at the
-end of this section is the one exception — a feature matrix rather than a
-workload — and it is here rather than under the statement-level tools because
-it has a twin and follows the same conventions.
+The four `scenarioN_*.py` drivers are workloads. Two entries in this section
+are not: `join_ksweep.py` is a **harness** over `scenario3_library.py`'s own
+relations that makes k the axis, and `index_benchmark.py` at the end is a
+feature matrix. Both are here rather than under the statement-level tools —
+the first because its numbers only mean anything beside scenario 3's, the
+second because it has a twin and follows the same conventions.
 
 ### `scenario0_stockmarket.py` — a write workload, in TPS
 
@@ -308,6 +310,65 @@ because a declared index is not necessarily a used one — KDS has no `EXPLAIN`,
 which is itself worth recording. There is **no Cabin equivalent** on the
 PostgreSQL side and the twin does not invent one; a `--cabin` run simply has
 no twin column in the comparison.
+
+### `join_ksweep.py` — the inner build's k-sweep, one shape and k as the axis
+
+`scenario3_library.py` fixes its outer cardinality (`JOIN_OUTER_K = 16`,
+`EXISTS_OUTER_K = 20`) because its phase model is ops-of-one-statement, and
+says in its own comment that the k-sweep is a harness's job. This is that
+harness. It exists because the **statement-local inner build's whole
+economics is a function of k** (`docs/spec-join-inner-build.md`): the map is
+built once per statement and amortized over the outer rows, so k = 1 pays the
+build with no payback and k = 16 pays it once for sixteen walks.
+
+It imports `scenario3_library` and re-uses its relations, seeding and
+statement builders rather than restating them, so a number here is directly
+comparable with a number there. Two shapes:
+
+* `--shape join` — the driver's `join-no-literal` with the `BETWEEN` bound
+  moved: `users AS u JOIN loans AS l ON l.user_id = u.id WHERE u.id BETWEEN 1
+  AND k`. The inner walk never stops, so the map is total from the second
+  outer row on (JB3–JB5).
+* `--shape exists` — the driver's `exists-correlated`, k lifted the same way.
+  The inner walk **stops** at its first qualifying row, so what the map fills
+  is a walk-order prefix under a high-water mark (JB6, spec §6), and k decides
+  how much of that prefix a later outer row can be answered from.
+
+It prints p0/p25/p50/p95/p99 and a derived `stmts/s` per k, plus one
+`ANALYZE` of the largest k — **truncated at 400 characters**, which is enough
+for the plan and the leading counters but cuts the inner step's
+`inner_built=` / `build_rows=` / `build_probes=`; dump those separately when
+they are the point.
+
+**The A/B lever is `join_build_max_rows` in the server's config** (`0`
+disables the build outright, the shipped default is `65536`), which is why
+two cells of this harness under two configs of *one binary* can price the
+build without a cross-commit comparison — the placement band
+`docs/workplan-join-inner-build.md` documents cannot confound a config lever.
+Run it against a server started by `bench/run_cell.sh`, which gives each cell
+a fresh data file and records the contention:
+
+```bash
+# one config position; run the other with a conf whose join_build_max_rows is 0
+S3ROOT=~/bench-jb DRIVER=./tools/join_ksweep.py \
+    ./bench/run_cell.sh mycell my-on.conf -- \
+        --shape join --loans 10000 --matches 5 --ks 1,2,4,8,16 --ops 50 --seed 1
+```
+
+| flag | default | what it does |
+|---|---|---|
+| `--shape` | `join` | `join` (the walked join) or `exists` (the stopping correlated sub-chain) |
+| `--ks` | `1,2,4,16` | the outer cardinalities to sweep, comma-separated |
+| `--loans N` | 10000 | the bulk relation and the row-set axis; the documented sweep is **200 / 1000 / 10000** |
+| `--matches N` | 5 | rows per key; `users` and `books` scale as `loans / matches`, so this is also what sets how far a *stopping* inner walk runs before its first match |
+| `--ops N` | 40 | sampled operations per k, after one untimed first statement |
+| `--suffix`, `--seed`, `--label` | | `--label` is echoed in the header line so a cell's output names its own configuration |
+
+`--json` is accepted and ignored: `run_cell.sh` passes it to every driver it
+invokes, and refusing it would make this harness unusable through the only
+runner that records a cell's machine state. Results measured with it:
+`bench/results-scenario3-library.md` §7g, and the constant-cut rounds recorded
+in `docs/workplan-join-inner-build.md`.
 
 ### `scenario4_cabinopt_days.py` — the cabin optimizer over rotating business days
 
