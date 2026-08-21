@@ -983,17 +983,12 @@ TEST(SimOracleTest, AnUnknownRowCostsOnlyTheCountsItCouldChange) {
 // across sessions: any in-flight transaction's uncommitted delete can be
 // baked into another session's banked set.
 //
-// The assertion below is the acceptance test for the fix: flip the constant
-// when it lands. Skipped rather than deleted while it stands, because a
-// gap that costs a test is a gap that stops being visible.
-inline constexpr bool kCabinRollbackFixed = false;
-
+// **Fixed** by declining to record from a view that can still be
+// contradicted (`docs/feat-cabin.md` §6a): a recording walk banks nothing
+// while any transaction is in flight, its own included. Written gated, it
+// ran SKIPPED for as long as the gap stood and is an ordinary regression
+// test now.
 TEST(SimFindings, ACabinSetBankedInsideARolledBackTransactionServesEveryLiveRow) {
-    if (!kCabinRollbackFixed) {
-        GTEST_SKIP() << "[GATED: cabin rollback] docs/known-gaps.md - an entry set banked "
-                        "under an uncommitted DELETE outlives the ROLLBACK that restores "
-                        "the row, and is then served as authoritative";
-    }
     SimInstance::Options options;
     options.cabins = true;
     auto made = SimInstance::Create(options);
@@ -1038,6 +1033,47 @@ TEST(SimFindings, ACabinSetBankedAfterACommittedDeleteIsCorrect) {
     const std::string after = db.Execute("SELECT * FROM t WHERE v = 0");
     EXPECT_EQ(SplitEscapedLines(after).size(), 2u) << after;  // header + the live row
 }
+
+
+// The **other half of the same bug**, and the reason declining to record
+// is the fix rather than un-observing on rollback: a set banked while
+// another session's transaction is in flight misses the rows that
+// transaction is about to *commit*. Nothing rolls back, so there is no
+// event an unobserve-on-rollback rule could hang from — the set is simply
+// wrong from the moment the other transaction commits.
+//
+// Two sessions over one dispatcher, which is what `Dispatch(sql, &session)`
+// is for and what SIM08's driver will want wholesale.
+TEST(SimFindings, ACabinSetIsNotBankedWhileAnotherTransactionIsInFlight) {
+    SimInstance::Options options;
+    options.cabins = true;
+    auto made = SimInstance::Create(options);
+    ASSERT_TRUE(made.ok());
+    SimInstance& db = *made.value();
+    server::Session other;
+    const auto on_other = [&](const std::string& sql) {
+        return db.dispatcher().Dispatch(sql, &other).response;
+    };
+
+    ASSERT_EQ(db.Execute("CREATE TABLE t (id int64, v int64, name varchar) HEAP").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Execute("CREATE CABIN ON t(v)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Execute("INSERT INTO t VALUES (0, 'a')").substr(0, 8), "INSERTED");
+
+    // The other session writes a second row for the value and holds it.
+    ASSERT_EQ(on_other("BEGIN").rfind("BEGIN ", 0), 0u);
+    ASSERT_EQ(on_other("INSERT INTO t VALUES (0, 'b')").substr(0, 8), "INSERTED");
+
+    // This session probes and banks the set — from a view the uncommitted
+    // row is not in.
+    ASSERT_EQ(SplitEscapedLines(db.Execute("SELECT * FROM t WHERE v = 0")).size(), 2u);
+
+    ASSERT_EQ(on_other("COMMIT").rfind("COMMIT ", 0), 0u);
+
+    const std::string after = db.Execute("SELECT * FROM t WHERE v = 0");
+    EXPECT_EQ(SplitEscapedLines(after).size(), 3u) << after;  // header + both rows
+}
+
 
 }  // namespace
 }  // namespace kds::sim

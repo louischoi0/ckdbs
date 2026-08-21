@@ -788,56 +788,33 @@ still waits on its own gate, so:
   state and decision log are memory-resident: a restart forgets what the
   controller was managing, and re-observation rebuilds it — the stated
   crash posture, not a bug.
-- **A Cabin entry set banked inside a transaction outlives its
-  ROLLBACK, and is then served as authoritative** — found 2026-08-21 by
-  the simulation harness's first fault-free SIM06 sweep (seed 2, profile
-  `colliding`, mode `clean`) and shrunk by SIM07's minimizer from 1200 ops
-  to nine. Six statements state it whole:
+- ~~**A Cabin entry set banked inside a transaction outlives its ROLLBACK,
+  and is then served as authoritative**~~ — **closed 2026-08-21**, the day
+  after it was found, by `docs/feat-cabin.md` §6a: a recording walk banks
+  nothing unless its read view carries no in-flight transaction and belongs
+  to none (`view.in_flight_count == 0 && view.own_trx_id == kNoTrxId`, two
+  comparisons on a path that already holds both facts).
 
-  ```sql
-  CREATE TABLE t (id int64, v int64, name varchar) HEAP;
-  CREATE CABIN ON t(v);
-  INSERT INTO t VALUES (0, 'a');   -- id 1
-  BEGIN;
-  DELETE FROM t WHERE v = 0;       -- id 1 delete-marked, uncommitted
-  SELECT * FROM t WHERE v = 0;     -- 0 rows, and **banks the empty set for v = 0**
-  ROLLBACK;                        -- id 1 is live again
-  INSERT INTO t VALUES (0, 'b');   -- id 2, appended to the banked set
-  SELECT * FROM t WHERE v = 0;     -- returns id 2 alone; id 1 is gone
-  ```
+  The entry is kept because the *shape* of the mistake outlives it. The
+  store's header argued the build-by-observation hazard was structurally
+  dead, since statements run to completion on the owning core — which is
+  true, and answers a **write racing the scan**. What broke was a write the
+  scan *could not see*, resolving afterwards: a transaction's uncommitted
+  DELETE hides a row that its ROLLBACK restores, and an in-flight
+  transaction's INSERT is invisible until it commits. A correctness
+  argument can be sound and still be about the wrong hazard.
 
-  With `cabins = off` the last statement answers two rows, which is the
-  truth. The rule broken is `include/kds/stats/cabin_store.hpp`'s own:
-  *"Observed ⇒ complete, superset form, per snapshot ... Missing a
-  qualifying pk violates authority."* That header argues the
-  build-by-observation hazard is structurally dead because statements run
-  to completion on the owning core — which answers a **concurrent** writer
-  and not this one: the recording walk runs under *the recording
-  transaction's own snapshot*, so a row that transaction has delete-marked
-  never enters the set, and the set is memory-resident, cross-transaction
-  and authoritative. The rollback restores the row and nothing restores the
-  entry. The same shape reaches across sessions — any in-flight
-  transaction's uncommitted delete can be baked into another session's set.
+  Found by the simulation harness's first fault-free SIM06 sweep (seed 2,
+  profile `colliding`, mode `clean`), shrunk 1200 ops → 9 by SIM07's
+  minimizer, and read off as six statements. Both halves are pinned by
+  `SimFindings.ACabinSetBankedInsideARolledBackTransactionServesEveryLiveRow`
+  and `…IsNotBankedWhileAnotherTransactionIsInFlight`, with
+  `…ACabinSetBankedAfterACommittedDeleteIsCorrect` as the control that says
+  what was *not* wrong. The fix rejected: un-observing on rollback, which
+  repairs the DELETE half and cannot touch the INSERT half — a transaction
+  that commits rows the recorder could not see never rolls back, so there
+  is no moment at which to drop the value.
 
-  Not a rollback bug and not a delete bug: with the DELETE **committed** the
-  banked set is correct, which is the control
-  (`SimFindings.ACabinSetBankedAfterACommittedDeleteIsCorrect`). The
-  acceptance test for the fix is written and gated —
-  `SimFindings.ACabinSetBankedInsideARolledBackTransactionServesEveryLiveRow`,
-  behind `kCabinRollbackFixed` in `tests/sim_loop_test.cpp` — so it turns
-  green the day the fix lands and reports SKIPPED with this entry's name
-  until then. **The corpus reproduces it**: `ckdbs-sim --seed 2 --ops 1200
-  --mode clean --profile colliding --toggles cabins` fails, and it is the
-  **only** cell that does — `scripts/sim.sh` over the committed corpus
-  runs 95 and fails 2, both of them this one (with faults and without).
-
-  Two candidate fixes, neither picked here — the owner is
-  `docs/feat-cabin.md`: **decline to record** while any transaction is in
-  flight (`txn::TransactionManager::ActiveCount`), which rule 3 of that
-  header makes free by construction — "un-observing is always legal";
-  or **unobserve on rollback**, dropping every cabined value a rolling-back
-  transaction touched, which keeps the recording rate and costs the undo
-  path a walk.
 
 - **The physical optimizer is shadow-only as a finding**
   (`docs/feat-physical-optimizer.md` §6): every candidate move is blocked

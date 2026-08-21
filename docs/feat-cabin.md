@@ -326,6 +326,66 @@ This spec is valid **only** under both: the core-ownership execution
 model and the Keystone id contract. If either changes, §4–§5 must be
 redesigned, not relaxed.
 
+### 6a. A set is banked only from a view nothing can contradict `[ADDED 2026-08-21]`
+
+§6's argument above is sound and **answers a different question than the
+one that broke**. It is about a write racing the scan, and core ownership
+does delete that. What it does not reach is a write the scan *could not
+see*, resolving afterwards:
+
+- a transaction **in flight** when the walk ran has rows the walk could not
+  see, and the moment it commits they are live and missing from a set that
+  is authoritative for every later reader. Nothing rolls back, so no event
+  exists that a repair could hang from;
+- the walk's **own** transaction may have delete-marked a row, which hides
+  it from the walk and from the set — and its `ROLLBACK` restores the row
+  while nothing restores the entry.
+
+Both are the C1 break the store's header forbids in as many words
+("missing a qualifying pk violates authority"). The second was found by
+the simulation harness on 2026-08-21 (`docs/workplan-testing.md` SIM06),
+shrunk to nine operations by its minimizer, and reads as six statements:
+
+```sql
+CREATE CABIN ON t(v);  INSERT INTO t VALUES (0, 'a');
+BEGIN;  DELETE FROM t WHERE v = 0;
+SELECT * FROM t WHERE v = 0;   -- 0 rows, and banks the empty set for v = 0
+ROLLBACK;                      -- the row is live again
+INSERT INTO t VALUES (0, 'b');
+SELECT * FROM t WHERE v = 0;   -- returned the second row alone
+```
+
+**The rule.** `WalkAndRecord` declines when the walk's read view carries
+any in-flight transaction or belongs to one:
+
+    view.in_flight_count == 0 && view.own_trx_id == kNoTrxId
+
+Both facts are already in the `ReadView` the walk carries, so this costs
+two comparisons on the miss path and needs nothing new. Declining is free
+by §1's corollary — an unobserved value is answered by the authoritative
+scan, a performance event and never a wrong one — and `SHOW CABINS`
+reports `unbankable_views=` so an operator can tell "nobody probed this
+column" from "every probe that would have recorded ran inside a
+transaction".
+
+**What it costs, stated rather than discovered**: a workload that keeps a
+transaction open at all times never builds a Cabin. That is the honest
+price of an authoritative structure whose promise outlives the statement
+that filled it, and the conservative side of it is the only safe side.
+
+**The refinement not taken.** A read inside a transaction that has
+delete-marked nothing could record safely, and a view cannot tell — it
+knows an owner, not what the owner did. Tracking "has this transaction
+delete-marked a row of this relation" would recover that case; it is not
+built, and it buys back only the own-transaction half. The in-flight half
+is not recoverable this way at all.
+
+**And the fix that was considered and rejected**: un-observing on
+rollback. It repairs the second bullet and cannot touch the first — a
+transaction that *commits* rows the recorder could not see never rolls
+back, so there is no moment at which to drop the value. A repair that
+covers half a rule leaves the rule broken.
+
 ## 7. Interlock — three structures, one story (C4)
 
 Distinct trust classes, cooperative operation; none replaces another:

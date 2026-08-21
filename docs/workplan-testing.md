@@ -278,7 +278,7 @@ exists for.
 produces about one errored statement (`armed=120 fired=75 errored_ops=75`
 on seed 1 at 1500 ops x 2), and `scripts/sim.sh` over the committed corpus
 — 5 seeds x 3 modes x 2 fault profiles x 3 value profiles, plus a pairing
-per seed, **95 cells** — fails exactly the 2 the Cabin finding owns.
+per seed, **95 cells** — passes.
 
 Both numbers in that sentence were wrong before they were measured, and in
 both directions: the sweep failed 11 of 15 cells while the oracle keyed a
@@ -349,11 +349,15 @@ silently skipped:
   filter on the column. Both of those were found by the pairing, and both
   are replies reporting advisory state on purpose.
 
-**What it found in the engine: one wrong answer**, `docs/known-gaps.md`'s
-"A Cabin entry set banked inside a transaction outlives its ROLLBACK". The
-corpus still reproduces it (seed 2, `colliding`, `clean`), so that cell of
-`scripts/sim.sh` is red until the Cabin fix lands; the acceptance test is
-written and gated in `tests/sim_loop_test.cpp`.
+**What it found in the engine: one wrong answer**, and it was fixed the
+next day. A Cabin entry set banked inside a transaction outlived the
+ROLLBACK that restored the row and was then served as authoritative
+(`docs/feat-cabin.md` §6a, `docs/known-gaps.md`). Chasing the fix found the
+other half of the same rule — a set banked while *another* session's
+transaction is in flight loses the rows that transaction commits — which
+is what ruled out un-observing on rollback as a repair. Both halves are
+pinned in `tests/sim_loop_test.cpp`; the corpus cell that produced it runs
+clean.
 
 **The count assertion is checkable per predicate, not per relation**
 (`Oracle::CountCheckable`). A relation with an unknown in it cannot check
