@@ -509,6 +509,16 @@ way it must not block S-1..S-3.
   assumes `sim/`; either is fine, but the sim binary must not link gtest —
   a framework's fixture lifecycle fights crash-restart iteration (the
   reason this is a standalone binary at all).
+- `[OPEN: torn injection]` SIM05 injects device *errors* only. A torn
+  transfer that the run continues past is not the failure it looks like
+  (`sim/faults.hpp` carries the argument); the realistic image needs a
+  device primitive neither memory device has — a crash that promotes a
+  **prefix** of the unsynced overlay rather than dropping all of it. When
+  `Crash(prefix)` lands the log half asserts and the page half is
+  `[GATED: FPI]`.
+- `[OPEN: generated joins]` SIM06's grammar stops short of joins and
+  predicate-position subqueries: the oracle would need a join model to
+  have an opinion about them. The shapes are reachable and unclaimed.
 - `[GATED: recovery]` SIM04/SIM11's full durability assertions. The gate
   flips when WAL replay lands; no partial mitigation (per `docs/txn.md`
   §8's own instruction).
