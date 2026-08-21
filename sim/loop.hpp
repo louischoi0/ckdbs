@@ -36,15 +36,21 @@
 //
 // **Faults, orthogonal to the three modes** (SIM05). With
 // `SimConfig::faults` set, a seeded schedule (sim/faults.hpp) arms device
-// failures and torn transfers *during* the workload, and the contract
-// widens rather than loosens:
+// errors *during* the workload, and the contract widens rather than
+// loosens:
 //
 //   - a statement may answer an error, and then it is not applied to the
 //     oracle; a statement that answers *rows* is held to the same
 //     agreement as ever. Wrong answers stay wrong under injection.
-//   - an errored write's outcome is unknown, not absent: the row may come
-//     back after the restart (sim/oracle.hpp's indeterminate set) and
-//     may equally be gone.
+//   - an errored write's outcome is unknown, not absent: the row may be
+//     there and may equally be gone. What identifies it is the **id** —
+//     an errored UPDATE or DELETE makes that id unchecked, and an errored
+//     INSERT makes the relation one that may hold rows the engine never
+//     named an id for (sim/oracle.hpp).
+//   - a `CREATE TABLE` that catches an injection is **retried once**,
+//     because a relation that dies at op 0 turns every later op naming it
+//     into an absorbed error and the iteration then verifies nothing while
+//     reporting green. An iteration whose oracle ends up empty fails.
 //   - once the schedule is exhausted the injections are disarmed and every
 //     relation is scanned again — the **quiescence probe**. An instance
 //     that still answers an error with no fault left to blame has not
@@ -56,10 +62,11 @@
 // Waystone, the Cabin store or the access statistics may never change a
 // result. The oracle does not know they exist, so every iteration already
 // tests it; `RunTogglePairing` tests the stronger form — two instances
-// differing *only* in the three switches, run the same op stream, must
-// answer byte-identically, statement for statement. That is
-// `waystone_contract_test.cpp`'s five-way comparison generalized to a
-// generated workload.
+// differing *only* in the three switches, run the same op stream, and are
+// compared statement for statement by `SameOutcome`, whose three tiers say
+// exactly what an *answer* is and what is merely a reply reporting the
+// advisory state on purpose. That is `waystone_contract_test.cpp`'s
+// five-way comparison generalized to a generated workload.
 //
 // Every random choice forks off the iteration's seed by label, so a
 // failing (seed, iteration, mode, profile) quadruple replays exactly.
