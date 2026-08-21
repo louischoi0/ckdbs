@@ -3667,6 +3667,23 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                 false};
     }
 
+    // `ORDER BY` is refused here for the same reason and with the same
+    // shape. `exec::OutputSort` normalizes its keys out of a `ChainFrame`
+    // against `SortKey`s the compiler resolved to column indices in a
+    // Schema; a view has neither, so honouring the clause would mean a
+    // second comparator over `parser::AstValue` living beside the one the
+    // engine already has. `LIMIT`/`OFFSET` below need no such thing - the
+    // quota consumes rows and has no opinion about where they came from -
+    // which is exactly why one clause of the tail is served and the other
+    // is declined rather than accepted and ignored.
+    if (!stmt.order_by.empty()) {
+        return {"ERR ORDER BY over a catalog view (sys." + stmt.from.table_name +
+                    ") is not supported; a view's rows are materialized by the catalog's "
+                    "readers and carry no schema for the sort to resolve against (byte " +
+                    std::to_string(stmt.order_by.front().column.byte_offset) + ")",
+                false};
+    }
+
     auto view = exec::ReadCatalogView(catalog_, stmt.from.table_name);
     if (!view.ok()) {
         return {"ERR " + view.status().message(), false};
@@ -3713,6 +3730,12 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         first_col = false;
     }
 
+    // I11's contract, over the one row source that is not a chain. The
+    // view's rows arrive in the order the reply prints them, so a prefix
+    // of them is a prefix of an order the statement has - the same
+    // sentence `pagination.hpp` makes for a walked relation, and the
+    // reason `LIMIT` needs no `ORDER BY` to be well defined.
+    exec::EmissionQuota quota(stmt.offset, stmt.limit);
     for (const std::vector<parser::AstValue>& row : rows.rows) {
         bool matched = true;
         for (const parser::Condition& cond : stmt.where) {
@@ -3745,6 +3768,13 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         }
         if (!matched) continue;
 
+        // Noted once per *qualifying* row, after the WHERE and before the
+        // formatting: OFFSET skips rows that passed the predicate, and a
+        // skipped row costs no rendering.
+        const exec::QuotaVerdict verdict = quota.Note();
+        if (verdict == exec::QuotaVerdict::kStop) break;
+        if (verdict == exec::QuotaVerdict::kSkip) continue;
+
         os << "\\n";
         bool first_val = true;
         for (std::size_t index : project) {
@@ -3755,6 +3785,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             os << exec::FormatValue(/*type_val=*/0, row[index]);
             first_val = false;
         }
+        if (verdict == exec::QuotaVerdict::kEmitThenStop) break;
     }
     return {os.str(), false};
 }

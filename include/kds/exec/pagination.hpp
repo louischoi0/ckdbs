@@ -55,7 +55,16 @@ enum class QuotaVerdict : std::uint8_t {
 class EmissionQuota {
 public:
     explicit EmissionQuota(const StepChain& chain) noexcept
-        : offset_(chain.offset), limit_(chain.limit) {}
+        : EmissionQuota(chain.offset, chain.limit) {}
+
+    // The tail on its own, for the one row source that is not a chain: a
+    // catalog view is materialized by the catalog's typed readers, so it
+    // has no `StepChain` to read the clause off. The quota is the same
+    // object either way, which is the point - one place decides what
+    // `LIMIT n OFFSET m` means, and a view's reply is rows [m, m+n) of
+    // its unlimited reply by the same rule every other statement obeys.
+    EmissionQuota(std::uint64_t offset, std::optional<std::uint64_t> limit) noexcept
+        : offset_(offset), limit_(limit) {}
 
     // Called once per row the chain produced, in emission order. Not
     // idempotent - each call advances the quota - so exactly one call per
