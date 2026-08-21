@@ -203,6 +203,21 @@ path rather than the send: core 0's superblock carries core 1's anchor, and
 a second checkpoint advances it rather than republishing the first. Verified
 to fail with the checkpointer removed.
 
+**Its review found a silent-corruption route PW3 armed**, fixed with it.
+`DevicePageStore::FlushMaps` is the one write path that reaches
+`device_.WritePage` without asking `MayWrite`, and it writes the two map
+pages a peer may read and never write. A peer acquires a dirty map bit at
+mount — redo's `CreateAt` runs *before* `SetCoreOwnership` installs the
+lease, which `core_runtime.cpp` orders that way deliberately — and until PW3
+nothing on a peer ever called `FlushPages`, so nothing ever flushed it. The
+checkpointer is the first caller. A peer's cadence checkpoint would have
+written back the free map as it stood when that store opened, reverting every
+allocation and extent reservation core 0 had made since: silent reuse of live
+pages, not a lost bit. Guarded at `FlushMaps` with the reason at the site, and
+pinned by `ALeasedStoreNeverWritesTheMapsBackToTheDevice` — the existing
+`ALeasedStoreNeverMutatesTheFreeMap` group covered the *set* half and never
+the *write-out* half. Verified to fail unguarded.
+
 Two decisions inside it:
 
 - **The assertion snapshot source is wired even though it writes nothing.**
@@ -213,10 +228,24 @@ Two decisions inside it:
   fold from, which is exactly the failure RC07 exists to prevent.
 - **`StartWriter()` is *not* called for a peer**, and that was checked
   rather than assumed. `WalManager::Sync()` runs on the calling thread
-  always, writer or not, by an explicit decision in its own header — so the
-  paths a checkpoint and a commit gate on behave identically on a peer and
-  on core 0. The writer thread would change something else, and PW3 is not
-  where that is decided.
+  always, writer or not, by an explicit decision in its own header — so
+  `SyncAll`, `EnsureDurable`, D1's commit and the checkpoint's own gate
+  (`Checkpointer::Complete` → `EnsureDurable`) are byte-identical with and
+  without one. **The review named the one path that is not**: `DrainOnce`'s
+  D3 relaxed branch hands its flush to the writer when there is one and falls
+  through to `Sync()` on the reactor when there is not. `Run()` arms that
+  drain both as a post-task hook and as a timer, so under
+  `durability = relaxed` a peer charges that fsync to its reactor where core 0
+  does not — 2,208 µs against 194 µs at p99, by the number recorded at that
+  site. Free before PW3, because a peer's stream was empty; not free from
+  here, because it now carries this feature's own `CHECKPOINT_BEGIN`/`END`.
+  Still not PW3's to change, and now named rather than waved at.
+
+  Two adjacent staleness findings, neither PW3's: `expeditor.cpp`'s "every
+  sync moves to the WAL writer thread… and the checkpoint gate's" is wrong on
+  two of its three items, and a peer's WAL opens with a default
+  `WalManagerConfig`, so its `relaxed_flush_interval_ns` is the 10 ms default
+  rather than the configured one — load-bearing from this commit on.
 
 ### The original statement of PW-B3, for the record
 
@@ -290,6 +319,7 @@ per-core instance is a `SO_REUSEPORT` setsockopt beside the existing
 | PW1b | Make a peer *ask* for row-id blocks. `RequestRowIdLease` exists and has no callers, so a peer INSERT still dies at its row id. **Needs a decision**: a per-relation lease has no pre-emptive tick to ride, so something must choose which relations a peer leases for — on first exhaustion with a retry, at first write to a relation, or at the CC7 fault grant | PW1 |
 | PW2 | Route the two root-move catalog writes. **Needs a decision — §7** | PW1, PW1b |
 | PW3 | **Built 2026-08-21.** A peer checkpointer through `RemoteCheckpointAnchor`: the completion checkpoint at `AttachTransport`, the `wal.md` §11 cadence in `Run()` | PW1 |
+| PW3b | The **shutdown** checkpoint, which PW3 did not ship — core 0 has three checkpoint points and a peer now has two. A graceful restart replays up to one `checkpoint_interval_ms` of every peer's stream. **Needs a decision**: after the worker join both reactors are stopped, so a queued anchor send is never polled; it wants either one more core-0 ring drain after the join, or a different anchor on the shutdown path | PW3 |
 | PW4 | Name the peer DDL refusal, and hang §5d's purge gate off it | none |
 | PW5 | `SO_REUSEPORT` per-core listeners; share the credential store and TLS context without sharing them mutably | PW1, PW4 |
 | PW6 | The benchmark: `placement = rotate`, one writer connection per core, per-core relations. The first cross-core number that is a speedup and not a cost | PW1-PW5 |

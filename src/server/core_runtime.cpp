@@ -370,7 +370,17 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // startup thread, before the worker exists - the send it queues is
     // picked up by this core's own reactor once `Run()` starts, and core 0's
     // `kAnchorWrite` handler is registered before any peer attaches.
-    return Checkpoint();
+    //
+    // Through the same helper core 0 uses, rather than through `Checkpoint()`
+    // below: `CheckpointAfterRecovery` *is* "the completion checkpoint" as a
+    // named thing, and it carries three that the cadence path does not - the
+    // `NoActiveTransactions` table (empty by fact here, and its signature is
+    // what makes handing over a stale one impossible), the Info line that is
+    // a peer's only evidence its mount bounded the next crash, and the
+    // context on failure that says which checkpoint aborted the mount.
+    return CheckpointAfterRecovery(config_.core_id, *wal_, *checkpoint_target_,
+                                   *checkpoint_anchor_, log_, /*clock=*/nullptr,
+                                   /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
 }
 
 void CoreRuntime::GrantRelationFault(storage::Extent extent) {
@@ -461,10 +471,6 @@ void CoreRuntime::Run() {
     // PW3 - core 0 has run one since RC08 and a peer ran none, so a peer
     // that wrote left an anchor that never advanced and a stream every
     // later mount replayed whole. A no-op where `checkpointer_` is unset.
-    //
-    // A failed checkpoint does not disarm the timer, Expeditor's rule and
-    // for its reason: the pages it did not flush stay dirty and the next
-    // tick retries them.
     if (checkpointer_.has_value() && config_.checkpoint_interval_ns > 0) {
         scheduler_->SubmitEvery(config_.checkpoint_interval_ns, [this] { (void)Checkpoint(); });
     }

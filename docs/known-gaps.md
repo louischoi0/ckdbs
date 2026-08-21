@@ -27,9 +27,23 @@ the owner's workplan.
   (`sim/loop.hpp`'s `kRecoveryImplemented`, RC10's first half).
   A mount ends by publishing an anchor past everything it replayed (RC08, built
   the same day), so the next crash replays only what followed rather than
-  rescanning the stream — **except on a peer core**, which cannot write page 0
+  rescanning the stream. ~~**except on a peer core**, which cannot write page 0
   and so still scans from whatever anchor core 0 last wrote it (costless today:
-  a peer holds no transaction ids, so its stream carries no writes of its own).
+  a peer holds no transaction ids, so its stream carries no writes of its
+  own)~~ — **a peer checkpoints as of 2026-08-21** (PW3,
+  `docs/workplan-peer-writer.md`): it still cannot write page 0, so it sends
+  the anchor and core 0 writes it (`remote_checkpoint_anchor.hpp`), at mount
+  and on the `§11` cadence. The parenthetical was retracted a day earlier by
+  PW1, which is what made the gap cost anything. **One of core 0's three
+  checkpoint points is still missing on a peer**: the *shutdown* one. A peer's
+  teardown syncs its WAL and destroys its runtime before core 0 checkpoints,
+  so the "after a `STOP`, the next mount reads 2 records where it read 1205"
+  property below holds for core 0 and not for a peer — a graceful restart
+  replays up to one `checkpoint_interval_ms` of a peer's stream, every time.
+  PW3b owns it, and it is a sequencing decision rather than a missing call:
+  at the only moment the runtime is safely reachable again (after the worker
+  join) both reactors are stopped, so a queued anchor send would never be
+  polled.
   `SHOW META` reports what the last mount's recovery did — records scanned,
   transactions committed and rolled back, per-phase timings, and the audit below
   (RC09, built the same day).

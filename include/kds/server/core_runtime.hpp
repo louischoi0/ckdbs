@@ -286,13 +286,10 @@ private:
     // answers STEP_OPENs for relations it owns.
     std::optional<RemoteStepServer> remote_steps_;
 
-    // This core's checkpointer and the two objects it borrows (PW3). Built
-    // at `AttachTransport`, not at `Open`: the anchor publishes over the
-    // ring, so it cannot exist before the ring does. Declared after the
-    // statement stack below in construction order terms - they are further
-    // down this list - because the checkpointer borrows `txn_manager_` for
-    // its active-transaction set and the dispatcher's enforcer for AS6a's
-    // group snapshots.
+    // The two objects this core's checkpointer borrows (PW3). Built at
+    // `AttachTransport`, not at `Open`: the anchor publishes over the ring,
+    // so it cannot exist before the ring does. Declared below `scheduler_`
+    // and `store_`, which they hold references to.
     std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
     std::optional<RemoteCheckpointAnchor> checkpoint_anchor_;
 

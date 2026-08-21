@@ -538,6 +538,46 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverMutatesTheFreeMap) {
         << "a leased core set bits in the free map it does not own";
 }
 
+TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverWritesTheMapsBackToTheDevice) {
+    // The write-out half of the rule above, and the one a peer reaches: the
+    // map bit a leased store can hold is redo's, set by `CreateAt` at mount
+    // *before* the lease is installed (server/core_runtime.cpp orders it so),
+    // and `FlushMaps` is the only path to those two page ids that does not go
+    // through MayWrite. A peer that published its copy would write the map as
+    // it stood when this store opened - reverting every allocation core 0 has
+    // made since, which is silent reuse of live pages.
+    auto device = MakeDevice(64, 0);
+
+    auto core0 = OpenStore(*device);
+    ASSERT_NE(core0, nullptr);
+    ASSERT_TRUE(core0->CreateNew().ok());
+    ASSERT_TRUE(core0->Sync().ok());
+
+    // The peer's copy of the map: taken here, and stale from the next line on.
+    auto peer = OpenStore(*device);
+    ASSERT_NE(peer, nullptr);
+
+    auto later = core0->CreateNew();
+    ASSERT_TRUE(later.ok()) << later.status().message();
+    const PageId core0_page = later.value().first;
+    ASSERT_TRUE(core0->Sync().ok());
+
+    // What redo does on a peer's stream, at the point the lease does not
+    // exist yet: a page placed at a chosen id, which marks the map.
+    ASSERT_TRUE(peer->CreateAt(300).ok());
+    LeasedIdSource lease(Extent{1000, 4});
+    peer->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+
+    ASSERT_TRUE(peer->Sync().ok());
+
+    Page map{};
+    ASSERT_TRUE(device->ReadPage(kFreeMapPageId, std::span<std::byte, kPageSize>(map)).ok());
+    EXPECT_TRUE(FreeMapIsAllocated(std::span<const std::byte, kPageSize>(map), core0_page))
+        << "a leased store wrote its stale free map over core 0's";
+    EXPECT_FALSE(FreeMapIsAllocated(std::span<const std::byte, kPageSize>(map), 300u))
+        << "a leased store published a free-map bit it does not own";
+}
+
 TEST(DevicePageStoreOwnershipTest, ALeasedPageIsReadableThoughTheMapDoesNotKnowIt) {
     // A non-zero core reads its free map at Open(); core 0 marks the lease's
     // bits later, in *its* copy. So the lease has to answer for the core's
