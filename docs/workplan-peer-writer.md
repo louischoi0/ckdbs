@@ -326,7 +326,7 @@ per-core instance is a `SO_REUSEPORT` setsockopt beside the existing
 | PW6 | The benchmark: `placement = rotate`, one writer connection per core, per-core relations. The first cross-core number that is a speedup and not a cost | PW1-PW5 |
 
 PW1 + PW1b + **PW1c** make a peer write a heap relation with no secondary
-index — PW1c is the door the probe found behind PW1b, and it was not in this
+index by single-row INSERT — PW1c is the door the probe found behind PW1b, and it was not in this
 workplan's original three because it is not on the *id* path at all. PW1c +
 PW3 + PW5 is then a shippable slice with a real number at the end of it and a
 stated shape restriction; PW2 removes the restriction. Taking §7b's option
@@ -360,8 +360,13 @@ on the drain tick asks for the neediest relation, one in flight per core;
 relation is topped up before it is spent and asked for exactly once.
 
 The client-visible consequence, stated because it is a contract and not an
-implementation detail: **the first INSERT into a relation on a given peer
-fails retryably, and no later one does.** That is exactly what that lease's
+implementation detail: **the first single-row INSERT into a relation on a
+given peer fails retryably, and no later one does.** *Single-row* is exact
+and was corrected at review: the multi-row `VALUES` path calls
+`Catalog::AllocateRowIdRange`, which never consults the lease table at all,
+so a peer's bulk INSERT bypasses the lease and dies at the catalog page
+write. That is a fifth thing PW1c or PW4 has to reach, not something PW1b
+left half-done. That is exactly what that lease's
 `ResourceExhausted` message has always promised — "retry after the refill
 grant lands" — and it is the same retryable shape CC3's cross-core write
 refusal already uses, so a client that retries on those needs no new code.
@@ -383,6 +388,21 @@ a CC7 fault grant, and `INSERT INTO rotated VALUES (7)` answers
 relation's pages were allocated from core 0's free map at `CREATE TABLE`, so
 the tail page an INSERT appends to is core 0's, and the write is refused.
 
+**And the refusal above is a Debug-only refusal.** Found at PW1b's review
+2026-08-21 and stated nowhere else: the whole `MayFault`/`MayWrite` check
+sits inside `#ifndef NDEBUG` (`device_page_store.cpp`, "the shared-nothing
+check … debug builds only"). In `build-release` — where this project's
+measurement rule says every number is taken — that same peer INSERT does
+**not** refuse. It dirties core 0's page in the peer's own store and the last
+flush wins.
+
+So PW1c is not a door to open. It is a **silent two-writer corruption route
+that opens the moment PW5 gives a peer a listener**, and it would have been
+invisible in exactly the build PW6 measures. That makes **PW1c before PW5 an
+ordering requirement, not a preference** — the Debug check is an assertion
+of a shared-nothing invariant whose actual enforcement is statement dispatch,
+and a peer listener is what removes the dispatch.
+
 **This is not an oversight to patch.** `device_page_store.hpp` says it in as
 many words — *"MayWrite deliberately never [consults the granted list] - a
 grant is [read rights only]"* — and CC7 explains why: a grant is
@@ -398,8 +418,8 @@ So closing it means picking one, and each is a real design commitment:
   its exact page range rather than an extent, and let `MayWrite` consult it.
   Ends the superset for writes; costs a wire change and a grant that has to
   be re-sent as a relation grows.
-- **(b) Allocate a peer-owned relation's pages from the owner's lease at
-  DDL.** CC7 records this as considered and rejected — "a new cross-core
+- **(b) Allocate a peer-owned relation's pages from the owner's *free-map*
+  allocation at DDL.** CC7 records this as considered and rejected — "a new cross-core
   allocation protocol inside DDL that still needs a creation-time write
   exception" — but it was rejected when no peer could write at all, and the
   premise it was rejected under is the one PW1 removed.
@@ -407,7 +427,22 @@ So closing it means picking one, and each is a real design commitment:
   bullet, "involves no pipeline"). Then no peer ever writes a page core 0
   allocated, because the *owner* executes the write, and PW1c disappears
   rather than being solved. This is the route that also fixes PW5's
-  no-steering problem, and it is the one CLA would pick.
+  no-steering problem.
+- **(d) Grant a peer-owned relation a fresh *write* extent at DDL** — core 0
+  reserves an extent per peer-owned relation and grants it through the
+  existing `kExtentLease` path into `lease_`, rather than as a CC7 fault
+  grant, and that relation's pages are allocated only from inside it. Added
+  at PW1b's review, and it is the cheapest of the four: **no wire change and
+  no new protocol**, because both halves already exist. It also makes CC7's
+  superset **empty by construction**, which is the precise objection that
+  rules out granting write rights over an arbitrary extent. Costs one extent
+  (64 pages, 512 KiB) minimum per peer-owned relation. A strictly cheaper
+  cousin of (b) that avoids (b)'s stated defect — no cross-core allocation
+  protocol inside DDL.
+
+CLA's recommendation is **(d) then (c)**: (d) closes the corruption route on
+its own and unblocks PW5, and (c) remains the right end state because it
+makes steering a non-question. (a) and (b) are dominated by (d).
 
 ## 7. The decision PW2 needs — do not assume
 

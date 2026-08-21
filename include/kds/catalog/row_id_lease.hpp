@@ -36,12 +36,31 @@ namespace kds::catalog {
 struct RowIdLease {
     std::uint64_t next = 0;  // the id Next() hands out
     std::uint64_t end = 0;   // one past the last leased id
-    // The size of the run this one came from, so `low_water()` measures
+    // The size of the run **currently in hand**, so `low_water()` measures
     // against what was granted rather than against a constant a smaller
     // grant would sit permanently below. Zero on an entry that has never
     // held a grant - which is what "asked for and not yet answered" looks
     // like, and why it reads as low.
+    //
+    // In hand rather than cumulative, which is `LeasedIdSource`'s rule and
+    // arithmetic rather than taste: a contiguous top-up that *added* to this
+    // would raise the quarter mark by count/4 every refill, so the run would
+    // be asked for again after only 3/4 of it had been issued - a permanent
+    // 25% burn of the 40-bit space and a mark that drifts up forever.
     std::uint64_t window = 0;
+
+    // Set when core 0 answered this relation's request with **none**: a
+    // relation that no longer has a `sys.tables` row, one whose key mode
+    // names its own ids, or a genuinely exhausted 40-bit space. All three
+    // are permanent, and a spent entry reads as low water forever, so
+    // without this the drain tick would re-ask every cadence and - since
+    // one request is in flight per core and `NeediestRelation` answers in
+    // oid order - would never get past this oid to any other relation on
+    // the core. Demand is cleared rather than the entry dropped: the
+    // remainder of a low-water lease is still this core's to issue.
+    // `Next()` re-arms it, so a denial costs one request per *failing
+    // statement* instead of one per tick, forever.
+    bool denied = false;
 
     bool spent() const noexcept { return next >= end; }
     std::uint64_t remaining() const noexcept { return spent() ? 0 : end - next; }
@@ -71,6 +90,10 @@ public:
         // message promises is one that can succeed rather than a loop.
         RowIdLease& lease = leases_[table_oid];
         if (lease.spent()) {
+            // Fresh demand, so a previous "none" stops suppressing it: the
+            // message below promises a retry, and a request nobody makes
+            // again would make that promise a lie.
+            lease.denied = false;
             return Status::ResourceExhausted(
                 "row-id lease for relation oid " + std::to_string(table_oid) +
                 " is spent; retry after the refill grant lands");
@@ -79,14 +102,21 @@ public:
     }
 
     // The relation most in need of a run, or none. Ordered by oid so the
-    // answer is stable run to run - sched.md section 8's determinism rule for
-    // anything observable, and here also what keeps two needy relations from
-    // starving each other by map-iteration order.
+    // answer is stable run to run - sched.md section 8's determinism rule
+    // for anything observable. A denied relation is not need, it is an
+    // answer already given (see `RowIdLease::denied`).
     std::optional<Oid> NeediestRelation() const {
         for (const auto& [oid, lease] : leases_) {
-            if (lease.low_water()) return oid;
+            if (!lease.denied && lease.low_water()) return oid;
         }
         return std::nullopt;
+    }
+
+    // Records core 0's "none" for a relation this core asked about. Only an
+    // entry that already exists: the oid arrives off the ring, and creating
+    // one here would let a malformed reply grow this map.
+    void Deny(Oid table_oid) {
+        if (auto it = leases_.find(table_oid); it != leases_.end()) it->second.denied = true;
     }
 
     // Applies a grant. A grant that begins exactly where the current lease
@@ -97,12 +127,12 @@ public:
         RowIdLease& lease = leases_[table_oid];
         if (!lease.spent() && lease.end == first) {
             lease.end = first + count;
-            lease.window += count;
+            lease.window = lease.end - lease.next;
             return;
         }
         lease.next = first;
         lease.end = first + count;
-        lease.window = count;
+        lease.window = count;  // == end - next, the run in hand
     }
 
     std::uint64_t remaining(Oid table_oid) const {

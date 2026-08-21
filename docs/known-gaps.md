@@ -606,7 +606,14 @@ still waits on its own gate, so:
   decision between per-relation write grants, allocating a peer-owned
   relation's pages from the owner's lease at DDL, or shipping the DML
   statement to the owner core so no peer ever writes a page core 0
-  allocated. The original scoping note follows:
+  allocated. **And that refusal is Debug-only**: the whole
+  `MayFault`/`MayWrite` check sits inside `#ifndef NDEBUG`, so in
+  `build-release` the same peer INSERT does not refuse — it dirties core 0's
+  page in the peer's own store and the last flush wins. PW1c is therefore a
+  silent two-writer corruption route that opens the moment PW5 gives a peer
+  a listener, invisible in exactly the build every measurement is taken in,
+  which makes **PW1c before PW5 an ordering requirement**. The original
+  scoping note follows:
   a peer cannot issue a **transaction id** at all (`TrxIdSequence`
   constructs spent, and a peer's persist callback refuses), two catalog
   write points ride the ordinary INSERT (a clustered root growing a level,
