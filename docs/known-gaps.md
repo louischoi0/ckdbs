@@ -580,6 +580,15 @@ still waits on its own gate, so:
   reports rather than erroring per row. Until one of the three lands,
   every cross-core number in `bench/` is a *cost* measured with the
   parallelism removed, never a speedup.
+  **Scoped 2026-08-21** — `docs/workplan-peer-writer.md` owns the series
+  (PW1-PW6) and names what actually blocks it, which is not the listener:
+  a peer cannot issue a **transaction id** at all (`TrxIdSequence`
+  constructs spent, and a peer's persist callback refuses), two catalog
+  write points ride the ordinary INSERT (a clustered root growing a level,
+  a secondary index root splitting), and a peer has no checkpointer. A
+  heap relation with no secondary index writes no catalog page, so the
+  trx-id lease alone makes that one shape peer-writable. Its PW2 decision
+  — how a root move reaches core 0 — is open and listed there.
 - **`Catalog::catalog_version()` is not a sound guard for a cached
   `TableAccess`** (named 2026-08-15 while designing P4d-4c's per-batch
   runner handle). `InvalidateFromPeer()` — the `kCatalogInvalidate`
