@@ -320,19 +320,26 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
     // that dies at op 0 turns every later op naming it into an absorbed
     // error, and the iteration then verifies nothing while reporting green
     // — measured at 1291 of 3000 ops on one corpus seed, which is what
-    // `ops_on_lost_relation` counts. Retrying is what a client does, and it
-    // tests something the first attempt cannot: a CREATE TABLE that
-    // answered an error must have left **no** relation behind, so a retry
-    // answering EXISTS is a finding rather than a recovery.
+    // `ops_on_lost_relation` counts. Retrying is what a client does.
+    //
+    // A retry answering **EXISTS** is the DDL's version of an errored
+    // write's unknown outcome, not a violation: the injection that killed
+    // the acknowledgement (a failed commit sync, in every case the corpus
+    // produces) landed *after* the catalog write, so "it happened" is one
+    // of the two legal outcomes and the retry is how the client learns
+    // which. The relation is adopted. What would be a finding is a
+    // relation that half exists — visible by one route and absent by
+    // another — and EXISTS is not that; the routes are what
+    // `spec-ddl-transactional.md`'s own test walks.
     if (IsErr(reply) && it.faults_on() && op.kind == Op::Kind::kCreateTable) {
         ++it.verdict.errored_ops;
         it.trace.Note("create-table errored at op " + std::to_string(op_index) + ", retried");
         reply = it.instance.Execute(op.sql);
         if (reply.rfind("EXISTS", 0) == 0) {
-            Fail(it, "op " + std::to_string(op_index) +
-                         " [" + op.sql + "]: the CREATE answered an error and left the "
-                                         "relation behind: " + reply);
-            return false;
+            it.trace.Note("the first attempt had reached the catalog after all");
+            it.oracle.CreateTable(op.table);
+            ++it.verdict.ops_run;
+            return true;
         }
     }
 

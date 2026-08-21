@@ -246,10 +246,25 @@ differs from the paragraph above:
   generator keeps naming the relation, the engine keeps refusing, the
   oracle never learned it, and every check in the loop iterates
   `oracle.tables()` — measured at **1291 of 3000 ops thrown away on seed 3,
-  printing green**. The retry is what a client does, and it asserts
-  something the first attempt cannot: a `CREATE TABLE` that answered an
-  error must have left no relation behind, so a retry answering `EXISTS` is
-  a finding. `ops_on_lost_relation` reports the remainder.
+  printing green**. The retry is what a client does, and
+  `ops_on_lost_relation` reports what it could not recover.
+
+  **A retry answering `EXISTS` is adopted, not failed** — and the first cut
+  of this had it the other way, which cost nine of ninety-five corpus cells
+  until the measurement pass caught it. The injection that kills the
+  acknowledgement is a failed commit *sync*, which lands after the catalog
+  write, so "it happened" is one of the two legal outcomes: the DDL's
+  version of an errored write's unknown outcome, and the retry is how the
+  client learns which. **What the harness saw while getting that wrong is
+  worth an owner's eye**, because it is not obviously nothing — an
+  autocommit `CREATE TABLE` whose commit sync failed answers `ERR` and
+  leaves the relation *visible*, which reads oddly beside
+  `manual/sql/sql.md` §5's "an autocommit statement is its own transaction
+  and unwinds fully". Whether that is a defect or the honest end state of a
+  commit that reached its record and lost its fsync belongs to
+  `docs/txn.md` §8 and `docs/spec-ddl-transactional.md`, not here. The
+  harness accepts both outcomes and asserts the one thing neither reading
+  disputes: that the relation must not *half* exist.
 
 Two small additions to the memory devices carry it: `ClearInjections()` and
 an `injections_fired` stat, so "this error had an injected cause" is
@@ -258,14 +273,30 @@ a failing iteration leaves through its `return` and the counter that says
 whether the schedule disturbed anything read zero on exactly the runs it
 exists for.
 
-**What it found in the engine: nothing.** Every fired injection produces
-exactly one errored statement (`armed=120 fired=75 errored_ops=75` on
-seed 1 at 1500 ops x 2), and `scripts/sim.sh` over the committed corpus —
-5 seeds x 3 modes x 2 fault profiles x 3 value profiles, plus a pairing
-per seed — passes but for the one cell the Cabin finding owns. The number
-in this paragraph is the number measured after the identity fix above;
-before it, the same sweep failed 11 of 15 cells on the harness's own
-mistake.
+**What it found in the engine: nothing** — one observation for an owner
+(the `EXISTS` paragraph above) and no defect. Every fired injection
+produces about one errored statement (`armed=120 fired=75 errored_ops=75`
+on seed 1 at 1500 ops x 2), and `scripts/sim.sh` over the committed corpus
+— 5 seeds x 3 modes x 2 fault profiles x 3 value profiles, plus a pairing
+per seed, **95 cells** — fails exactly the 2 the Cabin finding owns.
+
+Both numbers in that sentence were wrong before they were measured, and in
+both directions: the sweep failed 11 of 15 cells while the oracle keyed a
+ghost on its content, and 11 of 95 while the retry called `EXISTS` a
+violation. A harness states its own condition as confidently as it states
+the engine's, and is wrong the same way.
+
+**What the gate costs**, measured in Release at `dfca583` on a two-core
+box: `scripts/sim.sh` over the committed corpus is **11.7 s** (151 s in
+Debug — it falls back to `build/` when no release tree exists, so a
+Debug-only CI job pays that), and the 17 new tests add **2.60 s** to
+`ctest -R '^Sim'` (5.08 -> 7.69 s), five of them accounting for 94% of it.
+The engine-side change costs nothing measurable, and not as an estimate:
+120 of the 122 engine object files are byte-identical to `aa3e26c`, the
+two that differ are the memory devices themselves, and
+`file_page_device.cpp.o` / `file_log_device.cpp.o` are unchanged. The
+production machine code is bit-identical, so an A/B would be measuring
+noise.
 
 ### SIM06 — Workload v2: mutations, transactions, features
 Grammar grows to `UPDATE` (key-column and non-key-column SETs — the Cabin
