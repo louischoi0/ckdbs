@@ -589,6 +589,10 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
   so the quota applies to them unchanged — `LIMIT n OFFSET m` is rows
   `[m, m+n)` of the view's unlimited reply, as everywhere else — but the
   output sort resolves its keys against a schema a view does not have.
+  **Neither clause saves any reading there**: the view is built in full
+  before the quota sees a row, so a view's `LIMIT` bounds what you receive
+  and what gets rendered, and the `O(offset)` note below is a statement
+  about relations, not about `sys.*`.
 - `OFFSET` costs what it skips — qualifying rows are examined and
   discarded, O(offset), since no head seek exists. For deep pagination
   prefer keyset form: `WHERE id > <last seen> LIMIT n`.

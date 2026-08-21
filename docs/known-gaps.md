@@ -737,6 +737,19 @@ still waits on its own gate, so:
   Still refused, by decision: nullable index keys (D2, covered columns
   included; `IS NULL` answers by scan), `NULLS FIRST/LAST` grammar (D3
   fixed NULLs-largest), and `ALTER TABLE ADD COLUMN` of any kind.
+- **A `sys.` qualifier is silently dropped below depth 0.** Found
+  2026-08-21 by the review of the catalog-view pagination fix, unowned.
+  `HandleSelect` diverts a catalog view only for the top-level `from` and
+  `joins`; nothing else in the engine reads `RelationRef::schema` —
+  `src/exec/step_compiler.cpp` never mentions it. So
+  `SELECT v FROM t WHERE id IN (SELECT oid FROM sys.tables)` drops the
+  `sys.`, resolves `tables` to the catalog's own internal relation oid,
+  and answers `ERR no columns for this rel_id` — an internal message with
+  no byte position. This is the same "parsed, accepted, silently dropped"
+  shape the tail had over a view before 2026-08-21, one nesting level
+  down. It wants either a parser refusal with the byte (a
+  schema-qualified relation below depth 0) or a decision to support it;
+  the entry exists so it is not found a third time.
 - ~~**Pagination is LIMIT/OFFSET only**~~ — **closed 2026-08-11** by the
   output sort (`docs/workplan-order-by.md`). `ORDER BY` now takes any
   column or columns, pk or not, of any relation in a non-aggregated

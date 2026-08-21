@@ -3654,6 +3654,26 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
 }
 
 
+namespace {
+
+// Where `name` sits in a view's column list, or `column_names.size()` when
+// it names none of them.
+//
+// A view resolves a column by *name* because it has no Schema to resolve
+// an index against - the one place a view is not the real path. One
+// function rather than three copies of the same linear search: the
+// projection, the WHERE and any future consumer must agree on what
+// "column of this view" means, and three loops differing only in a
+// variable name is how they stop agreeing.
+std::size_t ViewColumnIndex(const exec::CatalogView& view, const std::string& name) {
+    for (std::size_t i = 0; i < view.column_names.size(); ++i) {
+        if (IEquals(view.column_names[i], name)) return i;
+    }
+    return view.column_names.size();
+}
+
+}  // namespace
+
 DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt) {
     // **AG12.** A catalog view's rows come from the catalog's typed readers,
     // not from a step chain - so there is no `RowSink` for AG1's fold to
@@ -3702,13 +3722,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
                 return {"ERR '" + col.qualifier + "." + col.name + "' names no relation in "
                         "this statement", false};
             }
-            std::size_t found = rows.column_names.size();
-            for (std::size_t i = 0; i < rows.column_names.size(); ++i) {
-                if (IEquals(rows.column_names[i], col.name)) {
-                    found = i;
-                    break;
-                }
-            }
+            const std::size_t found = ViewColumnIndex(rows, col.name);
             if (found == rows.column_names.size()) {
                 return {"ERR view sys." + stmt.from.table_name + " has no column '" + col.name +
                         "'", false};
@@ -3722,6 +3736,35 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     // by *name*, because a view has no schema to resolve an index against.
     // That is the one place a view is not the real path; it is confined
     // here, and a subquery predicate is refused rather than half-applied.
+    //
+    // **Resolved once, before any row is read.** Every question below is a
+    // property of the statement, not of a row - is this a predicate shape
+    // a view can answer, does this column exist - and asking them inside
+    // the row loop made the *refusal* depend on how many rows the catalog
+    // happened to hold. `SELECT * FROM sys.patterns WHERE name =
+    // pattern_id` answered a header on a fresh instance, because the loop
+    // never ran, and refused over `sys.tables`, because it did. A refusal
+    // that data can silence is not a refusal.
+    std::vector<std::size_t> where_at;
+    where_at.reserve(stmt.where.size());
+    for (const parser::Condition& cond : stmt.where) {
+        if (cond.has_subquery()) {
+            return {"ERR a subquery predicate over a catalog view is not supported: the "
+                    "view is materialized, so there is no relation for a sub-chain to "
+                    "correlate against", false};
+        }
+        if (cond.rhs_kind == parser::RhsKind::kColumn) {
+            return {"ERR a column-to-column comparison over a catalog view is not "
+                    "supported", false};
+        }
+        const std::size_t at = ViewColumnIndex(rows, cond.col.name);
+        if (at == rows.column_names.size()) {
+            return {"ERR view sys." + stmt.from.table_name + " has no column '" +
+                    cond.col.name + "'", false};
+        }
+        where_at.push_back(at);
+    }
+
     std::ostringstream os;
     bool first_col = true;
     for (std::size_t index : project) {
@@ -3738,33 +3781,28 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     exec::EmissionQuota quota(stmt.offset, stmt.limit);
     for (const std::vector<parser::AstValue>& row : rows.rows) {
         bool matched = true;
-        for (const parser::Condition& cond : stmt.where) {
-            if (cond.has_subquery()) {
-                return {"ERR a subquery predicate over a catalog view is not supported: the "
-                        "view is materialized, so there is no relation for a sub-chain to "
-                        "correlate against", false};
-            }
-            if (cond.rhs_kind == parser::RhsKind::kColumn) {
-                return {"ERR a column-to-column comparison over a catalog view is not "
-                        "supported", false};
-            }
-            std::size_t at = rows.column_names.size();
-            for (std::size_t i = 0; i < rows.column_names.size(); ++i) {
-                if (IEquals(rows.column_names[i], cond.col.name)) {
-                    at = i;
-                    break;
-                }
-            }
-            if (at == rows.column_names.size()) {
-                return {"ERR view sys." + stmt.from.table_name + " has no column '" +
-                        cond.col.name + "'", false};
-            }
+        for (std::size_t i = 0; i < stmt.where.size(); ++i) {
+            const parser::Condition& cond = stmt.where[i];
+            const parser::AstValue& value = row[where_at[i]];
             // type_val 0: the view's values carry their own kind, and none
             // of them is a uint64 column needing the digit-text path.
-            if (!exec::CompareValues(/*type_val=*/0, row[at], cond.val, cond.op)) {
-                matched = false;
-                break;
-            }
+            //
+            // `BETWEEN` is two comparisons, inclusive at both ends, and it
+            // has to be spelled out here because it is spelled out nowhere
+            // else: `exec::CompileWhere` lowers a `kBetween` into two
+            // ordinary conjuncts before anything executes, so no evaluator
+            // downstream ever reads `kind`. This path is the one consumer
+            // that never got that lowering, and it read `op` - still the
+            // `kEq` its default leaves it at - so `oid BETWEEN 100 AND 130`
+            // silently meant `oid = 100`, dropping the high bound and most
+            // of the answer.
+            matched = cond.kind == parser::PredicateKind::kBetween
+                          ? exec::CompareValues(/*type_val=*/0, value, cond.val,
+                                                parser::CompareOp::kGte) &&
+                                exec::CompareValues(/*type_val=*/0, value, cond.val_high,
+                                                    parser::CompareOp::kLte)
+                          : exec::CompareValues(/*type_val=*/0, value, cond.val, cond.op);
+            if (!matched) break;
         }
         if (!matched) continue;
 

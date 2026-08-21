@@ -1,5 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -699,6 +701,70 @@ TEST_F(CommandDispatcherTest, ACatalogViewTakesAProjectionAndAWhereClause) {
     EXPECT_NE(filtered.response.find("acct"), std::string::npos) << filtered.response;
     // The WHERE really filtered: no other table's name came through.
     EXPECT_EQ(filtered.response.find("patterns"), std::string::npos) << filtered.response;
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewsBetweenTakesBothBounds) {
+    // `BETWEEN` reaches this path as a `kBetween` *kind* with its bounds in
+    // `val`/`val_high` and `op` left at its `kEq` default, because the step
+    // compiler lowers the kind into two conjuncts and no evaluator
+    // downstream ever reads it. The view path is the one consumer that
+    // never got that lowering: it used to read `op`, answer `oid = <low>`,
+    // and return one row where a range qualifies - a silently truncated
+    // catalog answer, which is the one kind of wrong this file exists to
+    // catch.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto oid_of = [&d](const char* sql) {
+        const std::string reply = d.Dispatch(sql).response;
+        EXPECT_EQ(reply.substr(0, 7), "CREATED") << reply;
+        const auto at = reply.find("oid=");
+        return at == std::string::npos ? 0ull : std::strtoull(reply.c_str() + at + 4, nullptr, 10);
+    };
+    const std::uint64_t lo = oid_of("CREATE TABLE a (id int64, v int64)");
+    oid_of("CREATE TABLE b (id int64, v int64)");
+    const std::uint64_t hi = oid_of("CREATE TABLE c (id int64, v int64)");
+    ASSERT_GT(hi, lo);
+
+    const std::string ranged =
+        d.Dispatch("SELECT name FROM sys.tables WHERE oid BETWEEN " + std::to_string(lo) +
+                   " AND " + std::to_string(hi)).response;
+    ASSERT_NE(ranged.substr(0, 4), "ERR ") << ranged;
+    // All three, not just the low bound - and both ends inclusive.
+    EXPECT_NE(ranged.find("a"), std::string::npos) << ranged;
+    EXPECT_NE(ranged.find("b"), std::string::npos) << ranged;
+    EXPECT_NE(ranged.find("c"), std::string::npos) << ranged;
+
+    // The control that makes the assertion above mean something: an
+    // equality really does answer one row, so a passing BETWEEN is not
+    // just a view that ignored the predicate.
+    const std::string exact =
+        d.Dispatch("SELECT name FROM sys.tables WHERE oid = " + std::to_string(lo)).response;
+    EXPECT_EQ(exact, "name\\na") << exact;
+
+    // A range holding nothing answers the header, not everything.
+    const std::string empty =
+        d.Dispatch("SELECT name FROM sys.tables WHERE oid BETWEEN " + std::to_string(hi + 1000) +
+                   " AND " + std::to_string(hi + 2000)).response;
+    EXPECT_EQ(empty, "name") << empty;
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewRefusesAMalformedPredicateWithNoRowsToApplyItTo) {
+    // The refusals below are properties of the *statement*, so they are
+    // decided before a row is read. Asked per row they were silenced by an
+    // empty view: `sys.patterns` holds nothing on a fresh instance, so the
+    // loop never ran and a predicate no view can answer came back as a
+    // successful header. A refusal that data can silence is not a refusal.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    const std::string rows = d.Dispatch("SELECT * FROM sys.patterns").response;
+    ASSERT_EQ(rows.find("\\n"), std::string::npos) << "sys.patterns must be empty here: " << rows;
+
+    const std::string col_to_col =
+        d.Dispatch("SELECT * FROM sys.patterns WHERE oid = pattern_id").response;
+    EXPECT_NE(col_to_col.find("column-to-column comparison"), std::string::npos) << col_to_col;
+
+    const std::string no_column =
+        d.Dispatch("SELECT * FROM sys.patterns WHERE nosuchcol = 1").response;
+    EXPECT_NE(no_column.find("has no column"), std::string::npos) << no_column;
 }
 
 TEST_F(CommandDispatcherTest, ACatalogViewRefusesWhatItCannotDoAndSaysWhich) {
