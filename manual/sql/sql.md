@@ -583,6 +583,12 @@ across steps, pk order within one — so `LIMIT n OFFSET m` means rows
 - The tail is refused over an aggregated statement (groups emit in fold
   order, which is not a contract) and inside a subquery, each with a
   byte position.
+- **Over a catalog view (`sys.*`), `LIMIT` and `OFFSET` apply and
+  `ORDER BY` is refused with a byte position.** A view's rows are
+  materialized by the catalog's readers rather than walked out of pages,
+  so the quota applies to them unchanged — `LIMIT n OFFSET m` is rows
+  `[m, m+n)` of the view's unlimited reply, as everywhere else — but the
+  output sort resolves its keys against a schema a view does not have.
 - `OFFSET` costs what it skips — qualifying rows are examined and
   discarded, O(offset), since no head seek exists. For deep pagination
   prefer keyset form: `WHERE id > <last seen> LIMIT n`.
@@ -694,7 +700,10 @@ Dispatcher commands, not parser statements:
 
 An unknown target answers `ERR unknown SHOW target`. The `sys.*` views
 (`sys.tables`, `sys.types`, ...) are also readable through ordinary
-`SELECT ... FROM sys.<name>` — but not aggregatable (AG12).
+`SELECT ... FROM sys.<name>` — projection, `WHERE`, `LIMIT` and `OFFSET`
+all apply — but they are not aggregatable (AG12), not joinable, and not
+sortable: `ORDER BY` over a view is refused with a byte position, because
+a view has no schema for the sort to resolve its keys against.
 
 There is also a legacy non-SQL form: `CREATE TABLE <name>` with **no column
 list** routes to a pre-SQL handler (the dispatcher routes on the presence
