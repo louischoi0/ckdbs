@@ -4,11 +4,21 @@ Owning specs: `docs/crosscore.md` (M3, CC3, §6), `docs/workplan-crosscore.md`
 (P5, P6, CC7). This file owns the *task series*; every decision it depends on
 belongs to those two and is cited, never restated.
 
-Scoped 2026-08-21 on `crosscore-peer-listener` at `aa3e26c`, against the code
-as it stands there. **Nothing here is built.** No target was compiled and no
-suite was run in this pass — the worktree has no `build`/`build-release` —
-so every claim below is a read of the source with its site named, and not a
-measurement.
+Scoped 2026-08-21 on `crosscore-peer-listener` at `aa3e26c`. **PW1 built the
+same day** on that tree; PW2-PW6 are not built, and every claim about them is
+a read of the source with its site named rather than a measurement.
+
+**What PW1's measurement can and cannot say.** The suite is green (2486/2486,
+Debug, `KDS_WITH_TLS=OFF`). For overhead, `kds_txn_bench` was run Release and
+interleaved against `aa3e26c`, six reps in both A/B orders — and then a null
+control ran the *same base binary* on both sides of the same interleave and
+produced a +0.040 µs whole-transaction delta of its own, with INSERT p50
+spanning 2.53–2.63 µs run to run. **That harness does not resolve differences
+of PW1's size**, so the honest statement is a structural one: `Next()` is
+byte-for-byte the path it was, the added branch is in `ReserveBlock` and runs
+once per 4096 ids, and a single-core instance gains one handler registration
+at startup and nothing on the statement path. A per-statement claim finer than
+±2% needs a harness this one is not.
 
 ## 1. What this closes, and why it is the binding constraint
 
@@ -39,7 +49,50 @@ the ordinary write path, and each is verified below.
 
 ## 3. The blockers, each with its site
 
-### PW-B1. A peer cannot issue a transaction id at all
+### PW-B1. A peer cannot issue a transaction id at all — **built 2026-08-21**
+
+**Closed on `crosscore-peer-listener`.** `RingMessageKind::kTrxIdLease` was
+declared by P1 and unsent; it now carries the service in
+`include/kds/server/trx_id_lease_service.hpp`, `row_id_lease_service`'s shape
+with no oid in any payload, because this sequence is per-instance rather than
+per-relation. A peer's `TrxIdSequence` takes a `TrxIdLease*`
+(`SetLeaseSource`, `Catalog::SetRowIdLeases`'s idiom) and draws its windows
+from grants; core 0 answers from `TrxIdSequence::Carve()`, the **one** place a
+block leaves the superblock, which its own windows now come through too. The
+request rides the WAL drain cadence at `low_water()`, one in flight per core,
+because `Next()` runs inside a statement and cannot await a grant.
+
+Two things the build had to correct, both of them predicted in the code it
+touched:
+
+1. **The reserve arithmetic.** `ReserveBlock` computed its ceiling as
+   `next_ + kTrxIdBlockSize`. With a peer's block raising the durable ceiling
+   above core 0's `next_`, that computes a ceiling *below* the durable one,
+   which `SetNextTrxId` refuses — so core 0's next reserve failed outright,
+   and before failing it could hand a peer ids core 0 had already issued.
+   `Carve` takes from `superblock_.next_trx_id()` instead, which is
+   behaviour-identical on one core and the difference between correct and
+   impossible on two. Three tests fail against the old arithmetic, verified;
+   one of them is the reissue.
+2. **The mount check compared against zero.** `CoreRuntime::Open` refuses a
+   mount whose recovered stream names an id above `superblock_.next_trx_id()`
+   — and a peer's `superblock_` is default-constructed, so that bound was 0.
+   Harmless only while a peer's stream named no transaction of its own, which
+   is exactly the state PW1 ends: the first peer that wrote and remounted
+   would have refused its own mount. Core 0's ceiling now travels in
+   `CoreRuntime::Config` beside the WAL anchor, for the same reason and with
+   the same comment. **Not end-to-end tested** — a peer stream that names ids
+   needs a peer that checkpoints, which is PW3; the config plumbing and the
+   no-false-refusal direction are covered, the refusal direction is not.
+
+The persist-after-mutate ordering named below is **not** fixed, and the
+reason is now written at the site: a lost persist leaves the in-memory
+ceiling *above* the durable one, so the next carve starts higher and burns
+the difference, while rolling it back is what would reissue an id. The case
+that made repeated advance pathological was a peer's refusing callback, and
+a peer no longer reaches it.
+
+### The original statement of PW-B1, for the record
 
 `TrxIdSequence` constructs with `next_ == ceiling_ == superblock.next_trx_id()`
 (`include/kds/txn/trx_id.hpp`), so the **first** `Next()` takes the
@@ -169,7 +222,7 @@ per-core instance is a `SO_REUSEPORT` setsockopt beside the existing
 
 | # | Task | Gate |
 |---|---|---|
-| PW1 | Trx-id lease over the ring (`kTrxIdLease`), mirroring `row_id_lease_service`. Core 0 persists the ceiling **before** granting. Fix `ReserveBlock`'s persist-after-mutate ordering | none |
+| PW1 | **Built 2026-08-21.** Trx-id lease over the ring (`kTrxIdLease`), mirroring `row_id_lease_service`. Core 0 persists the ceiling before granting; the reserve arithmetic and the mount check's zero bound corrected with it | none |
 | PW2 | Route the two root-move catalog writes. **Needs a decision — §7** | PW1 |
 | PW3 | Wire a peer checkpointer through `RemoteCheckpointAnchor` | PW1 |
 | PW4 | Name the peer DDL refusal, and hang §5d's purge gate off it | none |

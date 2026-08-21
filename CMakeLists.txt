@@ -49,6 +49,7 @@ add_library(kds
     src/server/core_affinity.cpp
     src/server/extent_lease_service.cpp
     src/server/row_id_lease_service.cpp
+    src/server/trx_id_lease_service.cpp
     src/server/step_descriptor.cpp
     src/server/remote_step_service.cpp
     src/server/session_step_client.cpp

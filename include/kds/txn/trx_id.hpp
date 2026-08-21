@@ -7,6 +7,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/txn/trx_id_lease.hpp"
 
 // The transaction id sequence (docs/txn.md section 4.2, section 10-2).
 //
@@ -41,11 +42,24 @@
 // indistinguishable on top of that. Both close with recovery and neither
 // closes without it.
 //
+// ---- Two consumers of one ceiling (PW1) -----------------------------------
+//
+// Since `docs/workplan-peer-writer.md` PW1 the superblock's ceiling has two
+// consumers: core 0's own sequence, and the blocks core 0 carves for peers
+// that may not write page 0. `Carve()` below is the single place either one
+// takes a block from, which is what keeps them from colliding - the same
+// arrangement `Catalog::AllocateRowIdRange()` already has for row ids, where
+// the bulk-INSERT path and the grant handler share one carve.
+//
+// A peer's sequence is given a `TrxIdLease*` instead (`SetLeaseSource`), and
+// draws its window from grants rather than from the page. It never carves,
+// and `persist` stays installed as the backstop that says so.
+//
 // ---- Concurrency ----------------------------------------------------------
 //
 // Core-local, like everything else (rules.md section 3). One sequence per
-// instance; a cross-core protocol is [OPEN] (txn.md section 9) and nothing
-// here assumes one.
+// core; the cross-core protocol is the lease above, and a *shared* sequence
+// is still [OPEN] (txn.md section 9) and still assumed by nothing here.
 
 namespace kds::txn {
 
@@ -81,8 +95,38 @@ public:
     // Issues the next id, reserving and persisting a new block when the
     // current one is spent. Fails with OutOfRange past kMaxTrxId - never
     // wrapped, because a wrapped id would make an old row's writer look
-    // like a live one.
+    // like a live one. On a leased sequence a spent window fails with
+    // **ResourceExhausted** instead: retryable, because the grant that
+    // fixes it is already on its way.
     StatusOr<std::uint64_t> Next();
+
+    // Reserves `count` ids and makes the raised ceiling durable, **without
+    // touching this sequence's own window**. The one place a block leaves
+    // the superblock: `ReserveBlock()` calls it for this core, and core 0's
+    // `kTrxIdLease` handler calls it for a peer's.
+    //
+    // The range is durable before it is returned. That ordering is a
+    // correctness statement rather than a preference:
+    // `CoreRuntime::Open` refuses a mount whose peer stream names an id
+    // above the superblock's ceiling, so granting before persisting would
+    // let a crash produce exactly that log and refuse the mount of a
+    // database that did nothing wrong.
+    StatusOr<TrxIdRange> Carve(std::uint64_t count);
+
+    // Draws this sequence's windows from `lease` instead of from the
+    // superblock. A peer's wiring, and `Catalog::SetRowIdLeases`'s shape
+    // for the same reason. `lease` must outlive this sequence; null
+    // restores the carving path.
+    void SetLeaseSource(TrxIdLease* lease) noexcept { lease_ = lease; }
+
+    // Ids left in the current window, and whether it is time to ask for
+    // another. A leased core must ask **before** the window is spent -
+    // `Next()` is called from inside a statement and cannot await a grant,
+    // which is `storage/extent_lease.hpp`'s rule and its quarter-window
+    // threshold. A sequence that has never held a window reads as low, so
+    // a peer's first tick asks.
+    std::uint64_t remaining() const noexcept { return next_ >= ceiling_ ? 0 : ceiling_ - next_; }
+    bool low_water() const noexcept { return window_ == 0 || remaining() <= window_ / 4; }
 
     // The next id this sequence would issue, without issuing it. For
     // minting a read view's high-water mark, which must be an *exclusive*
@@ -95,11 +139,31 @@ public:
 
 private:
     Status ReserveBlock();
+    void InstallWindow(TrxIdRange window) noexcept;
 
     server::SuperBlock& superblock_;
     std::function<Status()> persist_;
+    // `next_` and `ceiling_` stay where they were, ahead of everything PW1
+    // added: `Next()` reads both on the path every statement takes, and
+    // reads nothing below them on any path.
+    //
+    // **Not a measured win - a free one taken because it could not be
+    // measured either way.** Declaring `lease_` first moved the pair 8
+    // bytes later and showed +1.3% on INSERT p50, consistent in sign across
+    // six interleaved reps in both A/B orders. A null control then ran the
+    // *same* base binary on both sides of the same interleave and produced
+    // a +0.040 us whole-transaction delta of its own, with INSERT p50
+    // spanning 2.53-2.63 us run to run - so `kds_txn_bench` does not
+    // resolve differences of this size, and neither the regression nor its
+    // recovery is established. The order below is what the original layout
+    // had; it costs nothing to keep.
     std::uint64_t next_;
     std::uint64_t ceiling_;
+    TrxIdLease* lease_ = nullptr;
+    // The size of the window `next_`/`ceiling_` came from, so `low_water()`
+    // measures against what was actually granted rather than against a
+    // constant a smaller grant would sit permanently below.
+    std::uint64_t window_ = 0;
 };
 
 }  // namespace kds::txn
