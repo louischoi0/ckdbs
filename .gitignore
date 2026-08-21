@@ -19,3 +19,9 @@ kds_server
 
 # Drafts for outside audiences (posts, talks) - working notes, not a spec.
 .article/
+
+# Session worktrees (.claude/worktrees/<name>) are checkouts of this same
+# repository. `git add -A` from the primary checkout otherwise stages each
+# one as an embedded-repo gitlink, which commits a pointer to a commit that
+# may only exist locally - and did, once, before this line.
+.claude/worktrees/
