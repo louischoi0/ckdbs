@@ -98,6 +98,7 @@ Status MemoryPageDevice::ReadPageRun(PageId first_page_id, std::uint32_t nr_page
     trace_.push_back(TraceEntry{OpKind::kRead, first_page_id, nr_pages});
     ++stats_.reads;
     if (auto failure = Take(fail_next_read_); failure.has_value()) {
+        ++stats_.injections_fired;
         return std::move(*failure);
     }
     stats_.pages_read += nr_pages;
@@ -123,6 +124,7 @@ Status MemoryPageDevice::WritePageRun(PageId first_page_id, std::uint32_t nr_pag
     trace_.push_back(TraceEntry{OpKind::kWrite, first_page_id, nr_pages});
     ++stats_.writes;
     if (auto failure = Take(fail_next_write_); failure.has_value()) {
+        ++stats_.injections_fired;
         return std::move(*failure);
     }
     stats_.pages_written += nr_pages;
@@ -132,6 +134,7 @@ Status MemoryPageDevice::WritePageRun(PageId first_page_id, std::uint32_t nr_pag
     // the device does not know it happened, which is the point.
     std::size_t transferable = in.size();
     if (auto tear = Take(tear_next_write_); tear.has_value()) {
+        ++stats_.injections_fired;
         transferable = std::min(*tear, in.size());
     }
 
@@ -167,6 +170,7 @@ Status MemoryPageDevice::EnsureCapacity(std::uint32_t nr_pages) {
     }
 
     if (auto failure = Take(fail_next_grow_); failure.has_value()) {
+        ++stats_.injections_fired;
         return std::move(*failure);
     }
 
@@ -180,6 +184,7 @@ Status MemoryPageDevice::Sync() {
     trace_.push_back(TraceEntry{OpKind::kSync, 0, 0});
     ++stats_.syncs;
     if (auto failure = Take(fail_next_sync_); failure.has_value()) {
+        ++stats_.injections_fired;
         return std::move(*failure);
     }
 
@@ -198,6 +203,14 @@ void MemoryPageDevice::FailNextGrow(Status status) { fail_next_grow_ = std::move
 
 void MemoryPageDevice::TearNextWrite(std::size_t prefix_bytes) {
     tear_next_write_ = prefix_bytes;
+}
+
+void MemoryPageDevice::ClearInjections() noexcept {
+    fail_next_read_.reset();
+    fail_next_write_.reset();
+    fail_next_sync_.reset();
+    fail_next_grow_.reset();
+    tear_next_write_.reset();
 }
 
 void MemoryPageDevice::Crash() {

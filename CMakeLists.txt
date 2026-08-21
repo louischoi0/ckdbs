@@ -208,6 +208,8 @@ if(KDS_BUILD_SIM)
     add_library(kds_sim
         sim/instance.cpp
         sim/integrity.cpp
+        sim/faults.cpp
+        sim/minimize.cpp
         sim/workload.cpp
         sim/oracle.cpp
         sim/loop.cpp

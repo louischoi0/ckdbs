@@ -68,16 +68,28 @@ edge semantics (NULLs, type coercion) once the grammar grows.
 
 ## The two engine facts this is built around
 
-**Recovery does not exist.** `CLAUDE.md` is explicit: nothing reads the WAL
-back; a restart is protected only by `PageStore::Sync()` at `SYNC` or clean
-shutdown. So `SIM04`'s crash-restart loop cannot yet assert "committed ⇒
-survives". It asserts what is *currently promised* — the durable prefix is
-intact and internally consistent — in three modes (clean shutdown /
-crash-after-sync / crash-anywhere), and the full assertion is written now but
-gated off, so that **this harness is the acceptance test recovery must pass
-on the day it lands**. Building the checker before the feature is the point:
-recovery written without an adversarial harness waiting for it would be
-tested by its own author's imagination.
+**~~Recovery does not exist~~ — it landed 2026-08-12, and the gate is
+armed.** The paragraph below is kept because it is the record of why the
+checker was written before the feature; what it describes stopped being
+true with `docs/workplan-wal-recovery.md` RV1/RC10. `SimInstance::Boot`
+runs analysis / redo / high-water / undo before the first statement, and
+`kRecoveryImplemented` in `sim/loop.hpp` is `true`: kCrash's full
+durability assertion *fires* rather than counting. The counter it replaced,
+`gated_missing_rows`, is still printed and still expected to be zero. The
+one assertion the arming did **not** cover is named where it is true —
+`unlogged_ddl_lost_tables` — and RV3 closed that too on 2026-08-19.
+
+> **Recovery does not exist.** `CLAUDE.md` is explicit: nothing reads the
+> WAL back; a restart is protected only by `PageStore::Sync()` at `SYNC` or
+> clean shutdown. So `SIM04`'s crash-restart loop cannot yet assert
+> "committed ⇒ survives". It asserts what is *currently promised* — the
+> durable prefix is intact and internally consistent — in three modes
+> (clean shutdown / crash-after-sync / crash-anywhere), and the full
+> assertion is written now but gated off, so that **this harness is the
+> acceptance test recovery must pass on the day it lands**. Building the
+> checker before the feature is the point: recovery written without an
+> adversarial harness waiting for it would be tested by its own author's
+> imagination.
 
 **MVCC ships with a known crash gap.** An uncommitted row surviving a crash
 reads as committed on the next boot (`docs/txn.md` §8). The integrity sweep
@@ -183,6 +195,109 @@ reconcile as in SIM04.
 every injected-and-consumed fault is logged with its op index so a failure
 names the fault that provoked it.
 
+**BUILT 2026-08-21.** `sim/faults.{hpp,cpp}`, `--faults io --fault-rate N`,
+and the loop's absorbing half. What shipped, and the three places it
+differs from the paragraph above:
+
+- **Errors only; torn transfers are declined with a reason.** A tear the
+  run then *continues past* models a device that reported success for a
+  partial transfer and kept working, which leaves a hole in the middle of a
+  log whose later records all landed — nothing in `docs/wal.md` is written
+  against that, and it was this harness's first false alarm (three of five
+  seeds refused the mount with an LSN past the append point, which is the
+  hole, not a defect). A tear is what the power cut leaves *in flight*, so
+  the realistic image is a partial record at the **tail** with nothing after
+  it; expressing that needs a device primitive neither memory device has, a
+  crash that promotes a *prefix* of the unsynced overlay. The realistic case
+  is already pinned where it belongs — `tests/wal_stream_test.cpp` ("the
+  torn record is the end of the stream") and
+  `SimIntegrityCorruption.ATornCatalogPageRefusesTheMountInsteadOfServingIt`.
+  When `Crash(prefix)` exists the log half asserts and the page half is
+  [GATED: FPI].
+- **An errored write's outcome is unknown, not absent.** The oracle grew two
+  kinds of unknown (`sim/oracle.hpp`): an errored UPDATE/DELETE or an
+  abandoned transaction makes those *ids* unchecked, and an errored INSERT
+  makes the relation one that may hold **rows the engine never named an id
+  for**. Both are permitted and never required in every later comparison.
+  This is a model of what a client knows, not a tolerance for an engine bug
+  — the harness rule at the top of this file still holds.
+
+  The first cut of that model keyed the errored INSERT on its *content*,
+  `(v, name)`, and review killed it: content is not stable. A later
+  **acknowledged** `UPDATE ... WHERE v = <x>` moves the ghost off the value
+  it was keyed on, and the row then reads as a fabrication — 11 of 15
+  corpus cells red. The same key was wrong in the other direction and that
+  half was worse, because it was silent: `Reconcile` asks the same question
+  of *accepted* rows, so a genuinely lost row whose `(v, name)` merely
+  collided with an errored insert's was forgiven. Under `--profile
+  colliding`, where `v` ranges over `[0,4]`, that is not a corner case.
+  The identity that does hold is the id: ids are issued once and never
+  rebound (invariant 11), so the oracle records every id the engine ever
+  named and a ghost is exactly a row outside that set.
+- **The quiescence probe**, which the task text did not ask for and the
+  contract needs: when the schedule is exhausted every injection is
+  disarmed and every relation is scanned again. An engine that survives a
+  fault run by refusing everything afterwards passes every other check in
+  the loop, and fails this one. It is shown to fail
+  (`SimFaults.TheQuiescenceProbeFiresOnAnInstanceThatStoppedAnswering`).
+- **A `CREATE TABLE` that catches an injection is retried once**, and an
+  iteration whose oracle ends up knowing no relation *fails*. Absorbing a
+  failed `CREATE` silently is how a fault run passes vacuously: the
+  generator keeps naming the relation, the engine keeps refusing, the
+  oracle never learned it, and every check in the loop iterates
+  `oracle.tables()` — measured at **1291 of 3000 ops thrown away on seed 3,
+  printing green**. The retry is what a client does, and
+  `ops_on_lost_relation` reports what it could not recover.
+
+  **A retry answering `EXISTS` is adopted, not failed** — and the first cut
+  of this had it the other way, which cost nine of ninety-five corpus cells
+  until the measurement pass caught it. The injection that kills the
+  acknowledgement is a failed commit *sync*, which lands after the catalog
+  write, so "it happened" is one of the two legal outcomes: the DDL's
+  version of an errored write's unknown outcome, and the retry is how the
+  client learns which. **What the harness saw while getting that wrong is
+  worth an owner's eye**, because it is not obviously nothing — an
+  autocommit `CREATE TABLE` whose commit sync failed answers `ERR` and
+  leaves the relation *visible*, which reads oddly beside
+  `manual/sql/sql.md` §5's "an autocommit statement is its own transaction
+  and unwinds fully". Whether that is a defect or the honest end state of a
+  commit that reached its record and lost its fsync belongs to
+  `docs/txn.md` §8 and `docs/spec-ddl-transactional.md`, not here. The
+  harness accepts both outcomes and asserts the one thing neither reading
+  disputes: that the relation must not *half* exist.
+
+Two small additions to the memory devices carry it: `ClearInjections()` and
+an `injections_fired` stat, so "this error had an injected cause" is
+reportable rather than assumed — and the count is carried per op, because
+a failing iteration leaves through its `return` and the counter that says
+whether the schedule disturbed anything read zero on exactly the runs it
+exists for.
+
+**What it found in the engine: nothing** — one observation for an owner
+(the `EXISTS` paragraph above) and no defect. Every fired injection
+produces about one errored statement (`armed=120 fired=75 errored_ops=75`
+on seed 1 at 1500 ops x 2), and `scripts/sim.sh` over the committed corpus
+— 5 seeds x 3 modes x 2 fault profiles x 3 value profiles, plus a pairing
+per seed, **95 cells** — passes.
+
+Both numbers in that sentence were wrong before they were measured, and in
+both directions: the sweep failed 11 of 15 cells while the oracle keyed a
+ghost on its content, and 11 of 95 while the retry called `EXISTS` a
+violation. A harness states its own condition as confidently as it states
+the engine's, and is wrong the same way.
+
+**What the gate costs**, measured in Release at `dfca583` on a two-core
+box: `scripts/sim.sh` over the committed corpus is **11.7 s** (151 s in
+Debug — it falls back to `build/` when no release tree exists, so a
+Debug-only CI job pays that), and the 17 new tests add **2.60 s** to
+`ctest -R '^Sim'` (5.08 -> 7.69 s), five of them accounting for 94% of it.
+The engine-side change costs nothing measurable, and not as an estimate:
+120 of the 122 engine object files are byte-identical to `aa3e26c`, the
+two that differ are the memory devices themselves, and
+`file_page_device.cpp.o` / `file_log_device.cpp.o` are unchanged. The
+production machine code is bit-identical, so an A/B would be measuring
+noise.
+
 ### SIM06 — Workload v2: mutations, transactions, features
 Grammar grows to `UPDATE` (key-column and non-key-column SETs — the Cabin
 append rule and tuple-immobility both care about the difference), `DELETE`,
@@ -202,6 +317,56 @@ toggle-varied profiles; a paired-run mode (same seed, toggles on vs off)
 asserting byte-identical result streams — `waystone_contract_test.cpp`'s
 five-way comparison, generalized.
 
+**BUILT 2026-08-21.** The grammar grew to `UPDATE` and `DELETE` — each by
+pk and by a non-key predicate, each assigning either the column a Cabin and
+an index are keyed on or the varchar that may spill — `BEGIN`/`COMMIT`/
+`ROLLBACK` with the isolation level drawn per transaction, and `CREATE
+CABIN` / `CREATE PATTERN`. The oracle learned transactions as a pending
+write-set, and the loop compares the engine's own `UPDATED <n>` /
+`DELETED <n>` against the oracle's count of the matching rows, which is
+the sharpest single assertion in the harness.
+
+Three divergences from the paragraph above, each named rather than
+silently skipped:
+
+- **Per-transaction durability class is not generated, because no spelling
+  selects one.** `manual/sql/sql.md` §5 is explicit: the class is the
+  instance-wide `durability` config key, and the per-transaction field is a
+  KWP/1 feature that is not wired (parser-v2 V12 is open). The class stays
+  instance-wide here; when V12 lands this is where it gets drawn.
+- **Joins and predicate-position subqueries are not generated yet.** The
+  oracle would need a join model to have an opinion about them, and that is
+  a bigger change than this task; the shapes are reachable and unclaimed.
+- **The pairing compares *answers*, in three tiers.** Byte-for-byte for
+  every query and mutation; the assigned id but not the placement for an
+  INSERT (the advisory features keep state in `sys.*` relations whose pages
+  come out of the same free map, so a trail shifts the next user page —
+  invariant 8 promises the state cannot change what a query answers, never
+  that the free map allocates identically); acceptance only for a
+  declaration, because `CREATE PATTERN` answers CREATED or **ADOPTED**
+  depending on whether the recorder had already auto-registered the shape
+  and `CREATE CABIN` appends a WARN when the access statistics hold no
+  filter on the column. Both of those were found by the pairing, and both
+  are replies reporting advisory state on purpose.
+
+**What it found in the engine: one wrong answer**, and it was fixed the
+next day. A Cabin entry set banked inside a transaction outlived the
+ROLLBACK that restored the row and was then served as authoritative
+(`docs/feat-cabin.md` §6a, `docs/known-gaps.md`). Chasing the fix found the
+other half of the same rule — a set banked while *another* session's
+transaction is in flight loses the rows that transaction commits — which
+is what ruled out un-observing on rollback as a repair. Both halves are
+pinned in `tests/sim_loop_test.cpp`; the corpus cell that produced it runs
+clean.
+
+**The count assertion is checkable per predicate, not per relation**
+(`Oracle::CountCheckable`). A relation with an unknown in it cannot check
+a count over a *value* predicate — any row the predicate might match could
+be the unknown one — but a **pk** predicate names one row and stays
+checkable while that row is known. The generator emits pk predicates 70% of
+the time, and the difference is the assertion running on 6% of mutations
+under faults instead of most of them.
+
 ### SIM07 — Minimizer and corpus discipline
 A failing seed at op 80,000 is a fact, not a diagnosis. `--minimize
 <seed>` replays with delta-debugging over the operation log (drop a chunk,
@@ -213,6 +378,50 @@ while never losing a past failure. New failures auto-append seed + verdict
 to an artifacts file for triage.
 **Needs:** SIM04. **Tests:** a planted engine bug behind a feature flag is
 found by a fresh-seed sweep and minimized to < 50 ops.
+
+**BUILT 2026-08-21.** The seam is `SimPlan` (`sim/loop.hpp`): one
+iteration's whole input — the ops, the faults armed before each of them,
+and the feature toggles — drawn before the first statement runs, because
+the generator never reads a reply. `BuildPlan` is the only place the seed is
+consulted and `RunPlan` the only place the engine is, which makes an
+iteration replayable without the generator and shrinkable by deleting
+entries. **Faults travel with their op** rather than being keyed on an op
+index, or every removal would re-aim the whole schedule.
+
+`sim/minimize.{hpp,cpp}` adds delta debugging over the entry list, the
+`.sim` case file, and `--minimize [--out FILE] [--max-replays N]` /
+`--replay FILE`. The predicate is a normalized **failure signature** — digit
+runs collapse to `#`, bracketed SQL and the fault trace are cut — not "it
+failed", because dropping ops produces different failures easily and a
+minimizer without that check wanders to another bug instead of shrinking
+this one.
+
+Two limits, stated rather than discovered: the signature can still conflate
+two failures that read alike, and a plan whose failure needs a *specific* op
+count (a page fill, a segment roll) shrinks badly. The output is a lead, not
+a verdict.
+
+**Its first real use is the record**: the Cabin divergence above, 1200 ops
+→ **9** in 933 replays, from which the six-statement case in
+`docs/known-gaps.md` was read straight off. The planted-bug test the
+paragraph above asks for is served instead by a fault the harness already
+owns — `--skip-recovery` loses acknowledged rows on purpose (RC10) — and
+the test asserts the shrunk case still fails *the same way*, which is the
+property that makes a minimized case worth reading.
+
+**The case file carries the run-level gates**, which is not paperwork: a
+case minimized under `--skip-recovery` — the harness's own planted bug, and
+the one the minimizer is demonstrated on — replayed *green* without them,
+so SIM07's primary artifact was a file that claimed a failure and did not
+reproduce one. Round-tripping it through the file is now part of the
+minimizer's test.
+
+**The corpus half is `scripts/sim.sh`**: every committed seed forever, plus
+N seeds derived from today's date so the corpus explores forward (date-
+derived rather than random, so a failure found today reproduces for anyone
+running the same day), with failures appended to an artifacts file for
+triage. The sanitizer matrix and the wall-clock smoke threshold stay
+SIM13's and are deliberately not in it.
 
 ## Phase S-3 — Concurrent-transaction history checking
 
@@ -335,9 +544,19 @@ way it must not block S-1..S-3.
   assumes `sim/`; either is fine, but the sim binary must not link gtest —
   a framework's fixture lifecycle fights crash-restart iteration (the
   reason this is a standalone binary at all).
-- `[GATED: recovery]` SIM04/SIM11's full durability assertions. The gate
-  flips when WAL replay lands; no partial mitigation (per `docs/txn.md`
-  §8's own instruction).
+- `[OPEN: torn injection]` SIM05 injects device *errors* only. A torn
+  transfer that the run continues past is not the failure it looks like
+  (`sim/faults.hpp` carries the argument); the realistic image needs a
+  device primitive neither memory device has — a crash that promotes a
+  **prefix** of the unsynced overlay rather than dropping all of it. When
+  `Crash(prefix)` lands the log half asserts and the page half is
+  `[GATED: FPI]`.
+- `[OPEN: generated joins]` SIM06's grammar stops short of joins and
+  predicate-position subqueries: the oracle would need a join model to
+  have an opinion about them. The shapes are reachable and unclaimed.
+- ~~`[GATED: recovery]` SIM04/SIM11's full durability assertions~~ —
+  **the gate flipped 2026-08-12**, when WAL replay landed (RV1/RC10).
+  SIM04's assertion is armed; SIM11 is unbuilt and inherits it armed.
 - `[GATED: crosscore pipeline]` SIM08's multi-core driver. Blocked on the
   same open decision `docs/workplan-crosscore.md` P6 names (relation vs
   page ownership); the acceptance criteria are written above so the

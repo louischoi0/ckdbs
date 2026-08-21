@@ -34,6 +34,8 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/session.hpp"
+#include "kds/stats/cabin_store.hpp"
+#include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/device_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/txn/manager.hpp"
@@ -66,6 +68,17 @@ struct SimInstanceOptions {
     // instance booted this way has a loser's writes on its pages, which
     // txn.md §8's gap then reads as committed.
     bool skip_recovery = false;
+
+    // **The advisory features, per instance** (SIM06). Off here and on in
+    // the server's defaults, because the harness's interest in them is the
+    // invariant, not the feature: toggling any of the three may never
+    // change a result (invariant 8 for Waystone; the Cabin and the access
+    // statistics carry the same promise in their own specs). The oracle
+    // does not know they exist, and the loop's paired run puts two
+    // instances that differ only in these three side by side.
+    bool waystone = false;           // trail recording *and* replay
+    bool cabins = false;             // the value-observed store
+    bool access_statistics = true;   // sys.access_stats, the server default
 };
 
 class SimInstance {
@@ -142,13 +155,19 @@ private:
     std::unique_ptr<storage::MemoryPageDevice> page_device_;
     std::unique_ptr<wal::MemoryLogDevice> log_device_;
 
-    // Engine stack — rebuilt per boot.
+    // Engine stack — rebuilt per boot. The recorder and the Cabin store
+    // hold references into the catalog and the store, so they are rebuilt
+    // with them; a Cabin's entry sets are memory-resident by design
+    // (docs/feat-cabin.md), so a reboot forgets them, exactly as a server
+    // restart does.
     std::unique_ptr<wal::WalManager> wal_;
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> txn_;
+    std::optional<stats::TrailRecorder> trail_recorder_;
+    std::optional<stats::CabinStore> cabin_store_;
     std::optional<server::CommandDispatcher> dispatcher_;
     server::Session session_;
     server::MountRecovery recovery_;

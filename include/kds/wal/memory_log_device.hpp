@@ -37,6 +37,10 @@ public:
         std::uint64_t syncs = 0;
         std::uint64_t segments_created = 0;
         std::uint64_t bytes_written = 0;
+        // One-shot injections that actually fired - MemoryPageDevice's
+        // counter, for its reason: a driver that arms a fault cannot
+        // otherwise tell whether it was consumed (SIM05).
+        std::uint64_t injections_fired = 0;
     };
 
     // `segment_size` must be non-zero; the factory exists because that
@@ -69,6 +73,10 @@ public:
     // a torn write is not an error the device knows about, which is why
     // records carry CRCs. 0 means the write is lost entirely.
     void TearNextWrite(std::size_t prefix_bytes);
+
+    // Disarms every pending injection; MemoryPageDevice::ClearInjections'
+    // contract verbatim.
+    void ClearInjections() noexcept;
 
     // Discards every write and every segment creation since the last
     // Sync(), modelling power loss.
