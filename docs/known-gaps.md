@@ -580,6 +580,15 @@ still waits on its own gate, so:
   reports rather than erroring per row. Until one of the three lands,
   every cross-core number in `bench/` is a *cost* measured with the
   parallelism removed, never a speedup.
+  **Scoped 2026-08-21** — `docs/workplan-peer-writer.md` owns the series
+  (PW1-PW6) and names what actually blocks it, which is not the listener:
+  a peer cannot issue a **transaction id** at all (`TrxIdSequence`
+  constructs spent, and a peer's persist callback refuses), two catalog
+  write points ride the ordinary INSERT (a clustered root growing a level,
+  a secondary index root splitting), and a peer has no checkpointer. A
+  heap relation with no secondary index writes no catalog page, so the
+  trx-id lease alone makes that one shape peer-writable. Its PW2 decision
+  — how a root move reaches core 0 — is open and listed there.
 - **`Catalog::catalog_version()` is not a sound guard for a cached
   `TableAccess`** (named 2026-08-15 while designing P4d-4c's per-batch
   runner handle). `InvalidateFromPeer()` — the `kCatalogInvalidate`
@@ -788,6 +797,33 @@ still waits on its own gate, so:
   state and decision log are memory-resident: a restart forgets what the
   controller was managing, and re-observation rebuilds it — the stated
   crash posture, not a bug.
+- ~~**A Cabin entry set banked inside a transaction outlives its ROLLBACK,
+  and is then served as authoritative**~~ — **closed 2026-08-21**, the day
+  after it was found, by `docs/feat-cabin.md` §6a: a recording walk banks
+  nothing unless its read view carries no in-flight transaction and belongs
+  to none (`view.in_flight_count == 0 && view.own_trx_id == kNoTrxId`, two
+  comparisons on a path that already holds both facts).
+
+  The entry is kept because the *shape* of the mistake outlives it. The
+  store's header argued the build-by-observation hazard was structurally
+  dead, since statements run to completion on the owning core — which is
+  true, and answers a **write racing the scan**. What broke was a write the
+  scan *could not see*, resolving afterwards: a transaction's uncommitted
+  DELETE hides a row that its ROLLBACK restores, and an in-flight
+  transaction's INSERT is invisible until it commits. A correctness
+  argument can be sound and still be about the wrong hazard.
+
+  Found by the simulation harness's first fault-free SIM06 sweep (seed 2,
+  profile `colliding`, mode `clean`), shrunk 1200 ops → 9 by SIM07's
+  minimizer, and read off as six statements. Both halves are pinned by
+  `SimFindings.ACabinSetBankedInsideARolledBackTransactionServesEveryLiveRow`
+  and `…IsNotBankedWhileAnotherTransactionIsInFlight`, with
+  `…ACabinSetBankedAfterACommittedDeleteIsCorrect` as the control that says
+  what was *not* wrong. The fix rejected: un-observing on rollback, which
+  repairs the DELETE half and cannot touch the INSERT half — a transaction
+  that commits rows the recorder could not see never rolls back, so there
+  is no moment at which to drop the value.
+
 - **The physical optimizer is shadow-only as a finding**
   (`docs/feat-physical-optimizer.md` §6): every candidate move is blocked
   by a named gate; `physical_optimizer = on` is refused at startup naming

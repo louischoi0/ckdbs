@@ -22,6 +22,7 @@
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/server/mount_recovery.hpp"
 #include "kds/server/row_id_lease_service.hpp"
+#include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/stop_signal.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"

@@ -37,6 +37,7 @@ Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
     if (fail_next_write_.has_value()) {
         Status failure = *fail_next_write_;
         fail_next_write_.reset();
+        ++stats_.injections_fired;
         return failure;
     }
 
@@ -44,6 +45,7 @@ Status MemoryLogDevice::WriteAt(std::uint64_t segment_no, std::uint64_t offset,
     if (tear_next_write_.has_value()) {
         transferred = std::min(*tear_next_write_, in.size());
         tear_next_write_.reset();
+        ++stats_.injections_fired;
     }
 
     for (std::size_t i = 0; i < transferred; ++i) {
@@ -88,6 +90,7 @@ Status MemoryLogDevice::Sync() {
     if (fail_next_sync_.has_value()) {
         Status failure = *fail_next_sync_;
         fail_next_sync_.reset();
+        ++stats_.injections_fired;
         return failure;
     }
 
@@ -107,6 +110,12 @@ Status MemoryLogDevice::Sync() {
 void MemoryLogDevice::FailNextWrite(Status status) { fail_next_write_ = std::move(status); }
 void MemoryLogDevice::FailNextSync(Status status) { fail_next_sync_ = std::move(status); }
 void MemoryLogDevice::TearNextWrite(std::size_t prefix_bytes) { tear_next_write_ = prefix_bytes; }
+
+void MemoryLogDevice::ClearInjections() noexcept {
+    fail_next_write_.reset();
+    fail_next_sync_.reset();
+    tear_next_write_.reset();
+}
 
 void MemoryLogDevice::Crash() {
     // Everything un-synced dies: the overlay whole, and the segments

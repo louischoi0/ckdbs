@@ -37,6 +37,7 @@ add_executable(kds_tests
     superblock_test.cpp
     extent_lease_test.cpp
     extent_lease_service_test.cpp
+    trx_id_lease_service_test.cpp
     core_runtime_test.cpp
     step_pipeline_test.cpp
     step_descriptor_test.cpp
@@ -171,7 +172,8 @@ target_compile_definitions(kds_tests
 # V13's hygiene check greps the parser sources for productions that exist
 # only to accept another dialect's spelling (spec I13). It reads them at
 # run time, so it needs the repo root rather than the build tree.
-target_compile_definitions(kds_tests PRIVATE KDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(kds_tests PRIVATE KDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+                                            KDS_BINARY_DIR="${CMAKE_BINARY_DIR}")
 
 include(GoogleTest)
 gtest_discover_tests(kds_tests)

@@ -49,6 +49,7 @@ add_library(kds
     src/server/core_affinity.cpp
     src/server/extent_lease_service.cpp
     src/server/row_id_lease_service.cpp
+    src/server/trx_id_lease_service.cpp
     src/server/step_descriptor.cpp
     src/server/remote_step_service.cpp
     src/server/session_step_client.cpp
@@ -207,6 +208,8 @@ if(KDS_BUILD_SIM)
     add_library(kds_sim
         sim/instance.cpp
         sim/integrity.cpp
+        sim/faults.cpp
+        sim/minimize.cpp
         sim/workload.cpp
         sim/oracle.cpp
         sim/loop.cpp

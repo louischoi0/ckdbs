@@ -82,17 +82,28 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // A peer may not raise the durable transaction ceiling - the superblock is
     // page 0 and belongs to the system core (M5), and `superblock_` here is a
     // copy. Refused rather than applied to the copy, which would be a raise
-    // nothing persists and a ceiling core 0 never learns of. Unreachable
-    // today, because a peer cannot reserve an id block either (the persist
-    // callback below refuses it), so its stream names no transaction of its
-    // own; stated so it stays a refusal rather than becoming a silent hole
-    // when P5's id leases land.
+    // nothing persists and a ceiling core 0 never learns of.
+    //
+    // **The ceiling it compares against is core 0's, and PW1 is when that
+    // started mattering.** `superblock_` is default-constructed - zero
+    // everywhere, `next_trx_id` included - so this check used to compare a
+    // recovered stream against 0. That was harmless only while a peer's
+    // stream named no transaction of its own, which the sentence this
+    // comment replaced predicted would end with the id leases: the first
+    // peer that writes and then remounts would recover ids above 0 and
+    // refuse its own mount, on a database that did nothing wrong. So core 0
+    // copies its ceiling in at startup, exactly as it copies this core's WAL
+    // anchor and for the same reason - the field cannot be read off
+    // `superblock_`, and a zero there is legal, silent and wrong.
+    if (config.next_trx_id > runtime->superblock_.next_trx_id()) {
+        if (Status s = runtime->superblock_.SetNextTrxId(config.next_trx_id); !s.ok()) return s;
+    }
     if (recovered.value().next_trx_id > runtime->superblock_.next_trx_id()) {
         return Status::Unsupported(
             "core " + std::to_string(config.core_id) + ": its log names transaction id " +
             std::to_string(recovered.value().next_trx_id - 1) +
-            ", above the ceiling the superblock carries; raising it needs the system core's "
-            "page 0 and per-core id leases (docs/workplan-crosscore.md P5)");
+            ", above the ceiling the superblock carries; the system core owns page 0 and grants "
+            "this core its id blocks (docs/workplan-peer-writer.md PW1)");
     }
 
     // **No completion checkpoint here** (RC08), and the reason is the same one
@@ -102,10 +113,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // until AttachTransport(). So a peer's next mount still scans from whatever
     // anchor core 0 last wrote for it.
     //
-    // That costs nothing today - a peer cannot reserve a transaction id, so its
-    // stream holds no writes of its own to rescan - and it is stated rather than
-    // left to be discovered when P5's id leases make peer writes real. Core 0's
-    // own checkpoint runs in Expeditor::Open.
+    // **That used to cost nothing and now does.** The old reason was that a
+    // peer could not reserve a transaction id, so its stream held no writes
+    // of its own to rescan; PW1 is exactly what ends that, and this core has
+    // no checkpointer at all - `Expeditor` owns the only one. So a writing
+    // peer's stream grows with an anchor that never advances, and every
+    // later mount replays all of it. `RemoteCheckpointAnchor` is the built,
+    // unwired half; `docs/workplan-peer-writer.md` PW3 owns the wiring.
+    // Core 0's own checkpoint runs in Expeditor::Open.
     runtime->store_->SetCoreOwnership(config.core_id, &runtime->lease_, kFirstUserPageId);
 
     // The catalog, read-only in practice: DDL is core 0's, and the store
@@ -130,15 +145,24 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // below refuses rather than pretending.
     runtime->trx_ids_.emplace(runtime->superblock_, [core_id = config.core_id] {
         // A peer may not write the superblock - it is page 0 and belongs to
-        // the system core (M5). Reaching here means a peer tried to reserve
-        // a transaction-id block, which needs the lease service P5 owns.
-        // Refusing names the gap; silently succeeding would hand out ids
-        // whose ceiling never became durable.
+        // the system core (M5). Since PW1 a peer does not come here at all:
+        // its sequence draws windows from the lease installed below, and
+        // this callback is the backstop that says a lease source went
+        // missing rather than a gap that has not been filled.
         return Status::Unsupported("core " + std::to_string(core_id) +
                                     " cannot raise the transaction-id ceiling; the superblock "
-                                    "belongs to the system core and per-core id leases are "
-                                    "workplan P5");
+                                    "belongs to the system core, and this core's transaction-id "
+                                    "lease source is not installed");
     });
+    // Transaction ids come from a leased block on a peer, exactly as row
+    // ids do above (`docs/workplan-peer-writer.md` PW1). Installed here
+    // rather than at AttachTransport because a peer without a transport
+    // must fail its first write with the lease's retryable exhaustion, not
+    // with the superblock refusal above - the refusal names a wiring bug,
+    // and a transport-less core is a test fixture rather than one.
+    if (config.core_id != 0) {
+        runtime->trx_ids_->SetLeaseSource(&runtime->trx_id_lease_);
+    }
     // The undo log is already built - recovery wrote its compensations
     // through it above, before this stack existed.
     runtime->txn_manager_.emplace(*runtime->trx_ids_, *runtime->undo_log_, *runtime->store_,
@@ -225,6 +249,14 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // instead (row_id_lease_service.hpp).
     if (config_.core_id != 0) {
         if (Status s = RegisterRowIdGrantReceiver(*scheduler_, row_id_refill_, row_id_leases_,
+                                                  log_);
+            !s.ok()) {
+            return s;
+        }
+        // And the transaction-id lease's receive side (PW1), on the same
+        // terms and for the same reason: core 0 carries the grant handler
+        // on this kind instead (trx_id_lease_service.hpp).
+        if (Status s = RegisterTrxIdGrantReceiver(*scheduler_, trx_id_refill_, trx_id_lease_,
                                                   log_);
             !s.ok()) {
             return s;
@@ -384,6 +416,14 @@ void CoreRuntime::Run() {
     // would cost more than it measures.
     if (transport_ != nullptr && config_.wal_drain_interval_ns > 0) {
         scheduler_->SubmitEvery(config_.wal_drain_interval_ns, [this] { MaybeRefillLease(); });
+        // The transaction-id lease rides the same tick (PW1). A peer that
+        // has never held a window reads as low, so the first tick asks and
+        // a peer is ready to write before a client arrives - which is the
+        // point, since `TrxIdSequence::Next()` cannot await a grant.
+        if (config_.core_id != 0) {
+            scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
+                                    [this] { MaybeRefillTrxIds(); });
+        }
     }
 
     // Per core, on the thread that will run the statements - the audit's
@@ -424,6 +464,30 @@ void CoreRuntime::MaybeRefillLease() {
                 // retryably until a later tick succeeds.
                 log_->Error("extent", "core " + std::to_string(config_.core_id) +
                                           ": lease refill failed: " + s.message());
+            }
+        }));
+}
+
+void CoreRuntime::MaybeRefillTrxIds() {
+    // Asked for *before* the window is spent, the extent lease's rule and
+    // for its reason: `TrxIdSequence::Next()` is called from inside a
+    // statement and cannot await, so by the time it reports exhaustion the
+    // statement is already lost.
+    if (trx_id_refill_in_flight_ || !trx_ids_->low_water()) return;
+
+    trx_id_refill_in_flight_ = true;
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kSystem,
+        RequestTrxIdLease(*transport_, trx_id_refill_, config_.core_id, /*system_core=*/0, log_),
+        [this](const Status& s) {
+            trx_id_refill_in_flight_ = false;
+            if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                // Nothing to return it to - this is a background task - and
+                // the consequence is bounded: writes on this core fail
+                // retryably until a later tick succeeds. Reads are
+                // untouched either way; a read view issues no id.
+                log_->Error("trxid", "core " + std::to_string(config_.core_id) +
+                                         ": transaction-id refill failed: " + s.message());
             }
         }));
 }

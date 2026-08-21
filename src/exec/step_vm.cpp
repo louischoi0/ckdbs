@@ -747,6 +747,26 @@ private:
             co_return co_await RunWalkStep(steps, index, step, access);
         }
 
+        // **A set may only be banked from a view nothing can later
+        // contradict** (feat-cabin.md §6a, which carries the argument and
+        // the assumption it rests on). The set outlives this statement and
+        // is authoritative for every later reader, so two things forbid
+        // recording: an **in-flight** transaction, whose write this walk
+        // cannot see and which is live the moment it commits, and the
+        // walk's **own** transaction, which may have hidden a row from
+        // itself with an uncommitted DELETE or a value-changing UPDATE that
+        // its ROLLBACK restores. Either leaves the set missing a live pk,
+        // which is the C1 break cabin_store.hpp's header forbids.
+        //
+        // Declining is free by §1's corollary - the value stays unobserved
+        // and the authoritative scan answers it - and under autocommit with
+        // nothing in flight this is two comparisons and no change.
+        if (snapshot_.view.in_flight_count != 0 ||
+            snapshot_.view.own_trx_id != txn::kNoTrxId) {
+            cabins_->NoteUnbankableView();
+            co_return co_await RunWalkStep(steps, index, step, access);
+        }
+
         Recording recording;
         recording.step_id = step.step_id;
         recording.col_pos = step.cabin->col_pos;

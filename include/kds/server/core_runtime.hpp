@@ -17,6 +17,7 @@
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/row_id_lease_service.hpp"
+#include "kds/server/trx_id_lease_service.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
@@ -132,6 +133,14 @@ public:
         // names segment 15`, and a mount that refuses because of a
         // caller's stack contents.
         WalAnchorFields anchor{};
+
+        // Core 0's durable transaction-id ceiling, copied on the startup
+        // thread for the reason the anchor above is: this core's
+        // `superblock_` is default-constructed, so the field reads 0 here
+        // and a mount would compare its recovered stream against nothing.
+        // Zero means "core 0 had none to give", which is only true before a
+        // database exists (PW1, docs/workplan-peer-writer.md).
+        std::uint64_t next_trx_id = 0;
     };
 
     // Opens this core's WAL stream, page store, catalog and dispatcher, and
@@ -184,6 +193,11 @@ public:
     // flight at a time.
     void MaybeRefillLease();
 
+    // The same, for this core's transaction ids (PW1): a peer may not raise
+    // the superblock's ceiling, so its windows are granted. Peers only -
+    // core 0 carves its own and never leases from itself.
+    void MaybeRefillTrxIds();
+
     // The receive side of CC7's flush-then-grant handoff (workplan P6b):
     // fault rights over a relation's page range, granted by core 0 at DDL
     // publish. What the `kRelationFaultGrant` handler calls; exposed so a
@@ -195,6 +209,12 @@ public:
     // without a reactor, and diagnostics read the counters.
     catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
     RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
+
+    // This core's transaction-id lease, exposed for the first of those two
+    // reasons only: a test drives a grant without a reactor. The refill
+    // state has no accessor because nothing outside reads it - the claim
+    // that "diagnostics read the counters" is true of neither lease today.
+    txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
 
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     sched::Scheduler& scheduler() noexcept { return *scheduler_; }
@@ -241,15 +261,29 @@ private:
     catalog::RowIdLeaseTable row_id_leases_;
     RowIdRefill row_id_refill_;
 
+    // The transaction-id lease this core issues from (PW1), and the refill
+    // waiting on a grant. Declared before `trx_ids_` below, which holds a
+    // pointer to the lease.
+    txn::TrxIdLease trx_id_lease_;
+    TrxIdRefill trx_id_refill_;
+    // One refill in flight at a time, `refill_in_flight_`'s rule and for
+    // its reason: without it every tick before the first grant lands would
+    // submit another request, and every one of them would be answered.
+    bool trx_id_refill_in_flight_ = false;
+
     // The remote step server (P4b), armed at AttachTransport: this core
     // answers STEP_OPENs for relations it owns.
     std::optional<RemoteStepServer> remote_steps_;
 
     // The statement stack. A peer's `SuperBlock` is a **copy** taken on the
     // startup thread: the dispatcher needs one for SHOW-class commands, and
-    // the live instance belongs to core 0. Nothing here writes it, and the
-    // one field that would matter - the transaction-id ceiling - is P5's,
-    // not this phase's.
+    // the live instance belongs to core 0. Nothing here reaches the page.
+    //
+    // Since PW1 the copy carries one field that is not merely decorative:
+    // `Config::next_trx_id`, core 0's transaction-id ceiling, is applied to
+    // it at `Open` so the mount check has a real bound and `trx_ids_` below
+    // caches a real one. It is still a copy and still unpersisted - a peer's
+    // *raise* of that ceiling comes from a grant, never from here.
     SuperBlock superblock_;
     std::optional<catalog::Catalog> catalog_;
     std::optional<txn::TrxIdSequence> trx_ids_;

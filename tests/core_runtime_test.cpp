@@ -532,6 +532,61 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
     EXPECT_GE(next_on_core0.value(), first.value() + 16);
 }
 
+TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblock) {
+    // The row-id lease's twin, and the door PW1 opened
+    // (`docs/workplan-peer-writer.md`): before it, a peer's TrxIdSequence
+    // constructed spent and its persist callback refused, so a peer could
+    // not begin a *single* transaction - every write died at its first id,
+    // ahead of any page. Reads never noticed: a read view mints from
+    // `peek()`, which issues nothing.
+    // Core 0's ceiling travels in the config, the way its WAL anchor does:
+    // a peer's own `SuperBlock` is default-constructed, so without this the
+    // mount check downstream compares a recovered stream against 0.
+    CoreRuntime::Config config = ConfigFor(1);
+    config.next_trx_id = core0_->superblock.next_trx_id();
+    ASSERT_GT(config.next_trx_id, 0u) << "a bootstrapped database should carry a ceiling";
+
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // A read still works with no lease at all, which is the half that was
+    // never broken and must stay unbroken.
+    EXPECT_EQ(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0),
+              std::string::npos);
+
+    // Before any grant: retryable exhaustion, and never a write to page 0 -
+    // this core's store would refuse that anyway, which is the guard this
+    // path exists to satisfy rather than to bypass.
+    const auto dry = peer.value()->dispatcher().Dispatch("BEGIN").response;
+    EXPECT_EQ(dry.rfind("ERR", 0), 0u) << "a peer began a transaction with no leased ids: " << dry;
+    EXPECT_NE(dry.find("lease"), std::string::npos)
+        << "the refusal should name the lease, not page 0: " << dry;
+
+    // Core 0 carves a block through the same `Carve()` its own windows come
+    // from - the exact call the kTrxIdLease handler makes - and the peer's
+    // lease takes it, the exact application the receiver makes.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok()) << block.status().message();
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    const auto wet = peer.value()->dispatcher().Dispatch("BEGIN").response;
+    EXPECT_NE(wet.rfind("ERR", 0), 0u) << "a leased peer still could not begin: " << wet;
+    (void)peer.value()->dispatcher().Dispatch("ROLLBACK");
+
+    // The grant sits at or above the ceiling the config carried, so the
+    // out-of-order guard in `ReserveBlock` has a real floor to check
+    // against rather than the 0 a default-constructed superblock reads.
+    EXPECT_GE(block.value().first, config.next_trx_id);
+
+    // And the windows stay disjoint: core 0's next id sits past the block it
+    // granted, so a peer's transaction id can never collide with a core-0
+    // one - invariant 12's writer identity across cores.
+    auto next_on_core0 = core0_ids.Next();
+    ASSERT_TRUE(next_on_core0.ok()) << next_on_core0.status().message();
+    EXPECT_GE(next_on_core0.value(), block.value().first + block.value().count);
+}
+
 // ---- P4c: a SELECT against a rotated relation executes remotely ---------
 
 TEST_F(CoreRuntimeTest, ASelectAgainstARotatedRelationIsServedRemotely) {

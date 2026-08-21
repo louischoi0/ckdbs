@@ -1196,6 +1196,9 @@ Status Expeditor::Serve() {
             // without this copy every peer would recover from the head of its
             // stream while core 0 recovered from its checkpoint.
             core_config.anchor = database_->superblock.wal_anchor(core_id);
+            // And the ceiling this peer's recovery must not sit above (PW1).
+            // Same copy, same thread, same reason as the anchor.
+            core_config.next_trx_id = database_->superblock.next_trx_id();
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
@@ -1315,6 +1318,21 @@ Status Expeditor::Serve() {
         // reason this service exists.
         if (Status s = RegisterRowIdGrantHandler(scheduler, *transport_, database_->catalog,
                                                  &*logger_);
+            !s.ok()) {
+            return s;
+        }
+
+        // The transaction-id lease's grant side (PW1,
+        // `docs/workplan-peer-writer.md`): a peer's kTrxIdLease request is
+        // answered with a block from core 0's **own** sequence, through the
+        // same `Carve()` its own windows come from. Sharing that one carve
+        // is what keeps two consumers of one ceiling from colliding, and it
+        // persists the raise before replying - a grant whose ceiling a
+        // crash could forget is the one thing `CoreRuntime::Open`'s
+        // mount-time refusal cannot tell from a corrupt stream.
+        if (Status s =
+                RegisterTrxIdGrantHandler(scheduler, *transport_, *trx_ids_,
+                                          kTrxIdLeasePerGrant, &*logger_);
             !s.ok()) {
             return s;
         }

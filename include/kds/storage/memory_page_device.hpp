@@ -74,6 +74,12 @@ public:
         std::uint64_t grows = 0;          // EnsureCapacity calls that actually grew
         std::uint64_t pages_read = 0;
         std::uint64_t pages_written = 0;
+        // One-shot injections that actually fired. A driver that arms a
+        // fault cannot otherwise tell whether it was consumed, and
+        // "this error had an injected cause" is exactly what the
+        // simulation harness's fault runs assert (bench/workplan-
+        // teststrategy SIM05).
+        std::uint64_t injections_fired = 0;
     };
 
     // `extent_pages` must be non-zero, same as FilePageDevice; the factory
@@ -120,6 +126,12 @@ public:
     // which is the entire reason checksums exist. `prefix_bytes` is clamped
     // to the transfer size; 0 means the write is lost entirely.
     void TearNextWrite(std::size_t prefix_bytes);
+
+    // Disarms every pending injection. For a driver that injects during
+    // one phase and needs the next phase clean: a one-shot fault that was
+    // never consumed would otherwise fire into the phase that must not
+    // have faults in it (SIM05's quiescence probe).
+    void ClearInjections() noexcept;
 
     // Discards every write and every capacity growth since the last
     // Sync(), modelling power loss. Injections and the trace are left

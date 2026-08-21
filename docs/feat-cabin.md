@@ -326,6 +326,100 @@ This spec is valid **only** under both: the core-ownership execution
 model and the Keystone id contract. If either changes, §4–§5 must be
 redesigned, not relaxed.
 
+### 6a. A set is banked only from a view nothing can contradict `[ADDED 2026-08-21]`
+
+§6's argument above is sound and **answers a different question than the
+one that broke**. It is about a write racing the scan, and core ownership
+does delete that. What it does not reach is a write the scan *could not
+see*, resolving afterwards:
+
+- a transaction **in flight** when the walk ran has rows the walk could not
+  see, and the moment it commits they are live and missing from a set that
+  is authoritative for every later reader. Nothing rolls back, so no event
+  exists that a repair could hang from;
+- the walk's **own** transaction may have hidden a row from itself — by
+  delete-marking it, or by an `UPDATE` that moved it off the probed value —
+  and its `ROLLBACK` restores the row while nothing restores the entry.
+  `NoteCabinWrite` runs on the INSERT and UPDATE write paths and never on
+  rollback, so no append repairs it.
+
+Both are the C1 break the store's header forbids in as many words
+("missing a qualifying pk violates authority"). The second was found by
+the simulation harness on 2026-08-21 (`docs/workplan-testing.md` SIM06),
+shrunk to nine operations by its minimizer:
+
+```sql
+CREATE CABIN ON t(v);  INSERT INTO t VALUES (0, 'a');
+BEGIN;  DELETE FROM t WHERE v = 0;
+SELECT * FROM t WHERE v = 0;   -- 0 rows, and banks the empty set for v = 0
+ROLLBACK;                      -- the row is live again
+INSERT INTO t VALUES (0, 'b');
+SELECT * FROM t WHERE v = 0;   -- returned the second row alone
+```
+
+**The rule.** `WalkAndRecord` declines when the walk's read view carries
+any in-flight transaction or belongs to one:
+
+    view.in_flight_count == 0 && view.own_trx_id == kNoTrxId
+
+Both facts are already in the `ReadView` the walk carries, so this costs
+two comparisons on the miss path and needs nothing new. Declining is free
+by §1's corollary — an unobserved value is answered by the authoritative
+scan, a performance event and never a wrong one — and `SHOW CABINS`
+reports `unbankable_views=` so an operator can tell "nobody probed this
+column" from "every probe that would have recorded ran inside a
+transaction".
+
+**The assumption this rests on, named because nothing else names it**:
+`TransactionManager::Begin` allocates an id and pushes into `live_`
+*eagerly*, for read-only and `REPEATABLE READ` transactions alike, so every
+one of them appears in every other view's `in_flight`. If ids ever become
+lazily allocated for read-only transactions — an ordinary optimization — a
+session holding a pre-record view stops being visible to this guard, the
+break returns, and **no test fails**. Anyone touching that allocation owes
+this rule a second look.
+
+**What it costs, stated rather than discovered.** Two things, and the first
+is wider than it sounds:
+
+- `in_flight_count` is a property of the *manager*, not of the relation, so
+  **one** session idling on an open `BEGIN` stops every Cabin on that core
+  from building — including relations that transaction has never touched.
+  Not "a workload that stays in transactions": one session is enough.
+- the heal path (`FallBackAndReRecord`) un-observes *before* it re-records,
+  so a stale-hint probe taken inside a transaction now drops the set and
+  declines to rebuild it. On a heap relation that erodes a Cabin rather
+  than leaving it alone, which is the one place "declining is free" is not
+  the whole truth.
+
+Both are the honest price of an authoritative structure whose promise
+outlives the statement that filled it, and the conservative side is the
+only safe side.
+
+**The other site that banks a set enforces the same authority by a
+different test.** `CabinOptimizerExecutor::BuildSeededSets` builds under a
+check view and aborts the whole build on a `kBusy` row, which is stronger
+where it applies; a future editor who fixes one site and not the other
+leaves half the rule standing. (Its all-visible fallback on a failed mint
+was exactly that hole, found by review 2026-08-21 and closed the same day.)
+
+**The refinement not taken, and the shape it would have to have.** The
+obvious one — "a transaction that has delete-marked nothing may record" —
+is **unsound**, because a value-changing `UPDATE` hides a row from the
+probed value just as a delete-mark does. The sound refinement is per
+*relation* and covers both halves at once: decline only if some in-flight
+transaction, the walk's own included, has written this `rel_oid`. Undo
+records already carry the oid (`NoteInsert` / `NoteOverwrite` /
+`NoteDeleteMark`), so it needs a touched-oid set on `Transaction` and
+nothing else. Not built: the conservative rule costs nothing on the
+autocommit path every measured Cabin workload takes.
+
+**And the fix that was considered and rejected**: un-observing on
+rollback. It repairs the second bullet and cannot touch the first — a
+transaction that *commits* rows the recorder could not see never rolls
+back, so there is no moment at which to drop the value. A repair that
+covers half a rule leaves the rule broken.
+
 ## 7. Interlock — three structures, one story (C4)
 
 Distinct trust classes, cooperative operation; none replaces another:

@@ -204,6 +204,12 @@ public:
         std::uint64_t unobserved = 0;       // values dropped, for any reason
         std::uint64_t cap_refusals = 0;     // values not observed, at a cap
         std::uint64_t sighting_clears = 0;  // sighting table cleared wholesale
+        // Walks that would have recorded and were declined because the
+        // view could still be contradicted (§6a). Nonzero is normal on a
+        // transactional workload and is the number that says *why* a Cabin
+        // is not filling, which no other counter can distinguish from
+        // "nobody probed it".
+        std::uint64_t unbankable_views = 0;
     };
 
     // What one Cabin holds and how it has been doing. Per cabin rather than
@@ -290,8 +296,16 @@ public:
 
     // Counts a value refused ahead of its walk (MayObserve's value-cap
     // half) - the same `cap_refusals` Commit counts, so `SHOW CABINS`'
-    // signal does not go dark because the refusal moved earlier.
+    // signal does not go dark because the refusal moved earlier. It is
+    // printed there beside `unbankable_views`, the store-wide pair that
+    // answers "why is this Cabin not filling".
     void NoteCapRefusal() { ++stats_.cap_refusals; }
+
+    // A recording walk declined because its view is not one a set may be
+    // banked from: an in-flight transaction can still make a row it could
+    // not see live, and its own transaction's uncommitted DELETE can be
+    // rolled back under it (§6a, and the header's authority rule above).
+    void NoteUnbankableView() { ++stats_.unbankable_views; }
 
     // A key whose set outgrew the per-value entry cap mid-recording. The
     // mark is **sticky**: sets only grow under append-only maintenance, so
