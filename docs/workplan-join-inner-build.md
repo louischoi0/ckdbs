@@ -3,13 +3,35 @@
 Tasks `JB1`–`JB8`, the artifact `docs/spec-join-inner-build.md` §10 gates
 behind ratification (discharged 2026-08-19). The spec owns every design
 argument; this file owns the build order, the seams, and the gates.
-**JB1–JB7 are built (2026-08-20); JB8 is paperwork.** JB6 and JB7 were
-built in separate worktrees on the same day and are independent — JB7
-reads counters JB3/JB4 already collect and adds no executor state, and
-JB6 adds state no counter's meaning depends on. JB8's measurement is
-discharged by `bench/results-scenario3-library.md` §7f; its workplan row
-below is the remaining paperwork, and the JB6 numbers in "the stopping
-sub-chain" below are not in that file yet. The sanction is
+**JB1–JB7 are built (2026-08-20); JB8 is the closing measurement.** JB6
+and JB7 were built in separate worktrees on the same day and are
+independent — JB7 reads counters JB3/JB4 already collect and adds no
+executor state, and JB6 adds state no counter's meaning depends on.
+
+**The ledger, which JB8's done-when asks each row to carry.** Every
+task named with the commit that landed it, so a claim below can be
+checked against the tree it was true of rather than against a date:
+
+| task | commit | what landed |
+|---|---|---|
+| JB1 | `fc44ac6` | the `BuildKey` annotation, last ladder arm |
+| — | `772a524` | the annotation moved to `Step`'s tail (a measured cache-line regression, found by JB1's own A/B) |
+| JB2 | `9f67833` | `exec::InnerBuild`, the map |
+| JB3 | `d454cf4` | the lazy build |
+| JB4 | `b625855` | the probe |
+| JB5 | `1b28c9f` | `join_build_max_rows`, the cap and off-switch |
+| — | `74c1a3a` | the constant, second cut: 83.7 → 43.2 ns/row |
+| JB6 | `041410d` | the stopping sub-chain's prefix map |
+| — | `c8126cf` | the constant, third cut: 43.2 → 37.2 ns/row |
+| JB7 | `e186e7d` | ANALYZE's `build` marker and the three counters |
+
+Two of those ten rows are not tasks at all but answers to findings the
+series' own measurements produced — which is the shape this workplan
+kept taking, and worth seeing in one place.
+
+JB8's measurement at `2755045` is `bench/results-scenario3-library.md`
+§7f; it predates both constant cuts and JB6, so its EXISTS row records
+a class that is now served. The refresh at HEAD is §7g. The sanction is
 `docs/parser-v2.md` §5's amendment of 2026-08-19; the price of not
 having it is `bench/results-scenario3-library.md` §7e (117 stmts/s
 against PostgreSQL's 1,314 on the shape neither engine can index away).
@@ -490,6 +512,45 @@ per cell — the standing discipline. Cells:
 addendum with the commit, both binary sha256s, full percentile tables,
 and the §7e follow-up; the workplan's rows above flip to done with their
 commits.
+
+**Done 2026-08-21**, addendum §7g at `aa3e26c` (binary sha256
+`39ac4e42…9175d`), the ledger above carrying every task's commit. Four
+results and one correction:
+
+- **EXISTS reaches the class**: 1,598.8 → 534.3 µs (**×2.99**),
+  independently confirming JB6's own ×3.07 on a fresh seed. §7f had
+  recorded this cell unchanged with the class gated out; that record is
+  superseded.
+- **The join cell runs ×9.60 and still misses the class — and the
+  class was wrong.** One pass of `loans` costs 668 µs here, so spec §9's
+  ~600 µs target sits *below* the pass the design cannot remove; a free
+  build still lands at ~682. Spec §9 is amended. The honest reading is
+  the ratio and the share: the build is now **33% of the statement**
+  against 57% at `2755045`.
+- **The constant is 33.6 ns/row** (`c8126cf`'s 37.2 confirmed in class,
+  10% below it — re-measurement, not a fourth cut), and **break-even is
+  under k = 2 at every size** (1.24 / 1.50 / 1.56), where §7f had k = 2
+  losing at all three.
+- **JB6's k = 4 condition still fails** (+9.1% dense, +6.2% sparse;
+  crossover k ≈ 5.5 / 4.5), and the counters yielded the model that
+  explains every cell: `Δ = rows_saved × 62.2 ns − rows_bucketed ×
+  33.6 ns`. **A bucketed row costs about half a walked row**, so the
+  prefix wins exactly when it saves more than half the rows it buckets —
+  and the same ratio derives the join's break-even at k > 1.5. k = 4
+  fails on *how few rows a stopping walk saves*, not on the constant.
+- **The four-way, refreshed**: 103 / 989 / 1,271 / 14,035 stmts/s, the
+  gap to PostgreSQL closed 1.92× → **1.28×**. And on `exists-correlated`
+  ckdbs leads PostgreSQL **1,872 to 712 (×2.63)** — the first cell in
+  that file where this engine beats PostgreSQL with nothing banked,
+  because PostgreSQL decorrelates into a `HashAggregate` over the whole
+  relation where JB6's prefix stops at row 6,689 of 10,000.
+
+`--verify` passed all 16 driver cells, 163,864 operations, 0 errors.
+Two things are explicitly **not** settled and say so in §7g: the JB5
+gate's lever-off plumbing question (3–6 ns/row, needs a
+placement-equalized cross-commit A/B this run's offset would swallow),
+and §7f.8's `composite` / `covering` / `indexes = off` columns, not
+re-run.
 
 **Measurement note (2026-08-20, the JB1/JB2 landing rounds):** the walked
 correlated-inner loop is placement-sensitive at ±2–3% wall on the

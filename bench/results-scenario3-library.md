@@ -2170,6 +2170,671 @@ cost sits — hashing, entry write, or the residual evaluation JB3 applies
 before bucketing — needs per-step timing the engine does not have
 (`docs/observability.md`).
 
+## 7g. Addendum, 2026-08-21 — JB8's closing measurement: two constant cuts and JB6 later, at `aa3e26c`
+
+§7f measured the statement-local inner build at `2755045`, where the build
+constant was 83.7 ns per bucketed inner row and the `EXISTS` class was gated
+out of the arm by JB3 pending JB6. Three commits have moved both numbers
+since: `74c1a3a` (an arena-chained map and a Keystone-word pk read),
+`c8126cf` (an open-addressed key table), and `041410d` — JB6, the stopping
+sub-chain's prefix map, which puts the correlated `EXISTS` inside the
+feature for the first time. `e186e7d` (JB7) added the counters that let this
+addendum **prove engagement from `ANALYZE` rather than infer it from
+latency**, which is what every claim below rests on.
+
+This is JB8's closing round. Same discipline as §7f: **config-levered A/B on
+a single binary copy** — `join_build_max_rows = 0` against the shipped
+default `65536` — fresh server and fresh data file per cell, replicated
+same-config pairs behind every delta, three row-set sizes, and both
+sweep orders so the whole-cell placement effect the workplan documents can be
+separated from the lever.
+
+**The answers, all at `aa3e26c`. The `EXISTS` acceptance cell passes and
+reaches its class: 1,598.8 → 534.3 µs, ×2.99, which confirms JB6's own
+×3.07. The join acceptance cell passes at ×9.60 and still misses the class,
+at 1,010.8 µs against spec §9's ~600 µs — but 668 µs of that 1,011 is one
+pass of `loans`, which no build can remove, so what is left to remove is the
+336 µs build and nothing else. The constant at HEAD measures 33.6 ns per
+bucketed row at 10,000 rows and 31.1 at 1,000, confirming `c8126cf`'s 37.2 in
+class; break-even has fallen under k = 2 at every size and sits at k ≈ 1.2 to
+1.6. JB6's k = 4 done-condition still fails — +9.1% at 100 rows per key and
++6.2% at 5, crossover k ≈ 4.5 to 5.5 — exactly as its own round reported. The
+whole-cell order effect reproduces, at 16% on one unrelated shape at 1,000
+rows, and the verdict read from the order-controlled pair is unaffected
+because the two shapes that move do so by 200% to 880% in both orders. And
+the four-way account has changed shape: ckdbs's build is now 1.28× behind
+PostgreSQL's hash join on the walked join, from 1.92× — and 2.63× **ahead**
+of it on the correlated `EXISTS`, which is the first cell in this whole file
+where ckdbs beats PostgreSQL without banking anything.**
+
+### 7g.1 The run
+
+| | |
+|---|---|
+| executed | **2026-08-21 01:24:07 → 01:41:22 UTC** for every timed cell — 65 executions, 57 ckdbs and 7 PostgreSQL, of which one PostgreSQL cell was discarded for contention and re-run, so **64 retained**. The ckdbs block ran 01:24:07 → 01:31:08 without a break; the PostgreSQL block followed, never alongside. **One further ckdbs cell ran at 02:00** — a counter dump with no timing in it, disclosed in the row below |
+| branch / worktree | **no worktree** — the primary checkout `/home/cdkbs/ckdbs` on branch `main` |
+| commit measured | **`aa3e26c`** (committed 2026-08-21T01:12:11Z), recorded by every cell |
+| tree cleanliness | **not clean, and it matters only in one direction.** Every cell logs `dirty: true`, because one tracked file — `docs/workplan-join-inner-build.md`, edited at 01:18:56 by the session that commissioned this round — differs from `aa3e26c`, alongside the untracked `.claude/worktrees/`. **No source file differs**: `git diff --stat` is that one documentation path, 29 insertions and 7 deletions. The measured engine is `aa3e26c`'s |
+| **binary measured** | one **copy**, `sha256 39ac4e42ca70ec60693e6bd823241eb9157432f93b002da6da2f21c6e329175d`, 4,840,160 bytes, taken to `$HOME/bench-s3-jb8g/kds_server` before the first cell and started by all 58 ckdbs cells |
+| binary provenance | `build-release/kds_server` was linked at **2026-08-21 01:20:04 UTC**, eight minutes *after* `aa3e26c`'s commit timestamp — so the binary is at HEAD, not behind it. The copy earned its keep: at 01:32, while the PostgreSQL block was running, another session began `cmake --build build -j16` in this same checkout. It touched the Debug tree only (`build-release/kds_server` still hashes to `39ac4e42…` at the end of the run), but the copy is what makes that a fact rather than a hope |
+| build | Release (`-O3 -DNDEBUG`), gcc 13.3.0, `KDS_WITH_TLS=ON` (OpenSSL 3.0.13) |
+| test suite | **2,521 of 2,521 passing** at this commit, from this build, before the first cell |
+| device | **ext4 on `/dev/root`** (`df -T`, checked this session). ckdbs data files under `$HOME/bench-s3-jb8g/db/`, WAL under `$HOME/bench-s3-jb8g/wal/<cell>/`, PostgreSQL under `$HOME/pg-bench/data`. **Not tmpfs** — checked this session rather than recalled, because `/tmp` is ext4 on this host and has been tmpfs on others this suite has run on. The binary copy sits on ext4 beside them |
+| kernel / host | 6.17.0-1022-azure, Ubuntu 24.04, **2 vCPUs**, 15 GiB |
+| server config | `cores = 1`, `durability = group`, `indexes = on`, `log_level = warn`, port 15511, `join_build_max_rows` per §7g.2. One server and one **fresh data file** per cell |
+| driver | `tools/scenario3_library.py --suffix s3 --loans {200,1000,10000} --matches 5 --index-mode none --ops 200 --verify 25 --seed 1` — no `--cabin` and no index, the configuration in which the build is the only structure available. The Cabin column of §7g.8 adds `--cabin` |
+| the k-sweeps | `tools/join_ksweep.py --shape {join,exists} --ks 1,2,4,8,16 --ops 50 --seed 1`, at `--matches 5` and `--matches 100`. The driver fixes k at 16 (join) and 20 (`EXISTS`); the sweep is where k is the axis |
+| the counters | a session-local script, not in the tree, that re-uses the driver's own loaders and prints each plan whole — `join_ksweep.py` truncates its `ANALYZE` line at 400 characters, which cuts the JB7 counters this round needs. Eight such cells; seven ran inside the quiet block above, and **the eighth (`an100-10000-off`, §7g.6's dense off-side column) ran at 02:00 while another session held a core with `ckdbs-sim`**. It carries no latency — an `examined` count is deterministic and contention cannot move it — and no number of it appears in any timing table |
+| PostgreSQL | **16.14**, the standing scratch cluster of `tools/pg_setup.sh` on port 15433, one `createdb`-fresh database per cell, **cluster defaults** (`shared_buffers` 128 MB, `work_mem` 4 MB, `synchronous_commit on`, `max_parallel_workers_per_gather` 2) |
+| contention control | every ckdbs cell records `pgrep -c cc1plus` before and after: **0 in all 58**, maximum 1-minute load 1.30 (the cell's own) — the one late counter cell excepted and disclosed above. **One PostgreSQL cell was discarded** — `pg-10000-r2` ended with 15 `cc1plus` and load 4.83 when another session's build started; `run_pg_cell.sh` moved its artefacts aside and it was re-run behind `wait_quiet.sh`. §7g.8 names which draw each number comes from |
+| correctness | **163,864 ckdbs driver operations across 16 verify-bearing cells, 0 errors, `verify_problems` empty in every one**; 56,984 PostgreSQL operations across 6 retained cells, 0 errors. The 34 k-sweep cells return row counts identical between the two lever settings at every k and every size |
+
+Drivers, flags and invocations: `bench/docs/README.md`, entries
+`scenario3_library.py` and `join_ksweep.py`.
+
+### 7g.2 The lever, and why this round again refuses a cross-commit A/B
+
+`docs/workplan-join-inner-build.md`'s measurement note records that the
+walked correlated-inner loop is placement-sensitive at ±2–3% wall on this
+box. This run inherits §7f's answer: both sides of every A/B are the same
+binary, the same `sha256 39ac4e42…`, and the only difference between an
+`off` cell and an `on` cell is one line of the cell's `kds.conf`:
+
+```
+join_build_max_rows = 0        # the off-switch: the step declines to per-row walks
+join_build_max_rows = 65536    # the shipped default (kds.conf.sample)
+```
+
+`0` is JB5's off-switch and its A/B lever, contract-swept byte-for-byte in
+`tests/inner_build_contract_test.cpp`. Every code path outside the build's own
+arm is bit-identical between the two sides.
+
+**The refusal is not pedantry, and this run can price it.** Every absolute
+microsecond below is 8–13% higher than §7f's counterpart at `2755045`, on
+shapes the feature cannot reach: `loans-by-user` at 10,000 loans is a
+`kFilterScan` with a literal — JB1 declines it at compile, so no build arm
+exists for it under either lever — and it reads 667.1 µs here against §7f's
+590.7. `books-by-author`, `overdue`, `count-by-user` and `resv-by-user` all
+move by 8–11% in the same direction. **A whole-run offset of that size sits
+on this box between sessions**, so a cross-commit comparison of absolute
+latencies here would attribute a session's mood to a commit. What carries
+forward from this file is the within-run ratio, which the lever makes exact;
+what does not is the microsecond.
+
+### 7g.3 The counters, not the latency, say what is engaged
+
+JB7's `inner_built=` / `build_rows=` / `build_probes=` are what turn "the
+build must be running, look how fast it is" into evidence. At 10,000 loans,
+the same two statements under the two lever settings:
+
+| shape | lever | step 1's counters |
+|---|---|---|
+| `join-no-literal`, k=16 | `0` | `opens=16 examined=160000 matched=82 pages=1376 inner_built=0` |
+| `join-no-literal`, k=16 | `65536` | `opens=16 examined=10078 matched=82 pages=161` **`inner_built=1 build_rows=10000 build_probes=15`** |
+| `exists-correlated`, k=20 | `0` | `opens=20 examined=36003 matched=20 pages=315 sub_runs=20` **`corr_scans=20`** `inner_built=0` |
+| `exists-correlated`, k=20 | `65536` | `opens=20 examined=6708 matched=20 pages=77 sub_runs=20` **`corr_scans=1`** `inner_built=0` **`build_rows=6689 build_probes=19`** |
+
+Three readings, and the third is the one §7f could not make.
+
+**The join publishes.** `inner_built=1 build_rows=10000` is the whole
+relation bucketed on the first outer row's walk, and `build_probes=15` is the
+other fifteen outer rows served from the map — k−1, by JB7's own naming rule.
+`examined` falls 15.9× and page touches 8.5×, in a plan whose text does not
+change: the step is still `Scan`, still carries `build on=col1 key=0:0.0` on
+its plan line, and the annotation is visible before execution.
+
+**The `EXISTS` does not publish, and that is correct rather than a
+shortfall.** `inner_built=0` with `build_rows=6689` and `build_probes=19` is
+JB6's prefix map exactly as spec §6 ratifies it: the inner walk stops at its
+first qualifying row, so the map covers a walk-order prefix — 6,689 of 10,000
+rows — and never earns the `kBuilt` phase that would let a miss conclude
+absence. What proves the feature is engaged is `corr_scans`: **20 correlated
+inner scans with the lever off, 1 with it on**. Nineteen outer rows were
+answered from the prefix without a scan of their own. A reader chasing this
+shape should read `corr_scans` and `build_probes`, not `inner_built`.
+
+**The build's economics are visible in one column at every size.** The same
+pair at the other two row-set sizes, `examined` on step 1:
+
+| N | join k=16, lever `0` | join k=16, lever `65536` | `EXISTS` k=20, lever `0` | `EXISTS` k=20, lever `65536` |
+|---:|---:|---:|---:|---:|
+| 200 | 3,200 | **272** | 455 | **79** (`corr_scans` 20 → 6) |
+| 1,000 | 16,000 | **1,075** | 4,905 | **938** (`corr_scans` 20 → 2) |
+| 10,000 | 160,000 | **10,078** | 36,003 | **6,708** (`corr_scans` 20 → 1) |
+
+The join's off column is k·N exactly; its on column is N plus the matches
+replayed. The `EXISTS`'s off column is the *sum* of twenty stopping walks and
+its on column is the *longest* of them — which is spec §6's trade stated in
+counters, and the reason §7g.6's k = 4 verdict comes out the way it does.
+
+### 7g.4 The two acceptance cells
+
+The driver's own `join-no-literal` (k = 16) and `exists-correlated` (k = 20)
+phases, 200 ops each, `--index-mode none`, no `--cabin`. Throughput is
+derived as `1,000,000 ÷ p50 µs` — the driver is a serial single-connection
+loop, so that is exactly its `ops ÷ elapsed`; **the driver reports latency,
+so every rate in this addendum is derived and labelled as such.**
+
+| N | `join-no-literal` walk stmts/s | build stmts/s | speedup | `exists-correlated` walk stmts/s | prefix stmts/s | speedup |
+|---:|---:|---:|---:|---:|---:|---:|
+| 200 | 3,976 | **12,217** | **3.07×** | 9,272 | **12,878** | **1.39×** |
+| 1,000 | 954 | **6,394** | **6.71×** | 3,637 | **8,379** | **2.30×** |
+| 10,000 | 103 | **989** | **9.60×** | 625 | **1,872** | **2.99×** |
+
+*(each column is the mean of two same-configuration cells; derived from p50)*
+
+**The `EXISTS` cell passes and reaches its class.** At 10,000 loans it moves
+**1,598.8 → 534.3 µs**, which is inside spec §9's ~600 µs target, and
+confirms JB6's own round (1,681.3 → 547.2 µs, ×3.07) at ×2.99 on an
+independently seeded run. §7f recorded this cell as unchanged at −0.6%, with
+the class deliberately gated out; **that record is superseded here, and the
+gate is what moved, not the measurement.**
+
+**The join cell passes and still misses its class — but the miss is no
+longer mostly the build.** The on-side p50 at 10,000 is **1,010.8 µs** against
+the ~600 µs target, a miss of 1.68× where §7f's was 2.4×. §7g.5's fitted lines
+close the account to within 0.7%:
+
+| component | µs | how it is obtained |
+|---|---:|---|
+| the k=1 statement — client and socket, the outer `Range` over 32 rows, and **one walk of `loans`** while the map is built | **668.2** | the walk side's own k=1 p50, mean of two cells; ~70 µs of it is the fixed part (the walk line's intercept, and `pk-user` p50 is 38.7–38.8 µs in the same cells) |
+| the build itself — bucketing 10,000 rows at 33.6 ns | **336.4** | the k=1 delta between the two lever settings |
+| fifteen further bucket replays through the full MVCC-and-residual re-check | **13.7** | the build line's slope, 0.913 µs, × 15 |
+| **total** | **1,018.3** | measured driver-phase p50 **1,010.8** |
+
+**And the reading that matters for the target: one pass of `loans` costs
+668 µs in this run, so spec §9's ~600 µs class is below the cost of the pass
+the design cannot avoid.** Make the build free and this cell lands at ~682 µs,
+still outside the class. The target was set from a measurement of the pass at
+~600 µs; on this run's box the same pass measures 668 µs, and §7g.2 shows that
+difference is a whole-run offset rather than a regression. The actionable
+statement is therefore not "the build is 411 µs short" but **"the build's own
+cost is now 33% of the statement"**, against the 57% it was at `2755045`. The
+other 66% is the k = 1 walk statement — client and socket, the outer `Range`,
+and the one pass of `loans` — which no arming rule and no cheaper map
+reaches.
+
+Full distributions, µs, 200 ops per cell, in **execution order** (each size
+ran off, on, on, off — see §7g.7):
+
+**`join-no-literal`**
+
+| N | cell | order | mean | p0 | p25 | p50 | p95 | p99 |
+|---:|---|---|---:|---:|---:|---:|---:|---:|
+| 200 | walk | 1st | 268.2 | 238.4 | 251.3 | 254.5 | 285.4 | 368.9 |
+| 200 | **build** | 2nd | 83.6 | 71.2 | 80.8 | 81.6 | 96.1 | 104.1 |
+| 200 | **build** | 3rd | 83.9 | 70.4 | 80.4 | 82.1 | 95.7 | 104.4 |
+| 200 | walk | 4th | 254.0 | 239.8 | 246.2 | 248.6 | 266.9 | 298.4 |
+| 1,000 | walk | 1st | 1,139.7 | 1,052.6 | 1,071.3 | 1,077.6 | 1,691.6 | 2,187.5 |
+| 1,000 | **build** | 2nd | 160.9 | 144.3 | 154.3 | 156.5 | 176.3 | 206.1 |
+| 1,000 | **build** | 3rd | 173.2 | 145.2 | 154.4 | 156.3 | 177.2 | 440.7 |
+| 1,000 | walk | 4th | 1,026.1 | 1,002.8 | 1,016.6 | 1,020.8 | 1,047.9 | 1,163.3 |
+| 10,000 | walk | 1st | 9,716.9 | 9,542.8 | 9,592.1 | 9,616.5 | 9,992.4 | 10,703.9 |
+| 10,000 | **build** | 2nd | 1,038.9 | 999.6 | 1,013.0 | 1,024.4 | 1,077.8 | 1,382.6 |
+| 10,000 | **build** | 3rd | 1,014.9 | 978.1 | 993.3 | 997.1 | 1,057.7 | 1,360.8 |
+| 10,000 | walk | 4th | 9,863.4 | 9,743.7 | 9,781.9 | 9,798.8 | 10,169.7 | 10,873.7 |
+
+**`exists-correlated`**
+
+| N | cell | order | mean | p0 | p25 | p50 | p95 | p99 |
+|---:|---|---|---:|---:|---:|---:|---:|---:|
+| 200 | walk | 1st | 111.2 | 96.8 | 107.5 | 108.5 | 121.4 | 143.1 |
+| 200 | **prefix** | 2nd | 79.3 | 72.0 | 76.8 | 77.8 | 89.2 | 92.5 |
+| 200 | **prefix** | 3rd | 79.2 | 65.3 | 69.9 | 77.5 | 93.0 | 113.9 |
+| 200 | walk | 4th | 108.8 | 95.4 | 106.0 | 107.2 | 120.1 | 129.6 |
+| 1,000 | walk | 1st | 287.6 | 275.0 | 278.0 | 280.2 | 310.4 | 335.7 |
+| 1,000 | **prefix** | 2nd | 122.0 | 113.6 | 117.7 | 119.2 | 133.1 | 155.1 |
+| 1,000 | **prefix** | 3rd | 121.2 | 112.6 | 118.0 | 119.5 | 131.9 | 138.9 |
+| 1,000 | walk | 4th | 284.1 | 260.4 | 266.6 | 269.8 | 297.9 | 483.4 |
+| 10,000 | walk | 1st | 1,803.5 | 1,568.5 | 1,596.3 | 1,614.4 | 2,704.2 | 4,065.0 |
+| 10,000 | **prefix** | 2nd | 535.6 | 510.9 | 524.9 | 532.8 | 567.2 | 580.1 |
+| 10,000 | **prefix** | 3rd | 569.7 | 518.1 | 527.0 | 535.7 | 572.0 | 1,771.0 |
+| 10,000 | walk | 4th | 1,602.8 | 1,559.0 | 1,577.7 | 1,583.1 | 1,639.3 | 2,108.8 |
+
+The p0 columns say the two effects are structural, not tail artefacts. On
+`join-no-literal` at 10,000 the build's **best** draw (978.1 µs) is 9.8×
+better than the walk's best (9,542.8 µs), and the distributions do not
+overlap anywhere. On `exists-correlated` at 10,000 the prefix's best
+(510.9 µs) is 3.1× better than the walk's best (1,559.0 µs), and its p0-to-p50
+spread is 4.3% against the walk's 3.5% — two tight bodies, not a warm-up
+against a cold one. That matters for reading the shape at all: the map is
+statement-local, so **every one of the 200 operations rebuilds it from
+scratch**, and this distribution is the steady cost of doing so rather than
+an amortization curve. It is the opposite of the Cabin column of §7g.8, whose
+mean sits at twice its p50 because the observation charge is paid once.
+
+**The correctness gate, and its verdict.** `--verify` ran in all sixteen
+driver cells — twelve A/B cells and four Cabin cells. Its checks 4 and 5 are
+the ones this addendum needs: the no-literal join's reply and the correlated
+`EXISTS`'s id list are each compared **row for row, in order**, against an
+expectation computed client-side from two full scans, so a bucket replayed
+out of walk order, an incomplete bucket, a prefix wrongly concluding absence,
+or a row admitted without its MVCC re-check all fail it rather than passing
+quietly. Those two checks run once per invocation regardless of the sample
+count, so `--verify 25` gates every cell fully on both shapes. **Verdict:
+pass — `verify_problems` is empty in all sixteen, on both sides of every
+pair**, which is JB4's and JB6's done-when met on real data at three
+cardinalities. The 34 k-sweep cells add an independent cross-check: their
+returned row counts are identical between the two lever settings at every k
+and every size (join 7/12/17/39/79 at 200, 5/14/22/47/80 at 1,000,
+4/9/20/38/82 at 10,000; `EXISTS` 1/2/4/8/16 at all three).
+
+**On waits.** These are single-connection reads. There is **no durability or
+commit wait** in the measured unit — nothing here writes — and **no lock or
+conflict wait anywhere in this engine**: no lock manager exists
+(`docs/txn.md`), so a conflict is an immediate error rather than a queue, and
+none occurred in 163,864 operations. The unit decomposes as client and socket
+round trip, plus the outer `Range` walk, plus the inner step; the table above
+splits the inner step. Splitting *within* it — page I/O against latch against
+CPU — needs per-step timing that does not exist (`docs/observability.md`,
+unbuilt), and that limit is unchanged from §7f.
+
+### 7g.5 The k-sweep, the build constant, and where break-even sits
+
+p50 µs of 50 sampled operations per point, two cells per lever setting per
+size, after one untimed first statement. Rates derived from p50 as above.
+
+| N | k | walk stmts/s | build stmts/s | build ÷ walk |
+|---:|---:|---:|---:|---:|
+| 200 | 1 | 17,036 | 16,247 | **0.95×** |
+| 200 | 2 | 13,879 | 16,129 | 1.16× |
+| 200 | 4 | 10,283 | 15,936 | 1.55× |
+| 200 | 8 | 6,723 | 14,925 | 2.22× |
+| 200 | 16 | 3,946 | 12,996 | **3.29×** |
+| 1,000 | 1 | 9,200 | 7,153 | **0.78×** |
+| 1,000 | 2 | 5,801 | 7,072 | 1.22× |
+| 1,000 | 4 | 3,361 | 7,085 | 2.11× |
+| 1,000 | 8 | 1,803 | 6,714 | 3.72× |
+| 1,000 | 16 | 947 | 6,376 | **6.73×** |
+| 10,000 | 1 | 1,496 | 995 | **0.67×** |
+| 10,000 | 2 | 784 | 1,003 | 1.28× |
+| 10,000 | 4 | 399 | 991 | 2.49× |
+| 10,000 | 8 | 203 | 991 | 4.88× |
+| 10,000 | 16 | 104 | 982 | **9.47×** |
+
+*(replicate pairs disagree by 0.1–3.1% at 1,000 and 10,000; at 200 rows the
+two `on` cells disagree by 11–19% uniformly across every k, which is the
+whole-cell placement effect of §7g.7 and is why the 200-row constant below is
+not quoted)*
+
+**The constant, and the size at which it can be read.** The build is paid in
+full and probed once at k = 1, so the k = 1 delta over the rows bucketed is
+the constant:
+
+| N | walk p50 at k=1 | build p50 at k=1 | Δ µs | Δ ÷ rows bucketed | regression |
+|---:|---:|---:|---:|---:|---:|
+| 200 | 58.7 | 61.5 | +2.8 | *(not readable — see below)* | +4.9% |
+| 1,000 | 108.7 | 139.8 | +31.1 | **31.1 ns/row** | **+28.6%** |
+| 10,000 | 668.2 | 1,004.6 | +336.4 | **33.6 ns/row** | **+50.3%** |
+
+The slope of the k = 1 delta against N across the two readable sizes —
+`(336.4 − 31.1) µs ÷ 9,000 rows` — is **33.9 ns/row**, the same constant read
+a third way. **At 200 rows the constant is not separable from the cell**: 200
+bucketed rows at 34 ns is 6.8 µs, and the two `on` cells at that size differ
+from each other by 10.5 µs at k = 1. The three-size sweep still earns its
+place by saying *that*, which no single-size measurement could.
+
+**`c8126cf`'s claim of 37.2 ns/row is confirmed in class and measures 10%
+below it here.** The difference is about twice this run's replicate spread on
+the two k = 1 cells and sits well inside §7g.2's whole-run offset; this is a
+re-measurement of the same constant, not a fourth cut.
+
+**Break-even is now under k = 2 at every row-set size**, from lines fitted
+through each side's k = 1 and k = 16 points:
+
+| N | walk: µs per outer row | build: µs per outer row | build's fixed premium µs | **break-even k** |
+|---:|---:|---:|---:|---:|
+| 200 | 12.98 | 1.027 | 14.8 | **1.24** |
+| 1,000 | 63.17 | 1.137 | 93.1 | **1.50** |
+| 10,000 | 598.25 | 0.913 | 933.7 | **1.56** |
+
+and the sweep confirms it without a fit: **k = 2 now wins at every size**
+(1.16× / 1.22× / 1.28×), where §7f measured it losing at every size
+(0.92× / 0.83× / 0.79×). The k = 1 loss remains real and remains the price of
+an arming rule that cannot see k — `join_build_max_rows` gates *rows*, never
+outer cardinality — which is the open cap-scoping decision's standing datum
+(`CLAUDE.md`, Open Decisions → Join inner build; spec §7). The n = 2 deferral
+that would make k = 1 free was declined on arithmetic in spec §5 and this run
+does not reopen it: with break-even at 1.24–1.56, deferring would move the
+loss onto k = 2, which now wins.
+
+**Where the build's own per-outer-row cost went.** The build line's slope at
+10,000 rows is **0.913 µs per probe** — 15 outer rows replaying an average of
+5.2 matched rows each through `AcceptTupleAt`'s full MVCC-and-residual
+re-check. That is the price of JB4's superset-plus-recheck idiom, and it is
+0.15% of the walk it replaces.
+
+### 7g.6 JB6's k = 4 done-condition, re-measured — it still fails
+
+Spec §6 as ratified promised the prefix map would sit "at or below the plain
+walk's cost at every k". JB6's own round found that false and amended §6 with
+a crossover at k ≈ 5. **This round reproduces that finding at HEAD**, with
+replicated pairs in both orders, on the `EXISTS` shape at two key densities.
+`--matches` sets rows per key; `users` scales as `loans ÷ matches`, which is
+why the dense cells at 200 and 1,000 loans are degenerate and are shown as
+evidence of exactly that.
+
+**5 rows per key** (`--matches 5`, the driver's own density):
+
+| N | outer rows available | k=1 | k=2 | k=4 | k=8 | k=16 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 200 | 40 | +2.9% | +2.0% | +3.2% | −3.5% | −14.1% |
+| 1,000 | 200 | +29.2% | +17.1% | **−5.9%** | −22.5% | −57.5% |
+| 10,000 | 2,000 | +50.9% | +13.8% | **+6.2%** | −31.1% | −59.8% |
+
+**100 rows per key** (`--matches 100`):
+
+| N | outer rows available | k=1 | k=2 | k=4 | k=8 | k=16 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 200 | 4 *(k ≥ 4 is k = 4)* | +4.9% | +6.0% | −0.2% | +1.7% | +0.7% |
+| 1,000 | 10 *(k=16 is k = 10)* | +4.5% | +5.6% | +3.5% | −0.6% | +2.5% |
+| 10,000 | 100 | +4.6% | +6.8% | **+9.1%** | −11.5% | −22.9% |
+
+*(a positive number is the prefix costing more than the walk; each cell is the
+mean of two same-lever draws, except the 200-row dense pair which ran once per
+lever)*
+
+**Verdict: the k = 4 condition fails at HEAD**, at **+9.1%** dense and
+**+6.2%** sparse on the only size where either density has enough outer rows
+to mean anything — against JB6's own +8% and +11% at `c8126cf`. Interpolating
+each pair of adjacent k where the sign flips puts the crossover at
+**k ≈ 5.5 dense and k ≈ 4.5 sparse**, which is §6's amended k ≈ 5 confirmed
+rather than moved.
+
+**The arithmetic is the one §7g.3's counters already showed.** The prefix
+trades the *sum* of the per-outer-row stopping walks for the *longest single
+one*, plus the constant charged on every row of that longest walk. At 10,000
+loans and 5 rows per key the first outer row's walk already covers 6,689 of
+10,000 rows before its own match — so the map pays for two thirds of the
+relation while the walks it saves are short, and it takes until k ≈ 4.5 for
+the sum to exceed the max by more than the constant. At k = 16 the same
+arithmetic gives −59.8%, and the sweep's own `examined` column says why:
+27,856 rows walked against 6,704.
+
+**And the counters turn all of it into one number.** JB7's `examined` and
+`build_rows` say, for each cell, exactly how many row-visits the prefix saved
+and how many rows it paid to bucket. Setting those against the two measured
+per-row costs — 62.2 ns to walk a row (§7g.8) and 33.6 ns to bucket one
+(§7g.5) — predicts every cell in the two tables above:
+
+| N | rows/key | k | rows saved (`examined` off − on) | rows bucketed (`build_rows`) | predicted Δ µs | measured Δ µs |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 100 | 4 | 224 − 173 = **51** | 172 | +2.6 | **+6.0** |
+| 10,000 | 100 | 16 | 1,539 − 639 = **900** | 627 | −34.9 | **−35.7** |
+| 10,000 | 5 | 4 | 9,814 − 6,692 = **3,122** | 6,689 | +30.5 | **+41.5** |
+| 10,000 | 5 | 16 | 27,856 − 6,704 = **21,152** | 6,704 | −1,090.5 | **−1,068.6** |
+| 1,000 | 5 | 2 | 332 − 310 = **22** | 309 | +8.2 | **+12.2** |
+| 1,000 | 5 | 4 | 606 − 312 = **294** | 309 | −8.9 | **−5.3** |
+| 200 | 5 | 16 | 394 − 75 = **319** | 65 | −17.7 | **−11.5** |
+
+*(predicted = rows saved × 62.2 ns − rows bucketed × 33.6 ns, using each
+size's own constant where it is readable — 31.1 ns at 1,000; the 200-row row
+borrows the 10,000-row pair, since §7g.5 could not separate that size's own
+constant from its cell, and its whole prediction is inside that size's ±2.5%
+floor, which is why it disagrees most)*
+
+**The rule that falls out is worth carrying: a bucketed row costs about
+half a walked row, so the prefix wins exactly when it saves more than
+`0.5 × build_rows` row-visits.** Every failing cell above fails that test and
+every winning one passes it. It also explains the join, which needs no
+separate theory: the join buckets N rows and saves (k−1)·N row-visits, so it
+wins when `(k−1)·N > 0.5·N` — **k > 1.5**, which is §7g.5's measured
+break-even of 1.24–1.56 arrived at from the other direction.
+
+So the k = 4 condition fails not because the constant is large but because at
+k = 4 the *stopping* walk saves too few rows to clear it: 51 of 172 dense,
+3,122 of 6,689 sparse. Halving the constant would move the sparse crossover
+under k = 2 and the dense one only to about k ≈ 4.7 — because in the dense
+shape the prefix avoids one inner scan out of four (`corr_scans` 4 → 3) and
+saves 51 row-visits doing it, and no constant makes 51 rows worth 172. The candidates spec §6 names are unchanged — an earn gate (ratified
+against, and it would give back the k ≥ 8 wins in proportion), or a cheaper
+key — and this run adds the arithmetic each of them has to beat, not an
+opinion about which.
+
+### 7g.7 The floor sweep, in both orders — the placement effect reproduces
+
+Each row-set size ran four driver cells in the order **off, on, on, off**, so
+the file carries a same-config pair for each lever *and* both sweep orders.
+Same-configuration replicate pairs first, dividing the larger p50 by the
+smaller, over all twelve driver shapes:
+
+| pair | N | worst shape | worst Δ | median Δ |
+|---|---:|---|---:|---:|
+| walk vs walk | 200 | books-by-genre | 2.5% | 1.2% |
+| build vs build | 200 | count-by-user | 1.2% | 0.7% |
+| walk vs walk | 1,000 | **overdue** | **16.4%** | 1.5% |
+| build vs build | 1,000 | **pk-user** | **14.5%** | 0.7% |
+| walk vs walk | 10,000 | loans-by-user | 4.1% | 1.1% |
+| build vs build | 10,000 | count-by-user | 4.2% | 0.8% |
+
+**Floors adopted: ±2.5% at 200, ±16.4% at 1,000, ±4.2% at 10,000.** The
+1,000-row floor is set by two single draws, both in the *first* cell of a
+size: `overdue` reads 137.8 µs in the size's first cell against 118.4 in its
+last, and `pk-user` 33.7 in the second against 38.6 in the third. Excluding
+those two shapes, every pair at 1,000 rows agrees within 5.6%.
+
+**The effect follows position, not configuration** — which is what reading
+both orders is for. Lever on against lever off, computed twice, once within
+each order:
+
+| shape | 1,000: off→on (1st→2nd) | 1,000: on→off (3rd→4th) |
+|---|---:|---:|
+| pk-user | +18.7% | +3.4% |
+| overdue | **+16.2%** | **+0.9%** |
+| books-by-genre | +5.6% | +2.1% |
+| count-by-user | +5.2% | +1.2% |
+| loans-by-daterange | +3.7% | +1.5% |
+| books-by-author | +3.1% | +2.3% |
+| **join-no-literal** | **+588.6%** | **+553.1%** |
+| **exists-correlated** | **+135.1%** | **+125.8%** |
+
+Read the first two rows and then the last two. `overdue` and `pk-user` are
+shapes the build arm never sees — `overdue` is a two-column `FilterScan` and
+`pk-user` is a pk `Lookup`, both declined at compile by JB1 — and they show a
+16–19% "improvement" in one order and nothing in the other. **That is the
+whole-cell placement effect, reproduced.** The two shapes the feature exists
+for move by 553–589% and 126–135%, agree between the orders to within 6% of
+each other, and clear the size's own 16.4% floor by factors of thirty-four
+and eight.
+
+The complete lever-on-against-lever-off table, both orders averaged, at each
+size:
+
+| shape | 200 | 1,000 | 10,000 |
+|---|---:|---:|---:|
+| pk-user | −0.5% | +10.5% | +3.7% |
+| loans-by-user | +0.2% | +1.2% | +3.8% |
+| loans-by-book | −2.3% | +1.1% | +4.1% |
+| resv-by-user | −0.3% | +1.9% | −0.6% |
+| books-by-author | −2.1% | +2.7% | +0.3% |
+| books-by-genre | −0.4% | +3.8% | −0.8% |
+| loans-by-daterange | −1.0% | +2.6% | −0.5% |
+| overdue | −0.4% | +8.6% | −0.1% |
+| join-loan-user | +0.9% | +0.7% | −0.1% |
+| **join-no-literal** | **+207.3%** | **+570.9%** | **+860.4%** |
+| **exists-correlated** | **+38.9%** | **+130.5%** | **+199.3%** |
+| count-by-user | +0.5% | +3.2% | −2.4% |
+
+**Pass, with the finding named.** Exactly two rows are outside their size's
+floor, and they are the two rows the feature exists for. Every other row is
+inside its floor at every size; the 1,000-row column's uniform +1% to +10%
+band is the position effect above, has no pattern by shape, and reverses when
+the orders are.
+
+**One more thing the files say.** The four 10,000-row driver cells persist
+**3,670,016 bytes each**, identical to the byte in size under both lever
+settings. They are not identical in content — 150 of 448 pages differ — but
+**two cells of the *same* lever setting differ by the same 150 pages**
+(mount timestamps, transaction ids, the verify sample's own random draw), so
+the difference is run-to-run nondeterminism and not the build. The build banks
+nothing, which is what distinguishes it from the Cabin (§7b) and the index
+(§9b), and is why its benefit does not survive the statement.
+
+### 7g.8 The four-way account at 10,000 loans
+
+§7f.7 retired §7e.5's "a third answer ckdbs does not have" and set the build
+beside PostgreSQL's per-statement hash join. This round refreshes both ckdbs
+columns at HEAD and re-runs the PostgreSQL twin
+(`tools/pg_scenario3_library.py`) in the same session rather than citing it —
+PostgreSQL 16.14 runs on this box, so there is no reason to reuse a number.
+
+| | ckdbs walk | **ckdbs build** | PostgreSQL, no index | ckdbs Cabin, converged |
+|---|---:|---:|---:|---:|
+| `join-no-literal`, k=16 | 103 | **989** | **1,271** | **14,035** |
+| `exists-correlated`, k=20 | 625 | **1,872** | **712** | **13,477** |
+| cost model | k passes per statement (`EXISTS`: the sum of k stopping walks) | **one pass + a map per statement, discarded at statement end** | one pass + a hash per statement, discarded at statement end | zero passes after observation |
+| cross-statement memory | none | **none** | none | the entry set |
+
+*(stmts/s derived from p50; ckdbs columns are the mean of two same-config
+cells, the Cabin column the mean of two `--cabin` cells, PostgreSQL the mean
+of `pg-10000-r1` and its re-run `pg-10000-r2`. The Cabin's p50 is its served
+cost — CB14's per-key observation charge sits in the mean, 146.4 µs against a
+71.0 µs p50, which is why this file reads p50 for that column)*
+
+**The join gap to PostgreSQL closed further, from 1.92× to 1.28×.** Both
+engines make the same kind of answer — one pass, one hash, discarded at
+statement end — and the residual difference is still where §7f located it,
+in the filling rather than the pass:
+
+| | **ns** per inner row |
+|---|---:|
+| ckdbs walk of `loans`, no build (the k=1 line's slope against N) | **62.2** |
+| PostgreSQL seq scan + hash build + projection (same slope over its three sizes) | **58.0** |
+| ckdbs walk **with** the build's bucketing | **96.2** |
+
+*(ckdbs's slope is `(668.2 − 58.7) µs ÷ 9,800 rows`; PostgreSQL's is
+`(786.9 − 218.7) µs ÷ 9,800`, both p50 means of two cells)*
+
+The two engines pass over the relation within 8% of each other — §7e.5's
+"neither engine scans meaningfully faster" holds a third time — and ckdbs then
+spends **55% of a pass again** to bucket it, where PostgreSQL's hash build is
+folded into the scan it was already doing. At `2755045` that surcharge was
+150% of a pass. Two constant cuts have taken it from one and a half passes to
+half a pass, and the remaining 1.28× is that half.
+
+**The `EXISTS` row is new, and it is the first cell in this file where ckdbs
+beats PostgreSQL without banking anything.** 1,872 stmts/s against 712, a
+**2.63× lead**, on the shape §7e.4 measured PostgreSQL flat on and §7f
+measured as a tie (687 against 721). The reason is visible in the two plans.
+PostgreSQL decorrelates: its `EXPLAIN` reads
+`Hash Join … -> HashAggregate (rows=1988) -> Seq Scan on loans`, so it builds
+a distinct set of all 2,000 `user_id`s over a full 10,000-row scan and then
+joins twenty outer rows against it — a fixed cost that does not care that
+twenty rows were asked for. JB6's prefix stops where the twentieth outer row's
+match is: **6,689 rows of 10,000**, one walk, nineteen replays. The
+correlated form beats the decorrelated one here precisely because the
+predicate is satisfiable early and the outer side is small, which is the
+distribution KDS's whole design targets.
+
+Full distributions for the PostgreSQL twin, 200 ops per cell, so the two
+engines' shapes can be compared and not only their medians:
+
+| N | shape | cell | mean | p0 | p25 | p50 | p95 | p99 |
+|---:|---|---|---:|---:|---:|---:|---:|---:|
+| 200 | join-no-literal | r1 / r2 | 221.6 / 229.5 | 209.9 / 211.8 | 213.6 / 216.3 | 216.0 / 221.3 | 248.6 / 258.1 | 263.3 / 414.4 |
+| 200 | exists-correlated | r1 / r2 | 169.7 / 172.0 | 159.4 / 160.7 | 164.1 / 166.1 | 166.5 / 168.2 | 189.0 / 187.9 | 204.0 / 210.1 |
+| 1,000 | join-no-literal | r1 / r2 | 302.6 / 293.2 | 281.7 / 281.5 | 289.3 / 285.4 | 294.9 / 288.9 | 336.8 / 309.5 | 474.8 / 343.5 |
+| 1,000 | exists-correlated | r1 / r2 | 303.0 / 302.6 | 285.1 / 285.5 | 293.5 / 293.9 | 298.0 / 300.2 | 319.2 / 324.7 | 363.1 / 345.4 |
+| 10,000 | join-no-literal | r1 / r2 | 792.8 / 790.6 | 770.4 / 763.9 | 783.1 / 781.2 | 788.1 / 785.6 | 820.9 / 814.2 | 844.7 / 944.9 |
+| 10,000 | exists-correlated | r1 / r2 | 1,418.6 / 1,409.0 | 1,395.4 / 1,374.2 | 1,406.8 / 1,392.0 | 1,413.5 / 1,397.2 | 1,441.0 / 1,469.1 | 1,493.7 / 1,506.1 |
+
+And the same three sizes across all four answers, so the ladder's order is
+visible where rule 9's sweep can check it:
+
+| N | ckdbs walk | ckdbs build | PostgreSQL | ckdbs Cabin |
+|---:|---:|---:|---:|---:|
+| **`join-no-literal`, k=16** | | | | |
+| 200 | 3,976 | 12,217 | 4,574 | 14,641 |
+| 1,000 | 954 | 6,394 | 3,426 | 13,908 |
+| 10,000 | 103 | 989 | 1,271 | 14,035 |
+| **`exists-correlated`, k=20** | | | | |
+| 200 | 9,272 | 12,878 | 5,976 | 13,928 |
+| 1,000 | 3,637 | 8,379 | 3,343 | 13,680 |
+| 10,000 | 625 | 1,872 | 712 | 13,477 |
+
+Three things this sweep says that the 10,000-row row alone cannot. **The build
+is size-insensitive where the walk is not**: 12,217 → 989 stmts/s across a
+fiftyfold relation, against the walk's 3,976 → 103, because the build pays one
+pass where the walk pays sixteen. **PostgreSQL's advantage on the join is a
+large-relation advantage only** — at 200 rows ckdbs's build is 2.7× ahead of
+it and at 1,000 rows 1.9× ahead. The crossing has a cause in each direction:
+ckdbs's per-statement fixed cost is a third of PostgreSQL's (81.9 µs against
+218.7 at 200 rows, where neither engine's pass matters), and ckdbs's build
+surcharge is 34 ns on every row where PostgreSQL's hash fill rides inside a
+scan it was already paying for. And **the Cabin is flat**:
+14,641 → 14,035 across the same fiftyfold range, which is what "zero passes
+after observation" looks like in a table, and remains the ceiling every other
+column is measured against.
+
+### 7g.9 What §7g supersedes, and what stands
+
+**Superseded in §7f, and only these.** §7f.4's `exists-correlated` row —
+9,732 / 4,014 / 691 stmts/s "unchanged, the JB6 gate holding" — is superseded:
+JB6 is built, the class is served, and the numbers are 12,878 / 8,379 / 1,872
+against a walk baseline of 9,272 / 3,637 / 625. §7f.5's build constant of
+83 ns/row and its break-even of k ≈ 2.5 are superseded by **33.6 ns/row at
+10,000 rows and break-even 1.24–1.56**. §7f.4's join figure of 1,461.8 µs
+on-side, and its decomposition into 602 + 834 + 26, are superseded by
+**1,010.8 µs and 668 + 336 + 14**. §7f.7's four-way row for the join —
+114 / 684 / 1,311 / 14,104 — is superseded by **103 / 989 / 1,271 / 14,035**,
+and its "1.92× behind PostgreSQL" by **1.28×**.
+
+**Stands from §7f, and is not re-measured here.** Its whole-matrix §7f.8 with
+the `composite`, `covering` and `indexes = off` columns — including the
+finding that `indexes = off` shadows the build and costs 6.0× for it, which is
+an IX13/JB1 interaction this run did not exercise; its index build-time table;
+and its `ANALYZE` comparison against the banked structures
+(`CabinProbe` at `examined=79`, `IndexProbe` at `examined=79`). §7a through
+§7e stand entirely at their own commits, as §7f left them, and §7e's
+PostgreSQL k-sweep and break-even arithmetic are cited by neither addendum,
+only referenced.
+
+**What this round teaches about the engine, beyond the two verdicts.**
+
+*The ladder's order is the economics, and the build has moved up it without
+moving in it.* At 10,000 loans the four answers to one statement are 103
+(walk), 989 (build), 1,271 (PostgreSQL's equivalent) and 14,035 (Cabin) — the
+build still sits above the walk it replaces and below every banked structure,
+exactly where spec §5 places it, but it is now within 1.28× of the best
+per-statement answer either engine has. Two constant cuts bought that; a third would
+buy proportionally less, because the pass is now two thirds of the statement
+and the build a third.
+
+*A partial structure can be worth more than a complete one.* The `EXISTS`
+cell is the only place in this file where ckdbs beats PostgreSQL on an
+unindexed, uncabined column with no cross-statement memory, and it does so
+with a map that never completes — `inner_built=0` in every draw. JB6's prefix
+is cheaper than PostgreSQL's decorrelated hash aggregate for the same reason
+the whole positive-only rule exists (`docs/parser-v2.md` §6): proving
+existence needs a prefix, and only proving *absence* needs the whole relation.
+
+*One constant explains both shapes, and it is worth carrying forward: a
+bucketed row costs about half a walked row.* 33.6 ns against 62.2 at 10,000
+rows, 31.1 against 63.2 at 1,000. Everything else in this addendum is
+arithmetic on that ratio — the join's break-even at k > 1.5 (it buckets N and
+saves (k−1)·N), and the prefix's crossover wherever the stopping walks it
+avoids exceed half the rows it buckets. A future cut to the constant moves
+both, by exactly the amount §7g.6's table lets anyone compute in advance.
+
+*Spec §6's k = 4 condition is a real, unmet cost and should be read as one.*
+The prefix loses 6–9% at k = 4 and wins 23–60% at k = 16, and nothing in the
+engine can tell those apart before executing — `join_build_max_rows` gates
+rows, not outer cardinality, and the arm is `f(shape, catalog)` by design.
+Whoever takes up the cap-scoping decision now has two shapes' worth of data
+saying the same thing: the missing knob is k, not rows.
+
+**Not run, and named rather than implied.** The JB5 gate's unresolved item —
+whether JB6's resumable-walk plumbing costs 3–6 ns/row even with the lever
+off — is **not settled here**. It needs a placement-equalized cross-commit
+A/B (`-falign-functions=32` in scratch build directories, the workplan's own
+instrument), and §7g.2's whole-run offset of 8–13% on shapes the feature
+cannot reach is more than large enough to swallow the effect: this run can
+neither confirm nor deny it, and does not try. §7f.8's `composite`,
+`covering` and `indexes = off` columns were not re-run. And where inside the
+33.6 ns/row the cost sits — hashing, entry write, or the split residual
+evaluation — still needs per-step timing the engine does not have
+(`docs/observability.md`).
+
 ## 8. Composite is the only structure that helps `overdue`
 
 `overdue` filters two columns (`due_day BETWEEN ? AND ?` and `status = ?`),
