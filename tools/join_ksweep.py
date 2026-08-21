@@ -109,7 +109,7 @@ def main():
     print(f"# label={args.label} shape={args.shape} loans={sizes['loans']} "
           f"users={sizes['users']} ops={args.ops}")
     print(f"{'k':>4} {'rows':>6} {'p0':>10} {'p25':>10} {'p50':>10} "
-          f"{'p90':>10} {'stmts/s':>9}")
+          f"{'p95':>10} {'p99':>10} {'stmts/s':>9}")
     for k in ks:
         stmt = stmt_for(tables, k)
         rows = None
@@ -126,7 +126,7 @@ def main():
         p50 = pct(lat, 0.50)
         print(f"{k:>4} {rows if rows is not None else -1:>6} "
               f"{pct(lat, 0.0):>10.1f} {pct(lat, 0.25):>10.1f} {p50:>10.1f} "
-              f"{pct(lat, 0.90):>10.1f} {1e6 / p50:>9.1f}")
+              f"{pct(lat, 0.95):>10.1f} {pct(lat, 0.99):>10.1f} {1e6 / p50:>9.1f}")
 
     # The plan and its counters, so a reader can tell a probed statement
     # from a walked one without inferring it from the timings.
