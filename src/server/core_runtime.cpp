@@ -113,10 +113,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // until AttachTransport(). So a peer's next mount still scans from whatever
     // anchor core 0 last wrote for it.
     //
-    // That costs nothing today - a peer cannot reserve a transaction id, so its
-    // stream holds no writes of its own to rescan - and it is stated rather than
-    // left to be discovered when P5's id leases make peer writes real. Core 0's
-    // own checkpoint runs in Expeditor::Open.
+    // **That used to cost nothing and now does.** The old reason was that a
+    // peer could not reserve a transaction id, so its stream held no writes
+    // of its own to rescan; PW1 is exactly what ends that, and this core has
+    // no checkpointer at all - `Expeditor` owns the only one. So a writing
+    // peer's stream grows with an anchor that never advances, and every
+    // later mount replays all of it. `RemoteCheckpointAnchor` is the built,
+    // unwired half; `docs/workplan-peer-writer.md` PW3 owns the wiring.
+    // Core 0's own checkpoint runs in Expeditor::Open.
     runtime->store_->SetCoreOwnership(config.core_id, &runtime->lease_, kFirstUserPageId);
 
     // The catalog, read-only in practice: DDL is core 0's, and the store
@@ -474,8 +478,7 @@ void CoreRuntime::MaybeRefillTrxIds() {
     trx_id_refill_in_flight_ = true;
     scheduler_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
-        RequestTrxIdLease(*transport_, trx_id_refill_, kTrxIdLeasePerGrant, config_.core_id,
-                          /*system_core=*/0, log_),
+        RequestTrxIdLease(*transport_, trx_id_refill_, config_.core_id, /*system_core=*/0, log_),
         [this](const Status& s) {
             trx_id_refill_in_flight_ = false;
             if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {

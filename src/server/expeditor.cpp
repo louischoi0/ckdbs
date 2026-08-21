@@ -1331,7 +1331,8 @@ Status Expeditor::Serve() {
         // crash could forget is the one thing `CoreRuntime::Open`'s
         // mount-time refusal cannot tell from a corrupt stream.
         if (Status s =
-                RegisterTrxIdGrantHandler(scheduler, *transport_, *trx_ids_, &*logger_);
+                RegisterTrxIdGrantHandler(scheduler, *transport_, *trx_ids_,
+                                          kTrxIdLeasePerGrant, &*logger_);
             !s.ok()) {
             return s;
         }

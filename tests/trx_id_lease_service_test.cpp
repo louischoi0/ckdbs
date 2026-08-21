@@ -40,7 +40,9 @@ protected:
         });
 
         ASSERT_TRUE(
-            RegisterTrxIdGrantHandler(*core0_, *transport_, *core0_ids_, nullptr).ok());
+            RegisterTrxIdGrantHandler(*core0_, *transport_, *core0_ids_, kTrxIdLeasePerGrant,
+                                      nullptr)
+                .ok());
         ASSERT_TRUE(RegisterTrxIdGrantReceiver(*core1_, refill_, lease_, nullptr).ok());
     }
 
@@ -59,7 +61,7 @@ protected:
         Status result;
         core1_->Submit(sched::MakeCoroTask(
             sched::SchedulingGroup::kSystem,
-            RequestTrxIdLease(*transport_, refill_, count, /*core_id=*/1),
+            RequestTrxIdLease(*transport_, refill_, /*core_id=*/1),
             [&](const Status& s) {
                 result = s;
                 finished = true;
@@ -175,13 +177,15 @@ TEST_F(TrxIdLeaseServiceTest, AGrantThatCannotBeCarvedIsReportedRatherThanHungOn
     sched::Scheduler failing_core0(clock_, io0_);
     failing_core0.AttachTransport(&*transport_, 0);
     ASSERT_TRUE(
-        RegisterTrxIdGrantHandler(failing_core0, *transport_, refusing, nullptr).ok());
+        RegisterTrxIdGrantHandler(failing_core0, *transport_, refusing, kTrxIdLeasePerGrant,
+                                  nullptr)
+            .ok());
 
     bool finished = false;
     Status result;
     core1_->Submit(sched::MakeCoroTask(
         sched::SchedulingGroup::kSystem,
-        RequestTrxIdLease(*transport_, refill_, kTrxIdLeasePerGrant, /*core_id=*/1),
+        RequestTrxIdLease(*transport_, refill_, /*core_id=*/1),
         [&](const Status& s) {
             result = s;
             finished = true;
@@ -213,6 +217,35 @@ TEST_F(TrxIdLeaseServiceTest, ASecondGrantExtendsAContiguousPendingBlock) {
     auto id = peer.Next();
     ASSERT_TRUE(id.ok()) << id.status().message();
     EXPECT_EQ(id.value(), first);
+}
+
+TEST_F(TrxIdLeaseServiceTest, APendingGrantClearsTheLowWaterMark) {
+    // The refill cadence's **stopping** condition, and the one place this
+    // lease may not simply copy `LeasedIdSource`. That one installs its
+    // extent the moment a grant arrives, so its `low_water()` falls with the
+    // grant; this one *parks* the block, and the sequence takes it only once
+    // its own window is spent. A `low_water()` reading the window alone
+    // would therefore still be true immediately after a grant landed, and
+    // `CoreRuntime::MaybeRefillTrxIds` - which asks whenever it is true and
+    // nothing is in flight - would ask again on the very next tick, and on
+    // every tick after that. At the 1 ms drain interval that is a superblock
+    // write and a full `Sync()` per millisecond on core 0's reactor, and
+    // 4096 transaction ids burned with each, for a peer that has not issued
+    // one.
+    server::SuperBlock peer_copy = server::SuperBlock::CreateFresh(1000);
+    txn::TrxIdSequence peer(peer_copy, nullptr);
+    peer.SetLeaseSource(&lease_);
+
+    EXPECT_TRUE(peer.low_water()) << "a peer that has never held a window must ask";
+    ASSERT_TRUE(Refill().ok());
+    EXPECT_FALSE(peer.low_water()) << "a peer holding an unconsumed grant asked for another";
+
+    // And once the block is in the window the mark stays down until the
+    // window is three-quarters spent, which is the extent lease's threshold.
+    ASSERT_TRUE(peer.Next().ok());
+    EXPECT_FALSE(peer.low_water());
+    while (peer.remaining() > kTrxIdLeasePerGrant / 4) ASSERT_TRUE(peer.Next().ok());
+    EXPECT_TRUE(peer.low_water()) << "the mark never came back up";
 }
 
 }  // namespace

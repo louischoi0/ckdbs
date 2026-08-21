@@ -85,6 +85,27 @@ touched:
    needs a peer that checkpoints, which is PW3; the config plumbing and the
    no-false-refusal direction are covered, the refusal direction is not.
 
+**The review found one live defect, and it was a design error rather than a
+slip.** `low_water()` measured only the sequence's own window, but a grant
+parks in `TrxIdLease::pending_` and does not install until the window is
+spent — so the mark stayed up across the whole refill and
+`MaybeRefillTrxIds()` asked again on the next tick, forever. On an *idle*
+peer at the default 1 ms drain cadence that is a superblock write plus a full
+`Expeditor::Sync()` on core 0's reactor thread every millisecond, and 4 M
+transaction ids per second burned out of a space invariant 12 forbids
+wrapping. `low_water()` now counts the pending grant, with
+`APendingGrantClearsTheLowWaterMark` pinning it — verified to fail against
+the unfixed build. The cause is worth keeping: this is the one point where
+the lease may **not** copy `LeasedIdSource`, which installs its extent inside
+`Grant` and so drops its own mark when the grant lands.
+
+Also taken from that review: the request payload's caller-supplied `count` is
+gone — `Carve` clamps at `kMaxTrxId + 1` and grants what it clamped to, so a
+count on the wire let one malformed message consume the instance's whole
+48-bit space. The grant size is fixed at registration now, which is what
+`RegisterExtentGrantHandler` already did and what the row-id service
+diverged from.
+
 The persist-after-mutate ordering named below is **not** fixed, and the
 reason is now written at the site: a lost persist leaves the in-memory
 ceiling *above* the durable one, so the next carve starts higher and burns
@@ -106,12 +127,23 @@ On a peer that callback is `CoreRuntime::Open`'s refusal
 So a peer's write dies at its first id, before it reaches a page. Reads are
 unaffected: a read view is minted from `peek()`, which issues nothing.
 
-This is the same shape as row ids, and **that half is already built** —
-`catalog::RowIdLeaseTable` is installed into every non-zero core's catalog
-(`src/server/core_runtime.cpp:125`), `AllocateRowId()` draws from the block,
-and `kRowIdLease` refills over the ring
-(`include/kds/server/row_id_lease_service.hpp`, `kRowIdLeasePerGrant = 4096`).
-The trx-id lease is that service again with a different payload.
+This is the same shape as row ids — and **the claim that "that half is
+already built" was wrong, found at PW1's review 2026-08-21.** The *receiving*
+half is: `catalog::RowIdLeaseTable` is installed into every non-zero core's
+catalog, `AllocateRowId()` draws from the block, and the grant handler and
+receiver are both wired. The *asking* is not — `RequestRowIdLease` has **zero
+callers** in the tree. Since `AllocateRowId` short-circuits to the lease
+whenever one is installed (`src/catalog/catalog.cpp:1907`), and nothing ever
+grants that table anything, a peer INSERT still fails at its row id with
+`ResourceExhausted`, permanently.
+
+**So PW1 does not by itself produce a writing peer**, and this workplan said
+otherwise. It removes the first of two closed doors. The second is
+**PW1b**, below, and it is not the wiring omission it looks like: a row-id
+lease is *per relation*, so a pre-emptive low-water tick — the trick PW1 uses
+for the per-instance trx-id sequence — has no relation to name. Something has
+to decide which relations a peer leases ids for, and that is a design
+question, not a missing call.
 
 **One ordering constraint is a correctness statement, not a preference.**
 `CoreRuntime::Open` refuses the mount when a peer's recovered stream names a
@@ -223,15 +255,28 @@ per-core instance is a `SO_REUSEPORT` setsockopt beside the existing
 | # | Task | Gate |
 |---|---|---|
 | PW1 | **Built 2026-08-21.** Trx-id lease over the ring (`kTrxIdLease`), mirroring `row_id_lease_service`. Core 0 persists the ceiling before granting; the reserve arithmetic and the mount check's zero bound corrected with it | none |
-| PW2 | Route the two root-move catalog writes. **Needs a decision — §7** | PW1 |
+| PW1b | Make a peer *ask* for row-id blocks. `RequestRowIdLease` exists and has no callers, so a peer INSERT still dies at its row id. **Needs a decision**: a per-relation lease has no pre-emptive tick to ride, so something must choose which relations a peer leases for — on first exhaustion with a retry, at first write to a relation, or at the CC7 fault grant | PW1 |
+| PW2 | Route the two root-move catalog writes. **Needs a decision — §7** | PW1, PW1b |
 | PW3 | Wire a peer checkpointer through `RemoteCheckpointAnchor` | PW1 |
 | PW4 | Name the peer DDL refusal, and hang §5d's purge gate off it | none |
 | PW5 | `SO_REUSEPORT` per-core listeners; share the credential store and TLS context without sharing them mutably | PW1, PW4 |
 | PW6 | The benchmark: `placement = rotate`, one writer connection per core, per-core relations. The first cross-core number that is a speedup and not a cost | PW1-PW5 |
 
-PW1 alone makes a peer write a heap relation with no secondary index, so
-PW1 + PW3 + PW5 is a shippable slice with a real number at the end of it and
-a stated shape restriction. PW2 is what removes the restriction.
+PW1 + PW1b make a peer write a heap relation with no secondary index, so
+PW1 + PW1b + PW3 + PW5 is a shippable slice with a real number at the end of
+it and a stated shape restriction. PW2 is what removes the restriction.
+
+**Deferred cleanup, with a name** (PW1's review, rejected for PW1 itself):
+`trx_id_lease_service.cpp`'s receiver and request coroutine are a third
+near-identical copy of `row_id_lease_service.cpp`'s, which are themselves
+`extent_lease_service.cpp`'s — the two functions differ in six lines. A
+shared `server/lease_refill.hpp` templated on payload and an `apply` callable
+would delete ~70 lines now and ~70 more when the older two adopt it. Declined
+inside PW1 because it refactors two already-shipped services under a change
+that had not landed; the right moment is when a change next touches those
+funnels. **Not** to be merged with it: `TrxIdLease`, `catalog::RowIdLease`
+and `storage::Extent` are three id domains with three exhaustion contracts,
+and they resemble each other more than they share.
 
 ## 7. The decision PW2 needs — do not assume
 

@@ -210,11 +210,11 @@ public:
     catalog::RowIdLeaseTable& row_id_leases() noexcept { return row_id_leases_; }
     RowIdRefill& row_id_refill() noexcept { return row_id_refill_; }
 
-    // This core's transaction-id lease and refill state, exposed for the
-    // reason the two above are: a test drives a grant without a reactor,
-    // and diagnostics read the counters.
+    // This core's transaction-id lease, exposed for the first of those two
+    // reasons only: a test drives a grant without a reactor. The refill
+    // state has no accessor because nothing outside reads it - the claim
+    // that "diagnostics read the counters" is true of neither lease today.
     txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
-    TrxIdRefill& trx_id_refill() noexcept { return trx_id_refill_; }
 
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     sched::Scheduler& scheduler() noexcept { return *scheduler_; }
@@ -277,9 +277,13 @@ private:
 
     // The statement stack. A peer's `SuperBlock` is a **copy** taken on the
     // startup thread: the dispatcher needs one for SHOW-class commands, and
-    // the live instance belongs to core 0. Nothing here writes it, and the
-    // one field that would matter - the transaction-id ceiling - is P5's,
-    // not this phase's.
+    // the live instance belongs to core 0. Nothing here reaches the page.
+    //
+    // Since PW1 the copy carries one field that is not merely decorative:
+    // `Config::next_trx_id`, core 0's transaction-id ceiling, is applied to
+    // it at `Open` so the mount check has a real bound and `trx_ids_` below
+    // caches a real one. It is still a copy and still unpersisted - a peer's
+    // *raise* of that ceiling comes from a grant, never from here.
     SuperBlock superblock_;
     std::optional<catalog::Catalog> catalog_;
     std::optional<txn::TrxIdSequence> trx_ids_;

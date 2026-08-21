@@ -48,29 +48,34 @@ namespace kds::server {
 // this service's own, for the reason in the header.
 inline constexpr std::uint64_t kTrxIdLeasePerGrant = txn::kTrxIdBlockSize;
 
-// Wire forms. POD, under ring_message.hpp's exception to the on-disk layout
-// rules: they never leave the process.
-struct TrxIdLeaseRequestPayload {
-    std::uint64_t count;
-};
-static_assert(sizeof(TrxIdLeaseRequestPayload) == 8);
-
+// Wire form. POD, under ring_message.hpp's exception to the on-disk layout
+// rules: it never leaves the process.
+//
+// **The request carries nothing, and that is a decision.** How many ids a
+// grant is worth belongs to the core that owns the sequence, not to the one
+// asking - `RegisterExtentGrantHandler` fixes `pages_per_grant` at
+// registration for the same reason. Here it is also a bound: `Carve` clamps
+// at `kMaxTrxId + 1` and grants whatever it clamped to, so a requested count
+// would let one malformed message consume the instance's whole 48-bit space,
+// which invariant 12 forbids ever reclaiming. The row-id service takes a
+// count on the wire; that is the sibling this one deliberately does not copy.
 struct TrxIdLeaseGrantPayload {
     std::uint64_t first_id;
     std::uint64_t count;  // 0 = none available; the id space is exhausted
 };
 static_assert(sizeof(TrxIdLeaseGrantPayload) == 16);
 
-// Installs core 0's responder: a peer's request is answered with a block
-// from `ids.Carve()`, which raises the superblock's ceiling and makes it
-// durable **before** replying. A carve that fails replies with a zero-count
-// grant rather than dropping silently - the requester is waiting, and a
-// reply it can read as "none" is what lets it fail a statement honestly.
+// Installs core 0's responder: a peer's request is answered with a block of
+// `ids_per_grant` from `ids.Carve()`, which raises the superblock's ceiling
+// and makes it durable **before** replying. A carve that fails replies with a
+// zero-count grant rather than dropping silently - the requester is waiting,
+// and a reply it can read as "none" is what lets it fail a statement honestly.
 //
 // `ids` is core 0's own sequence, deliberately: sharing the carve is what
 // keeps the two consumers of one ceiling from colliding (trx_id.hpp).
 Status RegisterTrxIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, txn::TrxIdSequence& ids,
+                                 std::uint64_t ids_per_grant = kTrxIdLeasePerGrant,
                                  Logger* log = nullptr);
 
 // One core's refill state, owned by the caller for the coroutine's reason
@@ -91,9 +96,10 @@ Status RegisterTrxIdGrantReceiver(sched::Scheduler& scheduler, TrxIdRefill& refi
                                   txn::TrxIdLease& lease, Logger* log = nullptr);
 
 // The coroutine that asks for a block. Submit at `low_water()`; one in
-// flight per core, the extent refill's rule.
+// flight per core, the extent refill's rule. It names no size - see the
+// payload above.
 sched::Coro RequestTrxIdLease(sched::RingTransport& transport, TrxIdRefill& refill,
-                              std::uint64_t count, std::uint32_t core_id,
-                              std::uint32_t system_core = 0, Logger* log = nullptr);
+                              std::uint32_t core_id, std::uint32_t system_core = 0,
+                              Logger* log = nullptr);
 
 }  // namespace kds::server

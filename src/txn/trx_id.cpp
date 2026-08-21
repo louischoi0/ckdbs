@@ -19,7 +19,13 @@ StatusOr<TrxIdRange> TrxIdSequence::Carve(std::uint64_t count) {
         return Status::OutOfRange("transaction id space exhausted at " + std::to_string(first) +
                                   "; ids are never wrapped");
     }
-    if (count == 0) return TrxIdRange{first, 0};
+    if (count == 0) {
+        // Refused rather than answered with a zero-width range, which
+        // `InstallWindow` would turn into a window `Next()` issues straight
+        // past. `ExtentAllocator::Reserve` answers the same way to the same
+        // question.
+        return Status::InvalidArgument("a transaction-id block of 0 ids was asked for");
+    }
 
     // Clamped at the top of the space rather than allowed to overflow past
     // it: the last block is whatever is left, and it is still a block.
@@ -66,8 +72,8 @@ Status TrxIdSequence::ReserveBlock() {
         if (granted.value().first < next_) {
             return Status::Corruption(
                 "transaction-id grant starts at " + std::to_string(granted.value().first) +
-                ", at or below the " + std::to_string(next_) +
-                " this core has already issued; a block was carved out of order");
+                ", below the " + std::to_string(next_) +
+                " this core would issue next; a block was carved out of order");
         }
         InstallWindow(granted.value());
         return Status::OK();

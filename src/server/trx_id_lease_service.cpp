@@ -9,28 +9,17 @@ namespace kds::server {
 
 Status RegisterTrxIdGrantHandler(sched::Scheduler& system_scheduler,
                                  sched::RingTransport& transport, txn::TrxIdSequence& ids,
-                                 Logger* log) {
+                                 std::uint64_t ids_per_grant, Logger* log) {
     return system_scheduler.RegisterMessageHandler(
         sched::RingMessageKind::kTrxIdLease,
-        [&system_scheduler, &transport, &ids, log](const sched::MessageHeader& header,
-                                                   std::span<const std::byte> payload) {
-            TrxIdLeaseRequestPayload request{};
-            if (payload.size() != sizeof(request)) {
-                if (log != nullptr && log->enabled(LogLevel::kError)) {
-                    log->Error("trxid", "lease request from core " +
-                                            std::to_string(header.src_core) + " has " +
-                                            std::to_string(payload.size()) + " bytes, not " +
-                                            std::to_string(sizeof(request)));
-                }
-                return;  // nothing to reply to: the request is unreadable
-            }
-            std::memcpy(&request, payload.data(), sizeof(request));
-
-            const std::uint64_t count =
-                request.count == 0 ? kTrxIdLeasePerGrant : request.count;
-
+        [&system_scheduler, &transport, &ids, ids_per_grant, log](
+            const sched::MessageHeader& header, std::span<const std::byte>) {
+            // The request body is not read: the grant size is this core's,
+            // fixed at registration (trx_id_lease_service.hpp). An empty
+            // payload therefore cannot be malformed, and there is no size
+            // check to fail closed on.
             TrxIdLeaseGrantPayload grant{};
-            auto carved = ids.Carve(count);
+            auto carved = ids.Carve(ids_per_grant);
             if (carved.ok()) {
                 grant.first_id = carved.value().first;
                 grant.count = carved.value().count;
@@ -92,16 +81,11 @@ Status RegisterTrxIdGrantReceiver(sched::Scheduler& scheduler, TrxIdRefill& refi
 }
 
 sched::Coro RequestTrxIdLease(sched::RingTransport& transport, TrxIdRefill& refill,
-                              std::uint64_t count, std::uint32_t core_id,
-                              std::uint32_t system_core, Logger* log) {
+                              std::uint32_t core_id, std::uint32_t system_core, Logger* log) {
     refill.granted = false;
     refill.first_id = 0;
     refill.count = 0;
     ++refill.requests;
-
-    TrxIdLeaseRequestPayload request{count};
-    std::byte bytes[sizeof(request)];
-    std::memcpy(bytes, &request, sizeof(request));
 
     sched::MessageHeader header{};
     header.src_core = core_id;
@@ -110,8 +94,7 @@ sched::Coro RequestTrxIdLease(sched::RingTransport& transport, TrxIdRefill& refi
     header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kTrxIdLease);
     header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
 
-    if (Status s = transport.TrySend(header, std::span<const std::byte>(bytes, sizeof(bytes)));
-        !s.ok()) {
+    if (Status s = transport.TrySend(header, {}); !s.ok()) {
         // Not retried, the extent request's reason: nobody waits on a
         // request that never left, and the next low-water tick asks again.
         co_return s;

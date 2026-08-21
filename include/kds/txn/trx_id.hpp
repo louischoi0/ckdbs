@@ -119,14 +119,31 @@ public:
     // restores the carving path.
     void SetLeaseSource(TrxIdLease* lease) noexcept { lease_ = lease; }
 
-    // Ids left in the current window, and whether it is time to ask for
-    // another. A leased core must ask **before** the window is spent -
-    // `Next()` is called from inside a statement and cannot await a grant,
-    // which is `storage/extent_lease.hpp`'s rule and its quarter-window
-    // threshold. A sequence that has never held a window reads as low, so
-    // a peer's first tick asks.
+    // Ids left in the current window. A pending grant is **not** counted:
+    // it is not issuable until the window is spent and `ReserveBlock()`
+    // takes it.
     std::uint64_t remaining() const noexcept { return next_ >= ceiling_ ? 0 : ceiling_ - next_; }
-    bool low_water() const noexcept { return window_ == 0 || remaining() <= window_ / 4; }
+
+    // Whether it is time to ask for another block. A leased core must ask
+    // **before** the window is spent - `Next()` is called from inside a
+    // statement and cannot await a grant, which is
+    // `storage/extent_lease.hpp`'s rule and its quarter-window threshold. A
+    // sequence holding nothing at all reads as low, so a peer's first tick
+    // asks.
+    //
+    // **A grant already in hand counts, even though `remaining()` cannot
+    // see it**, and this is the one point where the lease may not simply
+    // copy `LeasedIdSource`. That one installs the extent when the grant
+    // arrives, so its low-water mark falls with the grant; this one parks
+    // the block until the window is spent. Asking on the window alone would
+    // therefore stay true across the whole refill and `MaybeRefillTrxIds()`
+    // would ask again on every tick - a superblock write and a full `Sync()`
+    // per millisecond on core 0, and a block of ids burned with each.
+    bool low_water() const noexcept {
+        const std::uint64_t held =
+            remaining() + (lease_ != nullptr ? lease_->pending_count() : 0);
+        return held == 0 || held <= window_ / 4;
+    }
 
     // The next id this sequence would issue, without issuing it. For
     // minting a read view's high-water mark, which must be an *exclusive*
@@ -143,20 +160,11 @@ private:
 
     server::SuperBlock& superblock_;
     std::function<Status()> persist_;
-    // `next_` and `ceiling_` stay where they were, ahead of everything PW1
-    // added: `Next()` reads both on the path every statement takes, and
-    // reads nothing below them on any path.
-    //
-    // **Not a measured win - a free one taken because it could not be
-    // measured either way.** Declaring `lease_` first moved the pair 8
-    // bytes later and showed +1.3% on INSERT p50, consistent in sign across
-    // six interleaved reps in both A/B orders. A null control then ran the
-    // *same* base binary on both sides of the same interleave and produced
-    // a +0.040 us whole-transaction delta of its own, with INSERT p50
-    // spanning 2.53-2.63 us run to run - so `kds_txn_bench` does not
-    // resolve differences of this size, and neither the regression nor its
-    // recovery is established. The order below is what the original layout
-    // had; it costs nothing to keep.
+    // `next_` and `ceiling_` keep the offsets they had before PW1, ahead of
+    // what it added. Reordering them measured inside `kds_txn_bench`'s own
+    // noise floor either way, so this is free rather than proven -
+    // `docs/workplan-peer-writer.md` carries the numbers and the null
+    // control that made them unusable.
     std::uint64_t next_;
     std::uint64_t ceiling_;
     TrxIdLease* lease_ = nullptr;
