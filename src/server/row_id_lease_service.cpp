@@ -79,6 +79,10 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
                 // core. It wakes, sees count 0, and reports.
                 refill.count = 0;
                 refill.granted = true;
+                // No run arrived, so the relation still reads as low water
+                // and the drain tick would ask again every cadence. The
+                // oid is the one the request named.
+                leases.Deny(static_cast<catalog::Oid>(refill.table_oid));
                 return;
             }
             RowIdLeaseGrantPayload fields{};
@@ -90,6 +94,15 @@ Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refi
                 leases.Grant(static_cast<catalog::Oid>(fields.table_oid), fields.first_id,
                              fields.count);
                 ++refill.grants;
+            } else {
+                // "None available" is an answer, and a permanent one - the
+                // carve failed because the relation is gone, names its own
+                // ids, or has exhausted the space. Recorded on the entry so
+                // the drain tick stops asking every cadence for a relation
+                // core 0 has already refused, which would also keep it from
+                // ever reaching a second needy relation on this core
+                // (catalog/row_id_lease.hpp, `RowIdLease::denied`).
+                leases.Deny(static_cast<catalog::Oid>(fields.table_oid));
             }
             refill.granted = true;
         });

@@ -209,6 +209,12 @@ public:
     // core 0 carves its own and never leases from itself.
     void MaybeRefillTrxIds();
 
+    // And for row ids (PW1b), which differ in what triggers them: a row-id
+    // lease is per *relation*, so this asks for the neediest relation the
+    // lease table knows about, and the table learns of one only when a
+    // statement asks it for an id (catalog/row_id_lease.hpp).
+    void MaybeRefillRowIds();
+
     // The receive side of CC7's flush-then-grant handoff (workplan P6b):
     // fault rights over a relation's page range, granted by core 0 at DDL
     // publish. What the `kRelationFaultGrant` handler calls; exposed so a
@@ -281,6 +287,10 @@ private:
     // its reason: without it every tick before the first grant lands would
     // submit another request, and every one of them would be answered.
     bool trx_id_refill_in_flight_ = false;
+    // One row-id refill in flight at a time, for the same reason - and it is
+    // per core rather than per relation, so a second needy relation waits one
+    // tick rather than racing the first.
+    bool row_id_refill_in_flight_ = false;
 
     // The remote step server (P4b), armed at AttachTransport: this core
     // answers STEP_OPENs for relations it owns.

@@ -464,6 +464,12 @@ void CoreRuntime::Run() {
         if (config_.core_id != 0) {
             scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
                                     [this] { MaybeRefillTrxIds(); });
+            // And the row-id lease's (PW1b), on the same tick and for the
+            // same reason the extent check is here: cheap `system` work, and
+            // a second timer for a map walk bounded by this core's relations
+            // would cost more than it measures.
+            scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
+                                    [this] { MaybeRefillRowIds(); });
         }
     }
 
@@ -513,6 +519,41 @@ void CoreRuntime::MaybeRefillLease() {
                 // retryably until a later tick succeeds.
                 log_->Error("extent", "core " + std::to_string(config_.core_id) +
                                           ": lease refill failed: " + s.message());
+            }
+        }));
+}
+
+void CoreRuntime::MaybeRefillRowIds() {
+    // The row-id lease's asking half (PW1b). It could not ride the trx-id
+    // lease's shape directly: that sequence is per *instance*, so a peer can
+    // pre-empt for it from the first tick, while a row-id lease is per
+    // *relation* and has no subject until a statement names one. So demand
+    // is recorded where it is discovered - `RowIdLeaseTable::Next` inserts
+    // the spent entry on a miss - and this tick answers it.
+    //
+    // The consequence, stated because a client sees it: the **first** INSERT
+    // into a relation on a given peer fails retryably, which is exactly what
+    // that lease's `ResourceExhausted` message already promises, and no
+    // later one does.
+    if (row_id_refill_in_flight_) return;
+    const auto neediest = row_id_leases_.NeediestRelation();
+    if (!neediest.has_value()) return;
+
+    row_id_refill_in_flight_ = true;
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kSystem,
+        RequestRowIdLease(*transport_, row_id_refill_, *neediest, kRowIdLeasePerGrant,
+                          config_.core_id, /*system_core=*/0, log_),
+        [this](const Status& s) {
+            row_id_refill_in_flight_ = false;
+            if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                // Nothing to return it to - a background task - and the
+                // consequence is bounded: INSERTs into that relation keep
+                // failing retryably until a later tick succeeds. A relation
+                // whose id space is genuinely exhausted answers zero-count
+                // forever, and the retry is then the honest report.
+                log_->Error("rowid", "core " + std::to_string(config_.core_id) +
+                                         ": row-id refill failed: " + s.message());
             }
         }));
 }
