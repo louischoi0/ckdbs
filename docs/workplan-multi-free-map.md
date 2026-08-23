@@ -623,12 +623,14 @@ with interleaved A/B per CLAUDE.md:
    against `d8be95a` on the same workload, because §5's whole argument is that
    this is the one place a multi-page map can cost real time.
 
-## 9. A finding this plan does not act on
+## 9. A finding this plan surfaced — now recorded
 
 The 65,280-page / 510 MiB instance ceiling is enforced in four places on
 `multi-free-map` at `d8be95a` (`device_page_store.cpp:173`, `:403`, `:479`;
-`extent_lease.cpp:25`) and pinned by three test files, but **it is not in
+`extent_lease.cpp:25`) and pinned by three test files, but it was **not in
 `docs/known-gaps.md`** — which is where CLAUDE.md says engine-wide gaps live,
-and which discusses free-map reuse being gated without ever saying how small
-the map is. Adding it is a one-line doc change, left for the go-ahead rather
-than taken here.
+and which discussed free-map reuse being gated without ever saying how small
+the map is. Added there 2026-08-23, under "Storage and key modes", including
+the §6a coupling: the ceiling is currently the engine's only bound on leaked
+space, so lifting it raises the ceiling on orphaned pages as much as on live
+ones.
