@@ -720,6 +720,25 @@ still waits on its own gate, so:
 
 ## Storage and key modes
 
+- **An instance cannot exceed 65,280 pages — 510 MiB of data file.** Not
+  the 16 TiB `docs/page.md` §4 designs for: `page_id` is `u32` with a 2^31
+  ceiling asserted at the device layer, and every persisted page-id field
+  in the engine stores a full 32 bits, so nothing *on disk* is the limit.
+  The limit is that the free map is **one page**, and one bitmap page
+  covers `(8192 − 32) × 8` ids. §5's multi-page free map — free-map pages
+  at computable interval positions — is written but unbuilt, and the
+  single-page ceiling is enforced in four places: `IsAllocated` (an id at
+  or above coverage reads as *not allocated*, so `Get()` answers
+  `NotFound`), `CreateAt` and `RaiseAllocationFloor` (both `OutOfRange`),
+  and `ExtentAllocator::Reserve` (`OutOfSpace`). Reaching it is a hard
+  refusal, not corruption. **It is also acting as the engine's only bound
+  on leaked space**: with nothing freeing pages (see reclamation above), a
+  `DROP TABLE`/rebuild loop stops at 510 MiB today and would run to the
+  design ceiling once the map grows — so lifting this raises the ceiling
+  on orphaned pages exactly as much as on live ones. Survey, placement
+  candidates and the task series:
+  `docs/workplan-multi-free-map.md` (2026-08-22); the placement
+  arithmetic itself stays `[OPEN]` in `docs/page.md` §5.
 - ~~**Dividing a full btree *internal* node is not implemented**~~ —
   **built 2026-08-11** (`docs/workplan-key-mode.md` PK09). A separator
   promoted into a full parent now divides that node's entries when it sorts

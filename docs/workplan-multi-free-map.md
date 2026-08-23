@@ -1,0 +1,636 @@
+# Workplan — the multi-page free map (`docs/page.md` §5)
+
+**Status: survey and plan only. Nothing here is built, and nothing here is
+decided.** `docs/page.md` §5 says free-map pages "sit at computable interval
+positions in the id space" and does not say which positions; §2 of this file
+records the candidates and their costs and **deliberately picks none**. Every
+other question the survey left open is a named decision in §7, in the shape
+`docs/workplan-peer-writer.md` §7b uses: the statement, the options, what each
+costs, and no silent default.
+
+Every claim below about code was read on the `multi-free-map` worktree at
+`d8be95a`. No measurement was taken and none was needed — every finding here
+is structural, and this worktree has no `build-release` of its own. §8 names
+the two numbers that *will* need one once something is built.
+
+**Scope.** Raise the instance ceiling from one bitmap page to a computable
+family of them. In scope: the addressing arithmetic, the store's map cache,
+the ceilings that today read `kFreeMapBitsPerPage`, `ExtentAllocator` across a
+page boundary, the headerless map's very different access pattern, mount
+validation, and peer stores. Out of scope, explicitly, in §6a: reclamation.
+
+---
+
+## 1. The current path, end to end, for both bitmaps
+
+`kFreeMapPageId` (1) and `kHeaderlessMapPageId` (2) are declared as fixed low
+ids at `include/kds/storage/device_page_store.hpp:109` and `:115`, and share
+one codec — `FormatFreeMapPage`, `ValidateFreeMapPage`, `FreeMapIsAllocated`,
+`FreeMapAllocate`, `FreeMapFindFirstFree`, `FreeMapCountAllocated` in
+`include/kds/storage/free_map.hpp` — distinguished on disk only by the common
+header's type byte (`PageType::kFreeMap` vs `PageType::kHeaderlessMap`).
+Coverage is one constant, `kFreeMapBitsPerPage = (8192 − 32) × 8 = 65,280` ids
+(`free_map.hpp:30-32`) — 510 MiB of data file, and on `multi-free-map` at
+`d8be95a` that is the **whole instance ceiling**, not a per-page one.
+
+### 1.1 Load at mount
+
+`DevicePageStore::Open` (`src/storage/device_page_store.cpp:24`) is the only
+loader. It declares two stack `Page` buffers, decides freshness from
+`device.page_capacity() <= kFreeMapPageId` (`:33`), reads exactly page 1
+(`:35`) and exactly page 2 (`:57`), and validates each with
+`ValidateFreeMapPage` (`:38`, `:64`). A fresh database formats both and marks
+their own two bits (`:47-50`). The two buffers are copied into the store's
+`free_map_page_` / `headerless_map_page_` members
+(`device_page_store.hpp:621-622`) by the constructor at
+`device_page_store.cpp:19-20`.
+
+**They are `Page` members, not frames.** The maps are not in `frames_`, so
+they are invisible to `DirtyPageIds()`, `DirtyPagesWithRecLsn()`, the CLOCK
+sweep, `EvictClean` (`device_page_store.hpp:378`), the scan ring and
+`PageRef`.
+
+Note that **every core opens its own store over the same device**
+(`src/server/core_runtime.cpp:54`), so an N-core mount holds N private copies
+of both pages, and a peer's copy is frozen at its `Open()`.
+
+### 1.2 Scan during `ExtentAllocator::Reserve`
+
+`ExtentAllocator` holds `std::span<std::byte, kPageSize> free_map_` — **one
+page, borrowed, for the allocator's lifetime**
+(`include/kds/storage/extent_lease.hpp`; `Reserve` at
+`src/storage/extent_lease.cpp:7`). The span comes from
+`DevicePageStore::free_map_bytes()` at `src/server/expeditor.cpp:1175`, and
+the allocator is a long-lived `std::optional` member
+(`include/kds/server/expeditor.hpp:659`). The scan is
+`FreeMapFindFirstFree(free_map_, candidate)` (`extent_lease.cpp:19`), the
+run-length probe is `FreeMapIsAllocated(free_map_, start + run)` (`:33`), and
+the refusal is `start + count > kFreeMapBitsPerPage` → `OutOfSpace` (`:25`).
+
+Core 0 also allocates *per page* without going through `Reserve`:
+`CreateNewUnpinned` calls `FreeMapFindFirstFree(free_map_bytes(),
+next_new_page_id_)` at `device_page_store.cpp:449`. See §5 for why that
+matters to the residency target.
+
+### 1.3 Marking
+
+Three sites set free-map bits: `CreateAtUnpinned`
+(`device_page_store.cpp:413`), `Reserve`'s marking loop
+(`extent_lease.cpp:40`), and `Open`'s bootstrap of the maps' own bits
+(`device_page_store.cpp:48-49`, `:62`). The headerless bit is set in exactly
+one place, `CreateNewHeaderlessUnpinned` (`:106`).
+
+`FreeMapAllocate` **silently ignores** an index at or above
+`kFreeMapBitsPerPage` (`free_map.cpp:38`) and `FreeMapIsAllocated` **returns
+true** for one (`free_map.cpp:33`) — fail-closed by design, so a missed range
+check cannot corrupt a neighbouring bit. Under a multi-page map those two
+guards stop meaning "outside the id space" and start meaning "outside *this
+page*", which is a different and far more common condition.
+
+### 1.4 Dirty tracking
+
+**One `bool maps_dirty_` for both pages** (`device_page_store.hpp:626`), with
+the reason at the declaration: they are written together, in the same order,
+at the same points, and a flag per map would create a state where one is on
+disk and the other is not. It is set at `device_page_store.cpp:107`, `:414`,
+and — unconditionally, on every call, whether or not the caller writes a bit —
+by the public `free_map_bytes()` accessor at `device_page_store.hpp:332`.
+
+### 1.5 Write-back
+
+`FlushMaps` (`device_page_store.cpp:115`) is the only writer. It returns early
+on a leased store (`:133`, the peer rule), stamps and writes the headerless
+map (`:147`), then the free map (`:155`), then clears the flag (`:164`). It is
+reached from `Flush()` (`:695`, after `WriteBack` of the data pages) and from
+`FlushPages()` (`:781-782`, likewise after).
+
+**`FlushMaps` does not go through `WriteBack`**, so the maps are not
+run-coalesced, not gated by `AwaitWalGate`, and never in a checkpoint dirty
+table — consistent with the map being unlogged (`src/server/expeditor.cpp:1163`
+says so in as many words; `RecordType::kAlloc`/`kFree` exist at
+`include/kds/wal/record.hpp:58`/`:64` with a payload codec at
+`include/kds/wal/payload.hpp:333`, and `grep` finds no emitter anywhere in
+`src/`).
+
+### 1.6 Which paths assume "exactly one page"
+
+Assume **one page** — must change:
+
+| Site | The assumption |
+|---|---|
+| `device_page_store.hpp:621-622` | two `Page` members, one each |
+| `device_page_store.hpp:626` | one `maps_dirty_` bool for both |
+| `device_page_store.hpp:332`, `:598`, `:601` | `*_bytes()` returns *the* page |
+| `device_page_store.cpp:33` | freshness = capacity vs. page 1 |
+| `device_page_store.cpp:35`, `:57` | mount reads exactly ids 1 and 2 |
+| `device_page_store.cpp:115-165` | `FlushMaps` writes exactly two device pages |
+| `device_page_store.cpp:173` | `IsAllocated`: `id >= kFreeMapBitsPerPage` → **false** — the hard ceiling that makes `Get()` answer `NotFound` |
+| `device_page_store.cpp:187` | `allocated_pages()` counts one page |
+| `device_page_store.cpp:403-406` | `CreateAt` → `OutOfRange` past coverage |
+| `device_page_store.cpp:449` | `CreateNew` searches one page from `next_new_page_id_` |
+| `device_page_store.cpp:479-483` | `RaiseAllocationFloor` → `OutOfRange` past coverage |
+| `extent_lease.hpp` (`free_map_`) | the allocator borrows one page for its lifetime |
+| `extent_lease.cpp:19`, `:25`, `:33`, `:40` | scan, ceiling, probe and mark all within it |
+| `free_map.cpp:33`, `:38`, `:45`, `:51`, `:56` | `kFreeMapBitsPerPage` read as the size of the id space |
+
+Already "the page covering this id", or indifferent — need not change:
+
+- `free_map.cpp`'s bit arithmetic itself. `ByteOffset`/`BitMask` are relative
+  to `kPageBodyOffset` and take a within-page index, so they become correct
+  the moment a caller passes `id % kFreeMapBitsPerPage`.
+- `IsHeaderless` (`device_page_store.cpp:84`) is *shape*-correct — it asks two
+  maps and ANDs them — but both lookups are single-page; see §5.
+- `MayFault` (`:357`) and `MayWrite` (`:383`) are id-range predicates that
+  already work per id; whether they still answer *correctly* depends on §2's
+  placement.
+- `IsPinnedClass` (`:848`) is per id and per resident frame, and its
+  page-kind half extends to `kFreeMap`/`kHeaderlessMap` with no structural
+  change.
+- The WAL envelope, every catalog row, every page-format link — see §4.
+
+---
+
+## 2. Placement arithmetic — candidates and costs. **This stays `[OPEN]`.**
+
+`docs/page.md` §5 fixes only that locating a bitmap is arithmetic and not a
+lookup. Two candidates, with what each actually costs. **Neither is
+recommended here.**
+
+### Candidate A — the map pair at the head of the range it covers
+
+Region `N` is ids `[N × 65,280, (N+1) × 65,280)`; its free map sits at
+`N × 65,280 + 1` and its headerless map at `N × 65,280 + 2`.
+
+- **It reproduces today's ids exactly for region 0** — `0 × 65,280 + 1 = 1`
+  and `+ 2 = 2`, which is `kFreeMapPageId` and `kHeaderlessMapPageId` on
+  `multi-free-map` at `d8be95a`, with the superblock still at 0 and the
+  catalog's fixed pages 4-14 plus its overflow range 15-127
+  (`include/kds/catalog/well_known.hpp:254-331`) all inside region 0. A
+  database that fits in one region is byte-identical, so **no superblock
+  version bump and no migration**.
+- **Dirty tracking:** per map page. The dirty map pages are scattered across
+  the file at 510 MiB intervals, so `WriteBack`'s ascending-run coalescing
+  (`device_page_store.cpp:568`, `kWritebackRunPages = 8`) can never fold two
+  of them together — one seek per dirty map page per flush. At §5's
+  single-digit residency that is a handful of extra writes, not a class of
+  cost.
+- **Mount validation:** how many regions exist is `page_capacity() / 65,280`,
+  arithmetic on a number `Open` already has. Validating all of them is
+  O(regions) *scattered* reads; validating region 0 only is one read, exactly
+  as today — that is decision **D7**.
+- **Locality:** a data page's map is always inside its own 510 MiB region, so
+  the allocator's read and the pages it then writes are near each other, and a
+  future per-region sweep touches one map page.
+- **Adjacency:** the two bitmaps stay adjacent, permanently, by construction.
+- **The costs, named.** Map pages sit *above* `system_page_limit_`
+  (`kFirstUserPageId = 128`, `include/kds/server/superblock.hpp:42`) for every
+  region above 0, so `MayFault` (`device_page_store.cpp:357`) refuses a peer
+  the very map pages it would need to answer `IsAllocated` for a CC7-granted
+  page — the check has to learn the placement arithmetic as a third clause.
+  The same holds for `IsPinnedClass`'s id-range half (`:848`): a scattered map
+  page is above `first_evictable_page_id_` and is caught only by the kind
+  half, which requires the frame to be resident already. And region 0's map
+  lives at `+1`/`+2` rather than at the region head, which is a deliberate
+  off-by-one that exists solely to leave page 0 to the superblock — it must be
+  written once, in one function, and tested, or it will be re-derived wrongly.
+
+### Candidate B — a reserved region extending today's sub-128 system range
+
+Every map page contiguous at the head of the file: free maps for regions
+`0..M` at ids `F..F+M`, headerless maps likewise, either as a second block or
+interleaved.
+
+- **Dirty tracking:** per map page, and the dirty ones are contiguous low ids,
+  so `WriteBack`'s run coalescing folds them into one or two `WritePageRun`s.
+  Strictly better write behaviour than A.
+- **Mount validation:** the same `page_capacity()`-derived count, but the
+  reads are one sequential run — a single `ReadPageRun` covers every map page
+  in existence. The cheapest possible answer to D7's "validate everything at
+  the door", which is the stance RV3 already took for catalog pages.
+- **Locality:** the worst of the two — the map for a page at 15 TiB sits at
+  the file head. With extent leases the map is touched once per 64 pages
+  (`kDefaultExtentPages`, `include/kds/storage/page_device.hpp:44`), so the
+  cost is a cold read per lease refill rather than per allocation.
+- **Adjacency:** a design choice, not a consequence. Two blocks lose it;
+  interleaving (`free, headerless, free, headerless, …`) keeps it and keeps
+  the arithmetic a single multiply-add.
+- **The costs, named.** The sub-128 range is **fully spoken for**:
+  `kCatalogOverflowFirst = 15` through `kCatalogOverflowLimit = 128`
+  (`well_known.hpp:326`, `:331`) is catalog overflow, and 128 is
+  `kFirstUserPageId`. A reserved map region therefore has to move
+  `kFirstUserPageId`, which is a **superblock version bump** — the block at
+  `include/kds/server/superblock.hpp:52-160` records six precedents, and the
+  12→13 entry is exactly this shape, where page 14 collided with the overflow
+  range — and there is no in-place path for an existing file. Worse, the
+  region has to be **sized in advance**: 2^31 ids need 32,897 free-map pages,
+  so a fixed region sized for the design ceiling reserves 65,794 ids (514 MiB
+  of *id space*, sparse on disk) ahead of the first user page. A growable
+  region reintroduces exactly the placement question it was meant to answer,
+  one level up.
+
+### What both share
+
+Either way the map's own bits are self-marking (under A, a map page's bit
+lives in the page it is; under B, in the first map page, which is always
+resident), and either way `page_capacity()` — not a stored count — is what
+says how many regions exist. Neither candidate needs a new superblock field:
+the superblock deliberately holds no allocation state
+(`include/kds/server/superblock.hpp:16-20`), which **contradicts
+`docs/page.md` §4's "the superblock at page 0 anchors … free-map root,
+high-water" and §5's "High-water mark and free-map root live in the
+superblock".** That conflict is decision **D6**; it is flagged here rather
+than guessed, per CLAUDE.md.
+
+---
+
+## 3. Is faulting map pages through the buffer pool circular?
+
+Today `free_map_page_` and `headerless_map_page_` are `Page` members outside
+`frames_` (`device_page_store.hpp:621-622`). Checked in three parts.
+
+**Reading a map page: no cycle.** `ResidentBytes`
+(`device_page_store.cpp:211`) allocates a frame and reads the device; it never
+consults the free map. The free-map check lives one level up, in
+`GetUnpinned` (`:495`) and `GetForReadUnpinned` (`:502`), which a map fault
+would simply not call. The one genuine loop candidate is inside
+`ResidentBytes` itself: the miss path asks `IsHeaderless(page_id)` at `:266`
+before verifying the checksum, and `IsHeaderless` (`:84`) reads the headerless
+map — which under a multi-page map is itself a page that might have to be
+faulted, whose fault asks `IsHeaderless` again. **It terminates, and by
+arithmetic rather than by luck:** a map page's class is known from its id
+under either §2 candidate, so `IsHeaderless` short-circuits to `false` for any
+map page without reading a map. That short-circuit is a required part of the
+work, not an optimization — without it the recursion is real.
+
+**Writing a map page back: no cycle, but a real ordering hazard.**
+`StampIfHeadered` (`:88`, called per page from `WriteBack`'s stamping loop at
+`:603`) asks the same question and takes the same short-circuit. What does
+*not* survive is the ordering rule: `FlushMaps` (`:115`) exists precisely to
+write the maps **after** the data pages they describe — the comment above the
+two writes says the reverse order would publish an allocated headerless page
+whose headerless bit had not landed — and `WriteBack` (`:568`) sorts strictly
+ascending. Map pages at low ids (candidate B, or region 0 under A) would be
+written **first**. So map pages may become ordinary pool frames only if the
+flush path keeps excluding them from the ascending sweep and writes them in a
+second, later pass. That is decision **D4**, and it is why "just put them in
+the pool" is not free.
+
+**Creating a new map page: no cycle, and this is the clearest case.** Its id
+is arithmetic under either candidate — `N × 65,280 + 1`, or `F + N` — so
+creating one never asks the map where to put it. `CreateAtUnpinned` (`:392`)
+takes a chosen id, checks `IsAllocated`, and marks the bit; for the first page
+of a new region under candidate A the bit it marks is *in the page being
+created*, which is self-referential and terminating (format, then set bit 1 of
+the page's own body). Under candidate B the bit is in map page 0, which is
+always resident.
+
+**Conclusion.** There is no real cycle in any of the three — only an apparent
+one, and it is apparent only because `IsHeaderless` sits on the fault path.
+Two things must be true for that to hold: a map page's class is decided by
+arithmetic and never by a map lookup, and the flush path keeps writing maps
+after data. Both are cheap; neither is automatic.
+
+---
+
+## 4. Does every on-disk structure that stores a page id survive 2^31?
+
+**Yes. Every persisted page-id field found on `multi-free-map` at `d8be95a`
+stores a full 32-bit `PageId`, and none reserves a high bit for flags.** The
+sweep, by structure:
+
+| Structure | Field | Width |
+|---|---|---|
+| B+ tree internal node | `leftmost_child` (`btree_page.hpp:68`), entry `child` (`:98`, at offset 8 of a 12-byte entry) | `PageId`, 32 bits |
+| Heap page | tail `next_page_id` reservation | `sizeof(PageId)` = 4 (`heap/heap_page.hpp:166`) |
+| Var-heap page | tail `next_page_id` | `sizeof(PageId)` (`varheap.hpp:57`) |
+| Var-heap cell pointer | `page_id << 32 \| slot << 16` in the u64 a `kSpilled` tagged cell carries | 32 bits at shift 32 (`varheap.hpp:159-176`) |
+| Undo chain pointer | `undo_ptr = u64(page_id) << 16 \| offset` | 32 bits at shift 16 inside a u64 — headroom to 2^48 (`txn/undo_page.hpp:271-282`) |
+| Undo page / record | `prev_page_id`, `target_page_id` | `PageId` (`undo_page.hpp:87`, `:147`) |
+| Secondary index | `right_sibling`, `leftmost_child`, entry child | `PageId` (`index/index_page.hpp:134`, `:170`, `:118`) |
+| Waystone trail page | `next_page_id` @ 24; entry `page_id` @ 16 of a 32-byte entry | `PageId` (`stats/waystone.hpp:79`, `:137`) |
+| Waystone directory | 2048 child ids tiling 8192 bytes exactly | `sizeof(PageId)` = 4, asserted (`stats/waystone_dir.hpp:87-89`) |
+| Bound Cabin entry | `page_id` in the 32-byte entry | `PageId` (`cabin_bound_page.hpp:138`) |
+| Catalog rows | `SysTableRow.desc_page_id` / `.varheap_page_id`, `SysIndexRow.root_page_id`, `SysPatternRow.waystone_root` | `PageId`, with offsets derived through `sizeof(PageId)` (`catalog/rows.hpp:62`, `:81`, `:384`, `:485`) |
+| Superblock | **holds no page id at all** — no free-map root, no high-water, no page counter, by the design note at `server/superblock.hpp:16-20` | n/a |
+| WAL record envelope | `page_id` @ 28 | `PageId` (`wal/record.hpp:199`, `:209`) |
+
+The file-offset arithmetic is already 64-bit: `PageOffset` casts to
+`std::uint64_t` before multiplying (`src/storage/file_page_device.cpp:37`),
+`CheckPageRunRange` computes `first + nr_pages` in `std::uint64_t`
+(`src/storage/page_device.cpp`), and the 2^31 ceiling is enforced at the
+device layer rather than merely documented — `kMaxPageCount = 1u << 31` with
+`static_assert(kMaxFileBytes == 16 TiB)` at
+`include/kds/base/common.hpp:22-25`, checked at `file_page_device.cpp:75`,
+`:170`, `:186` and `memory_page_device.cpp:42`, `:56`, `:64`.
+
+**Three things that are *not* width bugs but sit near the boundary**, recorded
+so nobody re-derives them:
+
+1. `Extent::end()` is `first + count` in `PageId`
+   (`storage/extent_lease.hpp`), safe only because `Reserve` refuses a run
+   reaching the coverage limit (`extent_lease.cpp:25`). When that limit
+   becomes 2^31 the guard must move with it, or `end()` wraps at the top of
+   the id space.
+2. `allocated_pages()` returns `std::uint32_t`
+   (`device_page_store.cpp:186`). 2^31 fits, but only just, and the number is
+   printed at mount and shutdown (`src/server/main.cpp:334`, `:349`) and by
+   `SHOW META` (`src/server/expeditor.cpp:882`, `:1568`) — see **D8**.
+3. `kEmptyDirSlot = kInvalidPageId` (`waystone_dir.hpp:107`) and every other
+   `kInvalidPageId` sentinel stay unambiguous only because the ceiling is 2^31
+   and the sentinel is `0xFFFFFFFF`, which `common.hpp:26`'s `static_assert`
+   already pins.
+
+So what blocks 16 TiB today is **not** a stored width. It is one constant,
+`kFreeMapBitsPerPage`, and the ~15 sites in §1.6 that read it as though it
+were the size of the id space. The real ceiling on `multi-free-map` at
+`d8be95a` is **65,280 pages = 510 MiB**, and that number is not recorded in
+`docs/known-gaps.md` — a finding this plan does not act on (§9).
+
+---
+
+## 5. Residency: the single-digit steady state, and why the two maps differ
+
+**Taken as given**, and confirmed at `extent_lease.hpp`'s header note and
+`device_page_store.cpp:428-446`: the 22 synchronous allocation sites go
+through `LeasedIdSource::Next()`, which touches no map at all, so a peer core
+allocates without reading a bitmap and only core 0 carves extents.
+
+**One correction to the premise, because it changes the count and not the
+conclusion.** Core 0 has no lease — `src/server/expeditor.cpp:1177` grants
+leases to cores `1..N-1` only — so on core 0 `CreateNewUnpinned` still scans
+the free map per page, at `device_page_store.cpp:449`, from
+`next_new_page_id_`. That hint advances monotonically (`:464`), so core 0's
+per-page allocation is likewise confined to the one map page covering its
+hint. A single-core deployment is entirely this path. The allocation-side
+working set is therefore **two hint-local pages, not one** —
+`ExtentAllocator::next_` and `DevicePageStore::next_new_page_id_` — plus their
+headerless twins if D2 keeps any. Single-digit still holds, comfortably.
+
+**The headerless map does not follow a hint, and that is the residency
+problem.** `IsHeaderless` sits on three paths that are not allocation:
+
+- **every page fault** — `ResidentBytes` asks it before verifying the checksum
+  (`device_page_store.cpp:266`);
+- **every page write-back** — `StampIfHeadered` asks it per page in
+  `WriteBack`'s stamping loop (`:603`, through `:88`);
+- **every dirty page in a flush batch** — `AwaitWalGate` asks it to decide
+  whether the bytes at the `page_lsn` offset are a real LSN (`:549`).
+
+Those follow the *statement's* working set, which is scattered across the id
+space by construction. At the design ceiling the headerless map is 32,897
+pages; a per-read bitmap lookup over that is, in the worst case, a second
+fault for every first fault — the opposite of a single-digit resident set, and
+it would show up as a doubling of the miss path rather than as a rounding
+error.
+
+That is why **D2 is a required decision and not a detail**: at one page the
+headerless map is free, and the *only* reason it is free is that it is one
+page. What makes the options viable at all: the headerless class is Waystone
+entry and directory pages and nothing else (`docs/page.md` §1), they are
+allocated through ordinary `CreateNewHeaderless` calls, and a database with no
+Waystone directory has zero of them.
+
+---
+
+## 6. Task series
+
+Each task ends with a `critics-developer` review per CLAUDE.md's session
+workflow. The series does not start until **D1** is settled.
+
+- **FM1 — the addressing layer.** One header owning
+  `FreeMapPageIdFor(PageId)`, `HeaderlessMapPageIdFor(PageId)`,
+  `BitIndexWithin(PageId)` and `IsMapPageId(PageId)` as `constexpr` functions,
+  with D1's choice expressed in exactly those four bodies and nowhere else.
+  `IsMapPageId` is what §3 needs to break the apparent recursion. Tests: every
+  id maps to exactly one `(map page, bit)`; the map pages' own ids map into
+  their own coverage; region 0's ids 1 and 2 are unchanged (candidate A), or
+  the new constants are asserted against `kFirstUserPageId` (candidate B).
+  No behaviour change — nothing calls it yet.
+- **FM2 — the store's map cache.** Replace the two `Page` members with a small
+  keyed set of resident map pages, each with its own dirty flag, retiring the
+  single `maps_dirty_`. `Open` loads region 0's pair and nothing else;
+  `FlushMaps` writes the dirty ones, headerless before free, after the data
+  pages. **A database inside one region must stay byte-identical** — that is
+  FM2's acceptance test, not a hope.
+- **FM3 — raise the ceilings.** Every site in §1.6's first table stops
+  comparing against `kFreeMapBitsPerPage` and starts comparing against
+  `kMaxPageCount` or against loaded coverage: `IsAllocated`, `CreateAt`,
+  `RaiseAllocationFloor`, `CreateNew`'s search, `allocated_pages()`. The
+  `free_map.cpp` guards keep their fail-closed shape but change meaning from
+  "outside the id space" to "outside this page", which every caller must now
+  handle rather than treat as terminal.
+- **FM4 — `ExtentAllocator` across a boundary.** It can no longer hold a
+  `std::span` of one page for its lifetime; it takes the store's map cache
+  behind a narrow accessor. `Reserve`'s scan, run probe and marking loop all
+  cross pages. **D3** decides whether a run may straddle a boundary.
+- **FM5 — growing the map.** The point where `Reserve` or `CreateNew` runs
+  past the last covered id: compute the next map page's id, `CreateAt` it,
+  format it, set its own bits, continue. Crash-safety follows the existing
+  rule — a map page written before the data it describes is the ordering
+  `FlushMaps` already enforces.
+- **FM6 — the headerless map at scale.** Whatever **D2** picks. Sequenced
+  after FM2 so its fast path is measured against a real cache.
+- **FM7 — peer stores.** What a non-zero core loads at `Open`, what it may
+  fault, and whether its cached map pages can go stale in a way `EvictClean`
+  does not cover (**D5**). Under candidate A this includes `MayFault`'s third
+  clause; under candidate B it does not.
+- **FM8 — residency and the pinned class.** Extend `IsPinnedClass`'s kind half
+  (`device_page_store.cpp:848`) to `PageType::kFreeMap` and
+  `kHeaderlessMap`, and add the counter that makes §5's single-digit target a
+  checked property rather than a design intention.
+- **FM9 — mount validation.** Whatever **D7** picks, plus: `fresh` detection
+  stays region 0's business, and a torn map page must refuse the mount the way
+  a torn catalog page has since RV3
+  (`docs/workplan-rv3-catalog-recovery.md`) rather than being served.
+- **FM10 — observability.** `SHOW META` reports resident map pages, map pages
+  in existence, and coverage; `allocated_pages()`'s meaning and cost per
+  **D8**.
+- **FM11 — the ceiling tests, moved.** `tests/extent_lease_test.cpp:82`,
+  `tests/device_page_store_test.cpp:113-115` and `tests/free_map_test.cpp`'s
+  out-of-range cases all pin 65,280 as the *instance* ceiling today; each
+  becomes a per-page-coverage test plus a new instance-ceiling test at
+  `kMaxPageCount`. A `sim/` run over a device spanning two regions is the
+  end-to-end gate.
+
+### 6a. Reclamation is out of scope and is **not** a prerequisite
+
+Nothing in this plan frees a page, and nothing in it needs anything to.
+Reclamation is blocked elsewhere and for its own reasons —
+`docs/feat-physical-optimizer.md` §6 gate 3 (a reallocated page breaks trail
+validation), `docs/known-gaps.md`'s record that `DROP TABLE` orphans pages by
+decision, and `extent_lease.hpp`'s "nothing frees an extent" — and none of
+those is made easier or harder by how many bitmap pages exist. `FreeMapFree()`
+does not exist and this plan does not add it.
+
+**The one thing that does couple them, stated so it is not discovered later:**
+with nothing freeing pages, a larger map raises the ceiling on **leaked** pages
+exactly as much as on live ones. Today a runaway `DROP TABLE`/rebuild loop
+stops at 510 MiB — badly, with `OutOfSpace`, but it stops. After this work the
+same loop consumes up to 16 TiB before anything refuses. That is not an
+argument against the work; it is an observation that the **instance ceiling is
+currently doing duty as a leak bound**, and that removing it makes
+reclamation's absence a bigger number rather than a new problem.
+
+---
+
+## 7. Named decisions — do not assume
+
+### D1. Placement arithmetic — **`[OPEN]`, and left open deliberately**
+
+§2 states the two candidates and their costs. Not picked here, per the task
+that produced this document. **Every other decision below is downstream of
+it**, so it is settled first or the series does not start.
+
+### D2. How the headerless map answers per read, once it is not one page
+
+§5 states the problem: `IsHeaderless` sits on the fault, write-back and
+WAL-gate paths, and those follow a scattered working set rather than a hint.
+
+- **(a) A whole-instance fast path.** Carry "this database has zero headerless
+  pages" as a cheap durable fact and answer `false` with no lookup. Correct by
+  construction for every database with no Waystone directory, which is the
+  common case; buys nothing for one that has any. Needs the fact to be durable
+  and maintained by exactly one writer, `CreateNewHeaderlessUnpinned`.
+- **(b) Reserve an id region for headerless pages**, so the answer is
+  arithmetic and no bitmap is read at all. Retires the headerless map
+  entirely — the strongest option and the most invasive, because it makes page
+  class a property of *where a page is*, which is a new rule for the id space
+  and interacts directly with D1.
+- **(c) Pin the covering pages of the Waystone allocation region.** Headerless
+  pages come from ordinary allocation, so they cluster in whatever extent was
+  current; pin those few headerless-map pages resident. Cheapest to build, and
+  it degrades quietly rather than loudly when the clustering assumption stops
+  holding — which is a cost, not a feature.
+- **(d) A second bit in the free map** — two bits per page id, "allocated" and
+  "headerless" — so one map page answers both questions and there is one
+  family of map pages instead of two. Halves per-page coverage to 32,640 ids
+  and doubles the page count, but the resident set becomes the *same* pages
+  the allocator already holds, which is the only option that makes the
+  headerless answer free rather than cheap. It is a format change to a page
+  class with exactly one reader and one writer.
+
+(b) and (d) are mutually exclusive, and both change what §2's "the two bitmaps
+stay adjacent" even means.
+
+### D3. May an extent straddle a map-page boundary?
+
+`Reserve` marks `count` contiguous ids (`extent_lease.cpp:40`). Across a
+boundary that is two pages dirtied by one reservation.
+
+- **(a) Refuse to straddle** — advance the hint to the next region when a run
+  would cross. Keeps a reservation to one page and one dirty flag; wastes up
+  to `count − 1` ids per boundary (at `kDefaultExtentPages = 64`, at most 63
+  ids per 65,280 — under 0.1%).
+- **(b) Allow straddling** — the allocator holds two map pages for the
+  duration of a marking loop. No waste; the marking loop stops being
+  single-page, and the crash window now spans two pages that must both land.
+
+### D4. Do map pages become buffer-pool frames, or stay store-owned?
+
+§3 shows neither is circular. The choice is real anyway.
+
+- **(a) Stay store-owned members**, as today, in a small keyed cache with its
+  own eviction (or none). Keeps `FlushMaps`'s ordering guarantee trivially,
+  keeps maps out of the checkpoint dirty table, and keeps `PageRef` out of the
+  picture. Costs a second, parallel caching mechanism inside the store.
+- **(b) Ordinary frames**, pinned-class per FM8. One caching mechanism, and
+  map pages become visible to `DirtyPagesWithRecLsn()` — which matters only if
+  D9 makes them logged. Costs the flush-ordering fix §3 names: `WriteBack`
+  sorts ascending, so map pages must be excluded from the ordinary sweep and
+  written in a second pass, or a low-id map page is published ahead of the
+  data it describes.
+
+### D5. Peer coherence for cached map pages
+
+A peer's map copy is frozen at its `Open()` (`core_runtime.cpp:54`), and that
+is sound today because `IsAllocated` short-circuits on `lease_->Owns()`
+(`device_page_store.cpp:182`) and because a peer's stale view is a retryable
+not-found by `crosscore.md` §5. Multi-page multiplies the objects that can be
+stale, and `EvictClean` — the invalidation route core 0 uses for catalog pages
+(`device_page_store.hpp:378`) — has no map equivalent.
+
+- **(a) Nothing changes**: a peer loads region 0 at `Open`, faults further map
+  pages read-only on demand, and staleness stays a retryable not-found.
+  Requires that the *fault* be permitted, which under candidate A is
+  `MayFault`'s missing third clause.
+- **(b) A peer never reads a map page at all** — `IsAllocated` answers from
+  the lease and the CC7 grants alone on a leased store, and a question outside
+  both is not-found. Removes the coherence question rather than answering it;
+  changes what a peer can say about a page core 0 allocated after the peer
+  started.
+
+### D6. `docs/page.md` §4/§5 vs. `superblock.hpp` — which is right?
+
+§4 says the superblock anchors the "free-map root, high-water"; §5 repeats it.
+`include/kds/server/superblock.hpp:16-20` says the opposite, in as many words
+and with a reason ("two records of the same fact is one record too many"), and
+the code has no such field. Options: **(a)** amend `page.md` §4/§5 to match
+the code, since neither §2 candidate needs a stored root; **(b)** add the
+fields, which is a superblock version bump and reopens whether placement is
+arithmetic at all. Flagged rather than guessed, per CLAUDE.md.
+
+### D7. Mount validation scope
+
+Today `Open` validates both map pages at the door
+(`device_page_store.cpp:38`, `:64`). With N regions: **(a)** validate every
+map page at mount — O(regions) reads, one sequential run under candidate B and
+scattered under A, and a torn map refuses the mount as RV3 taught; **(b)**
+validate region 0 at mount and the rest on first touch — constant mount cost,
+but a torn map page surfaces mid-statement, which is the failure shape RV3
+deliberately converted into a refusal.
+
+### D8. What `allocated_pages()` means once it must sweep
+
+It is `FreeMapCountAllocated` over one page (`device_page_store.cpp:186`),
+`std::uint32_t`, printed at mount, at shutdown and by `SHOW META`
+(`src/server/main.cpp:334`, `:349`; `src/server/expeditor.cpp:882`, `:1568`).
+Over 32,897 map pages it is either a sweep of every one in existence or a
+maintained counter. **(a)** a maintained running count, durable somewhere,
+with one writer; **(b)** count only the resident map pages and rename it so
+the number does not read as the instance total; **(c)** drop it from the mount
+and shutdown lines and keep it as a diagnostic that says it is expensive.
+
+### D9. Does the free map become logged as part of this?
+
+`RecordType::kAlloc`/`kFree` are assigned (`include/kds/wal/record.hpp:58`,
+`:64`) with a payload codec (`include/kds/wal/payload.hpp:333`) and **no
+emitter anywhere in `src/`**; `docs/page.md` §5 nonetheless describes the free
+map as "a headered, logged page class replayed like any other", and
+`src/server/expeditor.cpp:1163` records the truth — it is unlogged, which is
+why RC04's `RaiseAllocationFloor` exists to repair it. Multi-page changes the
+stakes: today losing the map write loses the whole instance's allocation
+record, and afterwards it loses one region's. **(a)** stay unlogged and keep
+RC04's repair, extended to find the right region; **(b)** emit ALLOC/FREE and
+let redo replay map pages, which retires the repair and makes D4(b)
+load-bearing. Out of scope for the series above either way — recorded because
+FM5 and FM9 both want the answer, and because `page.md` §5 currently asserts
+one the code does not implement.
+
+---
+
+## 8. What must be measured, and where
+
+Nothing is measured in this document — no code changed, and this worktree has
+no `build-release`. Two numbers gate the work itself, both in `build-release`
+with interleaved A/B per CLAUDE.md:
+
+1. **FM2's byte-identity claim.** A database inside one region must produce a
+   byte-identical data file before and after the map cache lands. Identity,
+   not a benchmark — but it is the only thing that proves the common case pays
+   nothing.
+2. **FM6's fault-path cost.** `IsHeaderless` on the miss path is free at one
+   page. Whatever D2 picks, the per-fault and per-write-back cost is measured
+   against `d8be95a` on the same workload, because §5's whole argument is that
+   this is the one place a multi-page map can cost real time.
+
+## 9. A finding this plan surfaced — now recorded
+
+The 65,280-page / 510 MiB instance ceiling is enforced in four places on
+`multi-free-map` at `d8be95a` (`device_page_store.cpp:173`, `:403`, `:479`;
+`extent_lease.cpp:25`) and pinned by three test files, but it was **not in
+`docs/known-gaps.md`** — which is where CLAUDE.md says engine-wide gaps live,
+and which discussed free-map reuse being gated without ever saying how small
+the map is. Added there 2026-08-23, under "Storage and key modes", including
+the §6a coupling: the ceiling is currently the engine's only bound on leaked
+space, so lifting it raises the ceiling on orphaned pages as much as on live
+ones.
