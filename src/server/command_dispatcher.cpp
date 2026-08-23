@@ -3656,20 +3656,48 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
 
 namespace {
 
-// Where `name` sits in a view's column list, or `column_names.size()` when
-// it names none of them.
+// Where a written column sits in a view's column list.
 //
 // A view resolves a column by *name* because it has no Schema to resolve
 // an index against - the one place a view is not the real path. One
-// function rather than three copies of the same linear search: the
-// projection, the WHERE and any future consumer must agree on what
-// "column of this view" means, and three loops differing only in a
-// variable name is how they stop agreeing.
-std::size_t ViewColumnIndex(const exec::CatalogView& view, const std::string& name) {
-    for (std::size_t i = 0; i < view.column_names.size(); ++i) {
-        if (IEquals(view.column_names[i], name)) return i;
+// function rather than one per consumer, and it answers the whole
+// question rather than half of it: **the qualifier is part of what was
+// written.** A resolver that checked only the name is how
+// `SELECT zzz.oid FROM sys.tables` came to be refused while
+// `WHERE zzz.oid = 100` was answered - the same spelling, enforced two
+// ways, twelve lines apart.
+StatusOr<std::size_t> ResolveViewColumn(const exec::CatalogView& view,
+                                        const parser::SelectStmt& stmt,
+                                        const parser::ColumnName& col) {
+    if (col.qualified() && !IEquals(col.qualifier, stmt.from.binding())) {
+        return Status::InvalidArgument("'" + col.qualifier + "." + col.name +
+                                       "' names no relation in this statement");
     }
-    return view.column_names.size();
+    for (std::size_t i = 0; i < view.column_names.size(); ++i) {
+        if (IEquals(view.column_names[i], col.name)) return i;
+    }
+    return Status::InvalidArgument("view sys." + stmt.from.table_name + " has no column '" +
+                                   col.name + "'");
+}
+
+// The `type_val` a view's value must be compared under.
+//
+// **Every integer a view emits is built from a `uint64_t`** -
+// `catalog_view.cpp`'s `Int()` casts it into `int_val` and keeps the
+// digits in `raw_int_text` - so comparing `int_val` signed puts every
+// value above INT64_MAX below every value under it. `sys.patterns`
+// carries exactly such a column: a `pattern_id` is a full-range 64-bit
+// fingerprint, and `WHERE pattern_id < 100` answered every id with the
+// top bit set. The value renders correctly all the while, because
+// `FormatValue` reads the digits - so the view showed a number and then
+// refused to compare it as that number.
+//
+// Keyed on the value rather than on the column because a view has no
+// column types, only values, and every builder emits one kind per column.
+// A string keeps `0`: the uint64 arm is tested before the string arm and
+// would answer false for every string comparison.
+std::uint32_t ViewCompareTypeVal(const parser::AstValue& value) {
+    return value.type == parser::ValueType::kInt ? catalog::kTypeValUint64 : 0;
 }
 
 }  // namespace
@@ -3718,16 +3746,9 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         for (std::size_t i = 0; i < rows.column_names.size(); ++i) project.push_back(i);
     } else {
         for (const parser::ColumnName& col : stmt.projection) {
-            if (col.qualified() && !IEquals(col.qualifier, stmt.from.binding())) {
-                return {"ERR '" + col.qualifier + "." + col.name + "' names no relation in "
-                        "this statement", false};
-            }
-            const std::size_t found = ViewColumnIndex(rows, col.name);
-            if (found == rows.column_names.size()) {
-                return {"ERR view sys." + stmt.from.table_name + " has no column '" + col.name +
-                        "'", false};
-            }
-            project.push_back(found);
+            auto found = ResolveViewColumn(rows, stmt, col);
+            if (!found.ok()) return {"ERR " + found.status().message(), false};
+            project.push_back(found.value());
         }
     }
 
@@ -3741,7 +3762,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     // property of the statement, not of a row - is this a predicate shape
     // a view can answer, does this column exist - and asking them inside
     // the row loop made the *refusal* depend on how many rows the catalog
-    // happened to hold. `SELECT * FROM sys.patterns WHERE name =
+    // happened to hold. `SELECT * FROM sys.patterns WHERE oid =
     // pattern_id` answered a header on a fresh instance, because the loop
     // never ran, and refused over `sys.tables`, because it did. A refusal
     // that data can silence is not a refusal.
@@ -3757,12 +3778,9 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             return {"ERR a column-to-column comparison over a catalog view is not "
                     "supported", false};
         }
-        const std::size_t at = ViewColumnIndex(rows, cond.col.name);
-        if (at == rows.column_names.size()) {
-            return {"ERR view sys." + stmt.from.table_name + " has no column '" +
-                    cond.col.name + "'", false};
-        }
-        where_at.push_back(at);
+        auto at = ResolveViewColumn(rows, stmt, cond.col);
+        if (!at.ok()) return {"ERR " + at.status().message(), false};
+        where_at.push_back(at.value());
     }
 
     std::ostringstream os;
@@ -3784,9 +3802,11 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         for (std::size_t i = 0; i < stmt.where.size(); ++i) {
             const parser::Condition& cond = stmt.where[i];
             const parser::AstValue& value = row[where_at[i]];
-            // type_val 0: the view's values carry their own kind, and none
-            // of them is a uint64 column needing the digit-text path.
-            //
+            // One comparator for the row's value, so the `type_val` rule is
+            // decided in one place rather than copied per operand.
+            const auto Compare = [&value](const parser::AstValue& bound, parser::CompareOp op) {
+                return exec::CompareValues(ViewCompareTypeVal(value), value, bound, op);
+            };
             // `BETWEEN` is two comparisons, inclusive at both ends, and it
             // has to be spelled out here because it is spelled out nowhere
             // else: `exec::CompileWhere` lowers a `kBetween` into two
@@ -3797,11 +3817,9 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
             // silently meant `oid = 100`, dropping the high bound and most
             // of the answer.
             matched = cond.kind == parser::PredicateKind::kBetween
-                          ? exec::CompareValues(/*type_val=*/0, value, cond.val,
-                                                parser::CompareOp::kGte) &&
-                                exec::CompareValues(/*type_val=*/0, value, cond.val_high,
-                                                    parser::CompareOp::kLte)
-                          : exec::CompareValues(/*type_val=*/0, value, cond.val, cond.op);
+                          ? Compare(cond.val, parser::CompareOp::kGte) &&
+                                Compare(cond.val_high, parser::CompareOp::kLte)
+                          : Compare(cond.val, cond.op);
             if (!matched) break;
         }
         if (!matched) continue;
@@ -3817,9 +3835,12 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         bool first_val = true;
         for (std::size_t index : project) {
             if (!first_val) os << ',';
-            // type_val 0, for the reason the CompareValues call above
-            // gives: a catalog view's values carry their own kind, and none
-            // of them is a DATE or TIMESTAMP column.
+            // type_val 0 here and not `ViewCompareTypeVal`: rendering
+            // consults the column's type only to tell a DATE or TIMESTAMP
+            // from the integer it is stored as, and no view has one. An
+            // integer above INT64_MAX still prints correctly, because
+            // `FormatValue` reads `raw_int_text` - which is exactly why
+            // the comparison above needed a rule and this does not.
             os << exec::FormatValue(/*type_val=*/0, row[index]);
             first_val = false;
         }
