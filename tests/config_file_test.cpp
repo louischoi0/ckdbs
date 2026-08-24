@@ -479,25 +479,34 @@ TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) 
     EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
 }
 
-TEST(ExpeditorConfigTest, FrameBudgetSharesSumToTheTotalAndNoShareIsZero) {
-    // EV4's whole content: one number splits N ways and loses nothing, and
-    // no core's share rounds to the 0 that SetFrameBudget reads as
-    // unbounded. Swept over every legal (total, cores) shape up to 8 cores
-    // with totals around the boundaries the division cares about.
+TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal) {
+    // The operator invariant of 2026-08-24: every core's share is *equal*
+    // (no remainder seat for core 0 - equality is the invariant), nonzero
+    // for any total CheckFrameBudget admits, and cores * share never
+    // exceeds the total, so the key keeps meaning the whole pool. The
+    // undistributed remainder is bounded by the divisor. Swept over every
+    // (total, cores) boundary shape up to 8 cores.
     for (std::uint32_t cores = 1; cores <= 8; ++cores) {
         for (std::size_t total : {std::size_t{cores}, std::size_t{cores} + 1,
                                   std::size_t{cores} * 7 - 1, std::size_t{cores} * 7,
                                   std::size_t{1024}}) {
             ASSERT_TRUE(CheckFrameBudget(total, cores).ok());
-            std::size_t sum = 0;
-            for (std::uint32_t id = 0; id < cores; ++id) {
-                const std::size_t share = FrameBudgetShare(total, cores, id);
-                EXPECT_GT(share, 0u) << "total " << total << " cores " << cores << " id " << id;
-                sum += share;
-            }
-            EXPECT_EQ(sum, total) << "total " << total << " cores " << cores;
+            const std::size_t share = FrameBudgetShare(total, cores, /*hardware_cores=*/cores);
+            EXPECT_GT(share, 0u) << "total " << total << " cores " << cores;
+            EXPECT_LE(share * cores, total) << "total " << total << " cores " << cores;
+            EXPECT_LT(total - share * cores, static_cast<std::size_t>(cores))
+                << "total " << total << " cores " << cores;
         }
     }
+
+    // The min() arm: an undetectable hardware count (0) falls back to the
+    // configured cores; a *smaller* detectable count becomes the divisor.
+    // Boot refuses cores above detectable hardware, so the second arm is
+    // unreachable on a bootable instance and pinned here so the fallback
+    // does not rot.
+    EXPECT_EQ(FrameBudgetShare(1024, 4, 0), 256u);
+    EXPECT_EQ(FrameBudgetShare(1024, 8, 4), 256u);
+    EXPECT_EQ(FrameBudgetShare(1024, 4, 8), 256u);
 }
 
 TEST(ExpeditorConfigTest, AFrameBudgetBelowTheCoreCountIsRefusedNamingBothNumbers) {

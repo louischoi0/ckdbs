@@ -267,10 +267,9 @@ that is sound (`include/kds/server/remote_checkpoint_anchor.hpp`).
   (`src/server/expeditor.cpp:1013`, `:1026`, `:1076`). Per-core listeners
   need them shared immutably or built per core; rules.md #3 means nothing may
   be shared mutably by default.
-- **DDL on a peer needs a named refusal.** The catalog is read-only there, so
-  a `CREATE TABLE` on a peer-accepted connection would reach `MayWrite` and
-  fail with a page id — the exact failure `core_affinity.hpp` says the
-  affinity check exists to prevent.
+- ~~**DDL on a peer needs a named refusal.**~~ **Built 2026-08-24, PW4** —
+  refused at dispatch by `PeerDdlRefused` wherever the catalog is read-only,
+  instead of reaching `MayWrite`'s page-id failure.
 - **A peer records nothing.** `waystone_recording` and `access_statistics`
   are off on a peer by construction, because `sys.patterns` and
   `sys.access_stats` are catalog pages written on the statement path
@@ -321,7 +320,7 @@ per-core instance is a `SO_REUSEPORT` setsockopt beside the existing
 | PW2 | Route the two root-move catalog writes. **Needs a decision — §7** | PW1, PW1b |
 | PW3 | **Built 2026-08-21.** A peer checkpointer through `RemoteCheckpointAnchor`: the completion checkpoint at `AttachTransport`, the `wal.md` §11 cadence in `Run()` | PW1 |
 | PW3b | The **shutdown** checkpoint, which PW3 did not ship — core 0 has three checkpoint points and a peer now has two. A graceful restart replays up to one `checkpoint_interval_ms` of every peer's stream. **Needs a decision**: after the worker join both reactors are stopped, so a queued anchor send is never polled; it wants either one more core-0 ring drain after the join, or a different anchor on the shutdown path | PW3 |
-| PW4 | Name the peer DDL refusal, and hang §5d's purge gate off it | none |
+| PW4 | **Built 2026-08-24** (`r1-peer-ddl-refusal`). CREATE/ALTER/DROP refused whole at dispatch wherever the catalog is read-only (`SetCatalogReadOnly`, set by `CoreRuntime` for every non-system core; `PeerDdlRefused` names the core and where DDL runs). Predicated on the incapacity rather than `core_id_`, so the P4e harness's core-1 stand-ins over a writable store keep building fixtures. §5d's purge gate cites the guard and stays as defense in depth | none |
 | PW5 | `SO_REUSEPORT` per-core listeners; share the credential store and TLS context without sharing them mutably | PW1, PW4 |
 | PW6 | The benchmark: `placement = rotate`, one writer connection per core, per-core relations. The first cross-core number that is a speedup and not a cost | PW1-PW5 |
 

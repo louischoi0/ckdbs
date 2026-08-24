@@ -1371,6 +1371,47 @@ TEST_F(CoreRuntimeTest, APeerStoreTakesItsConfiguredFrameBudgetShare) {
     EXPECT_EQ(peer.value()->store().frame_budget(), 8u);
 }
 
+TEST_F(CoreRuntimeTest, APeerRefusesEveryDdlVerbByNameAndStillServesReads) {
+    // PW4 (workplan-peer-writer.md): the refusal must exist *before* PW5
+    // gives peers listeners, and it must name where DDL runs - the
+    // alternative was running until MayWrite failed with a page id. The
+    // §5d purge gate's soundness argument cites this guard.
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    const std::string_view ddl[] = {
+        "CREATE TABLE pw4 (id int64, v int64)",
+        "CREATE INDEX pw4_v ON pw4 (v)",
+        "CREATE PATTERN p4 ON pw4 (v)",
+        "CREATE CABIN c4 ON pw4 (v)",
+        "ALTER TABLE pw4 RENAME TO pw4b",
+        "DROP TABLE pw4",
+        "DROP INDEX pw4_v",
+    };
+    for (std::string_view stmt : ddl) {
+        const std::string reply = peer.value()->dispatcher().Dispatch(stmt).response;
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << stmt << " -> " << reply;
+        EXPECT_NE(reply.find("takes no DDL"), std::string::npos) << stmt << " -> " << reply;
+        EXPECT_NE(reply.find("core 1"), std::string::npos) << stmt << " -> " << reply;
+        EXPECT_NE(reply.find("core 0"), std::string::npos) << stmt << " -> " << reply;
+    }
+
+    // The control, twice over: reads are untouched on the peer, and the
+    // guard is *core*-scoped, not a new refusal of DDL itself. A core-0
+    // CoreRuntime in this fixture cannot run DDL end to end (its
+    // TrxIdSequence has no superblock persist rights here - the whole
+    // suite's ordinary DDL tests prove the positive), so the control pins
+    // exactly the guard's marker: core 0's reply, whatever else it says,
+    // never says "takes no DDL".
+    EXPECT_EQ(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0),
+              std::string::npos);
+    auto core0 = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(core0.ok()) << core0.status().message();
+    const std::string on_core0 =
+        core0.value()->dispatcher().Dispatch("CREATE TABLE pw4 (id int64, v int64)").response;
+    EXPECT_EQ(on_core0.find("takes no DDL"), std::string::npos) << on_core0;
+}
+
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     // P6's deliberate cost, pinned so it stays a decision rather than
     // becoming a surprise: sys.patterns and sys.access_stats are catalog

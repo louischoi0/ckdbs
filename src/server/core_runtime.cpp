@@ -1,5 +1,7 @@
 #include "kds/server/core_runtime.hpp"
 
+#include "kds/catalog/core_placement.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -182,6 +184,12 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         &*runtime->wal_, config.durability, config.budget,
         /*recorder=*/nullptr, /*replay_enabled=*/false, /*access_statistics=*/false,
         /*cabins=*/nullptr, &*runtime->txn_manager_, config.isolation, config.core_id);
+    // Asymmetry 1 made enforceable at dispatch (PW4): a peer's DDL is
+    // refused by name before any handler, instead of dying inside one at
+    // MayWrite with a page id.
+    if (config.core_id != catalog::kSystemCore) {
+        runtime->dispatcher_->SetCatalogReadOnly(true);
+    }
 
     if (log != nullptr && log->enabled(LogLevel::kDebug)) {
         log->Debug("core", "core " + std::to_string(config.core_id) +

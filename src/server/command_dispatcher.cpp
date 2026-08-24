@@ -389,6 +389,23 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "DESCRIBE") || IEquals(cmd, "DESC")) {
         return HandleDescribe(rest, session);
     }
+    // A peer takes no DDL (workplan-peer-writer.md PW4). Every target of
+    // these three verbs writes state only the system core may write - the
+    // catalog rows, and for patterns/assertions the sys.* pages the
+    // recorder maintains - so on a peer the statement would run until
+    // `MayWrite` failed it with a page id. Refused whole at the verb,
+    // before any handler. The predicate is the incapacity itself - *the
+    // catalog is read-only here* (catalog_read_only_, set by CoreRuntime
+    // for every non-system core) - and deliberately not `core_id_`: the
+    // P4e equivalence harness's stand-in dispatchers call themselves core
+    // 1 over core 0's writable store precisely because no peer writer
+    // exists yet (docs/known-gaps.md), and they must keep building their
+    // fixtures. This refusal is what makes §5d's purge-gate soundness
+    // argument enforced rather than assumed (see the gate).
+    if (catalog_read_only_ &&
+        (IEquals(cmd, "CREATE") || IEquals(cmd, "ALTER") || IEquals(cmd, "DROP"))) {
+        return {"ERR " + PeerDdlRefused(core_id_, cmd).message(), false};
+    }
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "PATTERN")) {
@@ -3554,9 +3571,13 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id) {
         // **System core only.** This core's ReadHorizon() is blind to
         // every other core's readers, and a peer's - no transactions, no
         // leases - answers UINT64_MAX, which would retire a mark whose
-        // deleter is live on core 0. Unreachable while peers take no DDL,
-        // but that property is enforced nowhere, and this gate is what
-        // makes the soundness argument local (spec §5d, workplan D1).
+        // deleter is live on core 0. Unreachable because peers take no
+        // DDL - **enforced at dispatch since PW4** (PeerDdlRefused: the
+        // verb guard refuses DDL wherever the store may not write the
+        // catalog, which is every production peer) - and this gate
+        // stays as the defense in depth that makes the soundness argument
+        // local even if a new dispatch path forgets the guard (spec §5d,
+        // workplan D1).
         if (core_id_ == catalog::kSystemCore) {
             auto purged = catalog_.PurgeSettledDeleteMarks();
             if (purged.ok()) {

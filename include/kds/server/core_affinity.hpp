@@ -114,4 +114,22 @@ Status CrossCoreWriteRefused(std::uint32_t home_core, std::uint32_t target_core,
 Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_core,
                                 std::string_view relation);
 
+// The refusal every DDL verb gets on a non-system core
+// (docs/workplan-peer-writer.md PW4).
+//
+// A peer's catalog is read-only by construction (M5: the catalog pages
+// have one writer, core 0), so a CREATE/ALTER/DROP dispatched there would
+// run until it reached `MayWrite` and fail naming a page id - the exact
+// failure this header's read refusal exists to prevent, one statement
+// class over. Refused at dispatch instead, before any handler runs.
+//
+// `Unsupported` and not retryable, like the read refusal: retrying on the
+// same connection changes nothing. The message says where DDL does run,
+// because the operator's next question is always the same one.
+//
+// This refusal is also load-bearing for §5d: the delete-mark purge's
+// soundness argument assumes a peer takes no DDL, and this is what
+// enforces it (command_dispatcher.cpp's purge gate cites it).
+Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb);
+
 }  // namespace kds::server

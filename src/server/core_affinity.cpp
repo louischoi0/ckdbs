@@ -25,4 +25,11 @@ Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_co
         "; cross-core reads need the step pipeline, which is not built");
 }
 
+Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb) {
+    return Status::Unsupported(
+        std::string(verb) + " is DDL, and core " + std::to_string(this_core) +
+        " takes no DDL: the catalog has one writer, the system core - connect to core 0 "
+        "(workplan-peer-writer.md PW4)");
+}
+
 }  // namespace kds::server

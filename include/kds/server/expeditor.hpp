@@ -105,13 +105,18 @@ inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
 // reason CheckCoreCount is one: testable without a server.
 Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 
-// EV4 (docs/spec-eviction.md §6): the key is an instance total. Every core
-// takes an even share and core 0 also takes the division remainder, so the
-// shares sum to `frames` over core_id 0..cores-1. Never 0 for a nonzero
-// total that passed CheckFrameBudget - which is precisely what that
-// refusal buys. `cores` must be nonzero (CheckCoreCount owns that).
+// EV4 (docs/spec-eviction.md §6), under the operator invariant of
+// 2026-08-24: the key is an instance total, and **every core's share is
+// equal** - `frames / min(cores, hardware_cores)`, the remainder
+// undistributed (at most divisor-1 frames, ~504 KiB at the 64-core cap;
+// equality is the invariant, and a remainder seat would break it).
+// `hardware_cores` is std::thread::hardware_concurrency(), 0 ("not
+// detectable") falling back to `cores` - and boot refuses cores above the
+// detectable hardware count, so share * cores never exceeds the total.
+// Never 0 for a nonzero total that passed CheckFrameBudget. `cores` must
+// be nonzero (CheckCoreCount owns that).
 std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores,
-                             std::uint32_t core_id) noexcept;
+                             std::uint32_t hardware_cores) noexcept;
 
 class Expeditor {
 public:

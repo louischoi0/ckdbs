@@ -399,6 +399,10 @@ public:
     // every caller that predates transactions gets - and what keeps their
     // behaviour identical, because an autocommit statement outside an
     // explicit transaction is exactly what the engine did before.
+    // See catalog_read_only_ below. CoreRuntime::Open calls it for every
+    // non-system core, before the first statement can arrive.
+    void SetCatalogReadOnly(bool read_only) noexcept { catalog_read_only_ = read_only; }
+
     DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
 
     // The statement path without the durability wait: it runs the statement
@@ -1178,6 +1182,13 @@ private:
     SuperBlock& superblock_;
     catalog::Catalog& catalog_;
     storage::PageStore& page_store_;
+    // Whether this dispatcher's catalog is another core's to write
+    // (CoreRuntime asymmetry 1: catalog pages have one writer, core 0).
+    // Set by CoreRuntime for every non-system core; false everywhere else,
+    // including the P4e equivalence harness's stand-in dispatchers, which
+    // call themselves core 1 over a writable store precisely because no
+    // peer writer exists yet. Gates the PW4 DDL refusal (PeerDdlRefused).
+    bool catalog_read_only_ = false;
     Logger* log_;
     const sched::Clock* clock_;
     wal::WalManager* wal_;
