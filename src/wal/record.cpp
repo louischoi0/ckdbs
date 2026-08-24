@@ -60,6 +60,7 @@ const char* RecordTypeName(RecordType type) noexcept {
         case RecordType::kAssertBuild: return "ASSERT_BUILD";
         case RecordType::kAssertDrop: return "ASSERT_DROP";
         case RecordType::kAssertSnapshot: return "ASSERT_SNAPSHOT";
+        case RecordType::kPageHandoff: return "PAGE_HANDOFF";
     }
     return "UNKNOWN";
 }

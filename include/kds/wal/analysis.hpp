@@ -109,6 +109,12 @@ struct AnalysisResult {
     // seeded from CHECKPOINT_BEGIN's table. Redo replays a page from its
     // recLSN; the page_lsn gate does the rest (wal.md §9).
     //
+    // A PAGE_HANDOFF removes its page (PW1c-2, spec-page-lsn-cross-stream
+    // §9 rule 3): from that LSN the page belongs to another stream and
+    // this stream's redo never touches it - sound because the handoff's
+    // flush put everything logged before it in the durable image. A page
+    // that returns re-enters through its re-acquirer's ordinary records.
+    //
     // Ordered containers throughout, not hashed ones: sched.md §8 requires
     // deterministic iteration, and a recovery whose page visit order
     // varies between runs cannot be replayed from a seed.

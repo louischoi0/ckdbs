@@ -158,6 +158,21 @@ enum class RecordType : std::uint8_t {
     // Appending them later is exactly what this enum's append-only rule is
     // for.
     //
+    // The PL handoff (docs/spec-page-lsn-cross-stream.md §9 rule 1,
+    // workplan-peer-writer.md PW1c-1): *this page left this stream at this
+    // LSN*, appended by the outgoing owner after the page is flushed
+    // durable and before the incoming owner is granted write rights. The
+    // envelope's page_id names the page; the payload names the incoming
+    // core; the handoff LSN is the record's own. It moves a **fact**,
+    // never an ordering - no LSN is ever compared across streams.
+    //
+    // Redo applies nothing for it and must not even load the page (the
+    // page belongs to another stream from this LSN on); analysis is its
+    // real consumer. PW1c-2 (built): analysis *removes* the page from
+    // this stream's dirty page table at the handoff, and redo's
+    // not-dirty filter skips the page's earlier records without faulting
+    // it. Nothing emits it until PW1c-4 wires the DDL-publish grant.
+    kPageHandoff = 25,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A
@@ -181,7 +196,7 @@ enum class RecordType : std::uint8_t {
 // Keep this pinned to the last enumerator when appending a type; the test that
 // every named type encodes is what proves it stayed pinned.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kAssertSnapshot);
+    static_cast<std::uint8_t>(RecordType::kPageHandoff);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

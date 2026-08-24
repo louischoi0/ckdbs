@@ -144,6 +144,83 @@ TEST_F(AnalysisTest, TheCheckpointSeedsBothTables) {
         << "the checkpoint's recLSN must survive, not be replaced by the record's LSN";
 }
 
+TEST_F(AnalysisTest, APageHandoffRemovesThePageFromTheDirtyPageTable) {
+    // PW1c-2, spec-page-lsn-cross-stream.md section 9 rule 3: the page
+    // left this stream at the handoff LSN, and rule 1a's flush means
+    // everything this stream logged for it before is already in the
+    // durable image - so this stream's redo owes the page nothing, and an
+    // entry here would point redo at a page another stream owns from that
+    // LSN on. (Supersedes PW1c-1's skip-only direction pin.)
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kHeapOverwrite, 5, 800}).ok());
+
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        // One for the already-dirty page, one for a page this stream never
+        // otherwise touched.
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 800}, handoff).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 900}, handoff).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Run();
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().dirty_pages.count(800), 0u)
+        << "a handed-off page must leave the dirty page table";
+    EXPECT_EQ(r.value().dirty_pages.count(900), 0u);
+}
+
+TEST_F(AnalysisTest, APageThatReturnsAfterAHandoffReentersAtItsPostReturnLsn) {
+    // A -> B -> A: the page comes back (the handoff *to* this core lives
+    // in the other stream, so this stream never sees it) and the
+    // re-acquiring write re-dirties it. recLSN must be the post-return
+    // record: the pre-handoff history is in the durable image, and
+    // replaying it over the returned page is exactly the stale re-apply
+    // the PL spec's section 3 describes.
+    Lsn returned = 0;
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kHeapOverwrite, 5, 800}).ok());
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 800}, handoff).ok());
+        auto lsn = s.value()->Append({RecordType::kHeapOverwrite, 6, 800});
+        ASSERT_TRUE(lsn.ok());
+        returned = lsn.value();
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Run();
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    ASSERT_EQ(r.value().dirty_pages.count(800), 1u);
+    EXPECT_EQ(r.value().dirty_pages.at(800), returned);
+}
+
+TEST_F(AnalysisTest, AHandoffRemovesACheckpointSeededEntryToo) {
+    // The removal must reach entries analysis never saw dirtied in the
+    // scanned range: the checkpoint's dirty-page table seeded the page,
+    // and the handoff after the checkpoint is the only record that knows
+    // it left.
+    Lsn checkpoint_lsn = 0;
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        WalStream& w = *s.value();
+        const CheckpointDirtyPage dirty[] = {{700, 64}};
+        checkpoint_lsn = AppendCheckpointBegin(w, {}, dirty);
+        ASSERT_NE(checkpoint_lsn, 0u);
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{2}).ok());
+        ASSERT_TRUE(w.Append({RecordType::kPageHandoff, kNoTxnId, 700}, handoff).ok());
+        ASSERT_TRUE(w.Sync().ok());
+    }
+    auto r = Run(checkpoint_lsn);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().dirty_pages.count(700), 0u)
+        << "a checkpoint-seeded entry must not survive a later handoff";
+}
+
 TEST_F(AnalysisTest, ARecLsnIsTheFirstTimeAPageWasDirtiedNotTheLast) {
     std::vector<Lsn> lsns;
     {

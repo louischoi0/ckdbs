@@ -57,6 +57,24 @@ std::span<const std::byte> PayloadOf(const std::vector<std::byte>& record) {
 
 // ---- PAGE_INIT -----------------------------------------------------------
 
+TEST(WalPayloadTest, PageHandoffRoundTripsAndRejectsAWrongSize) {
+    // PW1c-1: four bytes, exact - a longer payload is a record this build
+    // did not write, and a prefix-read would be a guess.
+    std::array<std::byte, kPageHandoffPayloadSize> buf{};
+    ASSERT_TRUE(EncodePageHandoff(buf, PageHandoffPayload{3}).ok());
+    auto decoded = DecodePageHandoff(buf);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().incoming_core, 3u);
+
+    std::array<std::byte, kPageHandoffPayloadSize + 1> longer{};
+    EXPECT_EQ(DecodePageHandoff(longer).status().code(), StatusCode::kCorruption);
+    std::array<std::byte, 2> shorter{};
+    EXPECT_EQ(EncodePageHandoff(shorter, PageHandoffPayload{1}).status().code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(DecodePageHandoff(std::span<const std::byte>(shorter)).status().code(),
+              StatusCode::kCorruption);
+}
+
 TEST(WalPayloadTest, PageInitRoundTripsThroughTheEnvelope) {
     PageInitPayload fields{};
     fields.min_key = 1234567;
@@ -507,19 +525,22 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertDrop), 22);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kHeapDeleteUnmark), 23);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertSnapshot), 24);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPageHandoff), 25);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 24);
+    EXPECT_EQ(kMaxAssignedRecordType, 25);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kVarHeapAppend)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kIndexInsert)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kPageHandoff)));
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
     EXPECT_STREQ(RecordTypeName(RecordType::kUndoWrite), "UNDO_WRITE");
     EXPECT_STREQ(RecordTypeName(RecordType::kFree), "FREE");
     EXPECT_STREQ(RecordTypeName(RecordType::kVarHeapAppend), "VARHEAP_APPEND");
     EXPECT_STREQ(RecordTypeName(RecordType::kIndexInsert), "INDEX_INSERT");
+    EXPECT_STREQ(RecordTypeName(RecordType::kPageHandoff), "PAGE_HANDOFF");
 }
 
 // ---- INDEX_INSERT --------------------------------------------------------

@@ -93,6 +93,18 @@ StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in);
 // of this record must stamp the tuple even when replayed outside any
 // transaction context, so the value is explicit rather than inferred.
 
+// PAGE_HANDOFF (PW1c-1): the incoming core is the payload's whole
+// content - the page is the envelope's, the handoff LSN is the record's
+// own. Fixed four bytes.
+struct PageHandoffPayload {
+    std::uint32_t incoming_core;
+};
+inline constexpr std::size_t kPageHandoffPayloadSize = 4;
+
+StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
+                                        const PageHandoffPayload& fields);
+StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in);
+
 struct HeapWritePayload {
     std::uint64_t trx_id;     // writer, 48-bit zero-extended
     std::uint64_t undo_ptr;   // previous version, 0 if none

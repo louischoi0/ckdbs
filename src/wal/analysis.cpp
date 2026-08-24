@@ -79,11 +79,25 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // A page mutation dirties its page as of *this* LSN, unless the
         // page is already known dirty from earlier - the recLSN is the
         // oldest record that must be replayed, so the first one wins.
+        //
+        // PAGE_HANDOFF is the *removal* (PW1c-2, PL §9 rule 3): the page
+        // left this stream at this LSN, and everything this stream logged
+        // for it before is already in the durable image (rule 1a's flush),
+        // so this stream's redo has nothing left to contribute - a
+        // checkpoint-seeded entry included. A page that later comes back
+        // re-enters through its re-acquirer's ordinary records, so erase
+        // followed by first-wins emplace gives the post-return recLSN.
+        // max_page_id is left where it was: it is a sizing high-water, and
+        // a departed page still had to exist here.
         if (record.header.page_id != kInvalidPageId) {
-            out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
-            out.max_page_id = (out.max_page_id == kInvalidPageId)
-                                  ? record.header.page_id
-                                  : std::max(out.max_page_id, record.header.page_id);
+            if (record.type() == RecordType::kPageHandoff) {
+                out.dirty_pages.erase(record.header.page_id);
+            } else {
+                out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
+                out.max_page_id = (out.max_page_id == kInvalidPageId)
+                                      ? record.header.page_id
+                                      : std::max(out.max_page_id, record.header.page_id);
+            }
         }
 
         // An undo record this transaction just wrote becomes the head of

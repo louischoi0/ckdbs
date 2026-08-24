@@ -62,6 +62,12 @@ struct RedoStats {
     std::uint64_t records = 0;        // records the scan handed to redo
     std::uint64_t applied = 0;        // records whose effect was written
     std::uint64_t skipped_by_lsn = 0; // already reflected on the page (RV5)
+    // Page not in (or record below) analysis's dirty page table - the
+    // ARIES filter PW1c-2 added so a handed-off page is never faulted
+    // here (spec-page-lsn-cross-stream.md §9 rule 3). Zero on any stream
+    // with no PAGE_HANDOFF: an ordinary record never sits below its own
+    // page's recLSN.
+    std::uint64_t skipped_not_dirty = 0;
     std::uint64_t page_images = 0;    // FULL_PAGE_IMAGEs restored
     std::uint64_t pages_created = 0;  // pages the log named and the store lacked
     std::uint64_t deferred_assertions = 0;  // RC07's, counted not applied

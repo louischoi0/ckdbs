@@ -117,6 +117,28 @@ StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in) {
 
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 
+StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
+                                        const PageHandoffPayload& fields) {
+    if (out.size() < kPageHandoffPayloadSize) {
+        return Status::InvalidArgument("EncodePageHandoff: buffer too small");
+    }
+    std::memcpy(out.data(), &fields.incoming_core, sizeof(fields.incoming_core));
+    return kPageHandoffPayloadSize;
+}
+
+StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in) {
+    // Exact, not minimum: a longer payload is a record this build did not
+    // write, and interpreting a prefix of it would be guessing.
+    if (in.size() != kPageHandoffPayloadSize) {
+        return Status::Corruption("DecodePageHandoff: payload is " +
+                                  std::to_string(in.size()) + " bytes, not " +
+                                  std::to_string(kPageHandoffPayloadSize));
+    }
+    PageHandoffPayload fields{};
+    std::memcpy(&fields.incoming_core, in.data(), sizeof(fields.incoming_core));
+    return fields;
+}
+
 StatusOr<std::size_t> EncodeHeapWrite(std::span<std::byte> out, const HeapWritePayload& fields,
                                       std::span<const std::byte> tuple) {
     if (tuple.size() > 0xFFFFu) {

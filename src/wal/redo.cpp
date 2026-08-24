@@ -39,6 +39,12 @@ bool IsAssertionRecord(RecordType type) noexcept {
 // checkpoint control. Analysis read them; redo has nothing to apply.
 bool TouchesNoPage(RecordType type) noexcept {
     switch (type) {
+        // PAGE_HANDOFF names a page in its envelope but redo must not even
+        // load it: from the handoff LSN on, the page belongs to another
+        // stream, and loading it here is the exact cross-stream touch the
+        // record exists to end (spec-page-lsn-cross-stream.md §9 rule 3).
+        // Analysis is the consumer (PW1c-2).
+        case RecordType::kPageHandoff:
         case RecordType::kTxnBegin:
         case RecordType::kTxnCommit:
         case RecordType::kTxnAbort:
@@ -251,6 +257,22 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
 
         const PageId page_id = record.header.page_id;
         const bool is_image = record.type() == RecordType::kFullPageImage;
+
+        // PW1c-2, PL §9 rule 3's redo half: a record for a page analysis
+        // holds no dirty entry for - or one below that entry's recLSN -
+        // describes state already in the durable image. For a handed-off
+        // page that is state *another stream owns from that LSN on*, where
+        // the RV5 gate below is meaningless: the two LSN spaces are
+        // incomparable (the PL spec's §3 failure). Skipped before the
+        // load, because the page must not even be faulted here. For a
+        // page that never crossed streams this skips nothing the RV5 gate
+        // would have applied: a scanned record's LSN is never below its
+        // own page's recLSN, seeded or first-wins.
+        const auto dirty = analysis.dirty_pages.find(page_id);
+        if (dirty == analysis.dirty_pages.end() || record.header.lsn < dirty->second) {
+            ++stats.skipped_not_dirty;
+            return Status::OK();
+        }
 
         // A page the log names may not exist in the store at all - the
         // crash can have lost the allocation that created it. PAGE_INIT and

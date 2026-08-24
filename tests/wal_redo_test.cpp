@@ -222,6 +222,61 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
     EXPECT_EQ(r.value().no_page, 2u);
 }
 
+TEST_F(RedoTest, AHandedOffPagesRecordsAreSkippedAndThePageNeverFaulted) {
+    // PW1c-2, spec-page-lsn-cross-stream.md section 9 rule 3's redo half.
+    // The stream holds PAGE_INIT + two inserts for kPage and then a
+    // PAGE_HANDOFF: the page left this stream, so redo must apply nothing
+    // for it and must not even create or load it. The store deliberately
+    // does not hold the page, which makes any touch loud - an unfiltered
+    // redo would CreateAt the page from its PAGE_INIT and apply all three
+    // records.
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        WalStream& w = *s.value();
+
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/1,
+                                     static_cast<std::uint8_t>(PageType::kHeap),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
+        for (int i = 0; i < 2; ++i) {
+            const auto payload = Bytes(24, static_cast<unsigned char>(0xB0 + i));
+            std::vector<std::byte> buf(kHeapWriteFixedSize + payload.size(), std::byte{0});
+            const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0,
+                                      static_cast<std::uint16_t>(i),
+                                      static_cast<std::uint16_t>(payload.size())};
+            auto n_enc = EncodeHeapWrite(buf, hw, payload);
+            ASSERT_TRUE(n_enc.ok());
+            ASSERT_TRUE(w.Append({RecordType::kHeapInsert, 7, kPage},
+                                 std::span(buf).first(n_enc.value()))
+                            .ok());
+        }
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        ASSERT_TRUE(w.Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
+        ASSERT_TRUE(w.Sync().ok());
+    }
+
+    AnalysisResult analysis = Analyzed();
+    ASSERT_EQ(analysis.dirty_pages.count(kPage), 0u)
+        << "the handoff must have removed the page from the dirty page table";
+    // The table is empty, so RedoStartFrom answered end_lsn and redo would
+    // correctly visit nothing. What is under test is the per-record filter
+    // - that a visited record for a departed page is skipped unfaulted -
+    // so scan from the head, the TransactionAndCheckpointRecords test's
+    // arrangement.
+    analysis.redo_start_lsn = 0;
+
+    auto r = Redo((*device_), 0, store_, analysis);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().applied, 0u);
+    EXPECT_EQ(r.value().skipped_not_dirty, 3u) << "init + two inserts";
+    EXPECT_FALSE(store_.Get(kPage).ok())
+        << "redo must not create or fault a page that left the stream";
+}
+
 // ---- The UNDO_WRITE gap, asserted rather than worked around -------------
 
 TEST_F(RedoTest, RedoOfUndoWriteRebuildsARecordThatNamesItsTuple) {
