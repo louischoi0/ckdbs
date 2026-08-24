@@ -824,3 +824,8 @@ off is a catalog act: `DROP INDEX`.
 - **Index maintenance cost as an input to `CABIN AUTO`.** A column with an
   index should presumably never earn a Cabin; that belongs with the promotion
   policy in `feat-cabin.md` §8.1, which nothing consumes yet.
+- **Per-range local vs global indexes under range ownership** (added
+  2026-08-24). `docs/crosscore.md` §6a gates an indexed relation from
+  splitting until this decides; reading on record there: local per range,
+  broadcast probes cut by Cabin/Waystone — **not ratified**. Uniqueness
+  enforcement under either shape is part of the same decision.

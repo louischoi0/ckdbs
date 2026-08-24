@@ -1,16 +1,18 @@
 # Blueprint — Range-Granular Core Ownership
 
-**The shape is ratified; the phases are not built.** §§1-6's ownership
-unit and the rules over it were **promoted into `docs/crosscore.md` on
+**The shape is ratified; the phases are not built.** The ownership unit
+and the rules over it were **promoted into `docs/crosscore.md` on
 2026-08-24** (operator-directed v2 revision, worktree
-`v2-crosscore-range-rules`: CC8-CC10, §2a, §5, §6-§6b) — that spec now
-owns the rules, and this file keeps the phasing (§11), the thesis
-argument (§2), and the parts not yet promoted (§§8-9). Every constant,
-policy and protocol choice stays `[OPEN]` with its owner named. This is
-the end-state architecture blueprint for "dynamically allocated to
-cores, reorganised on statistics, every core equivalent" — the revision
-the operator opened 2026-08-24. Drafted in the main checkout on `main`
-at `a755521`; every claim about existing code names its site.
+`v2-crosscore-range-rules`: CC8-CC10, §2a, §5, §6-§6b) — that spec owns
+the rules, and §§1, 4-7 here are pointers into it, not statements of
+their own. This file keeps the thesis argument (§2), the
+existing-pieces table (§3), the every-core-equivalent and buffer-pool
+halves (§§8-9), the trade-offs (§10), the phasing (§11) and the open
+index (§12). Every constant, policy and protocol choice stays `[OPEN]`
+with its owner named. This is the end-state architecture blueprint for
+"dynamically allocated to cores, reorganised on statistics, every core
+equivalent" — the revision the operator opened 2026-08-24. Drafted in
+the main checkout on `main` at `a755521`.
 
 Upstream of everything in it was `docs/spec-page-lsn-cross-stream.md`
 (the PL decision) — **ratified 2026-08-24: PL-B logged handoff with the
@@ -21,28 +23,13 @@ a page between streams builds against that contract.
 
 ## 1. The ownership unit is the primary-key range
 
-Not the relation, not the page.
-
-- **The relation is too coarse.** It caps a hot relation at one core
-  permanently, and no placement policy fixes that. For the engine's stated
-  workload — financial OLTP — one dominant relation is the ordinary case.
-- **The page is too fine.** `workplan-crosscore.md` M1 rejected page/extent
-  hashing because "btree descent and heap-chain walks cannot cross cores
-  per hop", and that argument survives any amount of mechanism: arbitrary
-  per-page ownership makes nearly every descent hop a boundary. The cost is
-  structural, not budgetary.
-- **The pk range is the unit the engine already orders itself by.** Both
-  clustering modes are range-ordered structures today: the heap chain is
-  key-ordered page by page — "one page's ids are entirely below the next
-  page's `min_key`" (`include/kds/storage/heap/heap_chain.hpp:38`) — and
-  the clustered B+ tree is key-ordered by construction. `min_key` is
-  immutable (invariant 2) so a range boundary is stable for the life of a
-  page. A descent under range ownership crosses **at most one boundary, at
-  the top**, and everything below it is core-local.
-
-A **range** is `[lo, hi)` over the 40-bit Keystone id space of one
-relation. A relation starts life as one range owned by its creating core —
-which makes today's `sys.tables.owner_core` the degenerate case, not a
+**Promoted: `docs/crosscore.md` CC8** — the unit, the too-coarse /
+too-fine argument, the per-range sub-structure qualification (a heap
+range is its own chain, a btree range its own subtree entry), and the
+shared-structure `[OPEN]` the btree's top-of-tree hop lands on. One
+line: a range is `[lo, hi)` over the 40-bit Keystone id space of one
+relation; a relation starts life as one range owned by its creating
+core, which makes `sys.tables.owner_core` the degenerate case, not a
 retired concept.
 
 ## 2. Why this fits *this* engine — the thesis argument
@@ -82,87 +69,43 @@ carrying the cost — not generic scalability.
 
 ## 4. The range directory
 
-Ownership stays a **function of the catalog** — guideline 4 is kept, not
-amended. A new catalog relation (working name `sys.ranges`: rel oid, lo,
-owner core; hi is the next row's lo) records every split; a relation with
-no rows there is one range owned by `sys.tables.owner_core`.
-
-- **Resolution happens where it happens today**: the session core resolves
-  owners at plan time from its catalog cache; a remote stage trusts its
-  descriptor and does not re-resolve; staleness surfaces as a retryable
-  step error (`crosscore.md` §5's existing rule, unchanged).
-- **Cache invalidation is the one part that must be built carefully**: the
-  known-gaps entry stands — `InvalidateFromPeer()` clears without bumping
-  `catalog_version()`, so the prerequisite is the cache-generation counter
-  every invalidation path bumps (`docs/known-gaps.md`, named 2026-08-15).
-  A split/migration broadcast rides `kCatalogInvalidate` as DDL does.
-- **The directory is read-mostly.** Splits and migrations are rare,
-  DDL-frequency events; the per-statement path reads a per-core cached
-  copy. CC1's fast-path invariant binds: a one-range relation on its owner
-  core must add zero instructions over today.
+**Promoted: `docs/crosscore.md` CC9 and §2a** — `sys.ranges` (with the
+lo = 0 partition rule and the per-range entry page), plan-time
+resolution, the read-mostly rule, and the cache-generation prerequisite
+(`docs/known-gaps.md`, named 2026-08-15). Guideline 4 kept: ownership
+stays a function of the catalog.
 
 ## 5. Reads, writes, transactions
 
-- **Reads**: a statement whose ranges all live on the session core runs the
-  local fast path. Any other read is the step pipeline over ranges instead
-  of relations — same messages, same credits, same teardown-by-tag. A scan
-  spanning k ranges opens k stages; `emit_in_key_order` concatenates in
-  range order, which range ordering makes structurally free.
-- **Writes**: a single-range DML statement ships whole to the range's owner
-  (`crosscore.md` §6 statement shipping — "involves no pipeline").
-  CC3's home-core rule keeps holding *per stream*: a transaction's writes
-  bind to one core. **A statement or transaction writing two ranges of one
-  relation is therefore a cross-core write and stays refused retryably
-  until 2PC** — range ownership widens what CC3 refuses, and this is
-  stated rather than hidden. The refusal counters (`core_affinity.hpp`)
-  are the evidence 2PC's design will be made from, exactly as §6 planned.
-- **Visibility**: CC4 unchanged per range — a shipped stage reads the
-  owning core's latest committed view; RR weakens per core. The cross-core
-  commit oracle DT9 waits on is the same oracle multi-range transactions
-  wait on; one design serves both.
+**Promoted: `docs/crosscore.md` §2/§2a (reads), §6 (writes), §5
+(visibility).** Note the visibility half was corrected in promotion:
+this section's original "CC4 unchanged per range" is **retracted** —
+per-stage views can tear a transaction that writes two same-core
+ranges (or two same-core relations, latent in the shipped shape), so
+`crosscore.md` §5 adds the one-view-per-(statement, core) rule, gated
+on the peer writer. The cross-core commit oracle DT9 waits on is still
+the oracle multi-range transactions wait on; one design serves both.
 
 ## 6. The tail problem — the honest constraint, and the answer built in
 
-**In `ASSIGNED` mode ids ascend, so every INSERT targets the relation's
-maximum id — the tail range.** Naive range ownership spreads reads and
-updates and leaves *inserts* single-core, which for insert-heavy OLTP
-concedes the headline number.
-
-The answer is already in the tree: **row-id block leases**
-(`catalog.hpp:229` — with a table installed, `AllocateRowId()` draws from
-the leased block; core 0 carves blocks). Let each core insert from its own
-leased id block, and align ranges to block boundaries: every core then
-appends to **its own range's tail**, fully locally. The heap chain's
-refusal of an id below the tail's `min_key` (`heap_chain.hpp:129`,
-invariant 3) is satisfied *per range* because each range is its own chain
-tail. Consequences, stated now:
-
-- Per-relation id monotonicity becomes per-range monotonicity. Invariant
-  11 was already amended once (2026-08-11, §4.1: "monotonicity is now
-  per-relation, never engine-wide"); this is the same amendment one level
-  down, and it needs the same loud documentation.
-- `EXPLICIT`-mode relations spread naturally (the caller's ids need not
-  ascend) and need none of this.
-- Whether interleaved blocks are the default or opt-in is `[OPEN]` —
-  a single-writer relation gains nothing from them.
+**Promoted: `docs/crosscore.md` §6b** — id-block-aligned insert
+spreading over the row-id block leases, with the per-range-chain
+qualification CC8 adds (the leases supply the ids; the per-range chains
+supply the tails; R3/R4 builds the second). Invariant 11's amendment
+one level down — per-range monotonicity — needs the same loud
+documentation when built.
 
 ## 7. Migration, split, merge
 
-- **Trigger**: the statistics substrate (§8). Split when one range's load
-  dominates its core; migrate when cores imbalance; merge is `[OPEN]` and
-  probably v2 (cold ranges cost only directory rows).
-- **Mechanism**: CC7 generalised under the **ratified PL contract**
-  (`spec-page-lsn-cross-stream.md` §9): flush, durable handoff record,
-  grant — in that order — then the directory row, then the invalidation
-  broadcast; the incoming write stamps the stream in `page_flags`. `relayout_epoch` bumps on migrated pages so
-  every Waystone/Cabin reference self-heals through the existing miss path.
-- **Split point**: a page boundary, always — `min_key` is the split key,
-  so no page is ever divided and invariants 2/3 hold by construction.
-- **The mover is the physical optimizer's third part.** Part I moves
-  tuples between pages (shadow-only, §6-gated); Part II manages Cabins;
-  this is Part III, moving ranges between cores, and it inherits Part I's
-  discipline: observe, decide, report through SHOW, enact only through
-  named gates.
+**Promoted: `docs/crosscore.md` CC10 and §6a** — the split point, the
+six-step migration ordering (quiesce → flush → handoff record →
+directory row → grant → broadcast, abort-to-outgoing at mount before
+the grant), advisory-reference retirement priced rather than assumed
+(Cabin does not self-heal and gates migration), and the split gates.
+**Trigger** stays here with §8: split when one range's load dominates
+its core; migrate when cores imbalance; merge is `[OPEN]` and probably
+v2 (cold ranges cost only directory rows). The mover is the physical
+optimizer's Part III and inherits Part I's discipline.
 
 ## 8. Every core equivalent — retiring M5
 
@@ -212,7 +155,7 @@ per-core pool structure survives unchanged.
 | R1 | Every core equivalent: shared-structure access rule, per-core listeners, per-core statistics relations | PL not needed |
 | R2 | Global frame accounting — **static half built 2026-08-24** (the instance budget divides over every core per EV4, worktree `r2-frame-budget`); the dynamic arbiter that rebalances shares by demand remains | none |
 | R3 | Range directory + read path: `sys.ranges`, manual `SPLIT RANGE` DDL, pipeline over ranges. Placement still static | R1 |
-| R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (§6) | R3, PW1b |
+| R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (`crosscore.md` §6b, per-range chains included) | R3, PW1b |
 | R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | R1, R3; the PL contract built |
 | R6 | Multi-range transactions | 2PC — separate decision |
 

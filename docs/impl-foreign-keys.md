@@ -413,3 +413,8 @@ milestone that makes a declared foreign key mean anything at all.
   transaction-model work.
 - Cross-core FKs — placement policy work (D3 + FK graph) may later
   relax F5; v1 rejects.
+- FK under a **split** relation (added 2026-08-24): `docs/crosscore.md`
+  §6a gates an FK parent or child from splitting until this doc decides
+  — RESTRICT validation's validation-to-commit window is sound only
+  against local latest-committed state, and a split parent makes it
+  cross-core.

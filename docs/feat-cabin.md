@@ -577,6 +577,12 @@ drop on its own judgement.
 - Entry-set page layout details and directory persistence format —
   workplan (the 24 B CabinEntry of §3 is fixed; its packing into
   pages is not).
+- Cabin under a split or migrated relation (added 2026-08-24).
+  `docs/crosscore.md` §6a gates a cabined relation from **both** until
+  this decides — entry sets are memory-resident where they were
+  observed, and the hint-miss fall-back resolves through the pk on the
+  same core, so a moved range's Cabin neither travels nor self-heals
+  (`crosscore.md` CC10).
 
 ---
 

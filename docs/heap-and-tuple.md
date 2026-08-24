@@ -265,6 +265,13 @@ Collected from the sections above, plus those owned by companion specs.
 - `kds.inline_cell_width` default value (§3.3) — settle against measured target-schema string-length distributions.
 - Spilled-value size cap; prefix-inline revisit trigger (adopt only if string-equality steps become a measured cost) (§§3.3–3.4).
 - Purge-cadence sizing metric for var-heap headroom (§3.4).
+- Var-heap partition under range ownership, and per-range sub-structures
+  generally (added 2026-08-24): one `kVarHeap` page may hold values
+  referenced from both sides of a pk-range boundary, so
+  `docs/crosscore.md` §6a gates a spilling relation from splitting until
+  this doc designs the partition; `crosscore.md` CC8 likewise names
+  per-range heap chains / btree subtree entries as R3's largest piece,
+  owned structurally here.
 - Repurposing of the 16 reserved Keystone bits (§4).
 - Id-reuse / low-range reclamation for high-churn relations (§4).
 - ~~Whether a caller may ever supply the pk, and whether a supplied id may descend (invariant 11)~~ — **both decided and built 2026-08-11 (§4.1)**: yes to each, as a per-relation `EXPLICIT` key mode, restricted to btree-clustered relations. The second question was briefly recorded here as open and owned by the heap page split policy; that framing was wrong. It is owned by *where uniqueness is proved*, and on a clustered btree the descent already proves it — so the answer cost a leaf division and nothing the heap chain rests on. What stays open beside it: **whether `ALTER TABLE` may ever change a relation's key mode** (today it refuses, with everything else data-shaped), and **whether a heap relation may ever be `EXPLICIT`**, which is the heap page split policy below and not a pk question.
