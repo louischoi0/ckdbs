@@ -162,6 +162,9 @@ TEST_F(AnalysisTest, APageHandoffRemovesThePageFromTheDirtyPageTable) {
         // otherwise touched.
         ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 800}, handoff).ok());
         ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 900}, handoff).ok());
+        // Twice for one page: erase is idempotent, a repeated handoff (a
+        // republished grant) changes nothing.
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, kNoTxnId, 800}, handoff).ok());
         ASSERT_TRUE(s.value()->Sync().ok());
     }
     auto r = Run();
@@ -169,6 +172,23 @@ TEST_F(AnalysisTest, APageHandoffRemovesThePageFromTheDirtyPageTable) {
     EXPECT_EQ(r.value().dirty_pages.count(800), 0u)
         << "a handed-off page must leave the dirty page table";
     EXPECT_EQ(r.value().dirty_pages.count(900), 0u);
+}
+
+TEST_F(AnalysisTest, ATransactionalPageHandoffIsCorruption) {
+    // A handoff is an ownership event and belongs to no transaction
+    // (log_page_handoff.hpp hardcodes 0); a nonzero txn_id would mint a
+    // phantom loser, so it is refused as corruption, never interpreted.
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageHandoff, /*txn=*/7, 800}, handoff).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Run();
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
 
 TEST_F(AnalysisTest, APageThatReturnsAfterAHandoffReentersAtItsPostReturnLsn) {

@@ -105,6 +105,16 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // page; raising it is monotone and free).
         if (record.header.page_id != kInvalidPageId) {
             if (record.type() == RecordType::kPageHandoff) {
+                // Non-transactional by contract (a handoff is an ownership
+                // event, log_page_handoff.hpp) - a nonzero txn_id would
+                // have minted a phantom loser above, so it is refused as
+                // the corruption it is, never interpreted.
+                if (record.header.txn_id != 0) {
+                    return Status::Corruption(
+                        "analysis: PAGE_HANDOFF at lsn " + std::to_string(record.header.lsn) +
+                        " carries txn " + std::to_string(record.header.txn_id) +
+                        "; a handoff is an ownership event and belongs to no transaction");
+                }
                 out.dirty_pages.erase(record.header.page_id);
             } else {
                 out.dirty_pages.emplace(record.header.page_id, record.header.lsn);

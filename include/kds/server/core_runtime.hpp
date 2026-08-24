@@ -248,6 +248,17 @@ public:
     // test can drive it without a reactor, InvalidateCatalog's pattern.
     void GrantRelationFault(storage::Extent extent);
 
+    // The receive side of PW1c-4's exact-page write grant, and the home of
+    // PL §9 rule 6's **acquisition restamp**: each granted page is faulted
+    // (read rights - the fault grant precedes this on the same FIFO edge),
+    // restamped to this stream (stamp := own, page_lsn := this stream's
+    // current end LSN, via the StampPageLsn funnel) and flushed durable,
+    // and only then admitted to MayWrite. A failure leaves the page
+    // unwritable and logs it - the relation stays refused retryably, the
+    // publish hook's own stance. What the `kRelationWriteGrant` handler
+    // calls; exposed for the reason GrantRelationFault is.
+    void GrantRelationWrite(std::span<const PageId> pages);
+
     // This core's row-id leases and refill state (P5's shape). Exposed for
     // the same reason GrantRelationFault is: a test drives the grant
     // without a reactor, and diagnostics read the counters.

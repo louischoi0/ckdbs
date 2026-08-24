@@ -17,6 +17,7 @@
 #include "kds/sched/send_retry.hpp"
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/storage/file_page_device.hpp"
+#include "kds/wal/log_page_handoff.hpp"
 
 #if KDS_WITH_TLS
 #include "kds/server/auth.hpp"
@@ -1456,6 +1457,42 @@ Status Expeditor::Serve() {
                     return;
                 }
 
+                // PW1c-4, PL §9 rule 1's ordering as code: the pages are
+                // flushed (above), the handoff records go durable in core
+                // 0's stream *before* any grant leaves, and the write
+                // grant follows the fault grant on the same FIFO edge so
+                // the receiver's restamp (rule 6) can fault its pages.
+                // The exact-page set is what core 0 formatted: the root,
+                // and the var-heap root when the schema can spill -
+                // PW1c-6 owns extending it to CREATE INDEX's pages.
+                RelationWriteGrantPayload write_grant{};
+                write_grant.page_ids[write_grant.count++] = root;
+                if (varheap_root != kInvalidPageId) {
+                    write_grant.page_ids[write_grant.count++] = varheap_root;
+                }
+                wal::Lsn handoff_max = 0;
+                bool handoffs_ok = true;
+                for (std::uint32_t i = 0; i < write_grant.count; ++i) {
+                    auto lsn = wal::LogPageHandoff(&*wal_, write_grant.page_ids[i], owner_core);
+                    if (!lsn.ok()) {
+                        logger_->Error("catalog",
+                                       "handoff record for page " +
+                                           std::to_string(write_grant.page_ids[i]) +
+                                           " failed: " + lsn.status().message());
+                        handoffs_ok = false;
+                        break;
+                    }
+                    handoff_max = std::max(handoff_max, lsn.value());
+                }
+                if (handoffs_ok && handoff_max != 0) {
+                    if (Status s = wal_->EnsureDurable(handoff_max); !s.ok()) {
+                        logger_->Error("catalog", "handoff records for relation oid=" +
+                                                      std::to_string(oid) +
+                                                      " not durable: " + s.message());
+                        handoffs_ok = false;
+                    }
+                }
+
                 ExtentGrantPayload grant{range.first, range.count};
                 std::byte payload[sizeof(grant)];
                 std::memcpy(payload, &grant, sizeof(grant));
@@ -1470,6 +1507,19 @@ Status Expeditor::Serve() {
                 // The task copies the payload (send_retry.hpp owns it), so a
                 // stack buffer is enough.
                 scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, payload));
+
+                // The write grant is withheld when its handoffs are not
+                // durable - the relation stays fault-readable and its
+                // writes stay refused retryably, never served unsound.
+                if (handoffs_ok) {
+                    std::byte write_payload[sizeof(write_grant)];
+                    std::memcpy(write_payload, &write_grant, sizeof(write_grant));
+                    sched::MessageHeader write_header = header;
+                    write_header.kind = static_cast<std::uint16_t>(
+                        sched::RingMessageKind::kRelationWriteGrant);
+                    scheduler.Submit(
+                        sched::MakeSendRetryTask(*transport_, write_header, write_payload));
+                }
             });
 
         // Spawned only after every core is built, so a failure above leaves

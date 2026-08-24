@@ -263,11 +263,19 @@ context.
    erased.
 
 6. **The acquisition restamp (2026-08-24, from the f19ead1 review's C2;
-   built with PW1c-3's rework).** The incoming owner, after the grant
-   and **before its first logged write** to the page, durably rewrites
-   the header pair: `page_flags := own core_id + 1`,
-   `page_lsn := its own stream's current end LSN` — and flushes the
-   page. Three consequences carry the design:
+   built with PW1c-3's rework and PW1c-4's grant path).** The incoming
+   owner, after the grant and **before its first logged write** to the
+   page, appends a PAGE_HANDOFF to its *own* stream naming itself as the
+   incoming core — the acquisition record — and durably rewrites the
+   header pair: `page_flags := own core_id + 1`, `page_lsn := that
+   record's LSN` — and flushes the page. The LSN must name a logged
+   record, not the bare append point: the WAL gate refuses a page
+   claiming a record that was never logged, which is what forced the
+   acquisition to be a record at all — and the record doubles as the
+   receiver's durable acquisition fact. Analysis's rule-3 erase reads
+   the record correctly in either direction: below its LSN, this
+   stream's redo owes the page nothing. Three consequences carry the
+   design:
    - **Rule 5 holds at full strength with no exception**: every
      legitimate crossing stamps the receiver before any of the
      receiver's records for the page exist, so a foreign stamp redo can

@@ -12,6 +12,7 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/sched/epoll_io_backend.hpp"
 #include "kds/server/mount_recovery.hpp"
+#include "kds/wal/log_page_handoff.hpp"
 
 namespace kds::server {
 
@@ -279,6 +280,35 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         return s;
     }
 
+    // PW1c-4's write grant, always sent after the fault grant on the same
+    // FIFO edge, so the fault rights the restamp needs are in place.
+    if (Status s = scheduler_->RegisterMessageHandler(
+            sched::RingMessageKind::kRelationWriteGrant,
+            [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                if (payload.size() != sizeof(RelationWriteGrantPayload)) {
+                    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                        log_->Error("core", "core " + std::to_string(config_.core_id) +
+                                                " dropped a malformed relation write grant (" +
+                                                std::to_string(payload.size()) + " bytes)");
+                    }
+                    return;
+                }
+                RelationWriteGrantPayload grant{};
+                std::memcpy(&grant, payload.data(), sizeof(grant));
+                if (grant.count == 0 ||
+                    grant.count > sizeof(grant.page_ids) / sizeof(grant.page_ids[0])) {
+                    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                        log_->Error("core", "dropped a relation write grant naming " +
+                                                std::to_string(grant.count) + " pages");
+                    }
+                    return;
+                }
+                GrantRelationWrite(std::span<const PageId>(grant.page_ids, grant.count));
+            });
+        !s.ok()) {
+        return s;
+    }
+
     // The row-id lease's receive side (P5's shape), peers only: core 0
     // owns the sequence pages and never leases from itself - and in
     // production its scheduler carries the *grant handler* on this kind
@@ -426,6 +456,57 @@ void CoreRuntime::GrantRelationFault(storage::Extent extent) {
         log_->Debug("core", "core " + std::to_string(config_.core_id) +
                                 " granted fault range [" + std::to_string(extent.first) + ", " +
                                 std::to_string(extent.end()) + ")");
+    }
+}
+
+void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
+    // Rule 6's ordering, restamp-durable before writable, and the whole
+    // body runs inside one task so no statement interleaves it. The fault
+    // is GetForRead - read rights suffice, and the frame must be resident
+    // for StampPageLsn to reach it. The restamp LSN is a **logged
+    // acquisition record**: a PAGE_HANDOFF appended to this stream naming
+    // this core as the incoming one - page_lsn must name a record that
+    // exists (the WAL gate refuses the bare append point), the record is
+    // the receiver's durable acquisition fact, and analysis's erase reads
+    // correctly in both directions (below this LSN, this stream's redo
+    // owes the page nothing - for an acquisition, nothing below exists).
+    for (PageId id : pages) {
+        if (auto page = store_->GetForRead(id); !page.ok()) {
+            if (log_ != nullptr) {
+                log_->Error("core", "core " + std::to_string(config_.core_id) +
+                                        " could not fault write-granted page " +
+                                        std::to_string(id) + ": " + page.status().message());
+            }
+            return;
+        }
+        auto acquired = wal::LogPageHandoff(&*wal_, id, config_.core_id);
+        if (!acquired.ok()) {
+            if (log_ != nullptr) {
+                log_->Error("core", "acquisition record for page " + std::to_string(id) +
+                                        " failed: " + acquired.status().message());
+            }
+            return;
+        }
+        if (Status s = store_->StampPageLsn(id, acquired.value()); !s.ok()) {
+            if (log_ != nullptr) {
+                log_->Error("core", "acquisition restamp of page " + std::to_string(id) +
+                                        " failed: " + s.message());
+            }
+            return;
+        }
+    }
+    if (Status s = store_->FlushPages(pages); !s.ok()) {
+        if (log_ != nullptr) {
+            log_->Error("core", "core " + std::to_string(config_.core_id) +
+                                    " could not flush its acquisition restamps: " + s.message());
+        }
+        return;  // unwritable is refused-retryably, never served wrong
+    }
+    store_->GrantWritePages(pages);
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("core", "core " + std::to_string(config_.core_id) + " write-granted " +
+                                std::to_string(pages.size()) +
+                                " page(s), acquisition-restamped");
     }
 }
 

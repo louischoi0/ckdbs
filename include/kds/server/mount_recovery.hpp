@@ -90,6 +90,10 @@ struct MountRecovery {
     // ---- What redo wrote ----
     std::uint64_t redo_applied = 0;
     std::uint64_t redo_skipped_by_lsn = 0;  // already on the page (RV5)
+    // The PW1c-2 not-dirty filter's count - zero on any stream with no
+    // PAGE_HANDOFF, and lifted here so that claim is checkable at a real
+    // mount, not only in gtest (the f19ead1 review's deferred item).
+    std::uint64_t redo_skipped_not_dirty = 0;
     std::uint64_t pages_healed = 0;         // checksum detected, an FPI healed
 
     // ---- What undo rolled back ----

@@ -401,6 +401,45 @@ TEST_F(CoreRuntimeTest, AGrantedPeerFaultsARelationsDataPagesReadOnly) {
     EXPECT_TRUE(peer.value()->catalog().InitTableAccess(oid.value()).ok());
 }
 
+TEST_F(CoreRuntimeTest, AWriteGrantedPeerRestampsThePageAndMayWriteIt) {
+    // PW1c-4's receive side, and PL §9 rule 6 end to end at the store: the
+    // granted page is restamped to the peer's stream - stamp its own,
+    // page_lsn re-based into its space - flushed, and only then writable.
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    auto row = core0_->catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    const PageId root = row.value().desc_page_id;
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // The fault grant precedes the write grant on the wire; mirror it.
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    ASSERT_FALSE(peer.value()->store().MayWrite(root));
+
+    const PageId pages[] = {root};
+    peer.value()->GrantRelationWrite(pages);
+
+    EXPECT_TRUE(peer.value()->store().MayWrite(root));
+    auto page = peer.value()->store().GetForRead(root);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()),
+              storage::StreamStampFor(1))
+        << "the acquisition restamp must name the peer's stream";
+    // page_lsn names the peer's logged acquisition record: nonzero, in
+    // this stream's space, strictly below the append point (the WAL gate
+    // refuses a page claiming a record never logged - what forced the
+    // acquisition to be a record at all).
+    const auto lsn = storage::GetPageLsn(page.value().bytes());
+    EXPECT_NE(lsn, 0u);
+    EXPECT_LT(lsn, peer.value()->wal().appended_lsn());
+}
+
 // ---- P6c: placement -----------------------------------------------------
 
 TEST(CorePlacementTest, RotationSkipsTheSystemCoreAndCreatingStaysPut) {
