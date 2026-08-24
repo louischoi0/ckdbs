@@ -157,7 +157,11 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // of the catalog rows, and the spec amendment quoted it at the wrong
 // subject before this list was read. The authority on whether a catalog row
 // may grow quietly is this comment block, and it has said no six times.
-inline constexpr std::uint32_t kSuperBlockVersion = 14;
+// 14 -> 15 (2026-08-24): SysTableRow grew `anchor_page_id` (PW2-1) - four
+// bytes, and Decode refuses any size but the exact one, so without the
+// bump a pre-anchor file would mount and fail on its first catalog read
+// naming a size instead of a version (key_mode's precedent, verbatim).
+inline constexpr std::uint32_t kSuperBlockVersion = 15;
 
 // ---- On-disk field layout ----------------------------------------------
 

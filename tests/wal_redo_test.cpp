@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/server/superblock.hpp"
+#include "kds/storage/anchor_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
@@ -280,6 +281,41 @@ TEST_F(RedoTest, AnAppliedRecordStampsTheOwningStream) {
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
     EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u);  // core 0 + 1
+}
+
+TEST_F(RedoTest, AnAnchorReplaysItsInitAndItsSlotUpdates) {
+    // PW2-1: PAGE_INIT rebuilds only the common header, so the anchor's
+    // durable story is PAGE_INIT + ANCHOR_UPDATE - one per slot. A crash
+    // losing the unflushed anchor must recover the relation's entry
+    // points whole, or the relation loses its roots (RC03's argument one
+    // page over).
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        WalStream& w = *s.value();
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/0,
+                                     static_cast<std::uint8_t>(PageType::kAnchor),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/4001};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
+        std::array<std::byte, kAnchorUpdatePayloadSize> upd{};
+        ASSERT_TRUE(EncodeAnchorUpdate(upd, AnchorUpdatePayload{0, 262}).ok());
+        ASSERT_TRUE(w.Append({RecordType::kAnchorUpdate, 1, kPage}, upd).ok());
+        ASSERT_TRUE(EncodeAnchorUpdate(upd, AnchorUpdatePayload{9001, 300}).ok());
+        ASSERT_TRUE(w.Append({RecordType::kAnchorUpdate, 1, kPage}, upd).ok());
+        ASSERT_TRUE(w.Sync().ok());
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().applied, 3u);
+
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(storage::RawPageType(page.value().bytes()),
+              static_cast<std::uint8_t>(PageType::kAnchor));
+    EXPECT_EQ(storage::AnchorClusteredRoot(page.value().bytes()), 262u);
+    EXPECT_EQ(storage::AnchorIndexRoot(page.value().bytes(), 9001), 300u);
 }
 
 TEST_F(RedoTest, AForeignStampReachableByRedoRefusesTheMount) {

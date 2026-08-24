@@ -58,6 +58,7 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::memcpy(base + kOwnerCoreOffset, &owner_core, sizeof(owner_core));
     auto km = static_cast<std::uint8_t>(key_mode);
     std::memcpy(base + kKeyModeOffset, &km, sizeof(km));
+    std::memcpy(base + kAnchorPageIdOffset, &anchor_page_id, sizeof(anchor_page_id));
     return buf;
 }
 
@@ -79,6 +80,7 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     std::uint8_t km;
     std::memcpy(&km, base + kKeyModeOffset, sizeof(km));
     row.key_mode = static_cast<KeyMode>(km);
+    std::memcpy(&row.anchor_page_id, base + kAnchorPageIdOffset, sizeof(row.anchor_page_id));
     return row;
 }
 

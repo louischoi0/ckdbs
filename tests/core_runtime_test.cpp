@@ -487,8 +487,9 @@ TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
     // production hook flushes before it too.
     Status evict_at_publish = Status::OK();
     catalog2.SetRelationPublishHook(
-        [&](catalog::Oid oid, std::uint32_t owner, PageId root, PageId varheap) {
+        [&](catalog::Oid oid, std::uint32_t owner, PageId root, PageId varheap, PageId anchor) {
             published = {oid, owner, root, varheap, published.calls + 1};
+            EXPECT_NE(anchor, kInvalidPageId) << "a user relation always gets an anchor (PW2-1)";
             const PageId departed[] = {root};
             evict_at_publish = core0_store_->FlushPages(departed);
             if (evict_at_publish.ok()) {

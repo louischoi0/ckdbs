@@ -113,10 +113,20 @@ enum class PageType : std::uint8_t {
     // constraint rather than a hint. Advisory rules do not apply, exactly
     // as they do not for kVarHeap.
     kCabinBound = 13,
+
+    // A relation's anchor: the one fixed page holding its entry points -
+    // the clustered root, and each secondary index's root keyed by index
+    // oid (workplan-peer-writer.md §7a, PW2's decision). It exists so a
+    // root move writes a *relation* page, never a catalog page: the
+    // catalog columns become CREATE-fixed facts naming this page, and the
+    // page's owner - whichever core that is - moves its own roots in its
+    // own stream. Headered, checksummed and authoritative: losing it
+    // loses the relation's entry points, kVarHeap's argument exactly.
+    kAnchor = 14,
 };
 
 // Highest value currently assigned above; anything greater read off disk
 // was written by a newer build. Bump when appending to the enum.
-inline constexpr std::uint8_t kMaxAssignedPageType = 13;
+inline constexpr std::uint8_t kMaxAssignedPageType = 14;
 
 }  // namespace kds

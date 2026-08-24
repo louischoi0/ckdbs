@@ -15,6 +15,7 @@ add_library(kds
     src/base/log.cpp
     src/storage/crc32c.cpp
     src/storage/page_header.cpp
+    src/storage/anchor_page.cpp
     src/storage/page_device.cpp
     src/storage/file_page_device.cpp
     src/storage/memory_page_device.cpp

@@ -222,6 +222,12 @@ struct TableAccess {
     // catalog fact rather than a storage mode.
     KeyMode key_mode = KeyMode::kAssigned;
 
+    // The relation's anchor page (PW2-1; rows.hpp says what it is), or
+    // kInvalidPageId for a system relation. Cacheable for varheap_page_id's
+    // reason exactly: fixed at CREATE TABLE, and the page's *contents*
+    // move so this fact never does. PW2-2 is what starts reading it.
+    PageId anchor_page_id = kInvalidPageId;
+
     // The relation's fixed row size and column offsets (row_layout.hpp),
     // computed once when the entry is filled. It belongs here for the same
     // reason the schema does and by the same test the rest of this struct

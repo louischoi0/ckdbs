@@ -17,6 +17,8 @@
 #include "kds/storage/keystone.hpp"
 #include "kds/storage/varheap.hpp"
 #include "kds/txn/manager.hpp"
+#include "kds/storage/anchor_page.hpp"
+#include "kds/wal/log_anchor_update.hpp"
 #include "kds/wal/log_page_init.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/payload.hpp"
@@ -307,6 +309,16 @@ Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id
     // rows carry no key space, and a relation root passes owner + type.
     if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
     auto rec = wal::LogPageInit(wal, trx_id, page_id, type, /*min_key=*/0, owner_oid);
+    return rec.ok() ? Status::OK() : rec.status();
+}
+
+// One anchor slot's durable half (PW2-1): PAGE_INIT rebuilds only the
+// common header, so the roots ride ANCHOR_UPDATE - the same record a
+// root move writes.
+Status LogCatAnchorUpdate(wal::WalManager* wal, std::uint64_t trx_id, PageId anchor_page,
+                          std::uint64_t index_oid, PageId root) {
+    if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
+    auto rec = wal::LogAnchorUpdate(wal, trx_id, anchor_page, index_oid, root);
     return rec.ok() ? Status::OK() : rec.status();
 }
 
@@ -1043,7 +1055,7 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                                    PageId desc_page_id, ClusteredType clustered_type,
                                    PageId varheap_page_id, std::uint32_t owner_core,
-                                   KeyMode key_mode, std::uint64_t trx_id,
+                                   KeyMode key_mode, PageId anchor_page_id, std::uint64_t trx_id,
                                    CatalogRowRef* where) {
     SysTableRow row{};
     row.oid = oid;
@@ -1055,6 +1067,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view n
     row.varheap_page_id = varheap_page_id;
     row.owner_core = owner_core;
     row.key_mode = key_mode;
+    row.anchor_page_id = anchor_page_id;
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
     if (s.ok()) BumpVersion("sys.tables insert");
@@ -1206,6 +1219,29 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         }
     }
 
+    // PW2-1 (workplan-peer-writer.md §7a): the relation's anchor page.
+    // PAGE_INIT rebuilds only the common header, and the clustered root is
+    // *body* content - so the anchor's durable story is PAGE_INIT plus an
+    // ANCHOR_UPDATE record, the same record a root move will write
+    // (PW2-3). A crash losing the unflushed anchor otherwise loses the
+    // relation's entry points: RC03's argument, one page over. The ref is
+    // scoped for the reason the root's is - the publish hook evicts.
+    PageId anchor_id = kInvalidPageId;
+    {
+        auto created_anchor = store_.CreateNew();
+        if (!created_anchor.ok()) return created_anchor.status();
+        anchor_id = created_anchor.value().first;
+        storage::FormatAnchorPage(created_anchor.value().second.bytes(), new_oid, root_id);
+        if (Status s = LogCatPageInit(wal_, trx_id, anchor_id, PageType::kAnchor, new_oid);
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = LogCatAnchorUpdate(wal_, trx_id, anchor_id, /*index_oid=*/0, root_id);
+            !s.ok()) {
+            return s;
+        }
+    }
+
     // Placement (docs/workplan-crosscore.md M1). The rotation counter is
     // how many relations already exist, read off the page rather than
     // derived from the oid. That was originally because the oid restarted
@@ -1242,7 +1278,8 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     ref.oid = new_oid;
     note(ref);
     if (Status s = InsertRelationRow(new_oid, namespace_oid, name, root_id, clustered_type,
-                                      varheap_root, owner_core, key_mode, trx_id, &ref);
+                                      varheap_root, owner_core, key_mode, anchor_id, trx_id,
+                                      &ref);
         !s.ok()) {
         return s;
     }
@@ -1276,7 +1313,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // or it is unreachable - the pre-CC7 defect, now closed at the one site
     // that knows a non-creating owner was chosen.
     if (owner_core != kSystemCore && on_publish_) {
-        on_publish_(new_oid, owner_core, root_id, varheap_root);
+        on_publish_(new_oid, owner_core, root_id, varheap_root, anchor_id);
     }
     return new_oid;
 }
@@ -1764,6 +1801,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.varheap_page_id = table_row.value().varheap_page_id;
     access.owner_core = table_row.value().owner_core;
     access.key_mode = table_row.value().key_mode;
+    access.anchor_page_id = table_row.value().anchor_page_id;
 
     // The row-size constant, computed once here and carried for the life of
     // the entry (invariant 13). This is the only place it is derived: a

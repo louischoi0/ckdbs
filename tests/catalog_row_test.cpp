@@ -389,16 +389,18 @@ TEST(SysTableRowTest, TheOwnerCoreOccupiesItsOwnBytes) {
 }
 
 TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
-    // The row grew by four bytes for `owner_core` and by one more for
-    // `key_mode`, each a format-version event - the superblock bumps to 10
-    // and to 14 are the other half of them. Pinned so the next person to add
-    // a field cannot do so quietly.
+    // The row grew by four bytes for `owner_core`, one for `key_mode`, and
+    // four for `anchor_page_id` (PW2-1), each a format-version event - the
+    // superblock bumps to 10, 14 and 15 are the other halves. Pinned so
+    // the next person to add a field cannot do so quietly.
     EXPECT_EQ(SysTableRow::kOwnerCoreOffset,
               SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
     EXPECT_EQ(SysTableRow::kKeyModeOffset,
               SysTableRow::kOwnerCoreOffset + sizeof(std::uint32_t));
-    EXPECT_EQ(SysTableRow::kOnDiskSize,
+    EXPECT_EQ(SysTableRow::kAnchorPageIdOffset,
               SysTableRow::kKeyModeOffset + sizeof(std::uint8_t));
+    EXPECT_EQ(SysTableRow::kOnDiskSize,
+              SysTableRow::kAnchorPageIdOffset + sizeof(PageId));
 }
 
 TEST(SysTableRowTest, DecodeRefusesAnythingButTheExactSize) {

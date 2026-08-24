@@ -47,6 +47,7 @@ std::uint8_t MaxSupportedFormatVersion(PageType type) noexcept {
         // the first caller that did validate one would have called every
         // Bound Cabin page in the database corrupt.
         case PageType::kCabinBound:
+        case PageType::kAnchor:
             return 1;
         case PageType::kInvalid:
             break;

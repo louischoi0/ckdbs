@@ -119,6 +119,19 @@ struct SysTableRow {
     // catalog read naming a size instead of a version.
     KeyMode key_mode;
 
+    // The relation's anchor page (storage/anchor_page.hpp; PW2-1,
+    // workplan-peer-writer.md §7a), or kInvalidPageId for a **system**
+    // relation - a bootstrap table lives on a fixed catalog page whose
+    // root never moves, so it carries no anchor and PW2-2 reads
+    // kInvalidPageId as "desc_page_id is the root". Every user relation
+    // gets one at CREATE TABLE, and the field never changes after: the
+    // anchor is the page whose *contents* move so this row never has to.
+    // The four bytes are a format-version event (superblock 14 -> 15;
+    // Decode refuses any size but the exact one - key_mode's precedent).
+    // Appended after `key_mode` because every offset below is a fixed
+    // on-disk position.
+    PageId anchor_page_id;
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kNameOffset = 16;
@@ -130,7 +143,8 @@ struct SysTableRow {
     static constexpr std::size_t kVarHeapPageIdOffset = kNextIdOffset + sizeof(std::uint64_t);
     static constexpr std::size_t kOwnerCoreOffset = kVarHeapPageIdOffset + sizeof(PageId);
     static constexpr std::size_t kKeyModeOffset = kOwnerCoreOffset + sizeof(std::uint32_t);
-    static constexpr std::size_t kOnDiskSize = kKeyModeOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kAnchorPageIdOffset = kKeyModeOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kOnDiskSize = kAnchorPageIdOffset + sizeof(PageId);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);

@@ -214,10 +214,10 @@ public:
     // sends the owner a `kRelationFaultGrant`; with no hook installed a
     // rotated relation is created and never granted, which the affinity
     // check already refuses honestly. Arguments: the relation's oid, its
-    // owner core, its root page and its var-heap root (kInvalidPageId when
-    // none).
+    // owner core, its root page, its var-heap root (kInvalidPageId when
+    // none), and its anchor page (PW2-1).
     using RelationPublishHook =
-        std::function<void(Oid, std::uint32_t, PageId, PageId)>;
+        std::function<void(Oid, std::uint32_t, PageId, PageId, PageId)>;
     void SetRelationPublishHook(RelationPublishHook hook) { on_publish_ = std::move(hook); }
 
     // The placement rule CreateTable hands to catalog::AssignOwnerCore()
@@ -866,11 +866,17 @@ public:
     // catalog relation's ids come from the engine, and there is no spelling
     // by which a bootstrap table could be anything else. CreateTable()'s own
     // parameter is *not* defaulted - see its declaration.
+    // `anchor_page_id` defaults to kInvalidPageId - the *bootstrap* value:
+    // a system relation lives on a fixed catalog page whose root never
+    // moves, so it carries no anchor, and PW2-2's read rule treats
+    // kInvalidPageId as "desc_page_id is the root". Every user relation
+    // gets a real anchor from CreateTable (PW2-1).
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
                               PageId varheap_page_id,
                               std::uint32_t owner_core = kSystemCore,
                               KeyMode key_mode = KeyMode::kAssigned,
+                              PageId anchor_page_id = kInvalidPageId,
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr);
 

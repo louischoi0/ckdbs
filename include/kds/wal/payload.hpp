@@ -103,6 +103,26 @@ StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
                                         const PageHandoffPayload& fields);
 StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in);
 
+// ANCHOR_UPDATE (PW2): one anchor slot moved - the clustered root when
+// index_oid is 0 (no index oid is ever 0), otherwise that index's root.
+// The anchor page itself is the envelope's page_id.
+struct AnchorUpdatePayload {
+    std::uint64_t index_oid;
+    std::uint32_t root;
+};
+
+inline constexpr std::size_t kAnchorUpdateIndexOidOffset = 0;
+inline constexpr std::size_t kAnchorUpdateRootOffset = 8;
+// 12 bytes on disk; a floor, like every size in this file.
+inline constexpr std::size_t kAnchorUpdatePayloadSize = 12;
+
+static_assert(offsetof(AnchorUpdatePayload, index_oid) == kAnchorUpdateIndexOidOffset);
+static_assert(offsetof(AnchorUpdatePayload, root) == kAnchorUpdateRootOffset);
+
+StatusOr<std::size_t> EncodeAnchorUpdate(std::span<std::byte> out,
+                                         const AnchorUpdatePayload& fields);
+StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in);
+
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 //
 // One shape for both: an insert names a new slot, an overwrite names an

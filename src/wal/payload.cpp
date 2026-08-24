@@ -141,6 +141,28 @@ StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in) {
     return fields;
 }
 
+// ---- ANCHOR_UPDATE -------------------------------------------------------
+
+StatusOr<std::size_t> EncodeAnchorUpdate(std::span<std::byte> out,
+                                         const AnchorUpdatePayload& fields) {
+    if (Status s = CheckOutputSize(out, kAnchorUpdatePayloadSize, "ANCHOR_UPDATE"); !s.ok()) {
+        return s;
+    }
+    Store<std::uint64_t>(out, kAnchorUpdateIndexOidOffset, fields.index_oid);
+    Store<std::uint32_t>(out, kAnchorUpdateRootOffset, fields.root);
+    return kAnchorUpdatePayloadSize;
+}
+
+StatusOr<AnchorUpdatePayload> DecodeAnchorUpdate(std::span<const std::byte> in) {
+    if (Status s = CheckInputSize(in, kAnchorUpdatePayloadSize, "ANCHOR_UPDATE"); !s.ok()) {
+        return s;
+    }
+    AnchorUpdatePayload fields{};
+    fields.index_oid = Load<std::uint64_t>(in, kAnchorUpdateIndexOidOffset);
+    fields.root = Load<std::uint32_t>(in, kAnchorUpdateRootOffset);
+    return fields;
+}
+
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 
 StatusOr<std::size_t> EncodeHeapWrite(std::span<std::byte> out, const HeapWritePayload& fields,

@@ -536,21 +536,36 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kHeapDeleteUnmark), 23);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertSnapshot), 24);
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPageHandoff), 25);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAnchorUpdate), 26);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 25);
+    EXPECT_EQ(kMaxAssignedRecordType, 26);
 
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kUndoWrite)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kFree)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kVarHeapAppend)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kIndexInsert)));
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kPageHandoff)));
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAnchorUpdate)));
     EXPECT_FALSE(IsAssignedRecordType(kMaxAssignedRecordType + 1));
     EXPECT_STREQ(RecordTypeName(RecordType::kUndoWrite), "UNDO_WRITE");
     EXPECT_STREQ(RecordTypeName(RecordType::kFree), "FREE");
     EXPECT_STREQ(RecordTypeName(RecordType::kVarHeapAppend), "VARHEAP_APPEND");
     EXPECT_STREQ(RecordTypeName(RecordType::kIndexInsert), "INDEX_INSERT");
     EXPECT_STREQ(RecordTypeName(RecordType::kPageHandoff), "PAGE_HANDOFF");
+    EXPECT_STREQ(RecordTypeName(RecordType::kAnchorUpdate), "ANCHOR_UPDATE");
+}
+
+TEST(WalPayloadTest, AnchorUpdateRoundTripsThroughTheEnvelope) {
+    const auto record = ThroughEnvelope(RecordType::kAnchorUpdate,
+                                        [](std::span<std::byte> out) {
+                                            return EncodeAnchorUpdate(
+                                                out, AnchorUpdatePayload{9001, 310});
+                                        });
+    auto decoded = DecodeAnchorUpdate(PayloadOf(record));
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().index_oid, 9001u);
+    EXPECT_EQ(decoded.value().root, 310u);
 }
 
 // ---- INDEX_INSERT --------------------------------------------------------

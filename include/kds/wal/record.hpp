@@ -173,6 +173,16 @@ enum class RecordType : std::uint8_t {
     // not-dirty filter skips the page's earlier records without faulting
     // it. Nothing emits it until PW1c-4 wires the DDL-publish grant.
     kPageHandoff = 25,
+    // One anchor-page slot update (storage/anchor_page.hpp; PW2,
+    // workplan-peer-writer.md §7a): the clustered root (index_oid 0) or
+    // one index's root moved. The record every growth-path catalog write
+    // becomes - a root move writes the mover's own anchor page in its own
+    // stream, never sys.tables/sys.indexes - and the second half of a
+    // fresh anchor's durable story, since PAGE_INIT rebuilds only the
+    // common header and the roots are body content. Physiological like
+    // every page record: the envelope names the anchor page, the payload
+    // the slot.
+    kAnchorUpdate = 26,
     // **INDEX_PAGE_INIT is not assigned either, and spec §12.1 proposed it.**
     // The proposal assumed a new index page could be described by its header
     // the way a new heap page is, with the following record filling it. A
@@ -196,7 +206,7 @@ enum class RecordType : std::uint8_t {
 // Keep this pinned to the last enumerator when appending a type; the test that
 // every named type encodes is what proves it stayed pinned.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kPageHandoff);
+    static_cast<std::uint8_t>(RecordType::kAnchorUpdate);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 const char* RecordTypeName(RecordType type) noexcept;

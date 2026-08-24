@@ -1437,10 +1437,11 @@ Status Expeditor::Serve() {
         // hand the owner stale bytes.
         database_->catalog.SetRelationPublishHook(
             [this, &scheduler](catalog::Oid oid, std::uint32_t owner_core, PageId root,
-                               PageId varheap_root) {
+                               PageId varheap_root, PageId anchor) {
                 catalog::SysTableRow row{};
                 row.desc_page_id = root;
                 row.varheap_page_id = varheap_root;
+                row.anchor_page_id = anchor;
                 const storage::Extent range =
                     RelationFaultExtentOf(row, storage::kDefaultExtentPages);
 
@@ -1462,7 +1463,7 @@ Status Expeditor::Serve() {
                 // A failed prepare withholds the write grant - the
                 // relation stays fault-readable, its writes refused
                 // retryably, never served unsound.
-                const PageId formatted_pages[] = {root, varheap_root};
+                const PageId formatted_pages[] = {root, varheap_root, anchor};
                 auto write_grant = PrepareRelationHandoff(&*wal_, owner_core, formatted_pages);
                 if (!write_grant.ok()) {
                     logger_->Error("catalog", "relation oid=" + std::to_string(oid) +

@@ -5,6 +5,7 @@
 #include <set>
 #include <string>
 
+#include "kds/storage/anchor_page.hpp"
 #include "kds/storage/cabin_bound_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/index/index_page.hpp"
@@ -401,6 +402,22 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             case RecordType::kIndexInsert:
                 applied = ApplyIndexInsert(page, record);
                 break;
+            case RecordType::kAnchorUpdate: {
+                auto decoded = DecodeAnchorUpdate(record.payload);
+                if (!decoded.ok()) {
+                    applied = decoded.status();
+                    break;
+                }
+                if (decoded.value().index_oid == 0) {
+                    storage::SetAnchorClusteredRoot(page, decoded.value().root);
+                } else {
+                    // A full table here means the log and the page disagree
+                    // about capacity - Corruption's definition.
+                    applied = storage::SetAnchorIndexRoot(page, decoded.value().index_oid,
+                                                          decoded.value().root);
+                }
+                break;
+            }
             default:
                 // wal.md §5.2: an unknown type during replay is a hard
                 // error, never skipped. ALLOC/FREE land here too - they are

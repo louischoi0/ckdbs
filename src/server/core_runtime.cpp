@@ -601,6 +601,10 @@ storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
         low = std::min(low, row.varheap_page_id);
         high = std::max(high, row.varheap_page_id);
     }
+    if (row.anchor_page_id != kInvalidPageId) {
+        low = std::min(low, row.anchor_page_id);
+        high = std::max(high, row.anchor_page_id);
+    }
     const PageId first = (low / extent_pages) * extent_pages;
     const PageId end = ((high / extent_pages) + 1) * extent_pages;
     return storage::Extent{first, end - first};

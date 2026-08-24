@@ -507,10 +507,21 @@ loses the relation's entry points, the var-heap's argument for logging.
   (btree growth writes the anchor, never `sys.tables`); the indexed
   gate stays until PW1c-6's grant extension covers index *pages*.
 
-Staging: **PW2-1** the page class + creation + format bump; **PW2-2**
-descents read through it; **PW2-3** root moves write it
-(`UpdateRelationDescPage` / `UpdateIndexRoot` retire from the growth
-path); **PW2-4** the handoff/grant set grows to three and the btree
+Staging: **PW2-1 built 2026-08-24** (worktree `pw1c1-handoff-record`):
+`PageType::kAnchor` (14) with `storage/anchor_page.hpp` (clustered root
++ per-index-oid entry table, swap-remove, capacity-refusing);
+`SysTableRow.anchor_page_id` + `TableAccess` (superblock 14 → 15,
+key_mode's precedent; a **system** relation carries `kInvalidPageId` -
+its fixed-page root never moves - and PW2-2 reads that as
+"desc_page_id is the root"); `CREATE TABLE` allocates, formats and logs
+it - and the durable story is PAGE_INIT **plus `kAnchorUpdate` (26)**,
+the record a root move will write, because PAGE_INIT rebuilds only the
+common header and the roots are body content; the publish hook and
+`RelationFaultExtentOf` carry the anchor, so the write-grant set is
+three pages. Nothing reads the anchor yet - behavior-identical by
+construction, suite 2610/2610. **PW2-2** descents read through it;
+**PW2-3** root moves write it (`UpdateRelationDescPage` /
+`UpdateIndexRoot` retire from the growth path); **PW2-4** the btree
 shape gate lifts, with the e2e btree peer INSERT as the proof.
 
 ## 8. The PW1c decision — decided 2026-08-24 (operator-delegated)
