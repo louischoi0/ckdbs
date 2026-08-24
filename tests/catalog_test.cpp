@@ -197,7 +197,9 @@ TEST_F(CatalogTest, DdlInvalidatesACachedTableAccess) {
     ASSERT_TRUE(first.ok());
     const PageId old_desc = first.value()->desc_page_id;
 
-    ASSERT_TRUE(catalog_.UpdateRelationDescPage(oid.value(), old_desc + 1000).ok());
+    ASSERT_TRUE(catalog_.UpdateRelationDescPage(oid.value(), old_desc + 1000,
+                                                first.value()->anchor_page_id)
+                    .ok());
 
     auto second = catalog_.InitTableAccess(oid.value());
     ASSERT_TRUE(second.ok());
@@ -229,7 +231,8 @@ TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
     ASSERT_TRUE(before.ok());
     PageId old_desc = before.value().desc_page_id;
 
-    Status s = catalog_.UpdateRelationDescPage(oid.value(), old_desc + 1000);
+    Status s = catalog_.UpdateRelationDescPage(oid.value(), old_desc + 1000,
+                                               before.value().anchor_page_id);
     ASSERT_TRUE(s.ok()) << s.message();
 
     auto after = catalog_.GetSysTableRow(oid.value());
@@ -433,7 +436,9 @@ TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
 
     const std::uint64_t before = catalog_.catalog_version();
     const PageId original_root = ta->indexes[0].root_page_id;
-    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value(), 4242, ta->anchor_page_id).ok());
+    ASSERT_TRUE(catalog_.UpdateIndexRoot(table.value(), oid.value(), 4242,
+                                         ta->anchor_page_id)
+                    .ok());
     EXPECT_EQ(catalog_.catalog_version(), before) << "a root move must not drop the cache";
 
     // Still valid, and already showing the new root.
@@ -456,8 +461,9 @@ TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
         EXPECT_EQ(slot.value(), 4242u);
     }
 
-    EXPECT_EQ(catalog_.UpdateIndexRoot(999999, 1, ta->anchor_page_id).code(),
-              StatusCode::kNotFound);
+    // The NotFound probe went with the sys.indexes scan (the 96b0343
+    // review's C1): existence is the caller's fact now - MaintainIndexes
+    // iterates access.indexes, which is the proof.
 }
 
 // ---- TableAccess::indexes / index_mask (workplan IX04) -----------------
@@ -572,7 +578,7 @@ TEST_F(CatalogTest, ACachedTableAccessSeesAnIndexCreatedAfterItWasFilled) {
     // across an index insert that grows a level is holding a dangling one.
     auto oid = catalog_.FindIndexByName("ix");
     ASSERT_TRUE(oid.ok());
-    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value().index_oid, 7777,
+    ASSERT_TRUE(catalog_.UpdateIndexRoot(table.value(), oid.value().index_oid, 7777,
                                          after.value()->anchor_page_id)
                     .ok());
 
@@ -647,8 +653,14 @@ TEST_F(CatalogTest, DdlBumpsTheCatalogVersion) {
     const std::uint64_t after_create = catalog_.catalog_version();
     EXPECT_GT(after_create, after_bootstrap);
 
-    ASSERT_TRUE(catalog_.UpdateRelationDescPage(oid.value(), 9999).ok());
-    EXPECT_GT(catalog_.catalog_version(), after_create);
+    auto vrow = catalog_.GetSysTableRow(oid.value());
+    ASSERT_TRUE(vrow.ok());
+    ASSERT_TRUE(
+        catalog_.UpdateRelationDescPage(oid.value(), 9999, vrow.value().anchor_page_id).ok());
+    // PW2-4 reversed the old pin here: a root move is not DDL - the cached
+    // entry updates in place, and the version must NOT bump (the running
+    // INSERT holds the entry, and a peer's move must not broadcast).
+    EXPECT_EQ(catalog_.catalog_version(), after_create);
 }
 
 // The rule that keeps a statement's cached TableAccess alive across its own

@@ -550,6 +550,13 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
         return;  // unwritable is refused-retryably, never served wrong
     }
     store_->GrantWritePages(pages);
+    // A fill that ran before these rights landed cached the CREATE-time
+    // row as its root (the pre-grant fall-back in InitTableAccess); drop
+    // it so the next fill resolves the anchor now that it is faultable -
+    // the f5686f8 review's C1 window, closed where the rights arrive.
+    // InvalidateFromPeer, not BumpVersion: this instance's rows did not
+    // change, and nothing should broadcast.
+    catalog_->InvalidateFromPeer();
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("core", "core " + std::to_string(config_.core_id) + " write-granted " +
                                 std::to_string(pages.size()) +

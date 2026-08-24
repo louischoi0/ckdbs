@@ -1537,15 +1537,16 @@ TEST_F(CoreRuntimeTest, PrepareRelationHandoffRefusesPastCapacityAndSkipsInvalid
 }
 
 TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
-    // PW1c-5's shape gate at CheckWriteAffinity: a btree-clustered
-    // relation cannot take writes on a peer - a root move writes
-    // sys.tables - and the refusal names PW2, not a generic guard. No
+    // PW2-4 lifted the btree arm; the EXPLICIT arm is the shape gate's
+    // surviving clustered-side refusal - AdmitExplicitRowId persists the
+    // id ceiling on the catalog page, which a peer may never write. No
     // session poison: a different statement can succeed.
     catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
                               /*core_count=*/2);
     catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
-    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema(),
-                                    catalog::ClusteredType::kBtree, catalog::KeyMode::kAssigned);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "explicit_owned",
+                                    TwoColumnSchema(), catalog::ClusteredType::kBtree,
+                                    catalog::KeyMode::kExplicit);
     ASSERT_TRUE(oid.ok()) << oid.status().message();
     ASSERT_TRUE(core0_store_->Sync().ok());
 
@@ -1563,11 +1564,65 @@ TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
     peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
 
     const auto reply =
-        peer.value()->dispatcher().Dispatch("INSERT INTO btree_owned VALUES (1)").response;
+        peer.value()
+            ->dispatcher()
+            .Dispatch("INSERT INTO explicit_owned VALUES (5, 1)")
+            .response;
     EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
-    EXPECT_NE(reply.find("PW2"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("EXPLICIT"), std::string::npos) << reply;
     // Not poisoned: the next statement answers normally.
     EXPECT_NE(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0), 0u);
+}
+
+TEST_F(CoreRuntimeTest, AFundedPeerGrowsItsOwnBtreeWritingNoCatalogPage) {
+    // PW2-4's proof: a peer INSERTs into its own btree relation far enough
+    // to divide leaves - every split page from its own lease, every root
+    // move in its own granted anchor - and the sys.tables row never moves.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema(),
+                                    catalog::ClusteredType::kBtree, catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 1u);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
+    peer.value()->GrantRelationWrite(pages);
+    ASSERT_TRUE(peer.value()->store().MayWrite(row.value().anchor_page_id));
+
+    auto first = catalog2.AllocateRowIdRange(oid.value(), 1024);
+    ASSERT_TRUE(first.ok());
+    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 1024);
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(1024);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    for (int i = 0; i < 600; ++i) {
+        const auto ins =
+            peer.value()
+                ->dispatcher()
+                .Dispatch("INSERT INTO btree_owned VALUES (" + std::to_string(i) + ")")
+                .response;
+        ASSERT_NE(ins.rfind("ERR", 0), 0u) << "row " << i << ": " << ins;
+    }
+
+    // The row never moved; the anchor's root is live and the relation
+    // answers whole.
+    auto row_after = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row_after.ok());
+    EXPECT_EQ(row_after.value().desc_page_id, row.value().desc_page_id)
+        << "the peer must not have written the catalog row";
+    const auto count =
+        peer.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM btree_owned").response;
+    EXPECT_NE(count.find("600"), std::string::npos) << count;
 }
 
 TEST_F(CoreRuntimeTest, ACreatedRelationsAnchorIsWiredWholeThroughTheCatalog) {
@@ -1614,7 +1669,10 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
     const PageId moved_root = row.value().desc_page_id + 7;  // any distinct id
     // Through the real mover (PW2-3): the anchor slot moves, the row does
     // not - the retirement's whole contract in one call.
-    ASSERT_TRUE(core0_->catalog.UpdateRelationDescPage(oid.value(), moved_root).ok());
+    ASSERT_TRUE(core0_->catalog
+                    .UpdateRelationDescPage(oid.value(), moved_root,
+                                            row.value().anchor_page_id)
+                    .ok());
 
     catalog::Catalog fresh(*core0_store_, storage::kDefaultInlineCellWidth,
                            /*core_count=*/1);

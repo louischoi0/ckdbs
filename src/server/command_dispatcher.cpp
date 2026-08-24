@@ -1,6 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
 #include "kds/exec/type_literals.hpp"
+#include "kds/storage/anchor_page.hpp"
 #include "kds/server/mount_recovery.hpp"  // SHOW META's recovery block (RC09)
 
 #include "kds/stats/optimizer_signals.hpp"
@@ -1050,11 +1051,21 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     // summary line, then one "\n"-escaped section per column, never a raw
     // newline byte.
     // PW2-3: the row's desc_page_id is the CREATE-time root; the current
-    // one lives in the anchor, and the cached access resolves it - so
-    // DESCRIBE reports what a descent would actually use.
+    // one lives in the anchor. Read directly, not through InitTableAccess
+    // (the 96b0343 review's C5): DESCRIBE resolves its name through the
+    // session's view, and filling the unfiltered shared cache from a
+    // view-filtered read is DT3's rule broken sideways - and an anchor
+    // Corruption should reach the operator on the one surface they
+    // diagnose with, not be swallowed by a fallback.
     PageId current_root = table_row.value().desc_page_id;
-    if (auto access = catalog_.InitTableAccess(oid.value()); access.ok()) {
-        current_root = access.value()->desc_page_id;
+    if (table_row.value().anchor_page_id != kInvalidPageId) {
+        auto anchor = page_store_.GetForRead(table_row.value().anchor_page_id);
+        if (anchor.ok() &&
+            storage::ValidatePageHeader(anchor.value().bytes(), PageType::kAnchor).ok()) {
+            current_root = storage::AnchorClusteredRoot(anchor.value().bytes());
+        } else if (!anchor.ok() && anchor.status().code() == StatusCode::kCorruption) {
+            return {"ERR " + anchor.status().message(), false};
+        }
     }
     std::ostringstream os;
     os << "oid=" << oid.value() << " root_page_id=" << current_root
@@ -2752,17 +2763,22 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         const bool any_cabin =
             std::any_of(access.cabin_ids.begin(), access.cabin_ids.end(),
                         [](const catalog::TableAccess::CabinRef& c) { return c.id != 0; });
-        const bool funded_shape = access.clustered_type == catalog::ClusteredType::kHeap &&
+        // The btree arm lifted 2026-08-24 (PW2-4): a root move writes the
+        // relation's own granted anchor page and updates the cache in
+        // place - no catalog write remains on the growth path. EXPLICIT
+        // stays refused: AdmitExplicitRowId persists the id ceiling on the
+        // catalog page, which a peer may never write.
+        const bool funded_shape = access.key_mode == catalog::KeyMode::kAssigned &&
                                   access.indexes.empty() && access.fkeys_out.empty() &&
                                   access.fkeys_in.empty() && !any_cabin &&
                                   !enforcer_.AnyOn(access.oid);
         if (!funded_shape) {
-            if (access.clustered_type == catalog::ClusteredType::kBtree) {
+            if (access.key_mode == catalog::KeyMode::kExplicit) {
                 return Status::Unsupported(
-                    "a btree-clustered relation cannot take writes on core " +
+                    "an EXPLICIT-keyed relation cannot take writes on core " +
                     std::to_string(core_id_) +
-                    ": a root move writes sys.tables, the system core's page "
-                    "(workplan-peer-writer.md PW2)");
+                    ": admitting a caller-supplied id persists the ceiling on the catalog "
+                    "page, the system core's (workplan-peer-writer.md §7a)");
             }
             if (!access.indexes.empty()) {
                 return Status::Unsupported(
@@ -3402,11 +3418,12 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     // The tree grew a level, so the relation's root moved. Persisted only
     // now: the new root's contents are logged above, and a root published
     // before the pages under it are described is a root recovery cannot
-    // follow. This invalidates the catalog cache, so `ta` is dangling from
-    // here on - the rest of this function uses only `oid`, `id` and
-    // `placed`.
+    // follow. Since PW2-4 the move writes the anchor and updates the
+    // cached entry **in place** - `ta` stays valid, no invalidation
+    // broadcast, no catalog write.
     if (placed.value().new_root != kInvalidPageId) {
-        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root);
+        if (Status s = catalog_.UpdateRelationDescPage(oid, placed.value().new_root,
+                                                       ta.anchor_page_id);
             !s.ok()) {
             if (logging(LogLevel::kError)) {
                 log_->Error("btree", "table oid " + std::to_string(oid) +
@@ -3422,14 +3439,9 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                                     " grew a level; root is now page " +
                                     std::to_string(placed.value().new_root));
         }
-        // The relink invalidated the catalog cache, so `ta` (and the
-        // caller's pointer) dangle from here on. Harmless on a statement's
-        // last row; fatal to its next one - so the borrow is refreshed
-        // before returning, which is the whole reason the pointer comes in
-        // by reference.
-        auto fresh = catalog_.InitTableAccess(oid);
-        if (!fresh.ok()) return "ERR " + fresh.status().message();
-        ta_ptr = fresh.value();
+        // The in-place update (PW2-4) keeps `ta` valid, so the refresh the
+        // pre-anchor invalidation forced is gone - the pointer reference
+        // stays for the day a move ever invalidates again.
     }
 
     // A relation growing a page is rare and structural - the closest thing

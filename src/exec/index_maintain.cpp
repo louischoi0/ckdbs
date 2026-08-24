@@ -196,7 +196,7 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
         // through the catalog, which updates the cached entry **in place** -
         // so `access`, and `ix` inside it, stay valid for the next iteration
         // and for the caller.
-        if (Status s = catalog.UpdateIndexRoot(ix.index_oid, moved.value(),
+        if (Status s = catalog.UpdateIndexRoot(access.oid, ix.index_oid, moved.value(),
                                                access.anchor_page_id);
             !s.ok()) {
             return s.WithContext("republishing the root of index " +

@@ -7,6 +7,7 @@
 #include <array>
 #include <cctype>
 #include <limits>
+#include <optional>
 
 #include "kds/server/superblock.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -1059,10 +1060,25 @@ Status Catalog::InsertObjectRow(Oid oid, Oid namespace_oid, Oid type_oid,
     return s;
 }
 
-Status Catalog::WriteAnchorRoot(PageId anchor_page, std::uint64_t index_oid, PageId root,
-                                std::uint64_t trx_id) {
+Status Catalog::WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid,
+                                std::uint64_t index_oid, PageId root, std::uint64_t trx_id) {
     auto anchor = store_.Get(anchor_page);
     if (!anchor.ok()) return anchor.status().WithContext("faulting anchor for a root move");
+    // The write is where the damage is created, so it checks what the
+    // redo applier and the fill already check (the 96b0343 review's C3):
+    // aimed at a non-anchor page, SetAnchorClusteredRoot would overwrite
+    // four bytes of somebody's tuple data with no error anywhere; aimed at
+    // another relation's anchor, it would move the wrong tree's root.
+    if (Status s = storage::ValidatePageHeader(anchor.value().bytes(), PageType::kAnchor);
+        !s.ok()) {
+        return s;
+    }
+    if (storage::GetOwnerOid(anchor.value().bytes()) != expected_owner_oid) {
+        return Status::Corruption(
+            "anchor page " + std::to_string(anchor_page) + " belongs to relation oid " +
+            std::to_string(storage::GetOwnerOid(anchor.value().bytes())) + ", not oid " +
+            std::to_string(expected_owner_oid));
+    }
     if (index_oid == 0) {
         storage::SetAnchorClusteredRoot(anchor.value().bytes(), root);
     } else if (Status s = storage::SetAnchorIndexRoot(anchor.value().bytes(), index_oid, root);
@@ -1836,8 +1852,21 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // stale map) and its root is never walked here - execution ships to
     // the owner, whose own fill resolves through its own anchor - so only
     // Corruption is loud.
-    bool anchor_resolved = false;
-    if (access.anchor_page_id != kInvalidPageId) {
+    // Scoped to this core's OWN relations (PW2-4, the C3 decision taken as
+    // "owner-readable": the anchor lives above kCatalogOverflowLimit,
+    // outside the invalidation set, so a cross-core reader's frame would
+    // never refresh - and a foreign relation's root is never walked here
+    // anyway, execution ships to the owner). A foreign relation keeps the
+    // row's CREATE-time value, and diagnostics of a foreign relation show
+    // exactly that - stated, build-invariant, no faultability probe.
+    // Held for the whole fill (the 96b0343 review's C2): the first form
+    // dropped the ref and re-fetched per index row - an N+1 that, under a
+    // sized pool, could fail mid-fill and leave the access half-anchored
+    // (clustered root from the anchor, index roots from the CREATE-time
+    // rows - a silently wrong tree for maintenance to append into). One
+    // read, one failure decision, no tear expressible.
+    std::optional<storage::PageRef> anchor_held;
+    if (access.anchor_page_id != kInvalidPageId && access.owner_core == core_id_) {
         auto anchor = store_.GetForRead(access.anchor_page_id);
         if (anchor.ok()) {
             if (Status s = storage::ValidatePageHeader(anchor.value().bytes(),
@@ -1856,22 +1885,20 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
                     ", not oid " + std::to_string(oid));
             }
             access.desc_page_id = storage::AnchorClusteredRoot(anchor.value().bytes());
-            anchor_resolved = true;
-        } else if (access.owner_core == core_id_ ||
-                   anchor.status().code() == StatusCode::kCorruption) {
-            // This core's own relation with an unreadable anchor is a
-            // defect, never a case to paper over with the CREATE-time row
-            // (the f5686f8 review's C1: silently falling through here goes
-            // wrong the day the peer's own roots move, PW2-4). Keyed on
-            // owner_core - build-invariant, unlike the Debug-only MayFault
-            // arm of the refusal below it (its C6).
+            anchor_held.emplace(std::move(anchor.value()));
+        } else if (anchor.status().code() == StatusCode::kCorruption) {
             return anchor.status().WithContext(
                 "resolving the clustered root through anchor page " +
                 std::to_string(access.anchor_page_id) + " of this core's own relation");
         }
-        // A *foreign* relation's unresolvable anchor keeps the row's
-        // value: its root is never walked here - execution ships to the
-        // owner, whose own fill resolves through its own anchor.
+        // An own relation's *unfaultable* anchor is the pre-grant window
+        // (P6's resolve-before-grant contract: a peer fills its relation's
+        // access before any grant arrives), and it falls back to the
+        // CREATE-time row - safe because nothing can have moved a root the
+        // owner could not yet write, and self-healing because the grant
+        // receiver drops this cache when the rights land (the f5686f8
+        // review's C1, closed at the grant rather than by refusing the
+        // fill). Corruption alone is loud.
     }
 
     // The row-size constant, computed once here and carried for the life of
@@ -1943,17 +1970,15 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         ref.root_page_id = row.root_page_id;
         // PW2-3: the anchor is the index root's truth too - the
         // sys.indexes row is CREATE-fixed, and a root move writes the
-        // anchor slot. Same fall-through as the clustered root above: an
-        // unresolvable anchor keeps the row's value, and a slot the anchor
-        // does not hold yet (an index created before its first move under
-        // the dual-write transition) keeps it too.
-        if (anchor_resolved) {
-            auto anchor = store_.GetForRead(access.anchor_page_id);
-            if (anchor.ok()) {
-                auto slot = storage::AnchorIndexRoot(anchor.value().bytes(), row.index_oid);
-                if (!slot.ok()) return slot.status();
-                if (slot.value() != kInvalidPageId) ref.root_page_id = slot.value();
-            }
+        // anchor slot. Read from the ref held across the whole fill, so
+        // clustered and index roots come from one page state and a forged
+        // count is as loud here as it is for the clustered arm. A slot
+        // the anchor does not hold (an index seeded before anchors, never
+        // moved) keeps the row's value.
+        if (anchor_held.has_value()) {
+            auto slot = storage::AnchorIndexRoot(anchor_held->bytes(), row.index_oid);
+            if (!slot.ok()) return slot.status();
+            if (slot.value() != kInvalidPageId) ref.root_page_id = slot.value();
         }
         ref.key_width = row.key_width;
         ref.entry_width = row.entry_width;
@@ -2155,47 +2180,38 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
     return Status::OK();
 }
 
-Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
-    auto acted = ForFirstRow<SysTableRow>(
-        store_, kCatalogPageTables,
-        [&](SysTableRow& row, heap::PageView& /*page*/, PageId /*page_id*/, std::uint16_t /*i*/,
-            const heap::PageView::Tuple& /*tuple*/) -> StatusOr<bool> {
-        if (row.oid != table_oid) return false;
-
-        const PageId old_desc_page_id = row.desc_page_id;
-        // PW2-3, the retirement: a root move writes the **anchor alone** -
-        // the sys.tables row is CREATE-fixed, which is the whole point of
-        // the indirection (a growth writes a relation page, never a
-        // catalog page; on a peer, its own granted page in its own
-        // stream). The row overwrite that lived here 2026-08-10..24 is
-        // gone; a system relation (no anchor) cannot reach this function -
-        // its fixed catalog page never grows a level - so an anchorless
-        // row here is a defect, not a case.
-        if (row.anchor_page_id == kInvalidPageId) {
-            return Status::InvalidArgument(
-                "relation oid " + std::to_string(table_oid) +
-                " has no anchor page; a system relation's root cannot move");
-        }
-        if (Status s = WriteAnchorRoot(row.anchor_page_id, /*index_oid=*/0, new_desc_page_id,
-                                       wal::kNoTxnId);
-            !s.ok()) {
-            return s;
-        }
-        // desc_page_id is a field of every cached TableAccess, so a relink
-        // stales it. Bumped only on success: a failed overwrite moved
-        // nothing.
-        BumpVersion("desc-page relink");
-        if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
-            // A relation's entry page moving is a structural change to the
-            // relation, rare enough to deserve Debug rather than Trace.
-            log_->Debug("catalog", "table oid " + std::to_string(table_oid) +
-                                       " desc page " + std::to_string(old_desc_page_id) + " -> " +
-                                       std::to_string(new_desc_page_id));
-        }
-        return true;
-    });
-    if (!acted.ok()) return acted.status();
-    if (!acted.value()) return Status::NotFound("no sys.tables row for this oid");
+Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
+                                       PageId anchor_page_id) {
+    // PW2-3/PW2-4: a root move writes the **anchor alone** - the
+    // sys.tables row is CREATE-fixed, which is the whole point of the
+    // indirection (a growth writes a relation page, never a catalog page;
+    // on a peer, its own granted page in its own stream). The anchor id
+    // comes from the caller's own TableAccess, UpdateIndexRoot's S2 rule -
+    // no catalog scan inside a level-grow - and the cached entry updates
+    // **in place**: the pre-anchor BumpVersion here destroyed the entry
+    // the running INSERT was holding, and on a peer it would have
+    // broadcast a cluster-wide invalidation per split. Same one-field/
+    // one-owner license as the index root's in-place update. A system
+    // relation (no anchor) cannot reach this function - its fixed catalog
+    // page never grows a level - so an anchorless call is a defect.
+    if (anchor_page_id == kInvalidPageId) {
+        return Status::InvalidArgument(
+            "relation oid " + std::to_string(table_oid) +
+            " has no anchor page; a system relation's root cannot move");
+    }
+    if (Status s = WriteAnchorRoot(anchor_page_id, table_oid, /*index_oid=*/0,
+                                   new_desc_page_id, wal::kNoTxnId);
+        !s.ok()) {
+        return s;
+    }
+    cache_.UpdateDescPage(table_oid, new_desc_page_id);
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        // A relation's entry page moving is a structural change to the
+        // relation, rare enough to deserve Debug rather than Trace.
+        log_->Debug("catalog", "table oid " + std::to_string(table_oid) + " root -> " +
+                                   std::to_string(new_desc_page_id) + " (anchor " +
+                                   std::to_string(anchor_page_id) + ")");
+    }
     return Status::OK();
 }
 
@@ -2738,6 +2754,27 @@ Status Catalog::CheckIndexDef(const IndexDef& def) {
     if (!access.ok()) return access.status();
     const Schema& schema = access.value()->schema;
 
+    // The owner refusal lives here, not only in the dispatcher (the
+    // 96b0343 review's C4): since PW2-3's anchor seed, CreateIndex writes
+    // a *relation* page, and this core writing a peer-owned relation's
+    // anchor would make it the second writer of a page whose handoff
+    // already granted the peer - PL §9 rule 5's mount refusal. This is
+    // the door every non-DDL caller comes through, this file's own
+    // doctrine; the dispatcher's PW1c-6 refusal stays for the byte
+    // position. Keyed on the publish hook's presence beside ownership:
+    // an installed publisher is what makes ownership a *handoff* fact -
+    // the P4e harness builds indexed fixtures on rotated relations
+    // through a hook-less catalog, where nothing was ever granted away
+    // and core 0 is still the only writer (PW4's predicate-on-incapacity
+    // rule, one layer down).
+    if (access.value()->owner_core != core_id_ && on_publish_) {
+        return Status::Unsupported(
+            "catalog: relation oid " + std::to_string(def.table_oid) + " is owned by core " +
+            std::to_string(access.value()->owner_core) + " and core " +
+            std::to_string(core_id_) +
+            " may not seed its anchor (workplan-peer-writer.md PW1c-6)");
+    }
+
     // A heap relation has no pk index, so resolving an entry's pk would be a
     // chain scan and an index over it would turn one full scan into N
     // partial ones. The same rule and the same argument as
@@ -2855,8 +2892,8 @@ StatusOr<Oid> Catalog::CreateIndex(const IndexDef& def, std::uint64_t trx_id,
             return rel.status().WithContext("resolving the relation for the index anchor seed");
         }
         if (rel.value().anchor_page_id != kInvalidPageId) {
-            if (Status s = WriteAnchorRoot(rel.value().anchor_page_id, row.index_oid,
-                                           row.root_page_id, trx_id);
+            if (Status s = WriteAnchorRoot(rel.value().anchor_page_id, def.table_oid,
+                                           row.index_oid, row.root_page_id, trx_id);
                 !s.ok()) {
                 return s;
             }
@@ -2962,45 +2999,30 @@ Status Catalog::DropIndex(Oid index_oid, std::uint64_t trx_id, CatalogRowChange*
     return Status::OK();
 }
 
-Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root, PageId anchor_page_id) {
-    auto acted = ForFirstRow<SysIndexRow>(
-        store_, kCatalogPageIndexes,
-        [&](SysIndexRow& row, heap::PageView& /*page*/, PageId /*page_id*/, std::uint16_t /*i*/,
-            const heap::PageView::Tuple& /*tuple*/) -> StatusOr<bool> {
-            if (row.index_oid != index_oid) return false;
-            const Oid rel_oid = row.table_oid;
-            // PW2-3: the sys.indexes row is CREATE-fixed - the root move
-            // writes the relation's anchor slot below, and the in-place
-            // cache update carries the running statement. The row
-            // overwrite that lived here is gone.
-            // **Updated in place, not bumped**, which is this catalog's
-            // third departure from "drop everything at one choke point" and
-            // the one that had to exist. A root moves when a split grows the
-            // tree, which happens inside an ordinary INSERT - so a global
-            // drop would dangle the `const TableAccess*` the running
-            // statement holds, and a multi-row UPDATE would be holding it
-            // across every later row.
-            //
-            // It qualifies by the same test the two pattern updates do: a
-            // root belongs to one index and is read by nothing else.
-            cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
-            // The move itself, UpdateRelationDescPage's twin: the anchor
-            // slot keyed by index oid is the root's one durable home. The
-            // anchor id came from the caller's own TableAccess (S2 - no
-            // sys.tables scan inside an index split).
-            if (anchor_page_id == kInvalidPageId) {
-                return Status::InvalidArgument(
-                    "relation oid " + std::to_string(rel_oid) +
-                    " has no anchor page; a system relation carries no secondary index");
-            }
-            if (Status s = WriteAnchorRoot(anchor_page_id, index_oid, new_root, wal::kNoTxnId);
-                !s.ok()) {
-                return s;
-            }
-            return true;
-        });
-    if (!acted.ok()) return acted.status();
-    if (!acted.value()) return Status::NotFound("no sys.indexes row for this index_oid");
+Status Catalog::UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root,
+                                PageId anchor_page_id) {
+    // PW2-4, the 96b0343 review's C1: the ForFirstRow scan that lived here
+    // fetched sys.indexes through the *write* accessor - dirtying a
+    // catalog page per index root split on core 0, and refusing outright
+    // on a peer, so half of PW-B2's blocker survived the retirement. The
+    // scan yielded only rel_oid and an existence proof, both of which the
+    // caller holds (MaintainIndexes iterates access.indexes) - so this is
+    // now UpdateRelationDescPage's exact mirror: anchor write, in-place
+    // cache update, no catalog touch. The in-place license is
+    // catalog_cache.hpp's: a root belongs to one index and is read by
+    // nothing else, and a drop would dangle the running statement's
+    // TableAccess.
+    if (anchor_page_id == kInvalidPageId) {
+        return Status::InvalidArgument(
+            "relation oid " + std::to_string(rel_oid) +
+            " has no anchor page; a system relation carries no secondary index");
+    }
+    if (Status s =
+            WriteAnchorRoot(anchor_page_id, rel_oid, index_oid, new_root, wal::kNoTxnId);
+        !s.ok()) {
+        return s;
+    }
+    cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
     return Status::OK();
 }
 

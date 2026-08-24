@@ -560,9 +560,39 @@ invalidation set - a *diagnostic* cross-core reader (core 0 faulting a
 peer's anchor for DESCRIBE) can cache a frame nothing refreshes;
 options: extend the invalidation set with cached relations' anchors,
 fault-bypass the frame at fill, or declare the anchor owner-readable
-only. **PW2-4** the btree shape gate lifts, with the e2e btree peer
-INSERT as the proof - C1's fix and C3's decision land before or with
-it.
+only. **PW2-4 built 2026-08-24** (worktree `pw1c1-handoff-record`): the
+btree shape gate lifted — a peer grows its own btree writing only its
+own pages, proven by the e2e (600 rows through the peer dispatcher,
+leaves divided, the sys.tables row never written, COUNT whole). What
+made the lift sound, each recorded: **root moves are not DDL** — both
+movers are `WriteAnchorRoot` + an in-place cache update
+(`CatalogCache::UpdateDescPage` joins the index root's deliberate
+exception; the old `BumpVersion` destroyed the entry the running
+INSERT held), and both take rel-oid/anchor from the caller's access —
+the 96b0343 review's C1 found `UpdateIndexRoot` still write-fetching
+`sys.indexes` (half of PW-B2 surviving the retirement), now gone;
+**C3 decided: owner-readable anchors** — the fill resolves anchors
+only for this core's own relations (build-invariant; foreign
+diagnostics show the CREATE-time root, by statement), which also
+closes the cross-core anchor-faulting hazard the C7 diagnostics had
+opened; **the pre-grant window closes at the grant** — an own
+pre-grant fill falls back to the row (P6's resolve-before-grant kept;
+provably safe, a peer cannot have moved a root it could not write) and
+`GrantRelationWrite` drops the catalog cache when rights land;
+**EXPLICIT stays refused on a peer** (the id-ceiling catalog write);
+**`WriteAnchorRoot` validates page type and owner stamp** (the
+review's C3 — the write is where damage is created); the fill holds
+**one anchor ref across the whole fill** (C2 — the N+1 re-fetch could
+leave a half-anchored access under a sized pool, maintenance appending
+into a stale subtree); `CheckIndexDef` refuses seeding a foreign
+anchor when a publisher is installed (C4, keyed on the hook so the
+P4e harness's hook-less fixtures keep building); DESCRIBE reads the
+anchor directly rather than filling the shared cache from a
+view-filtered resolve (C5/DT3). Declined with reasons: S1's shared
+resolution helper (C2+C5 cover the sites), S2's seed parameter (cold
+path; the owner check removed the coupling risk), S3's
+derive-core-id-from-store (a base-class change with a named
+interaction to examine first).
 
 ## 8. The PW1c decision — decided 2026-08-24 (operator-delegated)
 

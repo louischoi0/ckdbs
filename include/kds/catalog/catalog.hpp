@@ -749,7 +749,11 @@ public:
     // place - for a future btree root split/collapse to repoint at a new
     // root page. Uses an in-place overwrite (row size is unchanged), not
     // delete+insert, since the row size is unchanged.
-    Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id);
+    // The anchor id comes from the caller's TableAccess (S2's rule); the
+    // move writes the anchor alone and updates the cached entry in place -
+    // no row write, no invalidation, no catalog scan (PW2-3/PW2-4).
+    Status UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id,
+                                  PageId anchor_page_id);
 
     // ---- sys.access_stats (docs/heap-and-tuple.md §7) --------------------
 
@@ -879,12 +883,14 @@ public:
     // parameter is *not* defaulted - see its declaration.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
     // rows.hpp owns the rule (a system relation carries no anchor).
-    // The one anchor write path (the f5686f8 review's S1): fetch, set the
-    // slot (index_oid 0 = the clustered root, the record's own
-    // discriminator), log and stamp. Three callers - both movers and the
-    // CREATE INDEX seed - so the PW2 ordering discipline lives once.
-    Status WriteAnchorRoot(PageId anchor_page, std::uint64_t index_oid, PageId root,
-                           std::uint64_t trx_id);
+    // The one anchor write path (the f5686f8 review's S1): validate the
+    // page and its owner stamp (the 96b0343 review's C3 - the write is
+    // where damage is created), set the slot (index_oid 0 = the clustered
+    // root, the record's own discriminator), log and stamp. Three callers
+    // - both movers and the CREATE INDEX seed - so the PW2 ordering
+    // discipline lives once.
+    Status WriteAnchorRoot(PageId anchor_page, Oid expected_owner_oid, std::uint64_t index_oid,
+                           PageId root, std::uint64_t trx_id);
 
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
@@ -986,10 +992,12 @@ public:
     // The counterpart of UpdateRelationDescPage(), and it exists for the
     // same reason: the storage layer has no catalog, so it reports a new
     // root and someone above it records one.
-    // `anchor_page_id` comes from the caller's own TableAccess (the
-    // f5686f8 review's S2): the alternative was a full sys.tables scan
-    // inside the index-split path for one field the caller already holds.
-    Status UpdateIndexRoot(Oid index_oid, PageId new_root, PageId anchor_page_id);
+    // `rel_oid` and `anchor_page_id` come from the caller's own
+    // TableAccess (the f5686f8 review's S2, extended by 96b0343's C1: the
+    // sys.indexes scan that used to live here fetched a catalog page
+    // through the write accessor - dirtying it per split on core 0,
+    // refusing outright on a peer - for two values MaintainIndexes holds).
+    Status UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId new_root, PageId anchor_page_id);
 
     const SysObjectRegistry& sys_objects() const noexcept { return sys_objects_; }
 

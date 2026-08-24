@@ -163,6 +163,12 @@ public:
     // never ask for.
     void UpdateIndexRoot(Oid rel_oid, Oid index_oid, PageId root) noexcept;
 
+    // The clustered root's twin (PW2-4): a level-grow inside an ordinary
+    // INSERT moves desc_page_id, and dropping the whole cache for it - the
+    // pre-anchor arrangement - destroyed the entry the running statement
+    // was holding. Same in-place license, same one-field/one-owner test.
+    void UpdateDescPage(Oid rel_oid, PageId root) noexcept;
+
     // ---- sys.types (bootstrap-immutable) --------------------------------
 
     // nullptr means "not loaded yet, scan the page"; a non-null empty

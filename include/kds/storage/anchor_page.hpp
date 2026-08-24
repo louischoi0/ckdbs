@@ -23,8 +23,8 @@
 //
 // The entry table is append-ordered and linear-scanned: an index count is
 // bounded by DDL, not by data, and the scan runs at bind time, not per
-// row. A dropped index's entry is removed by swapping the last entry in -
-// order carries no meaning.
+// row. Removal deliberately does not exist yet - the note at the foot of
+// this header says why, and what shape it takes when it arrives.
 //
 // Mutation protocol: single-writer under the owning core's statement
 // execution, like every relation page. Every mutation is WAL-logged by
