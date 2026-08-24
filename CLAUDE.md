@@ -62,6 +62,7 @@ statements, not style.
 | Keystone id issue-once contract | K-M1, K-M3, K-M4 built (K-M3 2026-08-10: `exec::CompileAssignments` refuses a pk UPDATE at compile with `Unsupported` and a byte). **The unlogged-ceiling half of K1's crash exposure closed 2026-08-19** as an RV3 side effect: the `sys.tables.next_id` bump logs and replays with every other catalog write. Read the findings before quoting the invariant engine-wide — the owning docs decide when K1 may be called held | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md`, `docs/workplan-rv3-catalog-recovery.md` |
 | Key mode (`EXPLICIT` pk) | **Built 2026-08-11** (PK01-PK07): the caller may supply a pk and it need not ascend; uniqueness is proved by the btree descent, so the mode is `BTREE`-only and a full leaf now divides. The pk stays non-updatable. **Complete** — PK09 (dividing a full internal node) landed the same day, so no part of the feature is refused for being unbuilt | `docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` |
 | Simulation harness (seed-driven, above the unit suites) | SIM01-SIM07 built. SIM01-SIM04 build a whole instance on crashable in-memory devices, drive it through `CommandDispatcher`, crash it at a seed-chosen op, restart, sweep and reconcile against an oracle; the recovery gate is armed. **SIM05-SIM07 built 2026-08-21**: injected device errors with a *quiescence probe* (an engine that survives by refusing everything afterwards fails exactly one check) and an oracle that models an errored write's outcome as unknown rather than absent; workload v2 - UPDATE/DELETE by pk and by value, transactions, `CREATE CABIN`/`CREATE PATTERN`, the three advisory switches drawn per iteration plus an on-vs-off pairing over one op stream; and the `SimPlan` seam with a `.sim` case file and a signature-guarded minimizer, plus `scripts/sim.sh`. **It found a wrong answer on its first sweep** - a Cabin entry set banked inside a transaction outlived the ROLLBACK that restored the row (shrunk 1200 ops -> 9), **fixed 2026-08-21** by `docs/feat-cabin.md` §6a; its acceptance test was written gated and is an ordinary regression test now, and `scripts/sim.sh` is 95 cells green. Declined with reasons: torn transfers (they need a `Crash(prefix)` device primitive), joins/subqueries in the generator. Unbuilt: phase S-3's history checkers (SIM08-SIM11), S-4's fuzzing and CI matrix (SIM12-SIM14) | `docs/workplan-testing.md` |
+| Range-granular core ownership | **Blueprint only, 2026-08-24** — the end-state for dynamic core allocation: pk-range ownership units, Waystone/Cabin as the routing layer, id-block-aligned insert spreading, CC7's handoff as the mover. Gated on the PL decision (`docs/spec-page-lsn-cross-stream.md`); phases R0-R6, R1/R2 free-standing | `docs/blueprint-range-ownership.md` |
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
 | User manual | `manual/` — SQL surface written, verified against code | `manual/sql/sql.md` |
 
@@ -121,6 +122,35 @@ Numbered to match `docs/heap-and-tuple.md` §8.
 - Nothing new is reserved lightly: keywords hash as identifiers, and
   `kFingerprintVersion` moves only per `fingerprint.hpp`'s bump rule (the
   golden corpus pins it).
+
+## Version Management
+
+The version of record is an **annotated git tag on `main`**. `v1.0.0` at
+`ed03b44` set the form; **`v2.0.0` starts at `a755521` (2026-08-24)** and
+every version from here follows the rules below.
+
+- **The operator names the version; CLA may move only `z`.** A version is
+  set by the operator saying it — *"it is version x.y.z"* — and nothing
+  else. No number is ever inferred from a merged milestone, a green suite,
+  or the size of a diff. **`x` and `y` are the operator's alone**: CLA does
+  not choose them, propose them unasked, or round up to them. The one
+  component CLA may move is **`z`**, the third — a tag CLA creates on its
+  own initiative differs from the last operator-named version in `z` alone,
+  and CLA says plainly in the reply that it moved it. Pushing any tag still
+  waits for the word, like every other push.
+- **A tag message is a durability claim, so it carries what bounds it.**
+  v1.0.0's message says why: *"Known gaps at this tag, stated because a
+  version number is a durability claim and these bound it."* Every tag
+  therefore has two halves — what is built and enforcing, then the gaps that
+  limit it, with `docs/known-gaps.md` named as the full inventory. A tag
+  carrying only the first half overstates the engine.
+- **Every measurement names its version, and `git describe --tags` is how** —
+  `v2.0.0-37-gaa3e26c`. One string carries the version and the commit, which
+  is what keeps a run made *after* the tag from reading as the tag itself.
+  Binding on `bench/results-*.md` and on any reply that quotes a number.
+- **Nothing is back-filled.** Results measured before v2.0.0 keep their bare
+  commit id: a version was not a fact when they were taken, and stamping one
+  on afterwards would date a claim to a build that never carried it.
 
 ## Session Workflow — the loop every task runs
 
@@ -189,9 +219,11 @@ formatting:
   `feat-wal-recovery` at `f837e6a`"*. Silence reads as "a worktree", which
   the Session Workflow above requires and which would then be a false
   report of compliance.
-- **A measurement names the commit it was measured at**, which
-  `bench/results-*.md` already requires of a results file; this extends the
-  same discipline to the reply that quotes it.
+- **A measurement names the version and the commit it was measured at** —
+  `git describe --tags`, so `v2.0.0-37-gaa3e26c` rather than `aa3e26c`
+  alone — which `bench/results-*.md` already requires of a results file;
+  this extends the same discipline to the reply that quotes it. The rules
+  are in Version Management above.
 
 ## Open Decisions — DO NOT assume or silently pick
 
@@ -210,7 +242,10 @@ interface that keeps every listed option viable.
   and sampling; whether invariant 9 is ever amended.
 - **Transactions & WAL** (`docs/txn.md` §9, `docs/wal.md` §15): trx-id
   wraparound; `kTrxIdBlockSize`; cross-core commit and recovery under a
-  changed core count. (Undo retention was ratified and built 2026-08-19,
+  changed core count; **how a page's redo identity survives moving between
+  streams** — named 2026-08-24, `docs/spec-page-lsn-cross-stream.md`, five
+  options and no ratification. Required by dynamic page ownership, by 2PC,
+  by cross-core free-map reclamation and by a changed core count alike. (Undo retention was ratified and built 2026-08-19,
   `docs/workplan-undo-purge.md` — `SnapshotTooOld` surfacing reopens only
   with the declined byte-cap policy; UP4's mount-time reclaim of a
   previous run's pages stays open there.)
