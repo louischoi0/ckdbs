@@ -535,12 +535,34 @@ every fresh fill, the partial-version trap by the book - so PW2-2
 carries the **transition dual-write**: both movers
 (`UpdateRelationDescPage`, `UpdateIndexRoot`) land the new root in the
 anchor beside the row, logged and stamped through `LogCatAnchorUpdate`.
-**PW2-3** is now precisely the retirement: readers all resolve through
-the anchor, then the two row writes (and `sys.indexes.root`'s mover)
-delete, making the rows CREATE-fixed;
-**PW2-3** root moves write it (`UpdateRelationDescPage` /
-`UpdateIndexRoot` retire from the growth path); **PW2-4** the btree
-shape gate lifts, with the e2e btree peer INSERT as the proof.
+**PW2-3 built 2026-08-24**: the rows are CREATE-fixed - both movers
+write the **anchor alone** through `WriteAnchorRoot`, the one write
+path (the f5686f8 review's S1), with `UpdateIndexRoot` taking the
+anchor id from the caller's own access instead of scanning sys.tables
+inside an index split (its S2); `CREATE INDEX` seeds its slot so the
+anchor is whole truth from birth; `InitTableAccess` resolves index
+roots through the anchor too, and this core's *own* relation with an
+unresolvable anchor is now loud (`Catalog` learned its core id - the
+review's C1, which would have gone wrong the day PW2-4 lifts the btree
+gate), with the anchor's owner stamp checked as redundancy (C5).
+DESCRIBE's root/height/leaves and SHOW INDEXES resolve through the
+anchor (C7). **Named debts, each the review's**: the anchor slot
+removal waits for DDL resolution (DROP INDEX is transactional, a
+rollback must keep the slot), so entries accumulate across
+create-then-drop cycles toward the 679 cap - `anchor_page.hpp` states
+it; a failed root repoint still leaves a grown tree nobody points at
+(pre-existing, every ordering); `exec/catalog_view.cpp`'s
+`desc_page_id` column and the mount audit's "descriptor" entry now
+mean the CREATE-time root, said here so nobody rediscovers it; and
+**C3, a decision for PW2-4**: the anchor is authoritative but lives
+above `kCatalogOverflowLimit`, outside `kEveryCatalogPage`'s
+invalidation set - a *diagnostic* cross-core reader (core 0 faulting a
+peer's anchor for DESCRIBE) can cache a frame nothing refreshes;
+options: extend the invalidation set with cached relations' anchors,
+fault-bypass the frame at fill, or declare the anchor owner-readable
+only. **PW2-4** the btree shape gate lifts, with the e2e btree peer
+INSERT as the proof - C1's fix and C3's decision land before or with
+it.
 
 ## 8. The PW1c decision — decided 2026-08-24 (operator-delegated)
 

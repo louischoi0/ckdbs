@@ -61,15 +61,21 @@ StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
                                  std::uint64_t index_oid);
 
 // Inserts or updates the entry for `index_oid`. Refuses with
-// ResourceExhausted past kAnchorMaxIndexEntries - unreachable through DDL
-// (index counts are capped far below), stated so a direct caller cannot
-// overrun silently - and with Corruption on a forged count.
+// ResourceExhausted past kAnchorMaxIndexEntries, and with Corruption on
+// a forged count. The cap is **not** unreachable (the f5686f8 review's
+// C4.2 corrected the first claim here): entries accumulate across DROP
+// INDEX - no removal exists yet, and index oids never reissue - so ~679
+// create-then-drop cycles on one relation fill the table, and the next
+// index's first root split fails an ordinary INSERT. Remote, and named
+// as the debt it is in workplan-peer-writer.md §7a.
 Status SetAnchorIndexRoot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid,
                           PageId root);
 
 // There is deliberately no RemoveAnchorIndexRoot yet: a removal is a
-// mutation the log could not describe - redo of an older ANCHOR_UPDATE
-// would resurrect the entry - so the function arrives with its record at
-// PW2-3 (DROP INDEX's half), not before (the 3f07eda review's C6).
+// mutation the log could not describe (redo of an older ANCHOR_UPDATE
+// would resurrect the entry), and DROP INDEX is transactional - a
+// rollback must keep the slot - so the removal belongs at DDL
+// *resolution*, the §5d catalog-mark purge's shape, with its own record.
+// Its absence is what makes the accumulation above real.
 
 }  // namespace kds::storage

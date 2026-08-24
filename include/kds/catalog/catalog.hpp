@@ -130,10 +130,21 @@ public:
     // CreateTable() needs it to assign `sys.tables.owner_core`. The catalog
     // does not *decide* placement - catalog/core_placement.hpp does - it
     // only supplies the two inputs that policy takes.
+    // `core_id` exists for one judgment (PW2-3, the f5686f8 review's C1):
+    // whether an unresolvable anchor page belongs to a *foreign* relation
+    // - whose root is never walked here, so the row's value is a harmless
+    // stand-in - or to one of **this core's own**, where a silent
+    // fall-through would serve a CREATE-time root once roots move
+    // (reachable the day PW2-4 lifts the btree gate). Defaulted to the
+    // system core: every pre-existing construction site is core 0's.
     explicit Catalog(storage::PageStore& store,
                      std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth,
-                     std::uint32_t core_count = 1) noexcept
-        : store_(store), inline_cell_width_(inline_cell_width), core_count_(core_count) {}
+                     std::uint32_t core_count = 1,
+                     std::uint32_t core_id = kSystemCore) noexcept
+        : store_(store),
+          inline_cell_width_(inline_cell_width),
+          core_count_(core_count),
+          core_id_(core_id) {}
 
     // Diagnostic log, null (discard) by default. `log` must outlive the
     // catalog. Set rather than constructed with, because bootstrap builds
@@ -868,6 +879,13 @@ public:
     // parameter is *not* defaulted - see its declaration.
     // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
     // rows.hpp owns the rule (a system relation carries no anchor).
+    // The one anchor write path (the f5686f8 review's S1): fetch, set the
+    // slot (index_oid 0 = the clustered root, the record's own
+    // discriminator), log and stamp. Three callers - both movers and the
+    // CREATE INDEX seed - so the PW2 ordering discipline lives once.
+    Status WriteAnchorRoot(PageId anchor_page, std::uint64_t index_oid, PageId root,
+                           std::uint64_t trx_id);
+
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
                               PageId varheap_page_id,
@@ -968,7 +986,10 @@ public:
     // The counterpart of UpdateRelationDescPage(), and it exists for the
     // same reason: the storage layer has no catalog, so it reports a new
     // root and someone above it records one.
-    Status UpdateIndexRoot(Oid index_oid, PageId new_root);
+    // `anchor_page_id` comes from the caller's own TableAccess (the
+    // f5686f8 review's S2): the alternative was a full sys.tables scan
+    // inside the index-split path for one field the caller already holds.
+    Status UpdateIndexRoot(Oid index_oid, PageId new_root, PageId anchor_page_id);
 
     const SysObjectRegistry& sys_objects() const noexcept { return sys_objects_; }
 
@@ -1064,6 +1085,7 @@ private:
     // Read only by CreateTable(), to hand catalog::AssignOwnerCore() the
     // core count it takes.
     std::uint32_t core_count_ = 1;
+    std::uint32_t core_id_ = kSystemCore;  // see the constructor's comment
 
     Logger* log_ = nullptr;
     // Armed by the `CommandDispatcher` constructor, so it is null for

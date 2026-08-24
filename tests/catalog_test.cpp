@@ -1,5 +1,7 @@
 #include "kds/catalog/catalog.hpp"
 
+#include "kds/storage/anchor_page.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -232,8 +234,15 @@ TEST_F(CatalogTest, UpdateRelationDescPagePreservesRowIdentity) {
 
     auto after = catalog_.GetSysTableRow(oid.value());
     ASSERT_TRUE(after.ok());
-    EXPECT_EQ(after.value().desc_page_id, old_desc + 1000);
+    // PW2-3: the row is CREATE-fixed - the move landed in the anchor, and
+    // a fresh fill resolves it from there.
+    EXPECT_EQ(after.value().desc_page_id, old_desc);
     EXPECT_EQ(NameView(after.value().name), "movable");
+    {
+        auto anchor = store_.GetForRead(after.value().anchor_page_id);
+        ASSERT_TRUE(anchor.ok());
+        EXPECT_EQ(storage::AnchorClusteredRoot(anchor.value().bytes()), old_desc + 1000);
+    }
 }
 
 // ---- Secondary indexes (docs/feat-index.md §12, workplan IX03) ----------
@@ -423,18 +432,32 @@ TEST_F(CatalogTest, AnIndexRootMovesInPlaceRatherThanInvalidatingTheCache) {
     ASSERT_EQ(ta->indexes.size(), 1u);
 
     const std::uint64_t before = catalog_.catalog_version();
-    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value(), 4242).ok());
+    const PageId original_root = ta->indexes[0].root_page_id;
+    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value(), 4242, ta->anchor_page_id).ok());
     EXPECT_EQ(catalog_.catalog_version(), before) << "a root move must not drop the cache";
 
     // Still valid, and already showing the new root.
     EXPECT_EQ(ta->indexes[0].root_page_id, 4242u);
 
+    // PW2-3: the sys.indexes row is CREATE-fixed - the durable half moved
+    // to the anchor slot, and a fresh fill resolves it from there (the
+    // f5686f8 review's C4.1, the previously unpinned write).
     auto row = catalog_.FindIndexByName("ix");
     ASSERT_TRUE(row.ok());
-    EXPECT_EQ(row.value().root_page_id, 4242u);  // durable half
-    EXPECT_EQ(row.value().key_cols[0], 1u);      // the rest of the row survived
+    EXPECT_EQ(row.value().root_page_id, original_root);
+    EXPECT_EQ(row.value().key_cols[0], 1u);  // the rest of the row survived
+    {
+        auto rel = catalog_.GetSysTableRow(table.value());
+        ASSERT_TRUE(rel.ok());
+        auto anchor = store_.GetForRead(rel.value().anchor_page_id);
+        ASSERT_TRUE(anchor.ok());
+        auto slot = storage::AnchorIndexRoot(anchor.value().bytes(), oid.value());
+        ASSERT_TRUE(slot.ok());
+        EXPECT_EQ(slot.value(), 4242u);
+    }
 
-    EXPECT_EQ(catalog_.UpdateIndexRoot(999999, 1).code(), StatusCode::kNotFound);
+    EXPECT_EQ(catalog_.UpdateIndexRoot(999999, 1, ta->anchor_page_id).code(),
+              StatusCode::kNotFound);
 }
 
 // ---- TableAccess::indexes / index_mask (workplan IX04) -----------------
@@ -549,7 +572,9 @@ TEST_F(CatalogTest, ACachedTableAccessSeesAnIndexCreatedAfterItWasFilled) {
     // across an index insert that grows a level is holding a dangling one.
     auto oid = catalog_.FindIndexByName("ix");
     ASSERT_TRUE(oid.ok());
-    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value().index_oid, 7777).ok());
+    ASSERT_TRUE(catalog_.UpdateIndexRoot(oid.value().index_oid, 7777,
+                                         after.value()->anchor_page_id)
+                    .ok());
 
     auto relinked = catalog_.InitTableAccess(table.value());
     ASSERT_TRUE(relinked.ok());

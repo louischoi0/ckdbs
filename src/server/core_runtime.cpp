@@ -156,7 +156,8 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // The catalog, read-only in practice: DDL is core 0's, and the store
     // above refuses a write to the pages it lives on. What this instance
     // does is *read* and cache, and drop the cache when core 0 says so.
-    runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width, config.core_count);
+    runtime->catalog_.emplace(*runtime->store_, config.inline_cell_width, config.core_count,
+                              config.core_id);
     runtime->catalog_->SetLogger(log);
     // RV3: a peer may not write a catalog page (P6), so this should never
     // fire - but if a write ever slips through, logged beats silent.

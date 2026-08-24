@@ -1049,8 +1049,15 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     // Same one-line-per-response contract as SHOW PAGE and SELECT: a
     // summary line, then one "\n"-escaped section per column, never a raw
     // newline byte.
+    // PW2-3: the row's desc_page_id is the CREATE-time root; the current
+    // one lives in the anchor, and the cached access resolves it - so
+    // DESCRIBE reports what a descent would actually use.
+    PageId current_root = table_row.value().desc_page_id;
+    if (auto access = catalog_.InitTableAccess(oid.value()); access.ok()) {
+        current_root = access.value()->desc_page_id;
+    }
     std::ostringstream os;
-    os << "oid=" << oid.value() << " root_page_id=" << table_row.value().desc_page_id
+    os << "oid=" << oid.value() << " root_page_id=" << current_root
        << " clustered_type=" << clustered
        << " key_mode=" << catalog::KeyModeName(table_row.value().key_mode)
        << " next_id=" << table_row.value().next_id
@@ -1081,8 +1088,12 @@ DispatchOutcome CommandDispatcher::HandleDescribe(std::string_view args,
     // describable schema, and refusing the whole command over it would
     // remove the tool at the moment it is needed.
     if (table_row.value().clustered_type == catalog::ClusteredType::kBtree) {
-        auto height = btree::BtreeHeight(page_store_, table_row.value().desc_page_id);
-        auto leaves = btree::BtreeLeafCount(page_store_, table_row.value().desc_page_id);
+        // current_root, not the row: post-PW2-3 the row is the CREATE-time
+        // root, and a height computed from a superseded interior page would
+        // contradict the root printed two fields up (the f5686f8 review's
+        // C7).
+        auto height = btree::BtreeHeight(page_store_, current_root);
+        auto leaves = btree::BtreeLeafCount(page_store_, current_root);
         os << " height=" << (height.ok() ? std::to_string(height.value()) : std::string("?"))
            << " leaves=" << (leaves.ok() ? std::to_string(leaves.value()) : std::string("?"));
     }
@@ -1413,7 +1424,19 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
             write_columns("covering", row.covered_cols.data(), row.ncovered);
         }
 
-        os << " root_page=" << row.root_page_id << " key_width=" << row.key_width
+        // The anchored root, not the row's: post-PW2-3 the sys.indexes row
+        // is CREATE-fixed and the access entry resolved the current root
+        // through the anchor (the f5686f8 review's C7).
+        PageId shown_root = row.root_page_id;
+        if (access.ok()) {
+            for (const auto& ref : access.value()->indexes) {
+                if (ref.index_oid == row.index_oid) {
+                    shown_root = ref.root_page_id;
+                    break;
+                }
+            }
+        }
+        os << " root_page=" << shown_root << " key_width=" << row.key_width
            << " entry_width=" << row.entry_width;
 
         // The physical half. Height and entry count are what say whether an
@@ -1423,8 +1446,8 @@ DispatchOutcome CommandDispatcher::HandleShowIndexes(Session& session) {
                                         static_cast<std::uint16_t>(row.entry_width -
                                                                    row.key_width -
                                                                    index::kIndexPkWidth)};
-        auto height = index::IndexHeight(page_store_, row.root_page_id, layout);
-        auto entries = index::IndexEntryCount(page_store_, row.root_page_id, layout);
+        auto height = index::IndexHeight(page_store_, shown_root, layout);
+        auto entries = index::IndexEntryCount(page_store_, shown_root, layout);
         if (height.ok() && entries.ok()) {
             os << " height=" << height.value() << " entries=" << entries.value();
         } else {

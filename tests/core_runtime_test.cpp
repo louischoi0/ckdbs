@@ -1612,11 +1612,9 @@ TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
     auto row = core0_->catalog.GetSysTableRow(oid.value());
     ASSERT_TRUE(row.ok());
     const PageId moved_root = row.value().desc_page_id + 7;  // any distinct id
-    {
-        auto anchor = core0_store_->Get(row.value().anchor_page_id);
-        ASSERT_TRUE(anchor.ok());
-        storage::SetAnchorClusteredRoot(anchor.value().bytes(), moved_root);
-    }
+    // Through the real mover (PW2-3): the anchor slot moves, the row does
+    // not - the retirement's whole contract in one call.
+    ASSERT_TRUE(core0_->catalog.UpdateRelationDescPage(oid.value(), moved_root).ok());
 
     catalog::Catalog fresh(*core0_store_, storage::kDefaultInlineCellWidth,
                            /*core_count=*/1);
