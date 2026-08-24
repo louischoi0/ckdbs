@@ -1,12 +1,16 @@
 # Blueprint — Range-Granular Core Ownership
 
-**Proposal only; nothing here is implemented and nothing here is ratified.**
-This is the end-state architecture blueprint for "dynamically allocated to
-cores, reorganised on statistics, every core equivalent" — the revision the
-operator opened 2026-08-24. It fixes the *shape* (what the ownership unit
-is, what routes, what migrates) and leaves every constant, policy and
-protocol choice `[OPEN]` with its owner named. Drafted in the main checkout
-on `main` at `a755521`; every claim about existing code names its site.
+**The shape is ratified; the phases are not built.** §§1-6's ownership
+unit and the rules over it were **promoted into `docs/crosscore.md` on
+2026-08-24** (operator-directed v2 revision, worktree
+`v2-crosscore-range-rules`: CC8-CC10, §2a, §5, §6-§6b) — that spec now
+owns the rules, and this file keeps the phasing (§11), the thesis
+argument (§2), and the parts not yet promoted (§§8-9). Every constant,
+policy and protocol choice stays `[OPEN]` with its owner named. This is
+the end-state architecture blueprint for "dynamically allocated to
+cores, reorganised on statistics, every core equivalent" — the revision
+the operator opened 2026-08-24. Drafted in the main checkout on `main`
+at `a755521`; every claim about existing code names its site.
 
 Upstream of everything in it was `docs/spec-page-lsn-cross-stream.md`
 (the PL decision) — **ratified 2026-08-24: PL-B logged handoff with the
@@ -219,5 +223,9 @@ R1+R2 stand on their own merits even if ranges are never built.
 Per-range local vs global secondary indexes
 (reading on record: local per range, broadcast probes cut by Cabin/Waystone
 — **not ratified**; owner: `feat-index.md` §13); split/migrate policy and
-its constants (owner: this doc once promoted); id-block interleave default
-(§6); shared-structure access mechanism (§8); merge; 2PC.
+its constants (promoted 2026-08-24: `crosscore.md` §9 indexes it, the
+physical optimizer's Part III spec owns it when drafted); id-block
+interleave default (§6; indexed at `crosscore.md` §9); shared-structure
+access mechanism (§8); merge; 2PC. The split *gates* — which relations
+may split at all before these decisions land — are ratified rules, not
+open: `crosscore.md` §6a.

@@ -20,7 +20,7 @@ every txn test carry cross-core variables from day one.
 
 | # | Decision | Resolution |
 |---|----------|-----------|
-| M1 | Ownership partition | **Relation-unit ownership recorded in the catalog** (`owner_core` on the relation row), assigned at CREATE. Write-coupled auxiliaries (unique indexes, Cabin, Waystone, var-heap) always co-located with the base relation; FK-linked relations co-located in v1 (crosscore.md §6). Page/extent hashing rejected: btree descent and heap-chain walks cannot cross cores per hop |
+| M1 | Ownership partition | **Relation-unit ownership recorded in the catalog** (`owner_core` on the relation row), assigned at CREATE. Write-coupled auxiliaries (unique indexes, Cabin, Waystone, var-heap) always co-located with the base relation; FK-linked relations co-located in v1 (crosscore.md §6). Page/extent hashing rejected: btree descent and heap-chain walks cannot cross cores per hop. **Amended 2026-08-24 (v2): the unit is the pk range** (`crosscore.md` CC8-CC10, §2a) — relation-unit ownership survives as the degenerate one-range case and `owner_core` as exactly that; the hashing rejection stands and is what sizes the unit; co-location becomes `crosscore.md` §6a's gates. Nothing range-granular is built (blueprint R1-R6) |
 | M2 | Cross-core statements | **Cross-core read execution now** — step pipeline per `docs/crosscore.md` (CC1–CC6). Writes stay single-core per transaction; 2PC `[OPEN]` |
 | M3 | Accept distribution | **SO_REUSEPORT per-core listeners**; the kernel distributes connections; a session lives on the core that accepted it (protocol D3). No fd handoff path. Session/data skew is observed via metrics, never rebalanced in v1 |
 | M4 | trx-id allocation | **Single superblock counter, per-core block leases** requested from the system core over the ring; a crash burns each core's unissued remainder (extends txn workplan T3). Ids stay globally unique with no core bits in the format |
@@ -971,7 +971,8 @@ cannot do is *run* the INSERT — that is the pipeline.
    this milestone may create a cross-stream ordering dependency — that is
    what keeps recovery per-core and the 2PC door safely closed.
 4. Owner-core resolution comes from the catalog only; no code derives
-   ownership from page ids, hashes, or topology.
+   ownership from page ids, hashes, or topology. (v2: range resolution
+   likewise — `sys.ranges` is a catalog relation, `crosscore.md` CC9.)
 5. All cross-core messages are POD, tagged, and processable after the
    originating request is gone (discard-by-tag is normal operation).
 6. Every new mechanism lands with its simulated-transport test in the same

@@ -6,10 +6,26 @@ reserved ("server-side forwarding — clients are core-topology-unaware") and
 `docs/sched.md` §5 provides transport for. Consistent with `docs/rules.md`
 (thread-per-core, shared-nothing, no exceptions, deterministic testability).
 
+**Revised 2026-08-24 (v2): the ownership unit is the primary-key range,
+not the relation** — operator-directed, promoting
+`docs/blueprint-range-ownership.md` §1 into this spec. A range is
+`[lo, hi)` over the 40-bit Keystone id space of one relation; a relation
+starts life as one range owned by its creating core, so
+`sys.tables.owner_core` is the degenerate case, not a retired concept.
+That is why this revision contradicts no shipped behavior: everything
+built to date (P0-P6, P4a-P4e, PW1-PW5) is the one-range instance of the
+rules below, and **nothing range-granular is built at this revision**
+(worktree `v2-crosscore-range-rules`; the build phases are the
+blueprint's §11, R1-R6). The unit, the directory and the routing are
+§2a; the widened write scope is CC3 and §6; split and migration are
+CC10 and §6a-§6b.
+
 Scope boundary: this spec covers cross-core **reads**. Cross-core **commit**
 (a transaction writing relations owned by more than one core) remains
 `[OPEN]` per `docs/wal.md` §3 — reserved for a later 2PC design, not designed
-here. §6 defines the v1 restriction that keeps commit single-stream.
+here. §6 defines the v1 restriction that keeps commit single-stream; since
+v2 "cross-core write" includes a statement or transaction writing two
+ranges owned by different cores, *even ranges of one relation* (CC3).
 
 `[PROPOSED]` marks a default to confirm or amend before the affected part is
 built. `[OPEN]` marks a deferred decision that must not be assumed.
@@ -18,13 +34,16 @@ built. `[OPEN]` marks a deferred decision that must not be assumed.
 
 | # | Decision | Resolution |
 |---|----------|-----------|
-| CC1 | Execution model | **Step pipeline (function shipping)** — each step runs on the core owning its relation; output flows to the next step's core; final rows to the session core |
+| CC1 | Execution model | **Step pipeline (function shipping)** — each step runs on the core owning its range(s) (v2; "its relation" until 2026-08-24, the one-range case); output flows to the next step's core; final rows to the session core |
 | CC2 | Intermediate transfer | **KWP binary row batches (protocol D5 encoding) in chunked ring messages + credit-based flow control** |
-| CC3 | Write scope | **v1 is read-only cross-core.** A transaction's writes bind to one home core; a write targeting another core's relation is a retryable error. 2PC write support reserved `[OPEN]` |
-| CC4 | Remote-read isolation | A remote step reads the owning core's **latest committed snapshot**; no cross-core ReadView. RC-equivalent; RR weakening documented (§5) |
+| CC3 | Write scope | **v1 is read-only cross-core.** A transaction's writes bind to one home core; a write targeting another core's relation is a retryable error. 2PC write support reserved `[OPEN]`. **Widened 2026-08-24 (v2):** the binding stays per *core* (stream) and ownership is per *range*, so the retryable refusal is a write targeting a range owned by another core — which now includes a statement or transaction writing two ranges of *one* relation that live on two cores. Two ranges the home core co-owns stay legal: single-stream, nothing 2PC-shaped in them (§6, and the reader-side consequence in §5) |
+| CC4 | Remote-read isolation | A remote step reads the owning core's **latest committed snapshot**; no cross-core ReadView. RC-equivalent; RR weakening documented (§5). v2: per range — each stage reads its *range* owner's view, under the one-view-per-(statement, core) rule §5 adds |
 | CC5 | Cancellation & errors | Cancel/error messages propagate both directions; every message tagged `(session_core, request_id, step_id)`; stale batches discarded by tag |
 | CC6 | Scheduling | Remote step tasks run in the **foreground** group on their core (step chains are the OLTP path) |
-| CC7 | Page-ownership reconciliation (the P6 blocker; operator-decided 2026-08-10) | **Page ownership is a function of the catalog**: a relation's pages belong to the core `sys.tables.owner_core` names, whatever lease allocated them. Realized at DDL publish by a **flush-then-grant handoff** — core 0 flushes the relation's pages, then grants the owner fault rights at extent granularity over the ring, and the owner faults fresh frames: the same discipline P6's catalog half already uses for catalog pages. The alternative (CREATE TABLE allocating from the owner's lease) was rejected as a new cross-core allocation protocol inside DDL that still needs a creation-time write exception. Two consequences stated now: the store's debug `MayFault` check stays extent-granular, so a granted extent may carry pages of other core-0 relations — a **superset assertion**, acceptable because the enforced mechanism is statement dispatch to the owning core, never the assertion; and a catalog-derived ownership fact is one of the two candidate fixes `feat-physical-optimizer.md` §6 gate 3 names, so this decision serves both. Ownership **rebalancing** after creation stays out of v1 with M3. |
+| CC7 | Page-ownership reconciliation (the P6 blocker; operator-decided 2026-08-10) | **Page ownership is a function of the catalog**: a relation's pages belong to the core `sys.tables.owner_core` names, whatever lease allocated them. Realized at DDL publish by a **flush-then-grant handoff** — core 0 flushes the relation's pages, then grants the owner fault rights at extent granularity over the ring, and the owner faults fresh frames: the same discipline P6's catalog half already uses for catalog pages. The alternative (CREATE TABLE allocating from the owner's lease) was rejected as a new cross-core allocation protocol inside DDL that still needs a creation-time write exception. Two consequences stated now: the store's debug `MayFault` check stays extent-granular, so a granted extent may carry pages of other core-0 relations — a **superset assertion**, acceptable because the enforced mechanism is statement dispatch to the owning core, never the assertion; and a catalog-derived ownership fact is one of the two candidate fixes `feat-physical-optimizer.md` §6 gate 3 names, so this decision serves both. Ownership **rebalancing** after creation stays out of v1 with M3. **Generalized 2026-08-24 (v2, CC10):** every page movement between streams is a PL-B logged handoff (`docs/spec-page-lsn-cross-stream.md` §9); the DDL-publish flush-then-grant survives as its easiest case (pages quiescent, no peer ever logged), and `docs/workplan-peer-writer.md` §8 (PW1c: flush → durable handoff record → grant-with-write-rights, exact-page) is the contract's first consumer |
+| CC8 | Ownership unit (v2, operator-directed 2026-08-24) | **The pk range `[lo, hi)` of one relation.** Not the relation — too coarse: it caps a hot relation at one core permanently, and one dominant relation is the stated workload's ordinary case. Not the page — too fine: M1's rejection of page/extent hashing stands, and its argument is what sizes the unit — btree descents and heap-chain walks cannot cross cores per hop. Both clustering modes are key-ordered structures and `min_key` is immutable (invariant 2), so a boundary is stable for a page's life and a descent under range ownership crosses **at most one boundary, at the top**. A relation starts as one range owned by its creating core (§2a) |
+| CC9 | Range directory | **Ownership stays a function of the catalog** — workplan guideline 4 kept, not amended. A catalog relation (working name `sys.ranges`: rel oid, lo, owner core; hi is the next row's lo) records every split; a relation with no rows there is one range owned by `sys.tables.owner_core`. Resolved at plan time from the session core's catalog cache; a remote stage trusts its descriptor and does not re-resolve; staleness is a retryable step error (§5's rule, unchanged). Split/migration broadcasts ride `kCatalogInvalidate` as DDL does (§2a names the cache-generation prerequisite) |
+| CC10 | Range split & migration | **Split at a page boundary only** — `min_key` is the split key, so no page is ever divided and invariants 2/3 hold by construction. **Migration is the PL-B handoff** (`spec-page-lsn-cross-stream.md` §9): flush → durable handoff record → grant → directory row → invalidation broadcast, the incoming write stamping its stream per PL-C; `relayout_epoch` bumps on moved pages so every Waystone/Cabin reference self-heals through the existing miss path. The mover is the physical optimizer's Part III and inherits Part I's discipline (observe, decide, report through SHOW, enact through named gates); its policy and constants stay `[OPEN]` (§9). Until the owning docs decide auxiliary placement, split is **gated** (§6a) |
 
 ## 2. Execution Model
 
@@ -32,7 +51,21 @@ The session core owns the statement end to end: it parses, resolves the step
 chain (the written-order contract of `docs/parser-v2.md` — *the statement is
 the chain*, never silently reordered), and looks up each
 step's owner core from its catalog cache (`owner_core`, multicore-workplan
-M1). Two paths:
+M1).
+
+**Amended 2026-08-24 (v2, range granularity).** "The core owning its
+relation" reads "the core owning its range(s)" throughout: the session
+core resolves each step's ranges against the directory (§2a) at plan
+time. The local fast path is every referenced *range* on the session
+core — for a one-range relation that is exactly today's test, and CC1's
+zero-added-work invariant binds hardest there, because the degenerate
+case is the OLTP path. On the pipeline path a step whose relation spans
+k ranges on other cores opens k stages — same messages, same credits,
+same teardown-by-tag — and `emit_in_key_order` concatenates stage
+outputs in range order, which range ordering makes structurally free:
+ranges are disjoint and key-ordered by construction.
+
+Two paths:
 
 - **Local fast path.** Every referenced relation is owned by the session
   core. Execution is exactly today's single-core code — the cross-core layer
@@ -61,6 +94,55 @@ its **local** trail/statistics recording — no statistics cross cores.
 
 A pipeline is torn down when the session core has framed the final row,
 received `STEP_ERROR`, or issued `STEP_CANCEL` (§7).
+
+## 2a. Ranges — the Unit, the Directory, the Routing (v2, 2026-08-24)
+
+**The unit** is CC8's: a range `[lo, hi)` over the 40-bit Keystone id
+space of one relation. A relation starts life as one range owned by its
+creating core; everything shipped before this revision is that
+degenerate case, unchanged in behavior and in cost.
+
+**The directory** is CC9's `sys.ranges`, and three rules govern reading
+it:
+
+- **Resolution happens where it happens today**: the session core
+  resolves owners at plan time from its catalog cache; a remote stage
+  trusts its descriptor and does not re-resolve; staleness surfaces as a
+  retryable step error (§5's existing rule, unchanged).
+- **The directory is read-mostly.** Splits and migrations are rare,
+  DDL-frequency events; the per-statement path reads the per-core cached
+  copy. A split/migration broadcast rides `kCatalogInvalidate` as DDL
+  does. **Prerequisite, named**: `InvalidateFromPeer()` clears a peer's
+  cache without bumping `catalog_version()` — deliberately, that counter
+  is per-instance — so any range fact cached across a suspension and
+  guarded by that counter is wrong on every peer. The cache-generation
+  counter every invalidation path bumps (`docs/known-gaps.md`, named
+  2026-08-15) must exist before any code caches a resolved range across
+  a park.
+- **The fast-path invariant binds here hardest**: a one-range relation
+  on its owner core must add zero instructions over today (CC1, §2).
+
+**Routing a predicate to ranges.**
+
+- A pk equality or pk range names its range(s) arithmetically against
+  the directory — no structure consulted, no broadcast.
+- A non-pk *read* predicate names none; the default is every range of
+  the relation, and that fan-out is cut only by the engine's own
+  structures under their existing authority rules, never by a new one:
+  a secondary-index probe's answer names its own destination — the
+  entry is `key || pk || covered`, so the pk it returns is the routing
+  key (whether the index itself is per-range or global is `[OPEN]`,
+  `docs/feat-index.md` §13); Cabin answers "which range holds value V"
+  for an observed key under its own banked-authority rules
+  (`docs/feat-cabin.md` §4a, §6a); a Waystone trail names pages, a page
+  names a range, a range names a core — advisory per invariant 9, and a
+  trail replayed on the wrong core after a migration misses on the
+  epoch/owner check and falls through, the ordinary miss discipline.
+- **Advisory structures never narrow a write's target set.** Invariant
+  9's license is *where to look*; for a write, executing on fewer
+  ranges than hold matching rows is a missed write, not a slower one.
+  DML target resolution is pk arithmetic against the directory alone
+  (§6).
 
 ## 3. Messages
 
@@ -129,9 +211,40 @@ view would have excluded it; and each stage of a multi-stage pipeline
 mints its own, so two stages of one statement can disagree about a
 concurrent commit. Both sit inside the per-core weakening below.
 
+**Amended 2026-08-24 (v2, range granularity), and the amendment reaches
+single-relation statements.** A scan spanning k ranges is k stages, so
+the documented disagreement above now applies *inside one relation* —
+which v1 could only say of two relations. Two rules keep that a
+weakening and never a wrong answer:
+
+- **No transaction is ever observed torn across cores.** CC3 still binds
+  a transaction's writes to one core, so every transaction's writes lie
+  in one stream and no cross-core pair of stage views can split them.
+- **One view per (statement, core)** — a v2 rule this revision adds,
+  because the blueprint's "CC4 unchanged" was insufficient: CC3 binds
+  writes to one *core*, not one range, so a transaction may legally
+  write two ranges its home core co-owns, and if two stages of one
+  statement on that core minted independent views, a plain
+  single-relation scan could observe half of it — a torn read, a wrong
+  answer, not the documented weakening. The rule: **all stages of one
+  statement that execute on one core share that core's view, minted at
+  the first of them to poll.** It is core-local, so no view crosses a
+  core and CC4's sentence stays true. The built form (one view per
+  stage, P4d-4b-3) predates ranges and differs only on the
+  two-stages-one-peer shape, which nothing built can yet expose to a
+  concurrent same-core writer; the shared view is an **R3 gate** — it
+  must exist before a pipeline runs over a split relation.
+
+The RR weakening reads the same one level down: RR guarantees hold per
+core, and a cross-range read of one relation is a cross-core read. The
+client manual states the widened form beside the v1 one.
+
 - **READ COMMITTED** statements: semantically equivalent to local execution —
   RC already permits each statement (and each lookup within it) to observe
-  the latest committed state.
+  the latest committed state. (v2 note: that argument is what carries the
+  cross-range case too — a k-range statement holds one view per
+  participating core, not one view, and RC's per-lookup license is why
+  that is a documented weakening rather than an error.)
 - **REPEATABLE READ** transactions issuing cross-core reads: the remote
   relation is read at latest-committed, not at the transaction's ReadView.
   This is a **documented weakening**: RR guarantees hold per core, not
@@ -143,29 +256,108 @@ concurrent commit. Both sit inside the per-core weakening below.
   not re-resolve. DDL invalidation between resolve and execute surfaces as a
   normal step error (stale oid → `STEP_ERROR`, retryable).
 
-## 6. Writes (v1 Restriction)
+## 6. Writes (v1 Restriction, range-widened in v2)
 
-- A single DML statement is shipped **whole** to the core owning its target
-  relation and executes there under that core's transaction machinery —
-  this is statement shipping, already implied by protocol D3, and involves
-  no pipeline.
-- An explicit transaction acquires a **home core** at its first write (the
-  owner of the written relation). Any later write targeting a relation owned
-  by a different core fails with a retryable conflict error (protocol D9;
-  same client contract as first-updater-wins aborts in `docs/txn.md`).
-  Reads inside the transaction remain free to pipeline cross-core under §5.
+**Revised 2026-08-24 (v2): the shipping unit and the refusal are per
+range.** On a one-range relation every rule below reads exactly as it
+did.
+
+- A single DML statement is shipped **whole** to the core owning its
+  target range and executes there under that core's transaction
+  machinery — this is statement shipping, already implied by protocol
+  D3, and involves no pipeline. (Still unbuilt; `docs/
+  workplan-peer-writer.md` §8 reframes it as the answer to *session*
+  placement, complementary to the PW1c write handoff.) **Target
+  resolution is pk arithmetic against the directory alone** (§2a): a
+  DML on a split relation whose predicate does not bound its rows to
+  one owned range is a cross-core write, refused retryably until 2PC —
+  the widened CC3 refusal, stated rather than hidden.
+- An explicit transaction acquires a **home core** at its first write
+  (the owner of the written range). Any later write targeting a range
+  owned by a different core fails with a retryable conflict error
+  (protocol D9; same client contract as first-updater-wins aborts in
+  `docs/txn.md`). Writes to any ranges the home core owns — of one
+  relation or several — stay legal: they are single-stream, and
+  nothing 2PC-shaped is in them (§5's shared statement view is the
+  reader-side half of that claim). Reads inside the transaction remain
+  free to pipeline cross-core under §5.
 - Every rejected cross-core write increments a per-core observability
   counter keyed by (home core, target core, relation) — the input the
   future placement/2PC decision will be made from. Counters are metrics,
-  not stored state.
-- Write-coupled auxiliaries must therefore be co-located with their base
-  relation: unique indexes, Cabin, Waystone pages, and the var-heap of a
-  relation live on the relation's owner core, always (assignment rule in
-  multicore-workplan M1). Read-only join partners may live anywhere.
-- FK (`docs/impl-foreign-keys.md`) stays co-located in v1: RESTRICT validation is a
+  not stored state. Two v2 notes: whether the key gains the range
+  boundary is a workplan detail, not a decision; and PW5's peer-listener
+  guard refuses foreign writes *before* the relation is parsed, so those
+  refusals never reach these counters (`docs/workplan-peer-writer.md`
+  §8) — the 2PC evidence undercounts by that class, and anything quoting
+  the counters must say so.
+- Write-coupled auxiliary placement is §6a's. The v1 sentence — unique
+  indexes, Cabin, Waystone pages, and the var-heap live on the
+  relation's owner core, always — is a statement about a one-range
+  relation and survives as §6a's degenerate case. Read-only join
+  partners may live anywhere.
+- FK (`docs/impl-foreign-keys.md`) stays co-located: RESTRICT validation is a
   read, but its validation-to-commit window is only sound against the local
   latest-committed state; cross-core FK inherits the §5 weakening and is
-  deferred with 2PC `[OPEN]`.
+  deferred with 2PC `[OPEN]`. A split parent or child would make the
+  validation cross-core, which is §6a's FK gate.
+
+### 6a. Write-Coupled Auxiliaries — What May Split (v2)
+
+A split relation has no single owner core, so the v1 co-location rule
+does not survive a split as written. Each auxiliary's placement under a
+split belongs to its owning doc; none has decided; and until one does,
+**the conservative gate is that the relation does not split**. A
+`SPLIT RANGE` (working name, blueprint R3) targeting a gated relation is
+refused with the gate's name — `Unsupported`, understood and declined —
+which keeps every listed option viable:
+
+- **Secondary indexes** — per-range local vs global is `[OPEN]`
+  (`docs/feat-index.md` §13; reading on record: local per range, cut by
+  Cabin/Waystone — not ratified). Uniqueness enforcement under either
+  shape is part of that decision. Gate: an indexed relation does not
+  split.
+- **Cabin** — entry sets are memory-resident and observed per core; a
+  split relation's observation and banked-authority story belongs to
+  `docs/feat-cabin.md` §11. Gate: a cabined relation does not split.
+- **Var-heap** — one `kVarHeap` page may hold spilled values referenced
+  from tuples on both sides of a boundary, a core faults only pages it
+  owns, and invariant 14 stands (values immutable per version, pages
+  never relocated). Gate: a relation whose schema can spill does not
+  split until var-heap partition is designed (owner:
+  `docs/heap-and-tuple.md`).
+- **Foreign keys** — gate: an FK parent or child does not split
+  (`docs/impl-foreign-keys.md`; the §6 bullet above says why).
+- **Waystone and statistics** — advisory (invariant 8): recording stays
+  per owning core, a stale trail misses and falls through, and **no
+  gate is needed** — worst case the trail is deleted, which invariant 8
+  prices as performance, never a result. Per-core statistics relations
+  are R1's item and a prerequisite of the mover (R5), not of
+  correctness.
+
+What remains splittable in the first build — fixed-length, unindexed,
+un-cabined, FK-free relations — is narrow and real. The gates are lifted
+by the owning decisions, never by relaxing the refusal.
+
+### 6b. Inserts and the Tail — Id-Block-Aligned Spreading (v2, R4)
+
+In `ASSIGNED` mode ids ascend, so every INSERT targets the relation's
+maximum id — the tail range — and naive range ownership spreads reads
+while leaving inserts single-core, which for insert-heavy OLTP concedes
+the headline number. The answer is built from the row-id block leases
+that already exist (`catalog::RowIdLeaseTable`, demand-driven per
+PW1b): each core inserts from its own leased id block, and **ranges
+align to block boundaries**, so every core appends to its own range's
+tail, fully locally. Invariant 3 is satisfied per range because each
+range is its own chain tail. Consequences, stated now:
+
+- Per-relation id monotonicity becomes per-range monotonicity —
+  invariant 11's 2026-08-11 amendment (`docs/heap-and-tuple.md` §4.1:
+  "monotonicity is now per-relation, never engine-wide") one level
+  down, and it needs the same loud documentation when built (R4).
+- `EXPLICIT`-mode relations spread naturally — the caller's ids need
+  not ascend — and need none of this.
+- Whether interleaved blocks are the default or opt-in is `[OPEN]`
+  (§9): a single-writer relation gains nothing from them.
 
 ## 7. Cancellation, Errors, Early Termination
 
@@ -208,12 +400,50 @@ thread. Required tests:
 8. **RR weakening:** an RR transaction's cross-core read observes a commit
    made after the transaction began (documented behavior pinned by test).
 
+Added 2026-08-24 (v2) — each lands with the phase that builds its
+mechanism, R3-R5:
+
+9. **Range equivalence:** every shippable shape over a split relation
+   returns byte-identical result sets to the same statement over the
+   same rows unsplit on one core — test 1's discipline with the split as
+   the only variable, over data where matching rows straddle the
+   boundary.
+10. **Shared statement view:** a transaction writing two same-core
+   ranges commits between two stage opens of one statement; the
+   statement's answer contains all of that transaction's writes or none
+   (§5's per-(statement, core) rule, pinned against the torn read).
+11. **Migration under the PL contract:** a crash injected between each
+   pair of steps in flush → handoff record → grant → directory row →
+   broadcast recovers per `spec-page-lsn-cross-stream.md` §9; a
+   reachable stamp mismatch refuses the mount as `Corruption`, never a
+   skip.
+12. **Insert spreading:** k cores inserting concurrently each land in
+   their own range's tail; ids ascend per range; ids stay globally
+   unique (K1's issue-once contract across cores); invariant 3 holds
+   per range.
+13. **Split gates:** `SPLIT RANGE` on an indexed, cabined, spilling, or
+   FK-linked relation is refused with the gate's name (§6a); on an
+   eligible relation the directory row appears and an unaffected
+   relation's fast path is byte-identical to before.
+
 ## 9. Open Items
 
-- Cross-core commit protocol (2PC) and with it: cross-core FK, RR snapshot
-  forwarding, write shipping inside explicit transactions (§6 counters feed
-  this design).
+- Cross-core commit protocol (2PC) and with it: multi-range write
+  statements and transactions, cross-core FK, RR snapshot forwarding,
+  write shipping inside explicit transactions (§6 counters feed this
+  design, with the undercount §6 names; PL-A's revisit clause arms with
+  2PC, `spec-page-lsn-cross-stream.md` §9).
+- Split/migrate policy and its constants — triggers, thresholds,
+  cadence, and merge (the mover is the physical optimizer's Part III;
+  blueprint R5 owns the phase, the Part III spec owns the policy when
+  drafted).
+- Auxiliary placement under a split relation — each lifts its §6a gate:
+  per-range local vs global secondary indexes (`docs/feat-index.md`
+  §13), Cabin (`docs/feat-cabin.md` §11), var-heap partition
+  (`docs/heap-and-tuple.md`), FK (`docs/impl-foreign-keys.md`).
+- Id-block interleave default (§6b): default or opt-in.
 - Batch size and initial credit tuning (`[PROPOSED]` values above).
-- Pattern/Waystone-driven relation placement to reduce cross-core traffic —
-  placement is an optimization concern, out of scope here by decision:
-  cross-core execution is the correctness path regardless of placement.
+- ~~Pattern/Waystone-driven relation placement~~ — subsumed 2026-08-24
+  by the mover (CC10): placement is range placement, decided by
+  statistics, and stays an optimization concern — cross-core execution
+  is the correctness path regardless of placement.
