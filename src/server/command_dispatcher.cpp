@@ -1225,16 +1225,52 @@ DispatchOutcome CommandDispatcher::HandleDropPattern(std::string_view line) {
 
 DispatchOutcome CommandDispatcher::HandleIndex(std::string_view line,
                                                Session& session) {
+    // Parsed before the DDL scope exists: the PW1c-6 refusal below must
+    // not cost a transaction id (PW4's philosophy - refuse before
+    // resources), and the parse is pure.
+    parser::Parser parser(line);
+    auto parsed = parser.Parse();
+    if (!parsed.ok()) {
+        return {"ERR " + parsed.status().message(), false};
+    }
+    if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
+        return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
+    }
+    const parser::IndexStmt stmt = std::get<parser::IndexStmt>(std::move(parsed.value()));
+
+    // PW1c-6, decided as the refusal half: an index built here for a
+    // relation another core owns would live in *this* core's pages -
+    // covered by the owner's fault grant only through the 64-page-extent
+    // accident (the f878f4d review's finding), with no handoff record and
+    // no write grant. The grant-extension half arrives with PW2, which
+    // the owner's write path is gated on anyway (CheckWriteAffinity's
+    // shape gate refuses writes to an indexed relation on a peer), so
+    // granting index pages today would fund nothing. The unfiltered row
+    // read is deliberate: the build touches physical pages whichever view
+    // resolved the name. An unresolvable name falls through -
+    // exec::CreateIndex owns that refusal and its byte position.
+    if (!stmt.drop) {
+        if (auto rel_oid = catalog_.FindTableOidByName(stmt.table_name); rel_oid.ok()) {
+            auto rel_row = catalog_.GetSysTableRow(rel_oid.value());
+            if (rel_row.ok() && rel_row.value().owner_core != core_id_) {
+                return {"ERR " +
+                            Status::Unsupported(
+                                "CREATE INDEX on '" + stmt.table_name + "' at byte " +
+                                std::to_string(stmt.table_byte_offset) + ": the relation is "
+                                "owned by core " +
+                                std::to_string(rel_row.value().owner_core) +
+                                ", and an index built here would live in core " +
+                                std::to_string(core_id_) +
+                                "'s pages with no handoff or grant to the owner "
+                                "(workplan-peer-writer.md PW1c-6; lifted with PW2's grant "
+                                "extension)")
+                                .message(),
+                        false};
+            }
+        }
+    }
+
     return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
-        parser::Parser parser(line);
-        auto parsed = parser.Parse();
-        if (!parsed.ok()) {
-            return {"ERR " + parsed.status().message(), false};
-        }
-        if (!std::holds_alternative<parser::IndexStmt>(parsed.value())) {
-            return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
-        }
-        const auto& stmt = std::get<parser::IndexStmt>(parsed.value());
 
         if (stmt.drop) {
             // **Allowed inside an explicit transaction again as of DT9, and

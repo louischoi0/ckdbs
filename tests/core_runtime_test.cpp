@@ -1497,6 +1497,30 @@ TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
     EXPECT_NE(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0), 0u);
 }
 
+TEST_F(CoreRuntimeTest, CreateIndexOnAPeerOwnedRelationIsRefusedByName) {
+    // PW1c-6's refusal half: the index tree would be built from core 0's
+    // free map into pages the owner holds no grant over - refused before
+    // the DDL scope draws a transaction id, naming the task and the byte.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated_ix", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto core0 = CoreRuntime::Open(ConfigFor(0), *device_, clock_, nullptr);
+    ASSERT_TRUE(core0.ok()) << core0.status().message();
+    const std::string reply =
+        core0.value()
+            ->dispatcher()
+            .Dispatch("CREATE INDEX rix ON rotated_ix (value)")
+            .response;
+    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
+    EXPECT_NE(reply.find("PW1c-6"), std::string::npos) << reply;
+    EXPECT_NE(reply.find("at byte"), std::string::npos) << reply;
+}
+
 TEST_F(CoreRuntimeTest, APeerOpenedBeforeTheDdlCanStillTakeTheWriteGrant) {
     // The 95b45e8 review's C1, pinned in the production ordering: the
     // peer starts first, the DDL lands later, and the grant must still
