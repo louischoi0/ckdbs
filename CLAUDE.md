@@ -62,7 +62,7 @@ statements, not style.
 | Keystone id issue-once contract | K-M1, K-M3, K-M4 built (K-M3 2026-08-10: `exec::CompileAssignments` refuses a pk UPDATE at compile with `Unsupported` and a byte). **The unlogged-ceiling half of K1's crash exposure closed 2026-08-19** as an RV3 side effect: the `sys.tables.next_id` bump logs and replays with every other catalog write. Read the findings before quoting the invariant engine-wide — the owning docs decide when K1 may be called held | `docs/keystoneid-invariant.md`, `docs/keystoneid-k0-findings.md`, `docs/workplan-rv3-catalog-recovery.md` |
 | Key mode (`EXPLICIT` pk) | **Built 2026-08-11** (PK01-PK07): the caller may supply a pk and it need not ascend; uniqueness is proved by the btree descent, so the mode is `BTREE`-only and a full leaf now divides. The pk stays non-updatable. **Complete** — PK09 (dividing a full internal node) landed the same day, so no part of the feature is refused for being unbuilt | `docs/heap-and-tuple.md` §4.1, `docs/workplan-key-mode.md` |
 | Simulation harness (seed-driven, above the unit suites) | SIM01-SIM07 built. SIM01-SIM04 build a whole instance on crashable in-memory devices, drive it through `CommandDispatcher`, crash it at a seed-chosen op, restart, sweep and reconcile against an oracle; the recovery gate is armed. **SIM05-SIM07 built 2026-08-21**: injected device errors with a *quiescence probe* (an engine that survives by refusing everything afterwards fails exactly one check) and an oracle that models an errored write's outcome as unknown rather than absent; workload v2 - UPDATE/DELETE by pk and by value, transactions, `CREATE CABIN`/`CREATE PATTERN`, the three advisory switches drawn per iteration plus an on-vs-off pairing over one op stream; and the `SimPlan` seam with a `.sim` case file and a signature-guarded minimizer, plus `scripts/sim.sh`. **It found a wrong answer on its first sweep** - a Cabin entry set banked inside a transaction outlived the ROLLBACK that restored the row (shrunk 1200 ops -> 9), **fixed 2026-08-21** by `docs/feat-cabin.md` §6a; its acceptance test was written gated and is an ordinary regression test now, and `scripts/sim.sh` is 95 cells green. Declined with reasons: torn transfers (they need a `Crash(prefix)` device primitive), joins/subqueries in the generator. Unbuilt: phase S-3's history checkers (SIM08-SIM11), S-4's fuzzing and CI matrix (SIM12-SIM14) | `docs/workplan-testing.md` |
-| Range-granular core ownership | **Blueprint only, 2026-08-24** — the end-state for dynamic core allocation: pk-range ownership units, Waystone/Cabin as the routing layer, id-block-aligned insert spreading, CC7's handoff as the mover. Gated on the PL decision (`docs/spec-page-lsn-cross-stream.md`); phases R0-R6, R1/R2 free-standing | `docs/blueprint-range-ownership.md` |
+| Range-granular core ownership | **Blueprint only, 2026-08-24** — the end-state for dynamic core allocation: pk-range ownership units, Waystone/Cabin as the routing layer, id-block-aligned insert spreading, CC7's handoff as the mover. **R0 closed 2026-08-24** — PL ratified (PL-B handoff + PL-C stamp, `docs/spec-page-lsn-cross-stream.md` §9); phases R1-R6 remain, R1/R2 free-standing | `docs/blueprint-range-ownership.md` |
 | Observability | Proposal only, nothing implemented | `docs/observability.md` |
 | User manual | `manual/` — SQL surface written, verified against code | `manual/sql/sql.md` |
 
@@ -242,10 +242,10 @@ interface that keeps every listed option viable.
   and sampling; whether invariant 9 is ever amended.
 - **Transactions & WAL** (`docs/txn.md` §9, `docs/wal.md` §15): trx-id
   wraparound; `kTrxIdBlockSize`; cross-core commit and recovery under a
-  changed core count; **how a page's redo identity survives moving between
-  streams** — named 2026-08-24, `docs/spec-page-lsn-cross-stream.md`, five
-  options and no ratification. Required by dynamic page ownership, by 2PC,
-  by cross-core free-map reclamation and by a changed core count alike. (Undo retention was ratified and built 2026-08-19,
+  changed core count. (Page redo identity across streams was **ratified
+  2026-08-24**: PL-B logged handoff with the PL-C stream stamp,
+  `docs/spec-page-lsn-cross-stream.md` §9 — no longer open; PL-A reopens
+  only if 2PC is ratified, by that decision.) (Undo retention was ratified and built 2026-08-19,
   `docs/workplan-undo-purge.md` — `SnapshotTooOld` surfacing reopens only
   with the declined byte-cap policy; UP4's mount-time reclaim of a
   previous run's pages stays open there.)

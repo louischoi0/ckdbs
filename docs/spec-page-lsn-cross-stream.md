@@ -1,10 +1,15 @@
 # Page LSN Across Streams
 
-**`[OPEN]` — do not assume, do not pick silently.** This file names one
-decision and states the options; it ratifies none of them. Owning specs:
+**RATIFIED 2026-08-24 by the operator: PL-B with the PL-C guard** — the
+logged handoff over a flushed page, reinforced by an owning-stream stamp in
+the page header. §9 states the binding form; §§6-8 are kept as the record
+the choice was made from. PL-A, PL-D and PL-E are **declined** (PL-D may
+still be *implemented first* as a stepping stone, but it is not the
+contract; PL-A carries the named revisit clause in §9). Owning specs:
 `docs/wal.md` §3 and §15, `docs/workplan-crosscore.md` guideline 3.
-Scoped 2026-08-24 in the main checkout on `main` at `a755521`; every claim
-below is a read of the source with its site named, not a measurement.
+Scoped 2026-08-24 in the main checkout on `main` at `a755521`; ratified the
+same day at `b53cdb0`. Every claim below is a read of the source with its
+site named, not a measurement.
 
 ## 1. The decision, in one sentence
 
@@ -99,9 +104,9 @@ header is 32 bytes and **both reserved words are already spent**
 The first two are format-silent in the sense §2a established — a field
 carved out of space every existing page already reads as 0.
 
-## 6. The options
+## 6. The options — the record the ratification was made from
 
-None is ratified. Each states what it costs and what it forecloses.
+Kept as written before the choice. §9 is the binding form.
 
 ### PL-A — One global LSN
 
@@ -189,7 +194,7 @@ wrote them. A page's records are then single-stream by construction.
    invisible, and the engine's standing preference is `Corruption` over
    interpretation.
 
-## 8. CLA's reading — not a ratification
+## 8. CLA's reading — superseded by §9, kept as the record
 
 **PL-B is the answer that fits the engine as built, with PL-C as its
 guard-rail, and PL-A is the honest end state if cross-core commit is ever
@@ -200,10 +205,65 @@ loud one. PL-D is a legitimate first step — it makes core-count changes and
 relation rebalancing legal without deciding anything — but it should be
 adopted knowing it is not the destination.
 
-This belongs to whoever owns `wal.md` §15. It is recorded as a reading so
-the next session does not re-derive it, and it binds nothing.
+This reading was put to the operator and **ratified 2026-08-24**; §9 is
+what binds.
 
-## 9. Explicitly not in scope
+## 9. The ratified contract — PL-B with the PL-C guard
+
+Binding from 2026-08-24. Five rules; everything else in this file is
+context.
+
+1. **A page changes streams only through a logged handoff.** The outgoing
+   owner (a) flushes the page durable, (b) appends a **handoff record** to
+   its own stream naming the page id, the incoming core, and the
+   outgoing stream's LSN at the handoff, and (c) only after that record is
+   durable is the incoming owner granted fault/write rights. Order (a) →
+   (b) → (c) is a correctness statement, not a preference: the flush is
+   what makes rule 3's redo exclusion sound, and the durable record is
+   what makes the grant recoverable.
+2. **The handoff moves a fact, never an ordering.** No LSN is ever
+   compared across streams; `wal.md` §3 and `workplan-crosscore.md`
+   guideline 3 stand unamended.
+3. **Analysis processes handoff records before redo scope is fixed.** A
+   page handed off at LSN *h* is removed from the outgoing stream's dirty
+   page table (`include/kds/wal/analysis.hpp:115`); the outgoing stream's
+   redo never touches it. Sound because of rule 1(a): everything that
+   stream logged for the page before *h* is already in the durable image.
+   The incoming stream's records for the page replay normally.
+4. **The PL-C guard: the owning stream is stamped in `page_flags`.** The
+   16-bit word at offset 2 (`include/kds/storage/page_header.hpp:50`,
+   verified unused in this build — every heap/btree/varheap flag constant
+   lives in its type's own sub-header) carries **`core_id + 1`** of the
+   stream that last wrote the page; **0 means never stamped**, which is
+   what every existing page already reads — the exact no-backfill
+   precedent `owner_oid` set in `docs/page.md` §2a. `kMaxWalCores` = 64
+   fits with room. The LSN-high-bits alternative (§5) is **rejected**: it
+   overloads the field under decision and taxes every LSN site with a
+   mask.
+5. **A stamp mismatch redo can reach is `Corruption`, never a skip.** If a
+   stream's redo reaches a page whose stamp names another stream (both
+   nonzero) and analysis saw no handoff moving that page out, a handoff
+   record was lost or mis-ordered: the mount refuses, loudly. An unstamped
+   page (0) takes today's comparison unchanged — correct, because a page
+   that never crossed streams has a meaningful `page_lsn`, and no page may
+   cross without acquiring a stamp on the way.
+
+Consequences that bind other work:
+
+- **Cross-core free-map reclamation is a handoff** (`docs/
+  feat-physical-optimizer.md` §6 gate 3): a page freed by one core and
+  reallocated to another crosses streams and takes rules 1-5 like any
+  migration.
+- The mover's policy pays **one flush per migration** (rule 1a); pricing
+  that against migration frequency is the blueprint's R5 concern.
+- The handoff record's kind, payload layout and its `kPad`-style envelope
+  details are **workplan items**, not open decisions — they follow
+  `wal.md` §4's record discipline when built.
+- **Revisit clause**: if cross-core commit (2PC) is ever ratified, PL-A is
+  re-opened *by that decision* — one global LSN may then pay for both.
+  Until then it is declined, not deferred.
+
+## 10. Explicitly not in scope
 
 - The mover's policy, the frame directory, and the statistics that would
   drive them. Those are downstream of this and are argued elsewhere.

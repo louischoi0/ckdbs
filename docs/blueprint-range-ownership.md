@@ -8,9 +8,10 @@ is, what routes, what migrates) and leaves every constant, policy and
 protocol choice `[OPEN]` with its owner named. Drafted in the main checkout
 on `main` at `a755521`; every claim about existing code names its site.
 
-Upstream of everything in it: `docs/spec-page-lsn-cross-stream.md` (the
-PL decision). No phase that moves a page between streams may be built
-before PL is ratified.
+Upstream of everything in it was `docs/spec-page-lsn-cross-stream.md`
+(the PL decision) — **ratified 2026-08-24: PL-B logged handoff with the
+PL-C stream stamp** (that doc's §9). R0 is closed; every phase that moves
+a page between streams builds against that contract.
 
 ---
 
@@ -146,10 +147,10 @@ tail. Consequences, stated now:
 - **Trigger**: the statistics substrate (§8). Split when one range's load
   dominates its core; migrate when cores imbalance; merge is `[OPEN]` and
   probably v2 (cold ranges cost only directory rows).
-- **Mechanism**: CC7 generalised — flush, then the handoff the PL decision
-  ratifies (PL-B logged handoff + PL-C stream stamp is the reading on
-  record; **not ratified**), then grant, then the directory row, then the
-  invalidation broadcast. `relayout_epoch` bumps on migrated pages so
+- **Mechanism**: CC7 generalised under the **ratified PL contract**
+  (`spec-page-lsn-cross-stream.md` §9): flush, durable handoff record,
+  grant — in that order — then the directory row, then the invalidation
+  broadcast; the incoming write stamps the stream in `page_flags`. `relayout_epoch` bumps on migrated pages so
   every Waystone/Cabin reference self-heals through the existing miss path.
 - **Split point**: a page boundary, always — `min_key` is the split key,
   so no page is ever divided and invariants 2/3 hold by construction.
@@ -199,19 +200,19 @@ per-core pool structure survives unchanged.
 
 | Stage | Content | Gate |
 |---|---|---|
-| R0 | Ratify PL (`docs/spec-page-lsn-cross-stream.md`) | operator decision |
+| R0 | ~~Ratify PL~~ — **closed 2026-08-24**, PL-B + PL-C guard (`docs/spec-page-lsn-cross-stream.md` §9) | done |
 | R1 | Every core equivalent: shared-structure access rule, per-core listeners, per-core statistics relations | PL not needed |
 | R2 | Global frame accounting | none |
 | R3 | Range directory + read path: `sys.ranges`, manual `SPLIT RANGE` DDL, pipeline over ranges. Placement still static | R1 |
 | R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (§6) | R3, PW1b |
-| R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | R0, R1, R3; PL built |
+| R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | R1, R3; the PL contract built |
 | R6 | Multi-range transactions | 2PC — separate decision |
 
 R1+R2 stand on their own merits even if ranges are never built.
 
 ## 12. Open decisions — do not assume
 
-PL (owner: `wal.md` §15); per-range local vs global secondary indexes
+Per-range local vs global secondary indexes
 (reading on record: local per range, broadcast probes cut by Cabin/Waystone
 — **not ratified**; owner: `feat-index.md` §13); split/migrate policy and
 its constants (owner: this doc once promoted); id-block interleave default
