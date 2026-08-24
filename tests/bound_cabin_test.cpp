@@ -132,6 +132,17 @@ TEST_F(BoundCabinPageTest, AFormattedPageIsEmptyAndDeclaresItsClass) {
     const storage::PageHeaderFields header =
         storage::ReadPageHeader(std::span<const std::byte, kPageSize>(page()));
     EXPECT_EQ(header.page_type, static_cast<std::uint8_t>(PageType::kCabinBound));
+
+    // A formatted page must satisfy the engine's own header validator, not
+    // merely carry the right type byte. Until 2026-08-24 it did not:
+    // MaxSupportedFormatVersion had no kCabinBound case, so Format stamped
+    // version 0 and this call answered Corruption. Nothing on the live path
+    // asked - BoundCabinPage::Open checks the type byte itself, and
+    // DevicePageStore verifies checksums rather than versions - so the
+    // contradiction sat here unexercised.
+    EXPECT_TRUE(storage::ValidatePageHeader(
+                    std::span<const std::byte, kPageSize>(page()), PageType::kCabinBound)
+                    .ok());
 }
 
 TEST_F(BoundCabinPageTest, AppendsReadBackInOrderAndFillTheStatedCapacity) {

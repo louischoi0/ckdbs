@@ -72,6 +72,10 @@ std::string_view StatusCodeName(StatusCode code) {
         case StatusCode::kUnsupported: return "Unsupported";
         case StatusCode::kCardinalityViolation: return "CardinalityViolation";
         case StatusCode::kResourceExhausted: return "ResourceExhausted";
+        // Runtime codes: a parse never produces either, so no corpus line
+        // carries them. Named anyway, because the table is total.
+        case StatusCode::kFkViolation: return "FkViolation";
+        case StatusCode::kAssertionViolation: return "AssertionViolation";
     }
     return "<unknown>";
 }

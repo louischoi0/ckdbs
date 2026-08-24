@@ -253,10 +253,19 @@ public:
                 const txn::Snapshot* snapshot, bool indexes,
                 const std::function<bool()>* resume_gate = nullptr,
                 InnerBuildStore* builds = nullptr)
-        : catalog_(catalog), store_(store), sink_(sink), depth_(depth), parent_(parent),
-          stats_(stats), budget_(budget), trail_(trail), replay_(replay), cabins_(cabins),
-          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), indexes_(indexes),
-          resume_gate_(resume_gate),
+        // Listed in declaration order, which is the order they are actually
+        // initialized in - `snapshot_` sits third among the members even
+        // though it is eleventh in the parameter list. Every initializer but
+        // the last reads a constructor parameter, so no value here depends on
+        // the order. `builds_` is the one that names a member - it stores
+        // `&owned_builds_` - but only takes its address, which is valid
+        // whatever the order, so the list is order-independent in fact as
+        // well as in value. Recorded because a reorder that *dereferenced*
+        // a member would not be, and this is the line to check first.
+        : catalog_(catalog), store_(store),
+          snapshot_(snapshot != nullptr ? *snapshot : kSeesEverything), sink_(sink),
+          depth_(depth), parent_(parent), stats_(stats), budget_(budget), trail_(trail),
+          replay_(replay), cabins_(cabins), indexes_(indexes), resume_gate_(resume_gate),
           builds_(builds != nullptr ? builds : &owned_builds_) {}
 
     // Sub-chain mode - see `record_through_stops_`'s comment for what it
@@ -378,6 +387,10 @@ public:
                     }
 
                     case parser::PredicateKind::kCompareValue:
+                    // Same category, same refusal: `kBetween` lowers to two
+                    // ordinary conjuncts at compile time (ast.hpp), so it
+                    // reaches a step's residual and never a sub-chain.
+                    case parser::PredicateKind::kBetween:
                         return Status::Corruption("a plain comparison is not a sub-chain");
                 }
                 return storage::VisitControl::kContinue;
@@ -446,6 +459,9 @@ public:
             }
 
             case parser::PredicateKind::kCompareValue:
+            // Lowered to two conjuncts at compile time, so it is never a
+            // sub-chain kind - the same reason `kCompareValue` falls here.
+            case parser::PredicateKind::kBetween:
                 break;
         }
         return Status::Corruption("unhandled sub-chain kind");

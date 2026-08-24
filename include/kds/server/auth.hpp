@@ -43,7 +43,7 @@ public:
         // hold (role.hpp). The caller stamps these onto the session -
         // the gate is the only code that ever learns them, so it is the
         // one that must hand them over.
-        std::string username;
+        std::string username = {};
         Role role = Role::kReadOnly;
     };
 
