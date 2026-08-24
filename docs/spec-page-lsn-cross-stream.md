@@ -249,22 +249,42 @@ context.
    that never crossed streams has a meaningful `page_lsn`, and no page may
    cross without acquiring a stamp on the way.
 
-5a. **The returned page (amended 2026-08-24 with PW1c-3, from the PW1c-2
-   review's finding on rule 5's phrasing).** Rule 5 covers only a
-   mismatch where analysis saw no handoff. A page that left and came
-   back (A→B→A) legitimately shows its own stream a *foreign* stamp: the
-   incoming handoff B→A lives in B's stream, so A's durable image of the
-   page is B's flushed state (rule 1a) and its `page_lsn` is B's byte
-   offset — incomparable, and an unbypassed RV5 gate could skip A's
-   post-return records against it, the §3 failure one step further down.
-   The rule: when a stream's redo reaches a foreign-stamped page that
-   analysis *did* see handed out (`AnalysisResult::handed_off`), the RV5
-   comparison is bypassed — every record admitted by the dirty-page-table
-   filter applies, and the first apply restamps the own stream, after
-   which RV5 governs again. Sound for rule 3's reason: the flush behind
-   the incoming grant put everything the other stream wrote in the
-   image, and the admitted records are exactly this stream's post-return
-   ones.
+5a. **Retracted the day it was written (2026-08-24).** A first form of
+   the returned-page rule keyed a redo bypass on
+   `AnalysisResult::handed_off` — pages whose departure this stream's
+   *scanned window* saw. Its own review (the f19ead1 review's C2) showed
+   the key is wrong in principle: the stamp is a durable, cross-mount
+   fact, and any case where the fact outlives the window that explains
+   it became a false `Corruption` — above all the plain *receiving*
+   core, whose own log never holds the handoff at all (rule 1b puts it
+   in the outgoing stream), and whose healthy first-crash state was
+   byte-identical to the violation the rule refused. Rule 6 replaces it;
+   kept here because a ratified-form retraction is recorded, never
+   erased.
+
+6. **The acquisition restamp (2026-08-24, from the f19ead1 review's C2;
+   built with PW1c-3's rework).** The incoming owner, after the grant
+   and **before its first logged write** to the page, durably rewrites
+   the header pair: `page_flags := own core_id + 1`,
+   `page_lsn := its own stream's current end LSN` — and flushes the
+   page. Three consequences carry the design:
+   - **Rule 5 holds at full strength with no exception**: every
+     legitimate crossing stamps the receiver before any of the
+     receiver's records for the page exist, so a foreign stamp redo can
+     reach means a lost handoff or a lost restamp, nothing else. The
+     returned page (A→B→A) is just another acquisition.
+   - **`page_lsn` is always an offset in its owner's space**, at a value
+     at or above everything already reflected and below every future
+     record — so RV5 governs every page, always, and no bypass exists.
+   - **Crash-safe by construction**: a crash between the giver's rule-1a
+     flush and the receiver's restamp leaves the page durably the
+     giver's, which is the pre-grant state — the receiver logged
+     nothing, so its redo owes the page nothing.
+   Cost: one page write and flush per handoff, beside the flush rule 1a
+   already pays. This also closes the unstamped-crossing gap: creation
+   pages cross at DDL publish carrying stamp 0 today (`LogPageInit` does
+   not stamp), and the restamp is what stamps them — the crossing
+   itself, not the writer's goodwill.
 
 Consequences that bind other work:
 

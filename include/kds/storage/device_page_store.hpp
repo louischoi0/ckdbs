@@ -279,6 +279,14 @@ public:
         SetResidentLimit(system_page_limit);
     }
 
+    // The identity half of the above, on its own. `StampPageLsn` writes
+    // `core_id + 1` into the page's PL-C stream stamp (PL §9 rule 4), and
+    // mount-time recovery stamps pages *before* the lease may be installed
+    // (server/core_runtime.cpp says why) - so a peer needs its id early or
+    // it stamps core 0's onto its own pages. Sets nothing else: the lease
+    // is what MayFault/MayWrite/CreateAt key on, and it stays absent.
+    void SetStreamCoreId(std::uint32_t core_id) noexcept { core_id_ = core_id; }
+
     std::uint32_t core_id() const noexcept { return core_id_; }
 
     // Whether this store's core may **read** `page_id`.
@@ -318,6 +326,17 @@ public:
     // case stays one range. Nothing revokes a grant: revocation is
     // ownership rebalance, which M3 keeps out of v1.
     void GrantFaultPages(Extent extent);
+
+    // Write rights over **exact pages** this core does not own by lease
+    // (PW1c-4, `docs/workplan-peer-writer.md` §8 rule 1): the pages core 0
+    // formatted for a relation this core owns, granted at DDL publish only
+    // after their handoff records are durable (PL §9 rule 1's ordering,
+    // the sender's to keep). Exact-page and never extent-granular,
+    // deliberately - the superset that is safe to fault is not safe to
+    // write, which is the precise objection that rules out widening
+    // GrantFaultPages instead. MayWrite consults this set; nothing revokes
+    // an entry, GrantFaultPages' rule.
+    void GrantWritePages(std::span<const PageId> pages);
 
     // The live free-map page, for the one caller that carves extents out of
     // it (storage/extent_lease.hpp's ExtentAllocator). Exposed rather than
@@ -614,6 +633,11 @@ private:
     LeasedIdSource* lease_ = nullptr;
     // CC7 fault grants, merged where contiguous. See GrantFaultPages.
     std::vector<Extent> fault_granted_;
+    // PW1c-4 exact-page write grants, sorted and unique. A vector rather
+    // than a set: the population is the formatted creation pages of this
+    // core's relations - a handful - and MayWrite is on the write hot
+    // path, where a sorted-vector binary search beats a node container.
+    std::vector<PageId> write_granted_;
     // First non-system page id; 0 means no readable system range. See
     // SetCoreOwnership.
     PageId system_page_limit_ = 0;

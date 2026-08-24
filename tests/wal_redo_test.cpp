@@ -282,14 +282,15 @@ TEST_F(RedoTest, AnAppliedRecordStampsTheOwningStream) {
     EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u);  // core 0 + 1
 }
 
-TEST_F(RedoTest, AForeignStampWithNoHandoffSeenRefusesTheMount) {
-    // Rule 5. The page is stamped by stream 2 and this stream's analysis
-    // saw no PAGE_HANDOFF for it: a handoff record was lost or
-    // mis-ordered, so redo must refuse rather than compare incomparable
-    // page_lsns - the spec's §3 silent corruption made loud. The second
-    // pass revisits records RV5 would have skipped; the stamp check must
-    // fire first, because "a mismatch redo can reach" includes exactly
-    // those.
+TEST_F(RedoTest, AForeignStampReachableByRedoRefusesTheMount) {
+    // Rule 5, at full strength since rule 6 (the acquisition restamp): a
+    // foreign stamp inside this stream's redo scope has no benign reading
+    // - every legitimate crossing restamps durably before this stream's
+    // first record for the page exists - so redo refuses rather than
+    // compare incomparable page_lsns, the spec's §3 silent corruption
+    // made loud. The second pass revisits records RV5 would have skipped;
+    // the stamp check must fire first, because "a mismatch redo can
+    // reach" includes exactly those.
     WriteHeapStream(1);
     ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
     {
@@ -302,22 +303,51 @@ TEST_F(RedoTest, AForeignStampWithNoHandoffSeenRefusesTheMount) {
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
 
-TEST_F(RedoTest, AReturnedPagesAdmittedRecordsApplyOverTheForeignStamp) {
-    // Rule 5a (the returned page, A→B→A): the durable image is the other
-    // stream's flushed state - foreign stamp, and a page_lsn that is B's
-    // byte offset, set here *above* every A record to prove the RV5
-    // comparison is bypassed. An unbypassed gate would skip A's
-    // post-return record and lose the write: the §3 failure one step
-    // further down the pipe, which is what PW1c-2's review named and this
-    // rule closes.
+TEST_F(RedoTest, AForeignStampRefusesEvenWithAHandoffInTheWindow) {
+    // The shape rule 5a (retracted same-day at the f19ead1 review's C2)
+    // would have admitted: foreign stamp, a PAGE_HANDOFF in the scanned
+    // range, post-return records above it. Under rule 6 the legitimate
+    // return restamps at re-acquisition, so this durable state can only
+    // mean the restamp was lost - refused, never applied over another
+    // stream's data.
     WriteHeapStream(1);
     ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
     {
-        // B's flushed image, simulated: B's stamp, B's (large) page_lsn.
         auto page = store_.Get(kPage);
         ASSERT_TRUE(page.ok());
         storage::SetPageStreamStamp(page.value().bytes(), 2);  // stream 1's
         storage::SetPageLsn(page.value().bytes(), 0x7FFFFFFFFFFFULL);
+    }
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        ASSERT_TRUE(
+            s.value()->Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0xC5), 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+}
+
+TEST_F(RedoTest, ARestampedReturnedPageReplaysItsPostReturnRecordsNormally) {
+    // The legitimate A→B→A, as rule 6 leaves it at mount: the
+    // re-acquisition restamped the page to this stream and re-based
+    // page_lsn into this stream's space (here: below the post-return
+    // record, as a restamp taken at the stream's then-current end always
+    // is), so the post-return record passes the ordinary RV5 gate - no
+    // bypass, no special case.
+    WriteHeapStream(1);
+    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
+    Lsn restamp_base = 0;
+    {
+        auto page = store_.Get(kPage);
+        ASSERT_TRUE(page.ok());
+        restamp_base = storage::GetPageLsn(page.value().bytes());
+        storage::SetPageStreamStamp(page.value().bytes(), 1);  // own, per rule 6
     }
     Lsn returned = 0;
     {
@@ -331,21 +361,19 @@ TEST_F(RedoTest, AReturnedPagesAdmittedRecordsApplyOverTheForeignStamp) {
         ASSERT_NE(returned, 0u);
         ASSERT_TRUE(s.value()->Sync().ok());
     }
+    ASSERT_GT(returned, restamp_base);
 
     const AnalysisResult analysis = Analyzed();
-    ASSERT_EQ(analysis.handed_off.count(kPage), 1u);
     ASSERT_EQ(analysis.dirty_pages.at(kPage), returned);
 
     auto r = Redo((*device_), 0, store_, analysis);
     ASSERT_TRUE(r.ok()) << r.status().message();
-    EXPECT_EQ(r.value().applied, 1u) << "the post-return record must apply";
+    EXPECT_EQ(r.value().applied, 1u) << "the post-return record replays";
 
     auto page = store_.Get(kPage);
     ASSERT_TRUE(page.ok());
-    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u)
-        << "the apply restamps the own stream";
-    EXPECT_EQ(storage::GetPageLsn(page.value().bytes()), returned)
-        << "page_lsn is this stream's offset again, not B's";
+    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u);
+    EXPECT_EQ(storage::GetPageLsn(page.value().bytes()), returned);
 }
 
 // ---- The UNDO_WRITE gap, asserted rather than worked around -------------

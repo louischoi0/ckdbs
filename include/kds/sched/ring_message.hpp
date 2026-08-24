@@ -89,6 +89,15 @@ enum class RingMessageKind : std::uint16_t {
     // kExtentLease's arrangement. A zero-count grant means the relation's
     // id space is exhausted; the requester fails honestly, never waits.
     kRowIdLease = 22,
+
+    // core 0 -> owner core: **write** rights over the exact pages core 0
+    // formatted for a relation this core owns (PW1c-4,
+    // workplan-peer-writer.md §8). Sent at DDL publish strictly after (a)
+    // the pages are flushed and (b) their PAGE_HANDOFF records are durable
+    // in core 0's stream - PL §9 rule 1's ordering, the sender's to keep.
+    // Payload is server::RelationWriteGrantPayload: exact pages, never an
+    // extent - the superset that is safe to fault is not safe to write.
+    kRelationWriteGrant = 23,
 };
 
 // Whether `kind` names something this build knows. Callers use it in place
@@ -108,6 +117,7 @@ constexpr bool IsKnownRingMessageKind(std::uint16_t kind) noexcept {
         case RingMessageKind::kShutdown:
         case RingMessageKind::kRelationFaultGrant:
         case RingMessageKind::kRowIdLease:
+        case RingMessageKind::kRelationWriteGrant:
             return true;
         case RingMessageKind::kUnset:
             return false;

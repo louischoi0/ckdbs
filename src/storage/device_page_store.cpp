@@ -391,13 +391,25 @@ void DevicePageStore::GrantFaultPages(Extent extent) {
     fault_granted_.push_back(extent);
 }
 
+void DevicePageStore::GrantWritePages(std::span<const PageId> pages) {
+    for (PageId id : pages) {
+        auto it = std::lower_bound(write_granted_.begin(), write_granted_.end(), id);
+        if (it == write_granted_.end() || *it != id) write_granted_.insert(it, id);
+    }
+}
+
 bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
     if (lease_ == nullptr) return true;
     // Read-only for a peer, deliberately: one writer per catalog page is
     // what makes a peer's stale view a retryable "not found" rather than a
-    // torn read.
+    // torn read. The system check stays first: a write grant names
+    // relation creation pages, never a system page, and keeping the order
+    // makes that a structural fact rather than a convention.
     if (page_id < system_page_limit_) return false;
-    return lease_->Owns(page_id);
+    if (lease_->Owns(page_id)) return true;
+    // PW1c-4: the exact pages core 0 formatted for this core's relations,
+    // granted after their handoff records went durable (GrantWritePages).
+    return std::binary_search(write_granted_.begin(), write_granted_.end(), page_id);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::CreateAtUnpinned(PageId page_id) {
@@ -534,7 +546,7 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
     // is page_lsn - and a page stamped by one and not the other is what
     // rule 5 calls Corruption.
     SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
-                       static_cast<std::uint16_t>(core_id_ + 1));
+                       StreamStampFor(core_id_));
     it->second.dirty = true;
     // First record since the frame was last written back wins: recLSN is
     // the *oldest* LSN redo must replay to make the page whole, so a later

@@ -537,6 +537,36 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreAllocatesOnlyFromItsExtent) {
     EXPECT_EQ(spent.status().code(), StatusCode::kResourceExhausted);
 }
 
+TEST(DevicePageStoreOwnershipTest, AWriteGrantAdmitsExactPagesAndNothingElse) {
+    // PW1c-4 (workplan-peer-writer.md §8 rule 1): write rights are
+    // exact-page, never extent - a fault grant's superset stays unwritable,
+    // which is the objection that ruled out widening GrantFaultPages.
+    auto device = MakeDevice(64, 0);
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    LeasedIdSource lease(Extent{1000, 4});
+    store->SetCoreOwnership(/*core_id=*/1, &lease, /*system_page_limit=*/128);
+
+    // Own lease writable; a core-0 page and the system range are not.
+    EXPECT_TRUE(store->MayWrite(1000));
+    EXPECT_FALSE(store->MayWrite(130));
+    EXPECT_FALSE(store->MayWrite(4));
+
+    const PageId granted[] = {130, 131};
+    store->GrantWritePages(granted);
+    EXPECT_TRUE(store->MayWrite(130));
+    EXPECT_TRUE(store->MayWrite(131));
+    EXPECT_FALSE(store->MayWrite(132)) << "the rest of the extent stays unwritable";
+    EXPECT_FALSE(store->MayWrite(4)) << "a grant never reaches the system range";
+
+    // Idempotent re-grant (a republish resends), and order-independent.
+    const PageId regrant[] = {131, 130};
+    store->GrantWritePages(regrant);
+    EXPECT_TRUE(store->MayWrite(130));
+    EXPECT_TRUE(store->MayWrite(131));
+}
+
 TEST(DevicePageStoreOwnershipTest, ALeasedStoreNeverMutatesTheFreeMap) {
     // The guideline-1 property: the free map is core 0's, so a second writer
     // would be shared mutable state between cores.

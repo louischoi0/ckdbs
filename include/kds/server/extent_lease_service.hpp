@@ -53,6 +53,23 @@ struct ExtentGrantPayload {
 
 static_assert(sizeof(ExtentGrantPayload) == 8);
 
+// The wire form of PW1c-4's exact-page write grant (kRelationWriteGrant,
+// workplan-peer-writer.md §8 rule 1): the pages core 0 formatted for a
+// relation the receiving core owns, sent only after their PAGE_HANDOFF
+// records are durable in core 0's stream (PL §9 rule 1 - the send site
+// keeps the ordering). Exact pages, never an extent: the superset that is
+// safe to fault is not safe to write. Fixed capacity because a ring
+// payload is POD: today's population is the root plus the var-heap root
+// when the schema can spill, and the headroom is for PW1c-6's index pages
+// without a wire change. A relation needing more than the capacity is
+// refused loudly at the send site, never truncated.
+struct RelationWriteGrantPayload {
+    std::uint32_t count;
+    std::uint32_t page_ids[6];  // PageIds; entries past `count` are zero
+};
+
+static_assert(sizeof(RelationWriteGrantPayload) == 28);
+
 // Installs core 0's responder: a peer's `kExtentLease` request is answered
 // with a grant carved from the free map.
 //

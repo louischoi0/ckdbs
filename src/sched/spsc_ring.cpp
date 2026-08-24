@@ -32,6 +32,7 @@ const char* RingMessageKindName(RingMessageKind kind) noexcept {
         case RingMessageKind::kShutdown: return "SHUTDOWN";
         case RingMessageKind::kRelationFaultGrant: return "RELATION_FAULT_GRANT";
         case RingMessageKind::kRowIdLease: return "ROWID_LEASE";
+        case RingMessageKind::kRelationWriteGrant: return "RELATION_WRITE_GRANT";
     }
     return "unknown";
 }

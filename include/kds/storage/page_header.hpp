@@ -147,6 +147,17 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 std::uint16_t GetPageStreamStamp(std::span<const std::byte, kPageSize> page);
 void SetPageStreamStamp(std::span<std::byte, kPageSize> page, std::uint16_t stamp);
 
+// The one home of the `core_id + 1` convention (invariant 6's discipline:
+// a persisted encoding is spelled once). 0 stays "never stamped".
+constexpr std::uint16_t StreamStampFor(std::uint32_t core_id) noexcept {
+    return static_cast<std::uint16_t>(core_id + 1);
+}
+// Foreign = stamped, and by some other stream. Never true of an unstamped
+// page, whose page_lsn is meaningful as-is.
+constexpr bool StampIsForeign(std::uint16_t stamp, std::uint32_t core_id) noexcept {
+    return stamp != 0 && stamp != StreamStampFor(core_id);
+}
+
 // ---- Relayout epoch (docs/feat-physical-optimizer.md R4) ----------------
 //
 // Bumped only by the physical optimizer's mover when tuples on the page

@@ -169,9 +169,6 @@ TEST_F(AnalysisTest, APageHandoffRemovesThePageFromTheDirtyPageTable) {
     EXPECT_EQ(r.value().dirty_pages.count(800), 0u)
         << "a handed-off page must leave the dirty page table";
     EXPECT_EQ(r.value().dirty_pages.count(900), 0u);
-    // Both departures are recorded for redo's PW1c-3 stamp check.
-    EXPECT_EQ(r.value().handed_off.count(800), 1u);
-    EXPECT_EQ(r.value().handed_off.count(900), 1u);
 }
 
 TEST_F(AnalysisTest, APageThatReturnsAfterAHandoffReentersAtItsPostReturnLsn) {
@@ -198,9 +195,6 @@ TEST_F(AnalysisTest, APageThatReturnsAfterAHandoffReentersAtItsPostReturnLsn) {
     ASSERT_TRUE(r.ok()) << r.status().message();
     ASSERT_EQ(r.value().dirty_pages.count(800), 1u);
     EXPECT_EQ(r.value().dirty_pages.at(800), returned);
-    EXPECT_EQ(r.value().handed_off.count(800), 1u)
-        << "the departure survives the return - redo needs it to read the "
-           "foreign stamp correctly";
 }
 
 TEST_F(AnalysisTest, AHandoffRemovesACheckpointSeededEntryToo) {

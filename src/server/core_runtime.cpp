@@ -93,6 +93,16 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // writes through it, and the rest of the transaction stack must not exist
     // yet, because `TrxIdSequence` caches the transaction ceiling at
     // construction (txn/trx_id.hpp).
+    //
+    // **The stamp identity goes in first, though** (PW1c-3, PL §9 rule 4).
+    // Recovery's undo phase writes compensations through `StampPageLsn`,
+    // which stamps `core_id_` beside the page_lsn - and `core_id_` is still
+    // the default 0 until `SetCoreOwnership` below. A peer would therefore
+    // stamp its own pages as core 0's while writing core N's LSNs into them,
+    // which is exactly the lie rule 5 refuses at the *next* mount. Only the
+    // identity moves up; the lease still may not be installed yet, for the
+    // reason above.
+    runtime->store_->SetStreamCoreId(config.core_id);
     runtime->undo_log_.emplace(*runtime->store_, &*runtime->wal_);
     auto recovered =
         RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
