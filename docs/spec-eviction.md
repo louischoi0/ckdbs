@@ -153,7 +153,7 @@ Bulk sequential readers declare ring mode on their scan handle:
 
 | Setting | Default (PROPOSED) | Notes |
 |---|---|---|
-| `kds.buffer_pool_frames` | sized at boot | total, divided evenly per core (EV4) — **built 2026-08-24**: even share per core, remainder to core 0, a nonzero total below `cores` refused at boot (`CheckFrameBudget`); before this the key reached core 0's pool only and every peer ran unbounded |
+| `kds.buffer_pool_frames` | sized at boot | total, divided evenly per core (EV4) — **built 2026-08-24**: even share per core, remainder to core 0, a nonzero total below `cores` refused at boot (`CheckFrameBudget`), the shares-sum-to-total invariant tested (`FrameBudgetShare`); before this the key reached core 0's pool only and every peer ran unbounded. **Known asymmetry, owned by the R2 arbiter** (`docs/blueprint-range-ownership.md`): the even split hands most of the pool to peers while core 0 alone carries the listener, the catalog and every session - an operator budgeting a mostly-single-core instance should expect core 0's pool to shrink by the core count until shares rebalance by demand |
 | `kds.free_watermark` | pool/16 per core | background sweep target |
 | `kds.evict_retry_budget` | 8 | EV8 bounded retry |
 | `kds.scan_ring_frames` | 32 per core | EV6 |

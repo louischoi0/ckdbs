@@ -179,8 +179,12 @@ Required, and separable from ranges:
 ## 9. Buffer pool
 
 Global **frame accounting** first (one budget arbiter over the N private
-pools — also fixes the live defect that `buffer_pool_frames` reaches core 0
-only, `expeditor.cpp:599`). The frame *directory* — which core holds which
+pools). The *static* half is built as of 2026-08-24: `buffer_pool_frames`
+is an instance total divided evenly per core, remainder to core 0
+(`docs/spec-eviction.md` §6 EV4), which retires the defect this section
+used to name — the key reaching core 0's pool alone. What R2 still wants
+is the **arbiter**: shares are fixed at boot, and no core may borrow a
+frame from an idle peer. The frame *directory* — which core holds which
 page — falls out of the range directory instead of being tracked per page:
 a page's range names its owner, and only the owner faults it. The private
 per-core pool structure survives unchanged.

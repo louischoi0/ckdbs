@@ -99,14 +99,19 @@ namespace kds::server {
 inline constexpr std::size_t kCoreRingSlots = 256;
 inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
 
-// Refuses a nonzero instance frame budget smaller than the core count
-// (docs/spec-eviction.md §6: the key is a total, divided evenly per core).
-// The failure it prevents is silent and inverted: an integer share of zero
-// is what SetFrameBudget reads as *unbounded*, so a tiny budget on a large
-// instance would arm no sweep anywhere. Zero total stays legal and means
+// Refuses a nonzero instance frame budget that would give some core a
+// share of zero - the message says why. Zero total stays legal and means
 // unbounded by request. A free function beside the config for the same
 // reason CheckCoreCount is one: testable without a server.
 Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
+
+// EV4 (docs/spec-eviction.md §6): the key is an instance total. Every core
+// takes an even share and core 0 also takes the division remainder, so the
+// shares sum to `frames` over core_id 0..cores-1. Never 0 for a nonzero
+// total that passed CheckFrameBudget - which is precisely what that
+// refusal buys. `cores` must be nonzero (CheckCoreCount owns that).
+std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores,
+                             std::uint32_t core_id) noexcept;
 
 class Expeditor {
 public:

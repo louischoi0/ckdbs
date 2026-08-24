@@ -66,6 +66,14 @@ inline_cell_width = 64
 # block, so overcommitting them serializes whole workloads behind each other.
 cores = 1
 
+# Resident-frame budget for the whole instance's buffer pools, in 8 KiB
+# pages (docs/spec-eviction.md §6, EV4). Divided evenly per core, the
+# remainder to core 0; a core past its share evicts cold clean frames on
+# fault (docs/workplan-pageref.md). 0 (the default) is unbounded. A nonzero
+# value below `cores` is refused at boot: an integer share of zero would
+# mean unbounded on that core, the opposite of a small budget's intent.
+# buffer_pool_frames = 0
+
 # Relation placement (docs/workplan-crosscore.md P6c). `creating` (default)
 # pins every relation to the creating core - which is core 0, since DDL is
 # core 0's. `rotate` spreads user relations over the non-system cores;

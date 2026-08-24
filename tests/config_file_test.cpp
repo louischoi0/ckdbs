@@ -479,6 +479,27 @@ TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) 
     EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
 }
 
+TEST(ExpeditorConfigTest, FrameBudgetSharesSumToTheTotalAndNoShareIsZero) {
+    // EV4's whole content: one number splits N ways and loses nothing, and
+    // no core's share rounds to the 0 that SetFrameBudget reads as
+    // unbounded. Swept over every legal (total, cores) shape up to 8 cores
+    // with totals around the boundaries the division cares about.
+    for (std::uint32_t cores = 1; cores <= 8; ++cores) {
+        for (std::size_t total : {std::size_t{cores}, std::size_t{cores} + 1,
+                                  std::size_t{cores} * 7 - 1, std::size_t{cores} * 7,
+                                  std::size_t{1024}}) {
+            ASSERT_TRUE(CheckFrameBudget(total, cores).ok());
+            std::size_t sum = 0;
+            for (std::uint32_t id = 0; id < cores; ++id) {
+                const std::size_t share = FrameBudgetShare(total, cores, id);
+                EXPECT_GT(share, 0u) << "total " << total << " cores " << cores << " id " << id;
+                sum += share;
+            }
+            EXPECT_EQ(sum, total) << "total " << total << " cores " << cores;
+        }
+    }
+}
+
 TEST(ExpeditorConfigTest, AFrameBudgetBelowTheCoreCountIsRefusedNamingBothNumbers) {
     // The failure this prevents is inverted, not just wrong: 3 frames over
     // 4 cores gives some core a share of 0, and 0 means *unbounded* - so a
