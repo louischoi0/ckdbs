@@ -632,6 +632,22 @@ Status CoreRuntime::Checkpoint() {
     return Status::OK();
 }
 
+Status CoreRuntime::ListenAndAttach(std::uint16_t port) {
+    auto listener = TcpServer::Listen(port, /*reuse_port=*/true);
+    if (!listener.ok()) return listener.status();
+    listener_.emplace(std::move(listener.value()));
+    if (Status s = listener_->Attach(*scheduler_, *dispatcher_, log_); !s.ok()) {
+        listener_.reset();
+        return s;
+    }
+    if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
+        log_->Info("core", "core " + std::to_string(config_.core_id) +
+                               " listening on port " + std::to_string(port) +
+                               " (SO_REUSEPORT)");
+    }
+    return Status::OK();
+}
+
 Status CoreRuntime::Sync() { return wal_->SyncAll(); }
 
 }  // namespace kds::server

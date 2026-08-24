@@ -40,7 +40,12 @@ class TcpServer {
 public:
     // Binds and listens on 127.0.0.1:port. Fails with IoError if the
     // socket/bind/listen syscalls fail (e.g. the port is already in use).
-    static StatusOr<TcpServer> Listen(std::uint16_t port);
+    // `reuse_port` sets SO_REUSEPORT before bind, so N listeners - one per
+    // core - share one port and the kernel distributes accepted
+    // connections among them (crosscore.md M3, workplan-peer-writer.md
+    // PW5). Every socket on the port must pass it, core 0's included: the
+    // option must be set on the first binder or later binds fail.
+    static StatusOr<TcpServer> Listen(std::uint16_t port, bool reuse_port = false);
 
     TcpServer(TcpServer&& other) noexcept;
     TcpServer& operator=(TcpServer&& other) noexcept;

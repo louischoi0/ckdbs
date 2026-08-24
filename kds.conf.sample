@@ -77,6 +77,16 @@ cores = 1
 # of a small budget's intent.
 # buffer_pool_frames = 0
 
+# Per-core listeners (docs/workplan-peer-writer.md PW5). `on` binds the
+# text port on every core with SO_REUSEPORT and the kernel distributes
+# connections; a session lives on the core that accepted it, forever. A
+# peer-accepted session serves relations its core owns and refuses the
+# rest - the per-core benchmark shape, and a cliff for a general workload
+# (clients cannot choose their core). Refused in combination with tls or
+# auth until the credential store and TLS context can be shared across
+# cores immutably. Off by default.
+# peer_listeners = off
+
 # Relation placement (docs/workplan-crosscore.md P6c). `creating` (default)
 # pins every relation to the creating core - which is core 0, since DDL is
 # core 0's. `rotate` spreads user relations over the non-system cores;

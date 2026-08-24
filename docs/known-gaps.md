@@ -585,7 +585,11 @@ still waits on its own gate, so:
 - **A peer-owned relation has no writer, so cross-core *scaling* cannot
   be demonstrated at all** (named 2026-08-15 while closing P4e). Writes
   to a relation another core owns are refused (CC3), DML statement
-  shipping is unbuilt, and core 0 alone carries a listener — so
+  shipping is unbuilt, and ~~core 0 alone carries a listener~~ — **the
+  listener half closed 2026-08-24** (PW5, `r1-peer-ddl-refusal`):
+  `peer_listeners = on` binds every core's listener with `SO_REUSEPORT`,
+  off by default, refused with tls/auth until those can be shared
+  immutably. So
   `placement = rotate` produces relations that no connection can
   populate. The pipeline reads them correctly once they contain rows,
   which is why every cross-core test and benchmark builds its rows

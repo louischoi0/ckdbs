@@ -105,6 +105,14 @@ inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
 // reason CheckCoreCount is one: testable without a server.
 Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 
+// Refuses `peer_listeners = on` combined with TLS or SCRAM auth: both are
+// built on core 0's stack (the credential store and TLS context are
+// constructed inside Expeditor::Serve), and sharing them across per-core
+// listeners without sharing them *mutably* is PW5's open half - so the
+// combination is refused truthfully rather than served insecurely. A free
+// function for the same reason its two siblings above are.
+Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram);
+
 // EV4 (docs/spec-eviction.md §6), under the operator invariant of
 // 2026-08-24: the key is an instance total and every core's share is
 // equal - `frames / min(cores, hardware cores)` as ratified, which is
@@ -147,6 +155,19 @@ public:
         // refused with Unsupported naming the build flag - a config
         // written for a capability this binary does not have fails
         // loudly, the physical_optimizer = on precedent.
+        // Per-core listeners (crosscore.md M3, workplan-peer-writer.md
+        // PW5): every core binds the text port with SO_REUSEPORT and the
+        // kernel distributes connections; a session lives on the core
+        // that accepted it and is never rebalanced. Off by default, and
+        // the restriction is the point: a peer-accepted session serves
+        // relations its core owns and refuses the rest - a peer has no
+        // SessionStepClient, so nothing ships from there - which is the
+        // per-core benchmark shape (PW6) and a cliff for a general
+        // workload. Refused in combination with tls/auth until the
+        // credential store and TLS context can be shared immutably
+        // (CheckPeerListenerConfig).
+        bool peer_listeners = false;
+
         bool tls = false;
         std::string tls_cert_file;
         std::string tls_key_file;

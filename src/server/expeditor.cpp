@@ -53,6 +53,7 @@ std::string Expeditor::Config::LogPath() const {
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "wal_dir",  "checkpoint_interval_ms", "durability",
             "tls",        "tls_cert_file",        "tls_key_file",
+            "peer_listeners",
             "auth",       "users_file",
             "isolation",             "default_key_mode",
             "wal_drain_interval_us", "relaxed_flush_interval_us",
@@ -109,6 +110,17 @@ std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept {
     return frames / cores;
 }
 
+Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram) {
+    if (peer_listeners && (tls || auth_scram)) {
+        return Status::Unsupported(
+            "peer_listeners = on cannot yet be combined with tls or auth: the credential "
+            "store and TLS context live on core 0's stack, and sharing them across per-core "
+            "listeners is PW5's open half (workplan-peer-writer.md) - run peer listeners on "
+            "the loopback plaintext port, or keep one listener");
+    }
+    return Status::OK();
+}
+
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     std::vector<std::string> unknown = file.UnknownKeys(KnownConfigKeys());
     if (!unknown.empty()) {
@@ -163,6 +175,11 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
             return Status::InvalidArgument(file.origin() + ": " + parsed.status().message());
         }
         durability = parsed.value();
+    }
+    if (file.Has("peer_listeners")) {
+        auto v = file.GetBool("peer_listeners");
+        if (!v.ok()) return v.status();
+        peer_listeners = v.value();
     }
     if (file.Has("tls")) {
         auto v = file.GetBool("tls");
@@ -591,6 +608,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // behind another's, with no preemption to break the tie.
     if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
     if (Status s = CheckFrameBudget(config.buffer_pool_frames, config.cores); !s.ok()) return s;
+    if (Status s = CheckPeerListenerConfig(config.peer_listeners, config.tls, config.auth_scram);
+        !s.ok()) {
+        return s;
+    }
     const unsigned hardware_cores = std::thread::hardware_concurrency();
     // 0 means "not detectable" - not "no cores". Skipping the check is the
     // only honest response; refusing would make the server unstartable on a
@@ -1083,7 +1104,10 @@ Status Expeditor::Serve() {
 #endif
     }
 
-    auto listener = TcpServer::Listen(config_.port);
+    // With peer listeners on, every core's socket - this one included -
+    // must carry SO_REUSEPORT (tcp_server.hpp on why the first binder
+    // matters).
+    auto listener = TcpServer::Listen(config_.port, config_.peer_listeners);
     if (!listener.ok()) return listener.status();
 #if KDS_WITH_TLS
     if (tls_context.has_value()) {
@@ -1223,6 +1247,15 @@ Status Expeditor::Serve() {
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
             if (Status s = core.value()->AttachTransport(*transport_); !s.ok()) return s;
+            // PW5: the peer's share of the accept load, bound before its
+            // worker exists (the same single-threaded window the rest of
+            // its stack is wired in). Core 0's socket already carries
+            // SO_REUSEPORT when this is on - see the Listen call above.
+            if (config_.peer_listeners) {
+                if (Status s = core.value()->ListenAndAttach(config_.port); !s.ok()) {
+                    return s;
+                }
+            }
             cores_.push_back(std::move(core.value()));
         }
 

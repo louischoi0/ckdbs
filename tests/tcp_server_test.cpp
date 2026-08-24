@@ -98,6 +98,26 @@ std::string SendAndReceiveLine(int fd, const std::string& line) {
     return response;
 }
 
+TEST(TcpServerListenTest, ReusePortAdmitsASecondListenerAndItsAbsenceRefusesOne) {
+    // PW5's socket mechanics, pinned at the layer they live: with
+    // SO_REUSEPORT on both sockets the kernel admits N listeners on one
+    // port (the per-core accept fan-out of crosscore.md M3); without it
+    // the second bind is EADDRINUSE. The flag must be on the *first*
+    // binder too, which is why core 0's listener carries it whenever peer
+    // listeners are configured.
+    constexpr std::uint16_t kPort = 25431;
+    auto first = TcpServer::Listen(kPort, /*reuse_port=*/true);
+    ASSERT_TRUE(first.ok()) << first.status().message();
+    auto second = TcpServer::Listen(kPort, /*reuse_port=*/true);
+    EXPECT_TRUE(second.ok()) << second.status().message();
+
+    constexpr std::uint16_t kExclusive = 25432;
+    auto third = TcpServer::Listen(kExclusive);
+    ASSERT_TRUE(third.ok()) << third.status().message();
+    auto fourth = TcpServer::Listen(kExclusive);
+    EXPECT_FALSE(fourth.ok());
+}
+
 TEST_F(TcpServerTest, PingRoundTripsOverRealSocket) {
     constexpr std::uint16_t kPort = 25411;
     auto listener = TcpServer::Listen(kPort);

@@ -479,6 +479,22 @@ TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) 
     EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
 }
 
+TEST(ExpeditorConfigTest, PeerListenersParseAndRefuseTlsOrAuth) {
+    // PW5's stated restriction: the credential store and TLS context are
+    // core 0's stack, so peer listeners with either is refused truthfully
+    // (Unsupported - understood and declined) rather than served with
+    // secrets shared by accident.
+    Expeditor::Config config;
+    EXPECT_FALSE(config.peer_listeners);
+    ASSERT_TRUE(config.ApplyFile(ParseOk("peer_listeners = on\n")).ok());
+    EXPECT_TRUE(config.peer_listeners);
+
+    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true).ok());
+    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false).ok());
+    EXPECT_EQ(CheckPeerListenerConfig(true, true, false).code(), StatusCode::kUnsupported);
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, true).code(), StatusCode::kUnsupported);
+}
+
 TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal) {
     // The operator invariant of 2026-08-24: every core's share is *equal*
     // (no remainder seat for core 0 - equality is the invariant), nonzero

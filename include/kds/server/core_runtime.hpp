@@ -14,6 +14,7 @@
 #include "kds/sched/ring_transport.hpp"
 #include "kds/sched/scheduler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/tcp_server.hpp"
 #include "kds/server/extent_lease_service.hpp"
 #include "kds/server/remote_step_service.hpp"
 #include "kds/server/row_id_lease_service.hpp"
@@ -246,6 +247,14 @@ public:
     wal::WalManager& wal() noexcept { return *wal_; }
     catalog::Catalog& catalog() noexcept { return *catalog_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
+
+    // PW5: binds `port` with SO_REUSEPORT and attaches the listener to
+    // this core's reactor and dispatcher, so the kernel hands this core a
+    // share of accepted connections. Called on the startup thread before
+    // the worker exists - the same single-threaded window every other
+    // piece of this stack is wired in - and the listener dies with the
+    // runtime, before the scheduler it registered with.
+    Status ListenAndAttach(std::uint16_t port);
     storage::DevicePageStore& store() noexcept { return *store_; }
 
 private:
@@ -326,6 +335,9 @@ private:
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
+    // Declared after the scheduler and dispatcher it references: destroyed
+    // first, and ~TcpServer's Detach unregisters from the scheduler.
+    std::optional<TcpServer> listener_;
 
     // Last, because it borrows every one of them: the WAL, the target and
     // anchor above, `txn_manager_`, and the dispatcher's assertion

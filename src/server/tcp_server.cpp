@@ -33,7 +33,7 @@ Status SetNonBlocking(int fd) {
 
 }  // namespace
 
-StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port) {
+StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port, bool reuse_port) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         return Status::IoError(std::string("socket() failed: ") + std::strerror(errno));
@@ -41,6 +41,19 @@ StatusOr<TcpServer> TcpServer::Listen(std::uint16_t port) {
 
     int reuse = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    if (reuse_port) {
+        if (::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
+            // Refused rather than degraded: a listener that silently fell
+            // back to exclusive binding would make every later per-core
+            // bind fail with EADDRINUSE, which reads as a port clash
+            // rather than what it is.
+            Status s =
+                Status::IoError(std::string("setsockopt(SO_REUSEPORT) failed: ") +
+                                std::strerror(errno));
+            ::close(fd);
+            return s;
+        }
+    }
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
