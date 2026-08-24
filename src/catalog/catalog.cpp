@@ -1811,6 +1811,34 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.key_mode = table_row.value().key_mode;
     access.anchor_page_id = table_row.value().anchor_page_id;
 
+    // PW2-2 (workplan-peer-writer.md §7a): the durable truth for a user
+    // relation's clustered root is its **anchor page** - from PW2-3 on,
+    // sys.tables.desc_page_id is CREATE-fixed and a root move writes the
+    // anchor, so the row's value can be behind. Resolved here, at fill;
+    // between fills the cached access is updated in place on a root move,
+    // the same license the in-place root updates always had. A system
+    // relation (no anchor) keeps the row's value: its fixed-page root
+    // never moves. The fall-through arm is deliberate: a *foreign*
+    // relation's anchor may be unfaultable on this core (no grant, or a
+    // stale map) and its root is never walked here - execution ships to
+    // the owner, whose own fill resolves through its own anchor - so only
+    // Corruption is loud.
+    if (access.anchor_page_id != kInvalidPageId) {
+        auto anchor = store_.GetForRead(access.anchor_page_id);
+        if (anchor.ok()) {
+            if (Status s = storage::ValidatePageHeader(anchor.value().bytes(),
+                                                       PageType::kAnchor);
+                !s.ok()) {
+                return s;
+            }
+            access.desc_page_id = storage::AnchorClusteredRoot(anchor.value().bytes());
+        } else if (anchor.status().code() == StatusCode::kCorruption) {
+            return anchor.status().WithContext(
+                "resolving the clustered root through anchor page " +
+                std::to_string(access.anchor_page_id));
+        }
+    }
+
     // The row-size constant, computed once here and carried for the life of
     // the entry (invariant 13). This is the only place it is derived: a
     // second computation on an execute path is a second chance to disagree
@@ -2090,6 +2118,24 @@ Status Catalog::UpdateRelationDescPage(Oid table_oid, PageId new_desc_page_id) {
         auto encoded = row.Encode();
         if (Status s = OverwriteLogged(wal_, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
             return s;
+        }
+        // PW2 transition dual-write: the anchor is the durable truth PW2-2
+        // reads, so a root move must land there too - the row write above
+        // is what PW2-3 retires once every reader resolves through the
+        // anchor. Without this, a grown btree served its CREATE-time root
+        // to every fresh fill (fourteen suite failures found it).
+        if (row.anchor_page_id != kInvalidPageId) {
+            auto anchor = store_.Get(row.anchor_page_id);
+            if (!anchor.ok()) {
+                return anchor.status().WithContext("faulting anchor for a root move");
+            }
+            storage::SetAnchorClusteredRoot(anchor.value().bytes(), new_desc_page_id);
+            if (Status s = LogCatAnchorUpdate(wal_, store_, wal::kNoTxnId,
+                                              row.anchor_page_id,
+                                              /*index_oid=*/0, new_desc_page_id);
+                !s.ok()) {
+                return s;
+            }
         }
         // desc_page_id is a field of every cached TableAccess, so a relink
         // stales it. Bumped only on success: a failed overwrite moved
@@ -2877,6 +2923,29 @@ Status Catalog::UpdateIndexRoot(Oid index_oid, PageId new_root) {
             // It qualifies by the same test the two pattern updates do: a
             // root belongs to one index and is read by nothing else.
             cache_.UpdateIndexRoot(rel_oid, index_oid, new_root);
+            // PW2 transition dual-write, UpdateRelationDescPage's twin:
+            // the index root lands in the relation's anchor too, keyed by
+            // index oid, so PW2-3 can retire the row write above.
+            auto rel = GetSysTableRow(rel_oid);
+            if (rel.ok() && rel.value().anchor_page_id != kInvalidPageId) {
+                auto anchor = store_.Get(rel.value().anchor_page_id);
+                if (!anchor.ok()) {
+                    return anchor.status().WithContext("faulting anchor for an index root move");
+                }
+                if (Status s = storage::SetAnchorIndexRoot(anchor.value().bytes(), index_oid,
+                                                           new_root);
+                    !s.ok()) {
+                    return s;
+                }
+                if (Status s = LogCatAnchorUpdate(wal_, store_, wal::kNoTxnId,
+                                                  rel.value().anchor_page_id, index_oid,
+                                                  new_root);
+                    !s.ok()) {
+                    return s;
+                }
+            } else if (!rel.ok()) {
+                return rel.status().WithContext("resolving the relation for an index root move");
+            }
             return true;
         });
     if (!acted.ok()) return acted.status();

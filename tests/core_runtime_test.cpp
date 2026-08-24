@@ -1599,6 +1599,37 @@ TEST_F(CoreRuntimeTest, ACreatedRelationsAnchorIsWiredWholeThroughTheCatalog) {
     EXPECT_EQ(access.value()->anchor_page_id, row.value().anchor_page_id);
 }
 
+TEST_F(CoreRuntimeTest, TheAnchorNotTheRowIsTheClusteredRootsTruth) {
+    // PW2-2: a fresh fill resolves desc_page_id through the anchor, so a
+    // root move that writes only the anchor (PW2-3's contract) is seen by
+    // the next fill while the CREATE-fixed row stays put. Simulated by
+    // moving the anchor's slot by hand and filling through a fresh
+    // catalog over the same store - the cache-miss path.
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "moved", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok());
+    auto row = core0_->catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    const PageId moved_root = row.value().desc_page_id + 7;  // any distinct id
+    {
+        auto anchor = core0_store_->Get(row.value().anchor_page_id);
+        ASSERT_TRUE(anchor.ok());
+        storage::SetAnchorClusteredRoot(anchor.value().bytes(), moved_root);
+    }
+
+    catalog::Catalog fresh(*core0_store_, storage::kDefaultInlineCellWidth,
+                           /*core_count=*/1);
+    auto access = fresh.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok()) << access.status().message();
+    EXPECT_EQ(access.value()->desc_page_id, moved_root)
+        << "the fill must read the anchor, not the row";
+    // The row itself is CREATE-fixed - unchanged by the move.
+    auto row_after = fresh.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row_after.ok());
+    EXPECT_EQ(row_after.value().desc_page_id, row.value().desc_page_id);
+}
+
 TEST_F(CoreRuntimeTest, CreateIndexOnAPeerOwnedRelationIsRefusedByName) {
     // PW1c-6's refusal half: the index tree would be built from core 0's
     // free map into pages the owner holds no grant over - refused before

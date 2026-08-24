@@ -519,7 +519,25 @@ the record a root move will write, because PAGE_INIT rebuilds only the
 common header and the roots are body content; the publish hook and
 `RelationFaultExtentOf` carry the anchor, so the write-grant set is
 three pages. Nothing reads the anchor yet - behavior-identical by
-construction, suite 2610/2610. **PW2-2** descents read through it;
+construction, suite 2610/2610 (its review then hardened the count into
+checked redundancy, type-checked the applier, stamped the update, and
+put the anchor on the mount audit's list). **PW2-2 built 2026-08-24**:
+`InitTableAccess` resolves `desc_page_id` through the anchor at fill -
+the anchor is the durable truth, the row CREATE-fixed from PW2-3 on;
+between fills the cached access keeps today's in-place-update license; a
+system relation (no anchor) keeps the row's value, and a *foreign*
+relation's unfaultable anchor falls through to the row deliberately
+(its root is never walked here - execution ships to the owner, whose
+own fill resolves), Corruption alone loud. Pinned by the
+moved-anchor-vs-fixed-row test. **The first build of the read alone
+failed fourteen suites** - a grown btree served its CREATE-time root to
+every fresh fill, the partial-version trap by the book - so PW2-2
+carries the **transition dual-write**: both movers
+(`UpdateRelationDescPage`, `UpdateIndexRoot`) land the new root in the
+anchor beside the row, logged and stamped through `LogCatAnchorUpdate`.
+**PW2-3** is now precisely the retirement: readers all resolve through
+the anchor, then the two row writes (and `sys.indexes.root`'s mover)
+delete, making the rows CREATE-fixed;
 **PW2-3** root moves write it (`UpdateRelationDescPage` /
 `UpdateIndexRoot` retire from the growth path); **PW2-4** the btree
 shape gate lifts, with the e2e btree peer INSERT as the proof.
