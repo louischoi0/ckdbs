@@ -136,14 +136,10 @@ Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_co
 // enforces it (command_dispatcher.cpp's purge gate cites it).
 Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb);
 
-// The PW1c interim guard (workplan-peer-writer.md §8): a peer refuses
-// every DML write by name until the write handoff lands. A rotated
-// relation's creation pages are formatted and logged by core 0, so a peer
-// write to them is a cross-stream transition the ratified PL contract
-// forbids without a handoff — and the store's MayWrite enforcement is
-// Debug-only, so without this dispatch guard a release-build peer INSERT
-// silently dirtied core 0's page (docs/known-gaps.md's two-writer route).
-// Removed by PW1c-5 when exact-page write grants exist.
-Status PeerWriteRefused(std::uint32_t this_core, std::string_view verb);
+// PW1c's interim DML guard (`PeerWriteRefused`) lived here 2026-08-24
+// only: PW1c-5 deleted it when the write handoff landed. Its duties
+// moved, not lapsed - the dispatcher's CheckWriteAffinity shape gate
+// refuses the still-unsound shapes by name, and the store's MayWrite is
+// enforced for leased stores in every build (device_page_store.cpp).
 
 }  // namespace kds::server

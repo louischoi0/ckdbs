@@ -338,6 +338,18 @@ public:
     // an entry, GrantFaultPages' rule.
     void GrantWritePages(std::span<const PageId> pages);
 
+    // Re-reads the free-map page from the device into this store's copy
+    // (peers only - the system core's copy IS the authority). The fix for
+    // the 95b45e8 review's C1: a peer's snapshot is taken at Open(), so a
+    // relation created *after* the peer started has no bit in it, and
+    // every granted page answered "page id not found". Called by the grant
+    // receivers, ordered correctly by construction: core 0 flushes the
+    // maps inside the publish flush before any grant leaves. Strictly
+    // forward - nothing ever frees, so the device's map is only ever ahead
+    // of the copy - and it does not mark the maps dirty: this adopts core
+    // 0's truth, it does not create peer writes.
+    Status RefreshFreeMapFromDevice();
+
     // The live free-map page, for the one caller that carves extents out of
     // it (storage/extent_lease.hpp's ExtentAllocator). Exposed rather than
     // wrapped because reservation is *policy* about who gets which ids,

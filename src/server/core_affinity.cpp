@@ -32,16 +32,4 @@ Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb) {
         "(workplan-peer-writer.md PW4)");
 }
 
-Status PeerWriteRefused(std::uint32_t this_core, std::string_view verb) {
-    // "Connect to core 0" would be a lie here - core 0 refuses a write to
-    // a relation this core owns (CC3) - so the message says the
-    // uncomfortable truth instead: until the handoff lands, a rotated
-    // relation has no writer on any core.
-    return Status::Unsupported(
-        std::string(verb) + " writes pages, and core " + std::to_string(this_core) +
-        " cannot yet write pages the system core allocated: the write handoff is unbuilt "
-        "(workplan-peer-writer.md PW1c). Core 0 refuses a write to a relation this core "
-        "owns too (CC3), so a rotated relation has no writer until the handoff lands");
-}
-
 }  // namespace kds::server

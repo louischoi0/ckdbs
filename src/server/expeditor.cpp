@@ -1457,68 +1457,46 @@ Status Expeditor::Serve() {
                     return;
                 }
 
-                // PW1c-4, PL §9 rule 1's ordering as code: the pages are
-                // flushed (above), the handoff records go durable in core
-                // 0's stream *before* any grant leaves, and the write
-                // grant follows the fault grant on the same FIFO edge so
-                // the receiver's restamp (rule 6) can fault its pages.
-                // The exact-page set is what core 0 formatted: the root,
-                // and the var-heap root when the schema can spill -
-                // PW1c-6 owns extending it to CREATE INDEX's pages.
-                RelationWriteGrantPayload write_grant{};
-                write_grant.page_ids[write_grant.count++] = root;
-                if (varheap_root != kInvalidPageId) {
-                    write_grant.page_ids[write_grant.count++] = varheap_root;
+                // PW1c-4: flush (above) → durable handoff records → grants
+                // (PL §9 rule 1; PrepareRelationHandoff owns the middle).
+                // A failed prepare withholds the write grant - the
+                // relation stays fault-readable, its writes refused
+                // retryably, never served unsound.
+                auto write_grant = PrepareRelationHandoff(&*wal_, owner_core, root, varheap_root);
+                if (!write_grant.ok()) {
+                    logger_->Error("catalog", "relation oid=" + std::to_string(oid) +
+                                                  ": " + write_grant.status().message());
                 }
-                wal::Lsn handoff_max = 0;
-                bool handoffs_ok = true;
-                for (std::uint32_t i = 0; i < write_grant.count; ++i) {
-                    auto lsn = wal::LogPageHandoff(&*wal_, write_grant.page_ids[i], owner_core);
-                    if (!lsn.ok()) {
+
+                const auto send = [&](sched::RingMessageKind kind, const auto& pod) {
+                    std::byte payload[sizeof(pod)];
+                    std::memcpy(payload, &pod, sizeof(pod));
+                    sched::MessageHeader header{};
+                    header.src_core = 0;
+                    header.dst_core = owner_core;
+                    header.session_core = 0;
+                    header.kind = static_cast<std::uint16_t>(kind);
+                    header.sched_group =
+                        static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+                    // The task copies the payload (send_retry.hpp owns
+                    // it), so a stack buffer is enough.
+                    scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, payload));
+                };
+                send(sched::RingMessageKind::kRelationFaultGrant,
+                     ExtentGrantPayload{range.first, range.count});
+                if (write_grant.ok()) {
+                    send(sched::RingMessageKind::kRelationWriteGrant, write_grant.value());
+                    // Complete the departure on this side (the 95b45e8
+                    // review's C4): core 0 keeps clean frames of pages
+                    // another core now owns; evicting them removes the
+                    // stale-read window. Best-effort - a dirty frame
+                    // refusal here would mean the flush above lied.
+                    const std::span<const PageId> departed(
+                        write_grant.value().page_ids, write_grant.value().count);
+                    if (Status s = store_->EvictClean(departed); !s.ok()) {
                         logger_->Error("catalog",
-                                       "handoff record for page " +
-                                           std::to_string(write_grant.page_ids[i]) +
-                                           " failed: " + lsn.status().message());
-                        handoffs_ok = false;
-                        break;
+                                       "evicting handed-off pages failed: " + s.message());
                     }
-                    handoff_max = std::max(handoff_max, lsn.value());
-                }
-                if (handoffs_ok && handoff_max != 0) {
-                    if (Status s = wal_->EnsureDurable(handoff_max); !s.ok()) {
-                        logger_->Error("catalog", "handoff records for relation oid=" +
-                                                      std::to_string(oid) +
-                                                      " not durable: " + s.message());
-                        handoffs_ok = false;
-                    }
-                }
-
-                ExtentGrantPayload grant{range.first, range.count};
-                std::byte payload[sizeof(grant)];
-                std::memcpy(payload, &grant, sizeof(grant));
-
-                sched::MessageHeader header{};
-                header.src_core = 0;
-                header.dst_core = owner_core;
-                header.session_core = 0;
-                header.kind =
-                    static_cast<std::uint16_t>(sched::RingMessageKind::kRelationFaultGrant);
-                header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
-                // The task copies the payload (send_retry.hpp owns it), so a
-                // stack buffer is enough.
-                scheduler.Submit(sched::MakeSendRetryTask(*transport_, header, payload));
-
-                // The write grant is withheld when its handoffs are not
-                // durable - the relation stays fault-readable and its
-                // writes stay refused retryably, never served unsound.
-                if (handoffs_ok) {
-                    std::byte write_payload[sizeof(write_grant)];
-                    std::memcpy(write_payload, &write_grant, sizeof(write_grant));
-                    sched::MessageHeader write_header = header;
-                    write_header.kind = static_cast<std::uint16_t>(
-                        sched::RingMessageKind::kRelationWriteGrant);
-                    scheduler.Submit(
-                        sched::MakeSendRetryTask(*transport_, write_header, write_payload));
                 }
             });
 

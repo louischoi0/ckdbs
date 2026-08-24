@@ -412,23 +412,15 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         session.Poison();
         return {ErrorReply(PeerDdlRefused(core_id_, cmd)), false};
     }
-    // The PW1c interim guard, PW4's shape one statement class over: a
-    // peer's DML writes are refused whole until the write handoff lands
-    // (workplan-peer-writer.md §8). Poisons like the DDL guard and for
-    // the same reason. Release-load-bearing: the store's MayWrite
-    // enforcement is Debug-only, and a write to a relation this core
-    // *owns* passes CheckWriteAffinity - with this guard removed a funded
-    // peer INSERT runs all the way to the page write, where only the
-    // Debug check stops it.
-    //
-    // A blacklist, where `AdmittedWhileFailed` and `RequiredRole` beside
-    // it are whitelists: a page-writing verb added later is admitted here
-    // by omission, so it has to be added to this line by hand.
-    if (catalog_read_only_ &&
-        (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE"))) {
-        session.Poison();
-        return {ErrorReply(PeerWriteRefused(core_id_, cmd)), false};
-    }
+    // The PW1c interim DML guard stood here from 2026-08-24 until PW1c-5
+    // removed it the same day. What replaced it, so its removal is not a
+    // hole: `CheckWriteAffinity`'s shape gate refuses the still-unsound
+    // shapes by name (btree, indexed, FK-linked, cabined - each citing
+    // the task that lifts it), the multi-row VALUES path refuses on a
+    // peer before touching the catalog page, and the store's `MayWrite`
+    // is enforced for leased stores in **every** build now, not Debug
+    // alone - so an unfunded write is refused retryably instead of
+    // surfacing as a rule-5 stamp mismatch at the next mount.
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "PATTERN")) {
@@ -2683,6 +2675,44 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         cross_core_writes_.Record(session.home_core(), access.owner_core, access.oid);
         return CrossCoreWriteRefused(session.home_core(), access.owner_core, relation);
     }
+    // PW1c-5's shape gate: on a peer, a write is admitted only where the
+    // PW1c-4 grants make it sound - a heap-clustered relation with no
+    // secondary structure. Each refusal names the gate that lifts it, and
+    // none poisons the session: a different statement can succeed, unlike
+    // the blanket guard this replaced. The backstop below every admitted
+    // shape is the store's release-build MayWrite (device_page_store.cpp).
+    if (catalog_read_only_) {
+        if (access.clustered_type == catalog::ClusteredType::kBtree) {
+            return Status::Unsupported(
+                "a btree-clustered relation cannot take writes on core " +
+                std::to_string(core_id_) +
+                ": a root move writes sys.tables, the system core's page "
+                "(workplan-peer-writer.md PW2)");
+        }
+        if (!access.indexes.empty()) {
+            return Status::Unsupported(
+                "an indexed relation cannot take writes on core " + std::to_string(core_id_) +
+                ": index root moves write sys.indexes, and index pages carry no write "
+                "grant (workplan-peer-writer.md PW2, PW1c-6)");
+        }
+        if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
+            return Status::Unsupported(
+                "an FK-linked relation cannot take writes on core " + std::to_string(core_id_) +
+                ": validation reads the linked relation, which this core may not fault "
+                "(workplan-peer-writer.md §4)");
+        }
+        // cabin_ids is per-column-parallel with id 0 meaning "no Cabin"
+        // (schema.hpp), so emptiness is the wrong test - ask for a live id.
+        const bool any_cabin =
+            std::any_of(access.cabin_ids.begin(), access.cabin_ids.end(),
+                        [](const catalog::TableAccess::CabinRef& c) { return c.id != 0; });
+        if (any_cabin) {
+            return Status::Unsupported(
+                "a cabined relation cannot take writes on core " + std::to_string(core_id_) +
+                ": whether a Bound Cabin's entry pages follow the grant is unverified "
+                "(workplan-peer-writer.md §4)");
+        }
+    }
     session.BindHomeCore(access.owner_core);
     return Status::OK();
 }
@@ -2969,6 +2999,21 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         if (!err.empty()) {
             return {err + " (row " + std::to_string(k + 1) + ")", false};
         }
+    }
+
+    // PW1c-5: the multi-row path draws its id block straight off the
+    // catalog page (AllocateRowIdRange), which a peer may never write -
+    // the per-relation lease serves only the single-row path (PW1b's
+    // recorded gap). Refused whole rather than half-run into the store's
+    // write refusal.
+    if (catalog_read_only_) {
+        return {"ERR " +
+                    Status::Unsupported(
+                        "multi-row VALUES cannot run on core " + std::to_string(core_id_) +
+                        ": its id block comes from the catalog page, not the lease "
+                        "(workplan-peer-writer.md §7a)")
+                        .message(),
+                false};
     }
 
     auto first = catalog_.AllocateRowIdRange(oid, stmt.rows.size());

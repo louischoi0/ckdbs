@@ -288,6 +288,14 @@ context.
      flush and the receiver's restamp leaves the page durably the
      giver's, which is the pre-grant state — the receiver logged
      nothing, so its redo owes the page nothing.
+   **Precondition, stated because rule 3's erase reads the acquisition
+   record too**: an acquisition record is legal only when everything its
+   stream logged for the page below it is already durable. The receive
+   path makes that true **by construction**: it flushes the granted
+   pages *before* appending the acquisition (free at first contact,
+   load-bearing on a re-grant after a remount, where replayed-but-
+   unflushed writes can sit on the frame), and a page already holding
+   write rights takes no second acquisition at all.
    Cost: one page write and flush per handoff, beside the flush rule 1a
    already pays. This also closes the unstamped-crossing gap: creation
    pages cross at DDL publish carrying stamp 0 today (`LogPageInit` does

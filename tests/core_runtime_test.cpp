@@ -1416,25 +1416,112 @@ TEST_F(CoreRuntimeTest, APeerStoreTakesItsConfiguredFrameBudgetShare) {
     EXPECT_EQ(peer.value()->store().frame_budget(), 8u);
 }
 
-TEST_F(CoreRuntimeTest, APeerRefusesEveryDmlWriteVerbByNameUntilTheHandoff) {
-    // The PW1c interim guard, pinned at PW4's depth: every write verb, a
-    // spelling case, and the ANALYZE control (ANALYZE routes to the
-    // SELECT path, so it must answer as the parser and not this guard).
+TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
+    // PW1c-5's e2e: the interim guard is gone, and a peer with every
+    // funding piece - fault grant, write grant (rule 6's acquisition
+    // restamp inside it), a row-id block, a trx-id block - runs a
+    // single-row INSERT into its own heap relation and reads it back.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "owned", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap, catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 1u);
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 
-    for (std::string_view stmt : {"INSERT INTO x VALUES (1)", "UPDATE x SET a = 1",
-                                  "DELETE FROM x WHERE id = 1", "  insert into x VALUES (1)"}) {
-        const std::string reply = peer.value()->dispatcher().Dispatch(stmt).response;
-        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << stmt << " -> " << reply;
-        EXPECT_NE(reply.find("PW1c"), std::string::npos) << stmt << " -> " << reply;
-        EXPECT_NE(reply.find("no writer until"), std::string::npos) << stmt << " -> " << reply;
-    }
-    EXPECT_EQ(peer.value()
-                  ->dispatcher()
-                  .Dispatch("ANALYZE INSERT INTO x VALUES (1)")
-                  .response.find("PW1c"),
-              std::string::npos);
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    const PageId pages[] = {row.value().desc_page_id};
+    peer.value()->GrantRelationWrite(pages);
+    ASSERT_TRUE(peer.value()->store().MayWrite(row.value().desc_page_id));
+
+    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
+    ASSERT_TRUE(first.ok());
+    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    const auto ins = peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (7)").response;
+    EXPECT_NE(ins.rfind("ERR", 0), 0u) << "the funded INSERT must run: " << ins;
+    const auto sel =
+        peer.value()->dispatcher().Dispatch("SELECT * FROM owned").response;
+    EXPECT_NE(sel.find("7"), std::string::npos) << sel;
+
+    // The multi-row path stays refused on a peer by name: its id block
+    // comes off the catalog page, not the lease (PW1c-5's bulk gate).
+    const auto bulk =
+        peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (8), (9)").response;
+    EXPECT_EQ(bulk.rfind("ERR", 0), 0u) << bulk;
+    EXPECT_NE(bulk.find("multi-row"), std::string::npos) << bulk;
+}
+
+TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
+    // PW1c-5's shape gate at CheckWriteAffinity: a btree-clustered
+    // relation cannot take writes on a peer - a root move writes
+    // sys.tables - and the refusal names PW2, not a generic guard. No
+    // session poison: a different statement can succeed.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "btree_owned", TwoColumnSchema(),
+                                    catalog::ClusteredType::kBtree, catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    // Funded past the trx-id wall, so the refusal reaching the client is
+    // the shape gate's and not the lease's.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+
+    const auto reply =
+        peer.value()->dispatcher().Dispatch("INSERT INTO btree_owned VALUES (1)").response;
+    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
+    EXPECT_NE(reply.find("PW2"), std::string::npos) << reply;
+    // Not poisoned: the next statement answers normally.
+    EXPECT_NE(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0), 0u);
+}
+
+TEST_F(CoreRuntimeTest, APeerOpenedBeforeTheDdlCanStillTakeTheWriteGrant) {
+    // The 95b45e8 review's C1, pinned in the production ordering: the
+    // peer starts first, the DDL lands later, and the grant must still
+    // take - the peer's free-map snapshot predates the relation, and the
+    // grant receivers refresh it from the device (which core 0 flushed
+    // before any grant left).
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);  // peer first
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "late", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    auto row = core0_->catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    const PageId root = row.value().desc_page_id;
+
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    EXPECT_TRUE(peer.value()->store().GetForRead(root).ok())
+        << "the fault grant must refresh the free-map snapshot";
+    const PageId pages[] = {root};
+    peer.value()->GrantRelationWrite(pages);
+    EXPECT_TRUE(peer.value()->store().MayWrite(root));
 }
 
 TEST_F(CoreRuntimeTest, APeerRefusesEveryDdlVerbByNameAndStillServesReads) {
@@ -1580,13 +1667,14 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesForeignAndRoutes
     const std::string foreign = RoundTrip(fd, "SELECT * FROM local0");
     EXPECT_EQ(foreign.rfind("ERR", 0), 0u) << foreign;
     EXPECT_NE(foreign.find("owned by core 0"), std::string::npos) << foreign;
-    // Refused: every DML write, even to the relation this core owns - the
-    // PW1c interim guard. Its creation pages are core 0's stream's, and
-    // in release nothing below dispatch would stop the two-writer route
-    // (workplan-peer-writer.md section 8).
+    // Refused: an *unfunded* write to the relation this core owns. The
+    // PW1c-5 replacement for the interim guard: this listener-served peer
+    // holds no write grant and no row-id lease, so the INSERT dies at the
+    // first funding wall - retryably, from the lease - and in release the
+    // store's now-always-on MayWrite is what stands behind it
+    // (workplan-peer-writer.md §8, the PW1c-4r row).
     const std::string write = RoundTrip(fd, "INSERT INTO rotated VALUES (7)");
     EXPECT_EQ(write.rfind("ERR", 0), 0u) << write;
-    EXPECT_NE(write.find("PW1c"), std::string::npos) << write;
 
     // STOP: replied to, and routed - the kShutdown lands on core 0's ring
     // rather than stopping this reactor.

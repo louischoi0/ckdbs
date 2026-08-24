@@ -76,6 +76,21 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // start or its id came from a checkpoint's active list.
         note_txn(record.header.txn_id, TxnOutcome::kLoser);
 
+        // Non-transactional by contract (a handoff is an ownership event,
+        // log_page_handoff.hpp) - a nonzero txn_id has already minted a
+        // phantom loser on the line above, so it is refused as the
+        // corruption it is, never interpreted. Keyed on the *type* alone
+        // and placed here rather than inside the page branch below: the
+        // hazard is the transaction id, not the page, so a handoff naming
+        // no page - itself malformed, since the page is the record's whole
+        // subject - would otherwise carry the phantom through unrefused.
+        if (record.type() == RecordType::kPageHandoff && record.header.txn_id != kNoTxnId) {
+            return Status::Corruption(
+                "analysis: PAGE_HANDOFF at lsn " + std::to_string(record.header.lsn) +
+                " carries txn " + std::to_string(record.header.txn_id) +
+                "; a handoff is an ownership event and belongs to no transaction");
+        }
+
         // A page mutation dirties its page as of *this* LSN, unless the
         // page is already known dirty from earlier - the recLSN is the
         // oldest record that must be replayed, so the first one wins.
@@ -105,16 +120,6 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // page; raising it is monotone and free).
         if (record.header.page_id != kInvalidPageId) {
             if (record.type() == RecordType::kPageHandoff) {
-                // Non-transactional by contract (a handoff is an ownership
-                // event, log_page_handoff.hpp) - a nonzero txn_id would
-                // have minted a phantom loser above, so it is refused as
-                // the corruption it is, never interpreted.
-                if (record.header.txn_id != 0) {
-                    return Status::Corruption(
-                        "analysis: PAGE_HANDOFF at lsn " + std::to_string(record.header.lsn) +
-                        " carries txn " + std::to_string(record.header.txn_id) +
-                        "; a handoff is an ownership event and belongs to no transaction");
-                }
                 out.dirty_pages.erase(record.header.page_id);
             } else {
                 out.dirty_pages.emplace(record.header.page_id, record.header.lsn);

@@ -1189,11 +1189,11 @@ private:
     // Set by CoreRuntime for every non-system core; false everywhere else,
     // including the P4e equivalence harness's stand-in dispatchers, which
     // call themselves core 1 over a writable store precisely because no
-    // peer writer exists yet. Gates both peer refusals - the PW4 DDL one
-    // (PeerDdlRefused) and PW1c's interim DML one (PeerWriteRefused) - so
-    // the name is now narrower than the flag: it reads "this core writes
-    // no page the system core allocated", the catalog being the first
-    // such page. PW1c-5 removes the second, not the flag.
+    // peer writer exists yet. Gates the PW4 DDL refusal (PeerDdlRefused),
+    // CheckWriteAffinity's PW1c-5 shape gate, and the multi-row VALUES
+    // refusal - so the name is narrower than the flag: it reads "this
+    // core writes no page the system core allocated", the catalog being
+    // the first such page.
     bool catalog_read_only_ = false;
     Logger* log_;
     const sched::Clock* clock_;

@@ -382,4 +382,17 @@ private:
 storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
                                       std::uint32_t extent_pages);
 
+// The send-side half of PW1c-4's publish, extracted so it is testable
+// without a whole Expeditor (the 95b45e8 review's S1 - the untested
+// lambda is where C1 hid): appends a PAGE_HANDOFF per formatted page
+// into the giver's stream, makes them durable, and returns the
+// exact-page write-grant payload. A failed status means **withhold the
+// write grant** - the relation stays fault-readable and its writes
+// refused retryably. Refuses more pages than the payload holds rather
+// than truncating (the capacity check PW1c-6 will lean on). The caller
+// owns the flush *before* this and the sends after it.
+StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
+                                                           std::uint32_t owner_core,
+                                                           PageId root, PageId varheap_root);
+
 }  // namespace kds::server

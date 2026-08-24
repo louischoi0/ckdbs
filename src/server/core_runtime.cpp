@@ -451,6 +451,16 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
 }
 
 void CoreRuntime::GrantRelationFault(storage::Extent extent) {
+    // C1 of the 95b45e8 review: a peer's free-map snapshot predates any
+    // relation created after it started, so without this refresh every
+    // granted page answered "page id not found" however many rights the
+    // grant conveyed. Ordered soundly by construction - core 0 flushed
+    // the maps before this grant left. Failure is logged and the grant
+    // still installed: a stale map is the pre-refresh behavior, not a
+    // reason to drop rights.
+    if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok() && log_ != nullptr) {
+        log_->Error("core", "free-map refresh at fault grant failed: " + s.message());
+    }
     store_->GrantFaultPages(extent);
     if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
         log_->Debug("core", "core " + std::to_string(config_.core_id) +
@@ -470,7 +480,35 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
     // the receiver's durable acquisition fact, and analysis's erase reads
     // correctly in both directions (below this LSN, this stream's redo
     // owes the page nothing - for an acquisition, nothing below exists).
+    // C1's refresh (see GrantRelationFault) - required here too, because
+    // C2's fix below makes this grant self-sufficient when it arrives
+    // first.
+    if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok() && log_ != nullptr) {
+        log_->Error("core", "free-map refresh at write grant failed: " + s.message());
+    }
+    // Rule 6's precondition made true by construction, not by "nothing
+    // below exists": the acquisition record's erase declares everything
+    // this stream logged for the page below it durable, and a re-grant
+    // after a remount can arrive with *replayed but unflushed* writes on
+    // the frame - so flush first, then acquire. Free when the frames are
+    // clean, which the first-contact case always is.
+    if (Status s = store_->FlushPages(pages); !s.ok()) {
+        if (log_ != nullptr) {
+            log_->Error("core", "pre-acquisition flush failed: " + s.message());
+        }
+        return;
+    }
     for (PageId id : pages) {
+        // Idempotent re-grant (the review's C3): a page this core already
+        // holds write rights over gets no second acquisition record - the
+        // erase a second record implies is sound only when everything
+        // below it is durable, which a repeat delivery cannot promise.
+        if (store_->MayWrite(id)) continue;
+        // C2: the write grant implies fault rights over its exact pages,
+        // so it survives arriving before the extent fault grant - two
+        // send-retry tasks on a full ring can reorder (scheduler
+        // re-queue), and a dropped write grant never returns.
+        store_->GrantFaultPages(storage::Extent{id, 1});
         if (auto page = store_->GetForRead(id); !page.ok()) {
             if (log_ != nullptr) {
                 log_->Error("core", "core " + std::to_string(config_.core_id) +
@@ -508,6 +546,42 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
                                 std::to_string(pages.size()) +
                                 " page(s), acquisition-restamped");
     }
+}
+
+StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
+                                                           std::uint32_t owner_core,
+                                                           PageId root, PageId varheap_root) {
+    RelationWriteGrantPayload grant{};
+    const PageId candidates[] = {root, varheap_root};
+    constexpr std::uint32_t kCapacity =
+        sizeof(grant.page_ids) / sizeof(grant.page_ids[0]);
+    for (PageId id : candidates) {
+        if (id == kInvalidPageId) continue;
+        if (grant.count >= kCapacity) {
+            return Status::Unsupported(
+                "relation handoff names more pages than the grant carries (" +
+                std::to_string(kCapacity) + "); refused whole, never truncated");
+        }
+        grant.page_ids[grant.count++] = id;
+    }
+    wal::Lsn handoff_max = 0;
+    for (std::uint32_t i = 0; i < grant.count; ++i) {
+        auto lsn = wal::LogPageHandoff(wal, grant.page_ids[i], owner_core);
+        if (!lsn.ok()) {
+            return lsn.status().WithContext("handoff record for page " +
+                                            std::to_string(grant.page_ids[i]));
+        }
+        handoff_max = std::max(handoff_max, lsn.value());
+    }
+    // PL §9 rule 1: the records go durable before any grant leaves. An
+    // unlogged store (wal == nullptr, kNoLsn all around) has nothing to
+    // sync and nothing to recover, so it passes vacuously.
+    if (wal != nullptr && handoff_max != 0) {
+        if (Status s = wal->EnsureDurable(handoff_max); !s.ok()) {
+            return s.WithContext("handoff records not durable");
+        }
+    }
+    return grant;
 }
 
 storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,

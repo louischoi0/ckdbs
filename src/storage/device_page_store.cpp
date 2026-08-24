@@ -233,7 +233,16 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     // common case (a rotated relation's root, allocated by core 0 at DDL,
     // sits well above the limit). One message for both sent the reader
     // looking at the catalog for a user page.
-    if (mark_dirty && !MayWrite(page_id)) {
+#endif
+    // The write half is enforced in **every** build for a leased store,
+    // since PW1c-5: the interim peer-DML guard is gone, so this is what
+    // stands between an unfunded peer write (a crashed publish, grants
+    // lost to a restart) and a page whose next mount refuses with the
+    // rule-5 stamp mismatch. Refused-retryably beats detected-later.
+    // Zero cost where it matters: core 0 has no lease, so MayWrite
+    // returns at its first test, and this runs on the frame-load path,
+    // never per row. Debug builds additionally get the fault check above.
+    if (mark_dirty && lease_ != nullptr && !MayWrite(page_id)) {
         return Status::InvalidArgument(
             "DevicePageStore: core " + std::to_string(core_id_) + " may not write page " +
             std::to_string(page_id) +
@@ -242,7 +251,6 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
                  : "; it is not from this core's extent lease, and a relation fault grant "
                    "conveys read rights only"));
     }
-#endif
 
     if (auto it = frames_.find(page_id); it != frames_.end()) {
         // Never clears the flag: a frame already dirty from an earlier
@@ -396,6 +404,19 @@ void DevicePageStore::GrantWritePages(std::span<const PageId> pages) {
         auto it = std::lower_bound(write_granted_.begin(), write_granted_.end(), id);
         if (it == write_granted_.end() || *it != id) write_granted_.insert(it, id);
     }
+}
+
+Status DevicePageStore::RefreshFreeMapFromDevice() {
+    if (lease_ == nullptr) {
+        return Status::InvalidArgument(
+            "DevicePageStore: the system core's free map is the authority; nothing to refresh");
+    }
+    auto view = std::span<std::byte, kPageSize>(free_map_page_);
+    if (Status s = device_.ReadPage(kFreeMapPageId, view); !s.ok()) return s;
+    // Open()'s rule: a bad map is Corruption, never a guess. The stale copy
+    // is gone at this point, which is fine - a store whose free map cannot
+    // be read is not one to keep serving from.
+    return VerifyPageChecksum(std::span<const std::byte, kPageSize>(free_map_page_));
 }
 
 bool DevicePageStore::MayWrite(PageId page_id) const noexcept {

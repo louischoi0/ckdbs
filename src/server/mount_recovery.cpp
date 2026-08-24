@@ -64,6 +64,7 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                           std::to_string(out.aborted) + " aborted, " + std::to_string(out.losers) +
                           " rolled back; redo applied " + std::to_string(out.redo_applied) +
                           ", skipped " + std::to_string(out.redo_skipped_by_lsn) +
+                          ", skipped-not-dirty " + std::to_string(out.redo_skipped_not_dirty) +
                           ", healed " + std::to_string(out.pages_healed) + " page(s); undo wrote " +
                           std::to_string(out.compensations) + " compensation(s)" +
                           (out.torn_tail ? "; tail was torn" : "") +
