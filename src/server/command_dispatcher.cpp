@@ -401,16 +401,6 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // Keyed on `catalog_read_only_` (see its declaration) and deliberately
     // not on `core_id_`, and on exactly the token the routing below reads,
     // so the two cannot disagree about what a verb is.
-    // The PW1c interim guard, PW4's shape one statement class over: a
-    // peer's DML writes are refused whole until the write handoff lands
-    // (workplan-peer-writer.md §8). Poisons like the DDL guard and for
-    // the same reason. Release-load-bearing: the store's MayWrite
-    // enforcement is Debug-only.
-    if (catalog_read_only_ &&
-        (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE"))) {
-        session.Poison();
-        return {ErrorReply(PeerWriteRefused(core_id_, cmd)), false};
-    }
     if (catalog_read_only_ &&
         (IEquals(cmd, "CREATE") || IEquals(cmd, "ALTER") || IEquals(cmd, "DROP"))) {
         // Inside an explicit transaction this poisons, like every other
@@ -421,6 +411,23 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         // the path reachable.
         session.Poison();
         return {ErrorReply(PeerDdlRefused(core_id_, cmd)), false};
+    }
+    // The PW1c interim guard, PW4's shape one statement class over: a
+    // peer's DML writes are refused whole until the write handoff lands
+    // (workplan-peer-writer.md §8). Poisons like the DDL guard and for
+    // the same reason. Release-load-bearing: the store's MayWrite
+    // enforcement is Debug-only, and a write to a relation this core
+    // *owns* passes CheckWriteAffinity - with this guard removed a funded
+    // peer INSERT runs all the way to the page write, where only the
+    // Debug check stops it.
+    //
+    // A blacklist, where `AdmittedWhileFailed` and `RequiredRole` beside
+    // it are whitelists: a page-writing verb added later is admitted here
+    // by omission, so it has to be added to this line by hand.
+    if (catalog_read_only_ &&
+        (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE"))) {
+        session.Poison();
+        return {ErrorReply(PeerWriteRefused(core_id_, cmd)), false};
     }
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
@@ -890,7 +897,16 @@ DispatchOutcome CommandDispatcher::HandleShowPage(std::string_view args) {
         return {"ERR invalid page id: " + std::string(id_token), false};
     }
 
-    auto page = page_store_.Get(page_id);
+    // **GetForRead, not Get** - everything below only formats bytes.
+    // `Get()` marks the frame dirty (page_store.hpp), which made a
+    // diagnostic a *write*: on a peer it was refused outright ("core 1 may
+    // not write page 1"), and in a release build - where that check is
+    // compiled out - it dirtied a frame of a page this core does not own,
+    // to be written back by the next Sync, checkpoint or eviction, and
+    // left `InvalidateCatalog`'s EvictClean failing on a dirty catalog
+    // frame so the peer's cache never dropped again. PW1c's guard covers
+    // the DML verbs; this one was a read all along.
+    auto page = page_store_.GetForRead(page_id);
     if (!page.ok()) {
         return {"ERR " + page.status().message(), false};
     }

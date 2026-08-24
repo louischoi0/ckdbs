@@ -1377,6 +1377,27 @@ TEST_F(CoreRuntimeTest, APeerStoreTakesItsConfiguredFrameBudgetShare) {
     EXPECT_EQ(peer.value()->store().frame_budget(), 8u);
 }
 
+TEST_F(CoreRuntimeTest, APeerRefusesEveryDmlWriteVerbByNameUntilTheHandoff) {
+    // The PW1c interim guard, pinned at PW4's depth: every write verb, a
+    // spelling case, and the ANALYZE control (ANALYZE routes to the
+    // SELECT path, so it must answer as the parser and not this guard).
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    for (std::string_view stmt : {"INSERT INTO x VALUES (1)", "UPDATE x SET a = 1",
+                                  "DELETE FROM x WHERE id = 1", "  insert into x VALUES (1)"}) {
+        const std::string reply = peer.value()->dispatcher().Dispatch(stmt).response;
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << stmt << " -> " << reply;
+        EXPECT_NE(reply.find("PW1c"), std::string::npos) << stmt << " -> " << reply;
+        EXPECT_NE(reply.find("no writer until"), std::string::npos) << stmt << " -> " << reply;
+    }
+    EXPECT_EQ(peer.value()
+                  ->dispatcher()
+                  .Dispatch("ANALYZE INSERT INTO x VALUES (1)")
+                  .response.find("PW1c"),
+              std::string::npos);
+}
+
 TEST_F(CoreRuntimeTest, APeerRefusesEveryDdlVerbByNameAndStillServesReads) {
     // PW4 (workplan-peer-writer.md): the refusal must exist *before* PW5
     // gives peers listeners, and it must name where DDL runs - the

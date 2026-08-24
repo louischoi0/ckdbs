@@ -490,7 +490,7 @@ record → grant-with-write-rights**. Decided on `r1-peer-ddl-refusal` at
 `7c5432c`; nothing below is built except the interim guard.
 
 The fact that forced the shape: `Catalog::CreateTable` formats the root
-and RV3 logs it in **core 0's stream** (`src/catalog/catalog.cpp:1143`),
+and RV3 logs it in **core 0's stream** (`src/catalog/catalog.cpp:1155-1171`, `LogCatPageInit`),
 so a rotated relation's creation pages carry a core-0-stream `page_lsn`
 and a peer's first write is a cross-stream transition — the §3 failure of
 the PL spec. Per-relation write grants alone are therefore unsound; they
@@ -515,9 +515,16 @@ Two rules that are correctness statements:
 
 1. **Write rights are exact-page, never extent.** The superset that is
    safe to fault is not safe to write. The set is small by construction:
-   the creation pages (root, and the var-heap page when one exists) —
-   growth pages come from the owner's own lease and are its stream's from
-   birth, so they need no handoff.
+   **the pages core 0 formatted for this relation** — the root, the
+   var-heap root when the schema can spill (eager, `SchemaCanSpill`,
+   `catalog.cpp:1185`), **and every index page built on core 0** (amended
+   at the f878f4d review: `HandleIndex` has no owner check, so
+   `CREATE INDEX` on a peer-owned relation runs on core 0 and allocates
+   from core 0's map — and a peer's *read* through such an index is
+   already outside CC7's grant, working today only because a just-created
+   index lands in the same 64-page extent; that is **PW1c-6**). Growth
+   pages come from the owner's own lease and are its stream's from birth,
+   so they need no handoff.
 2. **The handoff record is durable before the grant leaves core 0** —
    PL §9 rule 1's ordering, restated because DDL publish is where it will
    be implemented.
@@ -529,9 +536,22 @@ Two rules that are correctness statements:
 | PW1c-3 | The PL-C stamp: `page_flags` carries `core_id + 1` on the incoming core's first write; a reachable mismatch is Corruption at mount | PW1c-1 |
 | PW1c-4 | Exact-page write grants in `DevicePageStore`; CC7's publish upgraded to send them after the handoff record is durable | PW1c-1..3 |
 | PW1c-5 | Remove the interim guard below; the e2e peer-INSERT test | PW1c-4 |
+| PW1c-6 | Index pages of a peer-owned relation: extend the publish grant and the handoff to `CREATE INDEX`'s pages, or refuse `CREATE INDEX` on a relation core 0 does not own until then (found at the f878f4d review — today the fault grant covers them only by the 64-page-extent accident) | PW1c-4 |
 
 **The interim guard, built with this decision (2026-08-24):** a peer
-dispatcher refuses INSERT/UPDATE/DELETE by name, beside PW4's DDL guard.
+dispatcher refuses INSERT/UPDATE/DELETE by name, beside PW4's DDL guard —
+and the same review found and closed the **third** write route: `SHOW
+PAGE` fetched through the mutating accessor, so a peer diagnostic dirtied
+a core-0 page in release and could wedge that peer's catalog invalidation
+permanently (`EvictClean` refuses on a dirty frame before
+`InvalidateFromPeer` runs); it reads through `GetForRead` now. "A peer
+listener is read-only" is true *because of* these three, not by nature.
+Two recorded costs: a peer's refused foreign writes no longer reach
+`cross_core_writes_.Record` (the §6 counters see nothing from peer
+listeners — the guard fires before the relation is parsed), and the
+foreign-write reply changed from retryable `TXN_CONFLICT` to
+`Unsupported`, which is the honest bit on a session that can never
+succeed by retrying.
 It closes the release-build two-writer route `docs/known-gaps.md` names —
 `MayWrite`'s enforcement is Debug-only, so without this a peer-accepted
 INSERT into a rotated relation silently dirtied core 0's page — which

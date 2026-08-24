@@ -226,10 +226,21 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
     }
     // Reading a system page is how a peer reaches the catalog; *dirtying*
     // one would make it a second writer of a page with exactly one owner.
+    //
+    // Two reasons, two messages, because MayWrite refuses for two: below
+    // the system limit the page is core 0's outright, above it the page
+    // simply is not from this core's extent lease - and the second is the
+    // common case (a rotated relation's root, allocated by core 0 at DDL,
+    // sits well above the limit). One message for both sent the reader
+    // looking at the catalog for a user page.
     if (mark_dirty && !MayWrite(page_id)) {
         return Status::InvalidArgument(
             "DevicePageStore: core " + std::to_string(core_id_) + " may not write page " +
-            std::to_string(page_id) + "; the system range has one writer, the system core");
+            std::to_string(page_id) +
+            (page_id < system_page_limit_
+                 ? "; the system range has one writer, the system core"
+                 : "; it is not from this core's extent lease, and a relation fault grant "
+                   "conveys read rights only"));
     }
 #endif
 
