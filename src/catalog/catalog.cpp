@@ -314,12 +314,19 @@ Status LogCatPageInit(wal::WalManager* wal, std::uint64_t trx_id, PageId page_id
 
 // One anchor slot's durable half (PW2-1): PAGE_INIT rebuilds only the
 // common header, so the roots ride ANCHOR_UPDATE - the same record a
-// root move writes.
-Status LogCatAnchorUpdate(wal::WalManager* wal, std::uint64_t trx_id, PageId anchor_page,
-                          std::uint64_t index_oid, PageId root) {
+// root move writes. Stamps, unlike LogCatPageInit: this IS the first
+// record that lands in the page, and an anchor is not an empty
+// formatted page - its roots are body content (the 3f07eda review's
+// C3). Replay stays safe without ordering care because the redo range
+// is a suffix: a replayed PAGE_INIT that wipes the body is necessarily
+// followed in-range by every ANCHOR_UPDATE that refills it.
+Status LogCatAnchorUpdate(wal::WalManager* wal, storage::PageStore& store, std::uint64_t trx_id,
+                          PageId anchor_page, std::uint64_t index_oid, PageId root) {
     if (trx_id == kBootstrapXid) trx_id = wal::kNoTxnId;
     auto rec = wal::LogAnchorUpdate(wal, trx_id, anchor_page, index_oid, root);
-    return rec.ok() ? Status::OK() : rec.status();
+    if (!rec.ok()) return rec.status();
+    if (rec.value() == wal::kNoLsn) return Status::OK();  // unlogged store
+    return store.StampPageLsn(anchor_page, rec.value());
 }
 
 // The old tail's link edit when a chain grows: no record type describes a
@@ -1236,7 +1243,8 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
             !s.ok()) {
             return s;
         }
-        if (Status s = LogCatAnchorUpdate(wal_, trx_id, anchor_id, /*index_oid=*/0, root_id);
+        if (Status s =
+                LogCatAnchorUpdate(wal_, store_, trx_id, anchor_id, /*index_oid=*/0, root_id);
             !s.ok()) {
             return s;
         }

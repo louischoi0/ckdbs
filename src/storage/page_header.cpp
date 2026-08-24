@@ -6,23 +6,9 @@
 #include <string>
 
 #include "kds/storage/crc32c.hpp"
+#include "kds/storage/page_bytes.hpp"
 
 namespace kds::storage {
-namespace {
-
-template <typename T>
-T Load(std::span<const std::byte, kPageSize> page, std::size_t offset) {
-    T value;
-    std::memcpy(&value, page.data() + offset, sizeof(T));
-    return value;
-}
-
-template <typename T>
-void Store(std::span<std::byte, kPageSize> page, std::size_t offset, T value) {
-    std::memcpy(page.data() + offset, &value, sizeof(T));
-}
-
-}  // namespace
 
 std::uint8_t MaxSupportedFormatVersion(PageType type) noexcept {
     switch (type) {
@@ -58,24 +44,24 @@ std::uint8_t MaxSupportedFormatVersion(PageType type) noexcept {
 
 PageHeaderFields ReadPageHeader(std::span<const std::byte, kPageSize> page) {
     PageHeaderFields fields;
-    fields.page_type = Load<std::uint8_t>(page, kPageTypeOffset);
-    fields.format_version = Load<std::uint8_t>(page, kFormatVersionOffset);
-    fields.flags = Load<std::uint16_t>(page, kPageFlagsOffset);
-    fields.checksum = Load<std::uint32_t>(page, kPageChecksumOffset);
-    fields.page_lsn = Load<std::uint64_t>(page, kPageLsnOffset);
-    fields.relayout_epoch = Load<std::uint64_t>(page, kPageRelayoutEpochOffset);
-    fields.owner_oid = Load<std::uint64_t>(page, kPageOwnerOidOffset);
+    fields.page_type = LoadField<std::uint8_t>(page, kPageTypeOffset);
+    fields.format_version = LoadField<std::uint8_t>(page, kFormatVersionOffset);
+    fields.flags = LoadField<std::uint16_t>(page, kPageFlagsOffset);
+    fields.checksum = LoadField<std::uint32_t>(page, kPageChecksumOffset);
+    fields.page_lsn = LoadField<std::uint64_t>(page, kPageLsnOffset);
+    fields.relayout_epoch = LoadField<std::uint64_t>(page, kPageRelayoutEpochOffset);
+    fields.owner_oid = LoadField<std::uint64_t>(page, kPageOwnerOidOffset);
     return fields;
 }
 
 void WritePageHeader(std::span<std::byte, kPageSize> page, const PageHeaderFields& fields) {
-    Store<std::uint8_t>(page, kPageTypeOffset, fields.page_type);
-    Store<std::uint8_t>(page, kFormatVersionOffset, fields.format_version);
-    Store<std::uint16_t>(page, kPageFlagsOffset, fields.flags);
-    Store<std::uint32_t>(page, kPageChecksumOffset, fields.checksum);
-    Store<std::uint64_t>(page, kPageLsnOffset, fields.page_lsn);
-    Store<std::uint64_t>(page, kPageRelayoutEpochOffset, fields.relayout_epoch);
-    Store<std::uint64_t>(page, kPageOwnerOidOffset, fields.owner_oid);
+    StoreField<std::uint8_t>(page, kPageTypeOffset, fields.page_type);
+    StoreField<std::uint8_t>(page, kFormatVersionOffset, fields.format_version);
+    StoreField<std::uint16_t>(page, kPageFlagsOffset, fields.flags);
+    StoreField<std::uint32_t>(page, kPageChecksumOffset, fields.checksum);
+    StoreField<std::uint64_t>(page, kPageLsnOffset, fields.page_lsn);
+    StoreField<std::uint64_t>(page, kPageRelayoutEpochOffset, fields.relayout_epoch);
+    StoreField<std::uint64_t>(page, kPageOwnerOidOffset, fields.owner_oid);
 }
 
 void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16_t flags,
@@ -94,7 +80,7 @@ void FormatPage(std::span<std::byte, kPageSize> page, PageType type, std::uint16
 }
 
 Status ValidatePageHeader(std::span<const std::byte, kPageSize> page) {
-    const std::uint8_t raw_type = Load<std::uint8_t>(page, kPageTypeOffset);
+    const std::uint8_t raw_type = LoadField<std::uint8_t>(page, kPageTypeOffset);
     if (raw_type == static_cast<std::uint8_t>(PageType::kInvalid)) {
         return Status::Corruption("page header: unformatted page (page_type 0)");
     }
@@ -103,7 +89,7 @@ Status ValidatePageHeader(std::span<const std::byte, kPageSize> page) {
     }
 
     const auto type = static_cast<PageType>(raw_type);
-    const std::uint8_t version = Load<std::uint8_t>(page, kFormatVersionOffset);
+    const std::uint8_t version = LoadField<std::uint8_t>(page, kFormatVersionOffset);
     const std::uint8_t supported = MaxSupportedFormatVersion(type);
     if (version == 0 || version > supported) {
         return Status::Corruption("page header: format_version " + std::to_string(version) +
@@ -119,7 +105,7 @@ Status ValidatePageHeader(std::span<const std::byte, kPageSize> page, PageType e
     if (!status.ok()) {
         return status;
     }
-    const std::uint8_t raw_type = Load<std::uint8_t>(page, kPageTypeOffset);
+    const std::uint8_t raw_type = LoadField<std::uint8_t>(page, kPageTypeOffset);
     if (raw_type != static_cast<std::uint8_t>(expected)) {
         return Status::Corruption(
             "page header: expected page_type " +
@@ -130,39 +116,39 @@ Status ValidatePageHeader(std::span<const std::byte, kPageSize> page, PageType e
 }
 
 std::uint8_t RawPageType(std::span<const std::byte, kPageSize> page) {
-    return Load<std::uint8_t>(page, kPageTypeOffset);
+    return LoadField<std::uint8_t>(page, kPageTypeOffset);
 }
 
 std::uint64_t GetPageLsn(std::span<const std::byte, kPageSize> page) {
-    return Load<std::uint64_t>(page, kPageLsnOffset);
+    return LoadField<std::uint64_t>(page, kPageLsnOffset);
 }
 
 void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn) {
-    Store<std::uint64_t>(page, kPageLsnOffset, lsn);
+    StoreField<std::uint64_t>(page, kPageLsnOffset, lsn);
 }
 
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page) {
-    return Load<std::uint32_t>(page, kPageChecksumOffset);
+    return LoadField<std::uint32_t>(page, kPageChecksumOffset);
 }
 
 std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page) {
-    return Load<std::uint64_t>(page, kPageOwnerOidOffset);
+    return LoadField<std::uint64_t>(page, kPageOwnerOidOffset);
 }
 
 std::uint16_t GetPageStreamStamp(std::span<const std::byte, kPageSize> page) {
-    return Load<std::uint16_t>(page, kPageFlagsOffset);
+    return LoadField<std::uint16_t>(page, kPageFlagsOffset);
 }
 
 void SetPageStreamStamp(std::span<std::byte, kPageSize> page, std::uint16_t stamp) {
-    Store<std::uint16_t>(page, kPageFlagsOffset, stamp);
+    StoreField<std::uint16_t>(page, kPageFlagsOffset, stamp);
 }
 
 std::uint64_t GetRelayoutEpoch(std::span<const std::byte, kPageSize> page) {
-    return Load<std::uint64_t>(page, kPageRelayoutEpochOffset);
+    return LoadField<std::uint64_t>(page, kPageRelayoutEpochOffset);
 }
 
 void SetRelayoutEpoch(std::span<std::byte, kPageSize> page, std::uint64_t epoch) {
-    Store<std::uint64_t>(page, kPageRelayoutEpochOffset, epoch);
+    StoreField<std::uint64_t>(page, kPageRelayoutEpochOffset, epoch);
 }
 
 void BumpRelayoutEpoch(std::span<std::byte, kPageSize> page) {
@@ -183,7 +169,7 @@ std::uint32_t ComputePageChecksum(std::span<const std::byte, kPageSize> page) {
 }
 
 void StampPageChecksum(std::span<std::byte, kPageSize> page) {
-    Store<std::uint32_t>(page, kPageChecksumOffset, ComputePageChecksum(page));
+    StoreField<std::uint32_t>(page, kPageChecksumOffset, ComputePageChecksum(page));
 }
 
 Status VerifyPageChecksum(std::span<const std::byte, kPageSize> page) {

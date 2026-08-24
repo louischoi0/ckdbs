@@ -35,7 +35,8 @@ namespace kds::storage {
 
 inline constexpr std::size_t kAnchorClusteredRootOffset = kPageBodyOffset;
 inline constexpr std::size_t kAnchorNrIndexOffset = kAnchorClusteredRootOffset + 4;
-inline constexpr std::size_t kAnchorEntriesOffset = kAnchorNrIndexOffset + 4;
+inline constexpr std::size_t kAnchorReservedOffset = kAnchorNrIndexOffset + 2;
+inline constexpr std::size_t kAnchorEntriesOffset = kAnchorReservedOffset + 2;
 inline constexpr std::size_t kAnchorEntrySize = 12;  // index_oid u64 + root u32
 inline constexpr std::size_t kAnchorMaxIndexEntries =
     (kPageSize - kAnchorEntriesOffset) / kAnchorEntrySize;
@@ -48,19 +49,27 @@ void FormatAnchorPage(std::span<std::byte, kPageSize> page, std::uint64_t owner_
 PageId AnchorClusteredRoot(std::span<const std::byte, kPageSize> page);
 void SetAnchorClusteredRoot(std::span<std::byte, kPageSize> page, PageId root);
 
-// The root recorded for `index_oid`, or kInvalidPageId when the anchor
-// holds no entry for it.
-PageId AnchorIndexRoot(std::span<const std::byte, kPageSize> page, std::uint64_t index_oid);
+// `nr_index` duplicates a schema constant, so every reader treats it as
+// **checked redundancy** (docs/rules.md): compared against the bound,
+// Corruption on disagreement, never computed from - a forged count was an
+// ASan-demonstrated out-of-bounds read, and one branch over, a write
+// (this file's 3f07eda review, C1).
+
+// The root recorded for `index_oid`, kInvalidPageId when the anchor holds
+// no entry for it, or Corruption when the page's count is not a count.
+StatusOr<PageId> AnchorIndexRoot(std::span<const std::byte, kPageSize> page,
+                                 std::uint64_t index_oid);
 
 // Inserts or updates the entry for `index_oid`. Refuses with
 // ResourceExhausted past kAnchorMaxIndexEntries - unreachable through DDL
 // (index counts are capped far below), stated so a direct caller cannot
-// overrun silently.
+// overrun silently - and with Corruption on a forged count.
 Status SetAnchorIndexRoot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid,
                           PageId root);
 
-// Removes `index_oid`'s entry (swap-with-last). Removing an absent entry
-// is a no-op, not an error: DROP INDEX's compensation may run twice.
-void RemoveAnchorIndexRoot(std::span<std::byte, kPageSize> page, std::uint64_t index_oid);
+// There is deliberately no RemoveAnchorIndexRoot yet: a removal is a
+// mutation the log could not describe - redo of an older ANCHOR_UPDATE
+// would resurrect the entry - so the function arrives with its record at
+// PW2-3 (DROP INDEX's half), not before (the 3f07eda review's C6).
 
 }  // namespace kds::storage

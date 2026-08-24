@@ -866,11 +866,8 @@ public:
     // catalog relation's ids come from the engine, and there is no spelling
     // by which a bootstrap table could be anything else. CreateTable()'s own
     // parameter is *not* defaulted - see its declaration.
-    // `anchor_page_id` defaults to kInvalidPageId - the *bootstrap* value:
-    // a system relation lives on a fixed catalog page whose root never
-    // moves, so it carries no anchor, and PW2-2's read rule treats
-    // kInvalidPageId as "desc_page_id is the root". Every user relation
-    // gets a real anchor from CreateTable (PW2-1).
+    // `anchor_page_id` defaults to kInvalidPageId, the bootstrap value -
+    // rows.hpp owns the rule (a system relation carries no anchor).
     Status InsertRelationRow(Oid oid, Oid namespace_oid, std::string_view name,
                               PageId desc_page_id, ClusteredType clustered_type,
                               PageId varheap_page_id,

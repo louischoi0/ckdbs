@@ -1,5 +1,7 @@
 #include "kds/server/core_runtime.hpp"
 
+#include "kds/storage/anchor_page.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -1566,6 +1568,35 @@ TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
     EXPECT_NE(reply.find("PW2"), std::string::npos) << reply;
     // Not poisoned: the next statement answers normally.
     EXPECT_NE(peer.value()->dispatcher().Dispatch("SHOW TABLES").response.rfind("ERR", 0), 0u);
+}
+
+TEST_F(CoreRuntimeTest, ACreatedRelationsAnchorIsWiredWholeThroughTheCatalog) {
+    // The 3f07eda review's S6: the four facts PW2-2 will stand on, pinned
+    // against the real store - the row names a page whose type is kAnchor,
+    // that page's clustered root is the relation's, and the fact
+    // round-trips through TableAccess. (The ANCHOR_UPDATE's emission is
+    // pinned by the redo replay test and exercised by the sim's crash
+    // sweep, which remounts created relations.)
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "anchored",
+                                           TwoColumnSchema(), catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto row = core0_->catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_NE(row.value().anchor_page_id, kInvalidPageId);
+    ASSERT_NE(row.value().anchor_page_id, row.value().desc_page_id);
+
+    auto page = core0_store_->GetForRead(row.value().anchor_page_id);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    EXPECT_EQ(storage::RawPageType(page.value().bytes()),
+              static_cast<std::uint8_t>(PageType::kAnchor));
+    EXPECT_EQ(storage::GetOwnerOid(page.value().bytes()), oid.value());
+    EXPECT_EQ(storage::AnchorClusteredRoot(page.value().bytes()),
+              row.value().desc_page_id);
+
+    auto access = core0_->catalog.InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    EXPECT_EQ(access.value()->anchor_page_id, row.value().anchor_page_id);
 }
 
 TEST_F(CoreRuntimeTest, CreateIndexOnAPeerOwnedRelationIsRefusedByName) {

@@ -139,7 +139,8 @@ MountRecovery AuditCatalogAfterRecovery(catalog::Catalog& catalog, storage::Page
             PageId page_id;
         };
         for (const Owned& owned : {Owned{"descriptor", row.value().desc_page_id},
-                                   Owned{"var-heap root", row.value().varheap_page_id}}) {
+                                   Owned{"var-heap root", row.value().varheap_page_id},
+                                   Owned{"anchor", row.value().anchor_page_id}}) {
             if (owned.page_id == kInvalidPageId) {
                 continue;
             }

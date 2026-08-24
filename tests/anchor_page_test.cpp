@@ -1,6 +1,7 @@
 #include "kds/storage/anchor_page.hpp"
 
 #include <array>
+#include <cstring>
 
 #include <gtest/gtest.h>
 
@@ -15,6 +16,12 @@ using Page = std::array<std::byte, kPageSize>;
 std::span<std::byte, kPageSize> Mut(Page& p) { return std::span<std::byte, kPageSize>(p); }
 std::span<const std::byte, kPageSize> Const(const Page& p) {
     return std::span<const std::byte, kPageSize>(p);
+}
+
+PageId Root(const Page& p, std::uint64_t index_oid) {
+    auto r = AnchorIndexRoot(Const(p), index_oid);
+    EXPECT_TRUE(r.ok()) << r.status().message();
+    return r.ok() ? r.value() : 0xDEADu;
 }
 
 TEST(AnchorPageTest, FormatCarriesTypeOwnerAndClusteredRoot) {
@@ -36,33 +43,35 @@ TEST(AnchorPageTest, IndexRootsInsertUpdateAndLookUp) {
     Page page{};
     FormatAnchorPage(Mut(page), 4001, 130);
 
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9001), kInvalidPageId);
+    EXPECT_EQ(Root(page, 9001), kInvalidPageId);
     ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 9001, 300).ok());
     ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 9002, 301).ok());
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9001), 300u);
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9002), 301u);
+    EXPECT_EQ(Root(page, 9001), 300u);
+    EXPECT_EQ(Root(page, 9002), 301u);
 
     // Update in place: a root move rewrites the entry, never appends.
     ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 9001, 310).ok());
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9001), 310u);
+    EXPECT_EQ(Root(page, 9001), 310u);
 }
 
-TEST(AnchorPageTest, RemoveSwapsWithLastAndTwiceIsANoOp) {
+TEST(AnchorPageTest, AForgedEntryCountIsCorruptionNeverALoopBound) {
+    // The 3f07eda review's C1, pinned: nr_index duplicates a schema
+    // constant, so it is checked redundancy (docs/rules.md) - a count the
+    // page cannot hold refuses, in both the read and the write direction.
+    // Unchecked, it was an ASan-demonstrated out-of-bounds read with an
+    // out-of-bounds write one branch over.
     Page page{};
     FormatAnchorPage(Mut(page), 4001, 130);
-    ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 9001, 300).ok());
-    ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 9002, 301).ok());
-    ASSERT_TRUE(SetAnchorIndexRoot(Mut(page), 9003, 302).ok());
+    const std::uint16_t forged = 4000;
+    std::memcpy(page.data() + kAnchorNrIndexOffset, &forged, sizeof(forged));
 
-    RemoveAnchorIndexRoot(Mut(page), 9001);
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9001), kInvalidPageId);
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9002), 301u) << "survivors keep their roots";
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9003), 302u);
+    auto read = AnchorIndexRoot(Const(page), 9001);
+    ASSERT_FALSE(read.ok());
+    EXPECT_EQ(read.status().code(), StatusCode::kCorruption) << read.status().message();
 
-    // DROP INDEX's compensation may run twice; absence is a no-op.
-    RemoveAnchorIndexRoot(Mut(page), 9001);
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9002), 301u);
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 9003), 302u);
+    Status write = SetAnchorIndexRoot(Mut(page), 9001, 300);
+    ASSERT_FALSE(write.ok());
+    EXPECT_EQ(write.code(), StatusCode::kCorruption) << write.message();
 }
 
 TEST(AnchorPageTest, TheEntryTableRefusesPastCapacity) {
@@ -80,7 +89,7 @@ TEST(AnchorPageTest, TheEntryTableRefusesPastCapacity) {
     // An existing entry still updates at capacity - fullness refuses
     // growth, never a root move.
     EXPECT_TRUE(SetAnchorIndexRoot(Mut(page), 10000, 999).ok());
-    EXPECT_EQ(AnchorIndexRoot(Const(page), 10000), 999u);
+    EXPECT_EQ(Root(page, 10000), 999u);
 }
 
 }  // namespace

@@ -315,7 +315,28 @@ TEST_F(RedoTest, AnAnchorReplaysItsInitAndItsSlotUpdates) {
     EXPECT_EQ(storage::RawPageType(page.value().bytes()),
               static_cast<std::uint8_t>(PageType::kAnchor));
     EXPECT_EQ(storage::AnchorClusteredRoot(page.value().bytes()), 262u);
-    EXPECT_EQ(storage::AnchorIndexRoot(page.value().bytes(), 9001), 300u);
+    auto idx = storage::AnchorIndexRoot(page.value().bytes(), 9001);
+    ASSERT_TRUE(idx.ok()) << idx.status().message();
+    EXPECT_EQ(idx.value(), 300u);
+}
+
+TEST_F(RedoTest, AnAnchorUpdateAgainstANonAnchorPageIsCorruption) {
+    // The 3f07eda review's C2: the applier must refuse a record that is
+    // not this page's - a heap page's body bytes read as an entry count
+    // are exactly the forged bound the anchor accessors refuse.
+    WriteHeapStream(1);
+    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        std::array<std::byte, kAnchorUpdatePayloadSize> upd{};
+        ASSERT_TRUE(EncodeAnchorUpdate(upd, AnchorUpdatePayload{0, 262}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kAnchorUpdate, 1, kPage}, upd).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
 
 TEST_F(RedoTest, AForeignStampReachableByRedoRefusesTheMount) {

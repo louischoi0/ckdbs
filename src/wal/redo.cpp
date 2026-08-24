@@ -403,6 +403,18 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                 applied = ApplyIndexInsert(page, record);
                 break;
             case RecordType::kAnchorUpdate: {
+                // The siblings' stance (the 3f07eda review's C2): a record
+                // that is not this page's is refused, never applied - a
+                // heap page's body+4 read as an entry count is exactly the
+                // forged bound the anchor accessors refuse.
+                if (storage::RawPageType(page) !=
+                    static_cast<std::uint8_t>(PageType::kAnchor)) {
+                    applied = Status::Corruption(
+                        "redo: ANCHOR_UPDATE names page " + std::to_string(page_id) +
+                        ", which is page type " +
+                        std::to_string(storage::RawPageType(page)) + ", not an anchor");
+                    break;
+                }
                 auto decoded = DecodeAnchorUpdate(record.payload);
                 if (!decoded.ok()) {
                     applied = decoded.status();
@@ -411,10 +423,15 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                 if (decoded.value().index_oid == 0) {
                     storage::SetAnchorClusteredRoot(page, decoded.value().root);
                 } else {
-                    // A full table here means the log and the page disagree
-                    // about capacity - Corruption's definition.
-                    applied = storage::SetAnchorIndexRoot(page, decoded.value().index_oid,
-                                                          decoded.value().root);
+                    // A full or forged table here means the log and the
+                    // page disagree - Corruption whatever the accessor's
+                    // own spelling (its ResourceExhausted is a live-path
+                    // answer, not a replay one).
+                    if (Status s = storage::SetAnchorIndexRoot(
+                            page, decoded.value().index_oid, decoded.value().root);
+                        !s.ok()) {
+                        applied = Status::Corruption(s.message());
+                    }
                 }
                 break;
             }
