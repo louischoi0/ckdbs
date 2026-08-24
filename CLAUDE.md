@@ -171,7 +171,11 @@ gets leaner for it; say plainly which findings were rejected and why —
 a review whose findings are all silently accepted was not read.
 
 **3. Every feature gets a `ck-tester` run, and the question is
-overhead.** Not only "is the suite green": does the change cost
+overhead.** *Operator amendment 2026-08-24: suspended for v2-stage
+development — the full test suite still gates every step, but the
+interleaved A/B overhead measurement is skipped until the operator
+reinstates it. A landed v2 change therefore carries "overhead not
+measured" as a stated fact, never an implied pass.* Not only "is the suite green": does the change cost
 measurable per-statement or system-level overhead? `build-release`,
 interleaved A/B, per the measurement rule above. A regression is a
 finding to report with its number, never a line to bury. **If the
