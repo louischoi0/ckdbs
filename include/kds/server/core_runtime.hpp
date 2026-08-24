@@ -107,6 +107,14 @@ public:
         std::uint32_t inline_cell_width = storage::kDefaultInlineCellWidth;
         std::uint32_t core_count = 1;
 
+        // This core's share of the instance frame budget
+        // (`buffer_pool_frames`, docs/spec-eviction.md §6: the key is a
+        // total, divided evenly per core - EV4). 0 = unbounded, the same
+        // meaning SetFrameBudget gives it. Core 0's share - the even part
+        // plus the division remainder - is applied by Expeditor::Open at
+        // store open, not through this struct.
+        std::size_t buffer_pool_frames = 0;
+
         // Settings a peer shares with core 0. Recording is *not* among
         // them - see the header on why a peer records nothing.
         wal::DurabilityClass durability = wal::DurabilityClass::kGroup;

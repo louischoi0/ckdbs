@@ -479,6 +479,22 @@ TEST(ExpeditorConfigTest, MoreCoresThanWalAnchorSlotsIsRefusedNamingTheCeiling) 
     EXPECT_NE(s.message().find(std::to_string(kMaxWalCores)), std::string::npos) << s.message();
 }
 
+TEST(ExpeditorConfigTest, AFrameBudgetBelowTheCoreCountIsRefusedNamingBothNumbers) {
+    // The failure this prevents is inverted, not just wrong: 3 frames over
+    // 4 cores gives some core a share of 0, and 0 means *unbounded* - so a
+    // tiny budget would arm no sweep at all on that core.
+    Status s = CheckFrameBudget(3, 4);
+    EXPECT_EQ(s.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(s.message().find("3"), std::string::npos) << s.message();
+    EXPECT_NE(s.message().find("4"), std::string::npos) << s.message();
+
+    // Zero total stays legal and means unbounded by request; equality and
+    // above divide into nonzero shares everywhere.
+    EXPECT_TRUE(CheckFrameBudget(0, 4).ok());
+    EXPECT_TRUE(CheckFrameBudget(4, 4).ok());
+    EXPECT_TRUE(CheckFrameBudget(9, 4).ok());
+}
+
 TEST(ExpeditorConfigTest, ExactlyTheCeilingIsAccepted) {
     Expeditor::Config config;
     ASSERT_TRUE(config.ApplyFile(ParseOk("cores = " + std::to_string(kMaxWalCores) + "\n")).ok());

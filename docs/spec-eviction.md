@@ -153,7 +153,7 @@ Bulk sequential readers declare ring mode on their scan handle:
 
 | Setting | Default (PROPOSED) | Notes |
 |---|---|---|
-| `kds.buffer_pool_frames` | sized at boot | total, divided evenly per core (EV4) |
+| `kds.buffer_pool_frames` | sized at boot | total, divided evenly per core (EV4) — **built 2026-08-24**: even share per core, remainder to core 0, a nonzero total below `cores` refused at boot (`CheckFrameBudget`); before this the key reached core 0's pool only and every peer ran unbounded |
 | `kds.free_watermark` | pool/16 per core | background sweep target |
 | `kds.evict_retry_budget` | 8 | EV8 bounded retry |
 | `kds.scan_ring_frames` | 32 per core | EV6 |

@@ -1355,6 +1355,22 @@ TEST_F(CoreRuntimeTest, EveryShippableShapeAnswersExactlyWhatLocalExecutionAnswe
               "a.id,d.id\\n1,1\\n1,4\\n2,2\\n5,2");
 }
 
+TEST_F(CoreRuntimeTest, APeerStoreTakesItsConfiguredFrameBudgetShare) {
+    // The instance key never reached a peer before 2026-08-24: only core
+    // 0's store was budgeted (expeditor.cpp), so on a multicore instance
+    // every peer pool ran unbounded whatever the operator configured. The
+    // share arrives through CoreRuntime::Config now. Asserted against the
+    // configured value rather than "0 by default", because the debug
+    // KDS_TEST_FRAME_BUDGET override may legitimately budget every store
+    // in this suite (MG05) - a default-0 assertion would fail exactly in
+    // the pressure runs that matter most.
+    CoreRuntime::Config config = ConfigFor(1);
+    config.buffer_pool_frames = 8;
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    EXPECT_EQ(peer.value()->store().frame_budget(), 8u);
+}
+
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     // P6's deliberate cost, pinned so it stays a decision rather than
     // becoming a surprise: sys.patterns and sys.access_stats are catalog

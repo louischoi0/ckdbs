@@ -202,7 +202,7 @@ per-core pool structure survives unchanged.
 |---|---|---|
 | R0 | ~~Ratify PL~~ — **closed 2026-08-24**, PL-B + PL-C guard (`docs/spec-page-lsn-cross-stream.md` §9) | done |
 | R1 | Every core equivalent: shared-structure access rule, per-core listeners, per-core statistics relations | PL not needed |
-| R2 | Global frame accounting | none |
+| R2 | Global frame accounting — **static half built 2026-08-24** (the instance budget divides over every core per EV4, worktree `r2-frame-budget`); the dynamic arbiter that rebalances shares by demand remains | none |
 | R3 | Range directory + read path: `sys.ranges`, manual `SPLIT RANGE` DDL, pipeline over ranges. Placement still static | R1 |
 | R4 | Writes: single-range statement shipping; id-block-aligned insert spreading (§6) | R3, PW1b |
 | R5 | The mover (physical optimizer Part III): statistics-driven split/migrate | R1, R3; the PL contract built |

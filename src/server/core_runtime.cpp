@@ -56,6 +56,13 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     runtime->store_ = std::move(store.value());
     runtime->store_->SetLogger(log);
     runtime->store_->SetWalGate(runtime->wal_.get());
+    // Only when the config carries a share. Zero must not be written:
+    // Open() may already hold the debug KDS_TEST_FRAME_BUDGET override,
+    // and writing zero here would silently undo it on every peer store -
+    // the same rule the core-0 site follows (expeditor.cpp).
+    if (config.buffer_pool_frames != 0) {
+        runtime->store_->SetFrameBudget(config.buffer_pool_frames);
+    }
 
     // **This core's recovery** (RV1/RV2, server/mount_recovery.hpp): each
     // stream is independent, so a peer recovers its own rather than waiting

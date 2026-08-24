@@ -573,6 +573,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // cores does not run slower - it runs one reactor's whole workload
     // behind another's, with no preemption to break the tie.
     if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
+    if (Status s = CheckFrameBudget(config.buffer_pool_frames, config.cores); !s.ok()) return s;
     const unsigned hardware_cores = std::thread::hardware_concurrency();
     // 0 means "not detectable" - not "no cores". Skipping the check is the
     // only honest response; refusing would make the server unstartable on a
@@ -596,7 +597,12 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // that override on every server-path store, which is exactly the set
     // MG05's poisoner run needs under pressure.
     if (config.buffer_pool_frames != 0) {
-        store.value()->SetFrameBudget(config.buffer_pool_frames);
+        // Core 0's share of the instance total: the even division plus the
+        // remainder (spec-eviction.md §6 EV4) - it hosts the catalog pages
+        // and the system services, so the odd frames go where the extra
+        // residents are. At cores = 1 this is the whole budget, unchanged.
+        store.value()->SetFrameBudget(config.buffer_pool_frames / config.cores +
+                                      config.buffer_pool_frames % config.cores);
     }
 
     // Built here rather than in the initializer list because the members
@@ -908,6 +914,17 @@ Status Expeditor::PersistSuperBlock() {
     return Sync();
 }
 
+Status CheckFrameBudget(std::size_t frames, std::uint32_t cores) {
+    if (frames != 0 && frames < cores) {
+        return Status::InvalidArgument(
+            "buffer_pool_frames " + std::to_string(frames) + " is below cores " +
+            std::to_string(cores) +
+            "; the budget is an instance total divided per core, and a share of zero means "
+            "unbounded, not tiny - raise the budget or drop the key");
+    }
+    return Status::OK();
+}
+
 Status Expeditor::Checkpoint() {
     // CheckpointStats counters are cumulative over the process, so this
     // one's contribution is the delta. Logging the running total would
@@ -1188,6 +1205,7 @@ Status Expeditor::Serve() {
             core_config.durability = config_.durability;
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
+            core_config.buffer_pool_frames = config_.buffer_pool_frames / config_.cores;
             core_config.lease = lease.value();
             // This peer's own anchor, copied out of the superblock core 0
             // decoded. A peer's `SuperBlock` member is a default-constructed
