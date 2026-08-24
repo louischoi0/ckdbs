@@ -73,7 +73,11 @@ private:
         bool closing = false;
         Phase phase = Phase::kAwaitHello;
         LoadState load;
-        Session session;
+        // Braced: `Session`'s constructor is `explicit`, so aggregate-
+        // initializing a Connection would have to copy-list-initialize this
+        // member through it. Direct-list-initialization here is what makes
+        // `Connection{}` legal without loosening the constructor.
+        Session session{};
     };
 
     explicit KwpLoadServer(int fd) noexcept : listen_fd_(fd) {}

@@ -3654,6 +3654,54 @@ CommandDispatcher::PkLookup CommandDispatcher::LocateByPk(const catalog::TableAc
 }
 
 
+namespace {
+
+// Where a written column sits in a view's column list.
+//
+// A view resolves a column by *name* because it has no Schema to resolve
+// an index against - the one place a view is not the real path. One
+// function rather than one per consumer, and it answers the whole
+// question rather than half of it: **the qualifier is part of what was
+// written.** A resolver that checked only the name is how
+// `SELECT zzz.oid FROM sys.tables` came to be refused while
+// `WHERE zzz.oid = 100` was answered - the same spelling, enforced two
+// ways, twelve lines apart.
+StatusOr<std::size_t> ResolveViewColumn(const exec::CatalogView& view,
+                                        const parser::SelectStmt& stmt,
+                                        const parser::ColumnName& col) {
+    if (col.qualified() && !IEquals(col.qualifier, stmt.from.binding())) {
+        return Status::InvalidArgument("'" + col.qualifier + "." + col.name +
+                                       "' names no relation in this statement");
+    }
+    for (std::size_t i = 0; i < view.column_names.size(); ++i) {
+        if (IEquals(view.column_names[i], col.name)) return i;
+    }
+    return Status::InvalidArgument("view sys." + stmt.from.table_name + " has no column '" +
+                                   col.name + "'");
+}
+
+// The `type_val` a view's value must be compared under.
+//
+// **Every integer a view emits is built from a `uint64_t`** -
+// `catalog_view.cpp`'s `Int()` casts it into `int_val` and keeps the
+// digits in `raw_int_text` - so comparing `int_val` signed puts every
+// value above INT64_MAX below every value under it. `sys.patterns`
+// carries exactly such a column: a `pattern_id` is a full-range 64-bit
+// fingerprint, and `WHERE pattern_id < 100` answered every id with the
+// top bit set. The value renders correctly all the while, because
+// `FormatValue` reads the digits - so the view showed a number and then
+// refused to compare it as that number.
+//
+// Keyed on the value rather than on the column because a view has no
+// column types, only values, and every builder emits one kind per column.
+// A string keeps `0`: the uint64 arm is tested before the string arm and
+// would answer false for every string comparison.
+std::uint32_t ViewCompareTypeVal(const parser::AstValue& value) {
+    return value.type == parser::ValueType::kInt ? catalog::kTypeValUint64 : 0;
+}
+
+}  // namespace
+
 DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& stmt) {
     // **AG12.** A catalog view's rows come from the catalog's typed readers,
     // not from a step chain - so there is no `RowSink` for AG1's fold to
@@ -3664,6 +3712,23 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     if (stmt.aggregated()) {
         return {"ERR aggregation over a catalog view (sys." + stmt.from.table_name +
                     ") is not supported; a view's rows do not come from a step chain",
+                false};
+    }
+
+    // `ORDER BY` is refused here for the same reason and with the same
+    // shape. `exec::OutputSort` normalizes its keys out of a `ChainFrame`
+    // against `SortKey`s the compiler resolved to column indices in a
+    // Schema; a view has neither, so honouring the clause would mean a
+    // second comparator over `parser::AstValue` living beside the one the
+    // engine already has. `LIMIT`/`OFFSET` below need no such thing - the
+    // quota consumes rows and has no opinion about where they came from -
+    // which is exactly why one clause of the tail is served and the other
+    // is declined rather than accepted and ignored.
+    if (!stmt.order_by.empty()) {
+        return {"ERR ORDER BY over a catalog view (sys." + stmt.from.table_name +
+                    ") is not supported; a view's rows are materialized by the catalog's "
+                    "readers and carry no schema for the sort to resolve against (byte " +
+                    std::to_string(stmt.order_by.front().key.byte_offset) + ")",
                 false};
     }
 
@@ -3681,22 +3746,9 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         for (std::size_t i = 0; i < rows.column_names.size(); ++i) project.push_back(i);
     } else {
         for (const parser::ColumnName& col : stmt.projection) {
-            if (col.qualified() && !IEquals(col.qualifier, stmt.from.binding())) {
-                return {"ERR '" + col.qualifier + "." + col.name + "' names no relation in "
-                        "this statement", false};
-            }
-            std::size_t found = rows.column_names.size();
-            for (std::size_t i = 0; i < rows.column_names.size(); ++i) {
-                if (IEquals(rows.column_names[i], col.name)) {
-                    found = i;
-                    break;
-                }
-            }
-            if (found == rows.column_names.size()) {
-                return {"ERR view sys." + stmt.from.table_name + " has no column '" + col.name +
-                        "'", false};
-            }
-            project.push_back(found);
+            auto found = ResolveViewColumn(rows, stmt, col);
+            if (!found.ok()) return {"ERR " + found.status().message(), false};
+            project.push_back(found.value());
         }
     }
 
@@ -3705,6 +3757,32 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
     // by *name*, because a view has no schema to resolve an index against.
     // That is the one place a view is not the real path; it is confined
     // here, and a subquery predicate is refused rather than half-applied.
+    //
+    // **Resolved once, before any row is read.** Every question below is a
+    // property of the statement, not of a row - is this a predicate shape
+    // a view can answer, does this column exist - and asking them inside
+    // the row loop made the *refusal* depend on how many rows the catalog
+    // happened to hold. `SELECT * FROM sys.patterns WHERE oid =
+    // pattern_id` answered a header on a fresh instance, because the loop
+    // never ran, and refused over `sys.tables`, because it did. A refusal
+    // that data can silence is not a refusal.
+    std::vector<std::size_t> where_at;
+    where_at.reserve(stmt.where.size());
+    for (const parser::Condition& cond : stmt.where) {
+        if (cond.has_subquery()) {
+            return {"ERR a subquery predicate over a catalog view is not supported: the "
+                    "view is materialized, so there is no relation for a sub-chain to "
+                    "correlate against", false};
+        }
+        if (cond.rhs_kind == parser::RhsKind::kColumn) {
+            return {"ERR a column-to-column comparison over a catalog view is not "
+                    "supported", false};
+        }
+        auto at = ResolveViewColumn(rows, stmt, cond.col);
+        if (!at.ok()) return {"ERR " + at.status().message(), false};
+        where_at.push_back(at.value());
+    }
+
     std::ostringstream os;
     bool first_col = true;
     for (std::size_t index : project) {
@@ -3713,48 +3791,60 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         first_col = false;
     }
 
+    // I11's contract, over the one row source that is not a chain. The
+    // view's rows arrive in the order the reply prints them, so a prefix
+    // of them is a prefix of an order the statement has - the same
+    // sentence `pagination.hpp` makes for a walked relation, and the
+    // reason `LIMIT` needs no `ORDER BY` to be well defined.
+    exec::EmissionQuota quota(stmt.offset, stmt.limit);
     for (const std::vector<parser::AstValue>& row : rows.rows) {
         bool matched = true;
-        for (const parser::Condition& cond : stmt.where) {
-            if (cond.has_subquery()) {
-                return {"ERR a subquery predicate over a catalog view is not supported: the "
-                        "view is materialized, so there is no relation for a sub-chain to "
-                        "correlate against", false};
-            }
-            if (cond.rhs_kind == parser::RhsKind::kColumn) {
-                return {"ERR a column-to-column comparison over a catalog view is not "
-                        "supported", false};
-            }
-            std::size_t at = rows.column_names.size();
-            for (std::size_t i = 0; i < rows.column_names.size(); ++i) {
-                if (IEquals(rows.column_names[i], cond.col.name)) {
-                    at = i;
-                    break;
-                }
-            }
-            if (at == rows.column_names.size()) {
-                return {"ERR view sys." + stmt.from.table_name + " has no column '" +
-                        cond.col.name + "'", false};
-            }
-            // type_val 0: the view's values carry their own kind, and none
-            // of them is a uint64 column needing the digit-text path.
-            if (!exec::CompareValues(/*type_val=*/0, row[at], cond.val, cond.op)) {
-                matched = false;
-                break;
-            }
+        for (std::size_t i = 0; i < stmt.where.size(); ++i) {
+            const parser::Condition& cond = stmt.where[i];
+            const parser::AstValue& value = row[where_at[i]];
+            // One comparator for the row's value, so the `type_val` rule is
+            // decided in one place rather than copied per operand.
+            const auto Compare = [&value](const parser::AstValue& bound, parser::CompareOp op) {
+                return exec::CompareValues(ViewCompareTypeVal(value), value, bound, op);
+            };
+            // `BETWEEN` is two comparisons, inclusive at both ends, and it
+            // has to be spelled out here because it is spelled out nowhere
+            // else: `exec::CompileWhere` lowers a `kBetween` into two
+            // ordinary conjuncts before anything executes, so no evaluator
+            // downstream ever reads `kind`. This path is the one consumer
+            // that never got that lowering, and it read `op` - still the
+            // `kEq` its default leaves it at - so `oid BETWEEN 100 AND 130`
+            // silently meant `oid = 100`, dropping the high bound and most
+            // of the answer.
+            matched = cond.kind == parser::PredicateKind::kBetween
+                          ? Compare(cond.val, parser::CompareOp::kGte) &&
+                                Compare(cond.val_high, parser::CompareOp::kLte)
+                          : Compare(cond.val, cond.op);
+            if (!matched) break;
         }
         if (!matched) continue;
+
+        // Noted once per *qualifying* row, after the WHERE and before the
+        // formatting: OFFSET skips rows that passed the predicate, and a
+        // skipped row costs no rendering.
+        const exec::QuotaVerdict verdict = quota.Note();
+        if (verdict == exec::QuotaVerdict::kStop) break;
+        if (verdict == exec::QuotaVerdict::kSkip) continue;
 
         os << "\\n";
         bool first_val = true;
         for (std::size_t index : project) {
             if (!first_val) os << ',';
-            // type_val 0, for the reason the CompareValues call above
-            // gives: a catalog view's values carry their own kind, and none
-            // of them is a DATE or TIMESTAMP column.
+            // type_val 0 here and not `ViewCompareTypeVal`: rendering
+            // consults the column's type only to tell a DATE or TIMESTAMP
+            // from the integer it is stored as, and no view has one. An
+            // integer above INT64_MAX still prints correctly, because
+            // `FormatValue` reads `raw_int_text` - which is exactly why
+            // the comparison above needed a rule and this does not.
             os << exec::FormatValue(/*type_val=*/0, row[index]);
             first_val = false;
         }
+        if (verdict == exec::QuotaVerdict::kEmitThenStop) break;
     }
     return {os.str(), false};
 }

@@ -252,10 +252,15 @@ ok	060af4ce805c88ca	b5d414774c8002cc	SELECT * FROM t WHERE group = 1
 # The type rule (decimal columns only) is the compiler's, invisible here.
 ok	91fa1130f96f7220	cbf29ce484222325	SELECT AVG(x) FROM t
 ok	c827c5fe23c991df	cbf29ce484222325	SELECT AVG(DISTINCT x) FROM t
-# HAVING and ORDER BY over aggregated output, each refused with its own
-# position (AG7, and §2's [PROPOSED] ORDER BY row).
-Unsupported	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
-Unsupported	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
+# HAVING and ORDER BY over aggregated output. Both were refusals - AG7, and
+# §2's [PROPOSED] ORDER BY row - and both parse since 2026-08-24
+# (docs/workplan-having.md HV-1): the verdicts flipped with the task that
+# intended them, and **neither hash moved**, because HAVING lexes as the
+# ordinary identifier it always was and a HAVING literal is a slot exactly
+# as a WHERE literal is. Same evidence AVG's flip above carries, and the
+# reason `kFingerprintVersion` did not move for either.
+ok	fe758a469156cb26	b5d414774c8002cc	SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1
+ok	61193a3cf78e857f	cbf29ce484222325	SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b
 
 # ---- ALTER (docs/spec-alter.md AL1, AL7) -----------------------------------
 # ALTER is not a patternable leading word, so every line is "-". The

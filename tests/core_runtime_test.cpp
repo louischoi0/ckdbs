@@ -14,6 +14,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/server/remote_step_service.hpp"
+#include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/session_step_client.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/catalog/well_known.hpp"
@@ -585,6 +586,242 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedTransactionIdsWithoutWritingTheSuperblo
     auto next_on_core0 = core0_ids.Next();
     ASSERT_TRUE(next_on_core0.ok()) << next_on_core0.status().message();
     EXPECT_GE(next_on_core0.value(), block.value().first + block.value().count);
+}
+
+TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesCoreZerosSuperblock) {
+    // PW3. A peer cannot write page 0, so its completed checkpoint sends the
+    // anchor and core 0 writes it (remote_checkpoint_anchor.hpp). Before
+    // this, a peer had no checkpointer at all: it published nothing, its
+    // anchor slot never advanced, and every later mount rescanned its whole
+    // stream - free while a peer could not write, and not free since PW1.
+    //
+    // The property asserted is the end of that path, not the send: core 0's
+    // superblock carries core 1's anchor. `SuperBlockCheckpointAnchor` is
+    // the receiving half here exactly as it is in `Expeditor::Serve`.
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    core0.AttachTransport(&transport.value(), 0);
+
+    SuperBlockCheckpointAnchor receiver(core0_->superblock, *core0_store_);
+    ASSERT_TRUE(core0
+                    .RegisterMessageHandler(
+                        sched::RingMessageKind::kAnchorWrite,
+                        [&](const sched::MessageHeader&, std::span<const std::byte> payload) {
+                            ASSERT_EQ(payload.size(), sizeof(AnchorWritePayload));
+                            AnchorWritePayload fields{};
+                            std::memcpy(&fields, payload.data(), sizeof(fields));
+                            wal::CheckpointAnchorRecord record;
+                            record.core_id = fields.core_id;
+                            record.checkpoint_lsn = fields.checkpoint_lsn;
+                            record.redo_start_lsn = fields.redo_start_lsn;
+                            record.durable_lsn = fields.durable_lsn;
+                            record.segment_no = fields.segment_no;
+                            EXPECT_TRUE(receiver.Publish(record).ok());
+                        })
+                    .ok());
+
+    ASSERT_EQ(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u)
+        << "core 1 should have no anchor before it checkpoints";
+
+    CoreRuntime::Config config = ConfigFor(1);
+    config.next_trx_id = core0_->superblock.next_trx_id();
+    auto peer = CoreRuntime::Open(config, *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+
+    // AttachTransport runs the completion checkpoint (RC08's half for a
+    // peer) and queues the send on this core's own reactor.
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+
+    for (int i = 0; i < 20; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+
+    EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn, 0u)
+        << "the peer's completion checkpoint never reached core 0's superblock";
+    EXPECT_EQ(receiver.publishes(), 1u);
+
+    // And a second checkpoint advances it rather than republishing the
+    // first - the cadence's whole purpose.
+    const std::uint64_t first = core0_->superblock.wal_anchor(1).checkpoint_lsn;
+    ASSERT_TRUE(peer.value()->Checkpoint().ok());
+    for (int i = 0; i < 20; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    EXPECT_GT(core0_->superblock.wal_anchor(1).checkpoint_lsn, first);
+    EXPECT_EQ(receiver.publishes(), 2u);
+}
+
+
+TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) {
+    // PW1b. `RequestRowIdLease` had no callers, so a peer's lease table was
+    // never granted anything and `AllocateRowId` answered ResourceExhausted
+    // forever - the retry its own message promises could not succeed.
+    //
+    // The trigger could not copy PW1's: that lease is per *instance*, so a
+    // peer pre-empts for it from the first tick, while a row-id lease is per
+    // *relation* and has no subject until a statement names one. So the miss
+    // records the demand and the refill tick answers it.
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    core0.AttachTransport(&transport.value(), 0);
+    ASSERT_TRUE(
+        RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr).ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+
+    // Nothing has asked yet, so the table knows of no relation at all and the
+    // tick has nothing to do.
+    EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value());
+    peer.value()->MaybeRefillRowIds();
+    EXPECT_EQ(peer.value()->row_id_refill().requests, 0u)
+        << "a peer asked for ids for a relation no statement had named";
+
+    // The first allocation fails retryably **and records the demand** - the
+    // half that did not exist before PW1b.
+    auto dry = peer.value()->catalog().AllocateRowId(oid.value());
+    ASSERT_FALSE(dry.ok());
+    EXPECT_EQ(dry.status().code(), StatusCode::kResourceExhausted);
+    ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value())
+        << "the miss did not record which relation needs ids";
+    EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value());
+
+    // The tick answers it, and the retry the message promised now succeeds.
+    peer.value()->MaybeRefillRowIds();
+    for (int i = 0; i < 20; ++i) {
+        peer.value()->scheduler().RunOnce();
+        core0.RunOnce();
+    }
+    EXPECT_EQ(peer.value()->row_id_refill().requests, 1u);
+    EXPECT_EQ(peer.value()->row_id_refill().grants, 1u);
+
+    auto wet = peer.value()->catalog().AllocateRowId(oid.value());
+    ASSERT_TRUE(wet.ok()) << wet.status().message();
+
+    // And the relation stops being needy, so the tick does not ask again on
+    // every cadence - PW1's defect, which had the same shape one lease over.
+    EXPECT_FALSE(peer.value()->row_id_leases().NeediestRelation().has_value())
+        << "a freshly granted relation still reads as low water";
+    peer.value()->MaybeRefillRowIds();
+    EXPECT_EQ(peer.value()->row_id_refill().requests, 1u)
+        << "the tick asked again for a relation that had just been granted a block";
+
+    // The ids are core 0's to give, and disjoint from what core 0 issues.
+    auto on_core0 = core0_->catalog.AllocateRowId(oid.value());
+    ASSERT_TRUE(on_core0.ok()) << on_core0.status().message();
+    EXPECT_GE(on_core0.value(), wet.value() + kRowIdLeasePerGrant)
+        << "core 0's next id sits inside the block it granted the peer";
+}
+
+TEST(RowIdLeaseTableTest, AContiguousTopUpKeepsTheWindowAtTheRunInHand) {
+    // PW1b review. `window` is what `low_water()` takes its quarter of, so
+    // it must be the run in hand and not the sum of every run ever granted.
+    // Accumulating it raised the mark by count/4 per refill, which asked for
+    // the next run after only 3/4 of this one had been issued - a standing
+    // 25% burn of the relation's 40-bit space, and a mark that drifts up
+    // without bound.
+    catalog::RowIdLeaseTable table;
+    table.Grant(4000, 100, 4096);
+    for (int refill = 0; refill < 8; ++refill) {
+        while (!table.NeediestRelation().has_value()) {
+            ASSERT_TRUE(table.Next(4000).ok());
+        }
+        // Topped up contiguously, exactly as core 0's sequential carve does.
+        table.Grant(4000, 100 + 4096 * (refill + 1), 4096);
+        ASSERT_FALSE(table.NeediestRelation().has_value())
+            << "a freshly topped-up relation reads as low water";
+    }
+    // Eight refills in, the mark is still a fraction of *one* run rather
+    // than of their sum: ask now and the relation is nearly spent, which is
+    // what makes it issue almost every id it is granted. Accumulating the
+    // window puts 8,192 ids behind this mark instead of 1,365.
+    while (!table.NeediestRelation().has_value()) {
+        ASSERT_TRUE(table.Next(4000).ok());
+    }
+    EXPECT_LT(table.remaining(4000), 4096u)
+        << "the low-water mark drifted up with every refill, so a run is asked for again "
+           "with more than a whole run still in hand";
+}
+
+TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOther) {
+    // PW1b review. A carve fails for reasons that are permanent - the
+    // relation has no sys.tables row, it names its own ids, or its 40-bit
+    // space is gone - and core 0 answers those with a zero-count grant. The
+    // entry stays spent, so it reads as low water forever: without the
+    // denial the drain tick asks again every cadence, and because one
+    // request is in flight per core and the neediest is the lowest low-water
+    // oid, no *other* relation on that core is ever asked for again.
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "t", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    ASSERT_GT(oid.value(), 3000u);  // the ungrantable oid below must sort first
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto transport = sched::RealRingTransport::Create(/*core_count=*/2, 16, 64);
+    ASSERT_TRUE(transport.ok()) << transport.status().message();
+
+    sched::NullIoBackend io0;
+    sched::Scheduler core0(clock_, io0);
+    core0.AttachTransport(&transport.value(), 0);
+    ASSERT_TRUE(
+        RegisterRowIdGrantHandler(core0, transport.value(), core0_->catalog, nullptr).ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+
+    // Demand for a relation core 0 has no sys.tables row for - what a
+    // dropped relation looks like to the lease table - and demand for a
+    // real one, which sorts after it.
+    EXPECT_FALSE(peer.value()->row_id_leases().Next(3000).ok());
+    EXPECT_FALSE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
+    ASSERT_EQ(*peer.value()->row_id_leases().NeediestRelation(), 3000u);
+
+    auto turn = [&] {
+        peer.value()->MaybeRefillRowIds();
+        for (int i = 0; i < 20; ++i) {
+            peer.value()->scheduler().RunOnce();
+            core0.RunOnce();
+        }
+    };
+
+    turn();
+    EXPECT_EQ(peer.value()->row_id_refill().requests, 1u);
+    EXPECT_EQ(peer.value()->row_id_refill().grants, 0u) << "core 0 granted a relation it has no row for";
+    ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value());
+    EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value())
+        << "a relation core 0 refused still counts as demand, so the tick never reaches another";
+
+    // The next tick reaches the real relation, and the one after that asks
+    // for nothing at all.
+    turn();
+    EXPECT_EQ(peer.value()->row_id_refill().requests, 2u);
+    EXPECT_EQ(peer.value()->row_id_refill().grants, 1u);
+    EXPECT_TRUE(peer.value()->catalog().AllocateRowId(oid.value()).ok());
+    turn();
+    EXPECT_EQ(peer.value()->row_id_refill().requests, 2u)
+        << "the tick asked again for a relation core 0 had already refused";
+
+    // And the refusal is not permanent to a *statement*: a fresh miss is
+    // fresh demand, so the retry the message promises is one that is made.
+    EXPECT_FALSE(peer.value()->row_id_leases().Next(3000).ok());
+    EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), 3000u);
 }
 
 // ---- P4c: a SELECT against a rotated relation executes remotely ---------

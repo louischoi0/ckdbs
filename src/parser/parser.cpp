@@ -1488,6 +1488,118 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
     }
 }
 
+// `HAVING <agg> <op> <val> [AND ...]`, the word already consumed
+// (docs/workplan-having.md HV-1, HV3).
+//
+// The left-hand side comes from `ParseSelectItem`, which already parses
+// exactly what this needs - an aggregate call or a plain column reference,
+// each with the byte it starts at - so the two clauses that name an
+// aggregate name it through one production. Sharing it is what keeps
+// `count(distinct x)` mean the same thing in a select list and here.
+//
+// What this production decides is shape, and it decides three things: the
+// conjuncts are AND-combined, `IS [NOT] NULL` is a predicate with no right
+// side, and every other right side is a **literal**. The last is the one
+// worth arguing: a post-fold predicate has no row to read a column from,
+// and an aggregate on the right would need an expression grammar this
+// language does not have (AG9's argument, two clauses over). Both are
+// refused here with the offending token's own byte rather than left to
+// fail as trailing garbage somewhere past it.
+//
+// What it does *not* decide: whether the aggregate typechecks, and whether
+// a plain column is a grouping key. Both are catalog questions, and HV-2
+// answers them where catalog knowledge lives.
+Status Parser::ParseHaving(SelectStmt& stmt) {
+    for (;;) {
+        HavingCondition cond;
+
+        auto lhs = ParseSelectItem();
+        if (!lhs.ok()) return lhs.status();
+        cond.agg = std::move(lhs.value());
+
+        // A paren still open past the left side is a call this grammar has
+        // no function for - `HAVING foo(q) > 1` - and refusing it at the
+        // name beats the "expected a comparison operator" the paren would
+        // otherwise produce, which points at a token the client did not get
+        // wrong. The same check `ORDER BY` makes one clause down.
+        if (lexer_.Peek().type == TokenType::kLParen) {
+            return Status::Unsupported(
+                "HAVING takes an aggregate or a column, not an expression (byte " +
+                std::to_string(cond.agg.byte_offset) + ")");
+        }
+
+        // `IS [NOT] NULL`, the one predicate with no right-hand side. A
+        // group that folded no non-NULL argument answers NULL for SUM,
+        // MIN, MAX and AVG (AG4), so this is the only way to ask for it -
+        // every relational operator drops it under spec-null.md §4's
+        // three-valued collapse.
+        if (const Token is_tok = lexer_.Peek();
+            is_tok.type == TokenType::kIdent && IEquals(is_tok.text, "IS")) {
+            lexer_.Next();
+            bool negated = false;
+            if (lexer_.Peek().type == TokenType::kKeyword &&
+                lexer_.Peek().kw == Keyword::kNot) {
+                lexer_.Next();
+                negated = true;
+            }
+            if (lexer_.Peek().type != TokenType::kNullLit) {
+                return Status::InvalidArgument("expected NULL after IS (byte " +
+                                                std::to_string(lexer_.Peek().byte_offset) +
+                                                ")");
+            }
+            lexer_.Next();
+            cond.op = negated ? CompareOp::kIsNotNull : CompareOp::kIsNull;
+        } else {
+            auto op = ParseCompareOp();
+            if (!op.ok()) return op.status();
+            cond.op = op.value();
+
+            // A sub-chain under a post-fold predicate puts an aggregation
+            // boundary where the execution model has none - AG8's refusal,
+            // which this is the same statement about from the other side.
+            if (const Token paren = lexer_.Peek(); paren.type == TokenType::kLParen) {
+                return Status::Unsupported(
+                    "HAVING compares against a literal, not a subquery (byte " +
+                    std::to_string(paren.byte_offset) +
+                    "); a fold has no row for a sub-chain to correlate with");
+            }
+
+            // An identifier on the right is one of two statements, and they
+            // deserve different sentences. Parsed through the same
+            // production the left side used, so the refusal can say which
+            // it read and point at where it started.
+            if (lexer_.Peek().type == TokenType::kIdent) {
+                auto rhs = ParseSelectItem();
+                if (!rhs.ok()) return rhs.status();
+                if (rhs.value().is_aggregate) {
+                    return Status::Unsupported(
+                        "HAVING compares one aggregate against a literal, not against "
+                        "another aggregate (byte " +
+                        std::to_string(rhs.value().byte_offset) +
+                        "); this grammar has no expressions");
+                }
+                return Status::Unsupported(
+                    "HAVING compares against a literal, not a column (byte " +
+                    std::to_string(rhs.value().byte_offset) +
+                    "); the fold has already consumed the rows a column would be read "
+                    "from - filter those with WHERE");
+            }
+
+            auto val = ParseValue();
+            if (!val.ok()) return val.status();
+            cond.val = std::move(val.value());
+        }
+        stmt.having.push_back(std::move(cond));
+
+        const Token next = lexer_.Peek();
+        if (next.type == TokenType::kIdent && IEquals(next.text, "AND")) {
+            lexer_.Next();
+            continue;
+        }
+        return Status::OK();
+    }
+}
+
 // The pagination tail (spec I11, workplan V09, amended by
 // docs/workplan-order-by.md OB1): `[ORDER BY <col> [ASC|DESC] [, ...]]
 // [LIMIT <n>] [OFFSET <m>]`, clause order fixed as written and each clause
@@ -1510,15 +1622,13 @@ Status Parser::ParseGroupBy(SelectStmt& stmt) {
 Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth) {
     if (const Token order = lexer_.Peek();
         order.type == TokenType::kIdent && IEquals(order.text, "ORDER")) {
-        // Over aggregated output the answer predates the tail (AG's
-        // `[PROPOSED]` row) and the corpus pins it, wording and all.
-        if (aggregated) {
-            return Status::Unsupported(
-                "ORDER BY is not supported over an aggregated statement (byte " +
-                std::to_string(order.byte_offset) +
-                "); an aggregated statement's output rows are not chain rows, and sorting them "
-                "needs an output sort this engine does not have");
-        }
+        // Over aggregated output this used to be a refusal citing "an
+        // output sort this engine does not have". The sort exists (OB4) and
+        // `docs/workplan-having.md` HV4 decides the half AG's `[PROPOSED]`
+        // row left open, so the clause is parsed over a fold too - with an
+        // aggregate admitted as a key, since `ORDER BY COUNT(*)` names
+        // something no column reference can.
+        //
         // A subquery's rows feed a predicate - IN's set, EXISTS's witness,
         // a scalar's one value - and no order of them is observable, so an
         // ORDER BY there is a clause with nothing to mean.
@@ -1543,16 +1653,28 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
                     std::to_string(ordinal.byte_offset) + "); name the column");
             }
 
-            auto col = ParseColumnName();
-            if (!col.ok()) return col.status();
+            auto item = ParseSelectItem();
+            if (!item.ok()) return item.status();
+            const std::uint32_t key_at = item.value().byte_offset;
 
-            // AG9's argument, one clause over: a paren here reads as an
-            // expression - `ORDER BY count(x)` - and refusing it by position
-            // beats a trailing-garbage error pointing past it.
-            if (lexer_.Peek().type == TokenType::kLParen) {
+            // AG9's argument, one clause over: a paren still open after the
+            // key reads as an expression - `ORDER BY foo(x)`, a call this
+            // grammar has no function for - and refusing it by position
+            // beats a trailing-garbage error pointing past it. Over a
+            // non-aggregated statement an *aggregate* key is the same
+            // refusal and keeps OB1's wording, because there is no fold for
+            // it to be an answer of.
+            const bool wrote_call =
+                item.value().is_aggregate || lexer_.Peek().type == TokenType::kLParen;
+            if (wrote_call && !aggregated) {
                 return Status::Unsupported(
                     "ORDER BY takes a column reference only, not an expression (byte " +
-                    std::to_string(col.value().byte_offset) + ")");
+                    std::to_string(key_at) + ")");
+            }
+            if (lexer_.Peek().type == TokenType::kLParen) {
+                return Status::Unsupported(
+                    "ORDER BY takes a column reference or an aggregate, not an expression "
+                    "(byte " + std::to_string(key_at) + ")");
             }
 
             // The cap is checked against what this key would make the list,
@@ -1561,13 +1683,13 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
             if (stmt.order_by.size() >= kMaxSortKeys) {
                 return Status::Unsupported(
                     "ORDER BY takes at most " + std::to_string(kMaxSortKeys) +
-                    " keys (byte " + std::to_string(col.value().byte_offset) +
+                    " keys (byte " + std::to_string(key_at) +
                     "); every key costs a comparison on every row pair, and sorting by a "
                     "prefix of what was written would answer a question nobody asked");
             }
 
             SortKey key;
-            key.column = std::move(col.value());
+            key.key = std::move(item.value());
 
             // `ASC` is the default spelled out; `DESC` reverses this key's
             // comparison and nothing else. Neither word is reserved, so a
@@ -1612,8 +1734,13 @@ Status Parser::ParseCountClause(std::string_view word, bool aggregated, std::uin
     // Groups are emitted in fold order, which is deterministic and
     // deliberately not a contract - so which rows survive the clause would
     // be a guess, and this engine's answer to "which wrong number would
-    // you like" has always been neither. Belongs with HAVING and ORDER BY
-    // in feat-aggregate.md §10's post-fold-consumer decision.
+    // you like" has always been neither.
+    //
+    // **Kept refused by HV5** (docs/workplan-having.md), where HAVING and
+    // ORDER BY over a fold were lifted beside it: serving this clause is
+    // what would promote AG6's fold order into a client contract, and
+    // ordering the groups first makes that a decision worth making on its
+    // own rather than one taken by three other clauses.
     if (aggregated) {
         return Status::Unsupported(
             std::string(word) + " is not supported over an aggregated statement (byte " +
@@ -1809,23 +1936,31 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
         aggregated = true;
     }
 
+    // HAVING is read by text exactly where it would be written, past the
+    // GROUP BY list and before the tail, and it is the third thing that can
+    // make a statement aggregated (HV-1). AG7's refusal used to be here;
+    // `docs/workplan-having.md` retracts it, and the clause it refused is
+    // now parsed in its place.
+    if (const Token having = lexer_.Peek();
+        having.type == TokenType::kIdent && IEquals(having.text, "HAVING")) {
+        lexer_.Next();
+        if (Status s = ParseHaving(stmt); !s.ok()) return s;
+        if (!aggregated) agg_at = having.byte_offset;
+        aggregated = true;
+    }
+
     // Which columns `*` folds - and in what order - was never written, and
     // there is no reading of it that is not a guess. InvalidArgument rather
     // than Unsupported: naming the columns is not a feature request.
+    //
+    // Checked after HAVING rather than before it, so `SELECT * FROM t
+    // HAVING COUNT(*) > 1` meets this answer rather than falling through to
+    // a fold with a star it cannot mean.
     if (wrote_star && aggregated) {
         return Status::InvalidArgument(
-            "SELECT * cannot be combined with GROUP BY (byte " + std::to_string(star_at) +
+            "SELECT * cannot be combined with GROUP BY or HAVING (byte " +
+            std::to_string(star_at) +
             "); name the grouping columns and the aggregates you want");
-    }
-
-    // HAVING is recognized by text exactly where it would be written, and
-    // refused with its own position - a truthful "not supported, here"
-    // instead of a syntax error pointing at whatever follows it (AG7).
-    if (const Token& having = lexer_.Peek();
-        having.type == TokenType::kIdent && IEquals(having.text, "HAVING")) {
-        return Status::Unsupported(
-            "HAVING is not supported (byte " + std::to_string(having.byte_offset) +
-            "); filter before the fold with WHERE, or filter the result client-side");
     }
 
     // ---- The pagination tail: ORDER BY, LIMIT, OFFSET (I11, V09) --------

@@ -696,6 +696,12 @@ TEST_F(AggregateDispatchTest, EveryParseTimeRefusalCarriesAPosition) {
     // The parse-time half of §2's promise. The compile-time refusals carry
     // one too and are checked beside their rules above; these are the ones
     // a client is likeliest to hit, because they are typos.
+    //
+    // **The HAVING line moved layers on 2026-08-24 and stayed in this
+    // list.** `docs/workplan-having.md` HV-1 makes the clause parse, so the
+    // refusal is the compiler's until HV-2 builds the filter - and what
+    // this test is actually about is that the client is told *where*,
+    // which no layer is excused from.
     for (const char* sql : {"SELECT AVG(qty) FROM h", "SELECT SUM(*) FROM h",
                             "SELECT COUNT(DISTINCT *) FROM h",
                             "SELECT tier, COUNT(*) FROM h GROUP BY tier HAVING COUNT(*) > 1"}) {

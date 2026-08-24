@@ -1,5 +1,7 @@
 #include "kds/server/command_dispatcher.hpp"
 
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -699,6 +701,144 @@ TEST_F(CommandDispatcherTest, ACatalogViewTakesAProjectionAndAWhereClause) {
     EXPECT_NE(filtered.response.find("acct"), std::string::npos) << filtered.response;
     // The WHERE really filtered: no other table's name came through.
     EXPECT_EQ(filtered.response.find("patterns"), std::string::npos) << filtered.response;
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewsBetweenTakesBothBounds) {
+    // `BETWEEN` reaches this path as a `kBetween` *kind* with its bounds in
+    // `val`/`val_high` and `op` left at its `kEq` default, because the step
+    // compiler lowers the kind into two conjuncts and no evaluator
+    // downstream ever reads it. The view path is the one consumer that
+    // never got that lowering: it used to read `op`, answer `oid = <low>`,
+    // and return one row where a range qualifies - a silently truncated
+    // catalog answer, which is the one kind of wrong this file exists to
+    // catch.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    auto oid_of = [&d](const char* sql) {
+        const std::string reply = d.Dispatch(sql).response;
+        EXPECT_EQ(reply.substr(0, 7), "CREATED") << reply;
+        const auto at = reply.find("oid=");
+        return at == std::string::npos ? 0ull : std::strtoull(reply.c_str() + at + 4, nullptr, 10);
+    };
+    const std::uint64_t lo = oid_of("CREATE TABLE a (id int64, v int64)");
+    oid_of("CREATE TABLE b (id int64, v int64)");
+    const std::uint64_t hi = oid_of("CREATE TABLE c (id int64, v int64)");
+    ASSERT_GT(hi, lo);
+
+    // All three and *nothing else*, both ends inclusive. Asserted as the
+    // whole reply rather than as three substring searches: `find("a")`
+    // matches the header `name`, and `b`/`c` are carried by catalog
+    // relation names outside the range - so a regression that dropped the
+    // WHERE entirely would have satisfied all three.
+    const std::string ranged =
+        d.Dispatch("SELECT name FROM sys.tables WHERE oid BETWEEN " + std::to_string(lo) +
+                   " AND " + std::to_string(hi)).response;
+    EXPECT_EQ(ranged, "name\\na\\nb\\nc") << ranged;
+
+    // The control that makes the assertion above mean something: an
+    // equality really does answer one row, so a passing BETWEEN is not
+    // just a view that ignored the predicate.
+    const std::string exact =
+        d.Dispatch("SELECT name FROM sys.tables WHERE oid = " + std::to_string(lo)).response;
+    EXPECT_EQ(exact, "name\\na") << exact;
+
+    // A range holding nothing answers the header, not everything.
+    const std::string empty =
+        d.Dispatch("SELECT name FROM sys.tables WHERE oid BETWEEN " + std::to_string(hi + 1000) +
+                   " AND " + std::to_string(hi + 2000)).response;
+    EXPECT_EQ(empty, "name") << empty;
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
+    // Every integer a view emits is built from a `uint64_t`
+    // (catalog_view.cpp's `Int()`), and `sys.patterns.pattern_id` is a
+    // full-range 64-bit fingerprint - so comparing `int_val` signed put
+    // every id above INT64_MAX below every id under it. `pattern_id < 100`
+    // answered the eight largest ids in the catalog, each printed in full
+    // by the same statement that claimed it was small.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    ASSERT_EQ(d.Dispatch("CREATE TABLE r (id int64, a int64, b int64)").response.substr(0, 7),
+              "CREATED");
+    // Distinct bodies, because a pattern_id is the fingerprint of the shape
+    // and identical shapes would collide into one row.
+    const char* wheres[] = {"id = $x", "a = $x", "b = $x", "a > $x", "b > $x", "a < $x",
+                            "b < $x", "a >= $x", "b >= $x", "a != $x", "b != $x",
+                            "id > $x", "id < $x", "id >= $x"};
+    int made = 0;
+    for (const char* where : wheres) {
+        const std::string reply =
+            d.Dispatch("CREATE PATTERN p" + std::to_string(made) + " ($x int64) OF SELECT a "
+                       "FROM r WHERE " + where).response;
+        if (reply.substr(0, 4) != "ERR ") ++made;
+    }
+    ASSERT_GT(made, 0) << "the fixture must register patterns to have ids to compare";
+
+    const std::string all = d.Dispatch("SELECT oid FROM sys.patterns").response;
+    const std::string ids = d.Dispatch("SELECT pattern_id FROM sys.patterns").response;
+    // Non-vacuous only if some id really does use the top bit. A
+    // fingerprint is deterministic, so this either holds or the corpus
+    // moved and the body list above wants another entry - which is what
+    // the message says rather than the test quietly proving nothing.
+    bool any_high = false;
+    for (std::size_t at = 0; (at = ids.find("\\n", at)) != std::string::npos;) {
+        at += 2;
+        if (std::strtoull(ids.c_str() + at, nullptr, 10) > (1ull << 63)) any_high = true;
+    }
+    ASSERT_TRUE(any_high) << "no pattern_id above INT64_MAX, so this proves nothing: " << ids;
+
+    // Every uint64 is >= 0 and none is < 0. Signed, the high-bit ids
+    // answered the second and were missing from the first.
+    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE pattern_id >= 0").response, all);
+    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE pattern_id < 0").response, "oid");
+    EXPECT_EQ(d.Dispatch("SELECT oid FROM sys.patterns WHERE pattern_id < 100").response, "oid");
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewRefusesABogusQualifierInAWhereToo) {
+    // The projection has always refused a qualifier naming no relation in
+    // the statement; the WHERE discarded it and answered. One resolver now,
+    // so the same spelling gets the same answer in both halves.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    const std::string where_bad =
+        d.Dispatch("SELECT name FROM sys.tables WHERE zzz.oid = 100").response;
+    EXPECT_NE(where_bad.find("names no relation in this statement"), std::string::npos)
+        << where_bad;
+    const std::string proj_bad = d.Dispatch("SELECT zzz.oid FROM sys.tables").response;
+    EXPECT_NE(proj_bad.find("names no relation in this statement"), std::string::npos)
+        << proj_bad;
+
+    // A qualifier that *does* name the statement's binding still works, in
+    // both halves - the refusal is of a wrong name, not of qualification.
+    // The header carries the view's own column name rather than the
+    // spelling the client wrote, which is what a view has: names printed
+    // from `column_names`, not a projection list echoed back. A chain
+    // echoes the qualified form; a view does not, and that difference is
+    // older than this test.
+    const std::string aliased =
+        d.Dispatch("SELECT t.name FROM sys.tables AS t WHERE t.oid = 100").response;
+    EXPECT_EQ(aliased, "name\\ntypes") << aliased;
+    const std::string unaliased =
+        d.Dispatch("SELECT name FROM sys.tables WHERE tables.oid = 100").response;
+    EXPECT_EQ(unaliased, "name\\ntypes") << unaliased;
+}
+
+TEST_F(CommandDispatcherTest, ACatalogViewRefusesAMalformedPredicateWithNoRowsToApplyItTo) {
+    // The refusals below are properties of the *statement*, so they are
+    // decided before a row is read. Asked per row they were silenced by an
+    // empty view: `sys.patterns` holds nothing on a fresh instance, so the
+    // loop never ran and a predicate no view can answer came back as a
+    // successful header. A refusal that data can silence is not a refusal.
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+
+    const std::string rows = d.Dispatch("SELECT * FROM sys.patterns").response;
+    ASSERT_EQ(rows.find("\\n"), std::string::npos) << "sys.patterns must be empty here: " << rows;
+
+    const std::string col_to_col =
+        d.Dispatch("SELECT * FROM sys.patterns WHERE oid = pattern_id").response;
+    EXPECT_NE(col_to_col.find("column-to-column comparison"), std::string::npos) << col_to_col;
+
+    const std::string no_column =
+        d.Dispatch("SELECT * FROM sys.patterns WHERE nosuchcol = 1").response;
+    EXPECT_NE(no_column.find("has no column"), std::string::npos) << no_column;
 }
 
 TEST_F(CommandDispatcherTest, ACatalogViewRefusesWhatItCannotDoAndSaysWhich) {

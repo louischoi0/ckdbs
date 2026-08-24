@@ -27,9 +27,23 @@ the owner's workplan.
   (`sim/loop.hpp`'s `kRecoveryImplemented`, RC10's first half).
   A mount ends by publishing an anchor past everything it replayed (RC08, built
   the same day), so the next crash replays only what followed rather than
-  rescanning the stream — **except on a peer core**, which cannot write page 0
+  rescanning the stream. ~~**except on a peer core**, which cannot write page 0
   and so still scans from whatever anchor core 0 last wrote it (costless today:
-  a peer holds no transaction ids, so its stream carries no writes of its own).
+  a peer holds no transaction ids, so its stream carries no writes of its
+  own)~~ — **a peer checkpoints as of 2026-08-21** (PW3,
+  `docs/workplan-peer-writer.md`): it still cannot write page 0, so it sends
+  the anchor and core 0 writes it (`remote_checkpoint_anchor.hpp`), at mount
+  and on the `§11` cadence. The parenthetical was retracted a day earlier by
+  PW1, which is what made the gap cost anything. **One of core 0's three
+  checkpoint points is still missing on a peer**: the *shutdown* one. A peer's
+  teardown syncs its WAL and destroys its runtime before core 0 checkpoints,
+  so the "after a `STOP`, the next mount reads 2 records where it read 1205"
+  property below holds for core 0 and not for a peer — a graceful restart
+  replays up to one `checkpoint_interval_ms` of a peer's stream, every time.
+  PW3b owns it, and it is a sequencing decision rather than a missing call:
+  at the only moment the runtime is safely reachable again (after the worker
+  join) both reactors are stopped, so a queued anchor send would never be
+  polled.
   `SHOW META` reports what the last mount's recovery did — records scanned,
   transactions committed and rolled back, per-phase timings, and the audit below
   (RC09, built the same day).
@@ -580,8 +594,26 @@ still waits on its own gate, so:
   reports rather than erroring per row. Until one of the three lands,
   every cross-core number in `bench/` is a *cost* measured with the
   parallelism removed, never a speedup.
-  **Scoped 2026-08-21** — `docs/workplan-peer-writer.md` owns the series
-  (PW1-PW6) and names what actually blocks it, which is not the listener:
+  **Scoped 2026-08-21, and three of its blockers closed the same day** —
+  `docs/workplan-peer-writer.md` owns the series and names what actually
+  blocks it, which is not the listener. PW1 (transaction-id leases), PW1b
+  (row-id leases) and PW3 (a peer checkpointer) are built; **a peer still
+  cannot INSERT**, and the reason is now a probed error rather than a
+  prediction: `core 1 may not write page 130`. `MayWrite` allows a peer only
+  the pages its own extent lease owns, and CC7's grant is fault rights only
+  by an explicit decision, because a grant is extent-granular and a superset
+  is safe to fault and not to write. That is **PW1c**, and it needs a
+  decision between per-relation write grants, allocating a peer-owned
+  relation's pages from the owner's lease at DDL, or shipping the DML
+  statement to the owner core so no peer ever writes a page core 0
+  allocated. **And that refusal is Debug-only**: the whole
+  `MayFault`/`MayWrite` check sits inside `#ifndef NDEBUG`, so in
+  `build-release` the same peer INSERT does not refuse — it dirties core 0's
+  page in the peer's own store and the last flush wins. PW1c is therefore a
+  silent two-writer corruption route that opens the moment PW5 gives a peer
+  a listener, invisible in exactly the build every measurement is taken in,
+  which makes **PW1c before PW5 an ordering requirement**. The original
+  scoping note follows:
   a peer cannot issue a **transaction id** at all (`TrxIdSequence`
   constructs spent, and a peer's persist callback refuses), two catalog
   write points ride the ordinary INSERT (a clustered root growing a level,
@@ -688,6 +720,25 @@ still waits on its own gate, so:
 
 ## Storage and key modes
 
+- **An instance cannot exceed 65,280 pages — 510 MiB of data file.** Not
+  the 16 TiB `docs/page.md` §4 designs for: `page_id` is `u32` with a 2^31
+  ceiling asserted at the device layer, and every persisted page-id field
+  in the engine stores a full 32 bits, so nothing *on disk* is the limit.
+  The limit is that the free map is **one page**, and one bitmap page
+  covers `(8192 − 32) × 8` ids. §5's multi-page free map — free-map pages
+  at computable interval positions — is written but unbuilt, and the
+  single-page ceiling is enforced in four places: `IsAllocated` (an id at
+  or above coverage reads as *not allocated*, so `Get()` answers
+  `NotFound`), `CreateAt` and `RaiseAllocationFloor` (both `OutOfRange`),
+  and `ExtentAllocator::Reserve` (`OutOfSpace`). Reaching it is a hard
+  refusal, not corruption. **It is also acting as the engine's only bound
+  on leaked space**: with nothing freeing pages (see reclamation above), a
+  `DROP TABLE`/rebuild loop stops at 510 MiB today and would run to the
+  design ceiling once the map grows — so lifting this raises the ceiling
+  on orphaned pages exactly as much as on live ones. Survey, placement
+  candidates and the task series:
+  `docs/workplan-multi-free-map.md` (2026-08-22); the placement
+  arithmetic itself stays `[OPEN]` in `docs/page.md` §5.
 - ~~**Dividing a full btree *internal* node is not implemented**~~ —
   **built 2026-08-11** (`docs/workplan-key-mode.md` PK09). A separator
   promoted into a full parent now divides that node's entries when it sorts
@@ -723,6 +774,19 @@ still waits on its own gate, so:
   Still refused, by decision: nullable index keys (D2, covered columns
   included; `IS NULL` answers by scan), `NULLS FIRST/LAST` grammar (D3
   fixed NULLs-largest), and `ALTER TABLE ADD COLUMN` of any kind.
+- **A `sys.` qualifier is silently dropped below depth 0.** Found
+  2026-08-21 by the review of the catalog-view pagination fix, unowned.
+  `HandleSelect` diverts a catalog view only for the top-level `from` and
+  `joins`; nothing else in the engine reads `RelationRef::schema` —
+  `src/exec/step_compiler.cpp` never mentions it. So
+  `SELECT v FROM t WHERE id IN (SELECT oid FROM sys.tables)` drops the
+  `sys.`, resolves `tables` to the catalog's own internal relation oid,
+  and answers `ERR no columns for this rel_id` — an internal message with
+  no byte position. This is the same "parsed, accepted, silently dropped"
+  shape the tail had over a view before 2026-08-21, one nesting level
+  down. It wants either a parser refusal with the byte (a
+  schema-qualified relation below depth 0) or a decision to support it;
+  the entry exists so it is not found a third time.
 - ~~**Pagination is LIMIT/OFFSET only**~~ — **closed 2026-08-11** by the
   output sort (`docs/workplan-order-by.md`). `ORDER BY` now takes any
   column or columns, pk or not, of any relation in a non-aggregated

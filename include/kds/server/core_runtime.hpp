@@ -21,6 +21,7 @@
 #include "kds/server/remote_checkpoint_anchor.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/device_page_store.hpp"
+#include "kds/storage/page_store_checkpoint_target.hpp"
 #include "kds/storage/extent_lease.hpp"
 #include "kds/storage/page_device.hpp"
 #include "kds/txn/manager.hpp"
@@ -183,6 +184,16 @@ public:
     // returns, so an acknowledged commit on this core survives the stop.
     Status Sync();
 
+    // Runs one checkpoint to completion and publishes its anchor **through
+    // core 0** (PW3, docs/workplan-peer-writer.md; remote_checkpoint_anchor.hpp
+    // carries why that send is one-way). A no-op on a core with no
+    // checkpointer - core 0's is `Expeditor`'s, and a runtime with no
+    // transport has nowhere to publish to.
+    //
+    // Public for the reason `GrantRelationFault` is: the cadence below calls
+    // it, and a test drives it without a reactor.
+    Status Checkpoint();
+
     // Drops this core's cached view of the catalog - both the derived facts
     // and the page frames they came from. What the `kCatalogInvalidate`
     // handler calls; exposed so a test can drive it without a reactor.
@@ -197,6 +208,12 @@ public:
     // the superblock's ceiling, so its windows are granted. Peers only -
     // core 0 carves its own and never leases from itself.
     void MaybeRefillTrxIds();
+
+    // And for row ids (PW1b), which differ in what triggers them: a row-id
+    // lease is per *relation*, so this asks for the neediest relation the
+    // lease table knows about, and the table learns of one only when a
+    // statement asks it for an id (catalog/row_id_lease.hpp).
+    void MaybeRefillRowIds();
 
     // The receive side of CC7's flush-then-grant handoff (workplan P6b):
     // fault rights over a relation's page range, granted by core 0 at DDL
@@ -270,10 +287,21 @@ private:
     // its reason: without it every tick before the first grant lands would
     // submit another request, and every one of them would be answered.
     bool trx_id_refill_in_flight_ = false;
+    // One row-id refill in flight at a time, for the same reason - and it is
+    // per core rather than per relation, so a second needy relation waits one
+    // tick rather than racing the first.
+    bool row_id_refill_in_flight_ = false;
 
     // The remote step server (P4b), armed at AttachTransport: this core
     // answers STEP_OPENs for relations it owns.
     std::optional<RemoteStepServer> remote_steps_;
+
+    // The two objects this core's checkpointer borrows (PW3). Built at
+    // `AttachTransport`, not at `Open`: the anchor publishes over the ring,
+    // so it cannot exist before the ring does. Declared below `scheduler_`
+    // and `store_`, which they hold references to.
+    std::optional<storage::PageStoreCheckpointTarget> checkpoint_target_;
+    std::optional<RemoteCheckpointAnchor> checkpoint_anchor_;
 
     // The statement stack. A peer's `SuperBlock` is a **copy** taken on the
     // startup thread: the dispatcher needs one for SHOW-class commands, and
@@ -290,6 +318,11 @@ private:
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
+
+    // Last, because it borrows every one of them: the WAL, the target and
+    // anchor above, `txn_manager_`, and the dispatcher's assertion
+    // enforcer. Reverse-order destruction therefore takes it first.
+    std::optional<wal::Checkpointer> checkpointer_;
 };
 
 // The extent-aligned page range covering a relation's fixed roots (the

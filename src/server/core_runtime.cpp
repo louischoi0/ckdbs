@@ -110,17 +110,16 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // that makes the refusal above a refusal: publishing an anchor means
     // writing page 0, which belongs to the system core (M5), and the ring this
     // core would send it over (remote_checkpoint_anchor.hpp) is not attached
-    // until AttachTransport(). So a peer's next mount still scans from whatever
-    // anchor core 0 last wrote for it.
+    // until AttachTransport().
     //
-    // **That used to cost nothing and now does.** The old reason was that a
-    // peer could not reserve a transaction id, so its stream held no writes
-    // of its own to rescan; PW1 is exactly what ends that, and this core has
-    // no checkpointer at all - `Expeditor` owns the only one. So a writing
-    // peer's stream grows with an anchor that never advances, and every
-    // later mount replays all of it. `RemoteCheckpointAnchor` is the built,
-    // unwired half; `docs/workplan-peer-writer.md` PW3 owns the wiring.
-    // Core 0's own checkpoint runs in Expeditor::Open.
+    // **Not here is no longer nowhere** (PW3). What used to make that a
+    // permanent state was that a peer could not reserve a transaction id, so
+    // its stream held no writes of its own to rescan; PW1 ended it. Only the
+    // *placement* survives: the completion checkpoint runs at
+    // `AttachTransport()`, where the ring exists, and the cadence in `Run()`.
+    // A peer with no transport still publishes nothing and still rescans,
+    // which describes a test fixture rather than a server. Core 0's own
+    // checkpoint runs in Expeditor::Open.
     runtime->store_->SetCoreOwnership(config.core_id, &runtime->lease_, kFirstUserPageId);
 
     // The catalog, read-only in practice: DDL is core 0's, and the store
@@ -339,7 +338,49 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // rather than in Run() because a grant can arrive before this core has
     // armed anything.
     transport_ = &transport;
-    return RegisterExtentGrantReceiver(*scheduler_, refill_, log_);
+    if (Status s = RegisterExtentGrantReceiver(*scheduler_, refill_, log_); !s.ok()) return s;
+
+    // **This core's checkpointer** (PW3, docs/workplan-peer-writer.md), and
+    // it can only be built here: the anchor publishes over the ring, so it
+    // cannot exist before the ring does.
+    //
+    // Peers only. Core 0's checkpointer is `Expeditor`'s and writes page 0
+    // directly; a core-0 `CoreRuntime` exists only in tests, and giving it
+    // one would have it send its own anchor to itself.
+    if (config_.core_id == 0) return Status::OK();
+
+    checkpoint_target_.emplace(*store_);
+    checkpoint_anchor_.emplace(transport, *scheduler_, config_.core_id, /*system_core=*/0);
+    checkpoint_anchor_->SetLogger(log_);
+    checkpointer_.emplace(*wal_, *checkpoint_target_, *txn_manager_, *checkpoint_anchor_);
+    checkpointer_->SetLogger(log_);
+    // AS6a's snapshot source, wired on the same terms core 0 wires it. A
+    // peer's registry is **empty today** - `ResumeAssertionsAfterRecovery`
+    // runs only on core 0 - so this writes no group snapshots. Wired anyway
+    // rather than omitted, because the omission would be the silent kind: a
+    // peer that later enforces would checkpoint without snapshots and the
+    // next mount would find no base to fold from, which is the failure RC07
+    // exists to prevent.
+    checkpointer_->SetAssertionSource(&dispatcher_->assertions());
+
+    // **The completion checkpoint** (RC08), which core 0 runs at the end of
+    // its own recovery and a peer could not: it publishes an anchor past
+    // everything this core's mount replayed, so the next crash scans from
+    // here rather than from wherever core 0 last wrote this slot. Run on the
+    // startup thread, before the worker exists - the send it queues is
+    // picked up by this core's own reactor once `Run()` starts, and core 0's
+    // `kAnchorWrite` handler is registered before any peer attaches.
+    //
+    // Through the same helper core 0 uses, rather than through `Checkpoint()`
+    // below: `CheckpointAfterRecovery` *is* "the completion checkpoint" as a
+    // named thing, and it carries three that the cadence path does not - the
+    // `NoActiveTransactions` table (empty by fact here, and its signature is
+    // what makes handing over a stale one impossible), the Info line that is
+    // a peer's only evidence its mount bounded the next crash, and the
+    // context on failure that says which checkpoint aborted the mount.
+    return CheckpointAfterRecovery(config_.core_id, *wal_, *checkpoint_target_,
+                                   *checkpoint_anchor_, log_, /*clock=*/nullptr,
+                                   /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
 }
 
 void CoreRuntime::GrantRelationFault(storage::Extent extent) {
@@ -423,7 +464,21 @@ void CoreRuntime::Run() {
         if (config_.core_id != 0) {
             scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
                                     [this] { MaybeRefillTrxIds(); });
+            // And the row-id lease's (PW1b), on the same tick and for the
+            // same reason the extent check is here: cheap `system` work, and
+            // a second timer for a map walk bounded by this core's relations
+            // would cost more than it measures.
+            scheduler_->SubmitEvery(config_.wal_drain_interval_ns,
+                                    [this] { MaybeRefillRowIds(); });
         }
+    }
+
+    // The `system`-group checkpoint cadence of wal.md §11, per core since
+    // PW3 - core 0 has run one since RC08 and a peer ran none, so a peer
+    // that wrote left an anchor that never advanced and a stream every
+    // later mount replayed whole. A no-op where `checkpointer_` is unset.
+    if (checkpointer_.has_value() && config_.checkpoint_interval_ns > 0) {
+        scheduler_->SubmitEvery(config_.checkpoint_interval_ns, [this] { (void)Checkpoint(); });
     }
 
     // Per core, on the thread that will run the statements - the audit's
@@ -468,6 +523,41 @@ void CoreRuntime::MaybeRefillLease() {
         }));
 }
 
+void CoreRuntime::MaybeRefillRowIds() {
+    // The row-id lease's asking half (PW1b). It could not ride the trx-id
+    // lease's shape directly: that sequence is per *instance*, so a peer can
+    // pre-empt for it from the first tick, while a row-id lease is per
+    // *relation* and has no subject until a statement names one. So demand
+    // is recorded where it is discovered - `RowIdLeaseTable::Next` inserts
+    // the spent entry on a miss - and this tick answers it.
+    //
+    // The consequence, stated because a client sees it: the **first** INSERT
+    // into a relation on a given peer fails retryably, which is exactly what
+    // that lease's `ResourceExhausted` message already promises, and no
+    // later one does.
+    if (row_id_refill_in_flight_) return;
+    const auto neediest = row_id_leases_.NeediestRelation();
+    if (!neediest.has_value()) return;
+
+    row_id_refill_in_flight_ = true;
+    scheduler_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kSystem,
+        RequestRowIdLease(*transport_, row_id_refill_, *neediest, kRowIdLeasePerGrant,
+                          config_.core_id, /*system_core=*/0, log_),
+        [this](const Status& s) {
+            row_id_refill_in_flight_ = false;
+            if (!s.ok() && log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                // Nothing to return it to - a background task - and the
+                // consequence is bounded: INSERTs into that relation keep
+                // failing retryably until a later tick succeeds. A relation
+                // whose id space is genuinely exhausted answers zero-count
+                // forever, and the retry is then the honest report.
+                log_->Error("rowid", "core " + std::to_string(config_.core_id) +
+                                         ": row-id refill failed: " + s.message());
+            }
+        }));
+}
+
 void CoreRuntime::MaybeRefillTrxIds() {
     // Asked for *before* the window is spent, the extent lease's rule and
     // for its reason: `TrxIdSequence::Next()` is called from inside a
@@ -490,6 +580,40 @@ void CoreRuntime::MaybeRefillTrxIds() {
                                          ": transaction-id refill failed: " + s.message());
             }
         }));
+}
+
+Status CoreRuntime::Checkpoint() {
+    // Nothing to do on a core that has no checkpointer: core 0, whose one
+    // lives on `Expeditor`, and any runtime built without a transport, which
+    // has nowhere to publish an anchor to.
+    if (!checkpointer_.has_value()) return Status::OK();
+
+    // Cumulative counters, so this checkpoint's contribution is the delta -
+    // `Expeditor::Checkpoint`'s reason: logging the running total would read
+    // as "this checkpoint flushed 5 pages" on every tick after the first one
+    // that did.
+    const std::uint64_t flushed_before = checkpointer_->stats().pages_flushed;
+
+    if (Status s = checkpointer_->RunToCompletion(); !s.ok()) {
+        // The one place this becomes visible. It runs on a timer with no
+        // caller to return to, so without the log it is a silently widening
+        // loss window. Not fatal and it does not disarm the cadence: the
+        // pages it did not flush stay dirty and the next tick retries them.
+        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+            log_->Error("checkpoint", "core " + std::to_string(config_.core_id) +
+                                          ": checkpoint failed: " + s.message());
+        }
+        return s;
+    }
+
+    if (log_ != nullptr && log_->enabled(LogLevel::kDebug)) {
+        log_->Debug("checkpoint",
+                    "core " + std::to_string(config_.core_id) +
+                        ": checkpoint complete: redo_start=" +
+                        std::to_string(checkpointer_->redo_start_lsn()) + " pages_flushed=" +
+                        std::to_string(checkpointer_->stats().pages_flushed - flushed_before));
+    }
+    return Status::OK();
 }
 
 Status CoreRuntime::Sync() { return wal_->SyncAll(); }

@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -218,6 +219,90 @@ TEST_F(PaginationExecTest, AnalyzeCountsEmittedRowsAndExaminedStaysHonest) {
     EXPECT_EQ(MeterOf(reply, "rows"), 1u);
     EXPECT_EQ(MeterOf(reply, "examined"), 50u);
     EXPECT_NE(reply.find("quota offset=49"), std::string::npos) << reply;
+}
+
+// ---- The catalog views -----------------------------------------------
+//
+// A `sys.*` statement never reaches a step chain: the dispatcher answers
+// it from the catalog's typed readers before the compiler is asked for
+// one. That second row source used to accept the pagination tail and
+// enforce none of it - `SELECT name FROM sys.tables LIMIT 2` returned
+// every row - so what these pin is that the *contract* is the row
+// source's, not the chain's: rows [m, m+n) of the unlimited reply,
+// wherever the rows came from.
+
+// Splits a reply into its header line and its rows, on the literal
+// two-character "\n" the wire contract uses.
+std::vector<std::string> ReplyLines(const std::string& reply) {
+    std::vector<std::string> out;
+    std::size_t at = 0;
+    while (true) {
+        const std::size_t sep = reply.find("\\n", at);
+        if (sep == std::string::npos) {
+            out.push_back(reply.substr(at));
+            return out;
+        }
+        out.push_back(reply.substr(at, sep - at));
+        at = sep + 2;
+    }
+}
+
+// The reply a `LIMIT n OFFSET m` must give, built from the unlimited one
+// rather than from the bootstrap's relation list - which is a detail of
+// what the catalog happens to hold and no part of what pagination
+// promises.
+std::string SliceOf(const std::string& unlimited, std::size_t offset, std::size_t limit) {
+    const std::vector<std::string> lines = ReplyLines(unlimited);
+    std::string out = lines.front();
+    for (std::size_t i = 1 + offset; i < lines.size() && i < 1 + offset + limit; ++i) {
+        out += "\\n" + lines[i];
+    }
+    return out;
+}
+
+TEST_F(PaginationExecTest, ACatalogViewsReplyIsASliceOfItsUnlimitedReply) {
+    Run("CREATE TABLE t (id int64, v varchar)");
+
+    const std::string all = Run("SELECT name FROM sys.tables");
+    const std::size_t rows = ReplyLines(all).size() - 1;
+    ASSERT_GE(rows, 5u) << "the bootstrap catalog must hold enough rows to slice: " << all;
+
+    EXPECT_EQ(Run("SELECT name FROM sys.tables LIMIT 2"), SliceOf(all, 0, 2));
+    EXPECT_EQ(Run("SELECT name FROM sys.tables LIMIT 1 OFFSET 3"), SliceOf(all, 3, 1));
+    EXPECT_EQ(Run("SELECT name FROM sys.tables OFFSET 2"), SliceOf(all, 2, rows));
+    EXPECT_EQ(Run("SELECT name FROM sys.tables LIMIT 99"), all);
+    // Only the header: the two ends of the range, and the pair that most
+    // easily degrades into "returned everything" unnoticed.
+    EXPECT_EQ(Run("SELECT name FROM sys.tables LIMIT 0"), ReplyLines(all).front());
+    EXPECT_EQ(Run("SELECT name FROM sys.tables OFFSET 9999"), ReplyLines(all).front());
+}
+
+TEST_F(PaginationExecTest, ACatalogViewsQuotaRunsAfterItsWhere) {
+    // OFFSET skips *qualifying* rows here for the same reason it does on a
+    // chain: the predicate filters, then the quota counts. `sys.columns`
+    // is the view with several rows per relation, so the filtered set is
+    // big enough to slice and small enough to name.
+    Run("CREATE TABLE t (id int64, a int64, b int64, c int64)");
+    const std::string all = Run("SELECT name FROM sys.columns WHERE rel_name = 't'");
+    ASSERT_EQ(ReplyLines(all).size() - 1, 4u) << all;
+
+    EXPECT_EQ(Run("SELECT name FROM sys.columns WHERE rel_name = 't' LIMIT 2"),
+              SliceOf(all, 0, 2));
+    EXPECT_EQ(Run("SELECT name FROM sys.columns WHERE rel_name = 't' LIMIT 1 OFFSET 2"),
+              SliceOf(all, 2, 1));
+}
+
+TEST_F(PaginationExecTest, ACatalogViewRefusesOrderByWithTheByte) {
+    // Declined, not ignored. `OutputSort` normalizes its keys against a
+    // Schema the view does not have, so the clause cannot be served here -
+    // and a clause that cannot be served is refused, never accepted and
+    // dropped (which is what this statement used to do).
+    const std::string reply =
+        dispatcher_->Dispatch("SELECT name FROM sys.tables ORDER BY name DESC").response;
+    EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
+    EXPECT_NE(reply.find("ORDER BY over a catalog view"), std::string::npos) << reply;
+    // The byte of the sort column, which is what the client has to fix.
+    EXPECT_NE(reply.find("(byte 37)"), std::string::npos) << reply;
 }
 
 }  // namespace

@@ -55,8 +55,10 @@ protected:
         }
     }
 
-    // Asks for one block from core 1 and runs it to completion.
-    Status Refill(std::uint64_t count = kTrxIdLeasePerGrant) {
+    // Asks for one block from core 1 and runs it to completion. The block
+    // size is not a parameter: `RequestTrxIdLease` does not take one, and
+    // every caller used the default - a knob that controlled nothing.
+    Status Refill() {
         bool finished = false;
         Status result;
         core1_->Submit(sched::MakeCoroTask(

@@ -16,8 +16,8 @@
 //       [HEAP | BTREE] [ASSIGNED | EXPLICIT];   -- either order, each once
 //   INSERT INTO  <name> VALUES (<val> [, ...]);
 //   SELECT <list> FROM  <rel> [<join>]* [WHERE <cond> [AND <cond>]*]
-//       [GROUP BY <col> [, ...]]
-//       [ORDER BY <col> [ASC]] [LIMIT <int>] [OFFSET <int>];
+//       [GROUP BY <col> [, ...]] [HAVING <hcond> [AND <hcond>]*]
+//       [ORDER BY <key> [ASC]] [LIMIT <int>] [OFFSET <int>];
 //   UPDATE <name> SET <col> = <val> [, ...] [WHERE <cond> [AND <cond>]*];
 //   CREATE PATTERN <name> ($p <type> [, ...]) [WITH (<k> = <v>, ...)]
 //       OF <select>;
@@ -32,11 +32,14 @@
 //   <list>  ::= * | <item> [, <item>]*
 //   <item>  ::= <col> | <agg> ( [DISTINCT] <col> | * )
 //   <agg>   ::= COUNT | SUM | MIN | MAX
+//   <hcond> ::= <item> <op> <val> | <item> IS [NOT] NULL
+//   <key>   ::= <item>
 //
-// Deliberate limitations: no HAVING and no expressions; WHERE is a flat
+// Deliberate limitations: no expressions; WHERE and HAVING are each a flat
 // AND-only conjunct list (no OR; NOT only in the reserved negation forms),
 // with predicate-position subqueries per V07 and explicit select lists per
-// V06. No quote-escaping in string literals.
+// V06. HAVING compares an aggregate against a literal and nothing else
+// (docs/workplan-having.md HV3). No quote-escaping in string literals.
 // docs/parser-v2.md specifies the grammar this is growing into.
 //
 // Two decisions worth stating, because both push work downstream on
@@ -155,14 +158,6 @@ struct ColumnName {
     std::uint32_t byte_offset = 0;  // of the qualifier if any, else of the name
 
     bool qualified() const noexcept { return !qualifier.empty(); }
-};
-
-// One `ORDER BY` key: a column and the direction written beside it
-// (docs/workplan-order-by.md OB1). `ASC` and a bare column are the same
-// key - the standard's default - so only descending needs a bit.
-struct SortKey {
-    ColumnName column;
-    bool descending = false;
 };
 
 // How many keys one `ORDER BY` may name (`[PROPOSED]`). A cap at all is
@@ -451,6 +446,48 @@ struct SelectItem {
     std::uint32_t byte_offset = 0;
 };
 
+// One `ORDER BY` key: what to order by and the direction written beside it
+// (docs/workplan-order-by.md OB1, amended by docs/workplan-having.md HV-1).
+// `ASC` and a bare key are the same key - the standard's default - so only
+// descending needs a bit.
+//
+// **A `SelectItem` and not a `ColumnName`**, since HV4 lets an aggregated
+// statement order by an aggregate: `ORDER BY COUNT(*) DESC` names something
+// no column reference can. A `SelectItem` with `is_aggregate == false` *is*
+// a column reference with an offset, so the non-aggregated path means
+// exactly what it meant - which is why this is one carrier rather than a
+// column plus an optional aggregate beside it.
+struct SortKey {
+    SelectItem key;
+    bool descending = false;
+};
+
+// One conjunct of a `HAVING` clause (docs/workplan-having.md HV1, HV3).
+//
+// The clause is a flat AND-only list, like WHERE and for WHERE's reason:
+// this grammar has no expression tree, and an OR would need one. What
+// differs from WHERE is the two ends - the left side is an *aggregate*
+// (HV2), and the right side is a literal and nothing else, because a
+// post-fold predicate has no row to read a column from and no place to put
+// a sub-chain (HV3).
+struct HavingCondition {
+    // What is being compared: the fold's answer for this aggregate.
+    //
+    // Carried as a `SelectItem` because that is precisely what was
+    // written - `count(*)`, `sum(distinct qty)` - and because the compiler
+    // matches it against the select list's items by resolved identity, so
+    // one carrier keeps that comparison honest. A plain column reaches
+    // here too and is refused at compile: whether a name is a grouping key
+    // is catalog knowledge (HV-2), not shape.
+    SelectItem agg;
+
+    CompareOp op = CompareOp::kEq;
+
+    // The right-hand side. Unread for `kIsNull` / `kIsNotNull`, which take
+    // none - the same rule `Condition::val` follows one clause over.
+    AstValue val;
+};
+
 struct SelectStmt {
     // The select list, or empty for `SELECT *`. Star is refused once
     // there is more than one relation for it to be ambiguous across:
@@ -491,12 +528,26 @@ struct SelectStmt {
     // the grammar has no expressions and GROUP BY does not grow one.
     std::vector<ColumnName> group_by;
 
+    // The `HAVING` conjuncts in written order, AND-combined, empty when no
+    // clause was written (docs/workplan-having.md HV-1).
+    //
+    // **A HAVING makes a statement aggregated**, exactly as a GROUP BY
+    // does and for the same reason: it consumes the fold's output rows, so
+    // there has to be a fold. That needs no refusal of its own - a bare
+    // ungrouped column beside it meets AG5's, with its own byte.
+    std::vector<HavingCondition> having;
+
     // ---- The pagination tail (docs/parser-v2.md I11, workplan V09) ------
     //
-    // `[ORDER BY <col> [ASC]] [LIMIT <n>] [OFFSET <m>]`, clauses in that
-    // order and each independently optional, parsed only on a
-    // non-aggregated depth-0 block - an aggregated statement's tail and a
-    // subquery's are refused at parse with a position.
+    // `[ORDER BY <key> [ASC]] [LIMIT <n>] [OFFSET <m>]`, clauses in that
+    // order and each independently optional, parsed on a depth-0 block - a
+    // subquery's tail is refused at parse with a position.
+    //
+    // **`[AMENDED 2026-08-24 — docs/workplan-having.md HV4]`** `ORDER BY`
+    // is parsed over an aggregated statement too, where a key may be an
+    // aggregate; `LIMIT` and `OFFSET` stay refused there (HV5), because
+    // serving them would promote AG6's deterministic fold order into a
+    // client contract.
     //
     // `LIMIT` without `ORDER BY` is well-defined here in a way general SQL
     // cannot promise: emission order is already a client contract (I12 -
@@ -505,8 +556,9 @@ struct SelectStmt {
     //
     // `order_by` carries the written sort keys in written order, empty when
     // no `ORDER BY` was written. The parser judges *shape* only - a column
-    // reference, not an ordinal and not an expression - because which
-    // relation a name belongs to and whether it is the pk are catalog
+    // reference or (over a fold) an aggregate call, never an ordinal and
+    // never an expression - because which relation a name belongs to,
+    // whether it is the pk, and whether it is a grouping key are catalog
     // knowledge, and the compiler is where catalog knowledge lives.
     //
     // `DESC` reaches the AST: an output sort does not walk, so descending

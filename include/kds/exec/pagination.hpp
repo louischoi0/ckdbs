@@ -24,6 +24,16 @@
 // and fetches no further page. Early termination is the existing stop
 // propagation, not new machinery.
 //
+// **That cheapness argument is the chain caller's alone.** A catalog view
+// (`SELECT ... FROM sys.tables`) has no walk to stop: the dispatcher
+// answers it from `exec::ReadCatalogView`, which materializes every row
+// of the view before this object exists. The quota is exactly as
+// *correct* there - same verdicts, same [m, m+n) reply - and buys only
+// the rendering of the rows it skips, never the reading of them. So
+// `LIMIT 1` over a view costs a whole view, and a client-facing promise
+// that an offset costs O(offset) is a statement about relations, not
+// about `sys.*`.
+//
 // ---- The contract --------------------------------------------------------
 //
 // Emission order is a client contract (I12: written order across steps,
@@ -55,7 +65,22 @@ enum class QuotaVerdict : std::uint8_t {
 class EmissionQuota {
 public:
     explicit EmissionQuota(const StepChain& chain) noexcept
-        : offset_(chain.offset), limit_(chain.limit) {}
+        : EmissionQuota(chain.offset, chain.limit) {}
+
+    // The tail on its own, for the one row source that is not a chain: a
+    // catalog view is materialized by the catalog's typed readers, so it
+    // has no `StepChain` to read the clause off. The quota is the same
+    // object either way, which is the point - one place decides what
+    // `LIMIT n OFFSET m` means, and a view's reply is rows [m, m+n) of
+    // its unlimited reply by the same rule every other statement obeys.
+    //
+    // `explicit`, and offset first: SQL writes `LIMIT n OFFSET m`, so a
+    // reader's eye supplies the opposite order to the one the arguments
+    // take. The keyword blocks the brace-initialized call - `f({0, 5})` -
+    // which is the form that would swap them invisibly; a direct call
+    // still has to name what it passes.
+    explicit EmissionQuota(std::uint64_t offset, std::optional<std::uint64_t> limit) noexcept
+        : offset_(offset), limit_(limit) {}
 
     // Called once per row the chain produced, in emission order. Not
     // idempotent - each call advances the quota - so exactly one call per

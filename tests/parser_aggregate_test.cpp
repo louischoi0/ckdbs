@@ -274,20 +274,135 @@ TEST(ParserAggregateTest, CountDistinctStarIsRefused) {
     EXPECT_TRUE(MentionsByte(parsed.status(), 22));
 }
 
-TEST(ParserAggregateTest, HavingIsRefusedWithItsOwnPosition) {
-    const StatusOr<Statement> parsed =
-        Parse("SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1");
-    ASSERT_FALSE(parsed.ok());
-    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
-    EXPECT_TRUE(MentionsByte(parsed.status(), 37));
+// ---- HAVING (docs/workplan-having.md HV-1) --------------------------------
+//
+// AG7 refused this clause by text at exactly this position for as long as
+// there was no post-fold consumer to hand it to. HV1 puts one at the AG1
+// seam, so the clause is parsed here and the refusals that remain are about
+// its *shape*: what may stand on each side, and nothing about the catalog.
+
+TEST(ParserAggregateTest, HavingParsesIntoConjuncts) {
+    const SelectStmt sel =
+        MustSelect(Parse("SELECT b, COUNT(*) FROM t GROUP BY b HAVING COUNT(*) > 1"));
+    ASSERT_EQ(sel.having.size(), 1u);
+    EXPECT_TRUE(sel.having[0].agg.is_aggregate);
+    EXPECT_EQ(sel.having[0].agg.func, AggFunc::kCount);
+    EXPECT_TRUE(sel.having[0].agg.star_arg);
+    EXPECT_EQ(sel.having[0].agg.byte_offset, 44u);
+    EXPECT_EQ(sel.having[0].op, CompareOp::kGt);
+    EXPECT_EQ(sel.having[0].val.type, ValueType::kInt);
+    EXPECT_EQ(sel.having[0].val.int_val, 1);
 }
 
-TEST(ParserAggregateTest, OrderByOverAggregatedOutputIsRefused) {
+// AND-combined and in written order, the shape WHERE already has - and for
+// WHERE's reason: this grammar has no expression tree, so there is no OR.
+TEST(ParserAggregateTest, HavingConjunctsAreAndCombinedInWrittenOrder) {
+    const SelectStmt sel = MustSelect(
+        Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) >= 2 AND SUM(DISTINCT q) < 10"));
+    ASSERT_EQ(sel.having.size(), 2u);
+    EXPECT_TRUE(sel.having[0].agg.is_aggregate);
+    EXPECT_EQ(sel.having[0].op, CompareOp::kGte);
+    EXPECT_EQ(sel.having[1].agg.func, AggFunc::kSum);
+    EXPECT_TRUE(sel.having[1].agg.distinct);
+    EXPECT_EQ(sel.having[1].agg.column.name, "q");
+    EXPECT_EQ(sel.having[1].op, CompareOp::kLt);
+    EXPECT_EQ(sel.having[1].val.int_val, 10);
+}
+
+// The one predicate with no right-hand side, and the only way to ask for a
+// group whose SUM folded no non-NULL value (AG4, spec-null.md §4).
+TEST(ParserAggregateTest, HavingTakesIsNullAndIsNotNull) {
+    const SelectStmt null_sel =
+        MustSelect(Parse("SELECT b FROM t GROUP BY b HAVING SUM(q) IS NULL"));
+    ASSERT_EQ(null_sel.having.size(), 1u);
+    EXPECT_EQ(null_sel.having[0].op, CompareOp::kIsNull);
+
+    const SelectStmt not_null_sel =
+        MustSelect(Parse("SELECT b FROM t GROUP BY b HAVING SUM(q) IS NOT NULL"));
+    ASSERT_EQ(not_null_sel.having.size(), 1u);
+    EXPECT_EQ(not_null_sel.having[0].op, CompareOp::kIsNotNull);
+}
+
+// A HAVING makes a statement aggregated exactly as a GROUP BY does: it
+// consumes the fold's output rows, so there has to be a fold.
+TEST(ParserAggregateTest, HavingAloneMakesTheStatementAggregated) {
+    const SelectStmt sel = MustSelect(Parse("SELECT COUNT(*) FROM t HAVING COUNT(*) > 5"));
+    EXPECT_TRUE(sel.aggregated());
+    EXPECT_TRUE(sel.group_by.empty());
+    ASSERT_EQ(sel.having.size(), 1u);
+}
+
+// A grouping key on the left parses - whether a name *is* a grouping key is
+// catalog knowledge, and HV-2 refuses it where that knowledge lives.
+TEST(ParserAggregateTest, HavingOnAPlainColumnParsesAndLeavesTheCheckToTheCompiler) {
+    const SelectStmt sel = MustSelect(Parse("SELECT b FROM t GROUP BY b HAVING b > 1"));
+    ASSERT_EQ(sel.having.size(), 1u);
+    EXPECT_FALSE(sel.having[0].agg.is_aggregate);
+    EXPECT_EQ(sel.having[0].agg.column.name, "b");
+}
+
+TEST(ParserAggregateTest, HavingAgainstAColumnIsRefusedAtTheColumn) {
     const StatusOr<Statement> parsed =
-        Parse("SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b");
+        Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > b");
     ASSERT_FALSE(parsed.ok());
     EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
-    EXPECT_TRUE(MentionsByte(parsed.status(), 37));
+    EXPECT_TRUE(MentionsByte(parsed.status(), 45));
+}
+
+// A call this grammar has no function for, refused at the name rather than
+// at the comparison operator that never arrived.
+TEST(ParserAggregateTest, HavingOverANonAggregateCallIsRefusedAtTheName) {
+    const std::string_view sql = "SELECT b FROM t GROUP BY b HAVING foo(b) > 1";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), 34));
+}
+
+TEST(ParserAggregateTest, HavingAgainstAnotherAggregateIsRefusedAtIt) {
+    const StatusOr<Statement> parsed =
+        Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > SUM(q)");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), 45));
+}
+
+// AG8 from the other side: a sub-chain under a post-fold predicate puts an
+// aggregation boundary where the execution model has none.
+TEST(ParserAggregateTest, HavingAgainstASubqueryIsRefusedAtTheParen) {
+    const StatusOr<Statement> parsed =
+        Parse("SELECT b FROM t GROUP BY b HAVING COUNT(*) > (SELECT COUNT(*) FROM u)");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), 45));
+}
+
+// The fold makes `*` unanswerable for the same reason a GROUP BY does -
+// which columns it folds, and in what order, was never written.
+TEST(ParserAggregateTest, StarWithHavingIsRefused) {
+    const StatusOr<Statement> parsed = Parse("SELECT * FROM t HAVING COUNT(*) > 1");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_TRUE(MentionsByte(parsed.status(), 7));
+}
+
+// AG8: the fold's own refusal, reached through the clause that made the
+// block aggregated, and pointed at that clause.
+TEST(ParserAggregateTest, HavingInsideASubqueryIsRefused) {
+    const StatusOr<Statement> parsed =
+        Parse("SELECT * FROM t WHERE id IN (SELECT id FROM u HAVING COUNT(*) > 1)");
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), 46));
+}
+
+// Unreserved like every other clause head here: `having` is still a column
+// name everywhere a column name can stand, which is what keeps the
+// fingerprint from moving.
+TEST(ParserAggregateTest, HavingIsNotReserved) {
+    const SelectStmt sel = MustSelect(Parse("SELECT having FROM t WHERE having = 1"));
+    ASSERT_EQ(sel.projection.size(), 1u);
+    EXPECT_EQ(sel.projection[0].name, "having");
 }
 
 TEST(ParserAggregateTest, ANonAggregatedOrderByParsesSinceV09) {
@@ -295,8 +410,11 @@ TEST(ParserAggregateTest, ANonAggregatedOrderByParsesSinceV09) {
     // anywhere, and only the aggregated refusal was this clause's
     // business. V09 made the non-aggregated form parse - the verdict
     // flipped with its task, exactly as the corpus comment schedules it -
-    // while the aggregated refusal above kept its answer. The tail's own
-    // grammar lives in parser_pagination_test.cpp; what this file still
+    // and HV4 flipped the aggregated form the same way on 2026-08-24, so
+    // the boundary this file held is now one of *shape* rather than one of
+    // support: an aggregate key is a key only where a fold can answer it.
+    // The tail's own grammar lives in parser_pagination_test.cpp; what this
+    // file still
     // holds down is the boundary between the two forms.
     const StatusOr<Statement> parsed = Parse("SELECT * FROM t ORDER BY id");
     ASSERT_TRUE(parsed.ok()) << parsed.status().message();

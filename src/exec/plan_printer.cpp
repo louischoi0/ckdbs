@@ -90,6 +90,7 @@ const char* PredicateKindName(parser::PredicateKind kind) noexcept {
         case parser::PredicateKind::kNotInSubquery: return "NOT IN";
         case parser::PredicateKind::kExists: return "EXISTS";
         case parser::PredicateKind::kNotExists: return "NOT EXISTS";
+        case parser::PredicateKind::kBetween: return "BETWEEN";
     }
     return "?";
 }

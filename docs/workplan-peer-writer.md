@@ -186,7 +186,68 @@ A peer can therefore write a heap relation with no secondary index the
 moment PW-B1 falls, and nothing else until PW2 decides how a root move
 reaches core 0.
 
-### PW-B3. A peer has no checkpointer
+### PW-B3. A peer has no checkpointer — **built 2026-08-21**
+
+**Closed.** `CoreRuntime` now owns a `PageStoreCheckpointTarget`, a
+`RemoteCheckpointAnchor` and a `wal::Checkpointer`, built at
+`AttachTransport()` rather than `Open()` for the one reason that placement
+has: the anchor publishes over the ring, so it cannot exist before the ring
+does. Two things run off it — the **completion checkpoint** (RC08's half for
+a peer, at `AttachTransport`, so a mount bounds the next crash) and the
+**cadence** (`wal.md` §11, in `Run()`, gated on `checkpoint_interval_ns`).
+Peers only: core 0's checkpointer is `Expeditor`'s, and a core-0
+`CoreRuntime` — which exists only in tests — would send its anchor to itself.
+
+`APeersCheckpointAnchorReachesCoreZerosSuperblock` asserts the end of the
+path rather than the send: core 0's superblock carries core 1's anchor, and
+a second checkpoint advances it rather than republishing the first. Verified
+to fail with the checkpointer removed.
+
+**Its review found a silent-corruption route PW3 armed**, fixed with it.
+`DevicePageStore::FlushMaps` is the one write path that reaches
+`device_.WritePage` without asking `MayWrite`, and it writes the two map
+pages a peer may read and never write. A peer acquires a dirty map bit at
+mount — redo's `CreateAt` runs *before* `SetCoreOwnership` installs the
+lease, which `core_runtime.cpp` orders that way deliberately — and until PW3
+nothing on a peer ever called `FlushPages`, so nothing ever flushed it. The
+checkpointer is the first caller. A peer's cadence checkpoint would have
+written back the free map as it stood when that store opened, reverting every
+allocation and extent reservation core 0 had made since: silent reuse of live
+pages, not a lost bit. Guarded at `FlushMaps` with the reason at the site, and
+pinned by `ALeasedStoreNeverWritesTheMapsBackToTheDevice` — the existing
+`ALeasedStoreNeverMutatesTheFreeMap` group covered the *set* half and never
+the *write-out* half. Verified to fail unguarded.
+
+Two decisions inside it:
+
+- **The assertion snapshot source is wired even though it writes nothing.**
+  A peer's registry is empty — `ResumeAssertionsAfterRecovery` runs only on
+  core 0 — so no group snapshots are written today. Omitting the wiring
+  would be the silent kind of gap: a peer that later enforces would
+  checkpoint without snapshots, and the next mount would find no base to
+  fold from, which is exactly the failure RC07 exists to prevent.
+- **`StartWriter()` is *not* called for a peer**, and that was checked
+  rather than assumed. `WalManager::Sync()` runs on the calling thread
+  always, writer or not, by an explicit decision in its own header — so
+  `SyncAll`, `EnsureDurable`, D1's commit and the checkpoint's own gate
+  (`Checkpointer::Complete` → `EnsureDurable`) are byte-identical with and
+  without one. **The review named the one path that is not**: `DrainOnce`'s
+  D3 relaxed branch hands its flush to the writer when there is one and falls
+  through to `Sync()` on the reactor when there is not. `Run()` arms that
+  drain both as a post-task hook and as a timer, so under
+  `durability = relaxed` a peer charges that fsync to its reactor where core 0
+  does not — 2,208 µs against 194 µs at p99, by the number recorded at that
+  site. Free before PW3, because a peer's stream was empty; not free from
+  here, because it now carries this feature's own `CHECKPOINT_BEGIN`/`END`.
+  Still not PW3's to change, and now named rather than waved at.
+
+  Two adjacent staleness findings, neither PW3's: `expeditor.cpp`'s "every
+  sync moves to the WAL writer thread… and the checkpoint gate's" is wrong on
+  two of its three items, and a peer's WAL opens with a default
+  `WalManagerConfig`, so its `relaxed_flush_interval_ns` is the 10 ms default
+  rather than the configured one — load-bearing from this commit on.
+
+### The original statement of PW-B3, for the record
 
 `CoreRuntime` submits a WAL drain cadence and a lease refill
 (`src/server/core_runtime.cpp:377`, `:385`) and **no checkpointer** —
@@ -255,16 +316,22 @@ per-core instance is a `SO_REUSEPORT` setsockopt beside the existing
 | # | Task | Gate |
 |---|---|---|
 | PW1 | **Built 2026-08-21.** Trx-id lease over the ring (`kTrxIdLease`), mirroring `row_id_lease_service`. Core 0 persists the ceiling before granting; the reserve arithmetic and the mount check's zero bound corrected with it | none |
-| PW1b | Make a peer *ask* for row-id blocks. `RequestRowIdLease` exists and has no callers, so a peer INSERT still dies at its row id. **Needs a decision**: a per-relation lease has no pre-emptive tick to ride, so something must choose which relations a peer leases for — on first exhaustion with a retry, at first write to a relation, or at the CC7 fault grant | PW1 |
+| PW1b | **Built 2026-08-21.** A peer asks for row-id blocks: the miss records the demand, the drain tick answers it. Decision taken — **demand-driven, not pre-emptive** (§7a) | PW1 |
+| PW1c | **Write rights on a peer-owned relation's pages.** Found by probe while building PW1b, not by reading: with both leases in hand a peer INSERT still fails, `core 1 may not write page 130`. `MayWrite` grants a peer only pages from its own *extent* lease, and CC7's grant is fault rights only, deliberately. **Needs a decision — §7b** | PW1, PW1b |
 | PW2 | Route the two root-move catalog writes. **Needs a decision — §7** | PW1, PW1b |
-| PW3 | Wire a peer checkpointer through `RemoteCheckpointAnchor` | PW1 |
+| PW3 | **Built 2026-08-21.** A peer checkpointer through `RemoteCheckpointAnchor`: the completion checkpoint at `AttachTransport`, the `wal.md` §11 cadence in `Run()` | PW1 |
+| PW3b | The **shutdown** checkpoint, which PW3 did not ship — core 0 has three checkpoint points and a peer now has two. A graceful restart replays up to one `checkpoint_interval_ms` of every peer's stream. **Needs a decision**: after the worker join both reactors are stopped, so a queued anchor send is never polled; it wants either one more core-0 ring drain after the join, or a different anchor on the shutdown path | PW3 |
 | PW4 | Name the peer DDL refusal, and hang §5d's purge gate off it | none |
 | PW5 | `SO_REUSEPORT` per-core listeners; share the credential store and TLS context without sharing them mutably | PW1, PW4 |
 | PW6 | The benchmark: `placement = rotate`, one writer connection per core, per-core relations. The first cross-core number that is a speedup and not a cost | PW1-PW5 |
 
-PW1 + PW1b make a peer write a heap relation with no secondary index, so
-PW1 + PW1b + PW3 + PW5 is a shippable slice with a real number at the end of
-it and a stated shape restriction. PW2 is what removes the restriction.
+PW1 + PW1b + **PW1c** make a peer write a heap relation with no secondary
+index by single-row INSERT — PW1c is the door the probe found behind PW1b, and it was not in this
+workplan's original three because it is not on the *id* path at all. PW1c +
+PW3 + PW5 is then a shippable slice with a real number at the end of it and a
+stated shape restriction; PW2 removes the restriction. Taking §7b's option
+(c) would collapse PW1c and PW5 into one task and is the current
+recommendation.
 
 **Deferred cleanup, with a name** (PW1's review, rejected for PW1 itself):
 `trx_id_lease_service.cpp`'s receiver and request coroutine are a third
@@ -277,6 +344,105 @@ that had not landed; the right moment is when a change next touches those
 funnels. **Not** to be merged with it: `TrxIdLease`, `catalog::RowIdLease`
 and `storage::Extent` are three id domains with three exhaustion contracts,
 and they resemble each other more than they share.
+
+## 7a. The decision PW1b took, and why
+
+A row-id lease is per **relation**. PW1's transaction-id lease is per
+*instance*, so a peer can pre-empt for it from its first tick — there is
+exactly one subject and it always exists. Nothing on a peer knows that a
+relation needs ids until a statement names one, so the three options were:
+ask on first exhaustion, ask at first write, or ask at the CC7 fault grant.
+
+**Taken: demand-driven.** `RowIdLeaseTable::Next` inserts the spent entry on
+a miss, which turns the failure into a recorded request; `MaybeRefillRowIds`
+on the drain tick asks for the neediest relation, one in flight per core;
+`RowIdLease::window` gives it PW1's quarter-window low-water mark, so a
+relation is topped up before it is spent and asked for exactly once.
+
+The client-visible consequence, stated because it is a contract and not an
+implementation detail: **the first single-row INSERT into a relation on a
+given peer fails retryably, and no later one does.** *Single-row* is exact
+and was corrected at review: the multi-row `VALUES` path calls
+`Catalog::AllocateRowIdRange`, which never consults the lease table at all,
+so a peer's bulk INSERT bypasses the lease and dies at the catalog page
+write. That is a fifth thing PW1c or PW4 has to reach, not something PW1b
+left half-done. That is exactly what that lease's
+`ResourceExhausted` message has always promised — "retry after the refill
+grant lands" — and it is the same retryable shape CC3's cross-core write
+refusal already uses, so a client that retries on those needs no new code.
+
+Rejected: **at the CC7 fault grant**, which would avoid the first failure.
+`ExtentGrantPayload` carries no oid, so it needs a wire change; and it leases
+ids for every relation placed on a peer whether or not the peer ever writes
+one. The saving is one retry per relation per mount.
+
+## 7b. The decision PW1c needs — do not assume
+
+**A peer with both leases still cannot INSERT.** Probed rather than reasoned:
+a rotated relation, a peer holding a transaction-id block, a row-id block and
+a CC7 fault grant, and `INSERT INTO rotated VALUES (7)` answers
+
+> ERR DevicePageStore: core 1 may not write page 130
+
+`MayWrite` allows a peer only the pages its own **extent lease** owns. The
+relation's pages were allocated from core 0's free map at `CREATE TABLE`, so
+the tail page an INSERT appends to is core 0's, and the write is refused.
+
+**And the refusal above is a Debug-only refusal.** Found at PW1b's review
+2026-08-21 and stated nowhere else: the whole `MayFault`/`MayWrite` check
+sits inside `#ifndef NDEBUG` (`device_page_store.cpp`, "the shared-nothing
+check … debug builds only"). In `build-release` — where this project's
+measurement rule says every number is taken — that same peer INSERT does
+**not** refuse. It dirties core 0's page in the peer's own store and the last
+flush wins.
+
+So PW1c is not a door to open. It is a **silent two-writer corruption route
+that opens the moment PW5 gives a peer a listener**, and it would have been
+invisible in exactly the build PW6 measures. That makes **PW1c before PW5 an
+ordering requirement, not a preference** — the Debug check is an assertion
+of a shared-nothing invariant whose actual enforcement is statement dispatch,
+and a peer listener is what removes the dispatch.
+
+**This is not an oversight to patch.** `device_page_store.hpp` says it in as
+many words — *"MayWrite deliberately never [consults the granted list] - a
+grant is [read rights only]"* — and CC7 explains why: a grant is
+**extent-granular**, so a granted extent may carry pages of *other* core-0
+relations. CC7 calls that the "superset assertion" and accepts it precisely
+because the enforced mechanism is statement dispatch, never the assertion.
+A superset is safe to *fault* and not safe to *write*: it would let a peer
+write another relation's pages.
+
+So closing it means picking one, and each is a real design commitment:
+
+- **(a) Per-relation write grants.** Make the grant carry the relation and
+  its exact page range rather than an extent, and let `MayWrite` consult it.
+  Ends the superset for writes; costs a wire change and a grant that has to
+  be re-sent as a relation grows.
+- **(b) Allocate a peer-owned relation's pages from the owner's *free-map*
+  allocation at DDL.** CC7 records this as considered and rejected — "a new cross-core
+  allocation protocol inside DDL that still needs a creation-time write
+  exception" — but it was rejected when no peer could write at all, and the
+  premise it was rejected under is the one PW1 removed.
+- **(c) Ship the DML statement to the owner core** (`crosscore.md` §6's first
+  bullet, "involves no pipeline"). Then no peer ever writes a page core 0
+  allocated, because the *owner* executes the write, and PW1c disappears
+  rather than being solved. This is the route that also fixes PW5's
+  no-steering problem.
+- **(d) Grant a peer-owned relation a fresh *write* extent at DDL** — core 0
+  reserves an extent per peer-owned relation and grants it through the
+  existing `kExtentLease` path into `lease_`, rather than as a CC7 fault
+  grant, and that relation's pages are allocated only from inside it. Added
+  at PW1b's review, and it is the cheapest of the four: **no wire change and
+  no new protocol**, because both halves already exist. It also makes CC7's
+  superset **empty by construction**, which is the precise objection that
+  rules out granting write rights over an arbitrary extent. Costs one extent
+  (64 pages, 512 KiB) minimum per peer-owned relation. A strictly cheaper
+  cousin of (b) that avoids (b)'s stated defect — no cross-core allocation
+  protocol inside DDL.
+
+CLA's recommendation is **(d) then (c)**: (d) closes the corruption route on
+its own and unblocks PW5, and (c) remains the right end state because it
+makes steering a non-question. (a) and (b) are dominated by (d).
 
 ## 7. The decision PW2 needs — do not assume
 

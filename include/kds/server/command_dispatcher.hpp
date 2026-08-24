@@ -155,7 +155,7 @@ struct DispatchOutcome {
     // `Dispatch()` can finish one only when it already completed (the
     // in-process loopback case), because with no reactor there is nothing
     // to pump the reply through.
-    std::optional<PipelineTag> pending_remote;
+    std::optional<PipelineTag> pending_remote = std::nullopt;
 
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/wal.md
@@ -238,12 +238,15 @@ public:
           access_stats_enabled_(access_statistics),
           cabins_(cabins),
           txn_(txn),
-          default_isolation_(isolation),
-          autocommit_session_(isolation),
           core_id_(core_id),
           indexes_enabled_(indexes),
           max_insert_rows_(max_insert_rows),
-          default_key_mode_(default_key_mode) {
+          default_key_mode_(default_key_mode),
+          // Last two, matching their declaration order below. Order-free:
+          // every initializer here reads a constructor parameter, and none
+          // reads another member.
+          default_isolation_(isolation),
+          autocommit_session_(isolation) {
         // The one place a catalog and a manager are known to belong
         // together, which is why DT9's wiring is here and not in each
         // server's startup: a new construction site - a test fixture
