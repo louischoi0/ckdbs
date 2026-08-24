@@ -479,3 +479,61 @@ spending a decision, and (b) removes the constraint for every core rather
 than building a cross-core protocol inside the insert path. (a) buys the
 widest scope for the most reasoning about failure. But this is `crosscore.md`
 §9's kind of decision and belongs to whoever owns it.
+
+## 8. The PW1c decision — decided 2026-08-24 (operator-delegated)
+
+**The write handoff, riding PL-B.** A peer gains write rights over a
+rotated relation's creation pages through the handoff contract
+`docs/spec-page-lsn-cross-stream.md` §9 ratifies, upgrading CC7's
+DDL-publish sequence from flush-then-fault-grant to **flush → handoff
+record → grant-with-write-rights**. Decided on `r1-peer-ddl-refusal` at
+`7c5432c`; nothing below is built except the interim guard.
+
+The fact that forced the shape: `Catalog::CreateTable` formats the root
+and RV3 logs it in **core 0's stream** (`src/catalog/catalog.cpp:1143`),
+so a rotated relation's creation pages carry a core-0-stream `page_lsn`
+and a peer's first write is a cross-stream transition — the §3 failure of
+the PL spec. Per-relation write grants alone are therefore unsound; they
+need the handoff, and coupling PW1c to PL-B makes it PL-B's **first
+consumer**, on its easiest case: pages that are quiescent and freshly
+flushed at DDL publish. The machinery is owed anyway — the range
+blueprint's R5 mover and `feat-physical-optimizer.md` §6 gate 3 both need
+it — so nothing here is throwaway.
+
+The other two known-gaps options, resolved:
+
+- **Owner allocates at DDL — rejected.** CC7's decision record already
+  rejected it ("a new cross-core allocation protocol inside DDL that
+  still needs a creation-time write exception"), and it dodges PL only at
+  creation while the mover still needs the general mechanism.
+- **DML statement shipping — reframed, not rejected.** It answers
+  *session* placement (M3's cliff), not page ownership: a shipped write
+  executes on the owner core against the same core-0-formatted pages.
+  Complementary; stays its own future item.
+
+Two rules that are correctness statements:
+
+1. **Write rights are exact-page, never extent.** The superset that is
+   safe to fault is not safe to write. The set is small by construction:
+   the creation pages (root, and the var-heap page when one exists) —
+   growth pages come from the owner's own lease and are its stream's from
+   birth, so they need no handoff.
+2. **The handoff record is durable before the grant leaves core 0** —
+   PL §9 rule 1's ordering, restated because DDL publish is where it will
+   be implemented.
+
+| # | Task | Gate |
+|---|---|---|
+| PW1c-1 | The handoff record: kind, payload (page id, incoming core, outgoing LSN), an ordinary record type per RV3's no-format-bump precedent | PL §9 (ratified) |
+| PW1c-2 | Analysis drops a handed-off page from the outgoing stream's dirty page table; redo never touches it | PW1c-1 |
+| PW1c-3 | The PL-C stamp: `page_flags` carries `core_id + 1` on the incoming core's first write; a reachable mismatch is Corruption at mount | PW1c-1 |
+| PW1c-4 | Exact-page write grants in `DevicePageStore`; CC7's publish upgraded to send them after the handoff record is durable | PW1c-1..3 |
+| PW1c-5 | Remove the interim guard below; the e2e peer-INSERT test | PW1c-4 |
+
+**The interim guard, built with this decision (2026-08-24):** a peer
+dispatcher refuses INSERT/UPDATE/DELETE by name, beside PW4's DDL guard.
+It closes the release-build two-writer route `docs/known-gaps.md` names —
+`MayWrite`'s enforcement is Debug-only, so without this a peer-accepted
+INSERT into a rotated relation silently dirtied core 0's page — which
+became reachable the day PW5 landed. PW6's write benchmark waits on
+PW1c-4, not on more listener work.

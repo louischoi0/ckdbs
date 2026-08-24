@@ -32,4 +32,11 @@ Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb) {
         "(workplan-peer-writer.md PW4)");
 }
 
+Status PeerWriteRefused(std::uint32_t this_core, std::string_view verb) {
+    return Status::Unsupported(
+        std::string(verb) + " writes pages, and core " + std::to_string(this_core) +
+        " cannot yet write pages the system core allocated: the write handoff is unbuilt "
+        "(workplan-peer-writer.md PW1c) - a peer listener is read-only for now");
+}
+
 }  // namespace kds::server

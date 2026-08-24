@@ -1520,6 +1520,13 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesForeignAndRoutes
     const std::string foreign = RoundTrip(fd, "SELECT * FROM local0");
     EXPECT_EQ(foreign.rfind("ERR", 0), 0u) << foreign;
     EXPECT_NE(foreign.find("owned by core 0"), std::string::npos) << foreign;
+    // Refused: every DML write, even to the relation this core owns - the
+    // PW1c interim guard. Its creation pages are core 0's stream's, and
+    // in release nothing below dispatch would stop the two-writer route
+    // (workplan-peer-writer.md section 8).
+    const std::string write = RoundTrip(fd, "INSERT INTO rotated VALUES (7)");
+    EXPECT_EQ(write.rfind("ERR", 0), 0u) << write;
+    EXPECT_NE(write.find("PW1c"), std::string::npos) << write;
 
     // STOP: replied to, and routed - the kShutdown lands on core 0's ring
     // rather than stopping this reactor.

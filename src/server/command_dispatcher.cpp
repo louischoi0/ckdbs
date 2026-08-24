@@ -401,6 +401,16 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     // Keyed on `catalog_read_only_` (see its declaration) and deliberately
     // not on `core_id_`, and on exactly the token the routing below reads,
     // so the two cannot disagree about what a verb is.
+    // The PW1c interim guard, PW4's shape one statement class over: a
+    // peer's DML writes are refused whole until the write handoff lands
+    // (workplan-peer-writer.md §8). Poisons like the DDL guard and for
+    // the same reason. Release-load-bearing: the store's MayWrite
+    // enforcement is Debug-only.
+    if (catalog_read_only_ &&
+        (IEquals(cmd, "INSERT") || IEquals(cmd, "UPDATE") || IEquals(cmd, "DELETE"))) {
+        session.Poison();
+        return {ErrorReply(PeerWriteRefused(core_id_, cmd)), false};
+    }
     if (catalog_read_only_ &&
         (IEquals(cmd, "CREATE") || IEquals(cmd, "ALTER") || IEquals(cmd, "DROP"))) {
         // Inside an explicit transaction this poisons, like every other

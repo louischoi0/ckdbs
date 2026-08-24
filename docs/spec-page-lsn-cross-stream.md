@@ -75,6 +75,7 @@ runtime side.
 
 | Waiting item | Why |
 |---|---|
+| **PW1c — a peer writing a rotated relation's creation pages (decided 2026-08-24, the contract's first consumer)** | those pages are formatted and logged by core 0 at DDL, so the first peer write is exactly §3's transition; `workplan-peer-writer.md` §8 |
 | Dynamic page-to-core assignment, the statistics-driven mover | its whole premise is that a page changes owner |
 | "Every core equivalent" (retiring `workplan-crosscore.md` M5) | a catalog page written by any core is written by any stream |
 | Cross-core commit / 2PC (`wal.md` §3 `[OPEN]`) | one transaction's records in two streams |
