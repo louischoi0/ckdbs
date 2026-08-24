@@ -148,6 +148,14 @@ std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page) {
     return Load<std::uint64_t>(page, kPageOwnerOidOffset);
 }
 
+std::uint16_t GetPageStreamStamp(std::span<const std::byte, kPageSize> page) {
+    return Load<std::uint16_t>(page, kPageFlagsOffset);
+}
+
+void SetPageStreamStamp(std::span<std::byte, kPageSize> page, std::uint16_t stamp) {
+    Store<std::uint16_t>(page, kPageFlagsOffset, stamp);
+}
+
 std::uint64_t GetRelayoutEpoch(std::span<const std::byte, kPageSize> page) {
     return Load<std::uint64_t>(page, kPageRelayoutEpochOffset);
 }

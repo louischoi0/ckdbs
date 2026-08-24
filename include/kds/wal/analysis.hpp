@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <span>
 
 #include "kds/base/common.hpp"
@@ -113,16 +114,24 @@ struct AnalysisResult {
     // §9 rule 3): from that LSN the page belongs to another stream and
     // this stream's redo never touches it - sound because the handoff's
     // flush put everything logged before it in the durable image. A page
-    // that returns re-enters through its re-acquirer's ordinary records -
-    // but note the residual: those post-return records still pass an RV5
-    // gate that may compare against the *other* stream's page_lsn stamp.
-    // PW1c-3 is what makes that comparison answerable; this table alone
-    // does not close the returning page.
+    // that returns re-enters through its re-acquirer's ordinary records,
+    // and `handed_off` below is what lets redo treat its foreign-stamped
+    // image correctly (PW1c-3).
     //
     // Ordered containers throughout, not hashed ones: sched.md §8 requires
     // deterministic iteration, and a recovery whose page visit order
     // varies between runs cannot be replayed from a seed.
     std::map<PageId, Lsn> dirty_pages;
+
+    // Pages a PAGE_HANDOFF moved out of this stream in the scanned range -
+    // kept even when the page later re-entered `dirty_pages` (the
+    // returning page, A→B→A). Redo's PW1c-3 stamp check reads it: a
+    // foreign-stamped page *not* in this set means a handoff record was
+    // lost or mis-ordered (PL §9 rule 5, Corruption); one in this set is
+    // the returned page, whose durable image is the other stream's flushed
+    // state, so its page_lsn is incomparable and every admitted record
+    // applies (§9 rule 5a).
+    std::set<PageId> handed_off;
 
     std::map<std::uint64_t, TxnState> transactions;
 

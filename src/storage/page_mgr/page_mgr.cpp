@@ -31,6 +31,11 @@ void Frame::MarkDirty(wal::Lsn record_lsn) noexcept {
     if (record_lsn > page_lsn_) {
         page_lsn_ = record_lsn;
         SetPageLsn(bytes(), record_lsn);
+        // Named debt (PW1c-3): the PL-C stream stamp is not written here
+        // because a Frame knows no core. Nothing production-wired calls
+        // MarkDirty today; the day the pool joins the logged write path,
+        // it must stamp beside the LSN as DevicePageStore::StampPageLsn
+        // does, or a pool-written page reads "never stamped" forever.
     }
     // The page-modification line. Reports rec_lsn too, because the pair
     // (page_lsn, rec_lsn) is what a checkpoint and a recovery argument

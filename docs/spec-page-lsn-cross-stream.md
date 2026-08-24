@@ -249,6 +249,23 @@ context.
    that never crossed streams has a meaningful `page_lsn`, and no page may
    cross without acquiring a stamp on the way.
 
+5a. **The returned page (amended 2026-08-24 with PW1c-3, from the PW1c-2
+   review's finding on rule 5's phrasing).** Rule 5 covers only a
+   mismatch where analysis saw no handoff. A page that left and came
+   back (A→B→A) legitimately shows its own stream a *foreign* stamp: the
+   incoming handoff B→A lives in B's stream, so A's durable image of the
+   page is B's flushed state (rule 1a) and its `page_lsn` is B's byte
+   offset — incomparable, and an unbypassed RV5 gate could skip A's
+   post-return records against it, the §3 failure one step further down.
+   The rule: when a stream's redo reaches a foreign-stamped page that
+   analysis *did* see handed out (`AnalysisResult::handed_off`), the RV5
+   comparison is bypassed — every record admitted by the dirty-page-table
+   filter applies, and the first apply restamps the own stream, after
+   which RV5 governs again. Sound for rule 3's reason: the flush behind
+   the incoming grant put everything the other stream wrote in the
+   image, and the admitted records are exactly this stream's post-return
+   ones.
+
 Consequences that bind other work:
 
 - **Cross-core free-map reclamation is a handoff** (`docs/

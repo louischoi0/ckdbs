@@ -302,7 +302,10 @@ public:
     // whole of the obligation for a store with no stable storage under it:
     // there is no write-back to order against the log. A store that does
     // write back overrides this to also track the frame's recLSN and to
-    // hold the gate (DevicePageStore).
+    // hold the gate (DevicePageStore) - and, since PW1c-3, to stamp the
+    // owning stream (PL §9 rule 4). The default deliberately does not: a
+    // store with no stable storage never survives into a recovery where
+    // streams could be confused, and it knows no core to stamp.
     virtual Status StampPageLsn(PageId page_id, std::uint64_t lsn) {
         auto page = Get(page_id);
         if (!page.ok()) return page.status();

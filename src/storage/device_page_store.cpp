@@ -529,6 +529,12 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
     }
 
     SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
+    // PW1c-3, PL §9 rule 4: the stream that last wrote the page. Rides
+    // the LSN stamp because the two answer one question - *whose* offset
+    // is page_lsn - and a page stamped by one and not the other is what
+    // rule 5 calls Corruption.
+    SetPageStreamStamp(std::span<std::byte, kPageSize>(*it->second.bytes),
+                       static_cast<std::uint16_t>(core_id_ + 1));
     it->second.dirty = true;
     // First record since the frame was last written back wins: recLSN is
     // the *oldest* LSN redo must replay to make the page whole, so a later

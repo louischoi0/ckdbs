@@ -48,6 +48,21 @@ protected:
         std::move(MemoryLogDevice::Create(kSegmentSize).value());
     storage::InMemoryPageStore store_{server::kFirstUserPageId};
 
+    // Appends one HEAP_INSERT at `slot` and returns its LSN (0 on failure).
+    Lsn AppendHeapInsert(WalStream& w, std::uint16_t slot, unsigned char fill) {
+        const auto payload = Bytes(24, fill);
+        std::vector<std::byte> buf(kHeapWriteFixedSize + payload.size(), std::byte{0});
+        const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0, slot,
+                                  static_cast<std::uint16_t>(payload.size())};
+        auto n_enc = EncodeHeapWrite(buf, hw, payload);
+        EXPECT_TRUE(n_enc.ok()) << n_enc.status().message();
+        if (!n_enc.ok()) return 0;
+        auto lsn = w.Append({RecordType::kHeapInsert, 7, kPage},
+                            std::span(buf).first(n_enc.value()));
+        EXPECT_TRUE(lsn.ok()) << lsn.status().message();
+        return lsn.ok() ? lsn.value() : 0;
+    }
+
     // Appends PAGE_INIT for a heap page plus `n` tuple inserts, and returns
     // the analysis of the resulting stream.
     void WriteHeapStream(int n, unsigned char fill = 0xA1) {
@@ -61,17 +76,9 @@ protected:
         ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
 
         for (int i = 0; i < n; ++i) {
-            const auto payload = Bytes(24, static_cast<unsigned char>(fill + i));
-            std::vector<std::byte> buf(kHeapWriteFixedSize + payload.size(), std::byte{0});
-            const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0,
-                                      static_cast<std::uint16_t>(i),
-                                      static_cast<std::uint16_t>(payload.size())};
-            auto n_enc = EncodeHeapWrite(buf, hw, payload);
-            ASSERT_TRUE(n_enc.ok()) << n_enc.status().message();
-            ASSERT_TRUE(s.value()
-                            ->Append({RecordType::kHeapInsert, 7, kPage},
-                                     std::span(buf).first(n_enc.value()))
-                            .ok());
+            ASSERT_NE(AppendHeapInsert(*s.value(), static_cast<std::uint16_t>(i),
+                                       static_cast<unsigned char>(fill + i)),
+                      0u);
         }
         ASSERT_TRUE(s.value()->Sync().ok());
     }
@@ -259,6 +266,86 @@ TEST_F(RedoTest, AHandedOffPagesRecordsAreSkippedAndThePageNeverFaulted) {
     EXPECT_EQ(r.value().skipped_not_dirty, 3u) << "init + two inserts";
     EXPECT_FALSE(store_.Get(kPage).ok())
         << "redo must not create or fault a page that left the stream";
+}
+
+// ---- The PL-C stamp (PW1c-3, spec-page-lsn-cross-stream.md §9 4-5) -------
+
+TEST_F(RedoTest, AnAppliedRecordStampsTheOwningStream) {
+    // Rule 4: the stream stamp rides the page_lsn stamp, so a replayed
+    // page names the stream whose byte offsets its page_lsn is in.
+    WriteHeapStream(1);
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    ASSERT_GT(r.value().applied, 0u);
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u);  // core 0 + 1
+}
+
+TEST_F(RedoTest, AForeignStampWithNoHandoffSeenRefusesTheMount) {
+    // Rule 5. The page is stamped by stream 2 and this stream's analysis
+    // saw no PAGE_HANDOFF for it: a handoff record was lost or
+    // mis-ordered, so redo must refuse rather than compare incomparable
+    // page_lsns - the spec's §3 silent corruption made loud. The second
+    // pass revisits records RV5 would have skipped; the stamp check must
+    // fire first, because "a mismatch redo can reach" includes exactly
+    // those.
+    WriteHeapStream(1);
+    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
+    {
+        auto page = store_.Get(kPage);
+        ASSERT_TRUE(page.ok());
+        storage::SetPageStreamStamp(page.value().bytes(), 3);  // stream 2's
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+}
+
+TEST_F(RedoTest, AReturnedPagesAdmittedRecordsApplyOverTheForeignStamp) {
+    // Rule 5a (the returned page, A→B→A): the durable image is the other
+    // stream's flushed state - foreign stamp, and a page_lsn that is B's
+    // byte offset, set here *above* every A record to prove the RV5
+    // comparison is bypassed. An unbypassed gate would skip A's
+    // post-return record and lose the write: the §3 failure one step
+    // further down the pipe, which is what PW1c-2's review named and this
+    // rule closes.
+    WriteHeapStream(1);
+    ASSERT_TRUE(Redo((*device_), 0, store_, Analyzed()).ok());
+    {
+        // B's flushed image, simulated: B's stamp, B's (large) page_lsn.
+        auto page = store_.Get(kPage);
+        ASSERT_TRUE(page.ok());
+        storage::SetPageStreamStamp(page.value().bytes(), 2);  // stream 1's
+        storage::SetPageLsn(page.value().bytes(), 0x7FFFFFFFFFFFULL);
+    }
+    Lsn returned = 0;
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        ASSERT_TRUE(
+            s.value()->Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
+        returned = AppendHeapInsert(*s.value(), /*slot=*/1, 0xC5);
+        ASSERT_NE(returned, 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    const AnalysisResult analysis = Analyzed();
+    ASSERT_EQ(analysis.handed_off.count(kPage), 1u);
+    ASSERT_EQ(analysis.dirty_pages.at(kPage), returned);
+
+    auto r = Redo((*device_), 0, store_, analysis);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().applied, 1u) << "the post-return record must apply";
+
+    auto page = store_.Get(kPage);
+    ASSERT_TRUE(page.ok());
+    EXPECT_EQ(storage::GetPageStreamStamp(page.value().bytes()), 1u)
+        << "the apply restamps the own stream";
+    EXPECT_EQ(storage::GetPageLsn(page.value().bytes()), returned)
+        << "page_lsn is this stream's offset again, not B's";
 }
 
 // ---- The UNDO_WRITE gap, asserted rather than worked around -------------

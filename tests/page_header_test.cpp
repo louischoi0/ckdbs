@@ -38,6 +38,20 @@ TEST(PageHeaderTest, RoundTripsEveryField) {
     EXPECT_EQ(read.owner_oid, written.owner_oid);
 }
 
+TEST(PageHeaderTest, TheStreamStampRoundTripsAndDefaultsToNeverStamped) {
+    // PW1c-3 (spec-page-lsn-cross-stream.md §9 rule 4): the flags word
+    // carries core_id + 1 of the stream that last wrote the page, and a
+    // zeroed page reads 0 - never stamped, the no-backfill default every
+    // pre-PW1c-3 page relies on.
+    Page page{};
+    EXPECT_EQ(GetPageStreamStamp(Const(page)), 0u);
+
+    SetPageStreamStamp(Mut(page), 3);  // core 2's stream
+    EXPECT_EQ(GetPageStreamStamp(Const(page)), 3u);
+    // The accessor and the whole-struct codec read the same bytes.
+    EXPECT_EQ(ReadPageHeader(Const(page)).flags, 3u);
+}
+
 TEST(PageHeaderTest, WriteHeaderLeavesBodyUntouched) {
     Page page{};
     std::memset(page.data() + kPageBodyOffset, 0x5A, kPageBodySize);

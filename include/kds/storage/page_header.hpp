@@ -134,6 +134,19 @@ void SetPageLsn(std::span<std::byte, kPageSize> page, std::uint64_t lsn);
 std::uint32_t GetStoredChecksum(std::span<const std::byte, kPageSize> page);
 std::uint64_t GetOwnerOid(std::span<const std::byte, kPageSize> page);
 
+// ---- The PL-C stream stamp (spec-page-lsn-cross-stream.md §9 rule 4) ----
+//
+// The 16-bit `flags` word at offset 2 carries `core_id + 1` of the WAL
+// stream that last wrote the page; **0 means never stamped**, which is
+// what every pre-PW1c-3 page reads - the owner_oid no-backfill precedent.
+// It exists because `page_lsn` is a byte offset into one stream's file:
+// after a PL-B handoff the number is meaningless to the other stream, and
+// the stamp is what lets redo tell "mine" from "incomparable" (rule 5).
+// Explicit load/store like every persisted field - invariant 6, no
+// bitfields. Like SetPageLsn, mutation does not restamp the checksum.
+std::uint16_t GetPageStreamStamp(std::span<const std::byte, kPageSize> page);
+void SetPageStreamStamp(std::span<std::byte, kPageSize> page, std::uint16_t stamp);
+
 // ---- Relayout epoch (docs/feat-physical-optimizer.md R4) ----------------
 //
 // Bumped only by the physical optimizer's mover when tuples on the page

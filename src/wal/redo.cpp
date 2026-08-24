@@ -339,9 +339,35 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
             return Status::OK();
         }
 
+        // PW1c-3, PL §9 rules 4-5. A nonzero stamp naming another stream
+        // is one of exactly two things. If analysis saw no handoff moving
+        // this page out, a handoff record was lost or mis-ordered and the
+        // mount refuses, loudly (rule 5) - the silent §3 corruption made
+        // detectable, which is what the PL-C guard exists for. If analysis
+        // *did* see one, this is the returned page (A→B→A): the durable
+        // image is the other stream's flushed state (rule 1a), its
+        // page_lsn is a byte offset into that stream's file, and the RV5
+        // comparison below would be arithmetic over incomparable numbers -
+        // so every admitted record applies, and the apply below restamps
+        // this stream (rule 5a, amended 2026-08-24 with PW1c-3). An
+        // unstamped page (0) takes today's comparison unchanged: a page
+        // that never crossed streams has a meaningful page_lsn.
+        const auto own_stamp = static_cast<std::uint16_t>(core_id + 1);
+        const std::uint16_t stamp = storage::GetPageStreamStamp(page);
+        const bool foreign = stamp != 0 && stamp != own_stamp;
+        if (foreign && analysis.handed_off.count(page_id) == 0) {
+            return Status::Corruption(
+                "redo: page " + std::to_string(page_id) + " is stamped by stream " +
+                std::to_string(stamp - 1) + " and analysis saw no handoff moving it out of "
+                "stream " + std::to_string(core_id) +
+                " - a handoff record was lost or mis-ordered (spec-page-lsn-cross-stream.md "
+                "§9 rule 5)");
+        }
+
         // RV5, the whole of idempotence. An FPI is gated too: a page
         // already at or past this LSN does not need its image restored.
-        if (storage::GetPageLsn(page) >= record.header.lsn) {
+        // Bypassed for the returned page, per the block above.
+        if (!foreign && storage::GetPageLsn(page) >= record.header.lsn) {
             ++stats.skipped_by_lsn;
             return Status::OK();
         }
@@ -404,8 +430,12 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
 
         // The stamp is what makes the next pass skip this record, and it
         // must follow the mutation: a stamp written first would mark the
-        // page done for a change that then failed.
+        // page done for a change that then failed. The stream stamp rides
+        // it (PL §9 rule 4) - this is also what turns a returned page's
+        // foreign stamp back into an own one on its first applied record,
+        // after which the ordinary RV5 gate governs again.
         storage::SetPageLsn(page, record.header.lsn);
+        storage::SetPageStreamStamp(page, own_stamp);
         ++stats.applied;
         return Status::OK();
     };

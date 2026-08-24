@@ -106,6 +106,7 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         if (record.header.page_id != kInvalidPageId) {
             if (record.type() == RecordType::kPageHandoff) {
                 out.dirty_pages.erase(record.header.page_id);
+                out.handed_off.insert(record.header.page_id);
             } else {
                 out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
             }

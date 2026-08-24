@@ -85,6 +85,23 @@ TEST(DevicePageStoreTest, CreateAtThenGetReturnsTheSamePage) {
     EXPECT_EQ(store->CreateAt(kFreeMapPageId).status().code(), StatusCode::kAlreadyExists);
 }
 
+TEST(DevicePageStoreTest, StampPageLsnStampsTheOwningStream) {
+    // PW1c-3 (spec-page-lsn-cross-stream.md §9 rule 4): every logged
+    // mutation funnels through StampPageLsn, so the stream stamp rides the
+    // LSN stamp - core_id + 1, and this store's default identity is core 0.
+    auto device = MakeDevice();
+    auto store = OpenStore(*device);
+    ASSERT_NE(store, nullptr);
+
+    auto created = store->CreateAt(0);
+    ASSERT_TRUE(created.ok());
+    EXPECT_EQ(GetPageStreamStamp(created.value().bytes()), 0u) << "unstamped until logged";
+
+    ASSERT_TRUE(store->StampPageLsn(0, /*lsn=*/64).ok());
+    EXPECT_EQ(GetPageStreamStamp(created.value().bytes()), 1u);
+    EXPECT_EQ(GetPageLsn(created.value().bytes()), 64u);
+}
+
 TEST(DevicePageStoreTest, CreateNewStartsAtTheConfiguredIdAndAdvances) {
     auto device = MakeDevice();
     auto store = OpenStore(*device, /*first_new_page_id=*/128);
