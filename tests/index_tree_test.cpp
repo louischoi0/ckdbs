@@ -230,7 +230,11 @@ TEST(IndexTreeTest, EveryLeafsKeysSitBelowItsRightSiblings) {
                               if (!entry.ok()) return entry.status();
                               const std::uint32_t key =
                                   KeyOf(entry.value().subspan(0, f.layout.key_width));
-                              if (!first) EXPECT_LE(previous_high, key);
+                              // Braced: EXPECT_LE expands to an if/else, so
+                              // an unbraced guard dangles the else onto it.
+                              if (!first) {
+                                  EXPECT_LE(previous_high, key);
+                              }
                               previous_high = key;
                               first = false;
                               return storage::VisitControl::kContinue;

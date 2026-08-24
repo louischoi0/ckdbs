@@ -58,11 +58,21 @@ public:
         values_.resize(total);
     }
 
+    // Where slot `rel_slot`'s values end: the next slot's base, or the end
+    // of the buffer for the last slot. One home for it, because both callers
+    // below need exactly this and a second copy is a second thing to get
+    // right. `std::size_t` in the parameter rather than the caller's
+    // uint16_t, so `+ 1` never promotes to *int* and the comparison against
+    // size() is never signed-vs-unsigned.
+    std::size_t EndOfSlot(std::size_t rel_slot) const {
+        const std::size_t next = rel_slot + 1;
+        return next < bases_.size() ? bases_[next] : values_.size();
+    }
+
     // The slice belonging to one step, for a decoder to fill.
     std::span<parser::AstValue> SlotsFor(std::uint16_t rel_slot) {
         const std::size_t base = bases_[rel_slot];
-        const std::size_t end = rel_slot + 1 < bases_.size() ? bases_[rel_slot + 1]
-                                                             : values_.size();
+        const std::size_t end = EndOfSlot(rel_slot);
         return std::span<parser::AstValue>(values_.data() + base, end - base);
     }
 
@@ -85,10 +95,7 @@ public:
             frame = frame->parent_;
         }
         if (ref.rel_slot >= frame->bases_.size()) return false;
-        const std::size_t end = ref.rel_slot + 1 < frame->bases_.size()
-                                    ? frame->bases_[ref.rel_slot + 1]
-                                    : frame->values_.size();
-        return frame->bases_[ref.rel_slot] + ref.col_pos < end;
+        return frame->bases_[ref.rel_slot] + ref.col_pos < frame->EndOfSlot(ref.rel_slot);
     }
 
 private:

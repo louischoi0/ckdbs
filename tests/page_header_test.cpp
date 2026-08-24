@@ -52,6 +52,27 @@ TEST(PageHeaderTest, WriteHeaderLeavesBodyUntouched) {
     }
 }
 
+TEST(PageHeaderTest, EveryAssignedPageTypeHasAFormatVersion) {
+    // **The test the kCabinBound bug got past.** The one below it asserts
+    // `format_version == MaxSupportedFormatVersion(type)` - which compares
+    // FormatPage's output against the very function that produced it, so it
+    // passes just as happily when that function returns 0. A 0 is not a
+    // version: FormatPage stamps it, and ValidatePageHeader then reads
+    // `version == 0` as Corruption, so a page class missing from that switch
+    // formats itself into a state its own validator rejects.
+    //
+    // Written over the whole assigned range rather than per type, because
+    // that is what also catches the next append to the enum - and what would
+    // survive someone giving the switch a `default:`, which would silence
+    // -Wswitch and put the class of bug back.
+    for (std::uint8_t raw = 1; raw <= kMaxAssignedPageType; ++raw) {
+        EXPECT_NE(MaxSupportedFormatVersion(static_cast<PageType>(raw)), 0)
+            << "page_type " << static_cast<int>(raw) << " has no format version";
+    }
+    EXPECT_EQ(MaxSupportedFormatVersion(PageType::kInvalid), 0)
+        << "an unformatted page has no layout to version";
+}
+
 TEST(PageHeaderTest, FormatPageZeroesEverythingAndSetsCurrentVersion) {
     Page page{};
     std::memset(page.data(), 0xFF, page.size());
