@@ -178,12 +178,30 @@ public:
     // has already destroyed. Safe here because nothing destroyed below
     // submits or polls; only the frames' own destructors run, and every
     // member they touch is still alive.
+    //
+    // One member breaks that last sentence and so goes *before* the
+    // scheduler in the same body: `listener_` (PW5), whose `~TcpServer`
+    // unregisters its fds from the reactor.
     ~CoreRuntime();
 
     // Attaches this core to the ring matrix and installs the handlers every
     // core needs - today just `kShutdown`, which is what lets core 0 stop
     // this one without touching its memory. `transport` must outlive this.
     Status AttachTransport(sched::RingTransport& transport);
+
+    // PW5: binds `port` with SO_REUSEPORT and attaches the listener to
+    // this core's reactor and dispatcher, on the startup thread before
+    // the worker exists. STOP accepted here routes to the system core
+    // (tcp_server.hpp's stop contract); the listener dies first at
+    // teardown - see ~CoreRuntime.
+    Status ListenAndAttach(std::uint16_t port);
+
+    // BUG-4 ordering (the PW5 review): closes the listener - and with it
+    // every accepted session, rolling back open transactions - while this
+    // core's WAL can still be synced by the caller. Serve calls it for
+    // every core before the final per-core Sync(), the same detach-then-
+    // sync order core 0's own teardown has always had. Idempotent.
+    void CloseListener() noexcept { listener_.reset(); }
 
     // Runs this core's reactor until a `kShutdown` message arrives. This is
     // the worker thread's whole body.
@@ -248,13 +266,6 @@ public:
     catalog::Catalog& catalog() noexcept { return *catalog_; }
     CommandDispatcher& dispatcher() noexcept { return *dispatcher_; }
 
-    // PW5: binds `port` with SO_REUSEPORT and attaches the listener to
-    // this core's reactor and dispatcher, so the kernel hands this core a
-    // share of accepted connections. Called on the startup thread before
-    // the worker exists - the same single-threaded window every other
-    // piece of this stack is wired in - and the listener dies with the
-    // runtime, before the scheduler it registered with.
-    Status ListenAndAttach(std::uint16_t port);
     storage::DevicePageStore& store() noexcept { return *store_; }
 
 private:
@@ -335,8 +346,12 @@ private:
     std::optional<txn::UndoLog> undo_log_;
     std::optional<txn::TransactionManager> txn_manager_;
     std::optional<CommandDispatcher> dispatcher_;
-    // Declared after the scheduler and dispatcher it references: destroyed
-    // first, and ~TcpServer's Detach unregisters from the scheduler.
+    // The client listener this core accepts on, when per-core listeners are
+    // configured (PW5). It borrows the scheduler and the dispatcher, and
+    // `~TcpServer` calls back into the scheduler to unregister its fds - so
+    // it is dropped explicitly at the top of `~CoreRuntime`, ahead of the
+    // scheduler. Declaration order alone would not do it: that destructor's
+    // *body* drops the scheduler before any member destructor runs.
     std::optional<TcpServer> listener_;
 
     // Last, because it borrows every one of them: the WAL, the target and

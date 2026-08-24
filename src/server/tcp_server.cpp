@@ -85,6 +85,7 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       log_(other.log_),
       channel_factory_(std::move(other.channel_factory_)),
       auth_gate_factory_(std::move(other.auth_gate_factory_)),
+      stop_handler_(std::move(other.stop_handler_)),
       clients_(std::move(other.clients_)) {
     other.listen_fd_ = -1;
     other.scheduler_ = nullptr;
@@ -105,6 +106,7 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         log_ = other.log_;
         channel_factory_ = std::move(other.channel_factory_);
         auth_gate_factory_ = std::move(other.auth_gate_factory_);
+        stop_handler_ = std::move(other.stop_handler_);
         clients_ = std::move(other.clients_);
         other.listen_fd_ = -1;
         other.scheduler_ = nullptr;
@@ -476,7 +478,11 @@ void TcpServer::OnStatementComplete(int client_fd) {
         // client sees the reply land and the socket shut, rather than
         // waiting on a process that is already tearing down.
         CloseClient(client_fd);
-        if (scheduler_ != nullptr) scheduler_->Stop();
+        if (stop_handler_) {
+            stop_handler_();
+        } else if (scheduler_ != nullptr) {
+            scheduler_->Stop();
+        }
         return;
     }
 

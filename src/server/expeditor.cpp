@@ -110,13 +110,32 @@ std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept {
     return frames / cores;
 }
 
-Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram) {
-    if (peer_listeners && (tls || auth_scram)) {
+Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
+                               std::uint32_t cores, catalog::PlacementPolicy placement) {
+    if (!peer_listeners) return Status::OK();
+    if (tls || auth_scram) {
         return Status::Unsupported(
             "peer_listeners = on cannot yet be combined with tls or auth: the credential "
             "store and TLS context live on core 0's stack, and sharing them across per-core "
             "listeners is PW5's open half (workplan-peer-writer.md) - run peer listeners on "
             "the loopback plaintext port, or keep one listener");
+    }
+    // Two pairings that cannot work, refused rather than served (the PW5
+    // review's finding 6). One core has no peer to listen - the sole
+    // effect would be SO_REUSEPORT on the only socket, which lets a
+    // second process bind the same port and silently take half the
+    // connections into a different database. And creating-core placement
+    // puts every relation on core 0, so every peer-accepted session would
+    // refuse every statement while answering OK to PING.
+    if (cores == 1) {
+        return Status::InvalidArgument(
+            "peer_listeners = on with cores = 1 has no peer to listen; the only effect "
+            "would be losing the exclusive bind on the one socket");
+    }
+    if (placement != catalog::PlacementPolicy::kRotate) {
+        return Status::InvalidArgument(
+            "peer_listeners = on needs placement = rotate: with creating-core placement "
+            "every relation is core 0's, so a peer-accepted session could serve nothing");
     }
     return Status::OK();
 }
@@ -608,7 +627,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // behind another's, with no preemption to break the tie.
     if (Status s = CheckCoreCount(config.cores); !s.ok()) return s;
     if (Status s = CheckFrameBudget(config.buffer_pool_frames, config.cores); !s.ok()) return s;
-    if (Status s = CheckPeerListenerConfig(config.peer_listeners, config.tls, config.auth_scram);
+    if (Status s = CheckPeerListenerConfig(config.peer_listeners, config.tls, config.auth_scram,
+                                           config.cores, config.placement);
         !s.ok()) {
         return s;
     }
@@ -1156,6 +1176,24 @@ Status Expeditor::Serve() {
 
         scheduler.AttachTransport(&*transport_, /*core_id=*/0);
 
+        // The receiving half of a peer's STOP (CoreRuntime::ListenAndAttach
+        // routes it here): stop core 0's reactor, after which Serve's tail
+        // broadcasts kShutdown to every peer and joins - the same sequence
+        // a STOP on core 0's own listener has always produced.
+        sched::Scheduler* core0_sched = &scheduler;
+        if (Status s = scheduler.RegisterMessageHandler(
+                sched::RingMessageKind::kShutdown,
+                [core0_sched, this](const sched::MessageHeader& header,
+                                    std::span<const std::byte>) {
+                    logger_->Info("expeditor", "stop routed from core " +
+                                                   std::to_string(header.src_core) +
+                                                   "; the shutdown tail follows");
+                    core0_sched->Stop();
+                });
+            !s.ok()) {
+            return s;
+        }
+
         // The system core's half of the anchor path (M5): the superblock is
         // page 0 and belongs to core 0, so a peer's completed checkpoint
         // sends its anchor here and this writes it. The write itself goes
@@ -1247,10 +1285,6 @@ Status Expeditor::Serve() {
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();
             if (Status s = core.value()->AttachTransport(*transport_); !s.ok()) return s;
-            // PW5: the peer's share of the accept load, bound before its
-            // worker exists (the same single-threaded window the rest of
-            // its stack is wired in). Core 0's socket already carries
-            // SO_REUSEPORT when this is on - see the Listen call above.
             if (config_.peer_listeners) {
                 if (Status s = core.value()->ListenAndAttach(config_.port); !s.ok()) {
                     return s;
@@ -1583,6 +1617,13 @@ Status Expeditor::Serve() {
     // After the join, so nothing is still appending to a stream being
     // synced. Each core's log is its own, so this is N independent syncs
     // and not a barrier.
+    // The review's BUG 4: a peer's listener teardown rolls back open
+    // sessions and can append CLRs, so it must run *before* this core's
+    // final sync - detach-then-sync, the order core 0's own teardown
+    // above already has.
+    for (auto& core : cores_) {
+        core->CloseListener();
+    }
     for (auto& core : cores_) {
         if (Status s = core->Sync(); !s.ok()) {
             logger_->Error("expeditor", "core " + std::to_string(core->core_id()) +

@@ -105,13 +105,15 @@ inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
 // reason CheckCoreCount is one: testable without a server.
 Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 
-// Refuses `peer_listeners = on` combined with TLS or SCRAM auth: both are
-// built on core 0's stack (the credential store and TLS context are
-// constructed inside Expeditor::Serve), and sharing them across per-core
-// listeners without sharing them *mutably* is PW5's open half - so the
-// combination is refused truthfully rather than served insecurely. A free
-// function for the same reason its two siblings above are.
-Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram);
+// Refuses every `peer_listeners = on` pairing that cannot work: with TLS
+// or SCRAM auth (both are built on core 0's stack; sharing them immutably
+// is PW5's open half - refused truthfully rather than served insecurely),
+// with `cores = 1` (no peer to listen, and SO_REUSEPORT on the only
+// socket loses the exclusive bind), and with creating-core placement
+// (every relation is core 0's, so a peer session could serve nothing). A
+// free function for the same reason its two siblings above are.
+Status CheckPeerListenerConfig(bool peer_listeners, bool tls, bool auth_scram,
+                               std::uint32_t cores, catalog::PlacementPolicy placement);
 
 // EV4 (docs/spec-eviction.md §6), under the operator invariant of
 // 2026-08-24: the key is an instance total and every core's share is
@@ -155,17 +157,10 @@ public:
         // refused with Unsupported naming the build flag - a config
         // written for a capability this binary does not have fails
         // loudly, the physical_optimizer = on precedent.
-        // Per-core listeners (crosscore.md M3, workplan-peer-writer.md
-        // PW5): every core binds the text port with SO_REUSEPORT and the
-        // kernel distributes connections; a session lives on the core
-        // that accepted it and is never rebalanced. Off by default, and
-        // the restriction is the point: a peer-accepted session serves
-        // relations its core owns and refuses the rest - a peer has no
-        // SessionStepClient, so nothing ships from there - which is the
-        // per-core benchmark shape (PW6) and a cliff for a general
-        // workload. Refused in combination with tls/auth until the
-        // credential store and TLS context can be shared immutably
-        // (CheckPeerListenerConfig).
+        // Per-core listeners (workplan-peer-writer.md PW5; the operator
+        // story is in kds.conf.sample, the socket mechanics in
+        // tcp_server.hpp). Off by default; the workable pairings are
+        // CheckPeerListenerConfig's to police.
         bool peer_listeners = false;
 
         bool tls = false;

@@ -90,6 +90,16 @@ public:
     // Attach(). Unset (the default) means every connection starts
     // authenticated, the pre-auth behaviour.
     using AuthGateFactory = std::function<std::unique_ptr<AuthGate>()>;
+    // What STOP does. Unset (core 0, single-core): Scheduler::Stop() on
+    // the attached reactor, which ends Serve() and takes the whole
+    // instance down. A *peer* listener must not do that - stopping its own
+    // reactor alone leaves a half-dead instance whose bound socket keeps
+    // receiving a share of new connections nobody will drain - so
+    // CoreRuntime installs a handler that routes the stop to the system
+    // core instead, keeping "STOP has always meant the whole server" true
+    // on every core.
+    void set_stop_handler(std::function<void()> handler) { stop_handler_ = std::move(handler); }
+
     void set_auth_gate_factory(AuthGateFactory factory) noexcept {
         auth_gate_factory_ = std::move(factory);
     }
@@ -210,6 +220,7 @@ private:
     Logger* log_ = nullptr;
     ChannelFactory channel_factory_;
     AuthGateFactory auth_gate_factory_;
+    std::function<void()> stop_handler_;
     std::unordered_map<int, Connection> clients_;
 };
 

@@ -9,6 +9,12 @@
 #include <thread>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
@@ -1427,6 +1433,125 @@ TEST_F(CoreRuntimeTest, APeerRefusesEveryDdlVerbByNameAndStillServesReads) {
     EXPECT_EQ(on_core0.find("takes no DDL"), std::string::npos) << on_core0;
 }
 
+namespace {
+
+// Minimal blocking client for the peer-listener test: connect, send one
+// line, read one newline-terminated reply under a poll() deadline.
+int ConnectLoopback(std::uint16_t port) {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+std::string RoundTrip(int fd, std::string_view line) {
+    std::string out(line);
+    out.push_back('\n');
+    if (::send(fd, out.data(), out.size(), 0) != static_cast<ssize_t>(out.size())) return "";
+    std::string reply;
+    char buf[4096];
+    for (int spins = 0; spins < 5000; ++spins) {
+        pollfd pfd{fd, POLLIN, 0};
+        if (::poll(&pfd, 1, 1) <= 0) continue;
+        const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        reply.append(buf, static_cast<std::size_t>(n));
+        if (reply.find('\n') != std::string::npos) break;
+    }
+    return reply;
+}
+
+}  // namespace
+
+TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesForeignAndRoutesStop) {
+    // FINDING 5 of the PW5 review: nothing proved a peer listener serves
+    // anything. This is the whole loop over a real socket - a rotated
+    // relation is served on the peer that owns it, a core-0 relation is
+    // refused with the affinity answer, and STOP does not stop this
+    // reactor: it routes a kShutdown to the system core
+    // (tcp_server.hpp's stop contract, CoreRuntime::ListenAndAttach).
+    constexpr std::uint16_t kPort = 25442;
+
+    auto transport = sched::RealRingTransport::Create(2, 16, 256);
+    ASSERT_TRUE(transport.ok());
+
+    // A relation owned by core 1 (the :417 test's arrangement), and one
+    // owned by core 0 as the foreign control.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto rotated = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
+                                        TwoColumnSchema(), catalog::ClusteredType::kHeap,
+                                        catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(rotated.ok()) << rotated.status().message();
+    auto local0 = core0_->catalog.CreateTable(catalog::kNamespacePublic, "local0",
+                                              TwoColumnSchema(), catalog::ClusteredType::kHeap,
+                                              catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(local0.ok()) << local0.status().message();
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->AttachTransport(transport.value()).ok());
+    auto row = catalog2.GetSysTableRow(rotated.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_EQ(row.value().owner_core, 1u);
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort).ok());
+
+    std::thread worker([&] { peer.value()->Run(); });
+
+    int fd = ConnectLoopback(kPort);
+    ASSERT_GE(fd, 0);
+
+    // Served: the relation this core owns (empty is fine; not an ERR).
+    const std::string own = RoundTrip(fd, "SELECT * FROM rotated");
+    EXPECT_EQ(own.rfind("ERR", 0), std::string::npos) << own;
+    // Refused: a relation core 0 owns, with the affinity answer - the
+    // peer has no session-side pipeline, so nothing ships from here.
+    const std::string foreign = RoundTrip(fd, "SELECT * FROM local0");
+    EXPECT_EQ(foreign.rfind("ERR", 0), 0u) << foreign;
+    EXPECT_NE(foreign.find("owned by core 0"), std::string::npos) << foreign;
+
+    // STOP: replied to, and routed - the kShutdown lands on core 0's ring
+    // rather than stopping this reactor.
+    (void)RoundTrip(fd, "STOP");
+    ::close(fd);
+
+    sched::MessageHeader header{};
+    std::vector<std::byte> payload;
+    bool routed = false;
+    for (int spins = 0; spins < 5000 && !routed; ++spins) {
+        while (transport.value().TryReceive(/*dst_core=*/0, header, payload)) {
+            if (header.kind == static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown)) {
+                EXPECT_EQ(header.src_core, 1u);
+                routed = true;
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_TRUE(routed) << "STOP on a peer never reached the system core";
+
+    // What Serve's tail would then do: stop the peer over its ring.
+    sched::MessageHeader stop{};
+    stop.src_core = 0;
+    stop.dst_core = 1;
+    stop.session_core = 0;
+    stop.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
+    stop.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+    ASSERT_TRUE(transport.value().TrySend(stop, {}).ok());
+    worker.join();
+}
+
 TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     // P6's deliberate cost, pinned so it stays a decision rather than
     // becoming a surprise: sys.patterns and sys.access_stats are catalog
@@ -1444,6 +1569,32 @@ TEST_F(CoreRuntimeTest, APeerIsWiredWithRecordingOff) {
     auto shapes = core0_->catalog.ListAccessStats();
     ASSERT_TRUE(shapes.ok()) << shapes.status().message();
     EXPECT_TRUE(shapes.value().empty());
+}
+
+TEST_F(CoreRuntimeTest, APeerListenerIsTornDownBeforeTheReactorItRegisteredWith) {
+    // PW5's teardown, and the one thing declaration order does not decide:
+    // `~CoreRuntime`'s *body* drops the scheduler before any member
+    // destructor runs, so a listener left to the members' reverse order
+    // would run `~TcpServer` - whose `Detach()` unregisters the listening fd
+    // and every client fd - against a reactor that had already been
+    // destroyed. Dropping `listener_` first is what makes that impossible,
+    // and this is the observable half: while the peer holds the port a plain
+    // (non-SO_REUSEPORT) bind is refused, and once the runtime is gone the
+    // same bind succeeds - which is only true if the teardown really ran and
+    // closed the socket.
+    constexpr std::uint16_t kPort = 25441;
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    ASSERT_TRUE(peer.value()->ListenAndAttach(kPort).ok());
+
+    // A socket without SO_REUSEPORT may not join a REUSEPORT group, so this
+    // is the port being genuinely held by the peer.
+    EXPECT_FALSE(TcpServer::Listen(kPort).ok());
+
+    peer.value().reset();
+
+    auto after = TcpServer::Listen(kPort);
+    EXPECT_TRUE(after.ok()) << after.status().message();
 }
 
 }  // namespace

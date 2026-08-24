@@ -489,10 +489,22 @@ TEST(ExpeditorConfigTest, PeerListenersParseAndRefuseTlsOrAuth) {
     ASSERT_TRUE(config.ApplyFile(ParseOk("peer_listeners = on\n")).ok());
     EXPECT_TRUE(config.peer_listeners);
 
-    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true).ok());
-    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false).ok());
-    EXPECT_EQ(CheckPeerListenerConfig(true, true, false).code(), StatusCode::kUnsupported);
-    EXPECT_EQ(CheckPeerListenerConfig(true, false, true).code(), StatusCode::kUnsupported);
+    constexpr auto kRotate = catalog::PlacementPolicy::kRotate;
+    constexpr auto kCreating = catalog::PlacementPolicy::kCreatingCore;
+    EXPECT_TRUE(CheckPeerListenerConfig(false, true, true, 1, kCreating).ok());
+    EXPECT_TRUE(CheckPeerListenerConfig(true, false, false, 2, kRotate).ok());
+    EXPECT_EQ(CheckPeerListenerConfig(true, true, false, 2, kRotate).code(),
+              StatusCode::kUnsupported);
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, true, 2, kRotate).code(),
+              StatusCode::kUnsupported);
+
+    // The two pairings that cannot work (the PW5 review's finding 6):
+    // no peer to listen, and a placement under which a peer session could
+    // serve nothing. Both are plain misconfigurations, so InvalidArgument.
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 1, kRotate).code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(CheckPeerListenerConfig(true, false, false, 2, kCreating).code(),
+              StatusCode::kInvalidArgument);
 }
 
 TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal) {

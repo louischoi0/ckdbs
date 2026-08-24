@@ -332,6 +332,14 @@ stated shape restriction; PW2 removes the restriction. Taking §7b's option
 (c) would collapse PW1c and PW5 into one task and is the current
 recommendation.
 
+**Named at the PW5 review, pre-existing, not fixed there** (BUG 3): a
+shutdown with a statement in flight leaks the deferred fd — `CloseClient`
+defers when `conn.in_flight`, and `Detach()`'s `clients_.clear()` then
+destroys the `Connection` without closing it, with a queued `CoroTask`
+still pointing at the dead session. True of core 0 since the coroutine
+conversion; N listeners give it N chances per shutdown. Its own item,
+not PW5's.
+
 **Deferred cleanup, with a name** (PW1's review, rejected for PW1 itself):
 `trx_id_lease_service.cpp`'s receiver and request coroutine are a third
 near-identical copy of `row_id_lease_service.cpp`'s, which are themselves

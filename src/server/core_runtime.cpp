@@ -20,7 +20,18 @@ namespace kds::server {
 // the coroutine frame it owns - while `txn_manager_`, `catalog_` and
 // `store_` are still standing, which is exactly what those frames' locals
 // need.
-CoreRuntime::~CoreRuntime() { scheduler_.reset(); }
+//
+// **The listener goes first, and it has to be said here rather than left to
+// declaration order** (PW5): this body runs before any member destructor, so
+// dropping the scheduler here would leave `~TcpServer`'s `Detach()` - which
+// unregisters the listening fd and every client fd - calling into a reactor
+// that no longer exists. Detaching first is also exactly what core 0 does
+// (`Expeditor::Serve` detaches its listener before its scheduler leaves
+// scope), so a peer's teardown is the same sequence as the system core's.
+CoreRuntime::~CoreRuntime() {
+    listener_.reset();
+    scheduler_.reset();
+}
 
 StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
                                                          storage::PageDevice& device,
@@ -639,6 +650,26 @@ Status CoreRuntime::ListenAndAttach(std::uint16_t port) {
     if (Status s = listener_->Attach(*scheduler_, *dispatcher_, log_); !s.ok()) {
         listener_.reset();
         return s;
+    }
+    // STOP accepted on this core must stop the *instance*, not this
+    // reactor (the review's BUG 2: a stopped peer's socket keeps
+    // receiving a kernel share of new connections nobody drains, and its
+    // ring goes undrained while core 0 reports healthy). So it routes: a
+    // kShutdown to the system core, whose handler stops core 0's reactor,
+    // and Serve's ordinary tail then broadcasts shutdown to every peer -
+    // one stop path, whichever core the client landed on. The transport
+    // is attached before any listener exists (Serve's ordering), so the
+    // fallback below is for tests that wire a listener with no rings.
+    if (transport_ != nullptr) {
+        listener_->set_stop_handler([this] {
+            sched::MessageHeader header{};
+            header.src_core = config_.core_id;
+            header.dst_core = 0;
+            header.session_core = config_.core_id;
+            header.kind = static_cast<std::uint16_t>(sched::RingMessageKind::kShutdown);
+            header.sched_group = static_cast<std::uint16_t>(sched::SchedulingGroup::kSystem);
+            scheduler_->Submit(sched::MakeSendRetryTask(*transport_, header, {}));
+        });
     }
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
         log_->Info("core", "core " + std::to_string(config_.core_id) +
