@@ -344,10 +344,13 @@ public:
     // relation created *after* the peer started has no bit in it, and
     // every granted page answered "page id not found". Called by the grant
     // receivers, ordered correctly by construction: core 0 flushes the
-    // maps inside the publish flush before any grant leaves. Strictly
-    // forward - nothing ever frees, so the device's map is only ever ahead
-    // of the copy - and it does not mark the maps dirty: this adopts core
-    // 0's truth, it does not create peer writes.
+    // maps inside the publish flush before any grant leaves. Reads into a
+    // scratch page, validates whole, then **unions** into the copy: a
+    // failed or torn read (core 0 flushes this page concurrently, no
+    // latch) leaves the copy intact for the next grant to retry, and
+    // union - never replacement - preserves the bits redo's mount-time
+    // CreateAt set in this copy alone. Does not mark the maps dirty: this
+    // adopts truth, it does not create peer writes.
     Status RefreshFreeMapFromDevice();
 
     // The live free-map page, for the one caller that carves extents out of

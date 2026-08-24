@@ -479,9 +479,21 @@ TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
         PageId varheap = kInvalidPageId;
         int calls = 0;
     } published;
+    // The evict runs *inside* the hook - CreateTable is still on the
+    // stack - which is what pins the 25059bf review's C-1: the root's
+    // creation PageRef must have dropped by publish time, or the
+    // production hook's EvictClean of departed pages fails on every peer
+    // CREATE TABLE. Flush first; eviction refuses dirty frames, and the
+    // production hook flushes before it too.
+    Status evict_at_publish = Status::OK();
     catalog2.SetRelationPublishHook(
         [&](catalog::Oid oid, std::uint32_t owner, PageId root, PageId varheap) {
             published = {oid, owner, root, varheap, published.calls + 1};
+            const PageId departed[] = {root};
+            evict_at_publish = core0_store_->FlushPages(departed);
+            if (evict_at_publish.ok()) {
+                evict_at_publish = core0_store_->EvictClean(departed);
+            }
         });
 
     auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "rotated",
@@ -498,6 +510,10 @@ TEST_F(CoreRuntimeTest, ARotatedRelationIsPlacedOnAPeerAndPublished) {
     EXPECT_EQ(published.oid, oid.value());
     EXPECT_EQ(published.owner, 1u);
     EXPECT_EQ(published.root, row.value().desc_page_id);
+
+    EXPECT_TRUE(evict_at_publish.ok())
+        << "the root must be unpinned when the publish hook fires: "
+        << evict_at_publish.message();
 
     // The grant the hook's installer would send reaches the peer, and the
     // relation resolves there - CC7's whole point, driven by placement.
@@ -1451,16 +1467,70 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
 
     const auto ins = peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (7)").response;
     EXPECT_NE(ins.rfind("ERR", 0), 0u) << "the funded INSERT must run: " << ins;
-    const auto sel =
-        peer.value()->dispatcher().Dispatch("SELECT * FROM owned").response;
-    EXPECT_NE(sel.find("7"), std::string::npos) << sel;
 
-    // The multi-row path stays refused on a peer by name: its id block
-    // comes off the catalog page, not the lease (PW1c-5's bulk gate).
+    // Multi-row runs too (revised at the 25059bf review's S-1): the sorted
+    // fill is merely ineligible on a peer, and the ordinary per-row path
+    // allocates through the lease.
     const auto bulk =
         peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (8), (9)").response;
-    EXPECT_EQ(bulk.rfind("ERR", 0), 0u) << bulk;
-    EXPECT_NE(bulk.find("multi-row"), std::string::npos) << bulk;
+    EXPECT_NE(bulk.rfind("ERR", 0), 0u) << "the per-row path must serve a peer: " << bulk;
+    EXPECT_NE(bulk.find("rows=2"), std::string::npos) << bulk;
+
+    // The reply is the CSV shape the neighbouring rotated-SELECT test
+    // pins: a header line then one line per row, ",<v>" carrying the
+    // inserted value after the leased id.
+    const auto sel = peer.value()->dispatcher().Dispatch("SELECT * FROM owned").response;
+    EXPECT_NE(sel.find(",7"), std::string::npos) << sel;
+    EXPECT_NE(sel.find(",9"), std::string::npos) << sel;
+
+    // The 25059bf review's idempotence pin: a repeat write grant appends
+    // no second acquisition record.
+    const auto before = peer.value()->wal().appended_lsn();
+    peer.value()->GrantRelationWrite(pages);
+    EXPECT_EQ(peer.value()->wal().appended_lsn(), before)
+        << "a page already writable must take no second acquisition";
+}
+
+TEST_F(CoreRuntimeTest, AWriteGrantAloneCarriesItsOwnFaultRights) {
+    // The 95b45e8 review's C2, pinned: two send-retry tasks can reorder on
+    // a full ring, so the write grant must survive arriving before the
+    // extent fault grant.
+    auto oid = core0_->catalog.CreateTable(catalog::kNamespacePublic, "solo", TwoColumnSchema(),
+                                           catalog::ClusteredType::kHeap,
+                                           catalog::KeyMode::kAssigned);
+    ASSERT_TRUE(oid.ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+    auto row = core0_->catalog.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    const PageId root = row.value().desc_page_id;
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    const PageId pages[] = {root};
+    peer.value()->GrantRelationWrite(pages);  // no fault grant first
+    EXPECT_TRUE(peer.value()->store().MayWrite(root));
+    EXPECT_TRUE(peer.value()->store().MayFault(root));
+}
+
+TEST_F(CoreRuntimeTest, PrepareRelationHandoffRefusesPastCapacityAndSkipsInvalid) {
+    // The send half, testable at last (the 95b45e8 review's S1 was the
+    // extraction; the 25059bf review's gap 1 is this test). A null WAL is
+    // the unlogged store: kNoLsn throughout, nothing to sync.
+    const PageId two[] = {130, kInvalidPageId, 131};
+    auto grant = PrepareRelationHandoff(nullptr, 1, two);
+    ASSERT_TRUE(grant.ok()) << grant.status().message();
+    EXPECT_EQ(grant.value().count, 2u);
+    EXPECT_EQ(grant.value().page_ids[0], 130u);
+    EXPECT_EQ(grant.value().page_ids[1], 131u);
+
+    PageId many[RelationWriteGrantPayload::kMaxPages + 1];
+    for (std::uint32_t i = 0; i < RelationWriteGrantPayload::kMaxPages + 1; ++i) {
+        many[i] = 200 + i;
+    }
+    auto refused = PrepareRelationHandoff(nullptr, 1, many);
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.status().code(), StatusCode::kUnsupported)
+        << refused.status().message();
 }
 
 TEST_F(CoreRuntimeTest, APeerRefusesAnUnsoundWriteShapeByItsGateName) {
@@ -1699,6 +1769,8 @@ TEST_F(CoreRuntimeTest, APeerListenerServesItsOwnRelationRefusesForeignAndRoutes
     // (workplan-peer-writer.md §8, the PW1c-4r row).
     const std::string write = RoundTrip(fd, "INSERT INTO rotated VALUES (7)");
     EXPECT_EQ(write.rfind("ERR", 0), 0u) << write;
+    EXPECT_NE(write.find("lease"), std::string::npos)
+        << "the refusal should name the funding wall, not a page or a read: " << write;
 
     // STOP: replied to, and routed - the kShutdown lands on core 0's ring
     // rather than stopping this reactor.

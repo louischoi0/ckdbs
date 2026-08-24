@@ -191,6 +191,24 @@ TEST_F(AnalysisTest, ATransactionalPageHandoffIsCorruption) {
     EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
 }
 
+TEST_F(AnalysisTest, ATransactionalPageHandoffNamingNoPageIsCorruptionToo) {
+    // The 25059bf review's pin for the hoist: the phantom loser is minted
+    // from the transaction id, not the page, so the refusal must fire even
+    // when the handoff names no page at all.
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        std::array<std::byte, kPageHandoffPayloadSize> handoff{};
+        ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
+        ASSERT_TRUE(
+            s.value()->Append({RecordType::kPageHandoff, /*txn=*/7, kInvalidPageId}, handoff).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Run();
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+}
+
 TEST_F(AnalysisTest, APageThatReturnsAfterAHandoffReentersAtItsPostReturnLsn) {
     // A -> B -> A: the page comes back (the handoff *to* this core lives
     // in the other stream, so this stream never sees it) and the

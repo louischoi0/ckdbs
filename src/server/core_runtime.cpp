@@ -280,8 +280,10 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
         return s;
     }
 
-    // PW1c-4's write grant, always sent after the fault grant on the same
-    // FIFO edge, so the fault rights the restamp needs are in place.
+    // PW1c-4's write grant. Order against the fault grant is NOT
+    // guaranteed - two send-retry tasks re-queue independently on a full
+    // ring - which is why GrantRelationWrite installs its own exact-page
+    // fault rights (the 95b45e8 review's C2).
     if (Status s = scheduler_->RegisterMessageHandler(
             sched::RingMessageKind::kRelationWriteGrant,
             [this](const sched::MessageHeader&, std::span<const std::byte> payload) {
@@ -295,8 +297,7 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
                 }
                 RelationWriteGrantPayload grant{};
                 std::memcpy(&grant, payload.data(), sizeof(grant));
-                if (grant.count == 0 ||
-                    grant.count > sizeof(grant.page_ids) / sizeof(grant.page_ids[0])) {
+                if (grant.count == 0 || grant.count > RelationWriteGrantPayload::kMaxPages) {
                     if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                         log_->Error("core", "dropped a relation write grant naming " +
                                                 std::to_string(grant.count) + " pages");
@@ -482,9 +483,16 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
     // owes the page nothing - for an acquisition, nothing below exists).
     // C1's refresh (see GrantRelationFault) - required here too, because
     // C2's fix below makes this grant self-sufficient when it arrives
-    // first.
-    if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok() && log_ != nullptr) {
-        log_->Error("core", "free-map refresh at write grant failed: " + s.message());
+    // first. One failure policy for this whole function (the 25059bf
+    // review's C-2/C-5): any step failing abandons the grant - a grant
+    // whose pages may answer NotFound is C1's silent uselessness with
+    // extra steps, and re-delivery is the re-grant debt's, not this
+    // path's.
+    if (Status s = store_->RefreshFreeMapFromDevice(); !s.ok()) {
+        if (log_ != nullptr) {
+            log_->Error("core", "free-map refresh at write grant failed: " + s.message());
+        }
+        return;
     }
     // Rule 6's precondition made true by construction, not by "nothing
     // below exists": the acquisition record's erase declares everything
@@ -550,21 +558,22 @@ void CoreRuntime::GrantRelationWrite(std::span<const PageId> pages) {
 
 StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
                                                            std::uint32_t owner_core,
-                                                           PageId root, PageId varheap_root) {
+                                                           std::span<const PageId> pages) {
+    // The span signature is the 25059bf review's: (root, varheap) made the
+    // capacity arm unreachable and untestable, and PW1c-6's index pages
+    // would have forced the change anyway.
     RelationWriteGrantPayload grant{};
-    const PageId candidates[] = {root, varheap_root};
-    constexpr std::uint32_t kCapacity =
-        sizeof(grant.page_ids) / sizeof(grant.page_ids[0]);
-    for (PageId id : candidates) {
+    for (PageId id : pages) {
         if (id == kInvalidPageId) continue;
-        if (grant.count >= kCapacity) {
+        if (grant.count >= RelationWriteGrantPayload::kMaxPages) {
             return Status::Unsupported(
                 "relation handoff names more pages than the grant carries (" +
-                std::to_string(kCapacity) + "); refused whole, never truncated");
+                std::to_string(RelationWriteGrantPayload::kMaxPages) +
+                "); refused whole, never truncated");
         }
         grant.page_ids[grant.count++] = id;
     }
-    wal::Lsn handoff_max = 0;
+    wal::Lsn handoff_max = wal::kNoLsn;
     for (std::uint32_t i = 0; i < grant.count; ++i) {
         auto lsn = wal::LogPageHandoff(wal, grant.page_ids[i], owner_core);
         if (!lsn.ok()) {
@@ -574,9 +583,9 @@ StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
         handoff_max = std::max(handoff_max, lsn.value());
     }
     // PL §9 rule 1: the records go durable before any grant leaves. An
-    // unlogged store (wal == nullptr, kNoLsn all around) has nothing to
-    // sync and nothing to recover, so it passes vacuously.
-    if (wal != nullptr && handoff_max != 0) {
+    // unlogged store answers kNoLsn throughout - nothing to sync, nothing
+    // to recover - so the guard below covers it without a null test.
+    if (handoff_max != wal::kNoLsn) {
         if (Status s = wal->EnsureDurable(handoff_max); !s.ok()) {
             return s.WithContext("handoff records not durable");
         }

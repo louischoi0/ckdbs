@@ -119,13 +119,12 @@ Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_co
 //
 // A peer's catalog is read-only by construction (M5: the catalog pages
 // have one writer, core 0), so a CREATE/ALTER/DROP dispatched there has no
-// sound outcome. In a **Debug** build it reaches `MayWrite` and fails
-// naming a page id - the exact failure this header's read refusal exists
-// to prevent, one statement class over. In a **release** build there is no
-// such check at all (`DevicePageStore::ResidentBytes` guards it with
-// `#ifndef NDEBUG`), so the statement would dirty a catalog page this core
-// does not own and become a second writer of a single-writer page.
-// Refused at dispatch instead, before any handler runs.
+// sound outcome. Since PW1c-5 the store's MayWrite is enforced for leased
+// stores in **every** build, so an unguarded DDL would no longer corrupt -
+// it would die mid-handler naming a page id. This refusal still earns its
+// place for what that failure is not: it fires before any handler runs,
+// names DDL and where DDL lives rather than a page, and leaves no
+// half-executed handler state behind it.
 //
 // `Unsupported` and not retryable, like the read refusal: retrying on the
 // same connection changes nothing. The message says where DDL does run,
@@ -135,11 +134,5 @@ Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_co
 // soundness argument assumes a peer takes no DDL, and this is what
 // enforces it (command_dispatcher.cpp's purge gate cites it).
 Status PeerDdlRefused(std::uint32_t this_core, std::string_view verb);
-
-// PW1c's interim DML guard (`PeerWriteRefused`) lived here 2026-08-24
-// only: PW1c-5 deleted it when the write handoff landed. Its duties
-// moved, not lapsed - the dispatcher's CheckWriteAffinity shape gate
-// refuses the still-unsound shapes by name, and the store's MayWrite is
-// enforced for leased stores in every build (device_page_store.cpp).
 
 }  // namespace kds::server

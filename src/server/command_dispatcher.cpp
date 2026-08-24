@@ -2711,42 +2711,67 @@ Status CommandDispatcher::CheckWriteAffinity(const catalog::TableAccess& access,
         cross_core_writes_.Record(session.home_core(), access.owner_core, access.oid);
         return CrossCoreWriteRefused(session.home_core(), access.owner_core, relation);
     }
-    // PW1c-5's shape gate: on a peer, a write is admitted only where the
-    // PW1c-4 grants make it sound - a heap-clustered relation with no
-    // secondary structure. Each refusal names the gate that lifts it, and
-    // none poisons the session: a different statement can succeed, unlike
-    // the blanket guard this replaced. The backstop below every admitted
-    // shape is the store's release-build MayWrite (device_page_store.cpp).
+    // PW1c-5's shape gate, a **whitelist**: on a peer, a write is admitted
+    // only where the PW1c-4 grants make it sound - a heap-clustered
+    // relation with no secondary structure at all. The interim guard this
+    // replaced indicted its own blacklist shape ("a page-writing verb
+    // added later is admitted by omission"), and the first form of this
+    // gate repeated it one level down - it missed assertions, whose entry
+    // pages are the system core's (the 25059bf review's C-3). Each named
+    // refusal cites the task that lifts it; the tail refusal is what makes
+    // a *future* secondary structure refuse rather than slip through.
+    // None poisons the session; the backstop below every admitted shape is
+    // the store's every-build MayWrite (device_page_store.cpp).
     if (catalog_read_only_) {
-        if (access.clustered_type == catalog::ClusteredType::kBtree) {
-            return Status::Unsupported(
-                "a btree-clustered relation cannot take writes on core " +
-                std::to_string(core_id_) +
-                ": a root move writes sys.tables, the system core's page "
-                "(workplan-peer-writer.md PW2)");
-        }
-        if (!access.indexes.empty()) {
-            return Status::Unsupported(
-                "an indexed relation cannot take writes on core " + std::to_string(core_id_) +
-                ": index root moves write sys.indexes, and index pages carry no write "
-                "grant (workplan-peer-writer.md PW2, PW1c-6)");
-        }
-        if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
-            return Status::Unsupported(
-                "an FK-linked relation cannot take writes on core " + std::to_string(core_id_) +
-                ": validation reads the linked relation, which this core may not fault "
-                "(workplan-peer-writer.md §4)");
-        }
         // cabin_ids is per-column-parallel with id 0 meaning "no Cabin"
-        // (schema.hpp), so emptiness is the wrong test - ask for a live id.
+        // (schema.hpp) - emptiness is the wrong test, and so is
+        // cabin_mask != 0: a Cabin on a column past 64 folds into no bit.
         const bool any_cabin =
             std::any_of(access.cabin_ids.begin(), access.cabin_ids.end(),
                         [](const catalog::TableAccess::CabinRef& c) { return c.id != 0; });
-        if (any_cabin) {
+        const bool funded_shape = access.clustered_type == catalog::ClusteredType::kHeap &&
+                                  access.indexes.empty() && access.fkeys_out.empty() &&
+                                  access.fkeys_in.empty() && !any_cabin &&
+                                  !enforcer_.AnyOn(access.oid);
+        if (!funded_shape) {
+            if (access.clustered_type == catalog::ClusteredType::kBtree) {
+                return Status::Unsupported(
+                    "a btree-clustered relation cannot take writes on core " +
+                    std::to_string(core_id_) +
+                    ": a root move writes sys.tables, the system core's page "
+                    "(workplan-peer-writer.md PW2)");
+            }
+            if (!access.indexes.empty()) {
+                return Status::Unsupported(
+                    "an indexed relation cannot take writes on core " +
+                    std::to_string(core_id_) +
+                    ": index root moves write sys.indexes, and index pages carry no write "
+                    "grant (workplan-peer-writer.md PW2, PW1c-6)");
+            }
+            if (!access.fkeys_out.empty() || !access.fkeys_in.empty()) {
+                return Status::Unsupported(
+                    "an FK-linked relation cannot take writes on core " +
+                    std::to_string(core_id_) +
+                    ": validation reads the linked relation, which this core may not fault "
+                    "(workplan-peer-writer.md §4)");
+            }
+            if (any_cabin) {
+                return Status::Unsupported(
+                    "a cabined relation cannot take writes on core " +
+                    std::to_string(core_id_) +
+                    ": whether a Bound Cabin's entry pages follow the grant is unverified "
+                    "(workplan-peer-writer.md §4)");
+            }
+            if (enforcer_.AnyOn(access.oid)) {
+                return Status::Unsupported(
+                    "a relation under an assertion cannot take writes on core " +
+                    std::to_string(core_id_) +
+                    ": the assertion's entry pages are the system core's and carry no "
+                    "write grant (workplan-peer-writer.md §4)");
+            }
             return Status::Unsupported(
-                "a cabined relation cannot take writes on core " + std::to_string(core_id_) +
-                ": whether a Bound Cabin's entry pages follow the grant is unverified "
-                "(workplan-peer-writer.md §4)");
+                "this relation's shape is not funded for writes on core " +
+                std::to_string(core_id_) + " (workplan-peer-writer.md §8)");
         }
     }
     session.BindHomeCore(access.owner_core);
@@ -2992,7 +3017,13 @@ bool CommandDispatcher::SortedFillEligible(const catalog::TableAccess& ta,
     // contiguous id range carved up front, appended in order - is wrong for
     // ids the caller names. Stated rather than inherited, so the coupling
     // cannot be broken silently from the other end.
-    return ta.clustered_type == catalog::ClusteredType::kHeap &&
+    // PW1c-5 (revised at the 25059bf review's S-1): the sorted fill's id
+    // block is AllocateRowIdRange's, straight off the catalog page a peer
+    // may never write - so a peer takes the ordinary per-row path, which
+    // allocates through the lease and works. Ineligibility, not a
+    // refusal: the first form refused the statement whole, which was
+    // false of what the per-row path could do.
+    return !catalog_read_only_ && ta.clustered_type == catalog::ClusteredType::kHeap &&
            ta.key_mode == catalog::KeyMode::kAssigned && ta.varheap_page_id == kInvalidPageId &&
            ta.indexes.empty() && ta.cabin_mask == 0 && !enforcer_.AnyOn(oid);
 }
@@ -3035,21 +3066,6 @@ DispatchOutcome CommandDispatcher::SortedFillInner(const parser::InsertStmt& stm
         if (!err.empty()) {
             return {err + " (row " + std::to_string(k + 1) + ")", false};
         }
-    }
-
-    // PW1c-5: the multi-row path draws its id block straight off the
-    // catalog page (AllocateRowIdRange), which a peer may never write -
-    // the per-relation lease serves only the single-row path (PW1b's
-    // recorded gap). Refused whole rather than half-run into the store's
-    // write refusal.
-    if (catalog_read_only_) {
-        return {"ERR " +
-                    Status::Unsupported(
-                        "multi-row VALUES cannot run on core " + std::to_string(core_id_) +
-                        ": its id block comes from the catalog page, not the lease "
-                        "(workplan-peer-writer.md §7a)")
-                        .message(),
-                false};
     }
 
     auto first = catalog_.AllocateRowIdRange(oid, stmt.rows.size());

@@ -224,25 +224,19 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::ResidentBytes(PageId 
             "DevicePageStore: core " + std::to_string(core_id_) + " may not fault page " +
             std::to_string(page_id) + "; it belongs to another core");
     }
-    // Reading a system page is how a peer reaches the catalog; *dirtying*
-    // one would make it a second writer of a page with exactly one owner.
-    //
-    // Two reasons, two messages, because MayWrite refuses for two: below
-    // the system limit the page is core 0's outright, above it the page
-    // simply is not from this core's extent lease - and the second is the
-    // common case (a rotated relation's root, allocated by core 0 at DDL,
-    // sits well above the limit). One message for both sent the reader
-    // looking at the catalog for a user page.
 #endif
     // The write half is enforced in **every** build for a leased store,
     // since PW1c-5: the interim peer-DML guard is gone, so this is what
     // stands between an unfunded peer write (a crashed publish, grants
     // lost to a restart) and a page whose next mount refuses with the
     // rule-5 stamp mismatch. Refused-retryably beats detected-later.
+    // Dirtying a system page would make a peer the second writer of a
+    // single-writer page; two messages below because MayWrite refuses for
+    // two reasons, and the not-from-this-lease one is the common case.
     // Zero cost where it matters: core 0 has no lease, so MayWrite
     // returns at its first test, and this runs on the frame-load path,
     // never per row. Debug builds additionally get the fault check above.
-    if (mark_dirty && lease_ != nullptr && !MayWrite(page_id)) {
+    if (mark_dirty && !MayWrite(page_id)) {
         return Status::InvalidArgument(
             "DevicePageStore: core " + std::to_string(core_id_) + " may not write page " +
             std::to_string(page_id) +
@@ -411,12 +405,28 @@ Status DevicePageStore::RefreshFreeMapFromDevice() {
         return Status::InvalidArgument(
             "DevicePageStore: the system core's free map is the authority; nothing to refresh");
     }
-    auto view = std::span<std::byte, kPageSize>(free_map_page_);
+    // Scratch first, validate whole, then merge - three defects of the
+    // first form, each fixed here (the 25059bf review's C-2): reading into
+    // the live copy destroyed it on a failed validate; core 0 flushes this
+    // page concurrently with no latch, so a torn read is an ordinary
+    // event, answered by keeping the old copy and retrying at the next
+    // grant; and "the device is only ever ahead" is false - redo's
+    // CreateAt sets bits in this copy at mount that core 0's map may never
+    // have flushed, so replacement would subtract a page this store's own
+    // recovery rebuilt. Union is what makes "strictly forward" a
+    // constructed property. ValidateFreeMapPage, not the checksum half
+    // alone: Open()'s whole rule.
+    auto fresh = std::make_unique<Page>();
+    auto view = std::span<std::byte, kPageSize>(*fresh);
     if (Status s = device_.ReadPage(kFreeMapPageId, view); !s.ok()) return s;
-    // Open()'s rule: a bad map is Corruption, never a guess. The stale copy
-    // is gone at this point, which is fine - a store whose free map cannot
-    // be read is not one to keep serving from.
-    return VerifyPageChecksum(std::span<const std::byte, kPageSize>(free_map_page_));
+    if (Status s = ValidateFreeMapPage(std::span<const std::byte, kPageSize>(*fresh));
+        !s.ok()) {
+        return s;
+    }
+    for (std::size_t i = kPageBodyOffset; i < kPageSize; ++i) {
+        free_map_page_[i] |= (*fresh)[i];
+    }
+    return Status::OK();
 }
 
 bool DevicePageStore::MayWrite(PageId page_id) const noexcept {
@@ -561,6 +571,11 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
                                 " is not resident, so its page_lsn cannot be stamped");
     }
 
+    // This is the one dirtying path that never asks MayWrite, and that is
+    // deliberate, not an oversight (the 25059bf review's C-6): rule 6's
+    // acquisition restamp must dirty a page *before* the write grant is
+    // installed - the restamp is what makes granting sound. Every other
+    // caller reached its frame through the checked accessor first.
     SetPageLsn(std::span<std::byte, kPageSize>(*it->second.bytes), lsn);
     // PW1c-3, PL §9 rule 4: the stream that last wrote the page. Rides
     // the LSN stamp because the two answer one question - *whose* offset

@@ -1140,41 +1140,49 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     if (!generated_oid.ok()) return generated_oid.status();
     const Oid new_oid = generated_oid.value();
 
-    auto created = store_.CreateNew();
-    if (!created.ok()) return created.status();
-    auto& [root_id, root_bytes_ref] = created.value();
-    const std::span<std::byte, kPageSize> root_bytes = root_bytes_ref.bytes();
+    // The root's PageRef is scoped so its pin drops before the publish
+    // hook at the tail of this function: on a rotated relation that hook
+    // EvictCleans the departed pages, and EvictClean refuses a pinned
+    // frame - held to the function's end, the eviction failed on every
+    // peer CREATE TABLE (the 25059bf review's C-1).
+    PageId root_id = kInvalidPageId;
+    {
+        auto created = store_.CreateNew();
+        if (!created.ok()) return created.status();
+        root_id = created.value().first;
+        const std::span<std::byte, kPageSize> root_bytes = created.value().second.bytes();
 
-    // Both clustered types root at `desc_page_id` and both start as one
-    // page - a heap page for kHeap, a B+ tree leaf for kBtree (btree.hpp).
-    // A btree relation grows its first internal level only when that leaf
-    // splits, so a small table costs exactly what it did before, and the
-    // choice is invisible to every layer above until the relation is big
-    // enough for it to matter.
-    Status formatted = Status::OK();
-    switch (clustered_type) {
-        case ClusteredType::kHeap: {
-            auto root_page = heap::PageView::CreateEmpty(root_bytes, 0, new_oid);
-            if (!root_page.ok()) formatted = root_page.status();
-            break;
+        // Both clustered types root at `desc_page_id` and both start as one
+        // page - a heap page for kHeap, a B+ tree leaf for kBtree (btree.hpp).
+        // A btree relation grows its first internal level only when that leaf
+        // splits, so a small table costs exactly what it did before, and the
+        // choice is invisible to every layer above until the relation is big
+        // enough for it to matter.
+        Status formatted = Status::OK();
+        switch (clustered_type) {
+            case ClusteredType::kHeap: {
+                auto root_page = heap::PageView::CreateEmpty(root_bytes, 0, new_oid);
+                if (!root_page.ok()) formatted = root_page.status();
+                break;
+            }
+            case ClusteredType::kBtree:
+                formatted = btree::FormatRoot(root_bytes, new_oid);
+                break;
         }
-        case ClusteredType::kBtree:
-            formatted = btree::FormatRoot(root_bytes, new_oid);
-            break;
-    }
-    if (!formatted.ok()) return formatted;
-    // RV3: the relation's root must exist in the log or a crash that
-    // loses the unflushed page makes the first HEAP_INSERT irreplayable -
-    // redo refuses a record naming a page nothing creates. Both clustered
-    // types start as one leaf-shaped page, which is exactly what a
-    // PAGE_INIT rebuilds.
-    if (Status s = LogCatPageInit(wal_, trx_id, root_id,
-                                  clustered_type == ClusteredType::kBtree
-                                      ? PageType::kBtreeLeaf
-                                      : PageType::kHeap,
-                                  new_oid);
-        !s.ok()) {
-        return s;
+        if (!formatted.ok()) return formatted;
+        // RV3: the relation's root must exist in the log or a crash that
+        // loses the unflushed page makes the first HEAP_INSERT irreplayable -
+        // redo refuses a record naming a page nothing creates. Both clustered
+        // types start as one leaf-shaped page, which is exactly what a
+        // PAGE_INIT rebuilds.
+        if (Status s = LogCatPageInit(wal_, trx_id, root_id,
+                                      clustered_type == ClusteredType::kBtree
+                                          ? PageType::kBtreeLeaf
+                                          : PageType::kHeap,
+                                      new_oid);
+            !s.ok()) {
+            return s;
+        }
     }
 
     // The var-heap root, allocated here or not at all. Eager rather than

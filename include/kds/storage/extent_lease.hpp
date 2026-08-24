@@ -168,9 +168,10 @@ public:
     // spent or current. What the page store's ownership check asks.
     //
     // Linear over the granted list, which is why grants are merged: the
-    // common case is one range. It is called only from the debug-build
-    // ownership check on the frame-load path, so a scan is affordable in a
-    // way it would not be in release.
+    // common case is one range. Called in **every** build since PW1c-5 -
+    // IsAllocated and the leased store's always-on MayWrite both consult
+    // it on the frame-load path - so the merge is what keeps the scan a
+    // handful of compares, not a debug-only indulgence.
     bool Owns(PageId page_id) const noexcept;
 
     // The extent currently being issued from.

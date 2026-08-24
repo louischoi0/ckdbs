@@ -64,8 +64,9 @@ static_assert(sizeof(ExtentGrantPayload) == 8);
 // without a wire change. A relation needing more than the capacity is
 // refused loudly at the send site, never truncated.
 struct RelationWriteGrantPayload {
+    static constexpr std::uint32_t kMaxPages = 6;
     std::uint32_t count;
-    std::uint32_t page_ids[6];  // PageIds; entries past `count` are zero
+    std::uint32_t page_ids[kMaxPages];  // PageIds; entries past `count` are zero
 };
 
 static_assert(sizeof(RelationWriteGrantPayload) == 28);

@@ -393,6 +393,6 @@ storage::Extent RelationFaultExtentOf(const catalog::SysTableRow& row,
 // owns the flush *before* this and the sends after it.
 StatusOr<RelationWriteGrantPayload> PrepareRelationHandoff(wal::WalManager* wal,
                                                            std::uint32_t owner_core,
-                                                           PageId root, PageId varheap_root);
+                                                           std::span<const PageId> pages);
 
 }  // namespace kds::server
