@@ -27,8 +27,10 @@
 //      trail serve it per instance.
 //
 //   3. **Every refusal carries a position**: `DESC`, an aggregated
-//      statement's tail, a subquery's tail, a count that is not a
-//      non-negative integer.
+//      statement's `LIMIT`, a subquery's tail, a count that is not a
+//      non-negative integer. `[AMENDED 2026-08-24 — HV4]` An aggregated
+//      statement's `ORDER BY` is no longer among them: it parses, with an
+//      aggregate admitted as a key.
 //
 // What the parser deliberately does not decide: whether `order_by` names
 // the driving relation's pk. Pk-ness is catalog knowledge, so that check -
@@ -101,16 +103,16 @@ TEST(ParserPaginationTest, LimitZeroIsAValueNotAnAbsence) {
 TEST(ParserPaginationTest, OrderByBareColumn) {
     const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY id"));
     ASSERT_EQ(sel.order_by.size(), 1u);
-    EXPECT_EQ(sel.order_by[0].column.name, "id");
-    EXPECT_FALSE(sel.order_by[0].column.qualified());
+    EXPECT_EQ(sel.order_by[0].key.column.name, "id");
+    EXPECT_FALSE(sel.order_by[0].key.column.qualified());
     EXPECT_FALSE(sel.order_by[0].descending);
 }
 
 TEST(ParserPaginationTest, OrderByQualifiedWithAsc) {
     const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY t.id ASC"));
     ASSERT_EQ(sel.order_by.size(), 1u);
-    EXPECT_EQ(sel.order_by[0].column.qualifier, "t");
-    EXPECT_EQ(sel.order_by[0].column.name, "id");
+    EXPECT_EQ(sel.order_by[0].key.column.qualifier, "t");
+    EXPECT_EQ(sel.order_by[0].key.column.name, "id");
     EXPECT_FALSE(sel.order_by[0].descending);
 }
 
@@ -122,7 +124,7 @@ TEST(ParserPaginationTest, OrderByQualifiedWithAsc) {
 TEST(ParserPaginationTest, DescReachesTheAst) {
     const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY id DESC"));
     ASSERT_EQ(sel.order_by.size(), 1u);
-    EXPECT_EQ(sel.order_by[0].column.name, "id");
+    EXPECT_EQ(sel.order_by[0].key.column.name, "id");
     EXPECT_TRUE(sel.order_by[0].descending);
 }
 
@@ -132,12 +134,12 @@ TEST(ParserPaginationTest, DescReachesTheAst) {
 TEST(ParserPaginationTest, MultipleKeysKeepWrittenOrderAndPerKeyDirection) {
     const SelectStmt sel = MustSelect(Parse("SELECT a FROM t ORDER BY x DESC, t.y, z ASC"));
     ASSERT_EQ(sel.order_by.size(), 3u);
-    EXPECT_EQ(sel.order_by[0].column.name, "x");
+    EXPECT_EQ(sel.order_by[0].key.column.name, "x");
     EXPECT_TRUE(sel.order_by[0].descending);
-    EXPECT_EQ(sel.order_by[1].column.qualifier, "t");
-    EXPECT_EQ(sel.order_by[1].column.name, "y");
+    EXPECT_EQ(sel.order_by[1].key.column.qualifier, "t");
+    EXPECT_EQ(sel.order_by[1].key.column.name, "y");
     EXPECT_FALSE(sel.order_by[1].descending);
-    EXPECT_EQ(sel.order_by[2].column.name, "z");
+    EXPECT_EQ(sel.order_by[2].key.column.name, "z");
     EXPECT_FALSE(sel.order_by[2].descending);
 }
 
@@ -162,7 +164,7 @@ TEST(ParserPaginationTest, TheFullTail) {
         "SELECT a FROM t WHERE a = 1 ORDER BY id ASC LIMIT 10 OFFSET 5";
     const SelectStmt sel = MustSelect(Parse(sql));
     ASSERT_EQ(sel.order_by.size(), 1u);
-    EXPECT_EQ(sel.order_by[0].column.name, "id");
+    EXPECT_EQ(sel.order_by[0].key.column.name, "id");
     ASSERT_TRUE(sel.limit.has_value());
     EXPECT_EQ(sel.limit.value(), 10u);
     EXPECT_EQ(sel.offset, 5u);
@@ -254,15 +256,62 @@ TEST(ParserPaginationTest, AGroupByAloneIsAggregatedForTheTail) {
     EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
 }
 
-// The pre-V09 answer, byte for byte where the corpus pins it: moving the
-// ORDER BY refusal into the tail production must not have moved what an
-// aggregated statement is told.
-TEST(ParserPaginationTest, OrderByOverAnAggregateKeepsItsAnswer) {
-    const std::string_view sql = "SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b";
+// `[AMENDED 2026-08-24 — docs/workplan-having.md HV4]` This was a refusal
+// for as long as the sort could not order what a fold emits. It parses now,
+// and the parser stores what was written: which relation a name belongs to,
+// and whether it is a grouping key, stay the compiler's.
+TEST(ParserPaginationTest, OrderByOverAnAggregateParses) {
+    const SelectStmt sel =
+        MustSelect(Parse("SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY b DESC"));
+    ASSERT_EQ(sel.order_by.size(), 1u);
+    EXPECT_FALSE(sel.order_by[0].key.is_aggregate);
+    EXPECT_EQ(sel.order_by[0].key.column.name, "b");
+    EXPECT_TRUE(sel.order_by[0].descending);
+}
+
+// The key an aggregated statement can name that no column reference can.
+TEST(ParserPaginationTest, OrderByAnAggregateOverAFoldParses) {
+    const SelectStmt sel = MustSelect(
+        Parse("SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY COUNT(*) DESC, b"));
+    ASSERT_EQ(sel.order_by.size(), 2u);
+    EXPECT_TRUE(sel.order_by[0].key.is_aggregate);
+    EXPECT_EQ(sel.order_by[0].key.func, AggFunc::kCount);
+    EXPECT_TRUE(sel.order_by[0].key.star_arg);
+    EXPECT_TRUE(sel.order_by[0].descending);
+    EXPECT_FALSE(sel.order_by[1].key.is_aggregate);
+    EXPECT_EQ(sel.order_by[1].key.column.name, "b");
+}
+
+// An aggregate not in the select list is a *hidden item* at compile (HV-2),
+// which is a compiler question - the parser's job is to carry it through.
+TEST(ParserPaginationTest, OrderByAnAggregateTheSelectListDoesNotNameParses) {
+    const SelectStmt sel =
+        MustSelect(Parse("SELECT b FROM t GROUP BY b ORDER BY SUM(DISTINCT qty)"));
+    ASSERT_EQ(sel.order_by.size(), 1u);
+    EXPECT_TRUE(sel.order_by[0].key.is_aggregate);
+    EXPECT_EQ(sel.order_by[0].key.func, AggFunc::kSum);
+    EXPECT_TRUE(sel.order_by[0].key.distinct);
+    EXPECT_EQ(sel.order_by[0].key.column.name, "qty");
+}
+
+// Without a fold there is nothing for an aggregate key to be the answer of,
+// so OB1's refusal stands unchanged - wording, code and byte.
+TEST(ParserPaginationTest, OrderByAnAggregateWithoutAFoldIsStillUnsupported) {
+    const std::string_view sql = "SELECT a FROM t ORDER BY COUNT(*)";
     const auto parsed = Parse(sql);
     ASSERT_FALSE(parsed.ok());
     EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
-    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "ORDER")));
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "COUNT")));
+}
+
+// A call this grammar has no function for, over a fold: refused at the
+// key's own byte rather than left to fail as trailing garbage past it.
+TEST(ParserPaginationTest, OrderByANonAggregateCallOverAFoldIsUnsupported) {
+    const std::string_view sql = "SELECT b, COUNT(*) FROM t GROUP BY b ORDER BY foo(b)";
+    const auto parsed = Parse(sql);
+    ASSERT_FALSE(parsed.ok());
+    EXPECT_EQ(parsed.status().code(), StatusCode::kUnsupported);
+    EXPECT_TRUE(MentionsByte(parsed.status(), ByteOf(sql, "foo")));
 }
 
 // ---- Refusals: subquery position ------------------------------------------

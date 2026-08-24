@@ -1725,6 +1725,32 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // residuals and access columns of an aggregated statement are the ones
     // its unaggregated twin compiles to, bit for bit (AG1). The chain
     // identity test is what keeps that from drifting.
+    // ---- The post-fold consumers, until HV-2 and HV-4 --------------------
+    //
+    // HV-1 parses `HAVING` and an aggregated `ORDER BY`; the fold's filter
+    // and the fold's sort are the next two tasks (docs/workplan-having.md).
+    // Refused here, positioned, and **never dropped**: a clause parsed,
+    // accepted and silently ignored is the failure parser-v2.md I11 records
+    // having already made once on a catalog view, and it is worse than the
+    // refusal it replaces because the client is answered rather than told.
+    //
+    // Outside the `aggregated()` arm below, deliberately. A HAVING makes a
+    // statement aggregated at parse, so the two conditions coincide today -
+    // and a refusal that can only be reached through a second fact is one
+    // that stops holding the day that fact changes.
+    if (!stmt.having.empty()) {
+        return Status::Unsupported(
+            "HAVING is not supported yet (byte " +
+            std::to_string(stmt.having.front().agg.byte_offset) +
+            "); filter before the fold with WHERE, or filter the result client-side");
+    }
+    if (stmt.aggregated() && !stmt.order_by.empty()) {
+        return Status::Unsupported(
+            "ORDER BY is not supported yet over an aggregated statement (byte " +
+            std::to_string(stmt.order_by.front().key.byte_offset) +
+            "); an aggregated statement's output rows are not chain rows");
+    }
+
     if (stmt.aggregated()) {
         auto spec = CompileAggregate(scope, stmt);
         if (!spec.ok()) return spec.status();
@@ -1767,11 +1793,14 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // so the rule is a property of this function rather than of a
     // guarantee two files away.
     for (const parser::SortKey& written : stmt.order_by) {
-        auto ref = ResolveColumn(scope, written.column);
+        // Every key here is a plain column reference: an aggregate one is
+        // parseable only over a fold, and the fold's whole tail is refused
+        // above until HV-4.
+        auto ref = ResolveColumn(scope, written.key.column);
         if (!ref.ok()) return ref.status();
         if (ref.value().up != 0) {
             return Status::Unsupported("ORDER BY cannot name an outer query's column" +
-                                       Position(written.column.byte_offset));
+                                       Position(written.key.column.byte_offset));
         }
         chain.sort_keys.push_back(SortKey{ref.value(), ColumnAt(scope, ref.value()).type_val,
                                           written.descending});

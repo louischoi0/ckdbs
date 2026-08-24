@@ -3728,7 +3728,7 @@ DispatchOutcome CommandDispatcher::HandleCatalogView(const parser::SelectStmt& s
         return {"ERR ORDER BY over a catalog view (sys." + stmt.from.table_name +
                     ") is not supported; a view's rows are materialized by the catalog's "
                     "readers and carry no schema for the sort to resolve against (byte " +
-                    std::to_string(stmt.order_by.front().column.byte_offset) + ")",
+                    std::to_string(stmt.order_by.front().key.byte_offset) + ")",
                 false};
     }
 

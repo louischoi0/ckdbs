@@ -137,11 +137,19 @@ private:
     // `GROUP BY <col> [, ...]`, with the two words already consumed.
     Status ParseGroupBy(SelectStmt& stmt);
 
-    // The pagination tail of a query block: `[ORDER BY <col> [ASC]]
-    // [LIMIT <n>] [OFFSET <m>]` (spec I11, workplan V09). Every refusal
-    // lives here with the production - aggregated output, subquery
-    // position, `DESC`, an expression after ORDER BY - so there is one
-    // answer to what the tail admits.
+    // `HAVING <agg> <op> <val> [AND ...]`, with the word already consumed
+    // (docs/workplan-having.md HV-1). Shape only: that the left side is an
+    // aggregate the fold can answer, and that the right side is a literal,
+    // are this production's; whether the aggregate typechecks and whether a
+    // plain column is a grouping key are the compiler's.
+    Status ParseHaving(SelectStmt& stmt);
+
+    // The pagination tail of a query block: `[ORDER BY <key> [ASC]]
+    // [LIMIT <n>] [OFFSET <m>]` (spec I11, workplan V09, amended by
+    // docs/workplan-having.md HV4). Every refusal lives here with the
+    // production - subquery position, an ordinal, an expression, an
+    // aggregate key on a statement with no fold to answer it, `LIMIT` over
+    // a fold - so there is one answer to what the tail admits.
     Status ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint32_t depth);
 
     // One count clause of the tail - `LIMIT <n>` or `OFFSET <m>` -
