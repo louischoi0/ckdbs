@@ -206,17 +206,28 @@ def to_dataframe(columns, rows):
 def _text_table(columns, rows):
     """Column-aligned text table - the fallback when pandas isn't
     installed, so SELECT output still reads like a dataframe printout
-    rather than raw comma-joined text."""
+    rather than raw comma-joined text.
+
+    Tolerates ragged rows: the wire format has no quoting (see
+    _parse_select_rows), so a varchar holding a comma splits into extra
+    cells and one holding the two-character "\\n" splits into a short row.
+    The true cell boundaries are unrecoverable client-side; extra cells
+    render under an unnamed header and short rows pad with blanks, so the
+    reply is shown as it arrived instead of crashing the REPL.
+    """
     str_rows = [[str(v) for v in row] for row in rows]
-    widths = [len(c) for c in columns]
+    n_cols = max([len(columns)] + [len(r) for r in str_rows])
+    headers = list(columns) + [""] * (n_cols - len(columns))
+    widths = [len(c) for c in headers]
     for row in str_rows:
         for i, v in enumerate(row):
             widths[i] = max(widths[i], len(v))
 
     def fmt(values):
-        return "  ".join(v.rjust(widths[i]) for i, v in enumerate(values))
+        padded = values + [""] * (n_cols - len(values))
+        return "  ".join(v.rjust(widths[i]) for i, v in enumerate(padded))
 
-    lines = [fmt(columns), "  ".join("-" * w for w in widths)]
+    lines = [fmt(headers), "  ".join("-" * w for w in widths)]
     lines.extend(fmt(row) for row in str_rows)
     return "\n".join(lines)
 
@@ -232,6 +243,12 @@ def render_select_reply(raw_reply):
         return text
 
     columns, rows = _parse_select_rows(text)
+    if any(len(row) != len(columns) for row in rows):
+        # Ragged reply: some varchar held a comma (or the two-character
+        # "\n") and mis-split - the wire format cannot say where the cell
+        # boundaries were. pandas refuses ragged input outright, so these
+        # always render through the tolerant text table.
+        return _text_table(columns, rows)
     try:
         return to_dataframe(columns, rows).to_string(index=False)
     except RuntimeError:
