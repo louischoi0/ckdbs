@@ -87,17 +87,31 @@ StatusOr<AnalysisResult> Analyze(LogDevice& device, std::uint32_t core_id,
         // checkpoint-seeded entry included. A page that later comes back
         // re-enters through its re-acquirer's ordinary records, so erase
         // followed by first-wins emplace gives the post-return recLSN.
-        // max_page_id is left where it was: it is a sizing high-water, and
-        // a departed page still had to exist here.
+        //
+        // The erase is positional: a later CHECKPOINT_BEGIN whose dirty
+        // table still lists the page re-seeds it at a pre-handoff recLSN.
+        // Sound only because the pool's dirty table keys off the frame's
+        // dirty bit - so PW1c-4's rule-1a flush must clear the pool's
+        // dirty entry, not merely write the bytes (the d3a8b08 review's
+        // stated precondition on that unbuilt task).
+        //
+        // max_page_id takes the handoff's page too, deliberately: the
+        // durable record of which pages exist is the unlogged free map,
+        // so "the page existed here" is exactly what may not survive the
+        // crash - if this stream's ordinary records for it fell below the
+        // scan start and the incoming core never wrote it, this record is
+        // the one durable proof the id is in use, and the high-water must
+        // rise past it (RV4's hazard, reopened for exactly the handed-off
+        // page; raising it is monotone and free).
         if (record.header.page_id != kInvalidPageId) {
             if (record.type() == RecordType::kPageHandoff) {
                 out.dirty_pages.erase(record.header.page_id);
             } else {
                 out.dirty_pages.emplace(record.header.page_id, record.header.lsn);
-                out.max_page_id = (out.max_page_id == kInvalidPageId)
-                                      ? record.header.page_id
-                                      : std::max(out.max_page_id, record.header.page_id);
             }
+            out.max_page_id = (out.max_page_id == kInvalidPageId)
+                                  ? record.header.page_id
+                                  : std::max(out.max_page_id, record.header.page_id);
         }
 
         // An undo record this transaction just wrote becomes the head of

@@ -113,7 +113,11 @@ struct AnalysisResult {
     // §9 rule 3): from that LSN the page belongs to another stream and
     // this stream's redo never touches it - sound because the handoff's
     // flush put everything logged before it in the durable image. A page
-    // that returns re-enters through its re-acquirer's ordinary records.
+    // that returns re-enters through its re-acquirer's ordinary records -
+    // but note the residual: those post-return records still pass an RV5
+    // gate that may compare against the *other* stream's page_lsn stamp.
+    // PW1c-3 is what makes that comparison answerable; this table alone
+    // does not close the returning page.
     //
     // Ordered containers throughout, not hashed ones: sched.md §8 requires
     // deterministic iteration, and a recovery whose page visit order

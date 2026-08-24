@@ -81,6 +81,28 @@ static_assert(sizeof(PageInitPayload) == kPageInitPayloadSize);
 StatusOr<std::size_t> EncodePageInit(std::span<std::byte> out, const PageInitPayload& fields);
 StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in);
 
+// ---- PAGE_HANDOFF --------------------------------------------------------
+//
+// PW1c-1: the incoming core is the payload's whole content - the page is
+// the envelope's, the handoff LSN is the record's own.
+
+struct PageHandoffPayload {
+    std::uint32_t incoming_core;
+};
+
+inline constexpr std::size_t kPageHandoffIncomingCoreOffset = 0;
+// 4 bytes on disk. A *floor*, like every size in this file: DecodeRecord
+// returns the record's 8-byte-aligned tail, so this payload arrives at the
+// decoder as 8 bytes, never as 4.
+inline constexpr std::size_t kPageHandoffPayloadSize = 4;
+
+static_assert(offsetof(PageHandoffPayload, incoming_core) == kPageHandoffIncomingCoreOffset);
+static_assert(sizeof(PageHandoffPayload) == kPageHandoffPayloadSize);
+
+StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
+                                        const PageHandoffPayload& fields);
+StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in);
+
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 //
 // One shape for both: an insert names a new slot, an overwrite names an
@@ -92,18 +114,6 @@ StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in);
 // `trx_id` is the writer, and it is *not* taken from the envelope: a redo
 // of this record must stamp the tuple even when replayed outside any
 // transaction context, so the value is explicit rather than inferred.
-
-// PAGE_HANDOFF (PW1c-1): the incoming core is the payload's whole
-// content - the page is the envelope's, the handoff LSN is the record's
-// own. Fixed four bytes.
-struct PageHandoffPayload {
-    std::uint32_t incoming_core;
-};
-inline constexpr std::size_t kPageHandoffPayloadSize = 4;
-
-StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
-                                        const PageHandoffPayload& fields);
-StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in);
 
 struct HeapWritePayload {
     std::uint64_t trx_id;     // writer, 48-bit zero-extended

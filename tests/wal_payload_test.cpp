@@ -57,24 +57,6 @@ std::span<const std::byte> PayloadOf(const std::vector<std::byte>& record) {
 
 // ---- PAGE_INIT -----------------------------------------------------------
 
-TEST(WalPayloadTest, PageHandoffRoundTripsAndRejectsAWrongSize) {
-    // PW1c-1: four bytes, exact - a longer payload is a record this build
-    // did not write, and a prefix-read would be a guess.
-    std::array<std::byte, kPageHandoffPayloadSize> buf{};
-    ASSERT_TRUE(EncodePageHandoff(buf, PageHandoffPayload{3}).ok());
-    auto decoded = DecodePageHandoff(buf);
-    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
-    EXPECT_EQ(decoded.value().incoming_core, 3u);
-
-    std::array<std::byte, kPageHandoffPayloadSize + 1> longer{};
-    EXPECT_EQ(DecodePageHandoff(longer).status().code(), StatusCode::kCorruption);
-    std::array<std::byte, 2> shorter{};
-    EXPECT_EQ(EncodePageHandoff(shorter, PageHandoffPayload{1}).status().code(),
-              StatusCode::kInvalidArgument);
-    EXPECT_EQ(DecodePageHandoff(std::span<const std::byte>(shorter)).status().code(),
-              StatusCode::kCorruption);
-}
-
 TEST(WalPayloadTest, PageInitRoundTripsThroughTheEnvelope) {
     PageInitPayload fields{};
     fields.min_key = 1234567;
@@ -174,6 +156,34 @@ TEST(WalPayloadTest, PageInitRejectsAPayloadShorterThanTheLegacyForm) {
     // CRC-vouched bytes that are intact and wrong.
     std::array<std::byte, 8> stub{};
     EXPECT_EQ(DecodePageInit(stub).status().code(), StatusCode::kCorruption);
+}
+
+// ---- PAGE_HANDOFF --------------------------------------------------------
+
+TEST(WalPayloadTest, PageHandoffRoundTripsThroughTheEnvelope) {
+    // Through the envelope, because that is the only way this record is ever
+    // read: the four-byte payload comes back as the record's eight-byte
+    // aligned tail. PW1c-1's decoder tested `!= 4` and refused exactly this -
+    // every real record - and passed only because its test handed the codec a
+    // bare 4-byte buffer.
+    const auto record = ThroughEnvelope(RecordType::kPageHandoff,
+                                        [](std::span<std::byte> out) {
+                                            return EncodePageHandoff(out, PageHandoffPayload{3});
+                                        });
+    const auto payload = PayloadOf(record);
+    ASSERT_EQ(payload.size(), 8u);  // never 4: the alignment is the point
+
+    auto decoded = DecodePageHandoff(payload);
+    ASSERT_TRUE(decoded.ok()) << decoded.status().message();
+    EXPECT_EQ(decoded.value().incoming_core, 3u);
+}
+
+TEST(WalPayloadTest, PageHandoffRejectsABufferShorterThanTheCore) {
+    std::array<std::byte, 2> stub{};
+    EXPECT_EQ(EncodePageHandoff(stub, PageHandoffPayload{1}).status().code(),
+              StatusCode::kInvalidArgument);
+    EXPECT_EQ(DecodePageHandoff(std::span<const std::byte>(stub)).status().code(),
+              StatusCode::kCorruption);
 }
 
 // ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------

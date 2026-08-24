@@ -129,7 +129,7 @@ Generalise CC7. A migration is: the outgoing owner flushes the page,
 appends a **handoff record**, and only then does the incoming owner take
 it. Recovery's analysis pass learns from that record that the page left the
 stream at LSN *h*, and **removes it from that stream's dirty page table**
-(`include/kds/wal/analysis.hpp:115`) so redo never touches it.
+(`include/kds/wal/analysis.hpp`, `dirty_pages`) so redo never touches it.
 
 - **Soundness rests on the flush**: everything the outgoing stream logged
   for that page before *h* is already in the durable image, so its redo has
@@ -227,7 +227,7 @@ context.
    guideline 3 stand unamended.
 3. **Analysis processes handoff records before redo scope is fixed.** A
    page handed off at LSN *h* is removed from the outgoing stream's dirty
-   page table (`include/kds/wal/analysis.hpp:115`); the outgoing stream's
+   page table (`include/kds/wal/analysis.hpp`, `dirty_pages`); the outgoing stream's
    redo never touches it. Sound because of rule 1(a): everything that
    stream logged for the page before *h* is already in the durable image.
    The incoming stream's records for the page replay normally.

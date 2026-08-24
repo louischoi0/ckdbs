@@ -230,33 +230,17 @@ TEST_F(RedoTest, AHandedOffPagesRecordsAreSkippedAndThePageNeverFaulted) {
     // does not hold the page, which makes any touch loud - an unfiltered
     // redo would CreateAt the page from its PAGE_INIT and apply all three
     // records.
+    WriteHeapStream(2);
     {
+        // An ordinary stream, plus a handoff: Open resumes at the durable
+        // tail, so this appends after the helper's records.
         auto s = WalStream::Open(device_.get(), 0);
         ASSERT_TRUE(s.ok());
-        WalStream& w = *s.value();
-
-        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
-        const PageInitPayload fields{/*min_key=*/1,
-                                     static_cast<std::uint8_t>(PageType::kHeap),
-                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
-        ASSERT_TRUE(EncodePageInit(init, fields).ok());
-        ASSERT_TRUE(w.Append({RecordType::kPageInit, 1, kPage}, init).ok());
-        for (int i = 0; i < 2; ++i) {
-            const auto payload = Bytes(24, static_cast<unsigned char>(0xB0 + i));
-            std::vector<std::byte> buf(kHeapWriteFixedSize + payload.size(), std::byte{0});
-            const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0,
-                                      static_cast<std::uint16_t>(i),
-                                      static_cast<std::uint16_t>(payload.size())};
-            auto n_enc = EncodeHeapWrite(buf, hw, payload);
-            ASSERT_TRUE(n_enc.ok());
-            ASSERT_TRUE(w.Append({RecordType::kHeapInsert, 7, kPage},
-                                 std::span(buf).first(n_enc.value()))
-                            .ok());
-        }
         std::array<std::byte, kPageHandoffPayloadSize> handoff{};
         ASSERT_TRUE(EncodePageHandoff(handoff, PageHandoffPayload{1}).ok());
-        ASSERT_TRUE(w.Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
-        ASSERT_TRUE(w.Sync().ok());
+        ASSERT_TRUE(
+            s.value()->Append({RecordType::kPageHandoff, kNoTxnId, kPage}, handoff).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
     }
 
     AnalysisResult analysis = Analyzed();

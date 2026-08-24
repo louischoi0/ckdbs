@@ -115,29 +115,33 @@ StatusOr<PageInitPayload> DecodePageInit(std::span<const std::byte> in) {
     return fields;
 }
 
-// ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
+// ---- PAGE_HANDOFF --------------------------------------------------------
 
 StatusOr<std::size_t> EncodePageHandoff(std::span<std::byte> out,
                                         const PageHandoffPayload& fields) {
-    if (out.size() < kPageHandoffPayloadSize) {
-        return Status::InvalidArgument("EncodePageHandoff: buffer too small");
+    if (Status s = CheckOutputSize(out, kPageHandoffPayloadSize, "PAGE_HANDOFF"); !s.ok()) {
+        return s;
     }
-    std::memcpy(out.data(), &fields.incoming_core, sizeof(fields.incoming_core));
+    Store<std::uint32_t>(out, kPageHandoffIncomingCoreOffset, fields.incoming_core);
     return kPageHandoffPayloadSize;
 }
 
 StatusOr<PageHandoffPayload> DecodePageHandoff(std::span<const std::byte> in) {
-    // Exact, not minimum: a longer payload is a record this build did not
-    // write, and interpreting a prefix of it would be guessing.
-    if (in.size() != kPageHandoffPayloadSize) {
-        return Status::Corruption("DecodePageHandoff: payload is " +
-                                  std::to_string(in.size()) + " bytes, not " +
-                                  std::to_string(kPageHandoffPayloadSize));
+    // A floor, **never an exact size** - the same `>=` rule DecodePageInit
+    // spells out above. `DecodeRecord` hands back the record's 8-byte
+    // aligned tail, so these four bytes arrive here as eight, and an
+    // equality test refused every PAGE_HANDOFF ever read through the
+    // envelope. It shipped that way in PW1c-1 and was invisible because the
+    // only caller was a test handing the codec a bare 4-byte buffer.
+    if (Status s = CheckInputSize(in, kPageHandoffPayloadSize, "PAGE_HANDOFF"); !s.ok()) {
+        return s;
     }
     PageHandoffPayload fields{};
-    std::memcpy(&fields.incoming_core, in.data(), sizeof(fields.incoming_core));
+    fields.incoming_core = Load<std::uint32_t>(in, kPageHandoffIncomingCoreOffset);
     return fields;
 }
+
+// ---- HEAP_INSERT / HEAP_OVERWRITE ---------------------------------------
 
 StatusOr<std::size_t> EncodeHeapWrite(std::span<std::byte> out, const HeapWritePayload& fields,
                                       std::span<const std::byte> tuple) {
