@@ -105,11 +105,8 @@ Status CheckFrameBudget(std::size_t frames, std::uint32_t cores) {
     return Status::OK();
 }
 
-std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores,
-                             std::uint32_t hardware_cores) noexcept {
-    const std::uint32_t divisor =
-        (hardware_cores > 0 && hardware_cores < cores) ? hardware_cores : cores;
-    return frames / divisor;
+std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept {
+    return frames / cores;
 }
 
 Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
@@ -617,8 +614,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // that override on every server-path store, which is exactly the set
     // MG05's poisoner run needs under pressure.
     if (config.buffer_pool_frames != 0) {
-        store.value()->SetFrameBudget(FrameBudgetShare(config.buffer_pool_frames, config.cores,
-                                                       std::thread::hardware_concurrency()));
+        store.value()->SetFrameBudget(FrameBudgetShare(config.buffer_pool_frames, config.cores));
     }
 
     // Built here rather than in the initializer list because the members
@@ -1210,8 +1206,8 @@ Status Expeditor::Serve() {
             core_config.durability = config_.durability;
             core_config.isolation = config_.isolation;
             core_config.budget = exec::Budget(config_.max_rows_touched);
-            core_config.buffer_pool_frames = FrameBudgetShare(
-                config_.buffer_pool_frames, config_.cores, std::thread::hardware_concurrency());
+            core_config.buffer_pool_frames =
+                FrameBudgetShare(config_.buffer_pool_frames, config_.cores);
             core_config.lease = lease.value();
             // This peer's own anchor, copied out of the superblock core 0
             // decoded. A peer's `SuperBlock` member is a default-constructed

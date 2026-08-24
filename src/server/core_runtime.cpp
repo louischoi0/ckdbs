@@ -139,12 +139,14 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // RV3: a peer may not write a catalog page (P6), so this should never
     // fire - but if a write ever slips through, logged beats silent.
     runtime->catalog_->SetWal(runtime->wal_.get());
+    const bool is_peer = config.core_id != catalog::kSystemCore;
+
     // A peer may not write the catalog, so its row ids come from leased
     // blocks (P5's shape, catalog/row_id_lease.hpp): AllocateRowId() draws
     // from this table, and a spent block is retryable exhaustion until the
     // kRowIdLease refill lands. Core 0 keeps the direct path - it owns the
     // page the sequence lives on.
-    if (config.core_id != 0) {
+    if (is_peer) {
         runtime->catalog_->SetRowIdLeases(&runtime->row_id_leases_);
     }
 
@@ -168,7 +170,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // must fail its first write with the lease's retryable exhaustion, not
     // with the superblock refusal above - the refusal names a wiring bug,
     // and a transport-less core is a test fixture rather than one.
-    if (config.core_id != 0) {
+    if (is_peer) {
         runtime->trx_ids_->SetLeaseSource(&runtime->trx_id_lease_);
     }
     // The undo log is already built - recovery wrote its compensations
@@ -184,10 +186,9 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         &*runtime->wal_, config.durability, config.budget,
         /*recorder=*/nullptr, /*replay_enabled=*/false, /*access_statistics=*/false,
         /*cabins=*/nullptr, &*runtime->txn_manager_, config.isolation, config.core_id);
-    // Asymmetry 1 made enforceable at dispatch (PW4): a peer's DDL is
-    // refused by name before any handler, instead of dying inside one at
-    // MayWrite with a page id.
-    if (config.core_id != catalog::kSystemCore) {
+    // Asymmetry 1 made enforceable at dispatch (PW4) - the argument is at
+    // PeerDdlRefused (core_affinity.hpp).
+    if (is_peer) {
         runtime->dispatcher_->SetCatalogReadOnly(true);
     }
 

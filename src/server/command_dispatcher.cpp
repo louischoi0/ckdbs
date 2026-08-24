@@ -390,21 +390,27 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return HandleDescribe(rest, session);
     }
     // A peer takes no DDL (workplan-peer-writer.md PW4). Every target of
-    // these three verbs writes state only the system core may write - the
-    // catalog rows, and for patterns/assertions the sys.* pages the
-    // recorder maintains - so on a peer the statement would run until
-    // `MayWrite` failed it with a page id. Refused whole at the verb,
-    // before any handler. The predicate is the incapacity itself - *the
-    // catalog is read-only here* (catalog_read_only_, set by CoreRuntime
-    // for every non-system core) - and deliberately not `core_id_`: the
-    // P4e equivalence harness's stand-in dispatchers call themselves core
-    // 1 over core 0's writable store precisely because no peer writer
-    // exists yet (docs/known-gaps.md), and they must keep building their
-    // fixtures. This refusal is what makes §5d's purge-gate soundness
-    // argument enforced rather than assumed (see the gate).
+    // these three verbs writes state only the system core may write, so
+    // the whole verb is refused here, before any handler - the argument,
+    // including why nothing below this catches it in a **release** build,
+    // is at `PeerDdlRefused` (core_affinity.hpp). Do not remove this as a
+    // message improvement: it is the only guard once NDEBUG is set, and
+    // it is what makes §5d's purge-gate soundness argument enforced
+    // rather than assumed (see the gate).
+    //
+    // Keyed on `catalog_read_only_` (see its declaration) and deliberately
+    // not on `core_id_`, and on exactly the token the routing below reads,
+    // so the two cannot disagree about what a verb is.
     if (catalog_read_only_ &&
         (IEquals(cmd, "CREATE") || IEquals(cmd, "ALTER") || IEquals(cmd, "DROP"))) {
-        return {"ERR " + PeerDdlRefused(core_id_, cmd).message(), false};
+        // Inside an explicit transaction this poisons, like every other
+        // write-capability refusal - CrossCoreWriteRefused fires inside a
+        // WriteScope and poisons, and two refusals of the same shape must
+        // not disagree about the transaction's fate (txn.md section 10-8's
+        // posture). Decided at the PW4 review, before PW5's listeners make
+        // the path reachable.
+        session.Poison();
+        return {ErrorReply(PeerDdlRefused(core_id_, cmd)), false};
     }
     if (IEquals(cmd, "CREATE")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);

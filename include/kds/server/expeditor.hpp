@@ -106,17 +106,19 @@ inline constexpr std::size_t kCoreRingPayloadBytes = 1024;
 Status CheckFrameBudget(std::size_t frames, std::uint32_t cores);
 
 // EV4 (docs/spec-eviction.md §6), under the operator invariant of
-// 2026-08-24: the key is an instance total, and **every core's share is
-// equal** - `frames / min(cores, hardware_cores)`, the remainder
-// undistributed (at most divisor-1 frames, ~504 KiB at the 64-core cap;
-// equality is the invariant, and a remainder seat would break it).
-// `hardware_cores` is std::thread::hardware_concurrency(), 0 ("not
-// detectable") falling back to `cores` - and boot refuses cores above the
-// detectable hardware count, so share * cores never exceeds the total.
-// Never 0 for a nonzero total that passed CheckFrameBudget. `cores` must
-// be nonzero (CheckCoreCount owns that).
-std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores,
-                             std::uint32_t hardware_cores) noexcept;
+// 2026-08-24: the key is an instance total and every core's share is
+// equal - `frames / min(cores, hardware cores)` as ratified, which is
+// `frames / cores` on every instance that exists, because Expeditor::Open
+// refuses to boot when `cores` exceeds the detectable hardware count and
+// falls back to `cores` when the count is undetectable. The min() is
+// therefore not carried as a parameter - its hardware arm can never be
+// selected, and if it ever were, share * cores would exceed the total,
+// the exact overcommit the invariant forbids. The remainder (at most
+// cores-1 frames, ~504 KiB at the 64-core cap) is undistributed -
+// equality is the invariant, and a remainder seat would break it. Never
+// 0 for a nonzero total that passed CheckFrameBudget; `cores` must be
+// nonzero (CheckCoreCount owns that).
+std::size_t FrameBudgetShare(std::size_t frames, std::uint32_t cores) noexcept;
 
 class Expeditor {
 public:

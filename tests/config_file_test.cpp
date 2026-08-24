@@ -491,7 +491,7 @@ TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal
                                   std::size_t{cores} * 7 - 1, std::size_t{cores} * 7,
                                   std::size_t{1024}}) {
             ASSERT_TRUE(CheckFrameBudget(total, cores).ok());
-            const std::size_t share = FrameBudgetShare(total, cores, /*hardware_cores=*/cores);
+            const std::size_t share = FrameBudgetShare(total, cores);
             EXPECT_GT(share, 0u) << "total " << total << " cores " << cores;
             EXPECT_LE(share * cores, total) << "total " << total << " cores " << cores;
             EXPECT_LT(total - share * cores, static_cast<std::size_t>(cores))
@@ -499,14 +499,6 @@ TEST(ExpeditorConfigTest, FrameBudgetSharesAreEqualNonzeroAndNeverExceedTheTotal
         }
     }
 
-    // The min() arm: an undetectable hardware count (0) falls back to the
-    // configured cores; a *smaller* detectable count becomes the divisor.
-    // Boot refuses cores above detectable hardware, so the second arm is
-    // unreachable on a bootable instance and pinned here so the fallback
-    // does not rot.
-    EXPECT_EQ(FrameBudgetShare(1024, 4, 0), 256u);
-    EXPECT_EQ(FrameBudgetShare(1024, 8, 4), 256u);
-    EXPECT_EQ(FrameBudgetShare(1024, 4, 8), 256u);
 }
 
 TEST(ExpeditorConfigTest, AFrameBudgetBelowTheCoreCountIsRefusedNamingBothNumbers) {

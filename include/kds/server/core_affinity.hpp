@@ -118,10 +118,14 @@ Status CrossCoreReadUnsupported(std::uint32_t this_core, std::uint32_t target_co
 // (docs/workplan-peer-writer.md PW4).
 //
 // A peer's catalog is read-only by construction (M5: the catalog pages
-// have one writer, core 0), so a CREATE/ALTER/DROP dispatched there would
-// run until it reached `MayWrite` and fail naming a page id - the exact
-// failure this header's read refusal exists to prevent, one statement
-// class over. Refused at dispatch instead, before any handler runs.
+// have one writer, core 0), so a CREATE/ALTER/DROP dispatched there has no
+// sound outcome. In a **Debug** build it reaches `MayWrite` and fails
+// naming a page id - the exact failure this header's read refusal exists
+// to prevent, one statement class over. In a **release** build there is no
+// such check at all (`DevicePageStore::ResidentBytes` guards it with
+// `#ifndef NDEBUG`), so the statement would dirty a catalog page this core
+// does not own and become a second writer of a single-writer page.
+// Refused at dispatch instead, before any handler runs.
 //
 // `Unsupported` and not retryable, like the read refusal: retrying on the
 // same connection changes nothing. The message says where DDL does run,

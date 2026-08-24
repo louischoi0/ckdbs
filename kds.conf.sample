@@ -68,12 +68,13 @@ cores = 1
 
 # Resident-frame budget for the whole instance's buffer pools, in 8 KiB
 # pages (docs/spec-eviction.md §6, EV4). Every core takes an *equal* share
-# - total / min(cores, hardware cores), the small remainder undistributed
-# (operator invariant 2026-08-24) - and a core past its share evicts cold
-# clean frames on fault (docs/workplan-pageref.md). 0 (the default) is
-# unbounded. A nonzero value below `cores` is refused at boot: an integer
-# share of zero would mean unbounded on that core, the opposite of a small
-# budget's intent.
+# - total / cores, the small remainder undistributed (operator invariant
+# 2026-08-24; the ratified min(cores, hardware cores) divisor collapses to
+# cores because boot refuses overcommit) - and a core past its share
+# evicts cold clean frames on fault (docs/workplan-pageref.md). 0 (the
+# default) is unbounded. A nonzero value below `cores` is refused at boot:
+# an integer share of zero would mean unbounded on that core, the opposite
+# of a small budget's intent.
 # buffer_pool_frames = 0
 
 # Relation placement (docs/workplan-crosscore.md P6c). `creating` (default)

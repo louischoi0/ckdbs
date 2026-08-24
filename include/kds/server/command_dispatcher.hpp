@@ -399,10 +399,6 @@ public:
     // every caller that predates transactions gets - and what keeps their
     // behaviour identical, because an autocommit statement outside an
     // explicit transaction is exactly what the engine did before.
-    // See catalog_read_only_ below. CoreRuntime::Open calls it for every
-    // non-system core, before the first statement can arrive.
-    void SetCatalogReadOnly(bool read_only) noexcept { catalog_read_only_ = read_only; }
-
     DispatchOutcome Dispatch(std::string_view line, Session* session = nullptr);
 
     // The statement path without the durability wait: it runs the statement
@@ -866,6 +862,12 @@ public:
     // the affinity refusal. `client` must outlive the dispatcher. With
     // this never called, every statement behaves exactly as before.
     void SetRemoteReads(SessionStepClient* client) noexcept { remote_reads_ = client; }
+
+    // Whether this core's catalog belongs to another core (see
+    // `catalog_read_only_`). Called by CoreRuntime::Open for every
+    // non-system core, before the first statement can arrive; a
+    // dispatcher never told behaves exactly as it did before PW4.
+    void SetCatalogReadOnly(bool read_only) noexcept { catalog_read_only_ = read_only; }
 
     // The physical optimizer's shadow surface (docs/feat-physical-optimizer.md
     // R3/R10, workplan PX06). A setter for `set_aggregate_limits`'s reason,

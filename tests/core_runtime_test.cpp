@@ -1396,6 +1396,21 @@ TEST_F(CoreRuntimeTest, APeerRefusesEveryDdlVerbByNameAndStillServesReads) {
         EXPECT_NE(reply.find("core 0"), std::string::npos) << stmt << " -> " << reply;
     }
 
+    // The guard keys on the router's own token, so spelling coverage is by
+    // construction - pinned once so a tokenizer change cannot silently
+    // narrow it - and the ANALYZE prefix routes to the SELECT path, never
+    // to a DDL handler, so it must answer as the parser and not this guard.
+    EXPECT_NE(peer.value()
+                  ->dispatcher()
+                  .Dispatch("  create table sp (id int64)")
+                  .response.find("takes no DDL"),
+              std::string::npos);
+    EXPECT_EQ(peer.value()
+                  ->dispatcher()
+                  .Dispatch("ANALYZE CREATE TABLE sp (id int64)")
+                  .response.find("takes no DDL"),
+              std::string::npos);
+
     // The control, twice over: reads are untouched on the peer, and the
     // guard is *core*-scoped, not a new refusal of DDL itself. A core-0
     // CoreRuntime in this fixture cannot run DDL end to end (its
