@@ -553,6 +553,12 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
        << " last_mount_time=" << superblock_.last_mount_time()
        << " wal_anchor_count=" << superblock_.wal_anchor_count()
        << " cabin_optimizer=" << (cabin_optimizer_enabled_ ? "on" : "off")
+       // The core serving this session (PW6, docs/workplan-peer-writer.md).
+       // Under `peer_listeners = on` the kernel picks the accepting core and
+       // a client cannot choose it (PW5), so a client that needs to know -
+       // the per-core writer benchmark, an operator reading a refusal - must
+       // be able to ask. Constant per session, by M3: a session never moves.
+       << " core=" << core_id_
        // §5d: delete-marked catalog rows the horizon-gated purge retired
        // *this* mount. Its sibling `catalog_marks_finalized` below counts a
        // previous mount's leftovers, and is part of the recovery report;
