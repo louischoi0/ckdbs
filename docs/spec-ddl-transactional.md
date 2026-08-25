@@ -5,7 +5,11 @@ DT8, durability, deferred by name and never scheduled). `CREATE TABLE`
 is atomic, isolated and consistent; `DROP INDEX` is atomic and isolated
 **on core 0** since DT9 took §5a's open decision; `DROP TABLE` is atomic
 only — §5 says exactly what each gets and §5a why they still differ.
-Owning workplan: `docs/workplan-ddl-transactional.md`.
+**§5e** adds the two-core case (PW1c-6b, 2026-08-25): a `CREATE INDEX`
+whose relation another core owns is built by that owner and stays atomic
+and isolated across both, and `DROP INDEX` on such a relation is refused
+inside a transaction. Owning workplan: `docs/workplan-ddl-transactional.md`
+(this spec) and `docs/workplan-peer-writer.md` §7c (the two-core case).
 
 ## 0. This reverses a recorded decision, deliberately
 
@@ -162,6 +166,14 @@ Built, and what each actually gets:
   and the refusal was withdrawn. The isolation claim is **core-0-scoped**
   — see §5a's last paragraph for what that means and when it stops being
   enough. Outside a transaction it behaves exactly as it always did.
+- **`CREATE INDEX` on a relation another core owns** — atomic and
+  isolated across two cores: the owner builds the tree in its own stream,
+  core 0 writes and commits the `sys.indexes` row. §5e is the whole
+  account (PW1c-6b).
+- **`DROP INDEX` on a relation another core owns** — refused inside a
+  transaction (§5e), for the reason §5b's core-0 scope names: the owner's
+  index maintenance cannot see core 0's deleter in flight. Autocommit is
+  admitted, and a `DROP INDEX` on a relation core 0 owns is untouched.
 
 **Not built, and each is now mechanical rather than open.** `ALTER
 TABLE`, patterns, cabins, assertions and foreign keys stay
@@ -347,7 +359,13 @@ listens; the day DML shipping lands, a peer's index maintenance can meet
 a core-0 deleter it cannot see, and this rule needs a cross-core commit
 oracle before `DROP INDEX` may be called isolated outright. Saying
 "isolated" without the scope would repeat exactly the overclaim the rest
-of this section exists to correct.
+of this section exists to correct. **That day arrived for indexes on
+2026-08-25** (PW1c-6b-4, `docs/workplan-peer-writer.md`): a peer now
+maintains its own relation's index, so a core-0 `DROP INDEX` on a
+peer-owned relation is the exact meeting this paragraph warned of. It is
+handled by **refusing that `DROP INDEX` inside a transaction** (§5e), not
+by widening the predicate — a cross-core commit oracle is still what
+would let it be admitted.
 
 **The cache had to learn the same thing, and this was the step's one
 real bug.** `EndDdlScope` invalidated the catalog cache on rollback
@@ -507,6 +525,71 @@ and what a reader carried across a shutdown for the mount to take.
    deleting DT9's ambiguity, never read speed; do not quote this
    section as a cold-read optimization.
 
+### 5e. A relation another core owns: `CREATE INDEX` built by the owner
+
+**Built 2026-08-25 (PW1c-6b, `docs/workplan-peer-writer.md` §7c).**
+`CREATE INDEX` is core 0's statement — the catalog has one writer — but
+the tree it builds is *pages*, and a relation another core owns holds its
+pages in that core's pool, stamped by that core's stream, with rows core 0
+never faulted. Core 0 cannot backfill them. So the **build** moves to the
+owner while the **catalog write** stays on core 0, and the statement is
+two phases with a park between them (`crosscore.md` CC7's owner-builds
+exception says why the pages may not travel the other way instead).
+
+**Atomic.** The owner builds the tree in its own stream under `kNoTxnId`
+and replies with the root; core 0 writes the `sys.indexes` row naming that
+root and commits. There is exactly one publishing event — core 0's commit
+— and until it lands nothing names the tree. A rollback, a refused reply,
+or a reply that never comes ends the statement with an error and tells the
+owner `done(aborted)`: the tree orphans, exactly as a dropped index's
+pages orphan, and no row points at it. A crash between core 0's
+commit-record *append* and its durability makes the DDL a recovery loser —
+the row is retired and the owner's `kNoTxnId` tree, redone regardless, is
+an orphan. Atomic across the crash, because orphaned is not published.
+
+**Isolated.** From the request's arrival until `done`, the owner **refuses
+writes to the relation** (a retryable `TXN_CONFLICT`): a row written while
+the index is being built would be indexed by nobody, since the owner's
+catalog shows no index until core 0's commit invalidates its cache. And
+the half-built index is invisible everywhere else — the `sys.indexes` row
+is stamped with core 0's transaction and filtered by every reader's view
+until it commits (the ordinary DT1-DT7 filtering, not DT9's delete-mark
+rule), and the owner's cache holds no index until `done(committed)` (or
+the catalog-invalidation broadcast) drops it. So no session reads a partial
+index and no write slips past unindexed.
+
+**Two gaps a single-core `CREATE INDEX` does not have**, both owed forward
+and neither a correctness defect today:
+
+- **A window that expires.** The owner bounds its refusal window by
+  `kIndexBuildPendingCeilingNs` (180 s) against a lost `done`; core 0
+  bounds its park by `kIndexBuildReplyDeadlineNs` (60 s). The ceiling
+  exceeds the deadline, so the owner never releases while core 0 is still
+  waiting — but it does not exceed *deadline + a bound on the commit*, and
+  no such bound exists. If the window expires before a late commit lands,
+  writes are admitted that the published index would miss. Pre-existing in
+  shape (the pre-lift gate keyed on the owner's own, equally stale, catalog
+  view) and unreachable in practice at these timeouts; the real close is a
+  bound on the commit leg, or the cross-core commit oracle §6 owes.
+- **`SHOW INDEXES` on core 0** for a peer-owned relation reads the
+  build-time root from the `sys.indexes` row — a foreign `InitTableAccess`
+  does not read the owner's anchor — which a maintenance split can move, so
+  a stale root walks a subtree and prints a plausible-wrong
+  `entries=`/`height=`. Diagnostics only: a cross-core *read* downgrades an
+  index probe to a scan before it ships (`step_descriptor.cpp`), so query
+  answers never depend on core 0's stale root.
+
+**`DROP INDEX` on a peer-owned relation** is the mirror hole, and the gate
+lift (PW1c-6b-4 — a peer now maintains its own index) is what makes it
+reachable. It is **refused inside a transaction**, for §5b's reason: the
+mark's `BumpVersion` broadcasts before core 0 commits, the owner's DT9
+predicate walks its own live list and cannot see core 0's deleter, so it
+would drop the index from its view and maintain nothing before COMMIT — and
+a ROLLBACK would then restore an index missing every meanwhile-write.
+Autocommit keeps only the commit-failure window every DDL has and is
+admitted; a `DROP INDEX` on a relation core 0 owns is untouched (DT9
+isolates it).
+
 ## 6. Open decisions — do not assume
 
 - **The cache strategy** (§4): (a) bypass, (b) overlay, (c) snapshot-keyed.
@@ -526,11 +609,14 @@ and what a reader carried across a shutdown for the mount to take.
 - **Whether a transaction that did DDL may be shipped** (crosscore).
   Today writes bind to a home core, which already covers it, but the
   interaction should be stated rather than inherited.
-- **A cross-core commit oracle for DT9's rule** (§5b). `IsInFlight`
+- **A cross-core commit oracle for DT9's rule** (§5b, §5e). `IsInFlight`
   answers about one core's live list, so `DROP INDEX`'s isolation is
-  core-0-scoped. Sound while CC3 refuses cross-core writes; the day DML
-  shipping lands, a peer's index maintenance can meet a deleter it
-  cannot see. Not a defect today, and not something to quietly inherit.
+  core-0-scoped. **The meeting this warned of arrived for indexes**
+  (PW1c-6b-4: a peer maintains its own index), and the conservative close
+  is in place — `DROP INDEX` on a peer-owned relation is refused inside a
+  transaction (§5e). The oracle is what would let it be admitted instead;
+  until then the refusal stands, and no other cross-core DDL may lean on
+  the predicate without the same guard.
 
 ## 7. Durability, ~~deferred and named~~ — **landed 2026-08-19**
 

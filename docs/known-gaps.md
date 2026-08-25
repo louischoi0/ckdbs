@@ -686,14 +686,28 @@ still waits on its own gate, so:
   — how a root move reaches core 0 — is open and listed there.
   **Later the same day (2026-08-24)**: PW1c-1..5 built — a funded peer
   INSERTs end to end — PW2 decided and built as the anchor page (the
-  btree shape lifted, the indexed shape still gated on PW1c-6 — decided
-  2026-08-25 as "the owner builds", §7c, with PW1c-6b-1's split of
-  `exec::CreateIndex` and 6b-2's ring half landed - the owner builds on request, refusing its own writes to the relation until core 0's `done` - and 6b-3..4, the two-phase `HandleIndex` and the shape gate's lift, to go), and **PW1c-7** closed the restart hole the series had
+  btree shape lifted 2026-08-24; **the indexed shape lifted 2026-08-25** —
+  the whole PW1c-6b series built (§7c, "the owner builds"): the owner
+  builds a peer-owned relation's index on request in its own stream,
+  refusing its own writes to it until core 0's `done` (6b-1/6b-2); core
+  0's two-phase `HandleIndex` parks on the build and publishes the
+  `sys.indexes` row (6b-3); the shape gate's `indexed` arm lifted so the
+  owner maintains it on write (6b-4), with `DROP INDEX` on such a
+  relation refused inside a transaction; `docs/spec-ddl-transactional.md`
+  §5e and `docs/crosscore.md` CC7's owner-builds exception carry the
+  atomic/isolated semantics), and **PW1c-7** closed the restart hole the series had
   named: leases and grants are memory-resident, and the probe found a
   restart loses every page a peer allocated itself, not only its grants;
   the PL-C stamp now carries ownership (`docs/workplan-peer-writer.md`
-  §8). What still stands of this entry: PW6's number is unmeasured, and
-  a peer listener with tls/auth is refused at boot (PW5).
+  §8). What still stands of this entry: PW6's number is unmeasured; a
+  peer listener with tls/auth is refused at boot (PW5); and the
+  owner-built `CREATE INDEX` carries §5e's two named gaps — a build
+  window that could expire before a late core-0 commit (unreachable at
+  the shipped 60 s/180 s timeouts; the real close is a bound on the
+  commit leg or the cross-core commit oracle), and `SHOW INDEXES` on
+  core 0 for a peer relation reading a maintenance-moved root as a
+  subtree (diagnostics only; cross-core reads downgrade the probe to a
+  scan before shipping, so answers are unaffected).
 - **`Catalog::catalog_version()` is not a sound guard for a cached
   `TableAccess`** (named 2026-08-15 while designing P4d-4c's per-batch
   runner handle). `InvalidateFromPeer()` — the `kCatalogInvalidate`
