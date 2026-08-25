@@ -551,6 +551,33 @@ still waits on its own gate, so:
 
 ## Concurrency and multicore
 
+- **Lease refills lag under load on a peer** (found 2026-08-25 by PW6's
+  four-writer cell, `bench/results-multicore-writers.md` §6a-§6b): with
+  four active sessions on one peer the row-id, trx-id and extent refills
+  complete hundreds of milliseconds to seconds after a ring round trip that
+  idle takes 2–7 ms — relations 3 and 4 wait 0.5–1.75 s for their first
+  INSERT, the trx-id lease is spent with a quarter-window of headroom, and
+  the 64-page extent lease is spent so the btree insert fails and **INSERTs
+  are lost** (1, 13, 51 per run; the refusal is not retried, next bullet).
+  Core 0 logs no failed grant, the peer no failed send; the mechanism is
+  untraced (`src/sched/scheduler.cpp`'s `PickNextGroup` favours the parked
+  system task, so query-group starvation is not the obvious reading). Until
+  it is traced, **a peer serving more than two writers is a known cliff**,
+  and the extent lease's 64 pages with a quarter-window refill is too little
+  headroom for concurrent btree writers. Two writers show none of it.
+- **Three peer refusals say "retry" without the wire's `retryable=1`** —
+  the row-id, trx-id and extent leases' `ResourceExhausted`
+  (`include/kds/base/status.hpp`: only `TxnConflict` is `IsRetryable`, by
+  decision). A client retrying on the bit alone loses rows to the extent
+  one, as PW6's driver did until it matched the messages. A protocol
+  decision: extend `IsRetryable` to the lease class, or re-code the three.
+- **The WAL drain's fdatasync runs on the reactor thread**, so every session
+  on that core — reads included — waits out a committing session's sync:
+  point-SELECT 973 µs beside one writer against 37 µs alone
+  (`bench/results-multicore-writers.md` §7). `docs/wal.md` §6's
+  non-blocking reactor is not what is built; the I/O-backend decision
+  (`docs/heap-and-tuple.md` §8) has its first number.
+
 - **An indexed join column made a peer-owned join refuse instead of
   answer — closed 2026-08-18, the same day it widened.** The step
   descriptor refuses to ship any index or Cabin step, and the pipeline's

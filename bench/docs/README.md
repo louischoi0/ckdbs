@@ -585,6 +585,86 @@ chose per shape — `Index Only Scan` is the plan `feat-index.md` §7 says KDS
 structurally cannot produce, so seeing where PostgreSQL uses one is what
 prices the missing visibility witness.
 
+### `multicore_benchmark.py` — the per-core writer shape, and its control
+
+N relations × M rows, one client thread and one connection per relation,
+each running INSERT / point-SELECT by pk / UPDATE by pk / DELETE of the odd
+half / one scan — first against a `cores = 1` server, then against
+`cores = N`, each a fresh server on a fresh data file — and one comparison
+line (`docs/workplan-peer-writer.md` PW6). Two shapes, chosen by the flags:
+
+- `--placement creating` (default): every relation is core 0's and core 0
+  serves every statement whatever `cores` says (`docs/workplan-crosscore.md`
+  P6c), so parity is the honest expectation. The control.
+- `--placement rotate --peer-listeners`: the PW6 shape. Relations rotate
+  over the peer cores, every core listens (`peer_listeners = on`, PW5), and
+  each relation is written from a session **the kernel accepted on its owner
+  core** — `SO_REUSEPORT` distributes accepts and a client cannot choose, so
+  the driver opens connections until every needed core has enough, asks each
+  one `SHOW META` for its `core=`, and reports how many it opened. DDL is
+  core 0's alone (PW4), so the setup session is found the same way. A
+  statement is retried while its reply is retryable — the wire's
+  `retryable=1`, or the row-id lease's "retry after the refill grant lands"
+  (PW1b: a peer's first INSERT into a relation fails until the refill grant
+  lands, and that refusal carries no `retryable=` field) — the whole wait is
+  the recorded latency, and retries are counted per phase and printed.
+
+`rotate` without `--peer-listeners` is probed with one INSERT and reported
+as NOT RUN: the relations sit on cores no connection reaches.
+
+| flag | default | meaning |
+|---|---|---|
+| `--server` | `build-release/kds_server` | the binary — pass a **copy** (see the rules above) |
+| `--cores N` | 2 | the multi-core configuration's `cores`; the server refuses a value above the machine's CPU count |
+| `--tables N` | 4 | relations, and so threads and connections |
+| `--rows N` | 2000 | rows per relation: N INSERTs, N point-SELECTs, N UPDATEs, N/2 DELETEs, one scan |
+| `--port` | 15460 | the `cores = 1` server's port; the `cores = N` server takes `port + 1` |
+| `--workdir` | `/tmp/mcbench` | data files, configs and logs — **put it under `$HOME`**, a block device |
+| `--placement` | `creating` | `creating` or `rotate` |
+| `--peer-listeners` | off | `peer_listeners = on` for the multi-core configuration; needs `--placement rotate` |
+| `--max-connects` | 256 | connections to open while hunting for sessions on the needed cores before giving up |
+
+```bash
+python3 tools/multicore_benchmark.py --server $HOME/run/kds_server --cores 2 --tables 2 \
+    --rows 2000 --placement rotate --peer-listeners --workdir $HOME/mcbench --port 15470
+```
+
+At `cores = 2` rotation skips the system core, so every rotated relation is
+core 1's: that cell compares the peer write path against core 0's at equal
+parallelism — a cost, not a speedup. Two writer cores need `--cores 3
+--tables 2` on a host with at least three CPUs. The driver prints p50/p99
+only; `bench/run_pw6.py` below is what `bench/results-multicore-writers.md`
+is built from.
+
+### `bench/run_pw6.py` — the PW6 matrix, its PostgreSQL twin, the probes and the report
+
+Imports `multicore_benchmark` and calls `run_config` directly, which hands
+back every per-statement latency: each configuration is reported with p0,
+p25, p50, p75, p90, p95, p99 and p100 pooled across its relations, the
+per-phase derived rate, each relation's first and second INSERT (where the
+lease refill lands), the retry counts, the session-hunt counts and the
+1-minute load the configuration started at. Every configuration waits for a
+quiet box first — no compiler or test binary, load under `--quiet-load`.
+
+| mode | what it does |
+|---|---|
+| `--matrix` | the cells `A-creating-t2` (control), `B-rotate-t2` (the PW6 shape) and `C-rotate-t4`, interleaved A,B,C,A,B,C,… for `--reps` (3) repetitions, each invocation on its own ports (`--port`, two per invocation) and directory |
+| `--cell NAME` | one of the three cells, once |
+| `--pg` | the PostgreSQL twin of one cell: `--tables` × `--rows`, one connection per table, the identical statements (the INSERT spelled with a column list for the serial pk) timed by the driver's own `timed()` through `tools/pg_wire.py` against the port-15433 cluster. There is no `tools/pg_multicore_benchmark.py`; this is the twin until one is built |
+| `--probes` | the wait-breakdown floors: 4 KiB `pwrite` + `fdatasync` on the workdir's device, overwrite and append, and `SHOW META` round trips on a core-0 session (`cores = 1`), a core-0 session and a core-1 session (`cores = 2`, rotate + listeners), `--probe-n` (2000) each |
+| `--report` | markdown tables from every `result.json` and `probes.json` under `--workdir` |
+
+`--binary` (the copy) is required for the ckdbs modes; `--workdir` always.
+
+```bash
+cp build-release/kds_server $HOME/mcbench-pw6/bin/ && sha256sum $HOME/mcbench-pw6/bin/kds_server
+python3 bench/run_pw6.py --binary $HOME/mcbench-pw6/bin/kds_server --workdir $HOME/mcbench-pw6/run \
+    --matrix --reps 3 --rows 2000 --port 15470
+python3 bench/run_pw6.py --binary $HOME/mcbench-pw6/bin/kds_server --workdir $HOME/mcbench-pw6/run --probes
+./tools/pg_setup.sh start && python3 bench/run_pw6.py --workdir $HOME/mcbench-pw6/run --pg --tables 2 --rows 2000
+python3 bench/run_pw6.py --workdir $HOME/mcbench-pw6/run --report
+```
+
 ---
 
 ## The statement-level tools

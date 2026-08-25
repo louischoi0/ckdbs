@@ -6,35 +6,37 @@ relation, run concurrently. Compares `cores = 1` against `cores = N`.
 Two shapes, and which one runs is decided by the flags:
 
 * `--placement creating` (default): every relation is core 0's and core 0
-  serves every statement whatever `cores` says (docs/crosscore.md P6), so the
-  honest expectation is parity. The harness's original shape, kept as the
-  control.
+  serves every statement whatever `cores` says (docs/workplan-crosscore.md
+  P6c), so the honest expectation is parity. The harness's original shape,
+  kept as the control.
 
 * `--placement rotate --peer-listeners`: the per-core writer shape
   (docs/workplan-peer-writer.md PW6). Relations rotate over the peer cores,
   every core listens (`peer_listeners = on`, PW5), and each relation is
   written from a connection **the kernel accepted on its owner core** - a
-  client cannot choose its core under SO_REUSEPORT, so the driver opens
-  connections until every needed core has enough, asks each one `SHOW META`
-  for its `core=`, and reports how many it had to open. DDL still runs on
-  core 0 only, so the setup connection is found the same way.
+  client cannot choose its core under SO_REUSEPORT (docs/workplan-peer-writer.md
+  §5, kds.conf.sample), so the driver opens connections until every needed
+  core has enough, asks each one `SHOW META` for its `core=`, and reports
+  how many it had to open. DDL still runs on core 0 only, so the setup
+  connection is found the same way.
 
   `rotate` without `--peer-listeners` is probed and reported as NOT RUN:
   the relations sit on peers and core 0's connection may not write them.
 
 Usage:
     tools/multicore_benchmark.py --server build-release/kds_server \
-        --cores 2 --tables 4 --rows 2000 --workdir /tmp/mcbench
+        --cores 2 --tables 4 --rows 2000 --workdir ~/mcbench
     tools/multicore_benchmark.py --server build-release/kds_server \
         --cores 3 --tables 2 --rows 2000 --placement rotate --peer-listeners
 
 Starts two fresh server instances itself (cores=1, then cores=N), each on
-its own data file and port, and prints one comparison table. The data
-file's device is the caller's business (bench/docs/README.md: a block
-device, never tmpfs) - `--workdir` is where it goes.
+its own data file and port, and prints one comparison table. The data file
+goes under `--workdir`, which must be a block device (bench/docs/README.md:
+never tmpfs) on a quiet box - both are checked, `--force` overrides.
 """
 
 import argparse
+import collections
 import os
 import shutil
 import socket
@@ -45,6 +47,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import Phase  # noqa: E402
+
+PHASES = ("insert", "point-select", "update", "delete", "scan")
 
 
 class Conn:
@@ -71,7 +75,47 @@ class Conn:
             pass
 
 
-def wait_for_port(port, deadline_s=15):
+def field(reply, key):
+    """`key=<int>` out of a keyed reply (SHOW META, DESCRIBE); absence is an
+    error, never a silent None - a None would become a core nobody serves."""
+    for tok in reply.split():
+        if tok.startswith(key + "="):
+            return int(tok[len(key) + 1:])
+    raise RuntimeError(f"reply carries no {key}= field: {reply}")
+
+
+def filesystem_of(path):
+    """The fstype of the mount holding `path`, from /proc/mounts."""
+    best, fs = "", "?"
+    try:
+        with open("/proc/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3 and path.startswith(parts[1]) and len(parts[1]) > len(best):
+                    best, fs = parts[1], parts[2]
+    except OSError:
+        pass
+    return fs
+
+
+def check_host(workdir, force):
+    """The two things that turn a number into fiction (bench/docs/README.md):
+    a tmpfs data file makes fsync free, and a loaded box attributes other
+    processes' preemption to the engine - the smoke run of this shape once
+    measured a 1 ms point-SELECT that was a compiler on the other CPU."""
+    fs = filesystem_of(os.path.abspath(workdir))
+    if fs == "tmpfs" and not force:
+        sys.exit(f"{workdir} is on tmpfs, where fsync is free; point --workdir at a real "
+                 f"device (df -T tells you which), or pass --force")
+    load1 = os.getloadavg()[0]
+    cores = os.cpu_count() or 1
+    if load1 > 0.5 * cores and not force:
+        sys.exit(f"1-minute load is {load1:.2f} on {cores} core(s); wait for the box to go "
+                 f"quiet, or pass --force")
+    return fs, load1
+
+
+def wait_for_port(port, stderr_path, deadline_s=15):
     end = time.time() + deadline_s
     while time.time() < end:
         try:
@@ -79,7 +123,15 @@ def wait_for_port(port, deadline_s=15):
             return
         except OSError:
             time.sleep(0.1)
-    raise TimeoutError(f"server did not listen on {port}")
+    # The server's own words, not just the silence: a refused configuration
+    # (cores above the machine's, peer listeners with tls) says why here.
+    tail = ""
+    try:
+        with open(stderr_path) as f:
+            tail = "".join(f.readlines()[-5:]).strip()
+    except OSError:
+        pass
+    raise TimeoutError(f"server did not listen on {port}" + (f":\n{tail}" if tail else ""))
 
 
 def start_server(binary, workdir, tag, cores, port, placement="creating",
@@ -88,117 +140,129 @@ def start_server(binary, workdir, tag, cores, port, placement="creating",
     the superblock at bootstrap, so each configuration needs its own file."""
     conf = os.path.join(workdir, f"{tag}.conf")
     data = os.path.join(workdir, f"{tag}.db")
+    stderr_path = os.path.join(workdir, f"{tag}.stderr")
     with open(conf, "w") as f:
         f.write(f"data_file = {data}\nport = {port}\ncores = {cores}\n"
                 f"placement = {placement}\n"
                 f"peer_listeners = {'on' if peer_listeners else 'off'}\n"
                 f"log_file = {tag}.log\nlog_dir = {workdir}\nlog_level = warn\n")
-    proc = subprocess.Popen([binary, "--config", conf],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-    wait_for_port(port)
+    with open(stderr_path, "w") as err:
+        proc = subprocess.Popen([binary, "--config", conf],
+                                stdout=err, stderr=subprocess.STDOUT)
+    wait_for_port(port, stderr_path)
     return proc
 
 
 def session_core(conn):
     """The core serving `conn`, from SHOW META's `core=` (docs/client-manual.md)."""
-    meta = conn.cmd("SHOW META")
-    for tok in meta.split():
-        if tok.startswith("core="):
-            return int(tok[len("core="):])
-    raise RuntimeError(f"SHOW META carries no core= field: {meta}")
+    return field(conn.cmd("SHOW META"), "core")
 
 
 def collect_connections(port, needed, max_attempts):
     """Opens connections until every core in `needed` (core -> count) has that
     many, closing the rest. The kernel distributes SO_REUSEPORT accepts, so
-    this is the only way a client gets a session on a chosen core (PW5:
-    "clients cannot choose their core"). Returns ({core: [Conn]}, attempts).
-    Raises after `max_attempts` opens - a core that never accepts is a
-    finding, not something to spin on."""
+    this is the only way a client gets a session on a chosen core. Returns
+    ({core: [Conn]}, attempts). Raises after `max_attempts` opens - a core
+    that never accepts is a finding, not something to spin on."""
     got = {core: [] for core in needed}
     attempts = 0
-    while any(len(got[c]) < n for c, n in needed.items()):
-        if attempts >= max_attempts:
-            for conns in got.values():
-                for c in conns:
-                    c.close()
-            short = {c: n - len(got[c]) for c, n in needed.items() if len(got[c]) < n}
-            raise RuntimeError(f"after {attempts} connections the kernel never gave "
-                               f"these cores enough sessions: {short}")
-        conn = Conn(port)
-        attempts += 1
-        core = session_core(conn)
-        if core in got and len(got[core]) < needed[core]:
-            got[core].append(conn)
-        else:
-            conn.close()
+    try:
+        while any(len(got[c]) < n for c, n in needed.items()):
+            if attempts >= max_attempts:
+                short = {c: n - len(got[c]) for c, n in needed.items() if len(got[c]) < n}
+                raise RuntimeError(f"after {attempts} connections the kernel never gave "
+                                   f"these cores enough sessions: {short}")
+            conn = Conn(port)
+            attempts += 1
+            core = session_core(conn)
+            if core in got and len(got[core]) < needed[core]:
+                got[core].append(conn)
+            else:
+                conn.close()
+    except BaseException:
+        for conns in got.values():
+            for c in conns:
+                c.close()
+        raise
     return got, attempts
 
 
+# The engine's refusals that mean "again, later" (docs/protocol.md §11): the
+# wire's `retryable=1` - except CC3's cross-core write refusal, which carries
+# the bit and is permanent for a session on the wrong core
+# (docs/workplan-peer-writer.md §5: it repeats forever) - and the three lease
+# exhaustions a peer answers until its refill grant lands: the row-id lease
+# on a relation's first INSERT (PW1b), the trx-id lease, and the extent lease
+# (a btree insert that could not allocate). Those three spell the retry in
+# prose and carry no bit - a protocol inconsistency the PW6 results record
+# rather than paper over here; matching the words is what keeps this driver
+# from losing rows to them.
+RETRY_TEXTS = ("retry after the refill grant lands",
+               "a refill must be granted before it can allocate again")
+PERMANENT_TEXTS = ("writes are bound to core",)
+
+
 def is_retryable(reply):
-    """The engine's retryable refusals: the wire's `retryable=1` bit
-    (docs/protocol.md §11), and the row-id lease's exhaustion - a peer's
-    first INSERT into a relation fails until the refill grant lands
-    (docs/workplan-peer-writer.md PW1b), spelled as a retry in the message
-    but not carrying the bit (a protocol inconsistency, recorded in the
-    PW6 results rather than papered over here)."""
-    return reply.startswith("ERR") and ("retryable=1" in reply or
-                                        "retry after the refill grant lands" in reply)
+    if not reply.startswith("ERR"):
+        return False
+    if any(t in reply for t in PERMANENT_TEXTS):
+        return False
+    return "retryable=1" in reply or any(t in reply for t in RETRY_TEXTS)
 
 
-def timed(conn, stmt, phase, retries, max_retries=2000, backoff_s=0.0005):
-    """One statement, retried while the engine says retry. The latency
-    recorded is the whole wait - what a client actually experienced -
-    and the retry count is kept beside the phase, since a retry is a
-    cost the percentiles alone would hide inside the tail."""
+def timed(conn, stmt, phase, retries, deadline_s=2.0, backoff_s=0.0005):
+    """One statement, retried while the engine says retry, for at most
+    `deadline_s` of wall clock - a bound in time, not attempts, so a refusal
+    that never clears costs two seconds and a recorded error, not an hour.
+    The latency recorded is the whole wait - what a client experienced -
+    and the retry count is kept beside the phase, since a retry is a cost
+    the percentiles alone would hide inside the tail."""
     t0 = time.perf_counter()
     r = conn.cmd(stmt)
     n = 0
-    while is_retryable(r) and n < max_retries:
+    while is_retryable(r) and time.perf_counter() - t0 < deadline_s:
         n += 1
         time.sleep(backoff_s)
         r = conn.cmd(stmt)
     phase.record(time.perf_counter() - t0, r)
-    retries[phase.name] = retries.get(phase.name, 0) + n
+    if n:
+        retries[phase.name] += n
     return r
 
 
-def worker(conn, table, rows, phases, barrier, retries):
+def worker(conn, table, rows, phases, barrier, retries, counts):
     """The per-relation workload. One connection, one relation - nothing this
     thread does touches another thread's relation."""
+    def run(stmt, phase):
+        return timed(conn, stmt, phases[phase], retries)
+
     try:
         barrier.wait()
         # INSERT rows (pk is engine-assigned; VALUES covers columns 1..n-1).
         for i in range(rows):
-            timed(conn, f"INSERT INTO {table} VALUES ('u{i}', {i * 10})",
-                  phases["insert"], retries)
+            run(f"INSERT INTO {table} VALUES ('u{i}', {i * 10})", "insert")
         # Point SELECT by pk (ids are 1..rows in issue order).
         for i in range(1, rows + 1):
-            timed(conn, f"SELECT * FROM {table} WHERE id = {i}", phases["point-select"],
-                  retries)
+            run(f"SELECT * FROM {table} WHERE id = {i}", "point-select")
         # UPDATE by pk.
         for i in range(1, rows + 1):
-            timed(conn, f"UPDATE {table} SET balance = {i} WHERE id = {i}",
-                  phases["update"], retries)
+            run(f"UPDATE {table} SET balance = {i} WHERE id = {i}", "update")
         # DELETE the odd half by pk (delete-marks; nothing is reclaimed).
         for i in range(1, rows + 1, 2):
-            timed(conn, f"DELETE FROM {table} WHERE id = {i}", phases["delete"], retries)
+            run(f"DELETE FROM {table} WHERE id = {i}", "delete")
         # One full scan at the end: the surviving half.
-        timed(conn, f"SELECT * FROM {table} WHERE balance > 0", phases["scan"], retries)
+        run(f"SELECT * FROM {table} WHERE balance > 0", "scan")
+        # What survived, from the session that wrote it: a lost INSERT shows
+        # here by name, where an error count would only say "some".
+        reply = conn.cmd(f"SELECT COUNT(*) FROM {table}")
+        counts[table] = reply
     finally:
         conn.close()
 
 
-def owner_core_of(describe_reply):
-    for tok in describe_reply.split():
-        if tok.startswith("owner_core="):
-            return int(tok[len("owner_core="):])
-    return None
-
-
 def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creating",
                peer_listeners=False, max_connects=256):
-    """Returns (wall, all_phases, owner_cores, session_report) - or
+    """Returns (wall, all_phases, owner_cores, report) - or
     (None, reason, owner_cores, None) when the configuration cannot run."""
     proc = start_server(binary, workdir, tag, cores, port, placement, peer_listeners)
     try:
@@ -209,56 +273,57 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
             got, ddl_attempts = collect_connections(port, {0: 1}, max_connects)
             setup = got[0][0]
         else:
-            setup, ddl_attempts = Conn(port), 1
+            setup = Conn(port)
         names = [f"bench{i}" for i in range(tables)]
         owner_cores = {}
         for name in names:
             r = setup.cmd(f"CREATE TABLE {name} (id int64, owner varchar, balance int64) BTREE")
             if r.startswith("ERR"):
                 raise RuntimeError(f"{name}: {r}")
-            owner_cores[name] = owner_core_of(setup.cmd(f"DESCRIBE {name}"))
+            owner_cores[name] = field(setup.cmd(f"DESCRIBE {name}"), "owner_core")
 
         # Which connection writes which relation: its owner core's, under
-        # peer listeners; the one core-0 session otherwise.
+        # peer listeners; a core-0 session otherwise.
         if peer_listeners:
-            needed = {}
-            for core in owner_cores.values():
-                needed[core] = needed.get(core, 0) + 1
+            needed = collections.Counter(owner_cores.values())
             per_core, writer_attempts = collect_connections(port, needed, max_connects)
-            writers = {}
-            for name in names:
-                writers[name] = per_core[owner_cores[name]].pop()
-            session_report = (f"ddl session on core 0 after {ddl_attempts} connection(s); "
-                              f"{len(names)} writer session(s) on cores "
-                              f"{sorted(needed)} after {writer_attempts} connection(s)")
+            writers = {name: per_core[owner_cores[name]].pop() for name in names}
+            sessions = (f"ddl session on core 0 after {ddl_attempts} connection(s); "
+                        f"{len(names)} writer session(s) on cores {sorted(needed)} "
+                        f"after {writer_attempts} connection(s)")
         else:
-            # **Can this configuration run the workload at all?** With
-            # `placement = rotate` and no peer listener the relations sit on
-            # cores no connection reaches, and a write to a peer-owned
-            # relation from core 0 is refused (crosscore.md CC3). Probed
-            # with one statement and reported as a finding, because an
-            # error storm from N threads x rows says the same thing far
-            # less clearly.
-            probe = setup.cmd(f"INSERT INTO {names[0]} VALUES ('probe', 1)")
-            if probe.startswith("ERR"):
-                setup.cmd("STOP")   # owed even on the early out, or the wait below hangs
-                setup.close()
-                return None, probe, owner_cores, None
             writers = {name: Conn(port) for name in names}
-            session_report = "every session on core 0"
+            sessions = "every session on core 0"
         setup.close()
+
+        # **Can this configuration run the workload at all?** One probe row
+        # from the first relation's own writer, in both arms so they stay
+        # the same workload: with `placement = rotate` and no peer listener
+        # the relation sits on a core no session reaches, and core 0's
+        # session is refused (crosscore.md CC3). Reported as a finding in
+        # the engine's own words, because an error storm from N threads x
+        # rows says the same thing far less clearly.
+        # Retried like any statement: on a peer the first INSERT is refused
+        # until the row-id refill lands, and that is the contract, not the
+        # finding this probe exists to make.
+        probe = timed(writers[names[0]], f"INSERT INTO {names[0]} VALUES ('probe', 1)",
+                      Phase("probe"), collections.Counter())
+        if probe.startswith("ERR"):
+            for w in writers.values():
+                w.close()
+            Conn(port).cmd("STOP")   # owed even on the early out, or the wait below hangs
+            return None, probe, owner_cores, None
 
         # One Phase set per table so per-relation latencies stay separable,
         # plus the aggregate wall clock across all threads - the number
         # that would move if the cores actually shared the work.
-        all_phases = {n: {p: Phase(p) for p in
-                          ("insert", "point-select", "update", "delete", "scan")}
-                      for n in names}
-        retries = {n: {} for n in names}
+        all_phases = {n: {p: Phase(p) for p in PHASES} for n in names}
+        retries = {n: collections.Counter() for n in names}
+        counts = {}
         barrier = threading.Barrier(tables)
         threads = [threading.Thread(target=worker,
                                     args=(writers[n], n, rows, all_phases[n], barrier,
-                                          retries[n]))
+                                          retries[n], counts))
                    for n in names]
         t0 = time.perf_counter()
         for t in threads:
@@ -268,35 +333,56 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
         wall = time.perf_counter() - t0
 
         # STOP is accepted on any core and stops the instance (PW5's route).
-        stop = Conn(port)
-        stop.cmd("STOP")
-        stop.close()
-        total_retries = {}
-        for per_table in retries.values():
-            for phase, n in per_table.items():
-                total_retries[phase] = total_retries.get(phase, 0) + n
-        session_report += "; retries: " + (
-            " ".join(f"{p}={n}" for p, n in sorted(total_retries.items())) or "none")
-        return wall, all_phases, owner_cores, session_report
+        Conn(port).cmd("STOP")
+
+        total_retries = sum(retries.values(), collections.Counter())
+        report = [sessions, "retries: " + (" ".join(f"{p}={n}" for p, n in
+                                                     sorted(total_retries.items())) or "none")]
+        # Survivors: the even ids, plus the probe row in the first relation
+        # (id 1, odd, deleted - so plus the last id, rows + 1, which the
+        # delete never names). Each id inserted once, each odd id deleted.
+        lost = []
+        for name in names:
+            expected = rows // 2 + (1 if name == names[0] else 0)
+            got = counts.get(name, "")
+            # A multi-line reply travels as one line with `\n` escaped
+            # (docs/client-manual.md): the header, then the value.
+            try:
+                n = int(got.replace("\\n", "\n").split("\n")[-1].split(",")[-1])
+            except ValueError:
+                n = None
+            if n != expected:
+                lost.append(f"{name} expected {expected} got {got!r}")
+        report.append("verify: " + ("; ".join(lost) if lost else
+                                    f"every relation holds its {rows // 2} survivors"))
+        return wall, all_phases, owner_cores, report
     finally:
         # A driver failure above never sent STOP; the server must not
         # outlive the run that started it (the next run wants the port).
+        # SIGTERM is the graceful path - a final sync and checkpoint - so on
+        # a large file it can outlast the wait; kill then, and never let the
+        # cleanup's own timeout mask what failed above.
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             proc.terminate()
-            proc.wait(timeout=15)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=15)
 
 
-def summarize(tag, cores, wall, all_phases, owner_cores, tables, rows, session_report):
+def summarize(tag, cores, wall, all_phases, owner_cores, tables, rows, report):
     total_stmts = sum(len(ph.latencies) for phases in all_phases.values()
                       for ph in phases.values())
     errors = sum(ph.errors for phases in all_phases.values() for ph in phases.values())
     print(f"\n== {tag}: cores={cores}, {tables} relations x {rows} rows ==")
     print("   placement: " + "  ".join(f"{n} owner_core={c}" for n, c in owner_cores.items()))
-    print(f"   sessions: {session_report}")
+    for line in report:
+        print(f"   {line}")
     print(f"   wall={wall:.2f}s  aggregate={total_stmts / wall:,.0f} stmt/s  errors={errors}")
-    for name in ("insert", "point-select", "update", "delete"):
+    for name in PHASES:
         lats = sorted(sum((phases[name].latencies for phases in all_phases.values()), []))
         if not lats:
             continue
@@ -315,16 +401,19 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--server", default="build-release/kds_server")
     ap.add_argument("--cores", type=int, default=2,
-                    help="core count for the multi-core run")
+                    help="core count for the multi-core run (must be <= nproc; the "
+                         "server refuses more, and this driver then sees only the "
+                         "missing listener)")
     ap.add_argument("--tables", type=int, default=4)
     ap.add_argument("--rows", type=int, default=2000)
     ap.add_argument("--port", type=int, default=15460)
-    ap.add_argument("--workdir", default="/tmp/mcbench")
+    ap.add_argument("--workdir", default=os.path.expanduser("~/mcbench"),
+                    help="where the data files go - a block device, never tmpfs")
     ap.add_argument("--placement", choices=("creating", "rotate"), default="creating",
-                    help="relation placement policy (docs/crosscore.md P6c). `rotate` "
-                         "puts relations on peer cores; with --peer-listeners each is "
-                         "written from a session on its owner core, without it the "
-                         "driver probes and reports NOT RUN.")
+                    help="relation placement policy (docs/workplan-crosscore.md P6c). "
+                         "`rotate` puts relations on peer cores; with --peer-listeners "
+                         "each is written from a session on its owner core, without it "
+                         "the driver probes and reports NOT RUN.")
     ap.add_argument("--peer-listeners", action="store_true",
                     help="run the multi-core configuration with `peer_listeners = on` "
                          "(PW5) and one writer session per relation on its owner core "
@@ -332,6 +421,8 @@ def main():
     ap.add_argument("--max-connects", type=int, default=256,
                     help="how many connections to open while hunting for sessions on "
                          "the needed cores before giving up (the kernel distributes)")
+    ap.add_argument("--force", action="store_true",
+                    help="run even on tmpfs or a loaded box")
     args = ap.parse_args()
     if args.peer_listeners and args.placement != "rotate":
         ap.error("--peer-listeners needs --placement rotate (the server refuses the "
@@ -339,6 +430,8 @@ def main():
 
     shutil.rmtree(args.workdir, ignore_errors=True)
     os.makedirs(args.workdir, exist_ok=True)
+    fs, load1 = check_host(args.workdir, args.force)
+    print(f"workdir {args.workdir} on {fs}, 1-minute load {load1:.2f}")
     binary = os.path.abspath(args.server)
 
     results = {}
@@ -347,7 +440,7 @@ def main():
     for tag, cores, port, listeners in (("single-core", 1, args.port, False),
                                         ("multi-core", args.cores, args.port + 1,
                                          args.peer_listeners)):
-        wall, phases, owners, sessions = run_config(
+        wall, phases, owners, report = run_config(
             binary, args.workdir, tag, cores, port, args.tables, args.rows,
             args.placement, listeners, args.max_connects)
         if wall is None:
@@ -365,7 +458,7 @@ def main():
             results[tag] = None
             continue
         results[tag] = summarize(tag, cores, wall, phases, owners,
-                                 args.tables, args.rows, sessions)
+                                 args.tables, args.rows, report)
 
     single, multi = results["single-core"], results["multi-core"]
     if single is None or multi is None:
@@ -377,7 +470,7 @@ def main():
     if args.placement == "creating":
         print("   (expected ~1.0x at placement=creating whatever the pipeline can do:\n"
               "    every relation is on core 0, so no statement ships - "
-              "docs/crosscore.md P6)")
+              "docs/workplan-crosscore.md P6c)")
     elif args.cores == 2:
         print("   (rotation skips the system core, so at cores=2 every relation is\n"
               "    core 1's: this compares the peer write path against core 0's at\n"
