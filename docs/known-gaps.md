@@ -614,8 +614,17 @@ still waits on its own gate, so:
   the share law in `RunReadyTasks` (`docs/sched.md` §4) end it: the same
   cell's refill waits 2.7 ms, four writers run at 0.99–1.03× the single-core
   configuration, and no row is lost (measured on the tree committed as
-  `v2.0.0-52-g2c6ae23`; the re-measurement of PW6's matrix at the fixed
-  engine is owed as a `bench/v2.0.0/` file). What stands from the finding: **a
+  `v2.0.0-52-g2c6ae23`; ~~the re-measurement of PW6's matrix at the fixed
+  engine is owed as a `bench/v2.0.0/` file~~ — **re-measured 2026-08-25 at
+  `v2.0.0-67-g952bbb9`**,
+  `bench/v2.0.0/results-multicore-writers-v2.0.0-67-g952bbb9.md`: the
+  four-writer cell runs at 1.030× the single-core configuration with zero
+  lost rows; the row-id refill's longest wait is 3.0–3.3 ms; the
+  two-writer peer path runs at 0.990× against a 0.944× control of identical
+  engines, whose 0.866 outlier that file's §3 explains as one unattributed
+  485 ms stall of core 0's reactor; a point-SELECT beside a committing
+  session is 1,088/1,083 µs on core 0/core 1 against 37/35 alone). What
+  stands from the finding: **a
   reactor with any parked coroutine spins** — `IdleTimeoutMs` counts a
   parked task as ready and drops the idle block to 0, so a peer waiting on a
   grant burns its CPU (108,150 iterations in one 39 ms refill) — and **the
@@ -656,7 +665,10 @@ still waits on its own gate, so:
 - **The WAL drain's fdatasync runs on the reactor thread**, so every session
   on that core — reads included — waits out a committing session's sync:
   point-SELECT 973 µs beside one writer against 37 µs alone
-  (`bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md` §7). `docs/wal.md` §6's
+  (`bench/v2.0.0/results-multicore-writers-v2.0.0-48-g314a06d.md` §7), and
+  re-measured at `v2.0.0-67-g952bbb9` as 1,088/1,083 µs beside a writer on
+  core 0/core 1 against 37/35 alone
+  (`bench/v2.0.0/results-multicore-writers-v2.0.0-67-g952bbb9.md` §7). `docs/wal.md` §6's
   non-blocking reactor is not what is built; the I/O-backend decision
   (`docs/heap-and-tuple.md` §8) has its first number.
 

@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/mcbench-pw7/run/C-rotate-t4-rows200/single-core.db: 16 pages, superblock version 15
+logging to /home/cdkbs/mcbench-pw7/run/C-rotate-t4-rows200/single-core.log at level WARN
+listening on 127.0.0.1:15544
+stopped; 42 pages persisted
