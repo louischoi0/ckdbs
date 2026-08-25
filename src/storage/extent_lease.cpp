@@ -2,7 +2,22 @@
 
 #include <string>
 
+#include "kds/storage/device_page_store.hpp"
+
 namespace kds::storage {
+
+ExtentAllocator::ExtentAllocator(DevicePageStore& store, PageId first_new_page_id) noexcept
+    : store_(&store), free_map_(store.free_map_bytes()), next_(first_new_page_id) {}
+
+std::span<std::byte, kPageSize> ExtentAllocator::MapBytes() noexcept {
+    // The store's accessor marks the map dirty on every take, which is the
+    // whole reason it is taken per call and not once (the header).
+    return store_ != nullptr ? store_->free_map_bytes() : free_map_;
+}
+
+Status ExtentAllocator::Persist() {
+    return store_ != nullptr ? store_->PersistMaps() : Status::OK();
+}
 
 StatusOr<Extent> ExtentAllocator::Reserve(std::uint32_t count) {
     if (count == 0) {
@@ -14,9 +29,10 @@ StatusOr<Extent> ExtentAllocator::Reserve(std::uint32_t count) {
     // from the next candidate, because a run that failed at position k means
     // k is allocated - so every start between the run's beginning and k is
     // equally doomed and re-testing them is wasted work.
+    const std::span<std::byte, kPageSize> map = MapBytes();
     PageId candidate = next_;
     while (true) {
-        auto found = FreeMapFindFirstFree(free_map_, candidate);
+        auto found = FreeMapFindFirstFree(map, candidate);
         if (!found.has_value()) {
             return Status::OutOfSpace("extent lease: no free page id at or above " +
                                       std::to_string(candidate));
@@ -30,14 +46,14 @@ StatusOr<Extent> ExtentAllocator::Reserve(std::uint32_t count) {
         }
 
         std::uint32_t run = 0;
-        while (run < count && !FreeMapIsAllocated(free_map_, start + run)) ++run;
+        while (run < count && !FreeMapIsAllocated(map, start + run)) ++run;
 
         if (run == count) {
             // Marked here, not at first use: an id promised to one core must
             // never be found free by another, and the map is the only place
             // that fact can live.
             for (std::uint32_t i = 0; i < count; ++i) {
-                FreeMapAllocate(free_map_, start + i);
+                FreeMapAllocate(map, start + i);
             }
             next_ = start + count;
             ++reservations_;

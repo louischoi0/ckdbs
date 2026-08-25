@@ -73,13 +73,18 @@ struct RelationWriteGrantPayload {
 static_assert(sizeof(RelationWriteGrantPayload) == 28);
 
 // Installs core 0's responder: a peer's `kExtentLease` request is answered
-// with a grant carved from the free map.
+// with a grant carved from the free map, **made durable before it leaves**
+// (`ExtentAllocator::Persist`, PW3b's finding in extent_lease.hpp): the
+// peer will commit rows into the run, so the run must be allocated on the
+// device before the peer can hold them, or a crash frees it for the next
+// mount's allocator to hand out over them. One map write and one device
+// sync per extent, on core 0's reactor.
 //
 // `allocator` and `transport` must outlive the scheduler. A reservation that
-// fails - the map is full - replies with a **zero-page grant** rather than
-// silently dropping: the requester is waiting, and a reply it can recognize
-// as "none available" is what lets it stop waiting and fail a statement
-// honestly instead of hanging.
+// fails - the map is full, or the map could not be made durable - replies
+// with a **zero-page grant** rather than silently dropping: the requester is
+// waiting, and a reply it can recognize as "none available" is what lets it
+// stop waiting and fail a statement honestly instead of hanging.
 Status RegisterExtentGrantHandler(sched::Scheduler& system_scheduler,
                                   sched::RingTransport& transport,
                                   storage::ExtentAllocator& allocator, std::uint32_t pages_per_grant,

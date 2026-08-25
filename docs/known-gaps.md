@@ -34,7 +34,7 @@ the owner's workplan.
   `docs/workplan-peer-writer.md`): it still cannot write page 0, so it sends
   the anchor and core 0 writes it (`remote_checkpoint_anchor.hpp`), at mount
   and on the `§11` cadence. The parenthetical was retracted a day earlier by
-  PW1, which is what made the gap cost anything. **One of core 0's three
+  PW1, which is what made the gap cost anything. ~~**One of core 0's three
   checkpoint points is still missing on a peer**: the *shutdown* one. A peer's
   teardown syncs its WAL and destroys its runtime before core 0 checkpoints,
   so the "after a `STOP`, the next mount reads 2 records where it read 1205"
@@ -43,7 +43,17 @@ the owner's workplan.
   PW3b owns it, and it is a sequencing decision rather than a missing call:
   at the only moment the runtime is safely reachable again (after the worker
   join) both reactors are stopped, so a queued anchor send would never be
-  polled.
+  polled.~~ — **the third point landed 2026-08-25** (PW3b, that workplan's
+  §6): `Serve`'s tail runs `CoreRuntime::ShutdownCheckpoint` per peer after
+  its final sync, and the anchor goes **direct** through core 0's
+  `SuperBlockCheckpointAnchor` on the startup thread — which owns every core
+  once the workers are joined — rather than over a ring nothing polls
+  (`remote_checkpoint_anchor.hpp`'s last section carries why the hand-pumped
+  drain was rejected). A peer's `SHOW META` now carries the recovery block
+  below, so the bound is checkable there. Measured on a two-core server
+  (200 rows on a core-1-owned relation, `STOP`, restart): the peer's mount
+  reads **2 records and redoes 0**, against **810 and 404** from the same
+  binary with the call disabled — core 0 reads 2 either way.
   `SHOW META` reports what the last mount's recovery did — records scanned,
   transactions committed and rolled back, per-phase timings, and the audit below
   (RC09, built the same day).
@@ -236,6 +246,21 @@ the owner's workplan.
   hole that was there: at the previous commit it wrote 361 B, exactly what an
   *inline* update writes, because its value was not logged at all.)
 
+- **One failed checkpoint disarms every later checkpoint on that core** —
+  found by the PW3b review (2026-08-25), pre-existing and unfixed.
+  `Checkpointer::in_progress_` is cleared only on `Complete()`'s success
+  path (`src/wal/checkpointer.cpp:249`), while `Start()` refuses with
+  `AlreadyExists` whenever it is set — so a checkpoint that fails at a
+  flush, at the `CHECKPOINT_END` append, at `EnsureDurable` or at the anchor
+  publish leaves the flag standing, and `RunToCompletion` (what both
+  cadences and both shutdown paths call) fails at `Start()` from then on.
+  The paced `Step()` retry the flag exists for has no caller: nothing
+  resumes a half-finished checkpoint. One `Error` line early in a run
+  therefore costs the whole run's bounded recovery, on core 0 and on every
+  peer — and since PW3b it costs the graceful-restart bound as well, which
+  is what makes it worth naming here. The fix is a behaviour decision that
+  belongs to `wal.md` §11: reset on failure and lose the snapshot, or keep
+  it and give the paced path a resumer.
 - ~~**A clean shutdown publishes no anchor**~~ — **fixed 2026-08-12** for the
   graceful path: `Expeditor::Serve` now checkpoints on its way out, and
   `SimInstance::CleanShutdown` does the same so the harness stops the way the
@@ -487,6 +512,29 @@ the owner's workplan.
   creating the page. An allocated-but-never-written page now reads
   `NotFound` and redo's PAGE_INIT arm creates it (PW1c-7's row has the
   detail).
+- ~~**An extent reserved after core 0's last map flush never reached the
+  device on its own.**~~ — **found and closed 2026-08-25** by PW3b's
+  remount test (`docs/workplan-peer-writer.md` §6). `DevicePageStore` marks
+  its free map dirty when `free_map_bytes()` is *taken*, and
+  `ExtentAllocator` held that span for its life — so every refill core 0
+  granted from the drain tick set bits in a map the next flush skipped as
+  clean, and `extent_lease.hpp`'s own "durable exactly when the store next
+  flushes" was false. Invisible for two reasons that both ended: a crash
+  could once only burn an *unspent* extent, and a peer's pages in such an
+  extent were re-created at every remount by redo's `CreateAt`, which the
+  cadence checkpoint (PW3) stops doing an interval later and the shutdown
+  checkpoint at the first restart — PW3b's test answered `page id not
+  found` for a 200-row relation. The crash-path consequence was worse than
+  the remount: a run holding a peer's committed rows was free again in the
+  map the next mount read, for core 0's allocator to hand out over them.
+  Closed on both halves: the production allocator is built **over the
+  store**, so every reservation marks the map, and the extent grant handler
+  calls `ExtentAllocator::Persist()` (`DevicePageStore::PersistMaps`: the
+  map pages and a device sync, not the frames) **before the grant leaves**
+  — a run that cannot be made durable is not granted and the peer gets the
+  zero-page reply. Cost: one map write and one fsync on core 0 per 64-page
+  extent granted; not measured (the v2 amendment). Pinned by
+  `AReservationAfterTheLastFlushIsLandedByPersist`.
 - **Cabin entry sets** are memory-resident by design
   (`docs/feat-cabin.md` §9): the `sys.cabins` row survives, the sets
   re-observe from traffic.

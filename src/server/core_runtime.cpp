@@ -107,10 +107,18 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // reason above.
     runtime->store_->SetStreamCoreId(config.core_id);
     runtime->undo_log_.emplace(*runtime->store_, &*runtime->wal_);
+    // Timed, as core 0's is (`Expeditor::Open` passes its clock): `SHOW META`
+    // prints the whole RC09 block only when `timings.timed` says a clock was
+    // there, so an untimed recovery here would silently drop the phase
+    // numbers *and* the completion checkpoint's, which AttachTransport times.
     auto recovered =
         RecoverCoreAtMount(config.core_id, config.anchor, *runtime->log_device_,
-                           *runtime->store_, *runtime->undo_log_, &*runtime->wal_, log);
+                           *runtime->store_, *runtime->undo_log_, &*runtime->wal_, log, &clock);
     if (!recovered.ok()) return recovered.status();
+    // Kept, not discarded: the dispatcher's `SHOW META` prints it and a test
+    // reads it (PW3b) - the one field that says whether the last stop
+    // bounded this mount.
+    runtime->recovery_ = recovered.value();
 
     // A peer may not raise the durable transaction ceiling - the superblock is
     // page 0 and belongs to the system core (M5), and `superblock_` here is a
@@ -211,6 +219,10 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
         &*runtime->wal_, config.durability, config.budget,
         /*recorder=*/nullptr, /*replay_enabled=*/false, /*access_statistics=*/false,
         /*cabins=*/nullptr, &*runtime->txn_manager_, config.isolation, config.core_id);
+    // This core's mount, for its `SHOW META` recovery block (RC09's field
+    // list, docs/client-manual.md) - `Expeditor::Open`'s wiring, per core
+    // since PW3b. `recovery_` is declared above the dispatcher and outlives it.
+    runtime->dispatcher_->set_recovery(&runtime->recovery_);
     // Asymmetry 1 made enforceable at dispatch (PW4) - the argument is at
     // PeerDdlRefused (core_affinity.hpp).
     if (is_peer) {
@@ -491,9 +503,11 @@ Status CoreRuntime::AttachTransport(sched::RingTransport& transport) {
     // what makes handing over a stale one impossible), the Info line that is
     // a peer's only evidence its mount bounded the next crash, and the
     // context on failure that says which checkpoint aborted the mount.
+    // Timed into this core's recovery block as core 0's is (RC09), now that
+    // the block is kept (PW3b).
     return CheckpointAfterRecovery(config_.core_id, *wal_, *checkpoint_target_,
-                                   *checkpoint_anchor_, log_, /*clock=*/nullptr,
-                                   /*elapsed_ns=*/nullptr, &dispatcher_->assertions());
+                                   *checkpoint_anchor_, log_, &scheduler_->clock(),
+                                   &recovery_.checkpoint_ns, &dispatcher_->assertions());
 }
 
 void CoreRuntime::GrantRelationFault(storage::Extent extent) {
@@ -919,6 +933,30 @@ Status CoreRuntime::Checkpoint() {
                         std::to_string(checkpointer_->stats().pages_flushed - flushed_before));
     }
     return Status::OK();
+}
+
+Status CoreRuntime::ShutdownCheckpoint(wal::CheckpointAnchor& system_anchor) {
+    // Pages first, and unconditionally: the flush is this core's own work
+    // and wants no checkpointer, while only the publish below does. The
+    // header says why the order matters.
+    if (Status s = store_->Sync(); !s.ok()) return s;
+    if (!checkpointer_.has_value()) return Status::OK();
+
+    // The anchor goes direct: no reactor runs on either side now
+    // (remote_checkpoint_anchor.hpp's last section).
+    //
+    // **Cleared again whatever happens** (the PW3b review's C3): `Expeditor`
+    // declares `cores_` above `checkpoint_anchor_`, so reverse-order
+    // destruction takes the anchor *first* and an armed route would outlive
+    // its target - unreachable today only because `Serve` clears `cores_`
+    // before returning. And an armed route on a core whose reactor still ran
+    // would have a peer's thread write page 0, which is the M5 violation the
+    // header's "shutdown path only" asks for; clearing it on the failure
+    // path too makes that a fact rather than a convention.
+    checkpoint_anchor_->RouteDirectly(&system_anchor);
+    Status s = Checkpoint();
+    checkpoint_anchor_->RouteDirectly(nullptr);
+    return s;
 }
 
 Status CoreRuntime::ListenAndAttach(std::uint16_t port) {

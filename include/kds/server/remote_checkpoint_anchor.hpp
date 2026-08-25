@@ -40,6 +40,32 @@
 // The send goes through `MakeSendRetryTask`, so a momentarily full ring
 // yields and retries rather than dropping - silent drop is forbidden
 // (sched.md §5) even for a message whose loss would be survivable.
+//
+// ---- Why the last one is not (PW3b) --------------------------------------
+//
+// Both halves of that argument fail for the **shutdown** checkpoint. "A
+// later checkpoint follows" - none does; the next thing this stream sees
+// is a mount, and an anchor lost here is one `checkpoint_interval` of
+// replay at that mount, every graceful restart. And "the ring's own retry"
+// - after the worker join no reactor runs on either side: a send queued on
+// this core's scheduler is never polled, and core 0's `kAnchorWrite`
+// handler never runs. Pumping the two stopped reactors by hand was
+// considered and rejected: this core's ready queue after its listener
+// closed can hold a task whose session is gone (the PW5 review's BUG 3),
+// core 0's ring can hold any pending request whose handler would then run
+// against peers mid-teardown, and `Expeditor::BroadcastShutdown`'s pump is
+// bounded and best-effort by construction - right for a stop message a
+// joined core no longer needs, wrong for the one anchor nothing makes up
+// for.
+//
+// So the last anchor goes **direct**: once the workers are joined the
+// startup thread owns every core - this one (its `Sync()` already runs
+// there) and core 0 (its reactor ran there) - and `RouteDirectly` hands
+// this object core 0's own `SuperBlockCheckpointAnchor` to call in place
+// of the send. Same receiving code, same page, one thread, no ring:
+// `SuperBlockCheckpointAnchor` stays the one piece of code that knows how
+// an anchor reaches page 0, and the shutdown checkpoint's `Publish` is
+// synchronous and durable when it returns, as core 0's own is.
 
 namespace kds::server {
 
@@ -62,9 +88,20 @@ public:
     // should not.
     Status Publish(const wal::CheckpointAnchorRecord& anchor) override;
 
-    // Anchors sent. The counterpart of SuperBlockCheckpointAnchor's
-    // publishes(), and what a test asserts against on the sending side.
+    // Anchors sent over the ring. The counterpart of
+    // SuperBlockCheckpointAnchor's publishes(), and what a test asserts
+    // against on the sending side. A direct publish (below) is not a send
+    // and is not counted here - the receiver counts it.
     std::uint64_t sends() const noexcept { return sends_; }
+
+    // PW3b, the header's last section: from here on Publish() calls
+    // `system_anchor` in place of the send. For the shutdown path only -
+    // set on the startup thread after this core's worker is joined, when
+    // no reactor runs on either side of the ring. `system_anchor` must
+    // outlive this object; null restores the send.
+    void RouteDirectly(wal::CheckpointAnchor* system_anchor) noexcept {
+        direct_ = system_anchor;
+    }
 
 private:
     sched::RingTransport& transport_;
@@ -73,6 +110,7 @@ private:
     std::uint32_t system_core_;
     Logger* log_ = nullptr;
     std::uint64_t sends_ = 0;
+    wal::CheckpointAnchor* direct_ = nullptr;  // PW3b, RouteDirectly
 };
 
 // The wire form of an anchor write. POD, like every ring payload, and under

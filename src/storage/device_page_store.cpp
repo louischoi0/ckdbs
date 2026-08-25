@@ -179,6 +179,11 @@ Status DevicePageStore::FlushMaps() {
     return Status::OK();
 }
 
+Status DevicePageStore::PersistMaps() {
+    if (Status s = FlushMaps(); !s.ok()) return s;
+    return device_.Sync();
+}
+
 bool DevicePageStore::IsAllocated(PageId page_id) const noexcept {
     if (page_id >= kFreeMapBitsPerPage) return false;
     // A leased core's copy of the free map is the one it read at Open(),

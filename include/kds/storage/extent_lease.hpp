@@ -81,17 +81,39 @@ struct Extent {
 // be two things to keep in step. Every function below takes it as a
 // parameter, so nothing depends on the number.
 //
+class DevicePageStore;
+
 // Carves extents out of the free map. **Core 0 only** - it is the one owner
 // of that page (M5), and this class exists so that ownership has a name.
 //
-// It does not own the map, it borrows the bytes: `DevicePageStore` holds
-// them and is the only thing that writes them back, so a reservation is
-// durable exactly when the store next flushes. A crash between the two burns
-// the extent, which is the documented cost above.
+// It does not own the map: `DevicePageStore` holds the bytes and is the
+// only thing that writes them back. **A reservation is therefore durable
+// only once the store has flushed a map it knows is dirty, and this class
+// has to be what tells it** (PW3b's finding, docs/workplan-peer-writer.md):
+// the store marks its map dirty when `free_map_bytes()` is *taken*, so an
+// allocator that cached that span reserved into a map the next flush
+// skipped as clean - every refill core 0 granted after its last flush
+// reached the device only if something else dirtied the map. That was
+// invisible while a crash could only burn an *unspent* extent; since a peer
+// writes into its lease (PW1c) a lost reservation frees a run holding
+// committed rows, for the next mount's allocator to hand out over them. So
+// the production form is built over the store, every reservation marks the
+// map, and `Persist()` lands it before a grant leaves core 0.
 class ExtentAllocator {
 public:
-    // `free_map` must outlive this allocator and must be the live free-map
-    // page of the store whose ids are being carved.
+    // Over the live map of the store whose ids are being carved - the
+    // production form, per the paragraph above. `store` must outlive this
+    // allocator.
+    //
+    // Constructing one **marks the store's map dirty**, because taking the
+    // span is what marks it. Harmless (the next flush writes a map that has
+    // not changed) and worth naming, since it is what let this defect's
+    // first regression test pass against the very implementation it was
+    // written to condemn - the PW3b review's C1.
+    explicit ExtentAllocator(DevicePageStore& store, PageId first_new_page_id) noexcept;
+
+    // Over bare bytes, for tests that script a map. The caller owns the
+    // bytes' durability, and Persist() has nothing to do.
     explicit ExtentAllocator(std::span<std::byte, kPageSize> free_map,
                              PageId first_new_page_id) noexcept
         : free_map_(free_map), next_(first_new_page_id) {}
@@ -111,10 +133,22 @@ public:
     // already documents as the instance ceiling.
     StatusOr<Extent> Reserve(std::uint32_t count);
 
+    // Makes every reservation so far durable: the store writes its map back
+    // and syncs the device (`DevicePageStore::PersistMaps`). The extent
+    // grant's durability point (server/extent_lease_service.hpp) - called
+    // before the grant leaves core 0, for the reason the class comment
+    // gives. OK with nothing to do over bare bytes.
+    Status Persist();
+
     // Extents handed out. Diagnostics and tests.
     std::uint64_t reservations() const noexcept { return reservations_; }
 
 private:
+    // The live bytes, fetched from the store per call so each mutation
+    // marks its map dirty - the cached span is the raw-bytes form's only.
+    std::span<std::byte, kPageSize> MapBytes() noexcept;
+
+    DevicePageStore* store_ = nullptr;
     std::span<std::byte, kPageSize> free_map_;
     // Where the next search starts. Purely a hint - correctness rests on the
     // free map, and a stale value costs a longer scan and never a double

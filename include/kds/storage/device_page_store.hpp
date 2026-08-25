@@ -175,6 +175,15 @@ public:
     Status Flush();
     Status Sync() override;
 
+    // The two map pages written back if dirty, then the device synced - the
+    // maps alone, not the frames. What an extent grant needs before it
+    // leaves core 0 (extent_lease.hpp, `ExtentAllocator::Persist`): a run of
+    // ids a peer may write into must be allocated on the device before the
+    // peer can hold committed rows in it, or a crash frees the run for the
+    // next mount's allocator to hand out over them. On a leased store the
+    // map write is FlushMaps' guarded no-op and only the sync runs.
+    Status PersistMaps();
+
     // ---- The writeback primitive (docs/spec-eviction.md §4, EVT03) ------
     //
     // Durable → checksum → write → clean, for exactly these ids, skipping

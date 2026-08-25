@@ -7,7 +7,10 @@
 
 #include "kds/sched/clock.hpp"
 #include "kds/sched/io_backend.hpp"
+#include "kds/server/superblock.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/storage/free_map.hpp"
+#include "kds/storage/memory_page_device.hpp"
 
 // Refilling a page-id lease over the ring (workplan-crosscore.md M5/P5).
 //
@@ -167,6 +170,56 @@ TEST_F(ExtentLeaseServiceTest, AnExhaustedMapIsReportedRatherThanHungOn) {
     ASSERT_TRUE(finished) << "an exhausted map left the requester parked forever";
     EXPECT_EQ(result.code(), StatusCode::kResourceExhausted);
     EXPECT_TRUE(lease.spent()) << "a failed refill must leave the lease untouched";
+}
+
+TEST_F(ExtentLeaseServiceTest, AGrantedExtentIsOnTheDeviceBeforeTheGrantLeaves) {
+    // PW3b's finding (workplan-peer-writer.md §6, docs/known-gaps.md): the
+    // peer will commit rows into this run, so the run has to be *allocated
+    // on the device* before it may - or a crash frees it, and the next
+    // mount's allocator hands it out over those rows. The handler therefore
+    // calls `ExtentAllocator::Persist()` before replying.
+    //
+    // Over a real store, because that is the only form where the property
+    // exists: the fixture's scripted map has no device behind it. The crash
+    // is what makes this "durable" rather than "written" - a map that only
+    // reached the page cache would be gone at the reopen.
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/64);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+    storage::ExtentAllocator over_store(*store.value(), kFirstUserPageId);
+    ASSERT_TRUE(store.value()->Sync().ok());  // a clean map, the shape at any refill
+
+    sched::Scheduler core0(clock_, io0_);
+    core0.AttachTransport(&*transport_, 0);
+    ASSERT_TRUE(RegisterExtentGrantHandler(core0, *transport_, over_store, 64).ok());
+
+    storage::LeasedIdSource lease;
+    bool finished = false;
+    core1_->Submit(sched::MakeCoroTask(
+        sched::SchedulingGroup::kSystem,
+        RequestExtentRefill(*transport_, lease, refill_, 1),
+        [&](const Status&) { finished = true; }));
+    for (int i = 0; i < 20 && !finished; ++i) {
+        core0.RunOnce();
+        core1_->RunOnce();
+    }
+    ASSERT_TRUE(finished);
+    ASSERT_FALSE(lease.spent());
+    const PageId granted = refill_.extent.first;
+
+    // Nothing else flushes: the device loses every write that was not
+    // synced, which is what separates a durable map from a written one.
+    // The store stays alive - `over_store` points at it - and its in-memory
+    // map is exactly what must not be believed here.
+    device.value()->Crash();
+
+    auto reopened = storage::DevicePageStore::Open(*device.value(), kFirstUserPageId);
+    ASSERT_TRUE(reopened.ok()) << reopened.status().message();
+    EXPECT_TRUE(reopened.value()->IsAllocated(granted))
+        << "the grant left core 0 before its run was durable, so a crash frees a run the "
+           "peer may already have written";
+    EXPECT_TRUE(reopened.value()->IsAllocated(granted + refill_.extent.count - 1));
 }
 
 TEST_F(ExtentLeaseServiceTest, TheRequestingCoreKeepsServingWhileItWaits) {
