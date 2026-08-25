@@ -753,8 +753,7 @@ TEST_F(CoreRuntimeTest, AMountAfterAPeersCleanStopDoesNotRereadTheRunsWholeLog) 
         catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
         const std::string name = clean_stop ? "stop_clean" : "stop_gap";
         auto oid = catalog2.CreateTable(catalog::kNamespacePublic, name, TwoColumnSchema(),
-                                        catalog::ClusteredType::kHeap,
-                                        catalog::KeyMode::kAssigned);
+                                        catalog::ClusteredType::kHeap);
         ASSERT_TRUE(oid.ok()) << oid.status().message();
         auto row = catalog2.GetSysTableRow(oid.value());
         ASSERT_TRUE(row.ok());
