@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/mcbench-pw7/run/probes/ruw-c0-cores1.db: 16 pages, superblock version 15
+logging to /home/cdkbs/mcbench-pw7/run/probes/ruw-c0-cores1.log at level WARN
+listening on 127.0.0.1:15523
+stopped; 549 pages persisted

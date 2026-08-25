@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/mcbench-pw7/run/A-creating-t2-r2/single-core.db: 16 pages, superblock version 15
+logging to /home/cdkbs/mcbench-pw7/run/A-creating-t2-r2/single-core.log at level WARN
+listening on 127.0.0.1:15476
+stopped; 76 pages persisted

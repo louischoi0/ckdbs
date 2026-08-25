@@ -1,0 +1,4 @@
+ckdbs on /home/cdkbs/mcbench-pw7/run/probes/ping-c0-cores1.db: 16 pages, superblock version 15
+logging to /home/cdkbs/mcbench-pw7/run/probes/ping-c0-cores1.log at level WARN
+listening on 127.0.0.1:15520
+stopped; 16 pages persisted
