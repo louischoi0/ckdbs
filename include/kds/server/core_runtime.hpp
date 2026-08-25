@@ -279,11 +279,6 @@ public:
     // reasons only: a test drives a grant without a reactor.
     txn::TrxIdLease& trx_id_lease() noexcept { return trx_id_lease_; }
 
-    // The other two refills' cost (lease_refill_stats.hpp), for a test that
-    // pins the stamps; `SHOW META` is the production reader.
-    const LeaseRefillStats& extent_refill_stats() const noexcept { return refill_.stats; }
-    const LeaseRefillStats& trx_id_refill_stats() const noexcept { return trx_id_refill_.stats; }
-
     std::uint32_t core_id() const noexcept { return config_.core_id; }
     sched::Scheduler& scheduler() noexcept { return *scheduler_; }
     wal::WalManager& wal() noexcept { return *wal_; }
@@ -298,9 +293,6 @@ private:
 
     Config config_;
     Logger* log_ = nullptr;
-    // The clock Open() was given, for the lease refills' stamps
-    // (lease_refill_stats.hpp); it outlives the runtime, like the device.
-    const sched::Clock* clock_ = nullptr;
     sched::RingTransport* transport_ = nullptr;
 
     // Declared in construction order and torn down in reverse, the same

@@ -99,7 +99,7 @@ struct ExtentRefill {
 // waiting coroutine. `clock`, when given, stamps the grant's arrival into
 // `refill.stats` - the middle of the three legs the stats measure.
 Status RegisterExtentGrantReceiver(sched::Scheduler& scheduler, ExtentRefill& refill,
-                                   Logger* log = nullptr, const sched::Clock* clock = nullptr);
+                                   Logger* log = nullptr);
 
 // The coroutine that asks. Submit it when `lease.low_water()` first turns
 // true; it sends the request, waits for the grant, and applies it.
@@ -110,7 +110,6 @@ Status RegisterExtentGrantReceiver(sched::Scheduler& scheduler, ExtentRefill& re
 sched::Coro RequestExtentRefill(sched::RingTransport& transport, storage::LeasedIdSource& lease,
                                 ExtentRefill& refill, std::uint32_t core_id,
                                 std::uint32_t system_core = 0, Logger* log = nullptr,
-                                const sched::Clock* clock = nullptr,
                                 const sched::Scheduler* sched = nullptr);
 
 }  // namespace kds::server

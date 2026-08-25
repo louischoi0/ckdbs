@@ -6,7 +6,18 @@
 namespace kds::sched {
 
 Scheduler::Scheduler(const Clock& clock, IoBackend& io_backend, SchedulerConfig config)
-    : clock_(clock), io_backend_(io_backend), config_(config) {}
+    : clock_(clock), io_backend_(io_backend), config_(config) {
+    // RunReadyTasks' second floor - one poll per ready group per iteration -
+    // needs a budget of at least one poll per group, or a small budget
+    // would hand every iteration to group 0 and starve the rest outright
+    // (the PW7 review's C3). Clamped here so the floor is a fact of the
+    // scheduler, not of the configuration. Zero keeps its meaning - phase 4
+    // runs nothing at all, which is how a test observes the drain alone.
+    if (config_.max_tasks_per_iteration > 0 &&
+        config_.max_tasks_per_iteration < kNumSchedulingGroups) {
+        config_.max_tasks_per_iteration = kNumSchedulingGroups;
+    }
+}
 
 void Scheduler::Submit(TaskPtr task) {
     int idx = SchedulingGroupIndex(task->group());

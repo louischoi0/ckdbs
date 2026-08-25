@@ -49,14 +49,11 @@ Status RegisterTrxIdGrantHandler(sched::Scheduler& system_scheduler,
 }
 
 Status RegisterTrxIdGrantReceiver(sched::Scheduler& scheduler, TrxIdRefill& refill,
-                                  txn::TrxIdLease& lease, Logger* log,
-                                  const sched::Clock* clock) {
+                                  txn::TrxIdLease& lease, Logger* log) {
     return scheduler.RegisterMessageHandler(
         sched::RingMessageKind::kTrxIdLease,
-        [&refill, &lease, &scheduler, log, clock](const sched::MessageHeader& header,
+        [&refill, &lease, &scheduler, log](const sched::MessageHeader& header,
                                       std::span<const std::byte> payload) {
-            if (clock != nullptr) refill.stats.granted_at_ns = clock->Now();
-            refill.stats.granted_iter = scheduler.iterations();
             if (payload.size() != sizeof(TrxIdLeaseGrantPayload)) {
                 if (log != nullptr && log->enabled(LogLevel::kError)) {
                     log->Error("trxid", "grant from core " + std::to_string(header.src_core) +
@@ -75,6 +72,7 @@ Status RegisterTrxIdGrantReceiver(sched::Scheduler& scheduler, TrxIdRefill& refi
             std::memcpy(&fields, payload.data(), sizeof(fields));
             refill.first_id = fields.first_id;
             refill.count = fields.count;
+            refill.stats.NoteGrant(scheduler.clock().Now(), scheduler.iterations());
             if (fields.count > 0) {
                 lease.Grant(fields.first_id, fields.count);
                 ++refill.stats.grants;
@@ -85,13 +83,12 @@ Status RegisterTrxIdGrantReceiver(sched::Scheduler& scheduler, TrxIdRefill& refi
 
 sched::Coro RequestTrxIdLease(sched::RingTransport& transport, TrxIdRefill& refill,
                               std::uint32_t core_id, std::uint32_t system_core, Logger* log,
-                              const sched::Clock* clock, const sched::Scheduler* sched) {
+                              const sched::Scheduler* sched) {
     refill.granted = false;
     refill.first_id = 0;
     refill.count = 0;
-    ++refill.stats.requests;
-    if (clock != nullptr) refill.stats.sent_at_ns = clock->Now();
-    if (sched != nullptr) refill.stats.sent_iter = sched->iterations();
+    refill.stats.NoteSent(sched != nullptr ? sched->clock().Now() : 0,
+                          sched != nullptr ? sched->iterations() : 0);
 
     sched::MessageHeader header{};
     header.src_core = core_id;

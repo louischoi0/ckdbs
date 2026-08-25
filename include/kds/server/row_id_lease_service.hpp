@@ -67,15 +67,14 @@ struct RowIdRefill {
 // caller that stopped waiting. `clock`, when given, stamps the grant's
 // arrival into the stats.
 Status RegisterRowIdGrantReceiver(sched::Scheduler& scheduler, RowIdRefill& refill,
-                                  catalog::RowIdLeaseTable& leases, Logger* log = nullptr,
-                                  const sched::Clock* clock = nullptr);
+                                  catalog::RowIdLeaseTable& leases, Logger* log = nullptr);
 
 // The coroutine that asks for a block for one relation. Submit on spent or
 // low lease; one in flight per core, the extent refill's rule.
 sched::Coro RequestRowIdLease(sched::RingTransport& transport, RowIdRefill& refill,
                               std::uint64_t table_oid, std::uint64_t count,
                               std::uint32_t core_id, std::uint32_t system_core = 0,
-                              Logger* log = nullptr, const sched::Clock* clock = nullptr,
+                              Logger* log = nullptr,
                               const sched::Scheduler* sched = nullptr);
 
 }  // namespace kds::server
