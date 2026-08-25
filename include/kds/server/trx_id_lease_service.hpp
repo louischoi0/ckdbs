@@ -93,15 +93,14 @@ struct TrxIdRefill {
 // than in the coroutine means a grant is never lost to a caller that stopped
 // waiting. `clock`, when given, stamps the grant's arrival into the stats.
 Status RegisterTrxIdGrantReceiver(sched::Scheduler& scheduler, TrxIdRefill& refill,
-                                  txn::TrxIdLease& lease, Logger* log = nullptr,
-                                  const sched::Clock* clock = nullptr);
+                                  txn::TrxIdLease& lease, Logger* log = nullptr);
 
 // The coroutine that asks for a block. Submit at `low_water()`; one in
 // flight per core, the extent refill's rule. It names no size - see the
 // payload above.
 sched::Coro RequestTrxIdLease(sched::RingTransport& transport, TrxIdRefill& refill,
                               std::uint32_t core_id, std::uint32_t system_core = 0,
-                              Logger* log = nullptr, const sched::Clock* clock = nullptr,
+                              Logger* log = nullptr,
                               const sched::Scheduler* sched = nullptr);
 
 }  // namespace kds::server

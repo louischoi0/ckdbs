@@ -588,7 +588,6 @@ DispatchOutcome CommandDispatcher::HandleShowMeta() {
            << "_refill_submit_lag_max_us=" << s->submit_lag_max_ns / 1000 << ' ' << kind
            << "_refill_grant_lag_max_us=" << s->wait_to_grant_max_ns / 1000 << ' ' << kind
            << "_refill_resume_lag_max_us=" << s->resume_lag_max_ns / 1000 << ' ' << kind
-           << "_refill_wait_last_us=" << s->wait_total_last_ns / 1000 << ' ' << kind
            << "_refill_submit_lag_max_iters=" << s->submit_lag_max_iters << ' ' << kind
            << "_refill_grant_lag_max_iters=" << s->grant_lag_max_iters << ' ' << kind
            << "_refill_resume_lag_max_iters=" << s->resume_lag_max_iters;

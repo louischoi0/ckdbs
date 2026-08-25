@@ -565,7 +565,9 @@ still waits on its own gate, so:
   refill unpolled for 395 iterations (546 ms, measured). Two floors under
   the share law in `RunReadyTasks` (`docs/sched.md` §4) end it: the same
   cell's refill waits 2.7 ms, four writers run at 0.99–1.03× the single-core
-  configuration, and no row is lost. What stands from the finding: **a
+  configuration, and no row is lost (measured on the tree committed as
+  `v2.0.0-52-g2c6ae23`; the re-measurement of PW6's matrix at the fixed
+  engine is owed as a `bench/v2.0.0/` file). What stands from the finding: **a
   reactor with any parked coroutine spins** — `IdleTimeoutMs` counts a
   parked task as ready and drops the idle block to 0, so a peer waiting on a
   grant burns its CPU (108,150 iterations in one 39 ms refill) — and **the

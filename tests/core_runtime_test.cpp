@@ -783,9 +783,7 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
         EXPECT_GT(st.wait_total_max_ns, 0u);
         EXPECT_GE(st.wait_total_max_ns, st.wait_to_grant_max_ns);
         EXPECT_GE(st.wait_total_max_ns, st.resume_lag_max_ns);
-        EXPECT_EQ(st.wait_total_last_ns, st.wait_total_max_ns);
-        EXPECT_EQ(st.requested_at_ns, 0u);
-        EXPECT_EQ(st.granted_at_ns, 0u);
+        EXPECT_FALSE(st.in_flight) << "the completion clears the in-flight request";
     }
     // And a peer's SHOW META prints them; core 0's never does.
     const auto meta = peer.value()->dispatcher().Dispatch("SHOW META").response;

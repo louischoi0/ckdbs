@@ -175,7 +175,7 @@ def refill_summary(meta):
         f = {k: field(meta, f"{kind}_refill_{k}")
              for k in ("requests", "grants", "wait_max_us", "submit_lag_max_us",
                        "grant_lag_max_us", "resume_lag_max_us", "submit_lag_max_iters",
-                       "grant_lag_max_iters", "resume_lag_max_iters")}
+                       "grant_lag_max_iters", "resume_lag_max_iters")}  # every printed field
         out.append(f"{kind} {f['requests']}/{f['grants']} wait_max={f['wait_max_us'] / 1000:.1f}ms "
                    f"(submit {f['submit_lag_max_us'] / 1000:.1f}ms/{f['submit_lag_max_iters']}it, "
                    f"to-grant {f['grant_lag_max_us'] / 1000:.1f}ms/{f['grant_lag_max_iters']}it, "
@@ -410,12 +410,18 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
         # writer core; the lease-refill trace's instrument.
         refills = None
         if peer_listeners:
-            lines = []
-            per_core, _ = collect_connections(port, {c: 1 for c in needed}, max_connects)
-            for core, conns in sorted(per_core.items()):
-                lines.append(f"core {core}: " + refill_summary(conns[0].cmd("SHOW META")))
-                conns[0].close()
-            refills = "refills: " + "; ".join(lines)
+            # A diagnostic read after the measurement must not lose the
+            # measurement: the session hunt is a nondeterministic
+            # SO_REUSEPORT draw, and a failed one is reported, not raised.
+            try:
+                lines = []
+                per_core, _ = collect_connections(port, {c: 1 for c in needed}, max_connects)
+                for core, conns in sorted(per_core.items()):
+                    lines.append(f"core {core}: " + refill_summary(conns[0].cmd("SHOW META")))
+                    conns[0].close()
+                refills = "refills: " + "; ".join(lines)
+            except (RuntimeError, OSError) as e:
+                refills = f"refills: unavailable ({e})"
 
         stop_server(port)
 
@@ -435,7 +441,7 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
             if n != expected:
                 lost.append(f"{name} expected {expected} got {got!r}")
         report = [f"host: workdir on {fs}, 1-minute load {load1:.2f} at start",
-                  sessions] + ([refills] if refills else []) + [
+                  sessions, refills or "refills: none (no peer listener)",
                   "verify: " + ("; ".join(lost) if lost else
                                 f"survivors as expected ({rows // 2}, and one more in "
                                 f"{names[0]} for the probe row)"),

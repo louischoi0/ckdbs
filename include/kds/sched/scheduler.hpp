@@ -133,6 +133,9 @@ public:
     // Messages this reactor has drained. Diagnostics and tests - notably
     // the single-core assertion that it stays 0.
     std::uint64_t messages_drained() const noexcept { return messages_drained_; }
+    // The clock this reactor was built on - what a task or handler stamps
+    // time with, so nothing threads a second clock pointer beside it.
+    const Clock& clock() const noexcept { return clock_; }
     // RunOnce() calls so far: a stamp for "did the loop iterate between two
     // events, or was it blocked" (server/lease_refill_stats.hpp).
     std::uint64_t iterations() const noexcept { return iterations_; }
