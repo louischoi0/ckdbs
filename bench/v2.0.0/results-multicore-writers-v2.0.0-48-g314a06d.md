@@ -163,7 +163,7 @@ row below is 1,833–1,912 µs on a write, the floor of §3.
 The peer's INSERT body is core 0's to the microsecond: B's p25/p50/p75 are
 1,807 / 1,863 / 1,965 against 1,799 / 1,862 / 1,966. C core 1's p0 of 37 µs
 is not a fast INSERT — it is a refused one (§6b), and its p100 of 1.75 s is
-a first INSERT waiting for a relation grant (§6a). Its mean carries both;
+a first INSERT waiting for its row-id lease refill (§6a). Its mean carries both;
 its median does not.
 
 **Point-SELECT by pk**
@@ -231,10 +231,12 @@ do. On the peer as on core 0.
 
 ## 6. Where C's 20% went: two per-relation start-up waits on a peer
 
-A relation on a peer core is written through two leases and one grant it
-does not have at `CREATE TABLE`, and the client sees each of them as a
-refused statement. The B and C cells' first INSERT per relation, with the
-driver's retry counts and session hunts:
+A relation on a peer core is written through three leases the core does not
+hold at `CREATE TABLE` — row-id, trx-id, extent — each a refused statement
+until its refill lands, and one grant the client never sees refused (the
+relation grant landed before the first write in every run, §6a). The B and C
+cells' first INSERT per relation, with the driver's retry counts and session
+hunts:
 
 | run | writers on core 1 | connections opened for them | first INSERT per relation, µs | retries (INSERT) | failed INSERTs |
 |---|---:|---:|---|---:|---:|
@@ -253,7 +255,7 @@ and the DDL session landed on core 0 at the first connection in all six
 runs. That is the whole cost of PW5's "clients cannot choose their core" at
 this scale.
 
-**6a. The row-id lease, then the relation grant.** The first INSERT into a
+**6a. The row-id lease, and what a second-long refill looks like.** The first INSERT into a
 relation on a peer is refused until the row-id refill grant lands (PW1b, the
 documented and deliberate contract — `docs/workplan-peer-writer.md` §7a) and
 the driver retries it at 0.5 ms. Relation 1 clears in 2.3–2.7 ms after two
@@ -314,8 +316,9 @@ matches neither `retryable=1` nor the row-id lease's "retry after the refill
 grant lands", so each is recorded as an error and the row is never written.
 **C core 1's numbers are therefore over a workload that lost 0.01–0.6% of
 its INSERTs**, and its point-SELECT/UPDATE/DELETE phases touched ids that
-did not exist. The driver has no `--verify`; the reply count is the only
-witness. At two writers the lease refilled ahead of demand through ~250
+did not exist. The driver had no verify at this run (`314a06d`; `2eb49a4`
+added the per-relation `COUNT(*)` afterwards), so the reply count was the
+only witness. At two writers the lease refilled ahead of demand through ~250
 pages of growth — B at 10,000 rows finished with zero errors (§9) — so this
 is a rate effect of four concurrent allocators against one lease and one
 refill round trip, not a per-relation constant.
@@ -490,13 +493,14 @@ write, and the third relation on a core pays a thousand times more than
 the first.** 2–7 ms for the row-id lease — the contract PW1b chose
 (demand-driven, §7a) and priced at "one retry per relation per mount", which
 this run confirms at two retries for the first relation and five for the
-second. Half a second to 1.75 s for the relation grant when four relations
-start together, which no document prices and which the source's own comment
-explains as a deliberate throttle against core 0 doing "a thousand fsyncs a
-second". The throttle is right; the expiry-as-scheduler is what the numbers
-indict. A relation grant that could be *queued* rather than dropped and
-re-asked after a second would remove the whole C-cell loss and, with it,
-the desynchronisation that produced the 943 µs reads.
+second. Half a second to 1.75 s for the **same row-id refill** when four
+relations start together — the round trip that takes 2–7 ms idle, with no
+failed grant or send in any log, and the trx-id and extent refills lagging
+beside it (§6a, §6b). No document prices it, no counter names it, and the
+source's own reading — a parked coroutine resumed by a scheduler that picks
+the least-consumed group first — does not predict it. Tracing that second
+is the next job (§11); whatever it is, removing it removes the whole C-cell
+loss and, with it, the desynchronisation that produced the 943 µs reads.
 
 **Every session on a core pays every other session's fsync, reads
 included.** This is the finding with the widest reach, and it is not a
@@ -559,9 +563,10 @@ architectural cost rather than a device fact.
   reactor that does not block, and the drain blocks it** (§7, §10). The spec should carry the measured
   cost — 0.9 ms of every commit spent with the reactor in `fdatasync`, paid
   by every colocated read — until the I/O backend decision retires it.
-- **`tools/multicore_benchmark.py` has no `--verify`**, and this run needed
-  one: a `SELECT COUNT(*)` per relation after the DELETE phase would have
-  named the 51 lost rows without the reply count. It should also carry the
+- **`tools/multicore_benchmark.py` had no verify at this run** (`314a06d`),
+  and it needed one: a `SELECT COUNT(*)` per relation after the DELETE phase
+  would have named the 51 lost rows without the reply count — `2eb49a4`
+  added exactly that, after the measurement. It should also carry the
   extent lease's message in `is_retryable`, or better, the engine should
   carry the bit.
 - **The PostgreSQL twin lives in `bench/run_pw6.py`** and belongs in

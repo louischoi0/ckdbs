@@ -611,10 +611,13 @@ line (`docs/workplan-peer-writer.md` PW6). Two shapes, chosen by the flags:
   one `SHOW META` for its `core=`, and reports how many it opened. DDL is
   core 0's alone (PW4), so the setup session is found the same way. A
   statement is retried while its reply is retryable — the wire's
-  `retryable=1`, or the row-id lease's "retry after the refill grant lands"
-  (PW1b: a peer's first INSERT into a relation fails until the refill grant
-  lands, and that refusal carries no `retryable=` field) — the whole wait is
-  the recorded latency, and retries are counted per phase and printed.
+  `retryable=1` except CC3's permanent cross-core refusal, and the three
+  lease exhaustions that spell "retry" without the bit (row-id, trx-id,
+  extent; the first is PW1b's documented first-INSERT-on-a-peer refusal) —
+  for at most `--retry-deadline` seconds; the whole wait is the recorded
+  latency, retries are counted per phase, a give-up is counted apart from
+  the retries, and a `COUNT(*)` per relation at the end names any relation
+  that lost rows.
 
 `rotate` without `--peer-listeners` is probed with one INSERT and reported
 as NOT RUN: the relations sit on cores no connection reaches.
@@ -626,10 +629,12 @@ as NOT RUN: the relations sit on cores no connection reaches.
 | `--tables N` | 4 | relations, and so threads and connections |
 | `--rows N` | 2000 | rows per relation: N INSERTs, N point-SELECTs, N UPDATEs, N/2 DELETEs, one scan |
 | `--port` | 15460 | the `cores = 1` server's port; the `cores = N` server takes `port + 1` |
-| `--workdir` | `/tmp/mcbench` | data files, configs and logs — **put it under `$HOME`**, a block device |
+| `--workdir` | `~/mcbench` | data files, configs and logs — a block device, never tmpfs; the driver refuses tmpfs and a loaded box unless `--force` |
 | `--placement` | `creating` | `creating` or `rotate` |
 | `--peer-listeners` | off | `peer_listeners = on` for the multi-core configuration; needs `--placement rotate` |
 | `--max-connects` | 256 | connections to open while hunting for sessions on the needed cores before giving up |
+| `--retry-deadline` | 10 | seconds a retryable refusal is retried before it is recorded as an error and a `<phase>-gave-up` |
+| `--force` | off | run on tmpfs or a loaded box anyway |
 
 ```bash
 python3 tools/multicore_benchmark.py --server $HOME/run/kds_server --cores 2 --tables 2 \

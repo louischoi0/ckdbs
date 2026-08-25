@@ -560,8 +560,9 @@ still waits on its own gate, so:
   the 64-page extent lease is spent so the btree insert fails and **INSERTs
   are lost** (1, 13, 51 per run; the refusal is not retried, next bullet).
   Core 0 logs no failed grant, the peer no failed send; the mechanism is
-  untraced (`src/sched/scheduler.cpp`'s `PickNextGroup` favours the parked
-  system task, so query-group starvation is not the obvious reading). Until
+  untraced (`src/sched/scheduler.cpp`'s `PickNextGroup` picks the ready
+  group with the lowest consumed-time/share ratio, so starvation of the
+  parked refill by the query group is not the obvious reading). Until
   it is traced, **a peer serving more than two writers is a known cliff**,
   and the extent lease's 64 pages with a quarter-window refill is too little
   headroom for concurrent btree writers. Two writers show none of it.

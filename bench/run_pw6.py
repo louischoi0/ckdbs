@@ -45,10 +45,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import multicore_benchmark as mb  # noqa: E402
-from bench_common import Phase  # noqa: E402
+from bench_common import Phase, nearest_rank  # noqa: E402
 
-PHASES = ("insert", "point-select", "update", "delete", "scan")
+PHASES = mb.PHASES  # the driver's order; the report slices off "scan" as the last
 PCTS = (0, 25, 50, 75, 90, 95, 99, 100)
+PG_INSERT = "INSERT INTO {t} (owner, balance) VALUES ('u{i}', {b})"
 
 # The three cells the results file compares. A is the control (both
 # configurations serve on core 0, parity expected); B is the PW6 shape at
@@ -63,7 +64,7 @@ CELLS = {
 # ---- helpers ---------------------------------------------------------------
 
 def loadavg():
-    return [float(x) for x in open("/proc/loadavg").read().split()[:3]]
+    return list(os.getloadavg())
 
 
 def busy_processes():
@@ -97,16 +98,12 @@ def stragglers():
 
 
 def percentiles(lats_us):
-    """Nearest-rank, the same rule as bench_common.Phase.percentile."""
+    """bench_common.nearest_rank over every percentile the tables print."""
     s = sorted(lats_us)
-    n = len(s)
-    if not n:
+    if not s:
         return {f"p{p}": 0.0 for p in PCTS} | {"mean": 0.0, "n": 0}
-    out = {"n": n, "mean": statistics.fmean(s)}
-    for p in PCTS:
-        rank = max(1, -(-p * n // 100)) - 1
-        out[f"p{p}"] = s[rank]
-    return out
+    return {"n": len(s), "mean": statistics.fmean(s)} | {
+        f"p{p}": nearest_rank(s, p) for p in PCTS}
 
 
 def parse_session_report(report):
@@ -236,28 +233,6 @@ class PgConn:
         self.c.close()
 
 
-def pg_worker(conn, table, rows, phases, barrier, retries):
-    """mb.worker's statement sequence with PostgreSQL's spelling of the
-    INSERT (a serial pk needs the column list; ckdbs's Keystone id is
-    implicit). Everything else is byte-identical to the ckdbs side."""
-    try:
-        barrier.wait()
-        for i in range(rows):
-            mb.timed(conn, f"INSERT INTO {table} (owner, balance) VALUES ('u{i}', {i * 10})",
-                     phases["insert"], retries)
-        for i in range(1, rows + 1):
-            mb.timed(conn, f"SELECT * FROM {table} WHERE id = {i}", phases["point-select"],
-                     retries)
-        for i in range(1, rows + 1):
-            mb.timed(conn, f"UPDATE {table} SET balance = {i} WHERE id = {i}",
-                     phases["update"], retries)
-        for i in range(1, rows + 1, 2):
-            mb.timed(conn, f"DELETE FROM {table} WHERE id = {i}", phases["delete"], retries)
-        mb.timed(conn, f"SELECT * FROM {table} WHERE balance > 0", phases["scan"], retries)
-    finally:
-        conn.close()
-
-
 def run_pg(workdir, tables, rows, port, user, database, quiet_load):
     os.makedirs(workdir, exist_ok=True)
     setup = PgConn(port, user, database)
@@ -275,8 +250,13 @@ def run_pg(workdir, tables, rows, port, user, database, quiet_load):
     all_phases = {n: {p: Phase(p) for p in PHASES} for n in names}
     retries = {n: {} for n in names}
     barrier = threading.Barrier(tables)
-    threads = [threading.Thread(target=pg_worker,
-                                args=(conns[n], n, rows, all_phases[n], barrier, retries[n]))
+    # The driver's own worker: the same five statements, PostgreSQL's
+    # spelling of the INSERT (a serial pk needs the column list), and no
+    # COUNT(*) verify (its reply shape differs). Sharing the function is
+    # what makes "the identical statement sequence" a fact, not a comment.
+    threads = [threading.Thread(target=mb.worker,
+                                args=(conns[n], n, rows, all_phases[n], barrier, retries[n],
+                                      None, PG_INSERT))
                for n in names]
     t0 = time.perf_counter()
     for t in threads:
@@ -287,12 +267,7 @@ def run_pg(workdir, tables, rows, port, user, database, quiet_load):
     for n in names:
         setup.cmd(f"DROP TABLE {n}")
     setup.close()
-    total_retries = {}
-    for per in retries.values():
-        for ph, k in per.items():
-            total_retries[ph] = total_retries.get(ph, 0) + k
-    report = ("every session a PostgreSQL backend; retries: " +
-              (" ".join(f"{p}={n}" for p, n in sorted(total_retries.items())) or "none"))
+    report = "every session a PostgreSQL backend; " + mb.retry_line(retries.values())
     cfg = summarize_config(wall, all_phases, {n: None for n in names}, report)
     cfg |= {"engine": f"PostgreSQL {version}", "synchronous_commit": sync,
             "tables": tables, "started_utc": started, "load_at_start": load_at_start,

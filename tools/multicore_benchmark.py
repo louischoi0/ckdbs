@@ -91,8 +91,15 @@ def filesystem_of(path):
         with open("/proc/mounts") as f:
             for line in f:
                 parts = line.split()
-                if len(parts) >= 3 and path.startswith(parts[1]) and len(parts[1]) > len(best):
-                    best, fs = parts[1], parts[2]
+                if len(parts) < 3:
+                    continue
+                mount = parts[1]
+                # A path component match, not a string prefix: `/mnt/ssd` is
+                # not the mount of `/mnt/ssdX`, and treating it as one names
+                # the wrong filesystem - which is the tmpfs guard's whole job.
+                if ((path == mount or path.startswith(mount.rstrip("/") + "/"))
+                        and len(mount) > len(best)):
+                    best, fs = mount, parts[2]
     except OSError:
         pass
     return fs
@@ -210,13 +217,20 @@ def is_retryable(reply):
     return "retryable=1" in reply or any(t in reply for t in RETRY_TEXTS)
 
 
-def timed(conn, stmt, phase, retries, deadline_s=2.0, backoff_s=0.0005):
+DEFAULT_RETRY_DEADLINE_S = 10.0
+
+
+def timed(conn, stmt, phase, retries, deadline_s=DEFAULT_RETRY_DEADLINE_S, backoff_s=0.0005):
     """One statement, retried while the engine says retry, for at most
     `deadline_s` of wall clock - a bound in time, not attempts, so a refusal
-    that never clears costs two seconds and a recorded error, not an hour.
-    The latency recorded is the whole wait - what a client experienced -
-    and the retry count is kept beside the phase, since a retry is a cost
-    the percentiles alone would hide inside the tail."""
+    that never clears costs the deadline and a recorded error, not an hour.
+    The default is well above the longest wait measured so far (1.75 s, the
+    PW6 results) so a slow refill is a tail, not an error; a give-up is
+    counted apart from the retries, as `<phase>-gave-up`, because a
+    harness bound and an engine's hard refusal must not read alike. The
+    latency recorded is the whole wait - what a client experienced - and the
+    retry count is kept beside the phase, since a retry is a cost the
+    percentiles alone would hide inside the tail."""
     t0 = time.perf_counter()
     r = conn.cmd(stmt)
     n = 0
@@ -225,22 +239,53 @@ def timed(conn, stmt, phase, retries, deadline_s=2.0, backoff_s=0.0005):
         time.sleep(backoff_s)
         r = conn.cmd(stmt)
     phase.record(time.perf_counter() - t0, r)
+    # `.get`, not `+=`: a caller may pass a plain dict as well as a Counter
+    # (bench/run_pw6.py's probes do), and `+=` on a missing key raises.
     if n:
-        retries[phase.name] += n
+        retries[phase.name] = retries.get(phase.name, 0) + n
+    if is_retryable(r):
+        retries[phase.name + "-gave-up"] = retries.get(phase.name + "-gave-up", 0) + 1
     return r
 
 
-def worker(conn, table, rows, phases, barrier, retries, counts):
+def retry_line(per_table_retries):
+    """The report's retries line over per-table dicts or Counters; zeros
+    dropped, so `none` means none."""
+    total = collections.Counter()
+    for per in per_table_retries:
+        total.update(per)
+    return "retries: " + (" ".join(f"{p}={n}" for p, n in sorted(total.items()) if n)
+                          or "none")
+
+
+def stop_server(port):
+    """STOP is accepted on any core and stops the instance (PW5's route)."""
+    conn = Conn(port)
+    try:
+        conn.cmd("STOP")
+    finally:
+        conn.close()
+
+
+# ckdbs's INSERT: the Keystone pk is implicit. PostgreSQL's twin (a serial
+# pk needs the column list) passes its own spelling; nothing else differs.
+INSERT_FMT = "INSERT INTO {t} VALUES ('u{i}', {b})"
+
+
+def worker(conn, table, rows, phases, barrier, retries, counts=None, insert_fmt=INSERT_FMT,
+           deadline_s=DEFAULT_RETRY_DEADLINE_S):
     """The per-relation workload. One connection, one relation - nothing this
-    thread does touches another thread's relation."""
+    thread does touches another thread's relation. `counts` is where the
+    final COUNT(*) reply goes; None skips it (the PostgreSQL twin, whose
+    reply shape differs)."""
     def run(stmt, phase):
-        return timed(conn, stmt, phases[phase], retries)
+        return timed(conn, stmt, phases[phase], retries, deadline_s)
 
     try:
         barrier.wait()
         # INSERT rows (pk is engine-assigned; VALUES covers columns 1..n-1).
         for i in range(rows):
-            run(f"INSERT INTO {table} VALUES ('u{i}', {i * 10})", "insert")
+            run(insert_fmt.format(t=table, i=i, b=i * 10), "insert")
         # Point SELECT by pk (ids are 1..rows in issue order).
         for i in range(1, rows + 1):
             run(f"SELECT * FROM {table} WHERE id = {i}", "point-select")
@@ -254,16 +299,20 @@ def worker(conn, table, rows, phases, barrier, retries, counts):
         run(f"SELECT * FROM {table} WHERE balance > 0", "scan")
         # What survived, from the session that wrote it: a lost INSERT shows
         # here by name, where an error count would only say "some".
-        reply = conn.cmd(f"SELECT COUNT(*) FROM {table}")
-        counts[table] = reply
+        if counts is not None:
+            counts[table] = conn.cmd(f"SELECT COUNT(*) FROM {table}")
     finally:
         conn.close()
 
 
 def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creating",
-               peer_listeners=False, max_connects=256):
+               peer_listeners=False, max_connects=256,
+               retry_deadline_s=DEFAULT_RETRY_DEADLINE_S, force=False):
     """Returns (wall, all_phases, owner_cores, report) - or
     (None, reason, owner_cores, None) when the configuration cannot run."""
+    # The host guard sits on the measuring path, not only under main(): the
+    # wrapper that produced the PW6 numbers calls this directly.
+    fs, load1 = check_host(workdir, force)
     proc = start_server(binary, workdir, tag, cores, port, placement, peer_listeners)
     try:
         # DDL is core 0's alone (PW4), and under peer listeners the kernel
@@ -305,25 +354,29 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
         # rows says the same thing far less clearly.
         # Retried like any statement: on a peer the first INSERT is refused
         # until the row-id refill lands, and that is the contract, not the
-        # finding this probe exists to make.
-        probe = timed(writers[names[0]], f"INSERT INTO {names[0]} VALUES ('probe', 1)",
-                      Phase("probe"), collections.Counter())
-        if probe.startswith("ERR"):
-            for w in writers.values():
-                w.close()
-            Conn(port).cmd("STOP")   # owed even on the early out, or the wait below hangs
-            return None, probe, owner_cores, None
-
+        # finding this probe exists to make. Timed into the first relation's
+        # own insert phase, because it *is* that relation's first INSERT -
+        # the one that pays the refill - and a throwaway phase would hide
+        # exactly the wait the PW6 results are about.
+        #
         # One Phase set per table so per-relation latencies stay separable,
         # plus the aggregate wall clock across all threads - the number
         # that would move if the cores actually shared the work.
         all_phases = {n: {p: Phase(p) for p in PHASES} for n in names}
         retries = {n: collections.Counter() for n in names}
         counts = {}
+        probe = timed(writers[names[0]], f"INSERT INTO {names[0]} VALUES ('probe', 1)",
+                      all_phases[names[0]]["insert"], retries[names[0]], retry_deadline_s)
+        if probe.startswith("ERR"):
+            for w in writers.values():
+                w.close()
+            stop_server(port)   # owed even on the early out, or the wait below hangs
+            return None, probe, owner_cores, None
+
         barrier = threading.Barrier(tables)
         threads = [threading.Thread(target=worker,
                                     args=(writers[n], n, rows, all_phases[n], barrier,
-                                          retries[n], counts))
+                                          retries[n], counts, INSERT_FMT, retry_deadline_s))
                    for n in names]
         t0 = time.perf_counter()
         for t in threads:
@@ -332,12 +385,8 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
             t.join()
         wall = time.perf_counter() - t0
 
-        # STOP is accepted on any core and stops the instance (PW5's route).
-        Conn(port).cmd("STOP")
+        stop_server(port)
 
-        total_retries = sum(retries.values(), collections.Counter())
-        report = [sessions, "retries: " + (" ".join(f"{p}={n}" for p, n in
-                                                     sorted(total_retries.items())) or "none")]
         # Survivors: the even ids, plus the probe row in the first relation
         # (id 1, odd, deleted - so plus the last id, rows + 1, which the
         # delete never names). Each id inserted once, each odd id deleted.
@@ -353,8 +402,15 @@ def run_config(binary, workdir, tag, cores, port, tables, rows, placement="creat
                 n = None
             if n != expected:
                 lost.append(f"{name} expected {expected} got {got!r}")
-        report.append("verify: " + ("; ".join(lost) if lost else
-                                    f"every relation holds its {rows // 2} survivors"))
+        report = [f"host: workdir on {fs}, 1-minute load {load1:.2f} at start",
+                  sessions,
+                  "verify: " + ("; ".join(lost) if lost else
+                                f"survivors as expected ({rows // 2}, and one more in "
+                                f"{names[0]} for the probe row)"),
+                  # Retries last, after the verify line: bench/run_pw6.py
+                  # reads them off the report's tail, and a quoted server
+                  # reply above carries `key=<int>` fields of its own.
+                  retry_line(retries.values())]
         return wall, all_phases, owner_cores, report
     finally:
         # A driver failure above never sent STOP; the server must not
@@ -423,6 +479,9 @@ def main():
                          "the needed cores before giving up (the kernel distributes)")
     ap.add_argument("--force", action="store_true",
                     help="run even on tmpfs or a loaded box")
+    ap.add_argument("--retry-deadline", type=float, default=DEFAULT_RETRY_DEADLINE_S,
+                    help="seconds a statement is retried while the engine says retry "
+                         "before it is recorded as an error and a `<phase>-gave-up`")
     args = ap.parse_args()
     if args.peer_listeners and args.placement != "rotate":
         ap.error("--peer-listeners needs --placement rotate (the server refuses the "
@@ -430,8 +489,6 @@ def main():
 
     shutil.rmtree(args.workdir, ignore_errors=True)
     os.makedirs(args.workdir, exist_ok=True)
-    fs, load1 = check_host(args.workdir, args.force)
-    print(f"workdir {args.workdir} on {fs}, 1-minute load {load1:.2f}")
     binary = os.path.abspath(args.server)
 
     results = {}
@@ -442,7 +499,7 @@ def main():
                                          args.peer_listeners)):
         wall, phases, owners, report = run_config(
             binary, args.workdir, tag, cores, port, args.tables, args.rows,
-            args.placement, listeners, args.max_connects)
+            args.placement, listeners, args.max_connects, args.retry_deadline, args.force)
         if wall is None:
             # The write-capability probe refused: this configuration cannot
             # run the workload, and saying so is the result.

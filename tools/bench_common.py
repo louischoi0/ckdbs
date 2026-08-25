@@ -30,6 +30,14 @@ import time
 NAME_WIDTH = 22
 
 
+def nearest_rank(ordered, p):
+    """The nearest-rank percentile of an ascending sequence: ceil(p/100 * n) - 1,
+    clamped, so p=50 on 4 samples picks index 1. One home for the rule -
+    Phase.percentile and the drivers' own tables both read it here."""
+    rank = max(1, -(-int(p) * len(ordered) // 100)) - 1
+    return ordered[rank]
+
+
 class Phase:
     """One timed phase: its per-request latencies in seconds."""
 
@@ -69,10 +77,7 @@ class Phase:
         """Nearest-rank percentile over the sorted latencies, in seconds."""
         if not self.latencies:
             return 0.0
-        ordered = sorted(self.latencies)
-        # ceil(p/100 * n) - 1, clamped: p=50 on 4 samples picks index 1.
-        rank = max(1, -(-int(p) * len(ordered) // 100)) - 1
-        return ordered[rank]
+        return nearest_rank(sorted(self.latencies), p)
 
     def summary(self):
         return {
