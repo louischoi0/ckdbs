@@ -536,10 +536,12 @@ TEST(DevicePageStoreOwnershipTest, ALeasedStoreAllocatesOnlyFromItsExtent) {
         EXPECT_EQ(created.value().first, expected);
     }
 
-    // Spent, and the failure is retryable rather than "the disk is full".
+    // Spent, and the failure is retryable rather than "the disk is full" -
+    // kTxnConflict because that is the one code the wire's `retryable` bit
+    // follows (status.hpp's IsRetryable).
     auto spent = store->CreateNew();
     ASSERT_FALSE(spent.ok());
-    EXPECT_EQ(spent.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(spent.status().code(), StatusCode::kTxnConflict);
 }
 
 TEST(DevicePageStoreOwnershipTest, AWriteGrantAdmitsExactPagesAndNothingElse) {

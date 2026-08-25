@@ -205,7 +205,12 @@ printf 'PING\n' | nc 127.0.0.1 15432
   and the whole transaction must be rolled back and retried — there is no
   lock to wait on and no partial recovery. The `retryable=1` token is a
   compatibility surface rather than prose: retry loops are expected to read
-  it, and it will not change spelling. Every other `ERR` is not retryable.
+  it, and it will not change spelling. On a multi-core instance the same
+  token answers a statement that reached a peer core whose id or page lease
+  is spent while its refill is in flight; retrying the statement is the
+  right response there too — unless core 0 has refused the refill (a
+  dropped relation, an exhausted id space), which answers the next
+  statement without the bit. Every other `ERR` is not retryable.
   After a conflict the connection is in a failed transaction and answers
   only `ROLLBACK`/`ABORT`/`SYNC`/`STOP`/`PING` until it is rolled back.
 - **Errors** are just another response line, always prefixed `ERR `. There

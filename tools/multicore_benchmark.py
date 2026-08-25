@@ -218,10 +218,11 @@ def collect_connections(port, needed, max_attempts):
 # (docs/workplan-peer-writer.md §5: it repeats forever) - and the three lease
 # exhaustions a peer answers until its refill grant lands: the row-id lease
 # on a relation's first INSERT (PW1b), the trx-id lease, and the extent lease
-# (a btree insert that could not allocate). Those three spell the retry in
-# prose and carry no bit - a protocol inconsistency the PW6 results record
-# rather than paper over here; matching the words is what keeps this driver
-# from losing rows to them.
+# (a btree insert that could not allocate). Those three carry the bit since
+# 2026-08-25 (they are TxnConflict now - docs/known-gaps.md closes PW6's
+# finding (2)); the message matching below stays as the fallback that reads
+# a server built before that, and is what kept this driver from losing rows
+# to them at v2.0.0-48-g314a06d.
 RETRY_TEXTS = ("retry after the refill grant lands",
                "a refill must be granted before it can allocate again")
 PERMANENT_TEXTS = ("writes are bound to core",)

@@ -622,12 +622,37 @@ still waits on its own gate, so:
   group accounting charges nobody for reactor time outside polls** (the
   drain's fdatasync above all), which is why a low-share group's debt was
   so slow to clear. Both are `docs/sched.md` §4's, unfixed.
-- **Three peer refusals say "retry" without the wire's `retryable=1`** —
+- ~~**Three peer refusals say "retry" without the wire's `retryable=1`** —
   the row-id, trx-id and extent leases' `ResourceExhausted`
   (`include/kds/base/status.hpp`: only `TxnConflict` is `IsRetryable`, by
   decision). A client retrying on the bit alone loses rows to the extent
   one, as PW6's driver did until it matched the messages. A protocol
-  decision: extend `IsRetryable` to the lease class, or re-code the three.
+  decision: extend `IsRetryable` to the lease class, or re-code the three.~~
+  — **closed 2026-08-25** (worktree `lease-refusal-retryable`) by
+  re-coding the three: each is `TxnConflict`, the one code `IsRetryable`
+  admits, which keeps the wire's bit one code wide as `status.hpp` decided
+  (the alternative, a second code `IsRetryable` also admits, widens the
+  wire's bit past one code — the thing `status.hpp` declined when it split
+  the assertion verdict across an existing retryable code and a new
+  non-retryable one rather than mint a second retryable spelling). The dispatcher renders every site a lease can refuse at
+  through `ErrorReply`: every `BeginWrite` failure, `BEGIN` itself (an
+  explicit transaction draws its id there and nowhere else, so that is
+  where a spent trx-id lease refuses a transactional client), and
+  `InsertOneRow`'s allocation, encode — a spilled value grows the var-heap
+  — placement, index maintenance and undo append, the last three all being
+  the extent lease. So the three print `ERR TXN_CONFLICT retryable=1 ...`;
+  pinned end to end by `ASpentLeaseRefusesWithTheWiresRetryableBit`
+  (`tests/core_runtime_test.cpp`). UPDATE and DELETE already rendered
+  through `ErrorReply` on both arms, and the sorted bulk fill is
+  unreachable on a peer (`SortedFillEligible` requires a writable
+  catalog). The lease *services'* own `ResourceExhausted` — a refill core 0
+  denies — is a request outcome, not a client reply, and keeps its code.
+  And a lease core 0 has **denied** answers the next statement without the
+  bit (`ResourceExhausted`, `RowIdLeaseTable::Next`): the causes are
+  permanent — no `sys.tables` row, an exhausted id space — so a retry loop
+  stops after one round trip instead of spinning to its deadline. The
+  review of this change found that case
+  (`ADeniedRelationAnswersOnceWithoutTheBitThenAsksAgain`).
 - **The WAL drain's fdatasync runs on the reactor thread**, so every session
   on that core — reads included — waits out a committing session's sync:
   point-SELECT 973 µs beside one writer against 37 µs alone

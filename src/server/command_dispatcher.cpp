@@ -2926,8 +2926,11 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
     // The write scope is opened before anything is parsed, so that a
     // statement inside an explicit transaction re-mints its read view at
     // the same boundary a SELECT does.
+    // ErrorReply, not a bare "ERR ": on a peer a spent transaction-id
+    // lease refuses here as TxnConflict, and the wire's `retryable=1` is
+    // what the client's retry loop reads.
     auto opened = BeginWrite(session);
-    if (!opened.ok()) return {"ERR " + opened.status().message(), false};
+    if (!opened.ok()) return {ErrorReply(opened.status()), false};
     WriteScope scope = opened.value();
 
     DispatchOutcome out = InsertInner(line, scope);
@@ -3199,7 +3202,7 @@ DispatchOutcome CommandDispatcher::ExecuteInsert(const parser::InsertStmt& stmt,
     // rule, so a load chunk and a textual statement are indistinguishable
     // from the write pipeline's side (KW5, BI2).
     auto opened = BeginWrite(session);
-    if (!opened.ok()) return {"ERR " + opened.status().message(), false};
+    if (!opened.ok()) return {ErrorReply(opened.status()), false};
     WriteScope scope = opened.value();
 
     DispatchOutcome out = InsertParsed(stmt, scope);
@@ -3464,6 +3467,16 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     const std::vector<parser::AstValue>& values, WriteScope& scope, InsertRowResult& out) {
     const catalog::TableAccess& ta = *ta_ptr;
 
+    // ---- Where a peer's leases can refuse, and how that reaches the wire --
+    //
+    // Every failure below renders through `ErrorReply`, never a bare "ERR ":
+    // on a peer the row id comes from the row-id lease, and the var-heap
+    // spill, the placement, an index leaf's growth and a full undo page all
+    // allocate from the extent lease - each refuses TxnConflict when spent,
+    // and `ErrorReply` is the one spelling that puts `retryable=1` on the
+    // wire (status.hpp's IsRetryable). The transaction id itself is drawn in
+    // BeginWrite or at BEGIN, and rendered the same way there.
+
     // ---- Arity, and where the pk comes from -----------------------------
     //
     // **Two arities, and the row picks** (docs/heap-and-tuple.md section
@@ -3578,7 +3591,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
     } else {
         auto issued = catalog_.AllocateRowId(oid);
         if (!issued.ok()) {
-            return "ERR " + issued.status().message();
+            return ErrorReply(issued.status());
         }
         row_id = issued.value();
     }
@@ -3588,7 +3601,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         ta.schema, ta.layout, row_id, body,
         exec::VarHeapSink{&page_store_, ta.varheap_page_id, &spills, ta.oid});
     if (!encoded.ok()) {
-        return "ERR " + encoded.status().message();
+        return ErrorReply(encoded.status());
     }
 
     // Into whichever storage the relation uses - a chain of heap pages or
@@ -3604,7 +3617,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                            std::to_string(ta.desc_page_id) +
                            " failed: " + placed.status().message());
         }
-        return "ERR " + placed.status().message();
+        return ErrorReply(placed.status());
     }
 
     // ---- The Cabin witness (docs/feat-cabin.md §5) ----------------------
@@ -3644,7 +3657,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
                                      std::to_string(oid) + " for id " +
                                      std::to_string(row_id) + " failed: " + s.message());
         }
-        return "ERR " + s.message();
+        return ErrorReply(s);
     }
 
     // ---- The reservation (docs/feat-assertion.md §6.2 step 3) -----------
@@ -3683,7 +3696,7 @@ std::optional<std::string> CommandDispatcher::InsertOneRow(
         rec.target_slot = placed.value().slot;
         rec.type = static_cast<std::uint8_t>(txn::UndoRecordType::kInsert);
         auto ptr = txn_->AppendUndo(*scope.txn, rec, row_id, {});
-        if (!ptr.ok()) return "ERR " + ptr.status().message();
+        if (!ptr.ok()) return ErrorReply(ptr.status());
 
         txn_->NoteInsert(*scope.txn, oid, placed.value().page_id, placed.value().slot,
                          row_id);
@@ -5112,7 +5125,7 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<stats::Instan
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {
     auto opened = BeginWrite(session);
-    if (!opened.ok()) return {"ERR " + opened.status().message(), false};
+    if (!opened.ok()) return {ErrorReply(opened.status()), false};
     WriteScope scope = opened.value();
 
     // The read view this UPDATE filters through. An UPDATE reads before it
@@ -5594,7 +5607,12 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
     }
 
     auto begun = txn_->Begin(level);
-    if (!begun.ok()) return {"ERR " + begun.status().message(), false};
+    // ErrorReply, not a bare "ERR ": on a peer the id this draws comes from
+    // the transaction-id lease, and a spent one refuses TxnConflict. Inside
+    // an explicit transaction that refusal lands *here* rather than at the
+    // INSERT - the id is drawn once, at BEGIN - so this is the site the
+    // wire's `retryable=1` has to reach for a transactional client.
+    if (!begun.ok()) return {ErrorReply(begun.status()), false};
     session.Adopt(begun.value());
 
     return {"BEGIN trx_id=" + std::to_string(begun.value()->id()) + " isolation=" +

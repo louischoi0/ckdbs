@@ -44,7 +44,7 @@
 // workload. When reclamation arrives it decides this too.
 //
 // **Refill is not a blocking call.** `LeasedIdSource` answers
-// ResourceExhausted when spent and says nothing about how a new extent is
+// TxnConflict when spent and says nothing about how a new extent is
 // obtained; the requesting core asks core 0 over the ring
 // (`RingMessageKind::kExtentLease`) and should ask at `low_water()`, while it
 // still has ids to hand out. A core that runs dry before the grant lands
@@ -165,7 +165,8 @@ public:
     LeasedIdSource() noexcept = default;
     explicit LeasedIdSource(Extent extent) { Grant(extent); }
 
-    // The next id, or ResourceExhausted when the lease is spent.
+    // The next id, or TxnConflict when the lease is spent - the one code
+    // the wire's `retryable` bit follows (status.hpp's IsRetryable says why).
     //
     // Exhaustion is a **retryable** condition, not a failure of the
     // database: a refill is a message away and the statement that hit the

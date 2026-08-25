@@ -108,7 +108,8 @@ TEST_F(TrxIdLeaseServiceTest, ALeasedPeerIssuesIdsAndTheCeilingIsDurableFirst) {
     // grant is on its way", never "the id space is gone".
     auto before = peer.Next();
     ASSERT_FALSE(before.ok());
-    EXPECT_EQ(before.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(before.status().code(), StatusCode::kTxnConflict);
+    EXPECT_TRUE(before.status().retryable());
 
     const std::uint64_t persists_before = persists_;
     ASSERT_TRUE(Refill().ok());

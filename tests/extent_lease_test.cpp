@@ -102,19 +102,21 @@ TEST(LeasedIdSourceTest, IdsComeOutInOrderAndThenRunOut) {
         EXPECT_EQ(id.value(), expected);
     }
 
-    // ResourceExhausted, deliberately not OutOfSpace: the device may have
-    // plenty of room and this core simply has no ids in hand. Conflating the
-    // two would turn "ask core 0 for more" into "the database is full".
+    // TxnConflict - the one retryable code - and deliberately not
+    // OutOfSpace: the device may have plenty of room and this core simply
+    // has no ids in hand. Conflating the two would turn "ask core 0 for
+    // more" into "the database is full".
     auto spent = lease.Next();
     ASSERT_FALSE(spent.ok());
-    EXPECT_EQ(spent.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(spent.status().code(), StatusCode::kTxnConflict);
+    EXPECT_TRUE(spent.status().retryable());
     EXPECT_TRUE(lease.spent());
 }
 
 TEST(LeasedIdSourceTest, ADefaultConstructedSourceHasNothingToGive) {
     LeasedIdSource lease;
     EXPECT_TRUE(lease.spent());
-    EXPECT_EQ(lease.Next().status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(lease.Next().status().code(), StatusCode::kTxnConflict);
 }
 
 TEST(LeasedIdSourceTest, AGrantResumesIssuingAndBurnsTheOldRemainder) {

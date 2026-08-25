@@ -61,7 +61,8 @@ public:
     // 48-bit space itself is gone, which retrying cannot fix.
     StatusOr<TrxIdRange> Take() {
         if (pending_.count == 0) {
-            return Status::ResourceExhausted(
+            // TxnConflict, not ResourceExhausted: status.hpp's IsRetryable says why.
+            return Status::TxnConflict(
                 "this core's transaction-id lease is spent; retry after the refill grant lands");
         }
         const TrxIdRange taken = pending_;

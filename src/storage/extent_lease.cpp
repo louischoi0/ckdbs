@@ -70,8 +70,9 @@ StatusOr<PageId> LeasedIdSource::Next() {
         // Retryable, and deliberately not OutOfSpace: the device may have
         // plenty of room and this core simply has no ids in hand. Conflating
         // the two would turn "ask core 0 for more" into "the database is
-        // full".
-        return Status::ResourceExhausted(
+        // full". And TxnConflict rather than ResourceExhausted: status.hpp's
+        // IsRetryable says why - the wire's bit follows one code.
+        return Status::TxnConflict(
             "extent lease: this core's lease of " + std::to_string(current_.count) +
             " pages is spent; a refill must be granted before it can allocate again");
     }

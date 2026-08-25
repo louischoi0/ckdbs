@@ -96,8 +96,8 @@ public:
     // current one is spent. Fails with OutOfRange past kMaxTrxId - never
     // wrapped, because a wrapped id would make an old row's writer look
     // like a live one. On a leased sequence a spent window fails with
-    // **ResourceExhausted** instead: retryable, because the grant that
-    // fixes it is already on its way.
+    // **TxnConflict** instead: the one code `IsRetryable` admits, because
+    // the grant that fixes it is already on its way (status.hpp's IsRetryable).
     StatusOr<std::uint64_t> Next();
 
     // Reserves `count` ids and makes the raised ceiling durable, **without

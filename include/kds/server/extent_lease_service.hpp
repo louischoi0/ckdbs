@@ -31,7 +31,7 @@
 // So the refill runs *beside* allocation, not inside it: a core asks for the
 // next extent when its current one crosses `low_water()`, while it can still
 // hand out ids, and the grant lands before the lease is spent. A core that
-// does run dry first gets `ResourceExhausted` from `Next()`, which is
+// does run dry first gets `TxnConflict` from `Next()`, which is
 // retryable - the statement fails, the refill is already in flight, and the
 // retry succeeds. That is the same bump-ahead trade `txn::TrxIdSequence`
 // makes for transaction ids.

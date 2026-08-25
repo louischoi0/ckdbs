@@ -50,8 +50,8 @@ struct RowIdLease {
     std::uint64_t window = 0;
 
     // Set when core 0 answered this relation's request with **none**: a
-    // relation that no longer has a `sys.tables` row, one whose key mode
-    // names its own ids, or a genuinely exhausted 40-bit space. All three
+    // relation that no longer has a `sys.tables` row (oids never reissue,
+    // so it never comes back) or a genuinely exhausted 40-bit space. Both
     // are permanent, and a spent entry reads as low water forever, so
     // without this the drain tick would re-ask every cadence and - since
     // one request is in flight per core and `NeediestRelation` answers in
@@ -59,7 +59,10 @@ struct RowIdLease {
     // the core. Demand is cleared rather than the entry dropped: the
     // remainder of a low-water lease is still this core's to issue.
     // `Next()` re-arms it, so a denial costs one request per *failing
-    // statement* instead of one per tick, forever.
+    // statement* instead of one per tick, forever - and the statement that
+    // finds it set is answered **without** the retryable bit (see `Next()`),
+    // so a client retrying on the bit stops after one round trip rather
+    // than spinning on a promise no grant can keep.
     bool denied = false;
 
     bool spent() const noexcept { return next >= end; }
@@ -75,11 +78,13 @@ struct RowIdLease {
 // Per-relation leases for one core: oid -> lease.
 class RowIdLeaseTable {
 public:
-    // The next id for `table_oid`, or **retryable exhaustion** when the
+    // The next id for `table_oid`, or a **retryable refusal** when the
     // lease is spent or absent. The message names the refill because the
     // caller's right response is "retry the statement once the grant
     // lands" - the extent lease's contract, and never OutOfRange, which
     // means the 40-bit space itself is gone and retrying is a lie.
+    // `TxnConflict` and not `ResourceExhausted`: status.hpp's `IsRetryable`
+    // says why - the wire's bit follows one code.
     StatusOr<std::uint64_t> Next(Oid table_oid) {
         // **A miss records the demand rather than only reporting it** (PW1b).
         // A row-id lease is per relation, so unlike the per-instance
@@ -90,11 +95,23 @@ public:
         // message promises is one that can succeed rather than a loop.
         RowIdLease& lease = leases_[table_oid];
         if (lease.spent()) {
-            // Fresh demand, so a previous "none" stops suppressing it: the
-            // message below promises a retry, and a request nobody makes
-            // again would make that promise a lie.
-            lease.denied = false;
-            return Status::ResourceExhausted(
+            if (lease.denied) {
+                // Core 0 already answered this relation with none, for a
+                // cause `denied` lists - every one permanent. Promising a
+                // retry *with the bit* here would send a client round the
+                // loop until its own deadline, so this answer carries none:
+                // ResourceExhausted, which IsRetryable does not admit. Still
+                // re-armed, so the next statement asks core 0 once more -
+                // one request per failing statement, never one per tick.
+                lease.denied = false;
+                return Status::ResourceExhausted(
+                    "row-id lease for relation oid " + std::to_string(table_oid) +
+                    " was refused by core 0 - the relation has no sys.tables row, or its "
+                    "40-bit id space is exhausted; not retryable");
+            }
+            // Fresh demand: the message promises a retry, and the tick makes
+            // the request that can keep it.
+            return Status::TxnConflict(
                 "row-id lease for relation oid " + std::to_string(table_oid) +
                 " is spent; retry after the refill grant lands");
         }

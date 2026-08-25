@@ -544,7 +544,7 @@ TEST(RowIdLeaseTableTest, IssuesFromAGrantAndExhaustsRetryably) {
     // No grant yet: exhaustion, and the code a retry loop keys on.
     auto dry = table.Next(1000);
     ASSERT_FALSE(dry.ok());
-    EXPECT_EQ(dry.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(dry.status().code(), StatusCode::kTxnConflict);
 
     table.Grant(1000, 100, 3);
     EXPECT_EQ(table.Next(1000).value(), 100u);
@@ -552,13 +552,36 @@ TEST(RowIdLeaseTableTest, IssuesFromAGrantAndExhaustsRetryably) {
     // Relations do not share blocks: oid 2000's lease is its own.
     EXPECT_FALSE(table.Next(2000).ok());
     EXPECT_EQ(table.Next(1000).value(), 102u);
-    EXPECT_EQ(table.Next(1000).status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(table.Next(1000).status().code(), StatusCode::kTxnConflict);
 
     // A contiguous grant extends; a disjoint one replaces and burns.
     table.Grant(1000, 103, 2);
     EXPECT_EQ(table.Next(1000).value(), 103u);
     table.Grant(1000, 500, 2);
     EXPECT_EQ(table.Next(1000).value(), 500u);
+}
+
+TEST(RowIdLeaseTableTest, ADeniedRelationAnswersOnceWithoutTheBitThenAsksAgain) {
+    // The review of the retryable-bit change: a "none" from core 0 is
+    // permanent, so the statement that meets it must not be told to retry
+    // with the bit - it would spin to its own deadline. One answer without
+    // the bit, and the entry is re-armed so the next statement asks again.
+    catalog::RowIdLeaseTable table;
+    auto miss = table.Next(1000);
+    ASSERT_FALSE(miss.ok());
+    EXPECT_TRUE(miss.status().retryable());
+    ASSERT_EQ(*table.NeediestRelation(), 1000u);
+
+    table.Deny(1000);
+    EXPECT_FALSE(table.NeediestRelation().has_value()) << "a denied relation is not demand";
+    auto denied = table.Next(1000);
+    ASSERT_FALSE(denied.ok());
+    EXPECT_EQ(denied.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_FALSE(denied.status().retryable());
+    ASSERT_EQ(*table.NeediestRelation(), 1000u) << "the denied answer must re-arm the demand";
+
+    // Re-armed means the next miss is fresh demand again, with the bit.
+    EXPECT_TRUE(table.Next(1000).status().retryable());
 }
 
 TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
@@ -577,7 +600,7 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
     // Before any grant: retryable exhaustion, never a catalog write.
     auto dry = peer.value()->catalog().AllocateRowId(oid.value());
     ASSERT_FALSE(dry.ok());
-    EXPECT_EQ(dry.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(dry.status().code(), StatusCode::kTxnConflict);
 
     // Core 0 carves a block with the bulk-INSERT primitive - the exact
     // call the kRowIdLease handler makes - and the peer's table takes it,
@@ -593,7 +616,7 @@ TEST_F(CoreRuntimeTest, APeerIssuesLeasedRowIdsWithoutWritingTheCatalog) {
         EXPECT_EQ(id.value(), first.value() + i);
     }
     EXPECT_EQ(peer.value()->catalog().AllocateRowId(oid.value()).status().code(),
-              StatusCode::kResourceExhausted);
+              StatusCode::kTxnConflict);
 
     // And the blocks stay disjoint: core 0's next single id sits past the
     // granted block, so a peer id can never collide with a core-0 id -
@@ -895,7 +918,7 @@ TEST_F(CoreRuntimeTest, APeerAsksForRowIdsItWasNeverGrantedAndTheRetrySucceeds) 
     // half that did not exist before PW1b.
     auto dry = peer.value()->catalog().AllocateRowId(oid.value());
     ASSERT_FALSE(dry.ok());
-    EXPECT_EQ(dry.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_EQ(dry.status().code(), StatusCode::kTxnConflict);
     ASSERT_TRUE(peer.value()->row_id_leases().NeediestRelation().has_value())
         << "the miss did not record which relation needs ids";
     EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), oid.value());
@@ -1033,8 +1056,13 @@ TEST_F(CoreRuntimeTest, ARelationCoreZeroCannotGrantIsAskedForOnceAndStarvesNoOt
         << "the tick asked again for a relation core 0 had already refused";
 
     // And the refusal is not permanent to a *statement*: a fresh miss is
-    // fresh demand, so the retry the message promises is one that is made.
-    EXPECT_FALSE(peer.value()->row_id_leases().Next(3000).ok());
+    // fresh demand, so the retry the message promises is one that is made -
+    // but the statement that meets the denial is answered without the
+    // wire's bit, since the "none" was for a permanent cause.
+    auto after_deny = peer.value()->row_id_leases().Next(3000);
+    ASSERT_FALSE(after_deny.ok());
+    EXPECT_EQ(after_deny.status().code(), StatusCode::kResourceExhausted);
+    EXPECT_FALSE(after_deny.status().retryable());
     EXPECT_EQ(*peer.value()->row_id_leases().NeediestRelation(), 3000u);
 }
 
@@ -1639,6 +1667,53 @@ TEST_F(CoreRuntimeTest, AFundedPeerInsertsIntoItsOwnRelationEndToEnd) {
     peer.value()->GrantRelationWrite(pages);
     EXPECT_EQ(peer.value()->wal().appended_lsn(), before)
         << "a page already writable must take no second acquisition";
+}
+
+TEST_F(CoreRuntimeTest, ASpentLeaseRefusesWithTheWiresRetryableBit) {
+    // PW6's finding (2), closed: a peer whose lease is spent used to answer
+    // a bare `ERR` (ResourceExhausted is not IsRetryable), so a client
+    // retrying on the bit did not retry it and lost the row. The refusal
+    // is TxnConflict now and the dispatcher renders it through ErrorReply,
+    // so the wire carries `retryable=1` - the token a retry loop reads.
+    catalog::Catalog catalog2(*core0_store_, storage::kDefaultInlineCellWidth,
+                              /*core_count=*/2);
+    catalog2.SetPlacementPolicy(catalog::PlacementPolicy::kRotate);
+    auto oid = catalog2.CreateTable(catalog::kNamespacePublic, "owned", TwoColumnSchema(),
+                                    catalog::ClusteredType::kHeap);
+    ASSERT_TRUE(oid.ok()) << oid.status().message();
+    auto row = catalog2.GetSysTableRow(oid.value());
+    ASSERT_TRUE(row.ok());
+    ASSERT_TRUE(core0_store_->Sync().ok());
+
+    auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
+    ASSERT_TRUE(peer.ok()) << peer.status().message();
+    peer.value()->GrantRelationFault(
+        RelationFaultExtentOf(row.value(), storage::kDefaultExtentPages));
+    const PageId pages[] = {row.value().desc_page_id, row.value().anchor_page_id};
+    peer.value()->GrantRelationWrite(pages);
+
+    // No transaction-id block: BeginWrite refuses first, before the row.
+    const std::string kToken = "ERR TXN_CONFLICT retryable=1 ";
+    const auto no_trx = peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (7)").response;
+    EXPECT_EQ(no_trx.substr(0, kToken.size()), kToken) << no_trx;
+    EXPECT_NE(no_trx.find("transaction-id lease"), std::string::npos) << no_trx;
+
+    // With transaction ids but no row-id block: the row's allocation refuses.
+    txn::TrxIdSequence core0_ids(core0_->superblock);
+    auto block = core0_ids.Carve(16);
+    ASSERT_TRUE(block.ok());
+    peer.value()->trx_id_lease().Grant(block.value().first, block.value().count);
+    const auto no_rows = peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (7)").response;
+    EXPECT_EQ(no_rows.substr(0, kToken.size()), kToken) << no_rows;
+    EXPECT_NE(no_rows.find("row-id lease"), std::string::npos) << no_rows;
+
+    // Both funded: the same statement runs. The refusals above were the
+    // lease's, never the relation's.
+    auto first = catalog2.AllocateRowIdRange(oid.value(), 16);
+    ASSERT_TRUE(first.ok());
+    peer.value()->row_id_leases().Grant(oid.value(), first.value(), 16);
+    const auto ins = peer.value()->dispatcher().Dispatch("INSERT INTO owned VALUES (7)").response;
+    EXPECT_NE(ins.rfind("ERR", 0), 0u) << ins;
 }
 
 TEST_F(CoreRuntimeTest, APeersOwnPagesSurviveARestartByTheirStamp) {

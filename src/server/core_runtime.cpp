@@ -822,8 +822,8 @@ void CoreRuntime::MaybeRefillRowIds() {
     //
     // The consequence, stated because a client sees it: the **first** INSERT
     // into a relation on a given peer fails retryably, which is exactly what
-    // that lease's `ResourceExhausted` message already promises, and no
-    // later one does.
+    // that lease's `TxnConflict` message already promises, and no later one
+    // does.
     if (row_id_refill_in_flight_) return;
     const auto neediest = row_id_leases_.NeediestRelation();
     if (!neediest.has_value()) return;

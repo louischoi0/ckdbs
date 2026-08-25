@@ -93,6 +93,18 @@ enum class StatusCode {
 // True for a Status a caller may sensibly re-issue the same statement for.
 // Spelled out here rather than at each call site so the wire layer's
 // `retryable` bit and the engine's notion of retryable cannot drift.
+//
+// **One code, by decision** (docs/protocol.md section 11: the bit is a
+// compatibility surface). Everything the engine means by "wait and retry"
+// spells itself kTxnConflict - a lost write race, a write to another core's
+// relation, a peer's rights still in flight, an index build's window - and
+// since 2026-08-25 a peer's **spent lease** too (row-id, transaction-id,
+// extent: catalog/row_id_lease.hpp, txn/trx_id_lease.hpp,
+// storage/extent_lease.cpp). Those three were kResourceExhausted, whose
+// message promised a retry the wire never carried, so a client retrying on
+// the bit lost rows (PW6, docs/known-gaps.md). kResourceExhausted stays for
+// what a retry cannot fix: a cap, a budget, a ring's backpressure, and a
+// refill core 0 has denied.
 constexpr bool IsRetryable(StatusCode code) noexcept { return code == StatusCode::kTxnConflict; }
 
 class [[nodiscard]] Status {
